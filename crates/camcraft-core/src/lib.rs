@@ -28,3 +28,5 @@
 //!   order-dependent floating point reductions are not.
 
 pub mod tool;
+
+pub mod dropcutter;

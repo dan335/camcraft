@@ -34,6 +34,33 @@ pub fn plane(z: f64, half: f64) -> TriMesh {
     TriMesh::new(v, vec![[0, 1, 2], [0, 2, 3]]).unwrap_or_default()
 }
 
+/// An inclined plane `z = z0 + a*x + b*y`, spanning `[-half, half]` in X and Y.
+///
+/// This is the fixture that exercises a *sloped* facet, which neither [`plane`] nor
+/// [`step`] can: both of those are horizontal, so a cutter's contact degenerates to
+/// the point directly beneath it and any rim handling goes untested.
+///
+/// Closed forms, valid wherever the tool footprint stays inside the patch:
+///
+/// ```text
+/// flat, radius R:  Zcl = z0 + a*x + b*y + R * sqrt(a^2 + b^2)
+/// ball, radius r:  Zcl = z0 + a*x + b*y + r * (sqrt(a^2 + b^2 + 1) - 1)
+/// ```
+///
+/// A flat mill rests on the *uphill rim* of its disc, not its centre — that
+/// `R * sqrt(a^2 + b^2)` term is the whole point. Both terms vanish on the level,
+/// agreeing with [`plane`].
+pub fn inclined_plane(a: f64, b: f64, z0: f64, half: f64) -> TriMesh {
+    let z = |x: f64, y: f64| z0 + a * x + b * y;
+    let v = vec![
+        dvec3(-half, -half, z(-half, -half)),
+        dvec3(half, -half, z(half, -half)),
+        dvec3(half, half, z(half, half)),
+        dvec3(-half, half, z(-half, half)),
+    ];
+    TriMesh::new(v, vec![[0, 1, 2], [0, 2, 3]]).unwrap_or_default()
+}
+
 /// A sharp step: height `h` over `x <= 0`, height `0` over `x >= 0`, joined by a
 /// vertical wall, spanning `[-half, half]` in both axes.
 ///
