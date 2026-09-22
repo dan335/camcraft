@@ -40,7 +40,7 @@ struct Part {
 #[derive(Serialize)]
 struct JobMeta {
     model: String,
-    units: &'static str,
+    units: String,
     tolerance: f64,
     wcs: u8,
     /// The block of material, corner to corner.
@@ -142,7 +142,7 @@ struct Step {
 /// what the terminal said.
 pub fn document(
     model: &str,
-    units: &'static str,
+    units: &str,
     mesh: &TriMesh,
     bounds: &Aabb,
     job: &Job,
@@ -161,7 +161,7 @@ pub fn document(
         part: part(mesh, bounds),
         job: JobMeta {
             model: model.to_string(),
-            units,
+            units: units.to_string(),
             tolerance: job.tolerance,
             wcs: job.setup.wcs,
             stock_min: [

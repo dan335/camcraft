@@ -22,7 +22,8 @@ use camcraft_core::job::{
 };
 use camcraft_core::run::{JobResult, OperationResult, run_job};
 use camcraft_geom::mesh::{Aabb, TriMesh};
-use camcraft_import::stl::{ImportReport, Units, load_stl};
+use camcraft_import::step::{FileCheck, load_step};
+use camcraft_import::stl::{Units, load_stl};
 use camcraft_post::op::{ProgramSpec, Spin, Units as PostUnits, lower};
 use camcraft_post::profile::Profile;
 use camcraft_post::render::render;
@@ -60,15 +61,16 @@ enum Command {
 #[derive(Parser, Debug)]
 #[command(group(ArgGroup::new("output").required(true).multiple(true).args(["out", "inspect"])))]
 struct JobArgs {
-    /// Model to machine (`.stl`).
+    /// Model to machine (`.stl`, `.step` or `.stp`).
     model: PathBuf,
 
     /// Job description (`.toml`).
     job: PathBuf,
 
-    /// What the numbers in the model file mean. STL carries no units.
+    /// What the numbers in the model mean. Required for STL, which carries no
+    /// units. A STEP file states its own; given anyway, it must agree.
     #[arg(long, value_enum)]
-    units: UnitArg,
+    units: Option<UnitArg>,
 
     /// Machine profile: a builtin name, or a path to a TOML profile.
     #[arg(long, default_value = "masso")]
@@ -118,12 +120,13 @@ struct PostArgs {
 
 #[derive(Parser, Debug)]
 struct InspectArgs {
-    /// Model to machine (`.stl`).
+    /// Model to machine (`.stl`, `.step` or `.stp`).
     model: PathBuf,
 
-    /// What the numbers in the file mean. STL carries no units.
+    /// What the numbers in the model mean. Required for STL, which carries no
+    /// units. A STEP file states its own; given anyway, it must agree.
     #[arg(long, value_enum)]
-    units: UnitArg,
+    units: Option<UnitArg>,
 
     /// Cutter shape.
     #[arg(long, value_enum, default_value_t = ToolArg::Ball)]
@@ -188,6 +191,10 @@ impl UnitArg {
             UnitArg::Inch => "inch",
         }
     }
+
+    fn mm(self) -> f64 {
+        self.units().to_mm()
+    }
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -201,7 +208,12 @@ enum ToolArg {
 type Fallible<T> = Result<T, Box<dyn std::error::Error>>;
 
 fn main() -> ExitCode {
-    tracing_subscriber::fmt().with_target(false).init();
+    // Logs and errors go to stderr, as a command-line tool's should: stdout is kept
+    // clean for anything a caller might pipe.
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .init();
     let cli = Cli::parse();
     let outcome = match cli.command {
         Command::Job(args) => job(args),
@@ -225,19 +237,109 @@ fn main() -> ExitCode {
 struct Model {
     mesh: TriMesh,
     bounds: Aabb,
-    import: ImportReport,
     path: String,
-    units: UnitArg,
+    /// What the model's numbers meant, as a person would say it.
+    units: String,
+    /// Anything about the import worth a person's attention.
+    warnings: Vec<String>,
 }
 
-fn load(path: &Path, units: UnitArg) -> Fallible<Model> {
-    let (mesh, import) = load_stl(path, units.units())?;
+/// Tessellation tolerance for a B-rep, from the machining tolerance.
+///
+/// The simulator verifies against this mesh, so the gap between it and the true
+/// surface is error nothing downstream can see. A quarter keeps it a small part of
+/// the budget without making tessellation the slow step.
+fn tessellation_tolerance(tolerance: f64) -> f64 {
+    tolerance / 4.0
+}
+
+fn load(path: &Path, units: Option<UnitArg>, tolerance: f64) -> Fallible<Model> {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let model = match ext.as_str() {
+        "stl" => {
+            let units = units.ok_or(
+                "an STL file carries no units: pass --units mm or --units inch. \
+                 Guessing would make an inch part 25.4 times too small.",
+            )?;
+            let (mesh, import) = load_stl(path, units.units())?;
+            let mut warnings = Vec::new();
+            if import.degenerate > 0 {
+                warnings.push(format!(
+                    "{} degenerate triangle(s) in the model",
+                    import.degenerate
+                ));
+            }
+            tracing::info!(
+                "loaded {} triangles, {} vertices after welding",
+                import.triangles,
+                import.vertices
+            );
+            finish(path, mesh, units.label().to_string(), warnings)?
+        }
+        "step" | "stp" => {
+            let started = std::time::Instant::now();
+            let (mesh, report) = load_step(path, tessellation_tolerance(tolerance))?;
+            if let Some(said) = units
+                && (said.mm() - report.unit.mm).abs() > 1e-9 * said.mm()
+            {
+                return Err(format!(
+                    "--units {} was given, but the file is in {}. A STEP file states \
+                     its own units; drop --units, or check this is the right file.",
+                    said.label(),
+                    report.unit.name
+                )
+                .into());
+            }
+            let mut warnings = Vec::new();
+            if report.degenerate > 0 {
+                warnings.push(format!(
+                    "{} degenerate triangle(s) from tessellation",
+                    report.degenerate
+                ));
+            }
+            if let FileCheck::Skipped(why) = report.check {
+                warnings.push(format!(
+                    "the mesh was not checked against the file's geometry: {why}"
+                ));
+            }
+            tracing::info!(
+                "read STEP in {}: {} face(s) all meshed, {} triangles at {} mm, checked: {}",
+                report.unit.name,
+                report.faces,
+                report.triangles,
+                report.tolerance,
+                match report.check {
+                    FileCheck::Passed => "yes",
+                    FileCheck::Skipped(_) => "NO",
+                },
+            );
+            tracing::info!("tessellated in {:.1} s", started.elapsed().as_secs_f64());
+            finish(
+                path,
+                mesh,
+                format!("{} (from file)", report.unit.name),
+                warnings,
+            )?
+        }
+        _ => {
+            return Err(format!(
+                "{}: not a model this can read; expected .stl, .step or .stp",
+                path.display()
+            )
+            .into());
+        }
+    };
+    Ok(model)
+}
+
+fn finish(path: &Path, mesh: TriMesh, units: String, warnings: Vec<String>) -> Fallible<Model> {
     let bounds = mesh.bounds().ok_or("model has no geometry")?;
     let extent = bounds.extent();
     tracing::info!(
-        "loaded {} triangles, {} vertices after welding, {:.1} x {:.1} x {:.1} mm",
-        import.triangles,
-        import.vertices,
+        "model is {:.1} x {:.1} x {:.1} mm",
         extent.x,
         extent.y,
         extent.z
@@ -245,9 +347,9 @@ fn load(path: &Path, units: UnitArg) -> Fallible<Model> {
     Ok(Model {
         mesh,
         bounds,
-        import,
         path: path.display().to_string(),
         units,
+        warnings,
     })
 }
 
@@ -271,12 +373,7 @@ fn run(model: &Model, job: &JobSpec) -> Fallible<Ran> {
     report(&result);
 
     let mut warnings = result.warnings();
-    if model.import.degenerate > 0 {
-        warnings.push(format!(
-            "{} degenerate triangle(s) in the model",
-            model.import.degenerate
-        ));
-    }
+    warnings.extend(model.warnings.iter().cloned());
     Ok(Ran { result, warnings })
 }
 
@@ -303,7 +400,7 @@ fn report(result: &JobResult) {
 fn write_inspection(path: &Path, model: &Model, job: &JobSpec, ran: &Ran) -> Fallible<()> {
     let doc = inspection::document(
         &model.path,
-        model.units.label(),
+        &model.units,
         &model.mesh,
         &model.bounds,
         job,
@@ -385,8 +482,9 @@ fn write_program(
 }
 
 fn job(args: JobArgs) -> Fallible<usize> {
-    let model = load(&args.model, args.units)?;
+    // The job first: its tolerance decides how finely a STEP model is tessellated.
     let job: JobSpec = toml::from_str(&std::fs::read_to_string(&args.job)?)?;
+    let model = load(&args.model, args.units, job.tolerance)?;
     let ran = run(&model, &job)?;
 
     // Before the gate, not after it: a job that failed to verify is exactly the one
@@ -417,7 +515,7 @@ fn job(args: JobArgs) -> Fallible<usize> {
 }
 
 fn post(args: PostArgs) -> Fallible<usize> {
-    let model = load(&args.job.model, args.job.units)?;
+    let model = load(&args.job.model, args.job.units, args.job.tolerance)?;
     let job = single_operation(&args.job, args.wcs, args.rpm, args.tool_number);
     let ran = run(&model, &job)?;
     gate(
@@ -445,7 +543,7 @@ fn post(args: PostArgs) -> Fallible<usize> {
 }
 
 fn inspect(args: InspectArgs) -> Fallible<usize> {
-    let model = load(&args.model, args.units)?;
+    let model = load(&args.model, args.units, args.tolerance)?;
     let job = single_operation(&args, 54, 18000, 1);
     let ran = run(&model, &job)?;
     write_inspection(&args.out, &model, &job, &ran)?;
