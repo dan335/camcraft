@@ -7,8 +7,10 @@ A B-rep modelling kernel is 50+ person-years of work — which is why Plasticity
 Shapr3D both license Parasolid rather than write one — but CAM needs no kernel at all.
 This is the CAM half.
 
-**Status: 0.1-a, pre-alpha.** The workspace scaffold exists. The engine does not yet.
-Do not point this at a machine.
+**Status: 0.1-c complete, pre-alpha.** Takes an STL and a job file, writes G-code,
+and refuses to write a program the simulator has not verified against material.
+Nothing has been cut yet. See [STATUS.md](STATUS.md) for where the work left off and
+what the simulator cannot check for you.
 
 ## What it is
 
