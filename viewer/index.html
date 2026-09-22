@@ -4,52 +4,115 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>camcraft inspector</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Fira+Code:wght@400;500&display=swap">
+<link rel="stylesheet" href="tokens.css">
 <style>
+  /* Role colours come from the design system's toolpath palette so the inspector
+     reads the same as other G-code viewers. Retract, ramp and link are not in the
+     system: retract is deliberately neutral because it is a safe move that should
+     not compete for attention, and an unresolved link is drawn near-white so it
+     reads as "unclassified", which is exactly what it is. */
   :root {
-    --bg: #14161a; --panel: #1c1f26; --line: #2c313b;
-    --ink: #e6e9ef; --dim: #939cad;
-    --cut: #4ade80; --rapid: #f87171; --plunge: #fb923c;
-    --retract: #60a5fa; --link: #e879f9; --lead: #facc15; --ramp: #22d3ee;
-    --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+    --role-cut:var(--path-cut);
+    --role-rapid:var(--path-rapid);
+    --role-plunge:var(--path-plunge);
+    --role-lead:var(--path-lead);
+    --role-ramp:var(--path-lead);
+    --role-retract:var(--gray-7);
+    --role-link:var(--gray-10);
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
-    background: var(--bg); color: var(--ink);
-    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    display: grid; grid-template-columns: 320px 1fr; overflow: hidden;
+    background: var(--bg); color: var(--text-1);
+    font: var(--weight-regular) var(--text-base)/var(--leading-normal) var(--font-sans);
+    font-feature-settings: var(--font-numeric);
+    -webkit-font-smoothing: antialiased;
+    display: grid; grid-template-columns: var(--panel) 1fr; overflow: hidden;
   }
   #side {
-    background: var(--panel); border-right: 1px solid var(--line);
-    padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px;
+    background: var(--surface-1); border-right: var(--border-width, 1px) solid var(--border);
+    padding: var(--space-5); overflow-y: auto;
+    display: flex; flex-direction: column; gap: var(--space-5);
   }
   #stage { position: relative; }
   canvas { display: block; }
-  h1 { font-size: 14px; margin: 0; letter-spacing: .04em; }
-  h2 { font-size: 11px; margin: 0 0 6px; color: var(--dim);
-       text-transform: uppercase; letter-spacing: .09em; }
-  .card { border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
+  h1 {
+    font: var(--weight-medium) var(--text-md)/var(--leading-snug) var(--font-mono);
+    margin: 0; letter-spacing: var(--tracking-tight); color: var(--text-1);
+  }
+  h2 {
+    font: var(--weight-medium) var(--text-xs)/var(--leading-snug) var(--font-mono);
+    margin: 0 0 var(--space-3); color: var(--text-3);
+    text-transform: uppercase; letter-spacing: var(--tracking-wide);
+  }
+  .card {
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+    padding: var(--space-4); background: var(--surface-2);
+  }
   #drop {
-    border: 1px dashed var(--line); border-radius: 6px; padding: 18px 12px;
-    text-align: center; color: var(--dim); cursor: pointer;
+    border: 1px dashed var(--border-strong); border-radius: var(--radius-md);
+    padding: var(--space-6) var(--space-4); text-align: center;
+    color: var(--text-3); font-size: var(--text-sm); cursor: pointer;
+    transition: border-color var(--dur-base) var(--ease-out),
+                color var(--dur-base) var(--ease-out);
   }
-  #drop.hot { border-color: var(--cut); color: var(--cut); }
-  table { width: 100%; border-collapse: collapse; }
-  td { padding: 1px 0; vertical-align: top; }
-  td:first-child { color: var(--dim); padding-right: 8px; white-space: nowrap; }
-  td:last-child { text-align: right; }
-  label { display: flex; align-items: center; gap: 7px; padding: 2px 0; cursor: pointer; }
-  input[type=checkbox] { accent-color: #6b7280; }
-  .sw { width: 11px; height: 11px; border-radius: 2px; flex: none; }
-  .check { display: flex; gap: 7px; padding: 3px 0; align-items: baseline; }
-  .check b { flex: none; font-weight: 700; }
-  .ok b { color: var(--ok); } .warn b { color: var(--warn); } .bad b { color: var(--bad); }
-  input[type=range] { width: 100%; accent-color: #6b7280; }
+  #drop:hover { border-color: var(--border-focus); color: var(--text-2); }
+  #drop.hot { border-color: var(--accent); color: var(--accent); }
+  #drop b { color: var(--text-1); font-weight: var(--weight-medium); }
+
+  /* Diagnostic, after the design system's component: a weighted left edge, a
+     level, a stable code, then the message. The code matters — a finding you can
+     quote is a finding you can look up. */
+  .diag {
+    display: grid; grid-template-columns: 52px 1fr; gap: 0 var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border); border-left-width: 2px;
+    border-radius: var(--radius-sm); margin-bottom: var(--space-2);
+    font-size: var(--text-sm); background: var(--surface-3);
+  }
+  .diag .lvl {
+    font: var(--weight-medium) var(--text-xs)/var(--leading-snug) var(--font-mono);
+    letter-spacing: var(--tracking-wide); padding-top: 2px;
+  }
+  .diag code {
+    font-family: var(--font-mono); font-size: var(--text-xs);
+    color: var(--text-4); margin-right: var(--space-3);
+  }
+  .diag .msg { color: var(--text-1); }
+  .diag.fail { border-left-color: var(--verdict-fail-edge); background: var(--verdict-fail-bg); }
+  .diag.fail .lvl { color: var(--err); text-transform: uppercase; }
+  .diag.warn { border-left-color: var(--verdict-warn-edge); background: var(--verdict-warn-bg); }
+  .diag.warn .lvl { color: var(--warn); }
+  .diag.note { border-left-color: var(--verdict-note-edge); }
+  .diag.note .lvl { color: var(--info); }
+  .diag.pass { border-left-color: var(--verdict-pass-edge); }
+  .diag.pass .lvl { color: var(--text-4); }
+  .diag.pass .msg { color: var(--text-2); }
+
+  table { width: 100%; border-collapse: collapse;
+          font-family: var(--font-mono); font-size: var(--text-sm); }
+  td { padding: var(--space-1) 0; vertical-align: top; }
+  td:first-child { color: var(--text-3); padding-right: var(--space-3);
+                   white-space: nowrap; font-family: var(--font-sans); }
+  td:last-child { text-align: right; color: var(--text-1); }
+  label { display: flex; align-items: center; gap: var(--space-3);
+          padding: var(--space-1) 0; cursor: pointer; font-size: var(--text-sm);
+          min-height: var(--control-sm); }
+  label:hover { color: var(--text-1); }
+  input[type=checkbox] { accent-color: var(--accent); }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .sw { width: 10px; height: 10px; border-radius: var(--radius-sm); flex: none; }
+  .count { margin-left: auto; color: var(--text-3); font-family: var(--font-mono);
+           font-size: var(--text-xs); }
   #hint {
-    position: absolute; left: 12px; bottom: 10px; color: var(--dim);
-    font-size: 11px; pointer-events: none;
+    position: absolute; left: var(--space-4); bottom: var(--space-4);
+    color: var(--text-4); font-size: var(--text-xs);
+    font-family: var(--font-mono); pointer-events: none;
   }
-  .muted { color: var(--dim); }
+  .muted { color: var(--text-3); }
 </style>
 </head>
 <body>
@@ -99,7 +162,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 const ROLES = ['cut','rapid','plunge','retract','lead','ramp','link'];
 const COLOR = {};
 for (const r of ROLES) {
-  COLOR[r] = getComputedStyle(document.documentElement).getPropertyValue('--' + r).trim() || '#888';
+  COLOR[r] = getComputedStyle(document.documentElement)
+    .getPropertyValue('--role-' + r).trim() || '#8B909D';
 }
 
 const stage = document.getElementById('stage');
@@ -108,7 +172,7 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 stage.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x14161a);
+scene.background = new THREE.Color(0x0B0C0E);   // --bg
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100000);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -208,7 +272,7 @@ function build(data, name) {
   geo.setAttribute('position', new THREE.BufferAttribute(tri, 3));
   geo.computeVertexNormals();
   const partMesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
-    color: 0x6b7280, roughness: 0.85, metalness: 0.0,
+    color: 0x585D6A, roughness: 0.85, metalness: 0.0,
     side: THREE.DoubleSide, flatShading: true,
   }));
   group.add(partMesh);
@@ -242,7 +306,7 @@ function build(data, name) {
     const w = (max[0]-min[0]) * 1.3 || 10, d = (max[1]-min[1]) * 1.3 || 10;
     const pg = new THREE.PlaneGeometry(w, d);
     const pm = new THREE.Mesh(pg, new THREE.MeshBasicMaterial({
-      color: 0x60a5fa, transparent: true, opacity: 0.09, side: THREE.DoubleSide,
+      color: 0x4FD1FF, transparent: true, opacity: 0.08, side: THREE.DoubleSide,
     }));
     pm.position.set((min[0]+max[0])/2, (min[1]+max[1])/2, cz);
     pm.visible = document.getElementById('showClear').checked;
@@ -283,47 +347,51 @@ function renderChecks(data) {
   const path = data.path || [];
   const cz = meta.clearance_z;
   const out = [];
+  const add = (level, code, message, location) => out.push({ level, code, message, location });
 
+  // CC1xx are hard failures: the program must not be run.
   const links = path.filter(m => m.role === 'link').length;
-  out.push(links === 0
-    ? ['ok', 'PASS', 'no unresolved links — path is machinable']
-    : ['bad', 'FAIL', links + ' unresolved link(s): NOT machinable']);
+  links === 0
+    ? add('pass', 'CC101', 'no unresolved links')
+    : add('fail', 'CC101', links + ' unresolved link(s) — path is NOT machinable');
 
   if (typeof cz === 'number') {
-    let low = 0, worst = Infinity;
-    let prev = null;
+    let low = 0, worst = Infinity, prev = null;
     for (const m of path) {
       if (m.role === 'rapid') {
-        if (m.to[2] < cz - 1e-6) { low++; worst = Math.min(worst, m.to[2]); }
-        if (prev && prev.to[2] < cz - 1e-6) { low++; worst = Math.min(worst, prev.to[2]); }
+        for (const pt of [prev, m]) {
+          if (pt && pt.to[2] < cz - 1e-6) { low++; worst = Math.min(worst, pt.to[2]); }
+        }
       }
       prev = m;
     }
-    out.push(low === 0
-      ? ['ok', 'PASS', 'every rapid is at or above clearance ' + cz.toFixed(2) + ' mm']
-      : ['bad', 'FAIL', low + ' rapid endpoint(s) below clearance, lowest ' + worst.toFixed(2)]);
+    low === 0
+      ? add('pass', 'CC102', 'every rapid is at or above clearance', cz.toFixed(2) + ' mm')
+      : add('fail', 'CC102', low + ' rapid endpoint(s) below clearance',
+            'lowest ' + worst.toFixed(2) + ' mm of ' + cz.toFixed(2));
   }
 
-  let diagonal = 0;
-  let prev = null;
+  let diagonal = 0, prev = null;
   for (const m of path) {
     if (prev && (m.role === 'plunge' || m.role === 'retract')) {
-      const dx = m.to[0] - prev.to[0], dy = m.to[1] - prev.to[1];
-      if (Math.hypot(dx, dy) > 1e-6) diagonal++;
+      if (Math.hypot(m.to[0] - prev.to[0], m.to[1] - prev.to[1]) > 1e-6) diagonal++;
     }
     prev = m;
   }
-  out.push(diagonal === 0
-    ? ['ok', 'PASS', 'plunges and retracts are vertical']
-    : ['bad', 'FAIL', diagonal + ' plunge/retract move(s) travel sideways']);
+  diagonal === 0
+    ? add('pass', 'CC103', 'plunges and retracts are vertical')
+    : add('fail', 'CC103', diagonal + ' plunge/retract move(s) travel sideways',
+          'drags the cutter through the wall it just cut');
 
-  let nofeed = path.filter(m => m.role !== 'rapid' && !(m.feed > 0)).length;
-  let rapidfeed = path.filter(m => m.role === 'rapid' && m.feed != null).length;
-  out.push(nofeed === 0 && rapidfeed === 0
-    ? ['ok', 'PASS', 'feed rates are consistent with move roles']
-    : ['bad', 'FAIL', nofeed + ' feeding move(s) without a feed, ' + rapidfeed + ' rapid(s) with one']);
+  const nofeed = path.filter(m => m.role !== 'rapid' && !(m.feed > 0)).length;
+  const rapidfeed = path.filter(m => m.role === 'rapid' && m.feed != null).length;
+  nofeed === 0 && rapidfeed === 0
+    ? add('pass', 'CC104', 'feed rates are consistent with move roles')
+    : add('fail', 'CC104', nofeed + ' feeding move(s) without a feed, ' +
+          rapidfeed + ' rapid(s) with one');
 
-  // Re-derived here rather than trusted from meta, like every other check.
+  // Re-derived here, not read from meta. A viewer that only echoed the producer's
+  // own report would agree with it even when both were wrong.
   let steep = 0, deepest = 0;
   prev = null;
   for (const m of path) {
@@ -334,21 +402,40 @@ function renderChecks(data) {
     }
     prev = m;
   }
-  out.push(steep === 0
-    ? ['ok', 'PASS', 'no cutting move descends more steeply than 45 degrees']
-    : ['bad', 'FAIL', steep + ' cutting move(s) are really plunges, deepest ' +
-       deepest.toFixed(2) + ' mm — will break cutters at cutting feed']);
+  steep === 0
+    ? add('pass', 'CC105', 'no cutting move descends faster than it advances')
+    : add('fail', 'CC105', steep + ' cutting move(s) are really plunges',
+          'deepest ' + deepest.toFixed(2) + ' mm at cutting feed — will break cutters');
 
-  const rl = meta.refinement_limited || 0;
-  if (rl > 0) out.push(['warn', 'WARN', rl + ' span(s) hit the refinement limit — path is coarser than requested']);
-  const disc = meta.discontinuities || 0;
-  if (disc > 0) out.push(['ok', 'NOTE', disc + ' span(s) stopped at a surface discontinuity — expected on parts with vertical walls']);
-  const sp = meta.suspicious_plunges || 0;
-  if (sp > 0) out.push(['warn', 'WARN', sp + ' plunge(s) do not start above the surface']);
-  for (const w of (meta.warnings || [])) out.push(['warn', 'WARN', w]);
+  // CC2xx are advisories: look, then decide.
+  if (meta.refinement_limited > 0) {
+    add('warn', 'CC201', meta.refinement_limited + ' span(s) hit the refinement limit',
+        'path is coarser than the requested tolerance');
+  }
+  if (meta.suspicious_plunges > 0) {
+    add('warn', 'CC202', meta.suspicious_plunges + ' plunge(s) do not start above the surface');
+  }
+  if (meta.discontinuities > 0) {
+    add('note', 'CC203', meta.discontinuities + ' span(s) stopped at a surface discontinuity',
+        'expected wherever the part has vertical walls');
+  }
+  for (const w of (meta.warnings || [])) {
+    if (!/steeply|refinement limit|do not start above/.test(w)) add('warn', 'CC299', w);
+  }
 
-  document.getElementById('checks').innerHTML = out.map(([cls, tag, text]) =>
-    '<div class="check ' + cls + '"><b>' + tag + '</b><span>' + esc(text) + '</span></div>').join('');
+  const failed = out.filter(d => d.level === 'fail').length;
+  const banner = failed > 0
+    ? '<div class="diag fail"><span class="lvl">HALT</span><span class="msg">' +
+      failed + ' blocking failure(s). Do not run this program.</span></div>'
+    : '';
+
+  document.getElementById('checks').innerHTML = banner + out.map(d =>
+    '<div class="diag ' + d.level + '">' +
+      '<span class="lvl">' + d.level + '</span>' +
+      '<div><div class="msg"><code>' + d.code + '</code>' + esc(d.message) + '</div>' +
+      (d.location ? '<div class="muted" style="font-family:var(--font-mono);font-size:var(--text-xs);margin-top:2px">' +
+        esc(d.location) + '</div>' : '') +
+    '</div></div>').join('');
   document.getElementById('checks-card').hidden = false;
 }
 
