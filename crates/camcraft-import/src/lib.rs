@@ -7,3 +7,5 @@
 //! out to cost to build, the inner development loop on `geom` / `sim` / `core` /
 //! `post` never pays it. This is structural, not a feature flag: STEP is a
 //! first-class input, because it is how parts arrive from Plasticity.
+
+pub mod stl;

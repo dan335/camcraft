@@ -8,3 +8,5 @@
 # Commercial fixtures must never be committed. See fixtures/step/README.md and use
 # CAMCRAFT_FIXTURES for parts that cannot be published.
 /fixtures/step/production_*
+# Inspector probe data; generated, and may contain part geometry.
+/viewer/_*.json

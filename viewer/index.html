@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>camcraft inspector</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c1f26; --line: #2c313b;
+    --ink: #e6e9ef; --dim: #939cad;
+    --cut: #4ade80; --rapid: #f87171; --plunge: #fb923c;
+    --retract: #60a5fa; --link: #e879f9; --lead: #facc15; --ramp: #22d3ee;
+    --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    display: grid; grid-template-columns: 320px 1fr; overflow: hidden;
+  }
+  #side {
+    background: var(--panel); border-right: 1px solid var(--line);
+    padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px;
+  }
+  #stage { position: relative; }
+  canvas { display: block; }
+  h1 { font-size: 14px; margin: 0; letter-spacing: .04em; }
+  h2 { font-size: 11px; margin: 0 0 6px; color: var(--dim);
+       text-transform: uppercase; letter-spacing: .09em; }
+  .card { border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
+  #drop {
+    border: 1px dashed var(--line); border-radius: 6px; padding: 18px 12px;
+    text-align: center; color: var(--dim); cursor: pointer;
+  }
+  #drop.hot { border-color: var(--cut); color: var(--cut); }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 1px 0; vertical-align: top; }
+  td:first-child { color: var(--dim); padding-right: 8px; white-space: nowrap; }
+  td:last-child { text-align: right; }
+  label { display: flex; align-items: center; gap: 7px; padding: 2px 0; cursor: pointer; }
+  input[type=checkbox] { accent-color: #6b7280; }
+  .sw { width: 11px; height: 11px; border-radius: 2px; flex: none; }
+  .check { display: flex; gap: 7px; padding: 3px 0; align-items: baseline; }
+  .check b { flex: none; font-weight: 700; }
+  .ok b { color: var(--ok); } .warn b { color: var(--warn); } .bad b { color: var(--bad); }
+  input[type=range] { width: 100%; accent-color: #6b7280; }
+  #hint {
+    position: absolute; left: 12px; bottom: 10px; color: var(--dim);
+    font-size: 11px; pointer-events: none;
+  }
+  .muted { color: var(--dim); }
+</style>
+</head>
+<body>
+<div id="side">
+  <h1>camcraft inspector</h1>
+  <div id="drop">drop a <b>.json</b> from<br><span class="muted">camcraft inspect</span><br>or click to choose</div>
+  <input id="file" type="file" accept=".json" hidden>
+
+  <div class="card" id="checks-card" hidden>
+    <h2>Checks</h2>
+    <div id="checks"></div>
+  </div>
+
+  <div class="card" id="meta-card" hidden>
+    <h2>Job</h2>
+    <table id="meta"></table>
+  </div>
+
+  <div class="card" id="layers-card" hidden>
+    <h2>Show</h2>
+    <div id="layers"></div>
+    <label style="margin-top:8px"><input type="checkbox" id="showPart" checked><span>part surface</span></label>
+    <label><input type="checkbox" id="showClear"><span>clearance plane</span></label>
+  </div>
+
+  <div class="card" id="scrub-card" hidden>
+    <h2>Move order</h2>
+    <input type="range" id="scrub" min="1" max="1" value="1">
+    <table><tr><td>showing</td><td id="scrubLabel">–</td></tr></table>
+  </div>
+</div>
+
+<div id="stage">
+  <div id="hint">drag to orbit · wheel to zoom · shift-drag to pan · R resets</div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.175.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.175.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const ROLES = ['cut','rapid','plunge','retract','lead','ramp','link'];
+const COLOR = {};
+for (const r of ROLES) {
+  COLOR[r] = getComputedStyle(document.documentElement).getPropertyValue('--' + r).trim() || '#888';
+}
+
+const stage = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+stage.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x14161a);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const key = new THREE.DirectionalLight(0xffffff, 1.3);
+key.position.set(0.6, -1, 1.4);
+scene.add(key);
+
+// Z-up, matching the engine's convention. Getting this wrong would make every
+// reading of the picture wrong, so it is set once here and never flipped.
+camera.up.set(0, 0, 1);
+
+let group = null, home = null;
+
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(stage);
+resize();
+
+(function loop() {
+  requestAnimationFrame(loop);
+  controls.update();
+  renderer.render(scene, camera);
+})();
+
+addEventListener('keydown', e => { if (e.key === 'r' || e.key === 'R') frame(); });
+
+function frame() {
+  if (!home) return;
+  const { center, radius } = home;
+  controls.target.copy(center);
+  camera.position.set(center.x + radius * 1.4, center.y - radius * 1.7, center.z + radius * 1.2);
+  camera.near = radius / 500; camera.far = radius * 100;
+  camera.updateProjectionMatrix();
+}
+
+// ---- loading -------------------------------------------------------------
+
+const drop = document.getElementById('drop');
+const filePick = document.getElementById('file');
+drop.onclick = () => filePick.click();
+filePick.onchange = e => { if (e.target.files[0]) read(e.target.files[0]); };
+for (const [ev, on] of [['dragover', true], ['dragleave', false], ['drop', false]]) {
+  drop.addEventListener(ev, e => {
+    e.preventDefault();
+    drop.classList.toggle('hot', on);
+    if (ev === 'drop' && e.dataTransfer.files[0]) read(e.dataTransfer.files[0]);
+  });
+}
+// ?data=<url> loads directly, which makes a view reproducible and lets the
+// inspector be driven from a script.
+const q = new URLSearchParams(location.search).get('data');
+if (q) {
+  fetch(q).then(r => r.json()).then(d => build(d, q.split('/').pop()))
+          .catch(e => { drop.textContent = 'could not load ' + q + ': ' + e.message; });
+}
+
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => {
+  e.preventDefault();
+  if (e.dataTransfer.files[0]) read(e.dataTransfer.files[0]);
+});
+
+function read(file) {
+  drop.textContent = 'reading ' + file.name + '…';
+  const fr = new FileReader();
+  fr.onload = () => {
+    try { build(JSON.parse(fr.result), file.name); }
+    catch (err) { drop.textContent = 'could not read: ' + err.message; }
+  };
+  fr.readAsText(file);
+}
+
+// ---- building ------------------------------------------------------------
+
+let segments = [];   // { role, a, b } in order
+let lineMeshes = {};
+
+function build(data, name) {
+  if (group) { scene.remove(group); disposeAll(group); }
+  group = new THREE.Group();
+  scene.add(group);
+  drop.innerHTML = '<b>' + name + '</b><br><span class="muted">click to load another</span>';
+
+  const meta = data.meta || {};
+  const part = data.part || {};
+  const path = data.path || [];
+
+  // Part surface.
+  const tri = Float32Array.from(part.triangles || []);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(tri, 3));
+  geo.computeVertexNormals();
+  const partMesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+    color: 0x6b7280, roughness: 0.85, metalness: 0.0,
+    side: THREE.DoubleSide, flatShading: true,
+  }));
+  group.add(partMesh);
+
+  // Toolpath, split per role so each can be toggled and coloured.
+  segments = [];
+  let at = null;
+  for (const m of path) {
+    const to = new THREE.Vector3(m.to[0], m.to[1], m.to[2]);
+    if (at) segments.push({ role: m.role, a: at, b: to });
+    at = to;
+  }
+
+  lineMeshes = {};
+  for (const role of ROLES) {
+    const pts = [];
+    for (const s of segments) if (s.role === role) pts.push(s.a, s.b);
+    if (!pts.length) continue;
+    const g = new THREE.BufferGeometry().setFromPoints(pts);
+    const mat = new THREE.LineBasicMaterial({ color: new THREE.Color(COLOR[role]) });
+    const mesh = new THREE.LineSegments(g, mat);
+    mesh.userData.role = role;
+    lineMeshes[role] = mesh;
+    group.add(mesh);
+  }
+
+  // Clearance plane, so "is that rapid high enough" is answerable by eye.
+  const min = part.min || [0,0,0], max = part.max || [0,0,0];
+  const cz = meta.clearance_z;
+  if (typeof cz === 'number') {
+    const w = (max[0]-min[0]) * 1.3 || 10, d = (max[1]-min[1]) * 1.3 || 10;
+    const pg = new THREE.PlaneGeometry(w, d);
+    const pm = new THREE.Mesh(pg, new THREE.MeshBasicMaterial({
+      color: 0x60a5fa, transparent: true, opacity: 0.09, side: THREE.DoubleSide,
+    }));
+    pm.position.set((min[0]+max[0])/2, (min[1]+max[1])/2, cz);
+    pm.visible = document.getElementById('showClear').checked;
+    pm.userData.clearance = true;
+    group.add(pm);
+  }
+
+  const center = new THREE.Vector3((min[0]+max[0])/2, (min[1]+max[1])/2, (min[2]+max[2])/2);
+  const radius = Math.max(max[0]-min[0], max[1]-min[1], max[2]-min[2]) || 10;
+  home = { center, radius };
+  frame();
+
+  document.getElementById('showPart').onchange = e => { partMesh.visible = e.target.checked; };
+  document.getElementById('showClear').onchange = e => {
+    group.children.forEach(c => { if (c.userData.clearance) c.visible = e.target.checked; });
+  };
+
+  renderChecks(data);
+  renderMeta(meta, part, path);
+  renderLayers();
+  renderScrub();
+}
+
+function disposeAll(obj) {
+  obj.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) o.material.dispose();
+  });
+}
+
+// ---- verification --------------------------------------------------------
+
+// These are re-derived here from the geometry, not copied from the engine's own
+// report. A viewer that only echoed the producer's opinion of its output would
+// agree with it even when both were wrong.
+function renderChecks(data) {
+  const meta = data.meta || {};
+  const path = data.path || [];
+  const cz = meta.clearance_z;
+  const out = [];
+
+  const links = path.filter(m => m.role === 'link').length;
+  out.push(links === 0
+    ? ['ok', 'PASS', 'no unresolved links — path is machinable']
+    : ['bad', 'FAIL', links + ' unresolved link(s): NOT machinable']);
+
+  if (typeof cz === 'number') {
+    let low = 0, worst = Infinity;
+    let prev = null;
+    for (const m of path) {
+      if (m.role === 'rapid') {
+        if (m.to[2] < cz - 1e-6) { low++; worst = Math.min(worst, m.to[2]); }
+        if (prev && prev.to[2] < cz - 1e-6) { low++; worst = Math.min(worst, prev.to[2]); }
+      }
+      prev = m;
+    }
+    out.push(low === 0
+      ? ['ok', 'PASS', 'every rapid is at or above clearance ' + cz.toFixed(2) + ' mm']
+      : ['bad', 'FAIL', low + ' rapid endpoint(s) below clearance, lowest ' + worst.toFixed(2)]);
+  }
+
+  let diagonal = 0;
+  let prev = null;
+  for (const m of path) {
+    if (prev && (m.role === 'plunge' || m.role === 'retract')) {
+      const dx = m.to[0] - prev.to[0], dy = m.to[1] - prev.to[1];
+      if (Math.hypot(dx, dy) > 1e-6) diagonal++;
+    }
+    prev = m;
+  }
+  out.push(diagonal === 0
+    ? ['ok', 'PASS', 'plunges and retracts are vertical']
+    : ['bad', 'FAIL', diagonal + ' plunge/retract move(s) travel sideways']);
+
+  let nofeed = path.filter(m => m.role !== 'rapid' && !(m.feed > 0)).length;
+  let rapidfeed = path.filter(m => m.role === 'rapid' && m.feed != null).length;
+  out.push(nofeed === 0 && rapidfeed === 0
+    ? ['ok', 'PASS', 'feed rates are consistent with move roles']
+    : ['bad', 'FAIL', nofeed + ' feeding move(s) without a feed, ' + rapidfeed + ' rapid(s) with one']);
+
+  // Re-derived here rather than trusted from meta, like every other check.
+  let steep = 0, deepest = 0;
+  prev = null;
+  for (const m of path) {
+    if (prev && m.role === 'cut') {
+      const drop = prev.to[2] - m.to[2];
+      const flat = Math.hypot(m.to[0] - prev.to[0], m.to[1] - prev.to[1]);
+      if (drop > 0 && drop > flat) { steep++; deepest = Math.max(deepest, drop); }
+    }
+    prev = m;
+  }
+  out.push(steep === 0
+    ? ['ok', 'PASS', 'no cutting move descends more steeply than 45 degrees']
+    : ['bad', 'FAIL', steep + ' cutting move(s) are really plunges, deepest ' +
+       deepest.toFixed(2) + ' mm — will break cutters at cutting feed']);
+
+  const rl = meta.refinement_limited || 0;
+  if (rl > 0) out.push(['warn', 'WARN', rl + ' span(s) hit the refinement limit — path is coarser than requested']);
+  const disc = meta.discontinuities || 0;
+  if (disc > 0) out.push(['ok', 'NOTE', disc + ' span(s) stopped at a surface discontinuity — expected on parts with vertical walls']);
+  const sp = meta.suspicious_plunges || 0;
+  if (sp > 0) out.push(['warn', 'WARN', sp + ' plunge(s) do not start above the surface']);
+  for (const w of (meta.warnings || [])) out.push(['warn', 'WARN', w]);
+
+  document.getElementById('checks').innerHTML = out.map(([cls, tag, text]) =>
+    '<div class="check ' + cls + '"><b>' + tag + '</b><span>' + esc(text) + '</span></div>').join('');
+  document.getElementById('checks-card').hidden = false;
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c]));
+}
+
+function renderMeta(meta, part, path) {
+  const rows = [
+    ['model', (meta.model || '').split(/[\\/]/).pop()],
+    ['file units', meta.units],
+    ['size', part.min && part.max
+      ? (part.max[0]-part.min[0]).toFixed(1) + ' × ' +
+        (part.max[1]-part.min[1]).toFixed(1) + ' × ' +
+        (part.max[2]-part.min[2]).toFixed(1) + ' mm' : '–'],
+    ['triangles', (part.triangle_count ?? 0).toLocaleString()],
+    ['tool', meta.tool + ' ⌀' + (meta.tool_radius * 2).toFixed(2)],
+    ['stock r/a', meta.stock_radial + ' / ' + meta.stock_axial + ' mm'],
+    ['stepover', meta.stepover + ' mm'],
+    ['tolerance', meta.tolerance + ' mm'],
+    ['clearance Z', (meta.clearance_z ?? 0).toFixed(2) + ' mm'],
+    ['passes', meta.passes],
+    ['moves', (path.length || 0).toLocaleString()],
+    ['cutting', (meta.cutting_length_mm ?? 0).toFixed(0) + ' mm'],
+  ];
+  document.getElementById('meta').innerHTML = rows
+    .map(([k, v]) => '<tr><td>' + esc(k) + '</td><td>' + esc(v ?? '–') + '</td></tr>').join('');
+  document.getElementById('meta-card').hidden = false;
+}
+
+function renderLayers() {
+  const counts = {};
+  for (const s of segments) counts[s.role] = (counts[s.role] || 0) + 1;
+  const el = document.getElementById('layers');
+  el.innerHTML = ROLES.filter(r => counts[r]).map(r =>
+    '<label><input type="checkbox" data-role="' + r + '" checked>' +
+    '<span class="sw" style="background:' + COLOR[r] + '"></span>' +
+    '<span>' + r + '</span>' +
+    '<span style="margin-left:auto;color:var(--dim)">' + counts[r].toLocaleString() + '</span></label>'
+  ).join('');
+  el.querySelectorAll('input').forEach(cb => {
+    cb.onchange = () => {
+      const m = lineMeshes[cb.dataset.role];
+      if (m) m.visible = cb.checked;
+    };
+  });
+  document.getElementById('layers-card').hidden = false;
+}
+
+// Scrubbing through move order is how you catch a path that is geometrically
+// fine but travels in a senseless sequence.
+function renderScrub() {
+  const scrub = document.getElementById('scrub');
+  const label = document.getElementById('scrubLabel');
+  scrub.min = 1; scrub.max = Math.max(1, segments.length); scrub.value = scrub.max;
+  const apply = () => {
+    const n = +scrub.value;
+    for (const role of ROLES) {
+      const mesh = lineMeshes[role];
+      if (!mesh) continue;
+      let shown = 0;
+      for (let i = 0; i < n; i++) if (segments[i].role === role) shown++;
+      mesh.geometry.setDrawRange(0, shown * 2);
+    }
+    label.textContent = n.toLocaleString() + ' / ' + segments.length.toLocaleString();
+  };
+  scrub.oninput = apply;
+  apply();
+  document.getElementById('scrub-card').hidden = false;
+}
+</script>
+</body>
+</html>

@@ -88,12 +88,23 @@ pub struct StrategyReport {
     /// Spans that exhausted [`ParallelParams::max_depth`] while still out of
     /// tolerance. Non-zero means the path is coarser than requested.
     pub refinement_limited: u64,
+    /// Spans that shrank below the geometric limit while still out of tolerance.
+    ///
+    /// This is the signature of a genuine discontinuity in the CL surface — a flat
+    /// mill crossing a step, or any tool passing a vertical wall — where no chord
+    /// can follow the surface however finely it is split. Expected on most real
+    /// parts, and distinct from giving up early, which is why it is counted
+    /// separately. Every emitted point is still exactly on the surface.
+    pub discontinuities: u64,
     /// Contiguous runs of cutting produced.
     pub passes: u64,
 }
 
 impl StrategyReport {
     /// Whether anything needs the caller's attention.
+    ///
+    /// Discontinuities do not count: they are a property of the part, not a
+    /// shortcoming of the path.
     pub fn is_clean(&self) -> bool {
         self.refinement_limited == 0
     }
@@ -202,6 +213,12 @@ pub fn region_from_bounds(bounds: &Aabb, margin: f64) -> (DVec2, DVec2) {
 /// every later conversion to `f64` exact.
 const MAX_STEPS: u32 = 1_000_000;
 
+/// Refinement stops once a span is this many tolerances wide.
+///
+/// Below it, the surface is discontinuous rather than merely curved, and further
+/// splitting cannot help.
+const GEOMETRIC_LIMIT: f64 = 0.5;
+
 /// Clamp a computed count into `[1, MAX_STEPS]`.
 fn clamp_count(n: f64) -> u32 {
     if !n.is_finite() || n < 1.0 {
@@ -279,6 +296,12 @@ fn refine<F: Fn(f64) -> Option<DVec3>>(
     };
     let chord = (p0 + p1) * 0.5;
     if (pm.z - chord.z).abs() <= params.tolerance {
+        return;
+    }
+    // A span narrower than this cannot be meaningfully split further; continuing
+    // would just burn depth against a step the chord can never follow.
+    if (u1 - u0).abs() <= params.tolerance * GEOMETRIC_LIMIT {
+        report.discontinuities += 1;
         return;
     }
     if depth >= params.max_depth {

@@ -202,6 +202,36 @@ impl Toolpath {
         self.moves.iter().any(|m| m.role.is_unplanned())
     }
 
+    /// Cutting moves that descend more steeply than `max_ratio` (fall per unit of
+    /// horizontal travel), and the deepest such descent in millimetres.
+    ///
+    /// A cutting move that drops a long way while barely advancing is a full-depth
+    /// plunge wearing a `Cut` label, and at cutting feed that is how end mills get
+    /// broken. It arises naturally wherever the CL surface is discontinuous — a
+    /// parallel pass crossing a vertical wall samples the top on one side and the
+    /// floor on the other, and both samples are correct.
+    ///
+    /// Detecting it is not optional politeness: every other check in this crate
+    /// passes on such a path, because every individual point really is on the
+    /// surface. Only the *connection* between them is unmachinable.
+    pub fn steep_cut_descents(&self, from: DVec3, max_ratio: f64) -> (u64, f64) {
+        let mut at = from;
+        let mut count = 0;
+        let mut deepest: f64 = 0.0;
+        for m in &self.moves {
+            if m.role == MoveRole::Cut {
+                let drop = at.z - m.to.z;
+                let flat = (m.to.truncate() - at.truncate()).length();
+                if drop > 0.0 && drop > flat * max_ratio {
+                    count += 1;
+                    deepest = deepest.max(drop);
+                }
+            }
+            at = m.to;
+        }
+        (count, deepest)
+    }
+
     /// Total length of moves whose role cuts, in millimetres.
     ///
     /// Arcs are measured by their chord in 0.1, since nothing emits them yet.
@@ -322,6 +352,42 @@ mod tests {
         assert_eq!(t.cutting_length(dvec3(0.0, 0.0, 0.0)), 7.0);
         assert_eq!(t.end(), Some(dvec3(3.0, 14.0, 0.0)));
         assert_eq!(t.len(), 4);
+    }
+
+    /// The check that a geometrically perfect path can still be unmachinable.
+    #[test]
+    fn detects_cut_moves_that_are_really_plunges() {
+        let mut t = Toolpath::new();
+        // A gentle pass, then a wall: correct points, unmachinable connection.
+        t.feed_to(dvec3(0.0, 0.0, 10.0), MoveRole::Cut, 500.0)
+            .unwrap();
+        t.feed_to(dvec3(5.0, 0.0, 10.0), MoveRole::Cut, 500.0)
+            .unwrap();
+        t.feed_to(dvec3(5.01, 0.0, -7.0), MoveRole::Cut, 500.0)
+            .unwrap();
+
+        let (count, deepest) = t.steep_cut_descents(dvec3(0.0, 0.0, 10.0), 1.0);
+        assert_eq!(count, 1, "the wall crossing must be caught");
+        assert!((deepest - 17.0).abs() < 1e-9, "deepest was {deepest}");
+
+        // Climbing a wall is not the same hazard as diving down one.
+        let mut up = Toolpath::new();
+        up.feed_to(dvec3(0.0, 0.0, 10.0), MoveRole::Cut, 500.0)
+            .unwrap();
+        up.feed_to(dvec3(0.01, 0.0, 27.0), MoveRole::Cut, 500.0)
+            .unwrap();
+        assert_eq!(up.steep_cut_descents(dvec3(0.0, 0.0, 10.0), 1.0).0, 0);
+    }
+
+    #[test]
+    fn a_shallow_pass_has_no_steep_descents() {
+        let mut t = Toolpath::new();
+        for i in 1..20 {
+            let x = f64::from(i);
+            t.feed_to(dvec3(x, 0.0, 10.0 - x * 0.1), MoveRole::Cut, 500.0)
+                .unwrap();
+        }
+        assert_eq!(t.steep_cut_descents(dvec3(0.0, 0.0, 10.0), 1.0), (0, 0.0));
     }
 
     /// Arcs are reserved but must already be representable, or arc fitting would

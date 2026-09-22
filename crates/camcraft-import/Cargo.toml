@@ -10,6 +10,7 @@ authors.workspace      = true
 
 [dependencies]
 camcraft-geom.workspace = true
+glam.workspace        = true
 stl_io.workspace        = true
 thiserror.workspace     = true
 

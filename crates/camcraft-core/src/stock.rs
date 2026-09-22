@@ -123,7 +123,7 @@ impl EffectiveTool {
     ///
     /// Takes anything convertible into the bullnose family, which is every cutter
     /// this engine currently has.
-    pub fn new(tool: &impl BullnoseFamily, stock: Stock) -> Result<Self, ToolError> {
+    pub fn new(tool: &(impl BullnoseFamily + ?Sized), stock: Stock) -> Result<Self, ToolError> {
         let base = tool.as_bullnose();
         let m = stock.radial.min(stock.axial);
         let shape = Bullnose::new(base.max_radius() + stock.radial, base.corner() + m)?;
