@@ -37,3 +37,5 @@ pub mod stock;
 
 pub mod parallel;
 pub mod toolpath;
+
+pub mod linker;
