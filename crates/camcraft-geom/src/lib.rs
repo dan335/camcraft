@@ -34,3 +34,5 @@ pub mod synthetic;
 pub mod bvh;
 
 pub mod heightmap;
+
+pub mod contour;

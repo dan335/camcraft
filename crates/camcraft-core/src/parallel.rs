@@ -86,6 +86,12 @@ pub enum StrategyError {
     /// A move could not be added.
     #[error(transparent)]
     Toolpath(#[from] ToolpathError),
+    /// A polygon operation failed.
+    ///
+    /// Propagated rather than swallowed: an empty region reads as "nothing to cut",
+    /// which is indistinguishable from a correct answer.
+    #[error("region operation failed: {0}")]
+    Region(String),
 }
 
 /// What happened while building a path, beyond the path itself.

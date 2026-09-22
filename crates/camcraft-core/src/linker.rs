@@ -20,6 +20,7 @@
 //! from inside material is how tools get snapped, and "keep tool down" optimisation
 //! is a later `Toolpath -> Toolpath` transform, not something to improvise here.
 
+use camcraft_geom::heightmap::HeightMap;
 use glam::{DVec2, DVec3, dvec3};
 
 use crate::toolpath::{MoveRole, Toolpath, ToolpathError};
@@ -62,6 +63,98 @@ impl ClearancePlane {
 impl Clearance for ClearancePlane {
     fn safe_z(&self, _from: DVec2, _to: DVec2, _tool_radius: f64) -> f64 {
         self.z
+    }
+}
+
+/// Clearance taken from a height field, plus a margin.
+///
+/// This is what [`Clearance`] existed for. A plane must clear the tallest thing on
+/// the table everywhere, so every traverse flies at the height of the worst obstacle
+/// on the part. A field answers per traverse, so the tool stays low where it can.
+///
+/// The height is sampled **along** the traverse and across the tool's own width,
+/// because the cutter is not a point: a rapid whose axis misses a boss can still put
+/// the cutter's shoulder through it.
+#[derive(Debug, Clone)]
+pub struct ClearanceField {
+    field: HeightMap,
+    margin: f64,
+    fallback: f64,
+}
+
+impl ClearanceField {
+    /// Clear `field` by `margin`, falling back to `fallback` where the field has no
+    /// data.
+    ///
+    /// The fallback matters: an unsampled column is an unknown height, and flying
+    /// low over an unknown is exactly the wrong guess.
+    pub fn new(field: HeightMap, margin: f64, fallback: f64) -> Result<Self, LinkError> {
+        if !margin.is_finite() || margin < 0.0 {
+            return Err(LinkError::BadParameter {
+                name: "margin",
+                value: margin,
+            });
+        }
+        if !fallback.is_finite() {
+            return Err(LinkError::BadParameter {
+                name: "fallback",
+                value: fallback,
+            });
+        }
+        Ok(Self {
+            field,
+            margin,
+            fallback,
+        })
+    }
+
+    /// Samples taken along a traverse. Fixed, so the answer cannot vary with input.
+    const SAMPLES: u32 = 24;
+}
+
+impl Clearance for ClearanceField {
+    fn safe_z(&self, from: DVec2, to: DVec2, tool_radius: f64) -> f64 {
+        let r = if tool_radius.is_finite() && tool_radius > 0.0 {
+            tool_radius
+        } else {
+            0.0
+        };
+        let mut worst = f64::MIN;
+        let mut unknown = false;
+
+        for i in 0..=Self::SAMPLES {
+            let t = f64::from(i) / f64::from(Self::SAMPLES);
+            let p = from.lerp(to, t);
+            // Sample the tool's footprint, not just its axis: a rapid whose centre
+            // misses a boss can still catch it with the cutter's shoulder.
+            let probes = [
+                p,
+                p + DVec2::new(r, 0.0),
+                p - DVec2::new(r, 0.0),
+                p + DVec2::new(0.0, r),
+                p - DVec2::new(0.0, r),
+            ];
+            for q in probes {
+                match self.field.sample(q.x, q.y) {
+                    Some(h) => worst = worst.max(h),
+                    None => unknown = true,
+                }
+            }
+        }
+
+        let base = if worst > f64::MIN { worst } else { f64::MIN };
+        let from_field = if base > f64::MIN {
+            base + self.margin
+        } else {
+            f64::MIN
+        };
+        // Anywhere the field is silent, the fallback governs. Never fly under an
+        // unknown.
+        if unknown || from_field <= f64::MIN {
+            from_field.max(self.fallback)
+        } else {
+            from_field
+        }
     }
 }
 
@@ -413,6 +506,84 @@ mod tests {
         );
         assert_eq!(second.1, dvec2(5.0, 1.0), "asked to the start of the next");
         assert_eq!(second.2, 3.0, "tool radius is passed through");
+    }
+
+    fn stepped_field() -> HeightMap {
+        // Flat at 0, with a 20 mm boss in the middle.
+        let mut f = HeightMap::filled(dvec2(-10.0, -10.0), 1.0, 21, 21, 0.0).unwrap();
+        for iy in 8..13 {
+            for ix in 8..13 {
+                f.set(ix, iy, 20.0);
+            }
+        }
+        f
+    }
+
+    #[test]
+    fn rejects_an_unusable_field() {
+        let f = stepped_field();
+        assert!(ClearanceField::new(f.clone(), -1.0, 0.0).is_err());
+        assert!(ClearanceField::new(f, 5.0, f64::NAN).is_err());
+    }
+
+    /// The whole point of a field over a plane: stay low where it is safe to.
+    #[test]
+    fn a_traverse_clear_of_the_boss_flies_low() {
+        let c = ClearanceField::new(stepped_field(), 5.0, 0.0).unwrap();
+        let away = c.safe_z(dvec2(-9.0, -9.0), dvec2(-7.0, -9.0), 0.5);
+        assert!(
+            (away - 5.0).abs() < 1e-9,
+            "clear of the boss it should be flat + margin, got {away}"
+        );
+    }
+
+    /// And rise where it is not.
+    #[test]
+    fn a_traverse_over_the_boss_rises() {
+        let c = ClearanceField::new(stepped_field(), 5.0, 0.0).unwrap();
+        let over = c.safe_z(dvec2(-9.0, 0.0), dvec2(9.0, 0.0), 0.5);
+        assert!(
+            (over - 25.0).abs() < 1e-9,
+            "crossing the boss it should be 20 + margin, got {over}"
+        );
+    }
+
+    /// The cutter is not a point. A rapid whose axis misses a boss can still put
+    /// the tool's shoulder through it.
+    #[test]
+    fn the_tool_width_is_accounted_for() {
+        let c = ClearanceField::new(stepped_field(), 5.0, 0.0).unwrap();
+        // The boss spans cell centres -2..2. A traverse at y = -4 clears it by 2 mm
+        // on the axis, but a 3 mm cutter does not.
+        let thin = c.safe_z(dvec2(-9.0, -4.0), dvec2(9.0, -4.0), 0.1);
+        let wide = c.safe_z(dvec2(-9.0, -4.0), dvec2(9.0, -4.0), 3.0);
+        assert!(
+            thin < 25.0,
+            "a thin tool passes beside the boss, got {thin}"
+        );
+        assert!(
+            (wide - 25.0).abs() < 1e-9,
+            "a wide tool must clear it, got {wide}"
+        );
+    }
+
+    /// An unsampled column is an unknown height. Flying low over an unknown is
+    /// exactly the wrong guess.
+    #[test]
+    fn unknown_ground_falls_back_rather_than_flying_low() {
+        let c = ClearanceField::new(stepped_field(), 5.0, 99.0).unwrap();
+        let outside = c.safe_z(dvec2(500.0, 500.0), dvec2(520.0, 500.0), 1.0);
+        assert_eq!(outside, 99.0, "off the field, the fallback governs");
+    }
+
+    /// Fields and planes must be interchangeable at the call site, since that is the
+    /// entire reason clearance is a trait.
+    #[test]
+    fn a_field_substitutes_for_a_plane() {
+        let field = ClearanceField::new(stepped_field(), 5.0, 0.0).unwrap();
+        let (out, report) = link(&strategy_output(), &field, &params()).unwrap();
+        assert!(!out.has_unplanned_links());
+        assert_eq!(report.links_resolved, 2);
     }
 
     #[test]

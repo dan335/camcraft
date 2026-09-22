@@ -41,3 +41,7 @@ pub mod toolpath;
 pub mod linker;
 
 pub mod simadapt;
+
+pub mod roughing;
+
+pub mod ordering;
