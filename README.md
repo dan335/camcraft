@@ -75,6 +75,12 @@ cargo test  --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+From 0.1-d, `camcraft-import` pulls in OpenCascade, which adds **cmake and a C++
+toolchain** as prerequisites (on Windows, build from an MSVC environment so cmake can
+find `cl.exe`). That crate is a leaf only `camcraft-cli` depends on, so the inner loop
+on `geom` / `sim` / `core` / `post` never pays that cost. Reasoning in
+[docs/decisions/0001-step-backend.md](docs/decisions/0001-step-backend.md).
+
 ## License
 
 Dual licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
