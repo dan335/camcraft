@@ -5,12 +5,18 @@ Chosen to span what the importer actually has to survive, not what's convenient.
 
 | file | units | faces | surfaces | size (mm) | what it exercises |
 |---|---|---|---|---|---|
-| `hinge_jig.step` | inch | 39 | planar | 25×32×33 | smallest sane case |
-| `lego_4x2_01.step` | inch | 76 | plane, cone | 101×50×38 | cylinders and fillets |
-| `door_handle_guide.step` | inch | 89 | plane, cone | 60×221×45 | a real router jig |
-| `rail_guide.step` | inch | 134 | plane, cone | 237×242×13 | many faces, all analytic |
-| `sled_base.step` | inch | 387 | plane, cone, **6 B-spline** | 251×233×76 | largest; mixed analytic + NURBS |
-| `bowl_01.step` | mm | 5 | **2 surface-of-revolution + seam curves** | 380×380×63 | revolved geometry and seam handling |
+| `hinge_jig.step` | inch | 39 | planar | 25.4×31.8×33.3 | smallest sane case |
+| `lego_4x2_01.step` | inch | 76 | plane, cone | 100.6×49.8×38.1 | cylinders and fillets |
+| `door_handle_guide.step` | inch | 89 | plane, cone | 57.1×215.9×33.0 | a real router jig |
+| `rail_guide.step` | inch | 134 | plane, cone | 237.0×40.6×12.7 | many faces, all analytic |
+| `sled_base.step` | inch | 387 | plane, cone, **6 B-spline** | 237.0×227.0×76.2 | largest; mixed analytic + NURBS |
+| `bowl_01.step` | mm | 5 | **2 surface-of-revolution + seam curves** | 380.0×380.0×20.0 | revolved geometry and seam handling |
+
+Sizes are the extent of each file's own B-rep vertices, read straight from the text,
+and `crates/camcraft-import/tests/step_fixtures.rs` holds the importer to them. An
+earlier version of this table gave the box around *every* `CARTESIAN_POINT`, which
+includes placement origins and circle centres that are not on the part: `rail_guide`
+read 242 mm deep instead of 40.6.
 
 ## Two things this set is designed to catch
 
@@ -23,12 +29,22 @@ specifically so a hardcoded inch conversion fails just as loudly as a missing on
 passes trivially. `sled_base` and `bowl_01` are the parts that separate a usable
 backend from an unusable one — see `docs/decisions/0001-step-backend.md`.
 
-## Invariant every importer must satisfy
+## Invariants every importer must satisfy
 
-A NURBS surface lies within the convex hull of its control points. So for any of these
-files, the tessellated bounding box must fit inside the bounding box of the raw
-`CARTESIAN_POINT` values (after unit conversion). That check is cheap, needs no
-reference mesh, and catches corrupt surface evaluation outright.
+Both are checked on every STEP import, not only in tests (`crates/camcraft-import/src/step.rs`).
+
+- **Nothing lands outside the file's own geometry.** A NURBS surface lies within the
+  convex hull of its control points, so the mesh must fit inside the box around the
+  raw `CARTESIAN_POINT` values, after unit conversion. The box has to be grown for
+  analytic geometry: a circle leaves it by up to its radius, and a surface of
+  revolution can land on the far side of its axis from every point in the file. The
+  rim of `bowl_01` is a torus reaching 190 mm from its axis, while every point in
+  the file sits on one side of it. This check catches corrupt surface evaluation
+  outright.
+- **The mesh reaches every vertex.** B-rep vertices lie on the part, so the mesh must
+  extend at least as far as they do. The first check cannot catch a unit error that
+  makes the part too *small*, because a shrunken mesh still sits inside the box. This
+  one does.
 
 ## Private fixtures: `CAMCRAFT_FIXTURES`
 

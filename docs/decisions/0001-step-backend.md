@@ -117,5 +117,42 @@ Accepted costs, all of which were actually hit and resolved during the spike:
   its history. A synthetic sculpted-surface fixture with a comparable control-point
   count should replace it; until then that regression is only caught on a machine with
   `CAMCRAFT_FIXTURES` set.
+- **Licensing was not weighed here, and must be before binaries are distributed.**
+  `opencascade` and `occt-sys` are LGPL-2.1, and OpenCascade itself is LGPL-2.1
+  with an additional exception. `occt-sys` links it statically. camcraft is MIT or
+  Apache-2.0. A static LGPL link in a distributed binary brings obligations, such as
+  letting users relink against a modified library, that a permissive project does
+  not otherwise have. The options include dynamic linking, shipping object files, a
+  feature flag, or accepting the obligations. None of this blocks a private
+  repository.
 - **Revisit if** a pure-Rust B-rep tessellator matures. The prize is dropping the C++
   toolchain requirement. `truck` is not close today on curved surfaces.
+
+## Implemented (0.1-d, 2026-09-22)
+
+`camcraft_import::step::load_step`, wired into every CLI subcommand by file
+extension. What building it on real files added to the above:
+
+- **The containment check needed more than the points' box.** Grown by the largest
+  circle radius, it still wrongly failed `bowl_01`, whose rim is a surface of
+  revolution reaching 190 mm from its axis on a side where the file has no points.
+  Each revolved surface is now bounded by a ball around its axis point, as far as its
+  profile reaches, and each extrusion by its vector. A check that fails correct
+  geometry gets loosened until it means nothing, so it was made right instead.
+- **A second check bounds the mesh from below.** Containment cannot catch a unit
+  error that makes the part too small, because a shrunken mesh still sits inside the
+  hull. B-rep vertices lie on the part, so the mesh must reach every one of them.
+  Both failure directions are covered by a test that scales a real mesh by 25.4 each
+  way.
+- **The unit is read from the file independently of OpenCascade,** from the
+  `GLOBAL_UNIT_ASSIGNED_CONTEXT` rather than the first unit defined. Fusion exports
+  define inch, millimetre and metre and assign only one. Unknown or conflicting
+  units are errors, never millimetres.
+- **The file's face count is checked against the kernel's,** since a face dropped in
+  transfer is a hole.
+- **The tessellation tolerance is a quarter of the job tolerance.** The simulator
+  verifies against the mesh, so tessellation error is invisible to it and must stay
+  a small part of the budget.
+- On an M-series Mac the first OpenCascade build took 4 min 49 s in release and
+  under a minute more for the dev profile. `sled_base` tessellates in 0.2 s at
+  0.0125 mm, and `bowl_01` in 1.6 s.

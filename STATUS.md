@@ -2,10 +2,10 @@
 
 Last updated 2026-09-22. Read this before picking the work back up.
 
-**0.1-a, 0.1-b and 0.1-c are complete, plus the `job.toml` contract, and the
-inspector now shows the real multi-operation job.** All gates green. The engine takes
-an STL and a job file and writes G-code, and refuses to write a program the simulator
-has not verified against material.
+**0.1 is feature-complete: 0.1-a to 0.1-d, the `job.toml` contract, and an
+inspector that shows the real multi-operation job.** All gates green. The engine
+takes a STEP or STL model and a job file and writes G-code, and refuses to write a
+program the simulator has not verified against material.
 
 **Nothing has been cut yet.** See *Before the first cut* below — there are things
 only the machine can tell us.
@@ -17,15 +17,16 @@ cd D:\rust\camcraft
 
 # Look first: every operation's path as JSON, no G-code written
 cargo run --release -p camcraft-cli -- job `
-  "D:\temp\coping_sled_rail_01 v12.stl" examples\rail-jig.toml `
-  --units mm --inspect job.json
+  fixtures\step\sled_base.step examples\rail-jig.toml --inspect job.json
 bash scripts/view.sh     # then drop job.json on the page
 
 # Then write one program per operation (--inspect and --out can go together)
 cargo run --release -p camcraft-cli -- job `
-  "D:\temp\coping_sled_rail_01 v12.stl" examples\rail-jig.toml `
-  --units mm --profile masso --out out
+  fixtures\step\sled_base.step examples\rail-jig.toml --profile masso --out out
 ```
+
+A STEP file states its own units, so `--units` is only needed for STL. Given with
+STEP it must agree with the file, or the run is refused.
 
 `inspect` and `post` still exist for a single finishing pass described with flags.
 They build a one-operation job and go through the same `run_job` as `job`, so there
@@ -37,12 +38,14 @@ positions and compares them with the inspection JSON, move for move.
 Exit codes: `0` clean, `2` ran with warnings worth reading, `1` refused because the
 simulator objected. `--force` overrides and says loudly that it did.
 
-Last full run on the 237 × 227 × 76 mm router jig:
+Last full run on the 237 × 227 × 76 mm router jig, read straight from
+`sled_base.step`. It agrees with the earlier run from an STL export of the same part
+to within 0.1%, and needs 0.2 s to tessellate:
 
 ```
-rough:  1048 passes, removed 3373651 mm3, travel saved 77%, rapid contacts 0
-finish:  556 passes, removed   98421 mm3, travel saved  0%, rapid contacts 0
-verified: 155330 columns compared, gouges 0, deepest 0.000 mm
+rough:  1048 passes, removed 3370907 mm3, travel saved 77%, rapid contacts 0
+finish:  556 passes, removed  101714 mm3, travel saved  0%, rapid contacts 0
+verified: 155326 columns compared, gouges 0, deepest 0.000 mm
 ```
 
 Finishing saving 0% travel is correct, not a failure: a parallel zigzag already ends
@@ -50,9 +53,11 @@ each pass next to where the following one starts.
 
 ## What is next, in order
 
-1. **0.1-d, STEP import.** The backend decision is made and the spike is done
-   (`docs/decisions/0001-step-backend.md`), so this is wiring rather than research.
-   OpenCascade, with cmake and a C++ toolchain as documented prerequisites.
+1. **Build on Windows once.** STEP import was built and tested on macOS only. The
+   spike needed `advapi32` linked explicitly on MSVC, and
+   `crates/camcraft-import/build.rs` does that, but the spike reported sixteen
+   unresolved externals and named only that one library. If more appear, the
+   libraries that define them go in the same file.
 2. **Nameless ASCII STL fails to load.** A file beginning `solid` followed by a
    newline (no name) is read as binary and fails with "failed to fill whole buffer".
    Most opencamlib sample files are like this. `stl_io` appears to detect ASCII by
@@ -72,6 +77,11 @@ actually break cutters on the day:
 - Roughing is conservative contour-parallel clearing. It has never cut anything.
 
 ## Open questions
+
+- **Licensing of distributed binaries.** STEP import links OpenCascade statically
+  through LGPL-2.1 crates, while camcraft is MIT or Apache-2.0. This doesn't matter
+  while the repo is private, but it has to be settled before anyone ships a binary.
+  See the decision record.
 
 Deferred on purpose: these are hard to judge until the GUI can show what is going
 on. Come back to them once it can.
@@ -116,6 +126,14 @@ Worth knowing, because each was found by looking rather than by a test passing:
   The viewer's rapid check (CC102) used to compare rapids against that plane. It now
   rasterises the part triangles, grows the result by the cutter radius, and checks
   that every rapid clears it, which stays true when clearance follows the material.
+- **The STEP containment check wrongly failed correct geometry.** Growing the box
+  of the file's points by the largest circle radius is not enough for a surface of
+  revolution. `bowl_01`'s rim reaches 190 mm from its axis, on a side of the axis
+  where the file has no points at all. A check that fails correct parts gets
+  loosened until it means nothing, so it was made right instead.
+- **`fixtures/step/README.md` gave the wrong sizes.** They were the box around every
+  point in the file, not the part.
+- **The CLI logged to stdout.** Errors now go to stderr.
 - **The post golden files were never committed.** `*.nc` in `.gitignore` caught
   `tests/golden/*.nc`, so on a fresh clone every golden test failed.
 - **The viewer drew off-screen on a 2x display.** The canvas laid out at its pixel
@@ -145,7 +163,7 @@ Worth knowing, because each was found by looking rather than by a test passing:
 
 ```
 camcraft-geom     BVH, height maps, contours, synthetic fixtures     (leaf)
-camcraft-import   STL, units required rather than assumed            -> geom
+camcraft-import   STL and STEP (OpenCascade), checked against the file -> geom
 camcraft-sim      material removal: stock updater + gouge oracle     -> geom
 camcraft-core     tools, CL maps, strategies, toolpaths, job, run    -> geom, sim
 camcraft-post     Op IR, TOML dialect renderers                      -> geom, core

@@ -7,8 +7,10 @@ A B-rep modelling kernel is 50+ person-years of work — which is why Plasticity
 Shapr3D both license Parasolid rather than write one — but CAM needs no kernel at all.
 This is the CAM half.
 
-**Status: 0.1-c complete, pre-alpha.** Takes an STL and a job file, writes G-code,
-and refuses to write a program the simulator has not verified against material.
+**Status: 0.1-d complete, pre-alpha.** Takes a STEP or STL model and a job file,
+writes G-code, and refuses to write a program the simulator has not verified against
+material. STEP files are read in the units they declare, and every import is checked
+against the file it came from.
 Nothing has been cut yet. See [STATUS.md](STATUS.md) for where the work left off and
 what the simulator cannot check for you.
 
@@ -104,3 +106,9 @@ on `geom` / `sim` / `core` / `post` never pays that cost. Reasoning in
 ## License
 
 Dual licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
+**Not yet settled for distributed binaries.** STEP import links OpenCascade
+statically, through the `opencascade` and `occt-sys` crates, and both are LGPL-2.1
+(OpenCascade adds its own exception). The source here stays MIT or Apache-2.0, but a
+`camcraft` binary carries LGPL obligations until that is resolved. See
+[docs/decisions/0001-step-backend.md](docs/decisions/0001-step-backend.md).
