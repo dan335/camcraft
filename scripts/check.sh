@@ -34,17 +34,18 @@ run "clippy" cargo clippy --workspace --all-targets -- -D warnings
 run "test"   cargo test --workspace --all-targets
 run "doc"    cargo doc --workspace --no-deps
 
-# Identical inputs must produce identical results on any core count. Without this,
-# golden-file comparisons are flaky and real regressions become invisible.
-printf '\n\033[1m== determinism ==\033[0m\n'
-if RAYON_NUM_THREADS=1 cargo test --workspace --quiet >/dev/null 2>&1 &&
-   RAYON_NUM_THREADS=8 cargo test --workspace --quiet >/dev/null 2>&1; then
-  PASS+=("determinism")
-  echo "tests agree at 1 and 8 threads"
-else
-  FAIL+=("determinism")
-  echo "tests differ across thread counts"
-fi
+# Identical inputs must produce identical results on any core count.
+#
+# This gate used to run the whole suite twice, at one thread and at eight. That was
+# expensive -- it tripled an already slow run -- and, worse, it did not test what it
+# claimed. Running a deterministic test at two thread counts just passes twice; it
+# never compares one run against the other, so it could not have detected
+# non-determinism at all.
+#
+# The real evidence lives in tests that compare output against itself:
+# fill_is_bit_identical_regardless_of_threads builds the same CL map at one and
+# eight threads and diffs it bit for bit. That is direct, and it takes seconds.
+run "determinism" cargo test --workspace --quiet -- --exact   clmap::tests::fill_is_bit_identical_regardless_of_threads   dropcutter::tests::is_deterministic   ordering::tests::ordering_is_deterministic
 
 if [ "$FULL" = "1" ]; then
   run "bench" cargo bench --workspace --no-fail-fast

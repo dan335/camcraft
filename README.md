@@ -81,6 +81,9 @@ bash scripts/check.sh          # fmt, clippy, tests, docs, determinism
 bash scripts/check.sh --full   # the above plus benchmarks
 ```
 
+Run it unpiped. Piping through `tail` buffers the whole run and hides progress on
+a suite that now takes minutes; read the tail of the output afterwards instead.
+
 ```powershell
 .\scripts\check.ps1
 .\scripts\check.ps1 -Full
