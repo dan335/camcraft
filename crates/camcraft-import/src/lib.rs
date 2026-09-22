@@ -8,4 +8,7 @@
 //! `post` never pays it. This is structural, not a feature flag: STEP is a
 //! first-class input, because it is how parts arrive from Plasticity.
 
+pub mod part21;
+pub mod step;
 pub mod stl;
+mod weld;

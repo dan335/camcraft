@@ -13,8 +13,9 @@
 
 use camcraft_geom::mesh::{MeshError, TriMesh};
 use glam::{DVec3, dvec3};
-use std::collections::HashMap;
 use std::path::Path;
+
+use crate::weld::Welder;
 
 /// What the numbers in a unit-less file mean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,64 +99,33 @@ pub fn load_stl(
 
     let scale = units.to_mm();
     let mut report = ImportReport::default();
-    let mut welded: HashMap<[u64; 3], u32> = HashMap::new();
-    let mut vertices: Vec<DVec3> = Vec::new();
-    let mut triangles: Vec<[u32; 3]> = Vec::new();
-
-    let intern = |v: stl_io::Vertex,
-                  vertices: &mut Vec<DVec3>,
-                  welded: &mut HashMap<[u64; 3], u32>|
-     -> Option<u32> {
-        let p = dvec3(
-            f64::from(v[0]) * scale,
-            f64::from(v[1]) * scale,
-            f64::from(v[2]) * scale,
-        );
-        if !p.is_finite() {
-            return None;
-        }
-        // Exact bit-pattern key: welding must never merge two points that are
-        // genuinely distinct, and a tolerance-based weld can do exactly that.
-        let key = [p.x.to_bits(), p.y.to_bits(), p.z.to_bits()];
-        Some(*welded.entry(key).or_insert_with(|| {
-            vertices.push(p);
-            // Index fits: the count is bounded by the file's triangle count, and a
-            // mesh larger than u32::MAX vertices would have failed to load.
-            u32::try_from(vertices.len() - 1).unwrap_or(u32::MAX)
-        }))
-    };
+    let mut weld = Welder::default();
 
     for face in &stl.faces {
         report.triangles += 1;
         report.raw_vertices += 3;
-        let mut abc = [0u32; 3];
-        let mut ok = true;
-        for (slot, index) in abc.iter_mut().zip(face.vertices) {
-            match stl.vertices.get(index).copied() {
-                Some(v) => match intern(v, &mut vertices, &mut welded) {
-                    Some(i) => *slot = i,
-                    None => ok = false,
-                },
-                None => ok = false,
+        let mut corners = [DVec3::NAN; 3];
+        for (slot, index) in corners.iter_mut().zip(face.vertices) {
+            if let Some(v) = stl.vertices.get(index) {
+                *slot = dvec3(
+                    f64::from(v[0]) * scale,
+                    f64::from(v[1]) * scale,
+                    f64::from(v[2]) * scale,
+                );
             }
         }
-        if !ok {
-            report.degenerate += 1;
-            continue;
-        }
-        if abc[0] == abc[1] || abc[1] == abc[2] || abc[0] == abc[2] {
-            report.degenerate += 1;
-            continue;
-        }
-        triangles.push(abc);
+        // A missing or non-finite corner is dropped and counted by the welder.
+        weld.push(corners);
     }
 
-    report.vertices = vertices.len() as u64;
-    if triangles.is_empty() {
+    report.degenerate = weld.degenerate;
+    report.vertices = weld.vertex_count() as u64;
+    if weld.triangle_count() == 0 {
         return Err(ImportError::Empty { path: name });
     }
 
-    let mesh = TriMesh::new(vertices, triangles)
+    let mesh = weld
+        .finish()
         .map_err(|source| ImportError::Mesh { path: name, source })?;
     Ok((mesh, report))
 }

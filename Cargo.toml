@@ -22,6 +22,10 @@ camcraft-post   = { path = "crates/camcraft-post",   version = "0.1.0" }
 clap               = { version = "4.6", features = ["derive"] }
 clipper2           = "0.6"
 glam               = { version = "0.33", features = ["serde"] }
+# STEP backend, see docs/decisions/0001-step-backend.md. Builds OpenCascade from
+# source: cmake and a C++ toolchain are prerequisites, and only camcraft-import
+# (and so only the CLI) pays for it.
+opencascade        = "0.3"
 parry3d-f64        = "0.31"
 proptest           = "1.11"
 rayon              = "1.12"
