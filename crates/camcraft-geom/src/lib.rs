@@ -32,3 +32,5 @@ pub mod mesh;
 pub mod synthetic;
 
 pub mod bvh;
+
+pub mod heightmap;

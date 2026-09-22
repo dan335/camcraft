@@ -20,6 +20,18 @@
 //! path does not apply. Encoding that in the type is deliberate: it is what lets
 //! undercutting tools arrive later without revisiting this trait.
 
+/// Identifies a cutter's geometry exactly, for cache keying.
+///
+/// Parameters are stored as raw bit patterns so that two tools which are equal are
+/// keyed equally, without the pitfalls of hashing floats by value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ToolKey {
+    /// Discriminates the cutter shape.
+    pub kind: &'static str,
+    /// Shape parameters as exact bit patterns; unused slots are zero.
+    pub params: [u64; 4],
+}
+
 /// A cutter's geometry, as a solid of revolution about the tool axis.
 ///
 /// The tool tip is the origin and the controlled point — never the ball centre or
@@ -47,6 +59,24 @@ pub trait ToolProfile {
     /// across the whole radius range. False for undercutting tools.
     fn is_monotonic(&self) -> bool {
         true
+    }
+
+    /// A value identifying this tool's geometry exactly.
+    fn geometry_key(&self) -> ToolKey;
+
+    /// Smallest convex radius of curvature this cutter can leave on a CL surface, or
+    /// `None` if it can leave a sharp convex edge.
+    ///
+    /// A rounded tip of radius `r` cannot produce a convex feature sharper than `r`,
+    /// because offsetting any surface by `r` rounds its convex corners to exactly
+    /// that. This bounds how badly a grid can misrepresent the CL surface between
+    /// nodes, which is what makes a sampling pitch derivable rather than guessed.
+    ///
+    /// A flat mill returns `None`: passing over a step it produces a genuine
+    /// discontinuity in slope, so no such bound exists and its grid must be sized
+    /// from region accuracy instead.
+    fn min_convex_radius(&self) -> Option<f64> {
+        None
     }
 }
 
@@ -110,6 +140,15 @@ impl ToolProfile for Flat {
     fn height_at(&self, d: f64) -> Option<f64> {
         (d <= self.radius).then_some(0.0)
     }
+
+    fn geometry_key(&self) -> ToolKey {
+        ToolKey {
+            kind: "flat",
+            params: [self.radius.to_bits(), 0, 0, 0],
+        }
+    }
+
+    // Deliberately no min_convex_radius: a flat mill leaves sharp convex edges.
 }
 
 impl ToolProfile for Ball {
@@ -137,6 +176,17 @@ impl ToolProfile for Ball {
         // The ball centre sits at z = R, so the surface at radius d is at
         // R - sqrt(R^2 - d^2).
         Some(r - (r * r - d * d).max(0.0).sqrt())
+    }
+
+    fn geometry_key(&self) -> ToolKey {
+        ToolKey {
+            kind: "ball",
+            params: [self.radius.to_bits(), 0, 0, 0],
+        }
+    }
+
+    fn min_convex_radius(&self) -> Option<f64> {
+        Some(self.radius)
     }
 }
 
