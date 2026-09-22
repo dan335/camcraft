@@ -1,0 +1,44 @@
+# A two-operation job: rough the block down, then finish the surface.
+#
+# Heights are symbolic on purpose. `ref = "stock-top"` means this job still works
+# against a thicker blank without editing a number, and still reads correctly in six
+# months. Absolute values are available but have to be asked for.
+
+tolerance = 0.05
+
+[setup]
+# The block: the model plus 2 mm around and 3 mm on top.
+stock = { kind = "box", margin = [2.0, 2.0, 3.0] }
+wcs = 54
+
+[tools.rough-6-flat]
+kind = "flat"
+diameter = 6.0
+number = 1
+rpm = 16000
+comment = "6mm flat"
+
+[tools.finish-6-ball]
+kind = "ball"
+diameter = 6.0
+number = 2
+rpm = 18000
+comment = "6mm ball"
+
+[[operation]]
+name = "rough"
+strategy = "zlevel-rough"
+tool = "rough-6-flat"
+stepdown = 3.0
+# Leave material for the finishing pass to take off.
+passes = { stepover = 3.0, feed = 2000.0, stock_to_leave = { radial = 0.5, axial = 0.5 } }
+heights = { clearance = { ref = "stock-top", offset = 8.0 } }
+linking = { retract_feed = 2000.0, plunge_feed = 400.0, reorder = true }
+
+[[operation]]
+name = "finish"
+strategy = "parallel"
+tool = "finish-6-ball"
+angle = 0.0
+passes = { stepover = 1.5, feed = 2400.0 }
+heights = { clearance = { ref = "stock-top", offset = 8.0 } }

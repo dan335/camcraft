@@ -9,8 +9,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use camcraft_core::dropcutter::DropCutter;
+use camcraft_core::job::Job as JobSpec;
 use camcraft_core::linker::{ClearancePlane, LinkParams, link};
 use camcraft_core::parallel::{ParallelParams, parallel_finish};
+use camcraft_core::run::{JobResult, run_job};
 use camcraft_core::simadapt::sim_moves;
 use camcraft_core::stock::{EffectiveTool, Stock};
 use camcraft_core::tool::{Ball, BullnoseFamily, Flat, ToolProfile};
@@ -45,6 +47,37 @@ enum Command {
     /// file that can reach a machine should have been checked against material and
     /// not merely against geometry.
     Post(PostArgs),
+    /// Run a multi-operation job from a TOML file.
+    ///
+    /// Operations run in order against one block of material, each reading what the
+    /// last one left. Writes one program per operation, and refuses any that did not
+    /// verify.
+    Job(JobArgs),
+}
+
+#[derive(Parser, Debug)]
+struct JobArgs {
+    /// Model to machine (`.stl`).
+    model: PathBuf,
+
+    /// Job description (`.toml`).
+    job: PathBuf,
+
+    /// What the numbers in the model file mean. STL carries no units.
+    #[arg(long, value_enum)]
+    units: UnitArg,
+
+    /// Machine profile: a builtin name, or a path to a TOML profile.
+    #[arg(long, default_value = "masso")]
+    profile: String,
+
+    /// Directory to write programs into. One file per operation.
+    #[arg(short, long)]
+    out: PathBuf,
+
+    /// Write programs even though verification failed.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -206,6 +239,17 @@ fn main() -> ExitCode {
     tracing_subscriber::fmt().with_target(false).init();
     let cli = Cli::parse();
     match cli.command {
+        Command::Job(args) => match run_job_file(args) {
+            Ok(0) => ExitCode::SUCCESS,
+            Ok(n) => {
+                tracing::warn!("{n} warning(s); review before cutting");
+                ExitCode::from(2)
+            }
+            Err(e) => {
+                tracing::error!("{e}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Post(args) => match post(args) {
             Ok(0) => ExitCode::SUCCESS,
             Ok(n) => {
@@ -236,6 +280,124 @@ struct Built {
     path: Toolpath,
     warnings: Vec<String>,
     verified: bool,
+}
+
+fn run_job_file(args: JobArgs) -> Result<usize, Box<dyn std::error::Error>> {
+    let units = match args.units {
+        UnitArg::Mm => Units::Millimetres,
+        UnitArg::Inch => Units::Inches,
+    };
+    let (mesh, import) = load_stl(&args.model, units)?;
+    let bounds = mesh.bounds().ok_or("model has no geometry")?;
+    let extent = bounds.extent();
+    tracing::info!(
+        "loaded {} triangles, {:.1} x {:.1} x {:.1} mm",
+        import.triangles,
+        extent.x,
+        extent.y,
+        extent.z
+    );
+
+    let job: JobSpec = toml::from_str(&std::fs::read_to_string(&args.job)?)?;
+    // Validation happens before anything is computed, so a bad job fails on its own
+    // terms rather than part-way through an operation.
+    job.validate()?;
+    tracing::info!(
+        "job: {} operation(s), tolerance {} mm",
+        job.operations.len(),
+        job.tolerance
+    );
+
+    let result = run_job(&job, &mesh)?;
+    report_job(&result);
+
+    let profile = match Profile::builtin(&args.profile) {
+        Some(p) => p?,
+        None => Profile::load(&args.profile)?,
+    };
+    std::fs::create_dir_all(&args.out)?;
+
+    let mut warnings = result.warnings();
+    if !result.is_clean() && !args.force {
+        tracing::error!(
+            "refusing to write programs that did not verify. Inspect first, then              re-run with --force only if you understand why the simulator objects."
+        );
+        return Err("verification failed".into());
+    }
+    if !result.is_clean() {
+        tracing::warn!("--force given: writing programs that did NOT verify");
+    }
+
+    for (i, op) in result.operations.iter().enumerate() {
+        let name = format!("{:02}-{}", i + 1, sanitise(&op.name));
+        let path = args.out.join(format!("{name}.{}", profile.extension));
+        let spec = ProgramSpec {
+            name: name.clone(),
+            op_name: op.name.clone(),
+            strategy: op.strategy.to_string(),
+            tool: op.tool_number,
+            tool_comment: op.tool_comment.clone(),
+            wcs: job.setup.wcs,
+            rpm: op.rpm,
+            spin: Spin::Clockwise,
+            coolant: None,
+            units: PostUnits::Millimetres,
+        };
+        let ops = lower(&op.path, &spec)?;
+        let (text, render_report) = render(&ops, &profile, &name);
+        std::fs::write(&path, &text)?;
+        tracing::info!(
+            "{}: {} lines, {} motion blocks -> {}",
+            op.name,
+            render_report.lines,
+            render_report.motion_blocks,
+            path.display()
+        );
+    }
+
+    if import.degenerate > 0 {
+        warnings.push(format!(
+            "{} degenerate triangle(s) in the model",
+            import.degenerate
+        ));
+    }
+    for w in &warnings {
+        tracing::warn!("{w}");
+    }
+    Ok(warnings.len())
+}
+
+fn report_job(result: &JobResult) {
+    for op in &result.operations {
+        tracing::info!(
+            "{}: {} passes, removed {:.0} mm3, travel saved {:.0}%, rapid contacts {}",
+            op.name,
+            op.passes,
+            op.sim.removed_mm3,
+            op.travel_saved * 100.0,
+            op.sim.rapid_contacts
+        );
+    }
+    tracing::info!(
+        "verified: {} column(s) compared, gouges {}, deepest {:.3} mm, budget {:.3} mm",
+        result.verify.compared,
+        result.verify.gouged,
+        result.verify.deepest_gouge_mm,
+        result.verify_budget
+    );
+}
+
+/// Keep an operation name usable as a file name.
+fn sanitise(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 fn post(args: PostArgs) -> Result<usize, Box<dyn std::error::Error>> {

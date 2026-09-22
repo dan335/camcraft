@@ -152,6 +152,7 @@ dependencies = [
  "rayon",
  "serde",
  "thiserror",
+ "toml",
 ]
 
 [[package]]
