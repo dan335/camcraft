@@ -34,3 +34,6 @@ pub mod dropcutter;
 pub mod clmap;
 
 pub mod stock;
+
+pub mod parallel;
+pub mod toolpath;
