@@ -32,3 +32,5 @@ pub mod tool;
 pub mod dropcutter;
 
 pub mod clmap;
+
+pub mod stock;

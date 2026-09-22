@@ -26,7 +26,7 @@ use camcraft_geom::bvh::MeshBvh;
 use camcraft_geom::mesh::TriMesh;
 use glam::{DVec2, DVec3, dvec2, dvec3};
 
-use crate::tool::{Ball, Flat, ToolProfile};
+use crate::tool::{Ball, Bullnose, Flat, ToolProfile};
 
 /// Triangles smaller than this in squared normal length are treated as degenerate
 /// and contribute only through their vertices.
@@ -341,8 +341,162 @@ fn ball_edge_contact(p0: DVec3, p1: DVec3, x: f64, y: f64, r: f64) -> Option<f64
     best
 }
 
+// ---------------------------------------------------------------------------
+// Bullnose (corner-radius) end mill
+// ---------------------------------------------------------------------------
+
+/// Iterations of the ternary search used for a bullnose edge contact.
+///
+/// Fixed, so the result cannot vary with input or thread. Each step shrinks the
+/// bracket by a third, so 80 steps reduce it by a factor of about `1e-14` — past
+/// double precision for any edge of a real part.
+const EDGE_SEARCH_STEPS: u32 = 80;
+
+impl DropTest for Bullnose {
+    /// The cutting end is a flat disc of radius `R - c` swept by a ball of radius
+    /// `c` — that is, `disc(R - c) ⊕ Ball(c)`. So "the tool touches X" means "the
+    /// disc is exactly `c` away from X", and the distance from a point to a
+    /// horizontal disc has a closed form. Vertex and facet follow directly; the edge
+    /// does not, and is handled below.
+    fn drop_triangle(&self, x: f64, y: f64, tri: &[DVec3; 3]) -> Option<f64> {
+        let c = self.corner();
+        let rho = self.flat_radius();
+        let centre = dvec2(x, y);
+        let mut best: Option<f64> = None;
+
+        // Vertex: horizontal gap to the disc rim, then the ball reaches the rest.
+        for v in tri {
+            if let Some(z) = disc_ball_contact(v.z, (v.truncate() - centre).length(), rho, c) {
+                raise(&mut best, z);
+            }
+        }
+
+        // Facet: the disc sits `c` from the plane. Its lowest point relative to the
+        // plane is displaced `rho` down the in-plane component of the normal.
+        if let Some(n) = normal(tri) {
+            let n = if n.z < 0.0 { -n } else { n };
+            let n = n.normalize();
+            if n.z > 0.0 {
+                let nh = dvec2(n.x, n.y).length();
+                let disc_z = (c + rho * nh + n.dot(tri[0]) - n.x * x - n.y * y) / n.z;
+                let rim = if nh > 0.0 {
+                    dvec3(x - rho * n.x / nh, y - rho * n.y / nh, disc_z)
+                } else {
+                    dvec3(x, y, disc_z)
+                };
+                if point_in_triangle(rim - n * c, tri, n) {
+                    raise(&mut best, disc_z - c);
+                }
+            }
+        }
+
+        // Edge: see `bullnose_edge_contact`.
+        for (p0, p1) in edges(tri) {
+            if let Some(z) = bullnose_edge_contact(p0, p1, centre, rho, c) {
+                raise(&mut best, z);
+            }
+        }
+
+        best
+    }
+}
+
+/// Tip height at which `disc(rho) ⊕ Ball(c)` touches a point whose height is `pz`
+/// and whose horizontal distance from the tool axis is `dxy`.
+///
+/// The disc sits `c` above the tip, so the horizontal gap the ball must span is
+/// `max(0, dxy - rho)`; beyond `c` there is no contact.
+///
+/// Reduces correctly at both limits: with `c = 0` contact needs `dxy <= rho` and
+/// gives `pz`, the flat-mill answer; with `rho = 0` it gives
+/// `pz - c + sqrt(c^2 - dxy^2)`, the ball answer.
+fn disc_ball_contact(pz: f64, dxy: f64, rho: f64, c: f64) -> Option<f64> {
+    let gap = (dxy - rho).max(0.0);
+    if gap > c {
+        return None;
+    }
+    Some(pz - c + (c * c - gap * gap).max(0.0).sqrt())
+}
+
+/// Tip height at which a bullnose touches the segment `p0 -> p1`.
+///
+/// Along the segment, the tip height that would touch point `p(t)` is
+///
+/// ```text
+/// f(t) = p(t).z - c + sqrt(c^2 - gap(t)^2),   gap(t) = max(0, D(t) - rho)
+/// ```
+///
+/// and the tool rests at the maximum of `f`, since it stops at the highest contact
+/// on the way down. `D(t)` is a distance and therefore convex, `max(0, ·)` preserves
+/// convexity, and `sqrt(c^2 - ·^2)` is concave and decreasing, so the composition is
+/// concave and the sum with a linear term stays concave. A concave function on an
+/// interval is unimodal, so a ternary search converges — this is a bounded solve of a
+/// known-shaped problem, not a hopeful approximation.
+///
+/// The feasible domain `D(t) <= rho + c` is itself an interval, found analytically.
+/// Both endpoints are always evaluated, so the linear case `c = 0` lands exactly.
+fn bullnose_edge_contact(p0: DVec3, p1: DVec3, centre: DVec2, rho: f64, c: f64) -> Option<f64> {
+    let e = p1 - p0;
+    let a = p0.truncate() - centre;
+    let exy = e.truncate();
+    let reach = rho + c;
+
+    // Feasible range of t, from |a + t*exy|^2 <= reach^2.
+    let (mut lo, mut hi) = (0.0f64, 1.0f64);
+    let qa = exy.length_squared();
+    if qa < DEGENERATE {
+        // Vertical edge: horizontal distance does not vary along it.
+        if a.length() > reach {
+            return None;
+        }
+    } else {
+        let qb = 2.0 * a.dot(exy);
+        let qc = a.length_squared() - reach * reach;
+        let disc = qb * qb - 4.0 * qa * qc;
+        if disc < 0.0 {
+            return None;
+        }
+        let root = disc.sqrt();
+        lo = lo.max((-qb - root) / (2.0 * qa));
+        hi = hi.min((-qb + root) / (2.0 * qa));
+        if lo > hi {
+            return None;
+        }
+    }
+
+    let f = |t: f64| -> Option<f64> {
+        let d = (a + exy * t).length();
+        disc_ball_contact(p0.z + e.z * t, d, rho, c)
+    };
+
+    let mut best: Option<f64> = None;
+    if let Some(v) = f(lo) {
+        raise(&mut best, v);
+    }
+    if let Some(v) = f(hi) {
+        raise(&mut best, v);
+    }
+
+    // Ternary search for an interior maximum of the concave f.
+    let (mut left, mut right) = (lo, hi);
+    for _ in 0..EDGE_SEARCH_STEPS {
+        let third = (right - left) / 3.0;
+        let (m1, m2) = (left + third, right - third);
+        let (v1, v2) = (f(m1), f(m2));
+        match (v1, v2) {
+            (Some(a1), Some(a2)) if a1 < a2 => left = m1,
+            (Some(_), Some(_)) => right = m2,
+            _ => break,
+        }
+    }
+    if let Some(v) = f((left + right) / 2.0) {
+        raise(&mut best, v);
+    }
+    best
+}
+
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::float_cmp)]
+#[allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
 mod tests {
     use super::*;
     use camcraft_geom::synthetic;
@@ -533,6 +687,102 @@ mod tests {
         Ok(())
     }
 
+    /// Cross-validation. `Bullnose` is a general, partly numerical implementation;
+    /// `Flat` and `Ball` are dedicated analytic ones. At `c = 0` and `c = R` they
+    /// describe the identical solid, so they must produce identical answers. Two
+    /// independent implementations agreeing is far stronger evidence than either
+    /// passing its own tests.
+    fn cross_check<A: DropTest, B: DropTest>(mesh: &TriMesh, a: &A, b: &B, tol: f64) {
+        let dc = DropCutter::new(mesh);
+        let mut compared = 0;
+        for i in -9..=9 {
+            for j in -9..=9 {
+                let (x, y) = (f64::from(i) * 0.83, f64::from(j) * 0.77);
+                match (dc.drop_at(a, x, y), dc.drop_at(b, x, y)) {
+                    (Some(za), Some(zb)) => {
+                        assert!(
+                            (za - zb).abs() <= tol,
+                            "at ({x},{y}) the two implementations disagree: {za} vs {zb}"
+                        );
+                        compared += 1;
+                    }
+                    (None, None) => {}
+                    (za, zb) => panic!("at ({x},{y}) coverage differs: {za:?} vs {zb:?}"),
+                }
+            }
+        }
+        assert!(compared > 100, "expected real overlap, compared {compared}");
+    }
+
+    #[test]
+    fn bullnose_with_no_corner_is_a_flat_mill() {
+        let tol = 1e-9;
+        for mesh in [
+            synthetic::step(4.0, 12.0),
+            synthetic::inclined_plane(0.3, -0.2, 1.0, 12.0),
+            synthetic::uv_sphere(9.0, 40, 60),
+        ] {
+            cross_check(
+                &mesh,
+                &Bullnose::new(R, 0.0).unwrap(),
+                &Flat::new(R).unwrap(),
+                tol,
+            );
+        }
+    }
+
+    #[test]
+    fn bullnose_with_a_full_corner_is_a_ball_mill() {
+        let tol = 1e-7;
+        for mesh in [
+            synthetic::step(4.0, 12.0),
+            synthetic::inclined_plane(0.3, -0.2, 1.0, 12.0),
+            synthetic::uv_sphere(9.0, 40, 60),
+        ] {
+            cross_check(
+                &mesh,
+                &Bullnose::new(R, R).unwrap(),
+                &Ball::new(R).unwrap(),
+                tol,
+            );
+        }
+    }
+
+    #[test]
+    fn bullnose_on_a_plane_is_exact() {
+        let mesh = synthetic::plane(1.75, 20.0);
+        let dc = DropCutter::new(&mesh);
+        let tool = Bullnose::new(4.0, 1.5).unwrap();
+        for (x, y) in [(0.0, 0.0), (5.0, -6.0)] {
+            let z = dc.drop_at(&tool, x, y).unwrap();
+            assert!((z - 1.75).abs() < 1e-9, "at ({x},{y}) got {z}");
+        }
+    }
+
+    /// On a slope the tool rests on its corner torus, between the flat mill's rim
+    /// lift and the ball's. Bracketing it is enough to show the corner is modelled
+    /// rather than ignored in either direction.
+    #[test]
+    fn bullnose_on_a_slope_sits_between_flat_and_ball() {
+        let (a, b, z0) = (0.45, 0.3, 0.0);
+        let mesh = synthetic::inclined_plane(a, b, z0, 40.0);
+        let dc = DropCutter::new(&mesh);
+        let (x, y) = (2.0, -1.0);
+
+        let flat = dc.drop_at(&Flat::new(R).unwrap(), x, y).unwrap();
+        let ball = dc.drop_at(&Ball::new(R).unwrap(), x, y).unwrap();
+        let bull = dc.drop_at(&Bullnose::new(R, 1.0).unwrap(), x, y).unwrap();
+
+        assert!(
+            ball < flat,
+            "a ball must sit lower than a flat mill on a slope"
+        );
+        assert!(
+            bull > ball && bull < flat,
+            "bullnose {bull} should lie strictly between ball {ball} and flat {flat}"
+        );
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]
 
@@ -549,6 +799,14 @@ mod tests {
             let mesh = synthetic::step(4.0, 10.0);
             let dc = DropCutter::new(&mesh);
             let tool = Flat::new(fr).unwrap();
+            assert_no_penetration(&mesh, &dc, &tool, x, y)?;
+        }
+
+        #[test]
+        fn bullnose_never_penetrates(x in -8.0f64..8.0, y in -8.0f64..8.0, c in 0.0f64..2.0) {
+            let mesh = synthetic::uv_sphere(10.0, 40, 60);
+            let dc = DropCutter::new(&mesh);
+            let tool = Bullnose::new(2.5, c).unwrap();
             assert_no_penetration(&mesh, &dc, &tool, x, y)?;
         }
 

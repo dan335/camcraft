@@ -98,12 +98,143 @@ pub struct Ball {
     radius: f64,
 }
 
+/// A bullnose (corner-radius) end mill: a flat face of radius `R - c` surrounded by
+/// a toroidal corner of radius `c`.
+///
+/// ```text
+/// r(z) = (R - c) + sqrt(z(2c - z))   for 0 <= z <= c
+///        R                           for z > c
+/// ```
+///
+/// This shape subsumes the other two: `c = 0` is a [`Flat`] mill and `c = R` is a
+/// [`Ball`]. Those keep their own dedicated implementations because both have fully
+/// analytic contact tests, whereas the general bullnose does not — but the fact that
+/// the general form must *agree* with them at those two limits is a strong check on
+/// both, and the tests exercise it.
+///
+/// It also matters for stock-to-leave. Leaving stock `s` means machining with the
+/// tool dilated by `s`, and a cylinder dilated by a ball is precisely a bullnose of
+/// radius `R + s` and corner `s`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bullnose {
+    radius: f64,
+    corner: f64,
+}
+
+impl Bullnose {
+    /// Build a bullnose mill of overall radius `radius` and corner radius `corner`.
+    ///
+    /// `corner` must lie in `[0, radius]`; outside that the shape is not a cutter.
+    pub fn new(radius: f64, corner: f64) -> Result<Self, ToolError> {
+        let radius = check_radius(radius)?;
+        if !corner.is_finite() || corner < 0.0 || corner > radius {
+            return Err(ToolError::BadCorner { corner, radius });
+        }
+        Ok(Self { radius, corner })
+    }
+
+    /// Radius of the flat portion of the face, `R - c`.
+    pub fn flat_radius(&self) -> f64 {
+        self.radius - self.corner
+    }
+
+    /// The corner radius.
+    pub fn corner(&self) -> f64 {
+        self.corner
+    }
+}
+
+impl ToolProfile for Bullnose {
+    fn radius_at(&self, z: f64) -> f64 {
+        let (r, c) = (self.radius, self.corner);
+        if z < 0.0 {
+            0.0
+        } else if z >= c {
+            r
+        } else {
+            (r - c) + (z * (2.0 * c - z)).max(0.0).sqrt()
+        }
+    }
+
+    fn max_radius(&self) -> f64 {
+        self.radius
+    }
+
+    fn height_at(&self, d: f64) -> Option<f64> {
+        let (r, c) = (self.radius, self.corner);
+        if d > r {
+            return None;
+        }
+        let flat = r - c;
+        if d <= flat {
+            return Some(0.0);
+        }
+        let k = d - flat;
+        Some(c - (c * c - k * k).max(0.0).sqrt())
+    }
+
+    fn geometry_key(&self) -> ToolKey {
+        ToolKey {
+            kind: "bullnose",
+            params: [self.radius.to_bits(), self.corner.to_bits(), 0, 0],
+        }
+    }
+
+    fn min_convex_radius(&self) -> Option<f64> {
+        (self.corner > 0.0).then_some(self.corner)
+    }
+}
+
+/// Cutters expressible in the bullnose family.
+///
+/// Every cutter this engine has is a flat face of radius `R - c` surrounded by a
+/// corner of radius `c`. Stating that as a trait is what lets stock-to-leave be
+/// computed once, for all of them, instead of per shape — the family is closed under
+/// dilation by the stock solid.
+pub trait BullnoseFamily {
+    /// This cutter as a bullnose. Infallible: the dimensions were validated when the
+    /// cutter was built.
+    fn as_bullnose(&self) -> Bullnose;
+}
+
+impl BullnoseFamily for Bullnose {
+    fn as_bullnose(&self) -> Bullnose {
+        *self
+    }
+}
+
+impl BullnoseFamily for Flat {
+    fn as_bullnose(&self) -> Bullnose {
+        Bullnose {
+            radius: self.radius,
+            corner: 0.0,
+        }
+    }
+}
+
+impl BullnoseFamily for Ball {
+    fn as_bullnose(&self) -> Bullnose {
+        Bullnose {
+            radius: self.radius,
+            corner: self.radius,
+        }
+    }
+}
+
 /// A tool dimension that was not physically meaningful.
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ToolError {
     /// A radius was zero, negative, or not finite.
     #[error("tool radius must be finite and greater than zero, got {0}")]
     BadRadius(f64),
+    /// A corner radius did not fit within the tool.
+    #[error("corner radius must be finite and within [0, {radius}], got {corner}")]
+    BadCorner {
+        /// The offending corner radius.
+        corner: f64,
+        /// The tool radius it had to fit inside.
+        radius: f64,
+    },
 }
 
 fn check_radius(radius: f64) -> Result<f64, ToolError> {
