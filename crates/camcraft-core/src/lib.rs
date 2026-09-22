@@ -26,3 +26,5 @@
 //! - Output is **deterministic**: identical inputs produce identical results on any
 //!   core count. Parallel map-and-collect preserves order and is fine;
 //!   order-dependent floating point reductions are not.
+
+pub mod tool;
