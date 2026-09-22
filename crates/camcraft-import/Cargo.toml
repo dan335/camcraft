@@ -1,0 +1,17 @@
+[package]
+name        = "camcraft-import"
+description = "Model import for camcraft: STL and STEP to triangle meshes."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[dependencies]
+camcraft-geom.workspace = true
+stl_io.workspace        = true
+thiserror.workspace     = true
+
+[lints]
+workspace = true

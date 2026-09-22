@@ -1,0 +1,20 @@
+[package]
+name        = "camcraft-geom"
+description = "Geometry primitives for camcraft: meshes, BVH, height maps and 2D contours."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[dependencies]
+glam.workspace        = true
+parry3d-f64.workspace = true
+clipper2.workspace    = true
+rayon.workspace       = true
+serde.workspace       = true
+thiserror.workspace   = true
+
+[lints]
+workspace = true

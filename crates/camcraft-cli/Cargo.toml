@@ -1,0 +1,29 @@
+[package]
+name        = "camcraft-cli"
+description = "Command-line interface for camcraft: model + job.toml to G-code."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[[bin]]
+name = "camcraft"
+path = "src/main.rs"
+
+[dependencies]
+camcraft-geom.workspace   = true
+camcraft-import.workspace = true
+camcraft-sim.workspace    = true
+camcraft-core.workspace   = true
+camcraft-post.workspace   = true
+clap.workspace            = true
+serde.workspace           = true
+toml.workspace            = true
+thiserror.workspace       = true
+tracing.workspace         = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,12 @@
+//! Post processors for camcraft.
+//!
+//! Position in the dependency DAG: depends on `camcraft-geom` and `camcraft-core`.
+//!
+//! The engine never emits text. This crate converts a `Toolpath` into a
+//! machine-independent instruction stream, and a **profile** renders that stream
+//! into a dialect. A profile is a TOML file, not Rust: adding a machine must never
+//! mean recompiling.
+//!
+//! The instruction stream carries structure, not just moves — section boundaries
+//! naming the operation, tool, strategy and work offset — because posts need that
+//! to write headers, tool-change blocks and setup sheets.

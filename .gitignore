@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+*.pdb
+# generated G-code and sim output from local runs
+/out
+*.nc

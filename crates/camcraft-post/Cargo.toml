@@ -1,0 +1,19 @@
+[package]
+name        = "camcraft-post"
+description = "Post processors for camcraft: the machine-independent Op IR and its TOML-driven renderers."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[dependencies]
+camcraft-geom.workspace = true
+camcraft-core.workspace = true
+serde.workspace         = true
+toml.workspace          = true
+thiserror.workspace     = true
+
+[lints]
+workspace = true

@@ -1,0 +1,55 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2024"
+rust-version = "1.97"
+license      = "MIT OR Apache-2.0"
+repository   = "https://github.com/dan335/camcraft"
+authors      = ["dan335"]
+
+[workspace.dependencies]
+# internal — the dependency DAG is enforced per-crate, see README
+camcraft-geom   = { path = "crates/camcraft-geom",   version = "0.1.0" }
+camcraft-import = { path = "crates/camcraft-import", version = "0.1.0" }
+camcraft-sim    = { path = "crates/camcraft-sim",    version = "0.1.0" }
+camcraft-core   = { path = "crates/camcraft-core",   version = "0.1.0" }
+camcraft-post   = { path = "crates/camcraft-post",   version = "0.1.0" }
+
+# external
+clap               = { version = "4.6", features = ["derive"] }
+clipper2           = "0.6"
+glam               = { version = "0.33", features = ["serde"] }
+parry3d-f64        = "0.31"
+proptest           = "1.11"
+rayon              = "1.12"
+serde              = { version = "1.0", features = ["derive"] }
+stl_io             = "0.11"
+thiserror          = "2.0"
+toml               = "1.1"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Correctness rules from the plan, enforced by the compiler rather than by memory.
+[workspace.lints.rust]
+unsafe_code  = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+unwrap_used         = "deny"
+expect_used         = "deny"
+panic               = "deny"
+indexing_slicing    = "warn"
+float_cmp           = "warn"
+cast_possible_truncation = "warn"
+cast_precision_loss = "warn"
+
+[profile.release]
+lto           = "thin"
+codegen-units = 1
+
+# Geometry work is unusably slow in an unoptimised debug build; tests included.
+[profile.dev.package."*"]
+opt-level = 2
