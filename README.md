@@ -67,13 +67,28 @@ style preferences:
   worst available failure mode.
 - **The simulator gates release.** No cut from a toolpath it has not verified.
 
-## Build
+## Build and check
 
 ```sh
 cargo build --workspace
-cargo test  --workspace
-cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+There is deliberately **no CI** while this repository is private, so one script is
+the only thing standing between a mistake and `main`. Run it before every push:
+
+```sh
+bash scripts/check.sh          # fmt, clippy, tests, docs, determinism
+bash scripts/check.sh --full   # the above plus benchmarks
+```
+
+```powershell
+.\scripts\check.ps1
+.\scripts\check.ps1 -Full
+```
+
+It checks each gate on its own exit status and prints a summary, rather than
+chaining commands in a way that can report success without having checked anything.
+Restore the GitHub Actions workflow when the repository goes public.
 
 From 0.1-d, `camcraft-import` pulls in OpenCascade, which adds **cmake and a C++
 toolchain** as prerequisites (on Windows, build from an MSVC environment so cmake can

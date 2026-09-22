@@ -95,7 +95,8 @@ Accepted costs, all of which were actually hit and resolved during the spike:
 
 - **cmake and a C++ toolchain become documented build prerequisites.** On Windows,
   cmake must find `cl.exe`, which means building from an MSVC environment.
-- **The first OCCT build is slow.** CI caches it; it is one cost per cache key.
+- **The first OCCT build is slow.** It is a one-off per machine. When CI is restored
+  (there is none while the repo is private) it should cache the OCCT artifact.
 - **Windows needs explicit system-library links** — `advapi32` and friends, for
   registry and SID symbols that `occt-sys` does not propagate. Sixteen unresolved
   externals without it.
