@@ -62,8 +62,24 @@ each pass next to where the following one starts.
    newline (no name) is read as binary and fails with "failed to fill whole buffer".
    Most opencamlib sample files are like this. `stl_io` appears to detect ASCII by
    `solid ` with a trailing space; detect it ourselves before handing over.
-3. Everything else is post-0.1: waterline, constant scallop, pencil, adaptive
-   clearing, 2D operations, V-carve, tabs, arc fitting, feeds and speeds.
+3. **0.2: a native desktop app.** Agreed scope, high level; each item gets its own
+   detailed plan before work starts:
+   - **App shell:** a `camcraft-gui` crate on the same engine path as the CLI
+     (`run_job`, the importers, the posts), native Rust, macOS and Windows.
+     Probably egui/eframe with a wgpu viewport; to be settled in its plan.
+   - **3D viewport:** everything the web inspector does, ported, then replacing it.
+   - **Simulated stock view:** the material after each operation, and where it was
+     left standing or gouged. This is the view the steep-descent question waits for.
+   - **Job editing:** forms that read and write `job.toml`, so file and app stay
+     interchangeable.
+   - **Run, check, post:** background runs with progress, the checks panel, and the
+     same refusal to post an unverified job as the CLI.
+   - **Then decide the steep-descent fix and gate policy,** once for both.
+
+   Also carried along: items 1 and 2 above, and the OpenCascade licensing decision.
+   Not in 0.2: new strategies (2D profile, pocket, drilling, waterline, adaptive),
+   arc fitting, and feeds and speeds. Those are 0.3. The first physical cut can
+   happen whenever it is ready and does not gate the release.
 
 ## Before the first cut
 
