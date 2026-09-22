@@ -156,9 +156,11 @@ dependencies = [
 name = "camcraft-geom"
 version = "0.1.0"
 dependencies = [
+ "approx",
  "clipper2",
  "glam",
  "parry3d-f64",
+ "proptest",
  "rayon",
  "serde",
  "thiserror",
