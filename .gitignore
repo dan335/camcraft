@@ -4,6 +4,9 @@
 # generated G-code and sim output from local runs
 /out
 *.nc
+# ...except the post goldens, which are the test. Ignoring them meant a fresh clone
+# failed the golden tests: the files only ever existed on the machine that made them.
+!/crates/camcraft-post/tests/golden/*.nc
 
 # Commercial fixtures must never be committed. See fixtures/step/README.md and use
 # CAMCRAFT_FIXTURES for parts that cannot be published.
