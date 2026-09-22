@@ -84,32 +84,41 @@ pub fn step(h: f64, half: f64) -> TriMesh {
 ///
 /// Getting that `- br` wrong would bake an error of one ball radius into everything
 /// downstream, which is precisely why this fixture exists.
-pub fn uv_sphere(r: f64, lat: usize, lon: usize) -> TriMesh {
-    let lat = lat.max(2);
-    let lon = lon.max(3);
-    let mut v: Vec<DVec3> = Vec::with_capacity((lat + 1) * (lon + 1));
+///
+/// `lat` and `lon` are clamped to `[2, MAX_SUBDIVISION]` and `[3, MAX_SUBDIVISION]`
+/// respectively, which keeps every index well inside `u32` and makes overflow
+/// impossible rather than merely unlikely.
+pub fn uv_sphere(r: f64, lat: u32, lon: u32) -> TriMesh {
+    let (lat, lon) = clamp_subdivision(lat, lon);
+    let row = lon + 1;
+    let mut v: Vec<DVec3> = Vec::with_capacity((row as usize) * (lat as usize + 1));
     for i in 0..=lat {
-        let theta = std::f64::consts::PI * (i as f64) / (lat as f64);
+        let theta = std::f64::consts::PI * f64::from(i) / f64::from(lat);
         let (st, ct) = theta.sin_cos();
         for j in 0..=lon {
-            let phi = std::f64::consts::TAU * (j as f64) / (lon as f64);
+            let phi = std::f64::consts::TAU * f64::from(j) / f64::from(lon);
             let (sp, cp) = phi.sin_cos();
             v.push(dvec3(r * st * cp, r * st * sp, r * ct));
         }
     }
-    let row = lon + 1;
-    let mut t = Vec::with_capacity(lat * lon * 2);
+    let mut t = Vec::with_capacity(lat as usize * lon as usize * 2);
     for i in 0..lat {
         for j in 0..lon {
-            let a = (i * row + j) as u32;
-            let b = a + 1;
-            let c = ((i + 1) * row + j) as u32;
-            let d = c + 1;
-            t.push([a, c, b]);
-            t.push([b, c, d]);
+            let a = i * row + j;
+            let c = (i + 1) * row + j;
+            t.push([a, c, a + 1]);
+            t.push([a + 1, c, c + 1]);
         }
     }
     TriMesh::new(v, t).unwrap_or_default()
+}
+
+/// Upper bound on [`uv_sphere`] subdivision, chosen so the largest possible vertex
+/// index stays far below `u32::MAX`.
+pub const MAX_SUBDIVISION: u32 = 4096;
+
+fn clamp_subdivision(lat: u32, lon: u32) -> (u32, u32) {
+    (lat.clamp(2, MAX_SUBDIVISION), lon.clamp(3, MAX_SUBDIVISION))
 }
 
 /// The largest distance by which a [`uv_sphere`] chord falls inside the true sphere.
@@ -128,11 +137,10 @@ pub fn uv_sphere(r: f64, lat: usize, lon: usize) -> TriMesh {
 ///
 /// Tests size their tolerance from this instead of guessing, so a genuinely wrong
 /// answer still fails.
-pub fn uv_sphere_max_sag(r: f64, lat: usize, lon: usize) -> f64 {
-    let lat = lat.max(2);
-    let lon = lon.max(3);
-    let dphi = std::f64::consts::TAU / lon as f64;
-    let stack = |i: usize| std::f64::consts::PI * (i as f64) / (lat as f64);
+pub fn uv_sphere_max_sag(r: f64, lat: u32, lon: u32) -> f64 {
+    let (lat, lon) = clamp_subdivision(lat, lon);
+    let dphi = std::f64::consts::TAU / f64::from(lon);
+    let stack = |i: u32| std::f64::consts::PI * f64::from(i) / f64::from(lat);
 
     let separation = |t0: f64, t1: f64| -> f64 {
         let c = t0.cos() * t1.cos() + t0.sin() * t1.sin() * dphi.cos();
@@ -154,7 +162,7 @@ pub fn uv_sphere_max_sag(r: f64, lat: usize, lon: usize) -> f64 {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
     use super::*;
 
