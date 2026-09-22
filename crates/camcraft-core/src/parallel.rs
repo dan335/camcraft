@@ -41,6 +41,14 @@ pub struct ParallelParams {
     pub feed: f64,
     /// Maximum refinement depth per span.
     pub max_depth: u32,
+    /// Largest Z drop, in millimetres, that may be traversed as a cutting move.
+    ///
+    /// Where the CL surface is discontinuous — any tool crossing a vertical wall —
+    /// two adjacent samples can sit far apart in Z while barely separated in XY.
+    /// Both are correct. Joining them with a cut is not: it is a full-depth plunge
+    /// at cutting feed. Past this drop the pass is broken instead, and the linker
+    /// turns the break into a retract, a traverse and a controlled plunge.
+    pub max_cut_step: f64,
 }
 
 impl Default for ParallelParams {
@@ -51,6 +59,7 @@ impl Default for ParallelParams {
             tolerance: 0.01,
             feed: 1000.0,
             max_depth: 12,
+            max_cut_step: 0.5,
         }
     }
 }
@@ -98,6 +107,17 @@ pub struct StrategyReport {
     pub discontinuities: u64,
     /// Contiguous runs of cutting produced.
     pub passes: u64,
+    /// Passes broken because coverage ended part-way through a span.
+    ///
+    /// The tool reaches no material somewhere between two samples, so the two sides
+    /// must not be joined by a cut. Common on the outermost scanlines, which graze
+    /// the edge of the part.
+    pub coverage_breaks: u64,
+    /// Passes broken because the surface dropped further than `max_cut_step`.
+    ///
+    /// Not a fault. Each one is a plunge that would otherwise have been cut at
+    /// feed, and is now a retract and a controlled re-entry.
+    pub wall_breaks: u64,
 }
 
 impl StrategyReport {
@@ -125,6 +145,7 @@ pub fn parallel_finish<T: DropTest>(
     check("stepover", params.stepover)?;
     check("tolerance", params.tolerance)?;
     check("feed", params.feed)?;
+    check("max_cut_step", params.max_cut_step)?;
     if !params.angle.is_finite() {
         return Err(StrategyError::BadParameter {
             name: "angle",
@@ -291,7 +312,13 @@ fn refine<F: Fn(f64) -> Option<DVec3>>(
 ) {
     let um = (u0 + u1) / 2.0;
     let Some(pm) = probe(um) else {
-        // Coverage ends inside this span; the seed loop records the gap.
+        // Coverage ends *inside* this span. Returning quietly would leave the two
+        // endpoints adjacent in the output and joined by a cut, across a region
+        // where the surface was never established -- which is how a 17 mm step got
+        // traversed at cutting feed on a scanline grazing the part edge. Break the
+        // run instead; the linker turns it into a retract and a re-entry.
+        report.coverage_breaks += 1;
+        out.push(None);
         return;
     };
     let chord = (p0 + p1) * 0.5;
@@ -302,6 +329,14 @@ fn refine<F: Fn(f64) -> Option<DVec3>>(
     // would just burn depth against a step the chord can never follow.
     if (u1 - u0).abs() <= params.tolerance * GEOMETRIC_LIMIT {
         report.discontinuities += 1;
+        // If the surface drops far enough here that joining the two sides would
+        // mean plunging at cutting feed, break the pass. `None` is the same
+        // marker a coverage gap uses, so the split and the linker's retract come
+        // out of machinery that already exists.
+        if (p0.z - p1.z).abs() > params.max_cut_step {
+            report.wall_breaks += 1;
+            out.push(None);
+        }
         return;
     }
     if depth >= params.max_depth {
@@ -530,6 +565,123 @@ mod tests {
                 m.to
             );
         }
+    }
+
+    /// The defect found by inspecting real output: crossing a wall produced cutting
+    /// moves that descend far faster than they advance, which is a full-depth plunge
+    /// at cutting feed. The pass must break instead.
+    ///
+    /// Stated comparatively rather than as "no steep descents at all", because some
+    /// steep descent near a wall is legitimate: a ball nose rolling over the top
+    /// edge traces a genuinely steep but perfectly smooth arc, and breaking there
+    /// would be wrong. The guarantee is that the *step itself* is no longer cut
+    /// through, which is what the before-and-after shows.
+    #[test]
+    fn a_wall_breaks_the_pass_instead_of_plunging_through_it() {
+        let step_height = 20.0;
+        let mesh = synthetic::step(step_height, 30.0);
+        let dc = DropCutter::new(&mesh);
+        let tool = Ball::new(3.0).unwrap();
+        let base = ParallelParams {
+            stepover: 1.0,
+            tolerance: 0.02,
+            ..Default::default()
+        };
+        let (lo, hi) = (dvec2(-10.0, -6.0), dvec2(10.0, 6.0));
+
+        // Allowance larger than the step: nothing breaks, and the wall gets cut.
+        let through = ParallelParams {
+            max_cut_step: 50.0,
+            ..base
+        };
+        let (before, before_report) = parallel_finish(&dc, &tool, lo, hi, &through).unwrap();
+        let b_start = before.moves().first().unwrap().to;
+        let (_, b_deep) = before.steep_cut_descents(b_start, 1.0);
+        assert_eq!(before_report.wall_breaks, 0);
+        assert!(
+            b_deep > step_height * 0.5,
+            "without breaking, the pass should dive most of the step; got {b_deep}"
+        );
+
+        // Default allowance: the step is no longer traversed as a cut.
+        let (after, after_report) = parallel_finish(&dc, &tool, lo, hi, &base).unwrap();
+        let a_start = after.moves().first().unwrap().to;
+        let (_, a_deep) = after.steep_cut_descents(a_start, 1.0);
+        assert!(
+            after_report.wall_breaks > 0,
+            "the step must break the passes"
+        );
+        assert!(
+            a_deep <= base.max_cut_step,
+            "deepest cutting descent {a_deep} exceeds the {} mm allowance",
+            base.max_cut_step
+        );
+        assert!(
+            a_deep < b_deep / 10.0,
+            "breaking should cut the worst descent by an order of magnitude: {b_deep} -> {a_deep}"
+        );
+    }
+
+    /// Breaking must not be indiscriminate. A smooth dome has no discontinuity, so
+    /// a pass across it should stay in one piece.
+    #[test]
+    fn a_smooth_surface_is_not_broken_up() {
+        let mesh = synthetic::uv_sphere(20.0, 200, 300);
+        let dc = DropCutter::new(&mesh);
+        let tool = Ball::new(2.0).unwrap();
+        let p = ParallelParams {
+            stepover: 1.0,
+            tolerance: 0.02,
+            ..Default::default()
+        };
+        let (_, report) =
+            parallel_finish(&dc, &tool, dvec2(-8.0, -8.0), dvec2(8.0, 8.0), &p).unwrap();
+        assert_eq!(report.wall_breaks, 0, "a dome has no walls to break at");
+    }
+
+    /// The threshold is the control: a generous one tolerates the step, a tight one
+    /// does not. If both behaved alike the parameter would be decoration.
+    #[test]
+    fn the_threshold_actually_governs_breaking() {
+        let mesh = synthetic::step(20.0, 30.0);
+        let dc = DropCutter::new(&mesh);
+        let tool = Ball::new(3.0).unwrap();
+        let base = ParallelParams {
+            stepover: 1.0,
+            tolerance: 0.02,
+            ..Default::default()
+        };
+
+        let tight = parallel_finish(
+            &dc,
+            &tool,
+            dvec2(-10.0, -6.0),
+            dvec2(10.0, 6.0),
+            &ParallelParams {
+                max_cut_step: 0.1,
+                ..base
+            },
+        )
+        .unwrap()
+        .1;
+        let loose = parallel_finish(
+            &dc,
+            &tool,
+            dvec2(-10.0, -6.0),
+            dvec2(10.0, 6.0),
+            &ParallelParams {
+                max_cut_step: 50.0,
+                ..base
+            },
+        )
+        .unwrap()
+        .1;
+
+        assert!(tight.wall_breaks > 0);
+        assert_eq!(
+            loose.wall_breaks, 0,
+            "a 50 mm allowance should tolerate a 20 mm step"
+        );
     }
 
     /// A bounded algorithm that reports being clamped beats one that spins.

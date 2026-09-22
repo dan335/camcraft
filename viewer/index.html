@@ -398,14 +398,21 @@ function renderChecks(data) {
     if (prev && m.role === 'cut') {
       const drop = prev.to[2] - m.to[2];
       const flat = Math.hypot(m.to[0] - prev.to[0], m.to[1] - prev.to[1]);
-      if (drop > 0 && drop > flat) { steep++; deepest = Math.max(deepest, drop); }
+      if (drop > 0 && drop > flat * 10) { steep++; deepest = Math.max(deepest, drop); }
     }
     prev = m;
   }
-  steep === 0
-    ? add('pass', 'CC105', 'no cutting move descends faster than it advances')
-    : add('fail', 'CC105', steep + ' cutting move(s) are really plunges',
-          'deepest ' + deepest.toFixed(2) + ' mm at cutting feed — will break cutters');
+  // Two conditions. Steepness alone is safe (a ball riding a smooth near-vertical
+  // face descends faster than it advances and stays supported); depth alone is just
+  // a cut. Dropping a long way while barely advancing engages the end of the cutter
+  // instead of its side, and that is the thing that snaps bits.
+  const allow = typeof meta.max_cut_step === 'number' ? meta.max_cut_step : 0.5;
+  deepest <= allow
+    ? add('pass', 'CC105', 'no cutting move descends past the allowance',
+          'deepest ' + deepest.toFixed(3) + ' mm of ' + allow.toFixed(2) + ' mm allowed')
+    : add('fail', 'CC105', 'deepest cutting descent ' + deepest.toFixed(2) +
+          ' mm exceeds the ' + allow.toFixed(2) + ' mm allowance',
+          steep + ' steep move(s) — a plunge at cutting feed will break cutters');
 
   // CC2xx are advisories: look, then decide.
   if (meta.refinement_limited > 0) {
@@ -414,6 +421,10 @@ function renderChecks(data) {
   }
   if (meta.suspicious_plunges > 0) {
     add('warn', 'CC202', meta.suspicious_plunges + ' plunge(s) do not start above the surface');
+  }
+  if (meta.wall_breaks > 0) {
+    add('note', 'CC204', meta.wall_breaks + ' pass(es) broken at a wall',
+        'each is a plunge turned into a retract and a controlled re-entry');
   }
   if (meta.discontinuities > 0) {
     add('note', 'CC203', meta.discontinuities + ' span(s) stopped at a surface discontinuity',
@@ -457,6 +468,8 @@ function renderMeta(meta, part, path) {
     ['stepover', meta.stepover + ' mm'],
     ['tolerance', meta.tolerance + ' mm'],
     ['clearance Z', (meta.clearance_z ?? 0).toFixed(2) + ' mm'],
+    ['max cut step', (meta.max_cut_step ?? 0).toFixed(2) + ' mm'],
+    ['wall breaks', meta.wall_breaks ?? 0],
     ['passes', meta.passes],
     ['moves', (path.length || 0).toLocaleString()],
     ['cutting', (meta.cutting_length_mm ?? 0).toFixed(0) + ' mm'],

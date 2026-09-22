@@ -70,6 +70,10 @@ struct InspectArgs {
     stock_axial: f64,
 
     /// Traverse height above the top of the part, in millimetres.
+    /// Largest Z drop that may be traversed as a cutting move, in millimetres.
+    #[arg(long, default_value_t = 0.5)]
+    max_cut_step: f64,
+
     #[arg(long, default_value_t = 10.0)]
     clearance: f64,
 
@@ -137,6 +141,9 @@ struct Meta {
     refinement_limited: u64,
     discontinuities: u64,
     suspicious_plunges: u64,
+    max_cut_step: f64,
+    wall_breaks: u64,
+    coverage_breaks: u64,
     steep_cut_descents: u64,
     deepest_cut_descent_mm: f64,
     cutting_length_mm: f64,
@@ -144,6 +151,9 @@ struct Meta {
     /// Anything the caller should look at before trusting this.
     warnings: Vec<String>,
 }
+
+/// Descent-to-advance ratio past which a cutting move is really a plunge.
+const PLUNGE_RATIO: f64 = 10.0;
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt().with_target(false).init();
@@ -207,6 +217,7 @@ fn inspect(args: InspectArgs) -> Result<usize, Box<dyn std::error::Error>> {
         stepover: args.stepover,
         tolerance: args.tolerance,
         feed: args.feed,
+        max_cut_step: args.max_cut_step,
         ..Default::default()
     };
     let (raw, strategy) = parallel_finish(&cutter, &tool, lo, hi, &sweep)?;
@@ -240,10 +251,17 @@ fn inspect(args: InspectArgs) -> Result<usize, Box<dyn std::error::Error>> {
 
     let start = path.moves().first().map_or(DVec3::ZERO, |m| m.to);
     // A cut that descends faster than it advances is a plunge at cutting feed.
-    let (steep, deepest) = path.steep_cut_descents(start, 1.0);
-    if steep > 0 {
+    // Two conditions, not one. Steepness alone is safe: a ball riding down a
+    // near-vertical but *smooth* face descends faster than it advances and is fully
+    // supported. Depth alone is safe too: a long gentle descent is just a cut. The
+    // hazard is both together -- dropping a long way while barely advancing, which
+    // engages the end of the cutter rather than its side. PLUNGE_RATIO is about 84
+    // degrees; real surfaces measured on this part top out near 3.
+    let (steep, deepest) = path.steep_cut_descents(start, PLUNGE_RATIO);
+    if deepest > args.max_cut_step {
         warnings.push(format!(
-            "{steep} cutting move(s) descend more steeply than 45 degrees, deepest {deepest:.2} mm              -- these are full-depth plunges at cutting feed and will break cutters"
+            "deepest cutting descent {deepest:.2} mm exceeds the {:.2} mm allowance              ({steep} steep move(s)) -- a plunge at cutting feed will break cutters",
+            args.max_cut_step
         ));
     }
     let output = Output {
@@ -267,6 +285,9 @@ fn inspect(args: InspectArgs) -> Result<usize, Box<dyn std::error::Error>> {
             refinement_limited: strategy.refinement_limited,
             discontinuities: strategy.discontinuities,
             suspicious_plunges: links.suspicious_plunges,
+            max_cut_step: args.max_cut_step,
+            wall_breaks: strategy.wall_breaks,
+            coverage_breaks: strategy.coverage_breaks,
             steep_cut_descents: steep,
             deepest_cut_descent_mm: deepest,
             cutting_length_mm: path.cutting_length(start),
