@@ -11,11 +11,16 @@ use std::process::ExitCode;
 use camcraft_core::dropcutter::DropCutter;
 use camcraft_core::linker::{ClearancePlane, LinkParams, link};
 use camcraft_core::parallel::{ParallelParams, parallel_finish};
+use camcraft_core::simadapt::sim_moves;
 use camcraft_core::stock::{EffectiveTool, Stock};
 use camcraft_core::tool::{Ball, BullnoseFamily, Flat, ToolProfile};
 use camcraft_core::toolpath::{MoveRole, Toolpath};
 use camcraft_geom::mesh::{Aabb, TriMesh};
 use camcraft_import::stl::{Units, load_stl};
+use camcraft_post::op::{ProgramSpec, Spin, Units as PostUnits, lower};
+use camcraft_post::profile::Profile;
+use camcraft_post::render::render;
+use camcraft_sim::stock::{PartSurface, Stock as SimStock};
 use clap::{Parser, Subcommand, ValueEnum};
 use glam::{DVec3, dvec2};
 use serde::Serialize;
@@ -34,6 +39,41 @@ enum Command {
     ///
     /// Emits nothing a machine can read. Look at the result before cutting.
     Inspect(InspectArgs),
+    /// Write a G-code program.
+    ///
+    /// Refuses unless the simulator verifies the result against the part, because a
+    /// file that can reach a machine should have been checked against material and
+    /// not merely against geometry.
+    Post(PostArgs),
+}
+
+#[derive(Parser, Debug)]
+struct PostArgs {
+    #[command(flatten)]
+    job: InspectArgs,
+
+    /// Machine profile: a builtin name, or a path to a TOML profile.
+    #[arg(long, default_value = "masso")]
+    profile: String,
+
+    /// Spindle speed, rev/min.
+    #[arg(long, default_value_t = 18000)]
+    rpm: u32,
+
+    /// Work offset, 54 for G54.
+    #[arg(long, default_value_t = 54)]
+    wcs: u8,
+
+    /// Tool number.
+    #[arg(long, default_value_t = 1)]
+    tool_number: u32,
+
+    /// Write the program even though verification failed.
+    ///
+    /// Prints what is wrong first. Reach for this only when you know why the
+    /// simulator objects and have decided it is wrong.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -144,6 +184,13 @@ struct Meta {
     max_cut_step: f64,
     wall_breaks: u64,
     coverage_breaks: u64,
+    sim_rapid_contacts: u64,
+    sim_deepest_rapid_contact_mm: f64,
+    sim_gouged_columns: u64,
+    sim_deepest_gouge_mm: f64,
+    sim_leftover_columns: u64,
+    sim_removed_mm3: f64,
+    verified: bool,
     steep_cut_descents: u64,
     deepest_cut_descent_mm: f64,
     cutting_length_mm: f64,
@@ -159,6 +206,17 @@ fn main() -> ExitCode {
     tracing_subscriber::fmt().with_target(false).init();
     let cli = Cli::parse();
     match cli.command {
+        Command::Post(args) => match post(args) {
+            Ok(0) => ExitCode::SUCCESS,
+            Ok(n) => {
+                tracing::warn!("{n} warning(s); review before cutting");
+                ExitCode::from(2)
+            }
+            Err(e) => {
+                tracing::error!("{e}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Inspect(args) => match inspect(args) {
             Ok(0) => ExitCode::SUCCESS,
             Ok(n) => {
@@ -173,7 +231,82 @@ fn main() -> ExitCode {
     }
 }
 
+struct Built {
+    output: Output,
+    path: Toolpath,
+    warnings: Vec<String>,
+    verified: bool,
+}
+
+fn post(args: PostArgs) -> Result<usize, Box<dyn std::error::Error>> {
+    let out_path = args.job.out.clone();
+    let built = build(&args.job)?;
+    for w in &built.warnings {
+        tracing::warn!("{w}");
+    }
+
+    if !built.verified && !args.force {
+        tracing::error!(
+            "refusing to write a program that did not verify. Inspect it first:
+               camcraft inspect ... --out path.json
+               bash scripts/view.sh
+             If you understand why the simulator objects, re-run with --force."
+        );
+        return Err("verification failed".into());
+    }
+    if !built.verified {
+        tracing::warn!("--force given: writing a program that did NOT verify");
+    }
+
+    let profile = match Profile::builtin(&args.profile) {
+        Some(p) => p?,
+        None => Profile::load(&args.profile)?,
+    };
+    let spec = ProgramSpec {
+        name: out_path
+            .file_stem()
+            .map_or_else(|| "camcraft".into(), |s| s.to_string_lossy().to_string()),
+        op_name: "finish".into(),
+        strategy: "parallel".into(),
+        tool: args.tool_number,
+        tool_comment: format!("{:?} d{:.2}", args.job.tool, args.job.diameter),
+        wcs: args.wcs,
+        rpm: args.rpm,
+        spin: Spin::Clockwise,
+        coolant: None,
+        units: PostUnits::Millimetres,
+    };
+    let ops = lower(&built.path, &spec)?;
+    let (text, report) = render(&ops, &profile, &spec.name);
+    std::fs::write(&out_path, &text)?;
+    tracing::info!(
+        "wrote {} lines ({} motion blocks) for {} to {}",
+        report.lines,
+        report.motion_blocks,
+        profile.name,
+        out_path.display()
+    );
+    Ok(built.warnings.len())
+}
+
 fn inspect(args: InspectArgs) -> Result<usize, Box<dyn std::error::Error>> {
+    let built = build(&args)?;
+    std::fs::write(&args.out, serde_json::to_string(&built.output)?)?;
+    let size = std::fs::metadata(&args.out).map(|m| m.len()).unwrap_or(0);
+    tracing::info!(
+        "wrote {} moves in {} passes ({}) to {}",
+        built.path.len(),
+        built.output.meta.passes,
+        human_size(size),
+        args.out.display()
+    );
+    for w in &built.warnings {
+        tracing::warn!("{w}");
+    }
+    Ok(built.warnings.len())
+}
+
+fn build(args: &InspectArgs) -> Result<Built, Box<dyn std::error::Error>> {
     let units = match args.units {
         UnitArg::Mm => Units::Millimetres,
         UnitArg::Inch => Units::Inches,
@@ -249,6 +382,40 @@ fn inspect(args: InspectArgs) -> Result<usize, Box<dyn std::error::Error>> {
         warnings.push("path still contains unresolved links and is NOT machinable".into());
     }
 
+    // The oracle. Every other check reasons about the path; this one removes
+    // material and looks at what is left, which is the only way to answer "did a
+    // rapid touch stock" against real geometry rather than against a plane.
+    let sim_pitch = (args.tolerance * 8.0).clamp(0.05, 1.0);
+    let top = bounds.max.z;
+    let mut block = SimStock::block(lo, hi, top, bounds.min.z - 1.0, sim_pitch)?;
+    let sim = block.apply(&sim_moves(&path), &tool);
+    let part = PartSurface::from_mesh(&mesh, lo, hi, sim_pitch)?;
+    // The simulator resolves the surface on a grid, so it cannot be held finer than
+    // one cell plus the chordal tolerance the path was built to.
+    let gouge_budget = args.tolerance + sim_pitch + args.stock_axial;
+    let check = block.verify(&part, gouge_budget, 1.0);
+
+    if sim.rapid_contacts > 0 {
+        warnings.push(format!(
+            "{} rapid move(s) pass through material, deepest {:.2} mm -- a full-speed              traverse is not supposed to be cutting",
+            sim.rapid_contacts, sim.deepest_rapid_contact_mm
+        ));
+    }
+    if check.gouged > 0 {
+        warnings.push(format!(
+            "simulated result is below the part in {} column(s), deepest {:.3} mm              against a {:.3} mm budget",
+            check.gouged, check.deepest_gouge_mm, gouge_budget
+        ));
+    }
+    let verified = sim.is_clean() && check.is_clean();
+    tracing::info!(
+        "simulated: removed {:.0} mm3, {} column(s) compared, gouges {}, rapid contacts {}",
+        sim.removed_mm3,
+        check.compared,
+        check.gouged,
+        sim.rapid_contacts
+    );
+
     let start = path.moves().first().map_or(DVec3::ZERO, |m| m.to);
     // A cut that descends faster than it advances is a plunge at cutting feed.
     // Two conditions, not one. Steepness alone is safe: a ball riding down a
@@ -288,6 +455,13 @@ fn inspect(args: InspectArgs) -> Result<usize, Box<dyn std::error::Error>> {
             max_cut_step: args.max_cut_step,
             wall_breaks: strategy.wall_breaks,
             coverage_breaks: strategy.coverage_breaks,
+            sim_rapid_contacts: sim.rapid_contacts,
+            sim_deepest_rapid_contact_mm: sim.deepest_rapid_contact_mm,
+            sim_gouged_columns: check.gouged,
+            sim_deepest_gouge_mm: check.deepest_gouge_mm,
+            sim_leftover_columns: check.leftover,
+            sim_removed_mm3: sim.removed_mm3,
+            verified,
             steep_cut_descents: steep,
             deepest_cut_descent_mm: deepest,
             cutting_length_mm: path.cutting_length(start),
@@ -296,19 +470,12 @@ fn inspect(args: InspectArgs) -> Result<usize, Box<dyn std::error::Error>> {
         },
     };
 
-    std::fs::write(&args.out, serde_json::to_string(&output)?)?;
-    let size = std::fs::metadata(&args.out).map(|m| m.len()).unwrap_or(0);
-    tracing::info!(
-        "wrote {} moves in {} passes ({}) to {}",
-        path.len(),
-        strategy.passes,
-        human_size(size),
-        args.out.display()
-    );
-    for w in &warnings {
-        tracing::warn!("{w}");
-    }
-    Ok(warnings.len())
+    Ok(Built {
+        output,
+        path,
+        warnings,
+        verified,
+    })
 }
 
 fn part_json(mesh: &TriMesh, bounds: &Aabb) -> Part {

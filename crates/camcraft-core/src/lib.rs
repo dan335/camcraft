@@ -39,3 +39,5 @@ pub mod parallel;
 pub mod toolpath;
 
 pub mod linker;
+
+pub mod simadapt;

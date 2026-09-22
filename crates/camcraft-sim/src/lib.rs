@@ -11,3 +11,5 @@
 //!    the target cutter-location surface: below target is a gouge, far above is
 //!    leftover stock. This is the primary regression test for the whole system, and
 //!    it finds real defects without anyone reading G-code.
+
+pub mod stock;

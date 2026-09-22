@@ -10,3 +10,7 @@
 //! The instruction stream carries structure, not just moves — section boundaries
 //! naming the operation, tool, strategy and work offset — because posts need that
 //! to write headers, tool-change blocks and setup sheets.
+
+pub mod op;
+pub mod profile;
+pub mod render;
