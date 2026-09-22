@@ -1,31 +1,32 @@
 //! Command-line interface for camcraft.
 //!
-//! `inspect` is the verification path: it computes a toolpath and writes the part
-//! and the path out together as JSON, so both can be looked at before anything is
-//! cut. It writes no G-code, which is deliberate — nothing that can reach a machine
-//! comes out of this subcommand.
+//! Every subcommand runs through one engine path, [`run_job`]. `inspect` and `post`
+//! describe a single finishing operation with flags, and are turned into a
+//! one-operation job before anything is computed; `job` reads the operations from a
+//! file. What the inspector draws and what the post writes therefore come from the
+//! same path, move for move. There used to be a second, single-operation path for
+//! the picture, and a defect could have lived in only the one nobody looked at.
+//!
+//! `inspect` writes no G-code, which is deliberate: nothing that can reach a
+//! machine comes out of it.
 
-use std::path::PathBuf;
+mod inspection;
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use camcraft_core::dropcutter::DropCutter;
-use camcraft_core::job::Job as JobSpec;
-use camcraft_core::linker::{ClearancePlane, LinkParams, link};
-use camcraft_core::parallel::{ParallelParams, parallel_finish};
-use camcraft_core::run::{JobResult, run_job};
-use camcraft_core::simadapt::sim_moves;
-use camcraft_core::stock::{EffectiveTool, Stock};
-use camcraft_core::tool::{Ball, BullnoseFamily, Flat, ToolProfile};
-use camcraft_core::toolpath::{MoveRole, Toolpath};
+use camcraft_core::job::{
+    Geometry, Height, HeightRef, Heights, Job as JobSpec, Linking, Operation, Passes, Setup,
+    StockSpec, StockToLeave, StrategySpec, ToolKind, ToolSpec,
+};
+use camcraft_core::run::{JobResult, OperationResult, run_job};
 use camcraft_geom::mesh::{Aabb, TriMesh};
-use camcraft_import::stl::{Units, load_stl};
+use camcraft_import::stl::{ImportReport, Units, load_stl};
 use camcraft_post::op::{ProgramSpec, Spin, Units as PostUnits, lower};
 use camcraft_post::profile::Profile;
 use camcraft_post::render::render;
-use camcraft_sim::stock::{PartSurface, Stock as SimStock};
-use clap::{Parser, Subcommand, ValueEnum};
-use glam::{DVec3, dvec2};
-use serde::Serialize;
+use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
 
 /// Generate 3-axis CNC toolpaths from a 3D model.
 #[derive(Parser, Debug)]
@@ -37,11 +38,11 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Compute a toolpath and write part + path as JSON for inspection.
+    /// Compute a finishing pass and write part + path as JSON for inspection.
     ///
     /// Emits nothing a machine can read. Look at the result before cutting.
     Inspect(InspectArgs),
-    /// Write a G-code program.
+    /// Write a G-code program for a single finishing pass.
     ///
     /// Refuses unless the simulator verifies the result against the part, because a
     /// file that can reach a machine should have been checked against material and
@@ -51,11 +52,13 @@ enum Command {
     ///
     /// Operations run in order against one block of material, each reading what the
     /// last one left. Writes one program per operation, and refuses any that did not
-    /// verify.
+    /// verify. `--inspect` writes what will run as JSON for the inspector, and is
+    /// written even when verification fails, because that is when it is needed.
     Job(JobArgs),
 }
 
 #[derive(Parser, Debug)]
+#[command(group(ArgGroup::new("output").required(true).multiple(true).args(["out", "inspect"])))]
 struct JobArgs {
     /// Model to machine (`.stl`).
     model: PathBuf,
@@ -73,7 +76,11 @@ struct JobArgs {
 
     /// Directory to write programs into. One file per operation.
     #[arg(short, long)]
-    out: PathBuf,
+    out: Option<PathBuf>,
+
+    /// Write every operation's path as JSON for the inspector.
+    #[arg(long)]
+    inspect: Option<PathBuf>,
 
     /// Write programs even though verification failed.
     #[arg(long)]
@@ -142,11 +149,11 @@ struct InspectArgs {
     #[arg(long, default_value_t = 0.0)]
     stock_axial: f64,
 
-    /// Traverse height above the top of the part, in millimetres.
     /// Largest Z drop that may be traversed as a cutting move, in millimetres.
     #[arg(long, default_value_t = 0.5)]
     max_cut_step: f64,
 
+    /// Traverse height above the material, in millimetres.
     #[arg(long, default_value_t = 10.0)]
     clearance: f64,
 
@@ -154,7 +161,7 @@ struct InspectArgs {
     #[arg(long, default_value_t = 1200.0)]
     feed: f64,
 
-    /// Where to write the JSON.
+    /// Where to write the output.
     #[arg(short, long)]
     out: PathBuf,
 }
@@ -167,6 +174,22 @@ enum UnitArg {
     Inch,
 }
 
+impl UnitArg {
+    fn units(self) -> Units {
+        match self {
+            UnitArg::Mm => Units::Millimetres,
+            UnitArg::Inch => Units::Inches,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            UnitArg::Mm => "mm",
+            UnitArg::Inch => "inch",
+        }
+    }
+}
+
 #[derive(ValueEnum, Clone, Copy, Debug)]
 enum ToolArg {
     /// Ball-nose end mill.
@@ -175,130 +198,67 @@ enum ToolArg {
     Flat,
 }
 
-#[derive(Serialize)]
-struct Output {
-    part: Part,
-    path: Vec<Step>,
-    meta: Meta,
-}
-
-#[derive(Serialize)]
-struct Part {
-    /// Flat triangle corners: nine values per triangle.
-    triangles: Vec<f32>,
-    min: [f64; 3],
-    max: [f64; 3],
-    triangle_count: usize,
-}
-
-#[derive(Serialize)]
-struct Step {
-    to: [f64; 3],
-    role: &'static str,
-    feed: Option<f64>,
-}
-
-#[derive(Serialize)]
-struct Meta {
-    model: String,
-    units: &'static str,
-    tool: String,
-    tool_radius: f64,
-    stock_radial: f64,
-    stock_axial: f64,
-    stepover: f64,
-    tolerance: f64,
-    clearance_z: f64,
-    passes: u64,
-    links_resolved: u64,
-    refinement_limited: u64,
-    discontinuities: u64,
-    suspicious_plunges: u64,
-    max_cut_step: f64,
-    wall_breaks: u64,
-    coverage_breaks: u64,
-    sim_rapid_contacts: u64,
-    sim_deepest_rapid_contact_mm: f64,
-    sim_gouged_columns: u64,
-    sim_deepest_gouge_mm: f64,
-    sim_leftover_columns: u64,
-    sim_removed_mm3: f64,
-    verified: bool,
-    steep_cut_descents: u64,
-    deepest_cut_descent_mm: f64,
-    cutting_length_mm: f64,
-    move_count: usize,
-    /// Anything the caller should look at before trusting this.
-    warnings: Vec<String>,
-}
-
-/// Descent-to-advance ratio past which a cutting move is really a plunge.
-const PLUNGE_RATIO: f64 = 10.0;
+type Fallible<T> = Result<T, Box<dyn std::error::Error>>;
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt().with_target(false).init();
     let cli = Cli::parse();
-    match cli.command {
-        Command::Job(args) => match run_job_file(args) {
-            Ok(0) => ExitCode::SUCCESS,
-            Ok(n) => {
-                tracing::warn!("{n} warning(s); review before cutting");
-                ExitCode::from(2)
-            }
-            Err(e) => {
-                tracing::error!("{e}");
-                ExitCode::FAILURE
-            }
-        },
-        Command::Post(args) => match post(args) {
-            Ok(0) => ExitCode::SUCCESS,
-            Ok(n) => {
-                tracing::warn!("{n} warning(s); review before cutting");
-                ExitCode::from(2)
-            }
-            Err(e) => {
-                tracing::error!("{e}");
-                ExitCode::FAILURE
-            }
-        },
-        Command::Inspect(args) => match inspect(args) {
-            Ok(0) => ExitCode::SUCCESS,
-            Ok(n) => {
-                tracing::warn!("{n} warning(s); review before cutting");
-                ExitCode::from(2)
-            }
-            Err(e) => {
-                tracing::error!("{e}");
-                ExitCode::FAILURE
-            }
-        },
+    let outcome = match cli.command {
+        Command::Job(args) => job(args),
+        Command::Post(args) => post(args),
+        Command::Inspect(args) => inspect(args),
+    };
+    match outcome {
+        Ok(0) => ExitCode::SUCCESS,
+        Ok(n) => {
+            tracing::warn!("{n} warning(s); review before cutting");
+            ExitCode::from(2)
+        }
+        Err(e) => {
+            tracing::error!("{e}");
+            ExitCode::FAILURE
+        }
     }
 }
 
-struct Built {
-    output: Output,
-    path: Toolpath,
-    warnings: Vec<String>,
-    verified: bool,
+/// A model, loaded and measured.
+struct Model {
+    mesh: TriMesh,
+    bounds: Aabb,
+    import: ImportReport,
+    path: String,
+    units: UnitArg,
 }
 
-fn run_job_file(args: JobArgs) -> Result<usize, Box<dyn std::error::Error>> {
-    let units = match args.units {
-        UnitArg::Mm => Units::Millimetres,
-        UnitArg::Inch => Units::Inches,
-    };
-    let (mesh, import) = load_stl(&args.model, units)?;
+fn load(path: &Path, units: UnitArg) -> Fallible<Model> {
+    let (mesh, import) = load_stl(path, units.units())?;
     let bounds = mesh.bounds().ok_or("model has no geometry")?;
     let extent = bounds.extent();
     tracing::info!(
-        "loaded {} triangles, {:.1} x {:.1} x {:.1} mm",
+        "loaded {} triangles, {} vertices after welding, {:.1} x {:.1} x {:.1} mm",
         import.triangles,
+        import.vertices,
         extent.x,
         extent.y,
         extent.z
     );
+    Ok(Model {
+        mesh,
+        bounds,
+        import,
+        path: path.display().to_string(),
+        units,
+    })
+}
 
-    let job: JobSpec = toml::from_str(&std::fs::read_to_string(&args.job)?)?;
+/// A job, run.
+struct Ran {
+    result: JobResult,
+    warnings: Vec<String>,
+}
+
+/// The one engine path every subcommand takes.
+fn run(model: &Model, job: &JobSpec) -> Fallible<Ran> {
     // Validation happens before anything is computed, so a bad job fails on its own
     // terms rather than part-way through an operation.
     job.validate()?;
@@ -307,67 +267,20 @@ fn run_job_file(args: JobArgs) -> Result<usize, Box<dyn std::error::Error>> {
         job.operations.len(),
         job.tolerance
     );
-
-    let result = run_job(&job, &mesh)?;
-    report_job(&result);
-
-    let profile = match Profile::builtin(&args.profile) {
-        Some(p) => p?,
-        None => Profile::load(&args.profile)?,
-    };
-    std::fs::create_dir_all(&args.out)?;
+    let result = run_job(job, &model.mesh)?;
+    report(&result);
 
     let mut warnings = result.warnings();
-    if !result.is_clean() && !args.force {
-        tracing::error!(
-            "refusing to write programs that did not verify. Inspect first, then              re-run with --force only if you understand why the simulator objects."
-        );
-        return Err("verification failed".into());
-    }
-    if !result.is_clean() {
-        tracing::warn!("--force given: writing programs that did NOT verify");
-    }
-
-    for (i, op) in result.operations.iter().enumerate() {
-        let name = format!("{:02}-{}", i + 1, sanitise(&op.name));
-        let path = args.out.join(format!("{name}.{}", profile.extension));
-        let spec = ProgramSpec {
-            name: name.clone(),
-            op_name: op.name.clone(),
-            strategy: op.strategy.to_string(),
-            tool: op.tool_number,
-            tool_comment: op.tool_comment.clone(),
-            wcs: job.setup.wcs,
-            rpm: op.rpm,
-            spin: Spin::Clockwise,
-            coolant: None,
-            units: PostUnits::Millimetres,
-        };
-        let ops = lower(&op.path, &spec)?;
-        let (text, render_report) = render(&ops, &profile, &name);
-        std::fs::write(&path, &text)?;
-        tracing::info!(
-            "{}: {} lines, {} motion blocks -> {}",
-            op.name,
-            render_report.lines,
-            render_report.motion_blocks,
-            path.display()
-        );
-    }
-
-    if import.degenerate > 0 {
+    if model.import.degenerate > 0 {
         warnings.push(format!(
             "{} degenerate triangle(s) in the model",
-            import.degenerate
+            model.import.degenerate
         ));
     }
-    for w in &warnings {
-        tracing::warn!("{w}");
-    }
-    Ok(warnings.len())
+    Ok(Ran { result, warnings })
 }
 
-fn report_job(result: &JobResult) {
+fn report(result: &JobResult) {
     for op in &result.operations {
         tracing::info!(
             "{}: {} passes, removed {:.0} mm3, travel saved {:.0}%, rapid contacts {}",
@@ -387,6 +300,215 @@ fn report_job(result: &JobResult) {
     );
 }
 
+fn write_inspection(path: &Path, model: &Model, job: &JobSpec, ran: &Ran) -> Fallible<()> {
+    let doc = inspection::document(
+        &model.path,
+        model.units.label(),
+        &model.mesh,
+        &model.bounds,
+        job,
+        &ran.result,
+        &ran.warnings,
+    );
+    std::fs::write(path, serde_json::to_string(&doc)?)?;
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let moves: usize = ran.result.operations.iter().map(|o| o.path.len()).sum();
+    tracing::info!(
+        "wrote {moves} moves in {} operation(s) ({}) to {}",
+        ran.result.operations.len(),
+        human_size(size),
+        path.display()
+    );
+    Ok(())
+}
+
+/// Refuse to go further unless the job verified, or the caller insisted.
+fn gate(ran: &Ran, force: bool, look_first: &str) -> Fallible<()> {
+    if ran.result.is_clean() {
+        return Ok(());
+    }
+    if !force {
+        // The caller never reaches its own warning report on this path, so say what
+        // is wrong here, before refusing.
+        for w in &ran.warnings {
+            tracing::warn!("{w}");
+        }
+        tracing::error!(
+            "refusing to write a program that did not verify. Look at it first:\n  \
+             {look_first}\n  bash scripts/view.sh\n\
+             If you understand why the simulator objects, re-run with --force."
+        );
+        return Err("verification failed".into());
+    }
+    tracing::warn!("--force given: writing a program that did NOT verify");
+    Ok(())
+}
+
+fn load_profile(name: &str) -> Fallible<Profile> {
+    Ok(match Profile::builtin(name) {
+        Some(p) => p?,
+        None => Profile::load(name)?,
+    })
+}
+
+fn write_program(
+    op: &OperationResult,
+    wcs: u8,
+    profile: &Profile,
+    name: &str,
+    path: &Path,
+) -> Fallible<()> {
+    let spec = ProgramSpec {
+        name: name.to_string(),
+        op_name: op.name.clone(),
+        strategy: op.strategy.to_string(),
+        tool: op.tool_number,
+        tool_comment: op.tool_comment.clone(),
+        wcs,
+        rpm: op.rpm,
+        spin: Spin::Clockwise,
+        coolant: None,
+        units: PostUnits::Millimetres,
+    };
+    let ops = lower(&op.path, &spec)?;
+    let (text, report) = render(&ops, profile, name);
+    std::fs::write(path, &text)?;
+    tracing::info!(
+        "{}: {} lines, {} motion blocks for {} -> {}",
+        op.name,
+        report.lines,
+        report.motion_blocks,
+        profile.name,
+        path.display()
+    );
+    Ok(())
+}
+
+fn job(args: JobArgs) -> Fallible<usize> {
+    let model = load(&args.model, args.units)?;
+    let job: JobSpec = toml::from_str(&std::fs::read_to_string(&args.job)?)?;
+    let ran = run(&model, &job)?;
+
+    // Before the gate, not after it: a job that failed to verify is exactly the one
+    // that needs looking at.
+    if let Some(path) = &args.inspect {
+        write_inspection(path, &model, &job, &ran)?;
+    }
+
+    if let Some(dir) = &args.out {
+        gate(
+            &ran,
+            args.force,
+            "camcraft job ... --inspect path.json, then drop it on the inspector",
+        )?;
+        let profile = load_profile(&args.profile)?;
+        std::fs::create_dir_all(dir)?;
+        for (i, op) in ran.result.operations.iter().enumerate() {
+            let name = format!("{:02}-{}", i + 1, sanitise(&op.name));
+            let path = dir.join(format!("{name}.{}", profile.extension));
+            write_program(op, job.setup.wcs, &profile, &name, &path)?;
+        }
+    }
+
+    for w in &ran.warnings {
+        tracing::warn!("{w}");
+    }
+    Ok(ran.warnings.len())
+}
+
+fn post(args: PostArgs) -> Fallible<usize> {
+    let model = load(&args.job.model, args.job.units)?;
+    let job = single_operation(&args.job, args.wcs, args.rpm, args.tool_number);
+    let ran = run(&model, &job)?;
+    gate(
+        &ran,
+        args.force,
+        "camcraft inspect ... --out path.json, then drop it on the inspector",
+    )?;
+
+    let profile = load_profile(&args.profile)?;
+    let op = ran
+        .result
+        .operations
+        .first()
+        .ok_or("the job produced no operation")?;
+    let out = &args.job.out;
+    let name = out
+        .file_stem()
+        .map_or_else(|| "camcraft".into(), |s| s.to_string_lossy().to_string());
+    write_program(op, job.setup.wcs, &profile, &name, out)?;
+
+    for w in &ran.warnings {
+        tracing::warn!("{w}");
+    }
+    Ok(ran.warnings.len())
+}
+
+fn inspect(args: InspectArgs) -> Fallible<usize> {
+    let model = load(&args.model, args.units)?;
+    let job = single_operation(&args, 54, 18000, 1);
+    let ran = run(&model, &job)?;
+    write_inspection(&args.out, &model, &job, &ran)?;
+    for w in &ran.warnings {
+        tracing::warn!("{w}");
+    }
+    Ok(ran.warnings.len())
+}
+
+/// The job that `inspect` and `post` describe with flags.
+///
+/// The block is the model's own bounding box, and traverses clear the material by
+/// `--clearance`. Retracts run at the cutting feed and plunges at a quarter of it.
+fn single_operation(args: &InspectArgs, wcs: u8, rpm: u32, number: u32) -> JobSpec {
+    const TOOL: &str = "cutter";
+    let (kind, shape) = match args.tool {
+        ToolArg::Ball => (ToolKind::Ball, "ball"),
+        ToolArg::Flat => (ToolKind::Flat, "flat"),
+    };
+    let tool = ToolSpec {
+        kind,
+        diameter: args.diameter,
+        corner: 0.0,
+        number,
+        rpm,
+        comment: format!("{}mm {shape}", args.diameter),
+    };
+    JobSpec {
+        tolerance: args.tolerance,
+        setup: Setup {
+            stock: StockSpec::Box { margin: [0.0; 3] },
+            wcs,
+        },
+        tools: BTreeMap::from([(TOOL.to_string(), tool)]),
+        operations: vec![Operation {
+            name: "finish".into(),
+            strategy: StrategySpec::Parallel { angle: 0.0 },
+            tool: TOOL.into(),
+            geometry: Geometry::default(),
+            heights: Heights {
+                clearance: Height {
+                    reference: HeightRef::ModelTop,
+                    offset: args.clearance,
+                },
+            },
+            passes: Passes {
+                stepover: args.stepover,
+                feed: args.feed,
+                stock_to_leave: StockToLeave {
+                    radial: args.stock_radial,
+                    axial: args.stock_axial,
+                },
+                max_cut_step: args.max_cut_step,
+            },
+            linking: Linking {
+                retract_feed: args.feed,
+                plunge_feed: args.feed / 4.0,
+                ..Linking::default()
+            },
+        }],
+    }
+}
+
 /// Keep an operation name usable as a file name.
 fn sanitise(name: &str) -> String {
     name.chars()
@@ -398,288 +520,6 @@ fn sanitise(name: &str) -> String {
             }
         })
         .collect()
-}
-
-fn post(args: PostArgs) -> Result<usize, Box<dyn std::error::Error>> {
-    let out_path = args.job.out.clone();
-    let built = build(&args.job)?;
-    for w in &built.warnings {
-        tracing::warn!("{w}");
-    }
-
-    if !built.verified && !args.force {
-        tracing::error!(
-            "refusing to write a program that did not verify. Inspect it first:
-               camcraft inspect ... --out path.json
-               bash scripts/view.sh
-             If you understand why the simulator objects, re-run with --force."
-        );
-        return Err("verification failed".into());
-    }
-    if !built.verified {
-        tracing::warn!("--force given: writing a program that did NOT verify");
-    }
-
-    let profile = match Profile::builtin(&args.profile) {
-        Some(p) => p?,
-        None => Profile::load(&args.profile)?,
-    };
-    let spec = ProgramSpec {
-        name: out_path
-            .file_stem()
-            .map_or_else(|| "camcraft".into(), |s| s.to_string_lossy().to_string()),
-        op_name: "finish".into(),
-        strategy: "parallel".into(),
-        tool: args.tool_number,
-        tool_comment: format!("{:?} d{:.2}", args.job.tool, args.job.diameter),
-        wcs: args.wcs,
-        rpm: args.rpm,
-        spin: Spin::Clockwise,
-        coolant: None,
-        units: PostUnits::Millimetres,
-    };
-    let ops = lower(&built.path, &spec)?;
-    let (text, report) = render(&ops, &profile, &spec.name);
-    std::fs::write(&out_path, &text)?;
-    tracing::info!(
-        "wrote {} lines ({} motion blocks) for {} to {}",
-        report.lines,
-        report.motion_blocks,
-        profile.name,
-        out_path.display()
-    );
-    Ok(built.warnings.len())
-}
-
-fn inspect(args: InspectArgs) -> Result<usize, Box<dyn std::error::Error>> {
-    let built = build(&args)?;
-    std::fs::write(&args.out, serde_json::to_string(&built.output)?)?;
-    let size = std::fs::metadata(&args.out).map(|m| m.len()).unwrap_or(0);
-    tracing::info!(
-        "wrote {} moves in {} passes ({}) to {}",
-        built.path.len(),
-        built.output.meta.passes,
-        human_size(size),
-        args.out.display()
-    );
-    for w in &built.warnings {
-        tracing::warn!("{w}");
-    }
-    Ok(built.warnings.len())
-}
-
-fn build(args: &InspectArgs) -> Result<Built, Box<dyn std::error::Error>> {
-    let units = match args.units {
-        UnitArg::Mm => Units::Millimetres,
-        UnitArg::Inch => Units::Inches,
-    };
-    let (mesh, import) = load_stl(&args.model, units)?;
-    let bounds = mesh.bounds().ok_or("model has no geometry")?;
-    let extent = bounds.extent();
-    tracing::info!(
-        "loaded {} triangles, {} vertices after welding, {:.1} x {:.1} x {:.1} mm",
-        import.triangles,
-        import.vertices,
-        extent.x,
-        extent.y,
-        extent.z
-    );
-
-    let mut warnings = Vec::new();
-    if import.degenerate > 0 {
-        warnings.push(format!(
-            "{} degenerate triangle(s) in the model",
-            import.degenerate
-        ));
-    }
-
-    let radius = args.diameter / 2.0;
-    let stock = Stock::new(args.stock_radial, args.stock_axial)?;
-    let base = match args.tool {
-        ToolArg::Ball => Ball::new(radius)?.as_bullnose(),
-        ToolArg::Flat => Flat::new(radius)?.as_bullnose(),
-    };
-    let tool = EffectiveTool::new(&base, stock)?;
-
-    let cutter = DropCutter::new(&mesh);
-    let margin = tool.max_radius();
-    let (lo, hi) = (
-        dvec2(bounds.min.x - margin, bounds.min.y - margin),
-        dvec2(bounds.max.x + margin, bounds.max.y + margin),
-    );
-
-    let sweep = ParallelParams {
-        stepover: args.stepover,
-        tolerance: args.tolerance,
-        feed: args.feed,
-        max_cut_step: args.max_cut_step,
-        ..Default::default()
-    };
-    let (raw, strategy) = parallel_finish(&cutter, &tool, lo, hi, &sweep)?;
-    if !strategy.is_clean() {
-        warnings.push(format!(
-            "{} span(s) hit the refinement limit; the path is coarser than requested",
-            strategy.refinement_limited
-        ));
-    }
-
-    let clearance_z = bounds.max.z + args.clearance;
-    let plane = ClearancePlane::new(clearance_z)?;
-    let (path, links) = link(
-        &raw,
-        &plane,
-        &LinkParams {
-            retract_feed: args.feed,
-            plunge_feed: args.feed / 4.0,
-            tool_radius: tool.max_radius(),
-        },
-    )?;
-    if links.suspicious_plunges > 0 {
-        warnings.push(format!(
-            "{} plunge(s) do not start above the surface",
-            links.suspicious_plunges
-        ));
-    }
-    if path.has_unplanned_links() {
-        warnings.push("path still contains unresolved links and is NOT machinable".into());
-    }
-
-    // The oracle. Every other check reasons about the path; this one removes
-    // material and looks at what is left, which is the only way to answer "did a
-    // rapid touch stock" against real geometry rather than against a plane.
-    let sim_pitch = (args.tolerance * 8.0).clamp(0.05, 1.0);
-    let top = bounds.max.z;
-    let mut block = SimStock::block(lo, hi, top, bounds.min.z - 1.0, sim_pitch)?;
-    let sim = block.apply(&sim_moves(&path), &tool);
-    let part = PartSurface::from_mesh(&mesh, lo, hi, sim_pitch)?;
-    // The simulator resolves the surface on a grid, so it cannot be held finer than
-    // one cell plus the chordal tolerance the path was built to.
-    let gouge_budget = args.tolerance + sim_pitch + args.stock_axial;
-    let check = block.verify(&part, gouge_budget, 1.0);
-
-    if sim.rapid_contacts > 0 {
-        warnings.push(format!(
-            "{} rapid move(s) pass through material, deepest {:.2} mm -- a full-speed              traverse is not supposed to be cutting",
-            sim.rapid_contacts, sim.deepest_rapid_contact_mm
-        ));
-    }
-    if check.gouged > 0 {
-        warnings.push(format!(
-            "simulated result is below the part in {} column(s), deepest {:.3} mm              against a {:.3} mm budget",
-            check.gouged, check.deepest_gouge_mm, gouge_budget
-        ));
-    }
-    let verified = sim.is_clean() && check.is_clean();
-    tracing::info!(
-        "simulated: removed {:.0} mm3, {} column(s) compared, gouges {}, rapid contacts {}",
-        sim.removed_mm3,
-        check.compared,
-        check.gouged,
-        sim.rapid_contacts
-    );
-
-    let start = path.moves().first().map_or(DVec3::ZERO, |m| m.to);
-    // A cut that descends faster than it advances is a plunge at cutting feed.
-    // Two conditions, not one. Steepness alone is safe: a ball riding down a
-    // near-vertical but *smooth* face descends faster than it advances and is fully
-    // supported. Depth alone is safe too: a long gentle descent is just a cut. The
-    // hazard is both together -- dropping a long way while barely advancing, which
-    // engages the end of the cutter rather than its side. PLUNGE_RATIO is about 84
-    // degrees; real surfaces measured on this part top out near 3.
-    let (steep, deepest) = path.steep_cut_descents(start, PLUNGE_RATIO);
-    if deepest > args.max_cut_step {
-        warnings.push(format!(
-            "deepest cutting descent {deepest:.2} mm exceeds the {:.2} mm allowance              ({steep} steep move(s)) -- a plunge at cutting feed will break cutters",
-            args.max_cut_step
-        ));
-    }
-    let output = Output {
-        part: part_json(&mesh, &bounds),
-        path: path_json(&path),
-        meta: Meta {
-            model: args.model.display().to_string(),
-            units: match args.units {
-                UnitArg::Mm => "mm",
-                UnitArg::Inch => "inch",
-            },
-            tool: format!("{:?}", args.tool),
-            tool_radius: radius,
-            stock_radial: args.stock_radial,
-            stock_axial: args.stock_axial,
-            stepover: args.stepover,
-            tolerance: args.tolerance,
-            clearance_z,
-            passes: strategy.passes,
-            links_resolved: links.links_resolved,
-            refinement_limited: strategy.refinement_limited,
-            discontinuities: strategy.discontinuities,
-            suspicious_plunges: links.suspicious_plunges,
-            max_cut_step: args.max_cut_step,
-            wall_breaks: strategy.wall_breaks,
-            coverage_breaks: strategy.coverage_breaks,
-            sim_rapid_contacts: sim.rapid_contacts,
-            sim_deepest_rapid_contact_mm: sim.deepest_rapid_contact_mm,
-            sim_gouged_columns: check.gouged,
-            sim_deepest_gouge_mm: check.deepest_gouge_mm,
-            sim_leftover_columns: check.leftover,
-            sim_removed_mm3: sim.removed_mm3,
-            verified,
-            steep_cut_descents: steep,
-            deepest_cut_descent_mm: deepest,
-            cutting_length_mm: path.cutting_length(start),
-            move_count: path.len(),
-            warnings: warnings.clone(),
-        },
-    };
-
-    Ok(Built {
-        output,
-        path,
-        warnings,
-        verified,
-    })
-}
-
-fn part_json(mesh: &TriMesh, bounds: &Aabb) -> Part {
-    let mut triangles = Vec::with_capacity(mesh.len() * 9);
-    for i in 0..mesh.len() {
-        if let Some(t) = mesh.triangle(i) {
-            for v in t {
-                triangles.push(camcraft_geom::heightmap::narrow(v.x));
-                triangles.push(camcraft_geom::heightmap::narrow(v.y));
-                triangles.push(camcraft_geom::heightmap::narrow(v.z));
-            }
-        }
-    }
-    Part {
-        triangles,
-        min: bounds.min.to_array(),
-        max: bounds.max.to_array(),
-        triangle_count: mesh.len(),
-    }
-}
-
-fn path_json(path: &Toolpath) -> Vec<Step> {
-    path.moves()
-        .iter()
-        .map(|m| Step {
-            to: m.to.to_array(),
-            role: role_name(m.role),
-            feed: m.feed,
-        })
-        .collect()
-}
-
-fn role_name(r: MoveRole) -> &'static str {
-    match r {
-        MoveRole::Rapid => "rapid",
-        MoveRole::Cut => "cut",
-        MoveRole::Lead => "lead",
-        MoveRole::Ramp => "ramp",
-        MoveRole::Plunge => "plunge",
-        MoveRole::Retract => "retract",
-        MoveRole::Link => "link",
-    }
 }
 
 fn human_size(bytes: u64) -> String {

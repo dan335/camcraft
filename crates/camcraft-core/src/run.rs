@@ -15,14 +15,24 @@ use glam::{DVec2, dvec2};
 use crate::clmap::{ClMap, ClMapError};
 use crate::dropcutter::DropCutter;
 use crate::job::{HeightContext, Job, JobError, Operation, StockSpec, StrategySpec};
-use crate::linker::{ClearanceField, LinkError, LinkParams, link};
+use crate::linker::{ClearanceField, LinkError, LinkParams, LinkReport, link};
 use crate::ordering::order_passes;
-use crate::parallel::{ParallelParams, StrategyError, parallel_finish};
-use crate::roughing::{RoughingParams, zlevel_rough};
+use crate::parallel::{ParallelParams, StrategyError, StrategyReport, parallel_finish};
+use crate::roughing::{RoughingParams, RoughingReport, zlevel_rough};
 use crate::simadapt::sim_moves;
 use crate::stock::{EffectiveTool, Stock as ToLeave, StockError as ToLeaveError};
 use crate::tool::{ToolError, ToolProfile};
 use crate::toolpath::{Toolpath, ToolpathError};
+
+/// Descent-to-advance ratio past which a cutting move is really a plunge.
+///
+/// Two conditions make a plunge, not one. Steepness alone is safe: a ball riding
+/// down a near-vertical but *smooth* face descends faster than it advances and is
+/// fully supported. Depth alone is safe too: a long gentle descent is just a cut.
+/// The hazard is both together -- dropping a long way while barely advancing, which
+/// engages the end of the cutter rather than its side. Ten is about 84 degrees;
+/// real surfaces measured on the router jig top out near 3.
+pub const PLUNGE_RATIO: f64 = 10.0;
 
 /// A job that could not be run.
 #[derive(Debug, thiserror::Error)]
@@ -71,6 +81,18 @@ pub enum RunError {
     EmptyModel,
 }
 
+/// What a strategy reported, in its own terms.
+///
+/// Carried through rather than flattened into warnings, so that anything looking
+/// at a result -- the inspector above all -- sees the same numbers the run did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrategyDetail {
+    /// Raster finishing.
+    Parallel(StrategyReport),
+    /// Z-level clearing.
+    ZlevelRough(RoughingReport),
+}
+
 /// What one operation produced.
 #[derive(Debug, Clone)]
 pub struct OperationResult {
@@ -92,6 +114,17 @@ pub struct OperationResult {
     pub passes: u64,
     /// Inter-pass travel removed by reordering, as a fraction.
     pub travel_saved: f64,
+    /// What the strategy reported.
+    pub detail: StrategyDetail,
+    /// What linking did.
+    pub links: LinkReport,
+    /// The clearance height, resolved. Traverses fly over the material by the
+    /// clearance offset, and never lower than this where the material is unknown.
+    pub clearance_z: f64,
+    /// Cutting moves steeper than [`PLUNGE_RATIO`].
+    pub steep_cut_descents: u64,
+    /// Deepest of those, in millimetres.
+    pub deepest_cut_descent_mm: f64,
     /// Anything the caller should look at.
     pub warnings: Vec<String>,
 }
@@ -116,6 +149,12 @@ pub struct JobResult {
     pub verify: VerifyReport,
     /// Tolerance the comparison allowed.
     pub verify_budget: f64,
+    /// Footprint of the block in XY, lower corner.
+    pub stock_min: DVec2,
+    /// Footprint of the block in XY, upper corner.
+    pub stock_max: DVec2,
+    /// The heights symbolic references resolved against.
+    pub heights: HeightContext,
 }
 
 impl JobResult {
@@ -189,6 +228,9 @@ pub fn run_job(job: &Job, mesh: &TriMesh) -> Result<JobResult, RunError> {
         part,
         verify,
         verify_budget: budget,
+        stock_min: lo,
+        stock_max: hi,
+        heights: ctx,
     })
 }
 
@@ -222,7 +264,7 @@ fn run_operation(
         dvec2(hi.x + reach, hi.y + reach),
     );
 
-    let (raw, passes) = match op.strategy {
+    let (raw, passes, detail) = match op.strategy {
         StrategySpec::Parallel { angle } => {
             let params = ParallelParams {
                 stepover: op.passes.stepover,
@@ -244,7 +286,7 @@ fn run_operation(
                     report.refinement_limited
                 ));
             }
-            (path, report.passes)
+            (path, report.passes, StrategyDetail::Parallel(report))
         }
         StrategySpec::ZlevelRough {
             stepdown,
@@ -280,7 +322,7 @@ fn run_operation(
                         .into(),
                 );
             }
-            (path, report.rings)
+            (path, report.rings, StrategyDetail::ZlevelRough(report))
         }
     };
 
@@ -294,10 +336,11 @@ fn run_operation(
 
     // Clearance comes from the material as it currently stands, so the tool stays
     // low where roughing has already been.
+    let clearance_z = op.heights.clearance.resolve(ctx);
     let clearance = ClearanceField::new(
         stock.field().clone(),
         op.heights.clearance.offset,
-        op.heights.clearance.resolve(ctx),
+        clearance_z,
     )
     .map_err(|source| RunError::Link {
         op: op.name.clone(),
@@ -323,6 +366,9 @@ fn run_operation(
             links.suspicious_plunges
         ));
     }
+    if path.has_unplanned_links() {
+        warnings.push("path still contains unresolved links and is NOT machinable".into());
+    }
 
     // Simulate now, not at the end: a gouge here is worth knowing before the next
     // operation is planned against the material this one left.
@@ -334,7 +380,7 @@ fn run_operation(
         ));
     }
     let start = path.moves().first().map_or(glam::DVec3::ZERO, |m| m.to);
-    let (steep, deepest) = path.steep_cut_descents(start, 10.0);
+    let (steep, deepest) = path.steep_cut_descents(start, PLUNGE_RATIO);
     if deepest > op.passes.max_cut_step {
         warnings.push(format!(
             "deepest cutting descent {deepest:.2} mm exceeds the {:.2} mm allowance \
@@ -356,6 +402,11 @@ fn run_operation(
         sim,
         passes,
         travel_saved: order.saved(),
+        detail,
+        links,
+        clearance_z,
+        steep_cut_descents: steep,
+        deepest_cut_descent_mm: deepest,
         warnings,
     })
 }
@@ -418,6 +469,33 @@ heights = { clearance = { ref = "stock-top", offset = 6.0 } }
             );
             assert!(o.passes > 0, "{} produced no passes", o.name);
         }
+    }
+
+    /// Whatever looks at a result sees the run's own reports, not a recomputation.
+    #[test]
+    fn results_carry_what_the_run_reported() {
+        let job: Job = toml::from_str(JOB).unwrap();
+        let result = run_job(&job, &dome()).unwrap();
+        let [rough, finish] = result.operations.as_slice() else {
+            panic!("expected two operations");
+        };
+
+        let StrategyDetail::ZlevelRough(r) = rough.detail else {
+            panic!("rough reported {:?}", rough.detail);
+        };
+        assert_eq!(r.rings, rough.passes);
+        let StrategyDetail::Parallel(p) = finish.detail else {
+            panic!("finish reported {:?}", finish.detail);
+        };
+        assert_eq!(p.passes, finish.passes);
+
+        // Clearance resolved against this job's block: stock-top plus 6.
+        assert!((result.heights.stock_top - (8.0 + 2.0)).abs() < 1e-6);
+        for o in &result.operations {
+            assert!((o.clearance_z - (result.heights.stock_top + 6.0)).abs() < 1e-9);
+            assert!(o.links.links_resolved > 0, "{} resolved no links", o.name);
+        }
+        assert!(result.stock_min.x < -8.0 && result.stock_max.x > 8.0);
     }
 
     /// The point of threading: the second operation sees what the first removed.
