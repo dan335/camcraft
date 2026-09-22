@@ -50,16 +50,14 @@ each pass next to where the following one starts.
 
 ## What is next, in order
 
-1. **Decide whether a steep cutting descent blocks a program.** See *Open questions*.
-   Small to change, but it is a policy decision about what the gate means.
-2. **0.1-d, STEP import.** The backend decision is made and the spike is done
+1. **0.1-d, STEP import.** The backend decision is made and the spike is done
    (`docs/decisions/0001-step-backend.md`), so this is wiring rather than research.
    OpenCascade, with cmake and a C++ toolchain as documented prerequisites.
-3. **Nameless ASCII STL fails to load.** A file beginning `solid` followed by a
+2. **Nameless ASCII STL fails to load.** A file beginning `solid` followed by a
    newline (no name) is read as binary and fails with "failed to fill whole buffer".
    Most opencamlib sample files are like this. `stl_io` appears to detect ASCII by
    `solid ` with a trailing space; detect it ourselves before handing over.
-4. Everything else is post-0.1: waterline, constant scallop, pencil, adaptive
+3. Everything else is post-0.1: waterline, constant scallop, pencil, adaptive
    clearing, 2D operations, V-carve, tabs, arc fitting, feeds and speeds.
 
 ## Before the first cut
@@ -75,6 +73,9 @@ actually break cutters on the day:
 
 ## Open questions
 
+Deferred on purpose: these are hard to judge until the GUI can show what is going
+on. Come back to them once it can.
+
 - **The viewer and the gate disagree about steep descents.** A cutting move that
   drops further than `max_cut_step` while barely advancing is a plunge at cutting
   feed. The viewer calls it a blocking failure (CC105, HALT). The engine only warns:
@@ -82,8 +83,18 @@ actually break cutters on the day:
   the opencamlib samples gets a 0.76 mm descent from a single finishing pass, and a
   0.93 mm one under `rail-jig.toml`. The same numbers came out before the
   one-engine-path change, so this is old behaviour. Either the gate should refuse it
-  (as the viewer implies), or the viewer should call it a warning. Wall breaks are
-  supposed to catch these, and why some still get through deserves a look too.
+  (as the viewer implies), or the viewer should call it a warning.
+
+  *Why they get through at all* (found, not yet fixed). `refine` in
+  `crates/camcraft-core/src/parallel.rs` accepts a span as soon as its midpoint lies
+  within tolerance of the chord. It only reaches the wall-break check when that test
+  fails and the span has shrunk to the geometric limit. A steep but *straight* face
+  passes the chord test, so its depth is never compared with `max_cut_step`. In the
+  `rail-jig.toml` finishing pass on `mount_rush.stl`, moves 444 and 445 drop 0.93 mm
+  and 0.51 mm over 0.047 mm and 0.023 mm of travel, 1.44 mm almost straight down at
+  cutting feed. Only `steep_cut_descents`, run afterwards, notices, and it only
+  warns. Likely fix: check depth before accepting a span, so the pass breaks there
+  like at any other wall. Then decide what the gate does with whatever is left.
 
 ## Things that were wrong and are now right
 
