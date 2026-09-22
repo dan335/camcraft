@@ -28,12 +28,17 @@ hole is a gouge. So:
 3. Lands inside the convex hull of the control points. A NURBS surface is
    mathematically contained in that hull, so this is a free correctness oracle that
    needs no reference mesh.
-4. Applies the STEP unit context. Six of seven fixtures are in inches.
+4. Applies the STEP unit context. Five of six committed fixtures are in inches.
 5. Fast enough to iterate on.
 
 ## Result
 
-Measured over `fixtures/step/` (see its README for what each part exercises).
+Measured over `fixtures/step/` (see its README for what each part exercises), plus one
+commercial part referred to below as **`sculpted-panel`** — a large freeform panel,
+5 faces, 3 `B_SPLINE_SURFACE_WITH_KNOTS`, 2104 control points. It is not in this
+repository: it was removed and scrubbed from the history because it is customer work,
+and it now lives only in `CAMCRAFT_FIXTURES`. It is named here because it is the part
+that produced the disqualifying result.
 truck at tolerance 0.1, OCCT at 0.01 — **a ten times finer tolerance**, and it still
 wins on wall clock.
 
@@ -44,7 +49,7 @@ wins on wall clock.
 | `rail_guide` (134 faces, cones) | 282 ms, 444 tris | 133 ms, 7,628 tris |
 | `sled_base` (387 faces, 6 B-spline) | 798 ms, 1,294 tris | 763 ms, 39,780 tris |
 | `bowl_01` (revolved + seams) | **114,956 ms**, Irregular | **9,723 ms**, 205,520 tris |
-| `production_…_remake` (3 B-spline) | 10,967 ms, **geometry corrupt** | 9,494 ms, 197,490 tris |
+| `sculpted-panel` (3 B-spline, private) | 10,967 ms, **geometry corrupt** | 9,494 ms, 197,490 tris |
 | `nist_ftc_06` (AP242) | **parse error** | not retested |
 
 Bounding boxes against ground truth (mm):
@@ -54,7 +59,7 @@ Bounding boxes against ground truth (mm):
 | `hinge_jig` | 25 × 32 × 33 | 1 × 1 × 1 | **25.4 × 31.8 × 33.3** |
 | `lego_4x2_01` | 101 × 50 × 38 | 4 × 2 × 2 | **100.6 × 49.8 × 38.1** |
 | `sled_base` | ≤ 251 × 233 × 76 | 9 × 9 × 3 | **237.0 × 227.0 × 76.2** |
-| `production_…_remake` | ≤ 477 × 281 × 44 | **54 × 105 × 2** | **309.8 × 272.3 × 44.4** |
+| `sculpted-panel` | ≤ 477 × 281 × 44 | **54 × 105 × 2** | **309.8 × 272.3 × 44.4** |
 
 ## Why truck fails
 
@@ -64,7 +69,7 @@ Had the fixture set stopped there it would have passed.
 
 It fails precisely on curved surfaces, which is the entire reason this project exists.
 
-1. **Corrupt NURBS refinement.** On `production_large_single_03_remake`, truck returns
+1. **Corrupt NURBS refinement.** On `sculpted-panel`, truck returns
    a Y extent of 105 mm where the control-point hull caps it at 11.06 inches. That is
    ~9.5× *outside* the convex hull, which a NURBS surface cannot leave. At coarse
    tolerance (0.5) the same file lands inside the hull; refinement is what breaks it.
@@ -106,5 +111,10 @@ Accepted costs, all of which were actually hit and resolved during the spike:
   that destroys parts.
 - **The convex-hull check becomes a permanent import test**, not just a spike tool. It
   is cheap, needs no reference mesh, and it is what caught this.
+- **The public fixture set can no longer reproduce finding 1 on its own.** The part
+  that exposed it is commercial and was removed from this repository and scrubbed from
+  its history. A synthetic sculpted-surface fixture with a comparable control-point
+  count should replace it; until then that regression is only caught on a machine with
+  `CAMCRAFT_FIXTURES` set.
 - **Revisit if** a pure-Rust B-rep tessellator matures. The prize is dropping the C++
   toolchain requirement. `truck` is not close today on curved surfaces.
