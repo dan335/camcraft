@@ -937,6 +937,7 @@ fn operation(
             }
         });
         if let Some(t) = &tool_name {
+            preset_row(ui, doc, si, index, t);
             if let Some(clash) = doc.number_clash(t) {
                 ui.horizontal(|ui| {
                     ui.colored_label(
@@ -987,6 +988,10 @@ fn operation(
         }
     });
 
+    let tool_rpm = tool_name
+        .as_ref()
+        .and_then(|t| doc.job.tools.get(t))
+        .map(|t| t.rpm);
     let Some(op) = operation_mut(doc, si, index) else {
         return;
     };
@@ -1094,6 +1099,29 @@ fn operation(
             ui.label("Feed");
             m.feed_field(ui, &mut op.passes.feed, 50_000.0);
             ui.end_row();
+            ui.label("Spindle");
+            ui.horizontal(|ui| {
+                let mut own = op.passes.rpm.is_some();
+                if ui.checkbox(&mut own, "").changed() {
+                    op.passes.rpm = own.then(|| tool_rpm.unwrap_or(18000));
+                }
+                match op.passes.rpm.as_mut() {
+                    Some(rpm) => {
+                        ui.add(
+                            egui::DragValue::new(rpm)
+                                .range(1..=60000)
+                                .suffix(" rev/min"),
+                        );
+                    }
+                    None => {
+                        ui.weak(match tool_rpm {
+                            Some(r) => format!("the tool's, {r} rev/min"),
+                            None => "the tool's".to_string(),
+                        });
+                    }
+                }
+            });
+            ui.end_row();
             ui.label("Leave, sideways");
             m.length_field(ui, &mut op.passes.stock_to_leave.radial, 0.05, 50.0, "");
             ui.end_row();
@@ -1123,6 +1151,109 @@ fn operation(
             );
             ui.end_row();
         });
+    });
+}
+
+/// Which of the tool's presets the operation's values came from, what has been
+/// changed since, and a way to keep the operation's values as a new preset.
+fn preset_row(ui: &mut egui::Ui, doc: &mut Document, si: usize, index: usize, tool: &str) {
+    let presets = doc
+        .job
+        .tools
+        .get(tool)
+        .map(|t| t.presets.clone())
+        .unwrap_or_default();
+    let Some(op) = operation_mut(doc, si, index) else {
+        return;
+    };
+    let none = "none";
+    ui.horizontal(|ui| {
+        ui.label("Preset");
+        egui::ComboBox::from_id_salt(("op-preset", si, index))
+            .selected_text(op.preset.as_deref().unwrap_or(none))
+            .show_ui(ui, |ui| {
+                for p in &presets {
+                    if ui
+                        .selectable_label(op.preset.as_deref() == Some(p.name.as_str()), &p.name)
+                        .clicked()
+                    {
+                        op.apply_preset(p);
+                    }
+                }
+                if ui.selectable_label(op.preset.is_none(), none).clicked() {
+                    op.preset = None;
+                }
+            });
+    });
+    if presets.is_empty() {
+        ui.weak("The tool has no presets. Save this operation's values as one below.");
+    }
+    if let Some(name) = op.preset.clone() {
+        match presets.iter().find(|p| p.name == name) {
+            Some(p) => {
+                let changed = op.differs_from(p);
+                if !changed.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            format!("Changed from '{name}': {}", changed.join(", ")),
+                        );
+                        if ui.small_button("Reset to preset").clicked() {
+                            op.apply_preset(p);
+                        }
+                    });
+                }
+            }
+            None => {
+                ui.weak(format!("The tool no longer has a preset called '{name}'."));
+            }
+        }
+    }
+
+    // Keep the operation's values as a preset of the job's copy of the tool.
+    let id = ui.id().with(("save-preset", si, index));
+    let mut draft: Option<String> = ui.data(|d| d.get_temp(id));
+    let mut saved = None;
+    match draft.as_mut() {
+        None => {
+            if ui.small_button("Save as preset…").clicked() {
+                draft = Some(String::new());
+            }
+        }
+        Some(text) => {
+            let mut done = false;
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(text).hint_text("preset name, e.g. Finishing"));
+                let name = text.trim().to_string();
+                let taken = presets.iter().any(|p| p.name == name);
+                if ui
+                    .add_enabled(!name.is_empty() && !taken, egui::Button::new("Save"))
+                    .clicked()
+                {
+                    saved = Some(op.as_preset(&name));
+                    op.preset = Some(name);
+                    done = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    done = true;
+                }
+                if taken {
+                    ui.colored_label(ui.visuals().warn_fg_color, "that name is taken");
+                }
+            });
+            if done {
+                draft = None;
+            }
+        }
+    }
+    if let (Some(preset), Some(spec)) = (saved, doc.job.tools.get_mut(tool)) {
+        spec.presets.push(preset);
+    }
+    ui.data_mut(|d| match draft {
+        Some(text) => {
+            d.insert_temp(id, text);
+        }
+        None => d.remove::<String>(id),
     });
 }
 

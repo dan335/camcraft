@@ -936,22 +936,14 @@ impl App {
             return;
         };
         self.picker = None;
-        let Some(picked) = outcome else {
+        let Some((picked, preset)) = outcome else {
             return;
         };
         let name = match picked {
             Picked::Job(name) => name,
             Picked::Library(hint, spec) => doc.adopt_tool(&hint, &spec),
         };
-        if let Some(o) = doc
-            .job
-            .setups
-            .iter_mut()
-            .find(|s| s.name == setup)
-            .and_then(|s| s.operations.get_mut(op))
-        {
-            o.tool = Some(name);
-        }
+        doc.use_tool(&setup, op, name, preset.as_deref());
     }
 
     fn prompts(&mut self, ctx: &egui::Context) {

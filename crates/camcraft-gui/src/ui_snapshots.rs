@@ -286,7 +286,7 @@ fn open_job_dialog() {
 fn tool_manager() {
     use crate::tool_manager::ToolManager;
     use camcraft_core::job::{
-        CuttingData, Holder, HolderSegment, ToolKind, ToolMaterial, ToolSpec,
+        Holder, HolderSegment, Preset, StockToLeave, ToolKind, ToolMaterial, ToolSpec,
     };
 
     let library = output_dir().join("snapshot-library.toml");
@@ -340,11 +340,28 @@ fn tool_manager() {
                 },
             ],
         }),
-        cutting: Some(CuttingData {
-            feed: Some(2400.0),
-            plunge_feed: Some(500.0),
-            ramp_feed: None,
-        }),
+        presets: vec![
+            Preset {
+                name: "Roughing".into(),
+                rpm: Some(16000),
+                feed: Some(2400.0),
+                plunge_feed: Some(500.0),
+                stepdown: Some(3.0),
+                stepover: Some(3.0),
+                stock_to_leave: Some(StockToLeave {
+                    radial: 0.3,
+                    axial: 0.2,
+                }),
+                ..Preset::default()
+            },
+            Preset {
+                name: "Finishing".into(),
+                comment: "from the maker's chart".into(),
+                stepover: Some(0.4),
+                stock_to_leave: Some(StockToLeave::default()),
+                ..Preset::default()
+            },
+        ],
     };
     manager.show_for_snapshot("bullnose-8", Some(described.clone()));
     let mut manager = shoot_manager(manager, "tools_library");

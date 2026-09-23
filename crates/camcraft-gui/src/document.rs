@@ -727,15 +727,24 @@ impl Document {
         };
         let name = free(base, s.operations.iter().map(|o| o.name.as_str()));
         let tool = s.operations.last().and_then(|o| o.tool.clone());
-        s.operations.push(Operation {
+        let preset = tool
+            .as_ref()
+            .and_then(|t| self.job.tools.get(t))
+            .and_then(|t| t.presets.first());
+        let mut op = Operation {
             name,
             strategy,
             tool,
+            preset: None,
             geometry: Default::default(),
             heights: Default::default(),
             passes: Default::default(),
             linking: Default::default(),
-        });
+        };
+        if let Some(p) = preset {
+            op.apply_preset(p);
+        }
+        s.operations.push(op);
         let i = s.operations.len() - 1;
         self.active = Some(setup.to_string());
         self.selection = Selection::Operation(setup.to_string(), i);
@@ -796,6 +805,27 @@ impl Document {
         let name = camcraft_session::library::free_name(hint, &self.job.tools);
         self.job.tools.insert(name.clone(), spec.clone());
         name
+    }
+
+    /// Give operation `op` of `setup` the job's tool `tool`, and copy in the values
+    /// of its preset `preset`. Without one, the operation keeps its own values and
+    /// no longer names a preset.
+    pub fn use_tool(&mut self, setup: &str, op: usize, tool: String, preset: Option<&str>) {
+        let preset = preset.and_then(|p| self.job.tools.get(&tool)?.preset(p).cloned());
+        let Some(o) = self
+            .job
+            .setups
+            .iter_mut()
+            .find(|s| s.name == setup)
+            .and_then(|s| s.operations.get_mut(op))
+        else {
+            return;
+        };
+        o.tool = Some(tool);
+        match preset {
+            Some(p) => o.apply_preset(&p),
+            None => o.preset = None,
+        }
     }
 
     /// Another tool the job's operations use with the same number as tool `name`,
@@ -1231,6 +1261,7 @@ fn shift<T>(items: &mut [T], i: usize, by: isize) -> Option<usize> {
 )]
 mod tests {
     use super::*;
+    use camcraft_core::job::Preset;
 
     fn example() -> Document {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/rail-jig.camcraft");
@@ -1455,6 +1486,37 @@ mod tests {
             doc.number_clash("finish-6-ball-2").as_deref(),
             Some("rough-6-flat")
         );
+    }
+
+    /// Choosing a tool with a preset fills in the operation from it; choosing one
+    /// without keeps the operation's values and forgets the preset.
+    #[test]
+    fn a_tool_chosen_with_a_preset_fills_in_the_operation() {
+        let mut doc = example();
+        let mut spec = doc.job.tools["finish-6-ball"].clone();
+        spec.diameter = 3.0;
+        spec.presets = vec![Preset {
+            name: "Finishing".into(),
+            rpm: Some(20000),
+            feed: Some(900.0),
+            stepover: Some(0.2),
+            ..Preset::default()
+        }];
+        let name = doc.adopt_tool("small-ball", &spec);
+        let before = doc.job.setups[0].operations[1].clone();
+        doc.use_tool("top", 1, name.clone(), Some("Finishing"));
+        let op = &doc.job.setups[0].operations[1];
+        assert_eq!(op.tool.as_deref(), Some(name.as_str()));
+        assert_eq!(op.preset.as_deref(), Some("Finishing"));
+        assert_eq!(op.passes.rpm, Some(20000));
+        assert_eq!(op.passes.feed, 900.0);
+        assert_eq!(op.passes.stepover, 0.2);
+        assert_eq!(op.linking, before.linking, "the preset has no plunge feed");
+
+        doc.use_tool("top", 1, "finish-6-ball".into(), None);
+        let op = &doc.job.setups[0].operations[1];
+        assert_eq!(op.preset, None);
+        assert_eq!(op.passes.feed, 900.0, "values stay without a preset");
     }
 
     #[test]

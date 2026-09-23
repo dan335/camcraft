@@ -2,7 +2,7 @@
 //! edits the library's tools, and an operation's panel, which edits the job's copy.
 
 use camcraft_core::job::{
-    CuttingData, Holder, HolderSegment, ToolFieldError, ToolKind, ToolMaterial, ToolSpec,
+    Holder, HolderSegment, Preset, StockToLeave, ToolFieldError, ToolKind, ToolMaterial, ToolSpec,
 };
 use eframe::egui;
 
@@ -14,7 +14,8 @@ use crate::tool_drawing::{Part, draw};
 /// shown in `m` and kept in millimetres. Call inside `ui.push_id` when more than
 /// one tool may be edited in the same window.
 pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure) {
-    let errors = tool.check();
+    let (errors, preset_errors): (Vec<_>, Vec<_>) =
+        tool.check().into_iter().partition(|e| e.preset.is_none());
     paint_tool(ui, tool, m);
 
     let section = |ui: &mut egui::Ui, title: &str, body: &mut dyn FnMut(&mut egui::Ui)| {
@@ -165,7 +166,7 @@ pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure) {
         ui.end_row();
     });
 
-    section(ui, "Cutting data", &mut |ui| {
+    section(ui, "Speed", &mut |ui| {
         ui.label("Spindle");
         ui.horizontal(|ui| {
             ui.add(
@@ -176,35 +177,14 @@ pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure) {
             field_error(ui, &errors, "rpm");
         });
         ui.end_row();
-        let cutting = tool.cutting.get_or_insert_with(CuttingData::default);
-        opt_feed(
-            ui,
-            m,
-            "Cutting feed",
-            &mut cutting.feed,
-            &errors,
-            "cutting.feed",
-        );
-        opt_feed(
-            ui,
-            m,
-            "Plunge feed",
-            &mut cutting.plunge_feed,
-            &errors,
-            "cutting.plunge_feed",
-        );
-        opt_feed(
-            ui,
-            m,
-            "Ramp feed",
-            &mut cutting.ramp_feed,
-            &errors,
-            "cutting.ramp_feed",
-        );
-        if *cutting == CuttingData::default() {
-            tool.cutting = None;
-        }
+        ui.label("");
+        ui.weak("An operation cuts at this speed unless its preset gives one.");
+        ui.end_row();
     });
+
+    egui::CollapsingHeader::new("Presets")
+        .default_open(true)
+        .show(ui, |ui| presets(ui, tool, m, &preset_errors));
 
     section(ui, "Post", &mut |ui| {
         ui.label("Tool number");
@@ -217,6 +197,196 @@ pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure) {
         });
         ui.end_row();
     });
+}
+
+/// The tool's presets, each a block of its own with its values, and a way to add,
+/// copy, reorder and remove them. The first is the one a new operation gets.
+fn presets(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFieldError]) {
+    if tool.presets.is_empty() {
+        ui.weak(
+            "No presets. A preset is a named set of speeds and feeds, \
+             e.g. Roughing and Finishing, that an operation copies.",
+        );
+    }
+    enum Act {
+        Up(usize),
+        Down(usize),
+        Copy(usize),
+        Remove(usize),
+    }
+    let mut act = None;
+    let count = tool.presets.len();
+    let diameter = tool.diameter;
+    for (i, p) in tool.presets.iter_mut().enumerate() {
+        let mine: Vec<ToolFieldError> = errors
+            .iter()
+            .filter(|e| e.preset == Some(i))
+            .cloned()
+            .collect();
+        let title = if p.name.trim().is_empty() {
+            "(unnamed)".to_string()
+        } else if i == 0 {
+            format!("{} (default)", p.name)
+        } else {
+            p.name.clone()
+        };
+        let title = if mine.is_empty() {
+            egui::RichText::new(title)
+        } else {
+            egui::RichText::new(title).color(ui.visuals().error_fg_color)
+        };
+        ui.push_id(("preset", i), |ui| {
+            egui::CollapsingHeader::new(title)
+                .id_salt(("preset", i))
+                .default_open(count <= 2)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(i > 0, egui::Button::new("up").small())
+                            .clicked()
+                        {
+                            act = Some(Act::Up(i));
+                        }
+                        if ui
+                            .add_enabled(i + 1 < count, egui::Button::new("down").small())
+                            .clicked()
+                        {
+                            act = Some(Act::Down(i));
+                        }
+                        if ui.small_button("duplicate").clicked() {
+                            act = Some(Act::Copy(i));
+                        }
+                        if ui.small_button("remove").clicked() {
+                            act = Some(Act::Remove(i));
+                        }
+                    });
+                    egui::Grid::new("preset-fields")
+                        .num_columns(2)
+                        .spacing([12.0, 6.0])
+                        .show(ui, |ui| preset_fields(ui, p, diameter, m, &mine));
+                });
+        });
+    }
+    match act {
+        Some(Act::Up(i)) => tool.presets.swap(i - 1, i),
+        Some(Act::Down(i)) => tool.presets.swap(i, i + 1),
+        Some(Act::Copy(i)) => {
+            if let Some(p) = tool.presets.get(i).cloned() {
+                let name = free_preset_name(&tool.presets, &p.name);
+                tool.presets.insert(i + 1, Preset { name, ..p });
+            }
+        }
+        Some(Act::Remove(i)) => {
+            tool.presets.remove(i);
+        }
+        None => {}
+    }
+    if ui.button("Add preset").clicked() {
+        let name = free_preset_name(&tool.presets, "Preset");
+        tool.presets.push(Preset {
+            name,
+            rpm: Some(tool.rpm),
+            ..Preset::default()
+        });
+    }
+}
+
+/// `base`, or `base 2`, `base 3`… if a preset already has that name.
+fn free_preset_name(presets: &[Preset], base: &str) -> String {
+    let taken = |n: &str| presets.iter().any(|p| p.name == n);
+    if !taken(base) {
+        return base.to_string();
+    }
+    (2..)
+        .map(|k| format!("{base} {k}"))
+        .find(|n| !taken(n))
+        .unwrap_or_default()
+}
+
+fn preset_fields(
+    ui: &mut egui::Ui,
+    p: &mut Preset,
+    diameter: f64,
+    m: Measure,
+    errors: &[ToolFieldError],
+) {
+    ui.label("Name");
+    ui.horizontal(|ui| {
+        ui.text_edit_singleline(&mut p.name);
+        field_error(ui, errors, "presets.name");
+    });
+    ui.end_row();
+    ui.label("Note");
+    ui.add(egui::TextEdit::singleline(&mut p.comment).hint_text("e.g. from the maker's chart"));
+    ui.end_row();
+    ui.label("Spindle");
+    ui.horizontal(|ui| {
+        let mut on = p.rpm.is_some();
+        if ui.checkbox(&mut on, "").changed() {
+            p.rpm = on.then_some(18000);
+        }
+        if let Some(rpm) = p.rpm.as_mut() {
+            ui.add(
+                egui::DragValue::new(rpm)
+                    .range(0..=60000)
+                    .suffix(" rev/min"),
+            );
+        } else {
+            ui.weak("not given");
+        }
+        field_error(ui, errors, "presets.rpm");
+    });
+    ui.end_row();
+    opt_feed(ui, m, "Cutting feed", &mut p.feed, errors, "presets.feed");
+    opt_feed(
+        ui,
+        m,
+        "Plunge feed",
+        &mut p.plunge_feed,
+        errors,
+        "presets.plunge_feed",
+    );
+    opt_feed(
+        ui,
+        m,
+        "Ramp feed",
+        &mut p.ramp_feed,
+        errors,
+        "presets.ramp_feed",
+    );
+    opt_length(
+        ui,
+        m,
+        "Stepdown",
+        &mut p.stepdown,
+        0.5 * diameter,
+        errors,
+        "presets.stepdown",
+    );
+    opt_length(
+        ui,
+        m,
+        "Stepover",
+        &mut p.stepover,
+        0.4 * diameter,
+        errors,
+        "presets.stepover",
+    );
+    ui.label("Stock to leave");
+    ui.horizontal(|ui| {
+        let mut on = p.stock_to_leave.is_some();
+        if ui.checkbox(&mut on, "").changed() {
+            p.stock_to_leave = on.then(StockToLeave::default);
+        }
+        if let Some(s) = p.stock_to_leave.as_mut() {
+            m.length_field(ui, &mut s.radial, 0.01, 100.0, "radial ");
+            m.length_field(ui, &mut s.axial, 0.01, 100.0, "axial ");
+        } else {
+            ui.weak("not given");
+        }
+        field_error(ui, errors, "presets.stock_to_leave");
+    });
+    ui.end_row();
 }
 
 /// A tool type's name, as the user reads it.

@@ -585,7 +585,7 @@ impl ToolManager {
         egui::ScrollArea::vertical().show(ui, |ui| {
             egui::Grid::new("tools-table")
                 .striped(true)
-                .num_columns(if with_folder { 8 } else { 7 })
+                .num_columns(if with_folder { 9 } else { 8 })
                 .min_col_width(40.0)
                 .show(ui, |ui| {
                     for (label, key) in [("T", Some(Sort::Number)), ("name", Some(Sort::Name))] {
@@ -602,6 +602,7 @@ impl ToolManager {
                         &mut sort,
                     );
                     ui.strong("flutes");
+                    ui.strong("presets");
                     ui.strong(format!("stickout {}", m.unit()));
                     ui.strong("description");
                     ui.end_row();
@@ -650,6 +651,17 @@ impl ToolManager {
                         ui.label(kind_name(tool.kind));
                         ui.label(m.number(tool.diameter, 2));
                         ui.label(tool.flutes.map_or_else(|| "–".into(), |f| f.to_string()));
+                        match tool.presets.len() {
+                            0 => ui.weak("–"),
+                            n => ui.label(n.to_string()),
+                        }
+                        .on_hover_text(
+                            tool.presets
+                                .iter()
+                                .map(|p| p.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        );
                         ui.label(tool.stickout.map_or_else(|| "–".into(), |s| m.number(s, 1)));
                         ui.label(&tool.comment);
                         ui.end_row();

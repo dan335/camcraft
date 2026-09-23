@@ -52,7 +52,8 @@
 //! fields it does not know, and machine the whole part where a person had asked for
 //! one face. So a job that uses them is written as version 2, which such a build
 //! refuses by name, and every other job is still written as version 1, which it
-//! reads as before ([`Job::required_version`]).
+//! reads as before ([`Job::required_version`]). An operation's own spindle speed
+//! is the same kind of field, skipped for the tool's, so a job with one is version 3.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -64,7 +65,7 @@ use crate::tool::{Ball, Bullnose, BullnoseFamily, Flat, ToolError};
 /// The newest job file format this build reads and writes. It reads every version
 /// from 1, and writes the oldest that holds what a job says
 /// ([`Job::required_version`]).
-pub const JOB_VERSION: u32 = 2;
+pub const JOB_VERSION: u32 = 3;
 
 /// A complete job.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -411,10 +412,13 @@ impl Along {
 ///
 /// The engine cuts with `kind`, `diameter` and `corner`. Everything after them
 /// describes the physical tool the way Fusion's tool library does, for the person
-/// setting it up and, later, for feeds and speeds, holder collision in playback,
-/// and the machine's tool table. All of it is optional, so a job that names only
-/// the cutting geometry is complete.
+/// setting it up and, later, for holder collision in playback and the machine's
+/// tool table. All of it is optional, so a job that names only the cutting
+/// geometry is complete.
+///
+/// Its speeds and feeds are [`Preset`]s: named sets an operation copies from.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(from = "ToolSpecFile")]
 pub struct ToolSpec {
     /// Shape.
     pub kind: ToolKind,
@@ -462,9 +466,141 @@ pub struct ToolSpec {
     /// What holds it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub holder: Option<Holder>,
-    /// Suggested feeds for this tool.
+    /// Named speeds and feeds, the first being the one a new operation gets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub presets: Vec<Preset>,
+}
+
+/// A [`ToolSpec`] as it may be written, including the single `cutting` table that
+/// came before presets, which reads as a preset called "Default".
+#[derive(Deserialize)]
+struct ToolSpecFile {
+    kind: ToolKind,
+    diameter: f64,
+    #[serde(default)]
+    corner: f64,
+    #[serde(default = "one_u32")]
+    number: u32,
+    #[serde(default = "default_rpm")]
+    rpm: u32,
+    #[serde(default)]
+    comment: String,
+    #[serde(default)]
+    flutes: Option<u32>,
+    #[serde(default)]
+    flute_length: Option<f64>,
+    #[serde(default)]
+    shoulder_length: Option<f64>,
+    #[serde(default)]
+    shank_diameter: Option<f64>,
+    #[serde(default)]
+    overall_length: Option<f64>,
+    #[serde(default)]
+    stickout: Option<f64>,
+    #[serde(default)]
+    material: Option<ToolMaterial>,
+    #[serde(default)]
+    vendor: Option<String>,
+    #[serde(default)]
+    product: Option<String>,
+    #[serde(default)]
+    holder: Option<Holder>,
+    #[serde(default)]
+    presets: Vec<Preset>,
+    #[serde(default)]
+    cutting: Option<CuttingData>,
+}
+
+/// Suggested feeds, as tools kept them before presets.
+#[derive(Deserialize)]
+struct CuttingData {
+    #[serde(default)]
+    feed: Option<f64>,
+    #[serde(default)]
+    plunge_feed: Option<f64>,
+    #[serde(default)]
+    ramp_feed: Option<f64>,
+}
+
+impl From<ToolSpecFile> for ToolSpec {
+    fn from(f: ToolSpecFile) -> Self {
+        let mut presets = f.presets;
+        if let Some(c) = f.cutting
+            && presets.is_empty()
+        {
+            presets.push(Preset {
+                name: "Default".into(),
+                rpm: Some(f.rpm),
+                feed: c.feed,
+                plunge_feed: c.plunge_feed,
+                ramp_feed: c.ramp_feed,
+                ..Preset::default()
+            });
+        }
+        Self {
+            kind: f.kind,
+            diameter: f.diameter,
+            corner: f.corner,
+            number: f.number,
+            rpm: f.rpm,
+            comment: f.comment,
+            flutes: f.flutes,
+            flute_length: f.flute_length,
+            shoulder_length: f.shoulder_length,
+            shank_diameter: f.shank_diameter,
+            overall_length: f.overall_length,
+            stickout: f.stickout,
+            material: f.material,
+            vendor: f.vendor,
+            product: f.product,
+            holder: f.holder,
+            presets,
+        }
+    }
+}
+
+/// Named speeds and feeds for a tool: "Roughing", "Finishing", "MDF", whatever
+/// the person calls it. Nothing reads the name; an operation copies the values.
+///
+/// Every value is optional, and choosing a preset sets only the values it has,
+/// so a "Finishing" preset can hold a stepover and stock to leave and keep the
+/// operation's feeds. The ramp feed is kept for when entries ramp; nothing uses
+/// it yet.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct Preset {
+    /// What the person calls it.
+    pub name: String,
+    /// A note, e.g. where the numbers came from.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub comment: String,
+    /// Spindle speed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cutting: Option<CuttingData>,
+    pub rpm: Option<u32>,
+    /// Cutting feed, in mm/min.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feed: Option<f64>,
+    /// Plunge feed, in mm/min.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plunge_feed: Option<f64>,
+    /// Ramp feed, in mm/min.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ramp_feed: Option<f64>,
+    /// Depth of each slice, in millimetres, for strategies that slice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stepdown: Option<f64>,
+    /// Distance between passes, in millimetres.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stepover: Option<f64>,
+    /// Material to leave.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock_to_leave: Option<StockToLeave>,
+}
+
+impl ToolSpec {
+    /// The preset called `name`.
+    pub fn preset(&self, name: &str) -> Option<&Preset> {
+        self.presets.iter().find(|p| p.name == name)
+    }
 }
 
 impl Default for ToolSpec {
@@ -487,7 +623,7 @@ impl Default for ToolSpec {
             vendor: None,
             product: None,
             holder: None,
-            cutting: None,
+            presets: Vec::new(),
         }
     }
 }
@@ -526,26 +662,14 @@ pub struct HolderSegment {
     pub length: f64,
 }
 
-/// Suggested feeds for a tool. Spindle speed is the tool's own `rpm`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
-pub struct CuttingData {
-    /// Cutting feed, in mm/min.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub feed: Option<f64>,
-    /// Plunge feed, in mm/min.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plunge_feed: Option<f64>,
-    /// Ramp feed, in mm/min.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ramp_feed: Option<f64>,
-}
-
 /// A tool field that is not physically meaningful, and why.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[error("{field}: {why}")]
 pub struct ToolFieldError {
-    /// Which field, as it is named in the file.
+    /// Which field, as it is named in the file: `presets.feed` for a preset's.
     pub field: &'static str,
+    /// Which preset, by position, for a preset's field.
+    pub preset: Option<usize>,
     /// What is wrong with it.
     pub why: String,
 }
@@ -575,7 +699,13 @@ impl ToolSpec {
     /// so an editor can show them where they are.
     pub fn check(&self) -> Vec<ToolFieldError> {
         let mut out = Vec::new();
-        let mut bad = |field, why: String| out.push(ToolFieldError { field, why });
+        let mut bad = |field, why: String| {
+            out.push(ToolFieldError {
+                field,
+                preset: None,
+                why,
+            });
+        };
         if let Err(e) = self.build() {
             let field = if self.diameter.is_finite() && self.diameter > 0.0 {
                 "corner"
@@ -643,17 +773,55 @@ impl ToolSpec {
                 }
             }
         }
-        if let Some(c) = &self.cutting {
+        out.extend(self.check_presets());
+        out
+    }
+
+    fn check_presets(&self) -> Vec<ToolFieldError> {
+        let mut out = Vec::new();
+        for (i, p) in self.presets.iter().enumerate() {
+            let mut bad = |field, why: String| {
+                out.push(ToolFieldError {
+                    field,
+                    preset: Some(i),
+                    why,
+                });
+            };
+            let name = p.name.trim();
+            if name.is_empty() {
+                bad("presets.name", "a preset needs a name".into());
+            } else if self.presets.iter().take(i).any(|q| q.name.trim() == name) {
+                bad(
+                    "presets.name",
+                    format!("there is already a preset '{name}'"),
+                );
+            }
+            if p.rpm == Some(0) {
+                bad(
+                    "presets.rpm",
+                    "spindle speed must be greater than zero".into(),
+                );
+            }
             for (field, v) in [
-                ("cutting.feed", c.feed),
-                ("cutting.plunge_feed", c.plunge_feed),
-                ("cutting.ramp_feed", c.ramp_feed),
+                ("presets.feed", p.feed),
+                ("presets.plunge_feed", p.plunge_feed),
+                ("presets.ramp_feed", p.ramp_feed),
+                ("presets.stepdown", p.stepdown),
+                ("presets.stepover", p.stepover),
             ] {
                 if let Some(v) = v
                     && !(v.is_finite() && v > 0.0)
                 {
                     bad(field, format!("must be greater than zero, got {v}"));
                 }
+            }
+            if let Some(s) = p.stock_to_leave
+                && !(s.radial >= 0.0 && s.axial >= 0.0)
+            {
+                bad(
+                    "presets.stock_to_leave",
+                    "stock to leave cannot be negative".into(),
+                );
             }
         }
         out
@@ -682,6 +850,10 @@ pub struct Operation {
     /// and cannot run until it has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
+    /// The tool's preset its values were copied from, by name. Only a record: the
+    /// operation cuts with its own values, whatever the preset now says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
     /// What to machine.
     #[serde(default, skip_serializing_if = "is_default")]
     pub geometry: Geometry,
@@ -851,6 +1023,91 @@ impl Height {
     }
 }
 
+impl Operation {
+    /// Copy the values `preset` has into this operation, leaving the rest, and
+    /// record where they came from.
+    pub fn apply_preset(&mut self, preset: &Preset) {
+        if let Some(rpm) = preset.rpm {
+            self.passes.rpm = Some(rpm);
+        }
+        if let Some(feed) = preset.feed {
+            self.passes.feed = feed;
+        }
+        if let Some(plunge) = preset.plunge_feed {
+            self.linking.plunge_feed = plunge;
+        }
+        if let Some(stepover) = preset.stepover {
+            self.passes.stepover = stepover;
+        }
+        if let (Some(d), StrategySpec::ZlevelRough { stepdown, .. }) =
+            (preset.stepdown, &mut self.strategy)
+        {
+            *stepdown = d;
+        }
+        if let Some(s) = preset.stock_to_leave {
+            self.passes.stock_to_leave = s;
+        }
+        self.preset = Some(preset.name.clone());
+    }
+
+    /// This operation's speeds and feeds as a preset called `name`: what
+    /// [`apply_preset`](Self::apply_preset) would set them back to.
+    pub fn as_preset(&self, name: &str) -> Preset {
+        Preset {
+            name: name.to_string(),
+            comment: String::new(),
+            rpm: self.passes.rpm,
+            feed: Some(self.passes.feed),
+            plunge_feed: Some(self.linking.plunge_feed),
+            ramp_feed: None,
+            stepdown: match self.strategy {
+                StrategySpec::ZlevelRough { stepdown, .. } => Some(stepdown),
+                StrategySpec::Parallel { .. } => None,
+            },
+            stepover: Some(self.passes.stepover),
+            stock_to_leave: Some(self.passes.stock_to_leave),
+        }
+    }
+
+    /// The values `preset` has that this operation no longer matches, by the name
+    /// a person reads: what has been changed since it was applied.
+    pub fn differs_from(&self, preset: &Preset) -> Vec<&'static str> {
+        let same = |a: f64, b: f64| (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0);
+        let mut out = Vec::new();
+        if preset.rpm.is_some() && preset.rpm != self.passes.rpm {
+            out.push("spindle speed");
+        }
+        if preset.feed.is_some_and(|f| !same(f, self.passes.feed)) {
+            out.push("feed");
+        }
+        if preset
+            .plunge_feed
+            .is_some_and(|f| !same(f, self.linking.plunge_feed))
+        {
+            out.push("plunge feed");
+        }
+        if preset
+            .stepover
+            .is_some_and(|s| !same(s, self.passes.stepover))
+        {
+            out.push("stepover");
+        }
+        if let (Some(d), StrategySpec::ZlevelRough { stepdown, .. }) =
+            (preset.stepdown, &self.strategy)
+            && !same(d, *stepdown)
+        {
+            out.push("stepdown");
+        }
+        if let Some(s) = preset.stock_to_leave {
+            let now = self.passes.stock_to_leave;
+            if !same(s.radial, now.radial) || !same(s.axial, now.axial) {
+                out.push("stock to leave");
+            }
+        }
+        out
+    }
+}
+
 /// How the passes are laid out.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Passes {
@@ -866,6 +1123,9 @@ pub struct Passes {
     /// Largest Z drop that may be traversed as a cut.
     #[serde(default = "default_max_cut_step")]
     pub max_cut_step: f64,
+    /// Spindle speed; the tool's own when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm: Option<u32>,
 }
 
 impl Default for Passes {
@@ -875,6 +1135,7 @@ impl Default for Passes {
             feed: default_feed(),
             stock_to_leave: StockToLeave::default(),
             max_cut_step: default_max_cut_step(),
+            rpm: None,
         }
     }
 }
@@ -1271,6 +1532,12 @@ impl Job {
             }
             positive(&format!("{at}.passes.stepover"), op.passes.stepover)?;
             positive(&format!("{at}.passes.feed"), op.passes.feed)?;
+            if op.passes.rpm == Some(0) {
+                return Err(JobError::BadValue {
+                    field: format!("{at}.passes.rpm"),
+                    value: 0.0,
+                });
+            }
             positive(&format!("{at}.passes.max_cut_step"), op.passes.max_cut_step)?;
             positive(
                 &format!("{at}.linking.retract_feed"),
@@ -1294,14 +1561,20 @@ impl Job {
         Ok(())
     }
 
-    /// The oldest file format that holds everything this job says: 2 if it uses
-    /// picked features, which a version 1 reader would silently skip, and 1
-    /// otherwise.
+    /// The oldest file format that holds everything this job says: 3 if an
+    /// operation sets its own spindle speed, which an older reader would skip and
+    /// cut at the tool's; 2 if it uses picked features, which a version 1 reader
+    /// would skip and cut the whole part; and 1 otherwise.
     pub fn required_version(&self) -> u32 {
-        let picks = self.setups.iter().any(|s| {
-            matches!(s.origin, Origin::Point { .. })
-                || s.operations.iter().any(|op| op.geometry.picked())
-        });
+        let ops = || self.setups.iter().flat_map(|s| &s.operations);
+        if ops().any(|op| op.passes.rpm.is_some()) {
+            return 3;
+        }
+        let picks = self
+            .setups
+            .iter()
+            .any(|s| matches!(s.origin, Origin::Point { .. }))
+            || ops().any(|op| op.geometry.picked());
         if picks { 2 } else { 1 }
     }
 
@@ -1773,7 +2046,21 @@ material = "carbide"
 vendor = "Amana"
 product = "46170-K"
 holder = { name = "ER20", segments = [{ diameter = 32.0, length = 20.0 }, { diameter = 40.0, length = 30.0 }] }
-cutting = { feed = 2000.0, plunge_feed = 400.0 }
+
+[[presets]]
+name = "Roughing"
+rpm = 16000
+feed = 2000.0
+plunge_feed = 400.0
+stepdown = 3.0
+stepover = 2.5
+stock_to_leave = { radial = 0.3, axial = 0.2 }
+
+[[presets]]
+name = "Finishing"
+comment = "light and slow"
+stepover = 0.5
+stock_to_leave = { radial = 0.0, axial = 0.0 }
 "#;
 
     /// A tool described the way Fusion describes one reads, checks clean and writes
@@ -1810,12 +2097,16 @@ cutting = { feed = 2000.0, plunge_feed = 400.0 }
         assert_eq!(with(|t| t.corner = 4.0), ["corner"]);
         assert_eq!(with(|t| t.diameter = 0.0), ["diameter"]);
         assert_eq!(with(|t| t.rpm = 0), ["rpm"]);
+        assert_eq!(with(|t| t.presets[0].feed = Some(0.0)), ["presets.feed"]);
+        assert_eq!(with(|t| t.presets[1].rpm = Some(0)), ["presets.rpm"]);
+        assert_eq!(with(|t| t.presets[1].name = " ".into()), ["presets.name"]);
         assert_eq!(
-            with(|t| t.cutting = Some(CuttingData {
-                feed: Some(0.0),
-                ..Default::default()
-            })),
-            ["cutting.feed"]
+            with(|t| t.presets[1].name = "Roughing".into()),
+            ["presets.name"]
+        );
+        assert_eq!(
+            with(|t| t.presets[0].stock_to_leave.as_mut().unwrap().axial = -1.0),
+            ["presets.stock_to_leave"]
         );
         assert_eq!(
             with(|t| t.holder.as_mut().unwrap().segments[0].length = 0.0),
@@ -1945,9 +2236,104 @@ cutting = { feed = 2000.0, plunge_feed = 400.0 }
         let mut two = sample();
         two.version = 2;
         two.validate().unwrap();
-        let mut three = sample();
-        three.version = 3;
-        assert_eq!(three.validate(), Err(JobError::UnsupportedVersion(3)));
+        let mut four = sample();
+        four.version = 4;
+        assert_eq!(four.validate(), Err(JobError::UnsupportedVersion(4)));
+    }
+
+    /// An older reader would skip an operation's own spindle speed and cut at the
+    /// tool's, so a job with one is version 3, whatever else it has.
+    #[test]
+    fn only_a_job_with_an_operation_speed_needs_version_3() {
+        let mut j = sample();
+        j.setups[0].operations[1].passes.rpm = Some(12000);
+        assert_eq!(j.required_version(), 3);
+        j.validate().unwrap();
+        let mut both = picked();
+        both.setups[0].operations[0].passes.rpm = Some(12000);
+        assert_eq!(both.required_version(), 3);
+        j.setups[0].operations[1].passes.rpm = Some(0);
+        assert!(matches!(j.validate(), Err(JobError::BadValue { .. })));
+    }
+
+    fn preset_tool() -> ToolSpec {
+        toml::from_str(FULL_TOOL).unwrap()
+    }
+
+    /// Choosing a preset copies what it has into the operation and records it; a
+    /// preset with only some values leaves the others as they were.
+    #[test]
+    fn a_preset_sets_only_what_it_has() {
+        let tool = preset_tool();
+        let mut op = sample().setups[0].operations[0].clone();
+        op.apply_preset(tool.preset("Roughing").unwrap());
+        assert_eq!(op.preset.as_deref(), Some("Roughing"));
+        assert_eq!(op.passes.rpm, Some(16000));
+        assert_eq!(op.passes.feed, 2000.0);
+        assert_eq!(op.linking.plunge_feed, 400.0);
+        assert_eq!(op.passes.stepover, 2.5);
+        assert!(
+            matches!(op.strategy, StrategySpec::ZlevelRough { stepdown, .. } if stepdown == 3.0)
+        );
+        assert_eq!(op.passes.stock_to_leave.radial, 0.3);
+        assert!(op.differs_from(tool.preset("Roughing").unwrap()).is_empty());
+
+        op.apply_preset(tool.preset("Finishing").unwrap());
+        assert_eq!(op.preset.as_deref(), Some("Finishing"));
+        assert_eq!(op.passes.stepover, 0.5);
+        assert_eq!(op.passes.stock_to_leave, StockToLeave::default());
+        // Finishing has no feeds or speed, so Roughing's stay.
+        assert_eq!(op.passes.feed, 2000.0);
+        assert_eq!(op.passes.rpm, Some(16000));
+    }
+
+    /// What has been changed since a preset was applied is named, and only that.
+    #[test]
+    fn changes_from_a_preset_are_named() {
+        let tool = preset_tool();
+        let roughing = tool.preset("Roughing").unwrap();
+        let mut op = sample().setups[0].operations[0].clone();
+        op.apply_preset(roughing);
+        op.passes.feed = 1500.0;
+        op.passes.stepover = 2.0;
+        assert_eq!(op.differs_from(roughing), ["feed", "stepover"]);
+        // A parallel finish has no stepdown, so a preset's is not a change.
+        let mut finish = sample().setups[0].operations[1].clone();
+        finish.apply_preset(roughing);
+        assert!(finish.differs_from(roughing).is_empty());
+    }
+
+    /// An operation's values saved as a preset set them back exactly.
+    #[test]
+    fn an_operation_saved_as_a_preset_sets_itself_back() {
+        let op = sample().setups[0].operations[0].clone();
+        let saved = op.as_preset("Mine");
+        let mut other = op.clone();
+        other.passes.feed = 1.0;
+        other.passes.stepover = 1.0;
+        other.apply_preset(&saved);
+        assert!(other.differs_from(&saved).is_empty());
+        assert_eq!(other.passes, op.passes);
+        assert_eq!(other.strategy, op.strategy);
+    }
+
+    /// A tool from before presets kept one `cutting` table; it reads as a preset
+    /// called "Default" at the tool's speed, and is written back as one.
+    #[test]
+    fn cutting_data_from_before_presets_reads_as_a_preset() {
+        let old = "kind = \"flat\"\ndiameter = 6.35\nrpm = 18000\n\
+                   cutting = { feed = 3810.0, plunge_feed = 1354.667 }\n";
+        let tool: ToolSpec = toml::from_str(old).unwrap();
+        assert_eq!(tool.presets.len(), 1);
+        let p = &tool.presets[0];
+        assert_eq!(p.name, "Default");
+        assert_eq!(p.rpm, Some(18000));
+        assert_eq!(p.feed, Some(3810.0));
+        assert_eq!(p.plunge_feed, Some(1354.667));
+        let text = toml::to_string(&tool).unwrap();
+        assert!(!text.contains("cutting"), "{text}");
+        let again: ToolSpec = toml::from_str(&text).unwrap();
+        assert_eq!(again, tool);
     }
 
     #[test]

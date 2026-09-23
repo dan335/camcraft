@@ -168,7 +168,8 @@ actually break cutters on the day:
 A job (`.camcraft`, TOML) has three groups, as in Fusion. It is written as
 `version = 1` unless it holds picked features, which need `version = 2`: an older
 build would skip them and cut the whole part, so it must refuse the file instead.
-Both are read.
+An operation with its own spindle speed needs `version = 3`, for the same reason:
+an older build would cut at the tool's. All three are read.
 
 - **Models**: design files, referenced by path relative to the job file, never
   copied in. STL needs `units`; STEP states its own.
@@ -196,13 +197,24 @@ with the per-user library only
 which saves itself as you edit. Tools are grouped in folders that nest (a folder per
 machine, say); drag a tool onto a folder, or use Move to. A library from before
 folders reads as its top folder. Tools carry Fusion-style detail: flutes, lengths,
-shank, stickout, holder, material, vendor and suggested feeds. Each gets a scale
-drawing and per-field checks. A job's tools are chosen inside its operations, which
-copy them into the job, never link them. A job whose used tools share a T number is
-refused, by the CLI too.
+shank, stickout, holder, material and vendor. Each gets a scale drawing and
+per-field checks. A job's tools are chosen inside its operations, which copy them
+into the job, never link them. A job whose used tools share a T number is refused,
+by the CLI too.
+
+Speeds and feeds are **presets**: named sets on a tool ("Roughing", "Finishing",
+"MDF", whatever the person calls them), each with any of spindle speed, cutting,
+plunge and ramp feed, stepdown, stepover and stock to leave. Choosing a tool for an
+operation chooses one of its presets too, the first by default, and copies the
+values it has into the operation; the operation then says what has been changed
+since, can be reset to the preset, and can save its own values as a new preset of
+the job's copy. An operation has its own spindle speed, the tool's unless given; a
+job that sets one is written as version 3. A tool's old single `cutting` table
+reads as a preset called "Default". Nothing uses the ramp feed until entries ramp.
 
 The work offset manager is to join the toolbar. Not yet: importing Fusion
-libraries, computing feeds and speeds from the cutting data, and more cutter types.
+libraries, chip load and surface speed, coolant and spindle direction, and more
+cutter types.
 
 ## Playback (after 0.2): how it is set up
 

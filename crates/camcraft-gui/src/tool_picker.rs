@@ -2,7 +2,9 @@
 //! or from a folder of the library.
 //!
 //! A library tool is copied into the job when chosen, never linked, and a copy the
-//! job already holds unchanged is used again rather than copied twice.
+//! job already holds unchanged is used again rather than copied twice. One of the
+//! tool's presets is chosen with it, its default to begin with, and its values are
+//! copied into the operation.
 
 use camcraft_core::job::{Job, ToolSpec};
 use camcraft_session::library::{Folder, FolderPath, folder_label};
@@ -39,19 +41,23 @@ pub struct ToolPicker {
     filter: String,
     /// The row chosen: its folder (for the library) and name.
     chosen: Option<(Source, FolderPath, String)>,
+    /// The chosen tool's preset to apply, by name; none keeps the operation's values.
+    preset: Option<String>,
 }
 
 impl ToolPicker {
     /// A picker for operation `op` of `setup` in job `doc`, opening on the job's
     /// tools, with the operation's own chosen, when it has any.
     pub fn new(doc: DocId, setup: String, op: usize, job: &Job) -> Self {
-        let current = job
+        let operation = job
             .setups
             .iter()
             .find(|s| s.name == setup)
-            .and_then(|s| s.operations.get(op))
+            .and_then(|s| s.operations.get(op));
+        let current = operation
             .and_then(|o| o.tool.clone())
             .filter(|t| job.tools.contains_key(t));
+        let preset = operation.and_then(|o| o.preset.clone());
         Self {
             target: (doc, setup, op),
             source: if job.tools.is_empty() {
@@ -61,18 +67,19 @@ impl ToolPicker {
             },
             filter: String::new(),
             chosen: current.map(|t| (Source::Job, Vec::new(), t)),
+            preset,
         }
     }
 
-    /// Draw it. `Some(Some(_))` once a tool is chosen, `Some(None)` if cancelled,
-    /// `None` while still open.
+    /// Draw it. `Some(Some(_))` once a tool and maybe a preset are chosen,
+    /// `Some(None)` if cancelled, `None` while still open.
     pub fn show(
         &mut self,
         ctx: &egui::Context,
         job: &Job,
         library: &Folder,
         m: Measure,
-    ) -> Option<Option<Picked>> {
+    ) -> Option<Option<(Picked, Option<String>)>> {
         let mut outcome = None;
         let modal = egui::Modal::new(egui::Id::new("tool-picker")).show(ctx, |ui| {
             // A fixed size throughout. The tool's picture fills the width it is
@@ -107,6 +114,8 @@ impl ToolPicker {
                     if let Some(tool) = self.chosen_tool(job, library) {
                         paint_tool(ui, tool, m);
                         ui.label(&tool.comment);
+                        ui.add_space(6.0);
+                        self.preset_choice(ui, tool);
                     } else {
                         ui.weak("Choose a tool to see it.");
                     }
@@ -119,7 +128,7 @@ impl ToolPicker {
                     .add_enabled(picked.is_some(), egui::Button::new("Use this tool"))
                     .clicked()
                 {
-                    outcome = Some(picked);
+                    outcome = Some(picked.map(|p| (p, self.preset.clone())));
                 }
                 if ui.button("Cancel").clicked() {
                     outcome = Some(None);
@@ -241,6 +250,45 @@ impl ToolPicker {
             });
         if let Some((sub, name)) = clicked {
             self.chosen = Some((self.source.clone(), sub, name));
+            self.preset = self
+                .chosen_tool(job, library)
+                .and_then(|t| t.presets.first())
+                .map(|p| p.name.clone());
+        }
+    }
+
+    /// Which of the tool's presets to copy into the operation.
+    fn preset_choice(&mut self, ui: &mut egui::Ui, tool: &ToolSpec) {
+        if self
+            .preset
+            .as_ref()
+            .is_some_and(|name| tool.preset(name).is_none())
+        {
+            self.preset = None;
+        }
+        if tool.presets.is_empty() {
+            ui.weak("This tool has no presets; the operation keeps its speeds and feeds.");
+            return;
+        }
+        ui.label("Preset");
+        egui::ComboBox::from_id_salt("picker-preset")
+            .width(220.0)
+            .selected_text(
+                self.preset
+                    .as_deref()
+                    .unwrap_or("none: keep the operation's"),
+            )
+            .show_ui(ui, |ui| {
+                for p in &tool.presets {
+                    ui.selectable_value(&mut self.preset, Some(p.name.clone()), &p.name);
+                }
+                ui.selectable_value(&mut self.preset, None, "none: keep the operation's");
+            });
+        if let Some(p) = self.preset.as_ref().and_then(|n| tool.preset(n)) {
+            if !p.comment.is_empty() {
+                ui.weak(&p.comment);
+            }
+            ui.weak("Its values are copied into the operation.");
         }
     }
 

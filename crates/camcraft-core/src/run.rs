@@ -499,7 +499,7 @@ fn run_operation(
         },
         path,
         tool_number: spec.number,
-        rpm: spec.rpm,
+        rpm: op.passes.rpm.unwrap_or(spec.rpm),
         tool_comment: spec.comment.clone(),
         sim,
         passes,

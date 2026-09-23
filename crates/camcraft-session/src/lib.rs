@@ -619,6 +619,7 @@ pub fn single_operation(spec: &FinishSpec, model: ModelDef) -> Job {
         name: "finish".into(),
         strategy: StrategySpec::Parallel { angle: 0.0 },
         tool: Some(TOOL.into()),
+        preset: None,
         geometry: Geometry::default(),
         heights: Heights {
             clearance: Height {
@@ -634,6 +635,7 @@ pub fn single_operation(spec: &FinishSpec, model: ModelDef) -> Job {
                 axial: spec.stock_axial,
             },
             max_cut_step: spec.max_cut_step,
+            rpm: None,
         },
         linking: Linking {
             retract_feed: spec.feed,
