@@ -19,7 +19,9 @@ use glam::{DVec2, dvec2};
 use crate::dropcutter::DropCutter;
 use crate::features::{FeatureError, machining_boundary};
 use crate::frame::Frame;
-use crate::job::{HeightContext, Job, JobError, Operation, StrategySpec};
+use crate::job::{
+    Coolant, HeightContext, Job, JobError, Operation, SpindleDirection, StrategySpec,
+};
 use crate::linker::{ClearanceField, LinkError, LinkParams, LinkReport, link};
 use crate::ordering::order_passes;
 use crate::parallel::{ParallelParams, StrategyError, StrategyReport, parallel_finish_within};
@@ -122,6 +124,10 @@ pub struct OperationResult {
     pub rpm: u32,
     /// Tool description.
     pub tool_comment: String,
+    /// Which way the spindle turns.
+    pub spindle: SpindleDirection,
+    /// Coolant while cutting.
+    pub coolant: Coolant,
     /// What the simulator saw while this operation ran.
     pub sim: SimReport,
     /// Cutting passes produced.
@@ -501,6 +507,8 @@ fn run_operation(
         tool_number: spec.number,
         rpm: op.passes.rpm.unwrap_or(spec.rpm),
         tool_comment: spec.comment.clone(),
+        spindle: spec.spindle,
+        coolant: spec.coolant,
         sim,
         passes,
         travel_saved: order.saved(),

@@ -286,7 +286,8 @@ fn open_job_dialog() {
 fn tool_manager() {
     use crate::tool_manager::ToolManager;
     use camcraft_core::job::{
-        Holder, HolderSegment, Preset, StockToLeave, ToolKind, ToolMaterial, ToolSpec,
+        Coolant, Holder, HolderSegment, Preset, SpindleDirection, StockToLeave, ToolKind,
+        ToolMaterial, ToolSpec,
     };
 
     let library = output_dir().join("snapshot-library.toml");
@@ -340,6 +341,8 @@ fn tool_manager() {
                 },
             ],
         }),
+        spindle: SpindleDirection::Clockwise,
+        coolant: Coolant::Mist,
         presets: vec![
             Preset {
                 name: "Roughing".into(),

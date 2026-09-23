@@ -168,8 +168,9 @@ actually break cutters on the day:
 A job (`.camcraft`, TOML) has three groups, as in Fusion. It is written as
 `version = 1` unless it holds picked features, which need `version = 2`: an older
 build would skip them and cut the whole part, so it must refuse the file instead.
-An operation with its own spindle speed needs `version = 3`, for the same reason:
-an older build would cut at the tool's. All three are read.
+An operation with its own spindle speed, or a tool that turns backwards or wants
+coolant, needs `version = 3`, for the same reason: an older build would skip it.
+All three are read.
 
 - **Models**: design files, referenced by path relative to the job file, never
   copied in. STL needs `units`; STEP states its own.
@@ -215,8 +216,13 @@ Beside each speed and feed the editor shows the surface speed (m/min or ft/min)
 and chip load (per tooth, needing the tool's flutes), as makers chart them; typing
 either sets the spindle speed or feed. Neither is kept, so neither goes stale.
 
+A tool also says which way its spindle turns (M3, or M4 for a left-hand cutter)
+and its coolant (off, flood M8 or mist M7), and the program says so; before, every
+program was M3 with no coolant. A job with a tool that turns backwards or wants
+coolant is written as version 3, since an older build would drop either silently.
+
 The work offset manager is to join the toolbar. Not yet: importing Fusion
-libraries, coolant and spindle direction, and more cutter types.
+libraries, and more cutter types.
 
 ## Playback (after 0.2): how it is set up
 

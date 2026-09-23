@@ -26,9 +26,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use camcraft_core::job::{
-    Geometry, Height, HeightRef, Heights, JOB_VERSION, Job, JobError, LengthUnit, Linking,
-    ModelDef, Operation, Passes, Setup, StockDef, StockSpec, StockToLeave, StrategySpec, ToolKind,
-    ToolSpec,
+    Coolant, Geometry, Height, HeightRef, Heights, JOB_VERSION, Job, JobError, LengthUnit, Linking,
+    ModelDef, Operation, Passes, Setup, SpindleDirection, StockDef, StockSpec, StockToLeave,
+    StrategySpec, ToolKind, ToolSpec,
 };
 use camcraft_core::run::{OperationResult, RunError, SetupResult, run_prepared};
 use camcraft_core::setup::{Bodies, PrepareError, prepare};
@@ -36,7 +36,9 @@ use camcraft_geom::mesh::{Aabb, TriMesh};
 use camcraft_geom::topology::{Body, FaceSource};
 use camcraft_import::step::{FileCheck, StepError, load_step};
 use camcraft_import::stl::{ImportError, load_stl};
-use camcraft_post::op::{LowerError, ProgramSpec, Spin, Units as PostUnits, lower};
+use camcraft_post::op::{
+    Coolant as PostCoolant, LowerError, ProgramSpec, Spin, Units as PostUnits, lower,
+};
 use camcraft_post::profile::{Profile, ProfileError};
 use camcraft_post::render::{RenderReport, render};
 
@@ -545,8 +547,15 @@ pub fn program(
         tool_comment: op.tool_comment.clone(),
         wcs,
         rpm: op.rpm,
-        spin: Spin::Clockwise,
-        coolant: None,
+        spin: match op.spindle {
+            SpindleDirection::Clockwise => Spin::Clockwise,
+            SpindleDirection::CounterClockwise => Spin::CounterClockwise,
+        },
+        coolant: match op.coolant {
+            Coolant::Off => None,
+            Coolant::Flood => Some(PostCoolant::Flood),
+            Coolant::Mist => Some(PostCoolant::Mist),
+        },
         units: PostUnits::Millimetres,
     };
     let ops = lower(&op.path, &spec)?;
@@ -977,6 +986,22 @@ mod tests {
         let (text, report) = program(op, 54, &profile, "01-finish").unwrap();
         assert!(text.contains("G54"));
         assert!(report.motion_blocks > 10);
+        let word = |w: &str| text.split_whitespace().any(|x| x == w);
+        assert!(word("M3") && !word("M8"), "{text}");
+    }
+
+    /// A tool's spindle direction and coolant reach the program.
+    #[test]
+    fn a_tools_direction_and_coolant_are_posted() {
+        let ran = run_small();
+        let profile = load_profile("masso", None).unwrap();
+        let mut op = ran.result.operations.first().unwrap().clone();
+        op.spindle = SpindleDirection::CounterClockwise;
+        op.coolant = Coolant::Mist;
+        let (text, _) = program(&op, 54, &profile, "01-finish").unwrap();
+        let word = |w: &str| text.split_whitespace().any(|x| x == w);
+        assert!(word("M4") && !word("M3"), "{text}");
+        assert!(word("M7") && word("M9"), "{text}");
     }
 
     /// The example job reads, and a job written and read back is the same job.

@@ -52,8 +52,9 @@
 //! fields it does not know, and machine the whole part where a person had asked for
 //! one face. So a job that uses them is written as version 2, which such a build
 //! refuses by name, and every other job is still written as version 1, which it
-//! reads as before ([`Job::required_version`]). An operation's own spindle speed
-//! is the same kind of field, skipped for the tool's, so a job with one is version 3.
+//! reads as before ([`Job::required_version`]). An operation's own spindle speed,
+//! and a tool's spindle direction and coolant, are the same kind of field, so a
+//! job with any of them is version 3.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -466,6 +467,12 @@ pub struct ToolSpec {
     /// What holds it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub holder: Option<Holder>,
+    /// Which way it turns.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub spindle: SpindleDirection,
+    /// Coolant while it cuts.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub coolant: Coolant,
     /// Named speeds and feeds, the first being the one a new operation gets.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub presets: Vec<Preset>,
@@ -505,6 +512,10 @@ struct ToolSpecFile {
     product: Option<String>,
     #[serde(default)]
     holder: Option<Holder>,
+    #[serde(default)]
+    spindle: SpindleDirection,
+    #[serde(default)]
+    coolant: Coolant,
     #[serde(default)]
     presets: Vec<Preset>,
     #[serde(default)]
@@ -554,6 +565,8 @@ impl From<ToolSpecFile> for ToolSpec {
             vendor: f.vendor,
             product: f.product,
             holder: f.holder,
+            spindle: f.spindle,
+            coolant: f.coolant,
             presets,
         }
     }
@@ -623,6 +636,8 @@ impl Default for ToolSpec {
             vendor: None,
             product: None,
             holder: None,
+            spindle: SpindleDirection::default(),
+            coolant: Coolant::default(),
             presets: Vec::new(),
         }
     }
@@ -630,6 +645,30 @@ impl Default for ToolSpec {
 
 fn is_zero(v: &f64) -> bool {
     *v == 0.0
+}
+
+/// Which way a spindle turns, seen from above.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SpindleDirection {
+    /// Clockwise: every ordinary right-hand cutter.
+    #[default]
+    Clockwise,
+    /// Counter-clockwise, for a left-hand cutter.
+    CounterClockwise,
+}
+
+/// Coolant while a tool cuts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Coolant {
+    /// None: dry, as a router usually cuts.
+    #[default]
+    Off,
+    /// Flood.
+    Flood,
+    /// Mist.
+    Mist,
 }
 
 /// What a cutter is made of.
@@ -1562,12 +1601,17 @@ impl Job {
     }
 
     /// The oldest file format that holds everything this job says: 3 if an
-    /// operation sets its own spindle speed, which an older reader would skip and
-    /// cut at the tool's; 2 if it uses picked features, which a version 1 reader
-    /// would skip and cut the whole part; and 1 otherwise.
+    /// operation sets its own spindle speed, or a tool turns backwards or wants
+    /// coolant, which an older reader would skip and cut without; 2 if it uses
+    /// picked features, which a version 1 reader would skip and cut the whole part;
+    /// and 1 otherwise.
     pub fn required_version(&self) -> u32 {
         let ops = || self.setups.iter().flat_map(|s| &s.operations);
-        if ops().any(|op| op.passes.rpm.is_some()) {
+        let turned = self
+            .tools
+            .values()
+            .any(|t| t.spindle != SpindleDirection::default() || t.coolant != Coolant::default());
+        if turned || ops().any(|op| op.passes.rpm.is_some()) {
             return 3;
         }
         let picks = self
@@ -2046,6 +2090,8 @@ material = "carbide"
 vendor = "Amana"
 product = "46170-K"
 holder = { name = "ER20", segments = [{ diameter = 32.0, length = 20.0 }, { diameter = 40.0, length = 30.0 }] }
+spindle = "counter-clockwise"
+coolant = "flood"
 
 [[presets]]
 name = "Roughing"
@@ -2076,9 +2122,14 @@ stock_to_leave = { radial = 0.0, axial = 0.0 }
         // Absent stays absent: a minimal tool writes only what it has.
         let minimal = toml::to_string(&ToolSpec::default()).unwrap();
         assert!(
-            !minimal.contains("flutes") && !minimal.contains("corner"),
+            !minimal.contains("flutes")
+                && !minimal.contains("corner")
+                && !minimal.contains("spindle")
+                && !minimal.contains("coolant"),
             "{minimal}"
         );
+        assert_eq!(tool.spindle, SpindleDirection::CounterClockwise);
+        assert_eq!(tool.coolant, Coolant::Flood);
     }
 
     fn with(edit: impl FnOnce(&mut ToolSpec)) -> Vec<&'static str> {
@@ -2252,6 +2303,12 @@ stock_to_leave = { radial = 0.0, axial = 0.0 }
         let mut both = picked();
         both.setups[0].operations[0].passes.rpm = Some(12000);
         assert_eq!(both.required_version(), 3);
+        let mut mist = sample();
+        mist.tools.get_mut("rough-6-flat").unwrap().coolant = Coolant::Mist;
+        assert_eq!(mist.required_version(), 3);
+        let mut left = sample();
+        left.tools.get_mut("rough-6-flat").unwrap().spindle = SpindleDirection::CounterClockwise;
+        assert_eq!(left.required_version(), 3);
         j.setups[0].operations[1].passes.rpm = Some(0);
         assert!(matches!(j.validate(), Err(JobError::BadValue { .. })));
     }

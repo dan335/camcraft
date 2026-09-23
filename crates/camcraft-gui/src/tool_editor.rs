@@ -1,12 +1,12 @@
 //! The fields of one tool, drawn and edited: shared by the tool manager, which
 //! edits the library's tools, and an operation's panel, which edits the job's copy.
 
+use camcraft_core::cutting;
 use camcraft_core::job::{
-    Holder, HolderSegment, Preset, StockToLeave, ToolFieldError, ToolKind, ToolMaterial, ToolSpec,
+    Coolant, Holder, HolderSegment, Preset, SpindleDirection, StockToLeave, ToolFieldError,
+    ToolKind, ToolMaterial, ToolSpec,
 };
 use eframe::egui;
-
-use camcraft_core::cutting;
 
 use crate::measure::Measure;
 use crate::theme;
@@ -202,6 +202,38 @@ pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure) {
                     .prefix("T"),
             );
         });
+        ui.end_row();
+        ui.label("Spindle turns");
+        egui::ComboBox::from_id_salt("spindle")
+            .selected_text(match tool.spindle {
+                SpindleDirection::Clockwise => "clockwise (M3)",
+                SpindleDirection::CounterClockwise => "counter-clockwise (M4)",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut tool.spindle,
+                    SpindleDirection::Clockwise,
+                    "clockwise (M3)",
+                );
+                ui.selectable_value(
+                    &mut tool.spindle,
+                    SpindleDirection::CounterClockwise,
+                    "counter-clockwise (M4), for a left-hand cutter",
+                );
+            });
+        ui.end_row();
+        ui.label("Coolant");
+        egui::ComboBox::from_id_salt("coolant")
+            .selected_text(match tool.coolant {
+                Coolant::Off => "off",
+                Coolant::Flood => "flood (M8)",
+                Coolant::Mist => "mist (M7)",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut tool.coolant, Coolant::Off, "off");
+                ui.selectable_value(&mut tool.coolant, Coolant::Flood, "flood (M8)");
+                ui.selectable_value(&mut tool.coolant, Coolant::Mist, "mist (M7)");
+            });
         ui.end_row();
     });
 }
