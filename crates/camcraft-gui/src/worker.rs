@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use camcraft_core::job::{Job, ModelDef};
+use camcraft_geom::bvh::MeshBvh;
 use camcraft_session::{Model, Models, Ran, SessionError, load_job_model, read_job, run_setup};
 use eframe::egui;
 
@@ -78,8 +79,9 @@ pub enum Request {
 pub enum Reply {
     /// A job file, read.
     Opened(Box<Result<(PathBuf, Job), SessionError>>),
-    /// A model, loaded.
-    Loaded(Result<Arc<Model>, SessionError>),
+    /// A model, loaded, with the index picking in the view casts rays against:
+    /// built here, off the UI thread, because a large model takes a while.
+    Loaded(Result<(Arc<Model>, Arc<MeshBvh>), SessionError>),
     /// A setup, run.
     Ran(Box<Result<Ran, SessionError>>),
     /// The thread stopped without replying: it panicked, most likely inside the
@@ -165,7 +167,10 @@ fn execute(request: Request) -> Reply {
             dir,
             model,
             tolerance,
-        } => Reply::Loaded(load_job_model(&dir, &model, tolerance).map(Arc::new)),
+        } => Reply::Loaded(load_job_model(&dir, &model, tolerance).map(|m| {
+            let bvh = Arc::new(MeshBvh::new(m.mesh()));
+            (Arc::new(m), bvh)
+        })),
         Request::Run { job, setup, models } => {
             let refs: Models<'_> = models.iter().map(|(n, m)| (n.as_str(), &**m)).collect();
             Reply::Ran(Box::new(run_setup(&job, setup, &refs)))
@@ -224,7 +229,7 @@ mod tests {
         let (_, _, Reply::Loaded(model)) = wait(&mut worker) else {
             panic!("expected a model");
         };
-        let models = BTreeMap::from([(def.name.clone(), model.unwrap())]);
+        let models = BTreeMap::from([(def.name.clone(), model.unwrap().0)]);
 
         // Something quicker than the example's roughing: its finish alone.
         let mut job = job;

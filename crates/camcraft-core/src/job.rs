@@ -34,6 +34,25 @@
 //! Each setup starts from its own stock. The material is a height field seen from
 //! above, so what a top setup leaves cannot be turned over for the bottom one to
 //! start from. Carrying stock between setups needs a volumetric model.
+//!
+//! # Picked features
+//!
+//! A work zero can sit on a point picked on a model, and an operation can be kept
+//! to faces or edges picked on one ([`FeatureRef`], [`PointRef`]). A pick is saved
+//! as the model's name, the feature's number, and a point on it in model
+//! coordinates. The point is what the pick *is*: the number is only a quick way to
+//! find it while the model is unchanged. A model tessellated again, or re-exported
+//! with its faces in another order, still has a face through that point, so the
+//! pick survives; a model edited so the point is on nothing any more says so, and
+//! nothing is cut until the pick is made again. See `crate::features`.
+//!
+//! # Versions
+//!
+//! A build that predates picked features would read a job that uses them, skip the
+//! fields it does not know, and machine the whole part where a person had asked for
+//! one face. So a job that uses them is written as version 2, which such a build
+//! refuses by name, and every other job is still written as version 1, which it
+//! reads as before ([`Job::required_version`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -42,8 +61,10 @@ use serde::{Deserialize, Serialize};
 use crate::frame::{BadOrientation, Orientation};
 use crate::tool::{Ball, Bullnose, BullnoseFamily, Flat, ToolError};
 
-/// The job file format this build reads and writes.
-pub const JOB_VERSION: u32 = 1;
+/// The newest job file format this build reads and writes. It reads every version
+/// from 1, and writes the oldest that holds what a job says
+/// ([`Job::required_version`]).
+pub const JOB_VERSION: u32 = 2;
 
 /// A complete job.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -218,7 +239,7 @@ fn default_post() -> String {
 }
 
 /// Where a setup's work zero is.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Origin {
     /// The design's own zero, turned with the part, moved by `offset` along the
@@ -243,6 +264,48 @@ pub enum Origin {
         #[serde(default, skip_serializing_if = "is_default")]
         offset: [f64; 3],
     },
+    /// A point picked on a model: a corner, the centre of a round edge, or the
+    /// middle of an edge, moved by `offset`.
+    Point {
+        /// The point.
+        point: PointRef,
+        /// Millimetres along the setup's X, Y and Z.
+        #[serde(default, skip_serializing_if = "is_default")]
+        offset: [f64; 3],
+    },
+}
+
+impl Origin {
+    /// Millimetres the work zero is moved by, along the setup's axes.
+    pub fn offset(&self) -> [f64; 3] {
+        match self {
+            Origin::ModelOrigin { offset }
+            | Origin::BoxPoint { offset, .. }
+            | Origin::Point { offset, .. } => *offset,
+        }
+    }
+
+    /// The same work zero, moved by `to` instead.
+    pub fn with_offset(mut self, to: [f64; 3]) -> Self {
+        match &mut self {
+            Origin::ModelOrigin { offset }
+            | Origin::BoxPoint { offset, .. }
+            | Origin::Point { offset, .. } => *offset = to,
+        }
+        self
+    }
+
+    /// The stock's front-left corner at its bottom, so X and Y run into the part
+    /// and Z up through it.
+    pub fn stock_corner() -> Self {
+        Origin::BoxPoint {
+            of: BoxOf::Stock,
+            x: Along::Min,
+            y: Along::Min,
+            z: Along::Min,
+            offset: [0.0; 3],
+        }
+    }
 }
 
 impl Default for Origin {
@@ -272,6 +335,65 @@ pub enum Along {
     Center,
     /// The high end: right, back or top.
     Max,
+}
+
+/// A face or an edge picked on a model.
+///
+/// `at` is what the pick is: a point on the feature, in the model's own
+/// coordinates, where the person clicked. `index` is the feature's number when it
+/// was picked, which finds it at once while the model is unchanged.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct FeatureRef {
+    /// The model, by name.
+    pub model: String,
+    /// The face's or edge's number in the model's topology.
+    pub index: u32,
+    /// A point on it, in model coordinates, millimetres.
+    pub at: [f64; 3],
+}
+
+/// Which point of a feature a picked point is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Snap {
+    /// A corner, where edges end.
+    Vertex,
+    /// The centre of a round edge: a hole's, say.
+    CircleCenter,
+    /// Halfway along an edge.
+    EdgeMiddle,
+}
+
+/// A point picked on a model.
+///
+/// As with [`FeatureRef`], `at` is what the pick is: the point itself, in model
+/// coordinates. `index` is the vertex's number for [`Snap::Vertex`], and the edge's
+/// otherwise.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct PointRef {
+    /// The model, by name.
+    pub model: String,
+    /// Which point of the feature.
+    pub snap: Snap,
+    /// The vertex's or edge's number in the model's topology.
+    pub index: u32,
+    /// The point, in model coordinates, millimetres.
+    pub at: [f64; 3],
+}
+
+/// Where the tool may go, against a boundary made from picked faces or edges.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Containment {
+    /// The tool's centre stays inside the boundary, so its side reaches past it by
+    /// its radius. Fusion's default.
+    #[default]
+    Center,
+    /// The whole tool stays inside.
+    Inside,
+    /// The tool may go its whole width outside, so its side still reaches the
+    /// boundary from beyond it.
+    Outside,
 }
 
 impl Along {
@@ -599,9 +721,16 @@ fn default_min_ring() -> f64 {
 }
 
 /// What to machine.
+///
+/// With nothing picked, an operation machines the whole part within the stock's
+/// footprint. Picked faces and edges keep it to a boundary instead: the outline of
+/// the faces seen from above, and the loops the edges close. What else they mean is
+/// the strategy's to say, which is why they live here and not with it: a pocket
+/// will clear a picked floor, a trace will follow picked edges.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Geometry {
-    /// Extra margin around the model's silhouette, in millimetres.
+    /// How far the tool may go past what is machined, in millimetres: past the
+    /// stock's footprint, or past the picked boundary.
     #[serde(default)]
     pub margin: f64,
     /// Highest level to cut at.
@@ -610,6 +739,15 @@ pub struct Geometry {
     /// Lowest level to cut at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bottom: Option<Height>,
+    /// Faces picked on the models.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub faces: Vec<FeatureRef>,
+    /// Edges picked on the models.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edges: Vec<FeatureRef>,
+    /// Where the tool may go against the picked boundary.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub containment: Containment,
 }
 
 impl Default for Geometry {
@@ -618,7 +756,17 @@ impl Default for Geometry {
             margin: 0.0,
             top: None,
             bottom: None,
+            faces: Vec::new(),
+            edges: Vec::new(),
+            containment: Containment::Center,
         }
+    }
+}
+
+impl Geometry {
+    /// Whether any face or edge is picked.
+    pub fn picked(&self) -> bool {
+        !self.faces.is_empty() || !self.edges.is_empty()
     }
 }
 
@@ -801,7 +949,7 @@ fn yes() -> bool {
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum JobError {
     /// The file is a format this build does not read.
-    #[error("job format {0} is not one this version reads (it reads {JOB_VERSION})")]
+    #[error("job format {0} is not one this version reads (it reads 1 to {JOB_VERSION})")]
     UnsupportedVersion(u32),
     /// Something was left without a name.
     #[error("a {what} has no name")]
@@ -899,6 +1047,24 @@ pub enum JobError {
         /// What is wrong.
         source: ToolFieldError,
     },
+    /// A pick names a model the setup does not machine.
+    #[error("{owner} was picked on model '{model}', which setup '{setup}' does not machine")]
+    PickedFromOtherModel {
+        /// Which setup.
+        setup: String,
+        /// What it was picked for.
+        owner: String,
+        /// The model it names.
+        model: String,
+    },
+    /// A pick's point is not a point.
+    #[error("{owner}: a picked point is not finite: {at:?}")]
+    BadPick {
+        /// What it was picked for.
+        owner: String,
+        /// The point.
+        at: [f64; 3],
+    },
     /// Two different tools the job uses share one tool number. The machine would
     /// load one cutter and run the other's program.
     #[error(
@@ -933,7 +1099,7 @@ impl Job {
     /// the names, and the stocks. A setup still being written does not fail this,
     /// so another setup can run.
     pub fn check_common(&self) -> Result<(), JobError> {
-        if self.version != JOB_VERSION {
+        if !(1..=JOB_VERSION).contains(&self.version) {
             return Err(JobError::UnsupportedVersion(self.version));
         }
         positive("tolerance", self.tolerance)?;
@@ -1070,6 +1236,27 @@ impl Job {
         if setup.operations.is_empty() {
             return Err(JobError::NoOperations(name.clone()));
         }
+        let pick = |owner: String, model: &str, at: &[f64; 3]| {
+            if !setup.models.iter().any(|m| m == model) {
+                return Err(JobError::PickedFromOtherModel {
+                    setup: name.clone(),
+                    owner,
+                    model: model.to_string(),
+                });
+            }
+            if !at.iter().all(|v| v.is_finite()) {
+                return Err(JobError::BadPick { owner, at: *at });
+            }
+            Ok(())
+        };
+        if let Origin::Point { point, .. } = &setup.origin {
+            pick(format!("setup '{name}' work zero"), &point.model, &point.at)?;
+        }
+        for op in &setup.operations {
+            for r in op.geometry.faces.iter().chain(&op.geometry.edges) {
+                pick(format!("operation '{name}/{}'", op.name), &r.model, &r.at)?;
+            }
+        }
 
         for op in &setup.operations {
             let at = format!("{name}/{}", op.name);
@@ -1105,6 +1292,37 @@ impl Job {
             }
         }
         Ok(())
+    }
+
+    /// The oldest file format that holds everything this job says: 2 if it uses
+    /// picked features, which a version 1 reader would silently skip, and 1
+    /// otherwise.
+    pub fn required_version(&self) -> u32 {
+        let picks = self.setups.iter().any(|s| {
+            matches!(s.origin, Origin::Point { .. })
+                || s.operations.iter().any(|op| op.geometry.picked())
+        });
+        if picks { 2 } else { 1 }
+    }
+
+    /// Every pick on model `from` names model `to` instead, for when a model is
+    /// renamed.
+    pub fn rename_model_refs(&mut self, from: &str, to: &str) {
+        for setup in &mut self.setups {
+            if let Origin::Point { point, .. } = &mut setup.origin
+                && point.model == from
+            {
+                point.model = to.to_string();
+            }
+            for op in &mut setup.operations {
+                let g = &mut op.geometry;
+                for r in g.faces.iter_mut().chain(&mut g.edges) {
+                    if r.model == from {
+                        r.model = to.to_string();
+                    }
+                }
+            }
+        }
     }
 
     /// The tool an operation names, if it names one the job has.
@@ -1656,5 +1874,115 @@ cutting = { feed = 2000.0, plunge_feed = 400.0 }
             two.validate(),
             Err(JobError::DuplicateToolNumber { number: 1, .. })
         ));
+    }
+
+    fn picked() -> Job {
+        let mut j = sample();
+        let s = &mut j.setups[0];
+        s.origin = Origin::Point {
+            point: PointRef {
+                model: "part".into(),
+                snap: Snap::CircleCenter,
+                index: 41,
+                at: [12.7, 6.35, 25.4],
+            },
+            offset: [0.0, 0.0, 1.0],
+        };
+        let g = &mut s.operations[1].geometry;
+        g.faces.push(FeatureRef {
+            model: "part".into(),
+            index: 12,
+            at: [30.2, 14.0, 12.7],
+        });
+        g.edges.push(FeatureRef {
+            model: "part".into(),
+            index: 3,
+            at: [1.0, 2.0, 3.0],
+        });
+        g.containment = Containment::Inside;
+        j
+    }
+
+    /// Picks survive being written and read back, and are written as the plan's
+    /// TOML shows them.
+    #[test]
+    fn picks_round_trip() {
+        let j = picked();
+        j.validate().unwrap();
+        let text = toml::to_string(&j).unwrap();
+        let again: Job = toml::from_str(&text).unwrap();
+        assert_eq!(again, j, "{text}");
+        assert!(text.contains(r#"kind = "point""#), "{text}");
+        assert!(text.contains(r#"snap = "circle-center""#), "{text}");
+        assert!(text.contains(r#"containment = "inside""#), "{text}");
+        assert!(
+            text.contains("[[setup.operation.geometry.faces]]"),
+            "{text}"
+        );
+        // Nothing picked, nothing written.
+        let plain = toml::to_string(&sample()).unwrap();
+        assert!(!plain.contains("faces"), "{plain}");
+        assert!(!plain.contains("containment"), "{plain}");
+    }
+
+    /// A version 1 reader would skip picks and cut the whole part, so a job with
+    /// any is version 2; every other job stays version 1, readable as before.
+    #[test]
+    fn only_a_job_with_picks_needs_version_2() {
+        assert_eq!(sample().required_version(), 1);
+        assert_eq!(picked().required_version(), 2);
+        let mut origin_only = sample();
+        origin_only.setups[0].origin = picked().setups[0].origin.clone();
+        assert_eq!(origin_only.required_version(), 2);
+        let mut faces_only = picked();
+        faces_only.setups[0].origin = Origin::default();
+        faces_only.setups[0].operations[1].geometry.edges.clear();
+        assert_eq!(faces_only.required_version(), 2);
+        // Both versions are read.
+        let mut one = sample();
+        one.version = 1;
+        one.validate().unwrap();
+        let mut two = sample();
+        two.version = 2;
+        two.validate().unwrap();
+        let mut three = sample();
+        three.version = 3;
+        assert_eq!(three.validate(), Err(JobError::UnsupportedVersion(3)));
+    }
+
+    #[test]
+    fn a_pick_must_be_on_the_setup_and_a_point() {
+        let mut j = picked();
+        j.setups[0].operations[1].geometry.faces[0].model = "elsewhere".into();
+        assert!(matches!(
+            j.validate(),
+            Err(JobError::PickedFromOtherModel { model, .. }) if model == "elsewhere"
+        ));
+        let mut j = picked();
+        if let Origin::Point { point, .. } = &mut j.setups[0].origin {
+            point.at[1] = f64::NAN;
+        }
+        assert!(matches!(j.validate(), Err(JobError::BadPick { .. })));
+    }
+
+    #[test]
+    fn renaming_a_model_carries_its_picks() {
+        let mut j = picked();
+        j.rename_model_refs("part", "bracket");
+        let s = &j.setups[0];
+        assert!(matches!(&s.origin, Origin::Point { point, .. } if point.model == "bracket"));
+        let g = &s.operations[1].geometry;
+        assert!(g.faces.iter().chain(&g.edges).all(|r| r.model == "bracket"));
+        j.rename_model_refs("nothing", "else");
+        assert_eq!(j.setups[0].operations[1].geometry.faces[0].model, "bracket");
+    }
+
+    #[test]
+    fn an_origin_keeps_its_kind_when_its_offset_changes() {
+        let o = picked().setups[0].origin.clone();
+        assert_eq!(o.offset(), [0.0, 0.0, 1.0]);
+        let moved = o.clone().with_offset([1.0, 2.0, 3.0]);
+        assert_eq!(moved.offset(), [1.0, 2.0, 3.0]);
+        assert!(matches!(moved, Origin::Point { .. }));
     }
 }

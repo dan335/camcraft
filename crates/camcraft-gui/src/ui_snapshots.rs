@@ -136,6 +136,41 @@ fn main_window_after_a_run() {
     h.run_steps(3);
     shoot(&mut h, "steep_deepest");
 
+    // Faces picked for finishing: lit in the view, listed in the panel, the
+    // boundary they make drawn at the stock's top, and a third face looked at.
+    let faces = h.state_mut().pick_faces_for_snapshot(1);
+    println!("{faces} faces on the model");
+    h.run_steps(4);
+    shoot(&mut h, "faces_picked");
+    h.state_mut().escape_for_snapshot();
+
+    // The work zero, picked on a hole: the pointer over its rim offers the
+    // centre, and a click puts the work zero there.
+    let (rim, centre) = h
+        .state_mut()
+        .arm_work_zero_for_snapshot()
+        .expect("the model has a round rim in view");
+    h.run_steps(2);
+    h.hover_at(rim);
+    h.run_steps(3);
+    shoot(&mut h, "work_zero_hover");
+    h.drag_at(rim);
+    h.step();
+    h.drop_at(rim);
+    h.run_steps(4);
+    shoot(&mut h, "work_zero_picked");
+    let origin = h.state_mut().doc_for_snapshot().unwrap().job.setups[0]
+        .origin
+        .clone();
+    let camcraft_core::job::Origin::Point { point, .. } = &origin else {
+        panic!("the click did not set the work zero: {origin:?}");
+    };
+    assert_eq!(point.snap, camcraft_core::job::Snap::CircleCenter);
+    println!("work zero on {point:?}, rim centre was {centre}");
+    // Back as it was, for the shots after.
+    h.state_mut().doc_for_snapshot().unwrap().undo();
+    h.run_steps(2);
+
     // The same, in inches, with the settings window that chose them open.
     h.state_mut()
         .settings_for_snapshot(crate::measure::Measure::Imperial);

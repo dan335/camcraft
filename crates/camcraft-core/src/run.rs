@@ -7,20 +7,25 @@
 //! Each operation is simulated as it runs, not at the end. A gouge in operation one
 //! is worth knowing about before operation two is planned against the material it
 //! left behind.
+//!
+//! An operation with picked faces or edges is kept to their boundary
+//! ([`crate::features::machining_boundary`]) as well as to the stock's footprint.
 
+use camcraft_geom::contour::Region;
 use camcraft_geom::mesh::{Aabb, TriMesh};
 use camcraft_sim::stock::{PartSurface, SimReport, Stock as SimStock, StockError, VerifyReport};
 use glam::{DVec2, dvec2};
 
 use crate::dropcutter::DropCutter;
+use crate::features::{FeatureError, machining_boundary};
 use crate::frame::Frame;
 use crate::job::{HeightContext, Job, JobError, Operation, StrategySpec};
 use crate::linker::{ClearanceField, LinkError, LinkParams, LinkReport, link};
 use crate::ordering::order_passes;
-use crate::parallel::{ParallelParams, StrategyError, StrategyReport, parallel_finish};
+use crate::parallel::{ParallelParams, StrategyError, StrategyReport, parallel_finish_within};
 use crate::reach::{LevelReach, ReachError};
 use crate::roughing::{RoughingParams, RoughingReport, zlevel_rough};
-use crate::setup::{Meshes, PrepareError, Prepared, prepare};
+use crate::setup::{Bodies, PrepareError, Prepared, prepare};
 use crate::simadapt::sim_moves;
 use crate::stock::{EffectiveTool, Stock as ToLeave, StockError as ToLeaveError};
 use crate::tool::{ToolError, ToolProfile};
@@ -67,6 +72,14 @@ pub enum RunError {
         op: String,
         /// Why.
         source: ReachError,
+    },
+    /// What the operation was kept to could not be found or used.
+    #[error("operation '{op}': {source}")]
+    Feature {
+        /// Which operation.
+        op: String,
+        /// Why.
+        source: FeatureError,
     },
     /// The stock could not be built.
     #[error("cannot build stock: {0}")]
@@ -201,16 +214,22 @@ impl SetupResult {
 }
 
 /// Check, lay out and run setup `index` of `job`, with its models by name.
-pub fn run_setup(job: &Job, index: usize, meshes: &Meshes<'_>) -> Result<SetupResult, RunError> {
+pub fn run_setup(job: &Job, index: usize, bodies: &Bodies<'_>) -> Result<SetupResult, RunError> {
     job.check_common()?;
     job.check_setup(index)?;
-    let prepared = prepare(job, index, meshes)?;
-    run_prepared(job, index, &prepared)
+    let prepared = prepare(job, index, bodies)?;
+    run_prepared(job, index, &prepared, bodies)
 }
 
 /// Run every operation of setup `index` against its block of material, already
-/// laid out in its frame. The job must have been checked.
-pub fn run_prepared(job: &Job, index: usize, prepared: &Prepared) -> Result<SetupResult, RunError> {
+/// laid out in its frame. The job must have been checked. `bodies` are the models
+/// it was laid out from, where picked faces and edges are found.
+pub fn run_prepared(
+    job: &Job,
+    index: usize,
+    prepared: &Prepared,
+    bodies: &Bodies<'_>,
+) -> Result<SetupResult, RunError> {
     let setup = job.setups.get(index).ok_or(JobError::NoSetups)?;
     let mesh = &prepared.part;
     let bounds = prepared.model_bounds;
@@ -243,8 +262,27 @@ pub fn run_prepared(job: &Job, index: usize, prepared: &Prepared) -> Result<Setu
     let mut stages = Vec::with_capacity(setup.operations.len() + 1);
     stages.push(stock.clone());
     for op in &setup.operations {
+        let tool = cutting_tool(job, op)?;
+        let limit = machining_boundary(
+            &op.geometry,
+            prepared,
+            bodies,
+            tool.max_radius(),
+            job.tolerance,
+        )
+        .map_err(|source| RunError::Feature {
+            op: op.name.clone(),
+            source,
+        })?;
         operations.push(run_operation(
-            job, op, mesh, &cutter, &ctx, lo, hi, &mut stock,
+            job,
+            op,
+            mesh,
+            &cutter,
+            &ctx,
+            (lo, hi),
+            limit.as_ref(),
+            &mut stock,
         )?);
         stages.push(stock.clone());
     }
@@ -305,8 +343,8 @@ fn run_operation(
     mesh: &TriMesh,
     cutter: &DropCutter<'_>,
     ctx: &HeightContext,
-    lo: DVec2,
-    hi: DVec2,
+    (lo, hi): (DVec2, DVec2),
+    limit: Option<&Region>,
     stock: &mut SimStock,
 ) -> Result<OperationResult, RunError> {
     let spec = job.tool_for(op).ok_or_else(|| unknown_tool(op))?;
@@ -330,11 +368,13 @@ fn run_operation(
                 max_cut_step: op.passes.max_cut_step,
                 ..Default::default()
             };
-            let (path, report) = parallel_finish(cutter, &tool, sweep_lo, sweep_hi, &params)
-                .map_err(|source| RunError::Strategy {
-                    op: op.name.clone(),
-                    source,
-                })?;
+            let (path, report) = parallel_finish_within(
+                cutter, &tool, sweep_lo, sweep_hi, limit, &params,
+            )
+            .map_err(|source| RunError::Strategy {
+                op: op.name.clone(),
+                source,
+            })?;
             if !report.is_clean() {
                 warnings.push(format!(
                     "{} span(s) hit the refinement limit; the path is coarser than the \
@@ -364,13 +404,19 @@ fn run_operation(
                     .map_or(ctx.model_bottom, |h| h.resolve(ctx)),
                 min_ring_length,
             };
+            let strategy = |source| RunError::Strategy {
+                op: op.name.clone(),
+                source,
+            };
+            let sweep = Region::rectangle(sweep_lo, sweep_hi);
+            let area = match limit {
+                Some(l) => sweep
+                    .intersection(l)
+                    .map_err(|e| strategy(StrategyError::Region(e.to_string())))?,
+                None => sweep,
+            };
             let (path, report) =
-                zlevel_rough(&mut reach, (sweep_lo, sweep_hi), stock.field(), &params).map_err(
-                    |source| RunError::Strategy {
-                        op: op.name.clone(),
-                        source,
-                    },
-                )?;
+                zlevel_rough(&mut reach, &area, stock.field(), &params).map_err(strategy)?;
             if report.rings == 0 {
                 warnings.push(
                     "found nothing to clear: the stock may already be below this \
@@ -478,6 +524,7 @@ fn run_operation(
 mod tests {
     use super::*;
     use camcraft_geom::synthetic;
+    use camcraft_geom::topology::Body;
 
     const JOB: &str = r#"
 version = 1
@@ -529,8 +576,9 @@ heights = { clearance = { ref = "stock-top", offset = 6.0 } }
     }
 
     fn run_job(job: &Job, mesh: &camcraft_geom::mesh::TriMesh) -> Result<SetupResult, RunError> {
-        let meshes: Meshes<'_> = [("dome", mesh)].into_iter().collect();
-        run_setup(job, 0, &meshes)
+        let body = Body::derived(mesh.clone());
+        let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+        run_setup(job, 0, &bodies)
     }
 
     #[test]
@@ -671,10 +719,10 @@ heights = { clearance = { ref = "stock-top", offset = 6.0 } }
         let mut second = job.setups[0].clone();
         second.name = "again".into();
         job.setups.push(second);
-        let mesh = dome();
-        let meshes: Meshes<'_> = [("dome", &mesh)].into_iter().collect();
-        let first = run_setup(&job, 0, &meshes).unwrap();
-        let again = run_setup(&job, 1, &meshes).unwrap();
+        let body = Body::derived(dome());
+        let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+        let first = run_setup(&job, 0, &bodies).unwrap();
+        let again = run_setup(&job, 1, &bodies).unwrap();
         assert_eq!(first.stages[0], again.stages[0]);
         assert_eq!(again.setup, "again");
     }
@@ -707,5 +755,128 @@ heights = { clearance = { ref = "stock-top", offset = 6.0 } }
         assert_eq!(result.stock_min, dvec2(-10.0, -10.0));
         assert_eq!(result.stock_max, dvec2(10.0, 10.0));
         assert!(result.is_clean(), "{:?}", result.warnings());
+    }
+
+    /// The step as the "dome" of `JOB`, with one operation left: `finish` or
+    /// `rough`, kept to the plateau.
+    fn kept_to_plateau(keep: &str, containment: crate::job::Containment) -> (Job, Body) {
+        use crate::features::find_face;
+        use crate::job::FeatureRef;
+        let body = Body::derived(synthetic::step(5.0, 10.0));
+        let mut job: Job = toml::from_str(JOB).unwrap();
+        job.setups[0].operations.retain(|op| op.name == keep);
+        let pick = FeatureRef {
+            model: "dome".into(),
+            index: 0,
+            at: [-5.0, 0.0, 5.0],
+        };
+        let face = find_face(&body, &pick, 0.01).unwrap().index;
+        let g = &mut job.setups[0].operations[0].geometry;
+        g.faces.push(FeatureRef {
+            index: face,
+            ..pick
+        });
+        g.containment = containment;
+        (job, body)
+    }
+
+    fn cuts(result: &SetupResult) -> Vec<DVec2> {
+        result.operations[0]
+            .path
+            .moves()
+            .iter()
+            .filter(|m| m.role == crate::toolpath::MoveRole::Cut)
+            .map(|m| m.to.truncate())
+            .collect()
+    }
+
+    /// Finishing kept to the plateau: every cut has the tool's centre over it, and
+    /// with the whole tool inside, a radius in from its edges.
+    #[test]
+    fn parallel_keeps_to_a_picked_face() {
+        use crate::job::Containment;
+        for (containment, inset) in [(Containment::Center, 0.0), (Containment::Inside, 2.0)] {
+            let (job, body) = kept_to_plateau("finish", containment);
+            let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+            let result = run_setup(&job, 0, &bodies).unwrap();
+            let cuts = cuts(&result);
+            assert!(cuts.len() > 20, "{containment:?}: only {} cuts", cuts.len());
+            let slack = 1e-6 + 0.01;
+            for p in &cuts {
+                assert!(
+                    p.x <= -inset + slack
+                        && p.x >= -10.0 + inset - slack
+                        && p.y.abs() <= 10.0 - inset + slack,
+                    "{containment:?}: a cut at {p} leaves the plateau"
+                );
+            }
+            // And the passes reach across it, not a stepover short.
+            let reach = cuts.iter().map(|p| p.x).fold(f64::MIN, f64::max);
+            assert!(
+                reach > -inset - 0.1,
+                "{containment:?}: stops at x = {reach}"
+            );
+        }
+        // Outside, the tool's side reaches the plateau from past its edge.
+        let (job, body) = kept_to_plateau("finish", Containment::Outside);
+        let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+        let result = run_setup(&job, 0, &bodies).unwrap();
+        let far = cuts(&result).iter().map(|p| p.x).fold(f64::MIN, f64::max);
+        assert!(far > 1.5, "outside stops at x = {far}");
+    }
+
+    /// Roughing kept to the plateau clears only around it, and less than the whole
+    /// block.
+    #[test]
+    fn roughing_keeps_to_a_picked_face() {
+        use crate::job::Containment;
+        let (job, body) = kept_to_plateau("rough", Containment::Center);
+        let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+        let kept = run_setup(&job, 0, &bodies).unwrap();
+        for p in cuts(&kept) {
+            assert!(
+                p.x <= 0.01 && p.x >= -10.01 && p.y.abs() <= 10.01,
+                "a roughing cut at {p} leaves the plateau"
+            );
+        }
+        let mut whole = job.clone();
+        whole.setups[0].operations[0].geometry.faces.clear();
+        let all = run_setup(&whole, 0, &bodies).unwrap();
+        assert!(
+            kept.operations[0].sim.removed_mm3 < all.operations[0].sim.removed_mm3,
+            "kept {} vs whole {}",
+            kept.operations[0].sim.removed_mm3,
+            all.operations[0].sim.removed_mm3
+        );
+    }
+
+    /// A pick on nothing stops the run and names the operation.
+    #[test]
+    fn a_gone_pick_stops_the_run() {
+        let (mut job, body) = kept_to_plateau("finish", crate::job::Containment::Center);
+        job.setups[0].operations[0].geometry.faces[0].at = [40.0, 40.0, 40.0];
+        let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+        let err = run_setup(&job, 0, &bodies).unwrap_err();
+        assert!(
+            matches!(err, RunError::Feature { ref op, .. } if op == "finish"),
+            "{err}"
+        );
+    }
+
+    /// Kept to a boundary, the same job gives the same moves on any number of
+    /// threads.
+    #[test]
+    fn bounded_runs_are_deterministic() {
+        let (job, body) = kept_to_plateau("rough", crate::job::Containment::Center);
+        let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+        let on = |threads: usize| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| run_setup(&job, 0, &bodies).unwrap())
+        };
+        let (one, eight) = (on(1), on(8));
+        assert_eq!(one.operations[0].path, eight.operations[0].path);
     }
 }

@@ -22,11 +22,19 @@
 //! The two geometric checks need the file's raw coordinates to be in the frame of
 //! the result. When geometry is placed by transforms, as in an assembly, they are
 //! not, and the checks are reported as skipped rather than passed.
+//!
+//! # Faces
+//!
+//! Every triangle keeps the B-rep face it was tessellated from, numbered in the
+//! order the kernel explores the shape's faces, so the result is a [`Body`] whose
+//! faces are the file's own. That order depends only on the file, not on the
+//! tessellation, so a face keeps its number when the tolerance changes.
 
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 
 use camcraft_geom::mesh::{MeshError, TriMesh};
+use camcraft_geom::topology::{Body, TopologyError};
 use glam::{DVec3, dvec3};
 
 use crate::part21::{self, LengthUnit, Part21Error};
@@ -109,6 +117,14 @@ pub enum StepError {
         /// Why.
         source: MeshError,
     },
+    /// The triangles could not be matched to the faces they came from.
+    #[error("{path}: the triangles do not match the file's faces: {detail}")]
+    Faces {
+        /// Which file.
+        path: String,
+        /// What did not match.
+        detail: String,
+    },
     /// Nothing was left to machine.
     #[error("{path} produced no triangles")]
     Empty {
@@ -148,15 +164,13 @@ pub struct StepReport {
     pub check: FileCheck,
 }
 
-/// Read a STEP file and tessellate it to within `tolerance` millimetres.
+/// Read a STEP file and tessellate it to within `tolerance` millimetres, keeping
+/// the face each triangle came from.
 ///
 /// The tolerance is the largest distance between a triangle and the true surface.
 /// It is error the simulator cannot see, because the simulator checks against this
 /// mesh, so it should be a small part of the machining tolerance.
-pub fn load_step(
-    path: impl AsRef<Path>,
-    tolerance: f64,
-) -> Result<(TriMesh, StepReport), StepError> {
+pub fn load_step(path: impl AsRef<Path>, tolerance: f64) -> Result<(Body, StepReport), StepError> {
     if !(tolerance.is_finite() && tolerance > 0.0) {
         return Err(StepError::BadTolerance(tolerance));
     }
@@ -204,9 +218,30 @@ pub fn load_step(
             .map_err(|e| kernel(e.to_string()))?
     };
 
+    let faces = |detail: String| StepError::Faces {
+        path: name.clone(),
+        detail,
+    };
+    let counted: usize = soup.face_triangles.iter().sum();
+    if counted * 3 != soup.indices.len() {
+        return Err(faces(format!(
+            "the faces account for {counted} triangles but the kernel gave {}",
+            soup.indices.len() / 3
+        )));
+    }
+    let face_count = u32::try_from(soup.face_triangles.len())
+        .map_err(|_| faces(format!("{} faces is too many", soup.face_triangles.len())))?;
+    // The face of each triangle, in the kernel's order.
+    let face_of = soup
+        .face_triangles
+        .iter()
+        .zip(0u32..)
+        .flat_map(|(&n, face)| std::iter::repeat_n(face, n));
+
     let mut weld = Welder::default();
+    let mut labels = Vec::new();
     let mut triangles = 0;
-    for tri in soup.indices.chunks_exact(3) {
+    for (tri, face) in soup.indices.chunks_exact(3).zip(face_of) {
         triangles += 1;
         let mut corners = [DVec3::NAN; 3];
         for (slot, &i) in corners.iter_mut().zip(tri) {
@@ -214,7 +249,10 @@ pub fn load_step(
                 *slot = dvec3(v.x, v.y, v.z);
             }
         }
-        weld.push(corners);
+        // A triangle the weld drops takes its label with it.
+        if weld.push(corners) {
+            labels.push(face);
+        }
     }
     let degenerate = weld.degenerate;
     let vertices = weld.vertex_count() as u64;
@@ -227,8 +265,10 @@ pub fn load_step(
     })?;
 
     let check = check_against_file(&mesh, &facts, tolerance, &name)?;
+    let body = Body::with_faces(mesh, labels, face_count)
+        .map_err(|e: TopologyError| faces(e.to_string()))?;
     Ok((
-        mesh,
+        body,
         StepReport {
             unit: facts.unit,
             faces: facts.faces,
@@ -332,9 +372,10 @@ mod tests {
         );
         let text = std::fs::read_to_string(path).unwrap();
         let facts = part21::facts(&text).unwrap();
-        let (mesh, _) = load_step(path, 0.01).unwrap();
+        let (body, _) = load_step(path, 0.01).unwrap();
+        let mesh = body.mesh();
         assert_eq!(
-            check_against_file(&mesh, &facts, 0.01, "hinge").unwrap(),
+            check_against_file(mesh, &facts, 0.01, "hinge").unwrap(),
             FileCheck::Passed
         );
 

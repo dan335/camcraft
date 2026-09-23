@@ -143,12 +143,14 @@ if [ ${#SELECT[@]} -gt 0 ]; then
   # This gate used to run the whole suite twice, at one thread and at eight. That
   # was expensive and did not test what it claimed: running a deterministic test at
   # two thread counts just passes twice. The evidence lives in tests that compare
-  # output against itself: fill_is_bit_identical_regardless_of_threads builds the
-  # same CL map at one and eight threads and diffs it bit for bit. Those tests are
-  # in camcraft-core, so this runs when core is being checked.
+  # output against itself: bounded_runs_are_deterministic runs a roughing kept to a
+  # picked face at one and eight threads and compares the moves. Those tests are in
+  # camcraft-core, so this runs when core is being checked. `--exact` passes on a
+  # name that matches nothing, which is how a removed module's test sat here
+  # unnoticed; check the count it reports after renaming one.
   if [ "$CRATES" = ALL ] || echo "$CRATES" | grep -qx camcraft-core; then
     run "determinism" cargo test -p camcraft-core --quiet -- --exact \
-      clmap::tests::fill_is_bit_identical_regardless_of_threads \
+      run::tests::bounded_runs_are_deterministic \
       dropcutter::tests::is_deterministic \
       ordering::tests::ordering_is_deterministic
   fi

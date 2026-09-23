@@ -198,6 +198,48 @@ impl Region {
         inside
     }
 
+    /// Where the line through the region at `v` runs inside it, as intervals of
+    /// `u`, in order.
+    ///
+    /// The line is every point `p` with `p · across == v`, where `across` is
+    /// `along` turned a quarter left; `u` is `p · along`. `along` must be a unit
+    /// vector. Exact in `f64`, by the same half-open crossing rule as
+    /// [`contains`](Self::contains), so a span's inside agrees with it. Intervals
+    /// of no length are left out.
+    pub fn spans(&self, along: DVec2, v: f64) -> Vec<(f64, f64)> {
+        let across = along.perp();
+        let mut crossings = Vec::new();
+        for ring in &self.rings {
+            let pts = ring.points();
+            let n = pts.len();
+            for i in 0..n {
+                let (Some(a), Some(b)) = (pts.get(i), pts.get((i + 1) % n)) else {
+                    continue;
+                };
+                let (va, vb) = (a.dot(across), b.dot(across));
+                if (va > v) != (vb > v) {
+                    let t = (v - va) / (vb - va);
+                    crossings.push((*a + (*b - *a) * t).dot(along));
+                }
+            }
+        }
+        crossings.sort_by(f64::total_cmp);
+        crossings
+            .chunks_exact(2)
+            .filter_map(|pair| match pair {
+                [a, b] if b > a => Some((*a, *b)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The smallest box holding every ring, or `None` for an empty region.
+    pub fn bounds(&self) -> Option<(DVec2, DVec2)> {
+        let mut pts = self.rings.iter().flat_map(|r| r.points().iter().copied());
+        let first = pts.next()?;
+        Some(pts.fold((first, first), |(lo, hi), p| (lo.min(p), hi.max(p))))
+    }
+
     /// Net enclosed area: outers less holes.
     pub fn area(&self) -> f64 {
         self.rings
@@ -576,6 +618,53 @@ fn chain(segs: Vec<(DVec2, DVec2)>, weld: f64) -> Vec<Contour> {
     clippy::indexing_slicing
 )]
 mod tests {
+
+    /// A span's inside is `contains`' inside: scanning a square with a square hole
+    /// in it, at many angles, every point strictly inside a span is inside the
+    /// region, and every point strictly between spans is not.
+    #[test]
+    fn spans_agree_with_contains() {
+        let outer = Contour::new(vec![
+            dvec2(0.0, 0.0),
+            dvec2(10.0, 0.0),
+            dvec2(10.0, 10.0),
+            dvec2(0.0, 10.0),
+        ])
+        .unwrap();
+        let hole = Contour::new(vec![
+            dvec2(3.0, 3.0),
+            dvec2(3.0, 7.0),
+            dvec2(7.0, 7.0),
+            dvec2(7.0, 3.0),
+        ])
+        .unwrap();
+        let region = Region::new(vec![outer, hole]);
+        for deg in [0.0_f64, 17.0, 45.0, 90.0, 133.0] {
+            let along = dvec2(deg.to_radians().cos(), deg.to_radians().sin());
+            let across = along.perp();
+            for k in -20..=160 {
+                let v = f64::from(k) * 0.1;
+                let spans = region.spans(along, v);
+                for (u0, u1) in &spans {
+                    assert!(u1 > u0);
+                    let mid = along * ((u0 + u1) / 2.0) + across * v;
+                    assert!(region.contains(mid), "{deg} {v}: {mid} should be inside");
+                }
+                for w in spans.windows(2) {
+                    if let [(_, a), (b, _)] = w {
+                        let mid = along * ((a + b) / 2.0) + across * v;
+                        assert!(!region.contains(mid), "{deg} {v}: {mid} should be outside");
+                    }
+                }
+            }
+        }
+        // Through the hole along X: two spans; below the square: none.
+        let spans = region.spans(dvec2(1.0, 0.0), 5.0);
+        assert_eq!(spans, vec![(0.0, 3.0), (7.0, 10.0)]);
+        assert!(region.spans(dvec2(1.0, 0.0), -1.0).is_empty());
+        assert_eq!(region.bounds(), Some((dvec2(0.0, 0.0), dvec2(10.0, 10.0))));
+        assert_eq!(Region::default().bounds(), None);
+    }
     use super::*;
 
     fn square(half: f64) -> Region {

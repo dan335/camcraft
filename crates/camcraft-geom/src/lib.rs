@@ -38,3 +38,5 @@ pub mod heightmap;
 pub mod contour;
 
 pub mod shadow;
+
+pub mod topology;

@@ -31,6 +31,8 @@ pub const PATH_LEAD: [u8; 3] = [0x4F, 0xD1, 0xFF];
 pub const AMBER_5: [u8; 3] = [0xF5, 0xA5, 0x24];
 /// `--amber-3`: highlight on amber.
 pub const AMBER_3: [u8; 3] = [0xFF, 0xE1, 0xA3];
+/// `--amber-6`, the accent pressed.
+pub const AMBER_6: [u8; 3] = [0xD9, 0x8A, 0x0F];
 /// `--amber-7`: material only just left above the part.
 pub const AMBER_7: [u8; 3] = [0x8A, 0x58, 0x06];
 /// `--err`: material cut below the part.
@@ -39,6 +41,13 @@ pub const ERR: [u8; 3] = [0xFF, 0x5C, 0x5C];
 pub const GRAY_5: [u8; 3] = [0x3A, 0x3E, 0x48];
 /// `--gray-8`: material finished to the part.
 pub const GRAY_8: [u8; 3] = [0xB9, 0xBD, 0xC7];
+/// What is picked in the view: the accent, as the design system gives selection.
+pub const SELECTED: [u8; 3] = AMBER_5;
+/// What is under the pointer, ready to pick: `--accent-hover`.
+pub const HOVER: [u8; 3] = AMBER_3;
+/// The boundary an operation is kept to: `--accent-press`, a step darker than
+/// what is picked, so the outline reads as derived from the picks.
+pub const BOUNDARY: [u8; 3] = AMBER_6;
 /// The work zero's X axis. X red, Y green and Z blue, as CAD draws them, taken from
 /// the path palette so they sit in the same family.
 pub const AXIS_X: [u8; 3] = PATH_RAPID;
@@ -207,6 +216,7 @@ mod tests {
             ("--path-plunge:", PATH_PLUNGE),
             ("--path-lead:", PATH_LEAD),
             ("--amber-5:", AMBER_5),
+            ("--amber-6:", AMBER_6),
             ("--amber-7:", AMBER_7),
             ("--amber-3:", AMBER_3),
             ("--err:", ERR),

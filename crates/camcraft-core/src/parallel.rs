@@ -21,7 +21,15 @@
 //! Where nothing lies under the tool the pass simply stops, and the connection to
 //! the next one is marked [`MoveRole::Link`] for the linker to resolve. The strategy
 //! does not invent a traverse it has no business planning.
+//!
+//! # Kept to a boundary by clipping lines, not probes
+//!
+//! Kept to picked faces ([`parallel_finish_within`]), each line is cut exactly to
+//! where it crosses the boundary, and each piece swept on its own. Asking the
+//! drop-cutter for nothing outside instead would end every pass up to a sample
+//! short of the boundary, and count each as a coverage break.
 
+use camcraft_geom::contour::Region;
 use camcraft_geom::mesh::Aabb;
 use glam::{DVec2, DVec3, dvec2, dvec3};
 
@@ -149,6 +157,23 @@ pub fn parallel_finish<T: DropTest>(
     max: DVec2,
     params: &ParallelParams,
 ) -> Result<(Toolpath, StrategyReport), StrategyError> {
+    parallel_finish_within(cutter, tool, min, max, None, params)
+}
+
+/// As [`parallel_finish`], with the tool's centre kept inside `boundary` as well
+/// as `[min, max]`.
+///
+/// The lines are laid across the boundary rather than the rectangle, centred on it
+/// so neither side is a whole stepover short. Without a boundary this is
+/// `parallel_finish`, move for move.
+pub fn parallel_finish_within<T: DropTest>(
+    cutter: &DropCutter<'_>,
+    tool: &T,
+    min: DVec2,
+    max: DVec2,
+    boundary: Option<&Region>,
+    params: &ParallelParams,
+) -> Result<(Toolpath, StrategyReport), StrategyError> {
     check("stepover", params.stepover)?;
     check("tolerance", params.tolerance)?;
     check("feed", params.feed)?;
@@ -176,54 +201,86 @@ pub fn parallel_finish<T: DropTest>(
         })
     };
     let (u0, u1) = span(along);
-    let (v0, v1) = span(across);
+    let (mut v0, mut v1) = span(across);
+    let mut start = v0;
+    if let Some(b) = boundary {
+        // Across the boundary, where it lies within the rectangle.
+        let (lo, hi) =
+            b.rings()
+                .iter()
+                .flat_map(|r| r.points())
+                .fold((f64::MAX, f64::MIN), |(lo, hi), p| {
+                    let v = p.dot(across);
+                    (lo.min(v), hi.max(v))
+                });
+        (v0, v1) = (v0.max(lo), v1.min(hi));
+        if v0.is_nan() || v1.is_nan() || v0 >= v1 {
+            return Ok((Toolpath::new(), StrategyReport::default()));
+        }
+        let n = ((v1 - v0) / params.stepover).floor();
+        start = v0 + (v1 - v0 - n * params.stepover) / 2.0;
+    }
 
-    let lines = clamp_count(((v1 - v0) / params.stepover).floor() + 1.0);
+    let lines = clamp_count(((v1 - start) / params.stepover).floor() + 1.0);
 
     let mut path = Toolpath::new();
     let mut report = StrategyReport::default();
     let mut samples = Vec::new();
 
     for i in 0..lines {
-        let v = v0 + f64::from(i) * params.stepover;
+        let v = start + f64::from(i) * params.stepover;
         // Zigzag: reverse alternate passes so the tool does not traverse back.
         let reversed = i % 2 == 1;
-        let (a, b) = if reversed { (u1, u0) } else { (u0, u1) };
+        let mut pieces = match boundary {
+            None => vec![(u0, u1)],
+            Some(b) => b
+                .spans(along, v)
+                .into_iter()
+                .map(|(a, b)| (a.max(u0), b.min(u1)))
+                .filter(|(a, b)| a < b)
+                .collect(),
+        };
+        if reversed {
+            pieces.reverse();
+        }
 
-        samples.clear();
-        sweep_line(
-            cutter,
-            tool,
-            along,
-            across,
-            v,
-            a,
-            b,
-            params,
-            &mut samples,
-            &mut report,
-        );
+        for (p0, p1) in pieces {
+            let (a, b) = if reversed { (p1, p0) } else { (p0, p1) };
+            samples.clear();
+            sweep_line(
+                cutter,
+                tool,
+                along,
+                across,
+                v,
+                a,
+                b,
+                params,
+                &mut samples,
+                &mut report,
+            );
 
-        let runs: Vec<Vec<DVec3>> = samples
-            .split(|p| p.is_none())
-            .flat_map(|run| {
-                let run: Vec<DVec3> = run.iter().filter_map(|p| *p).collect();
-                break_steep(run, params.max_cut_step, &mut report)
-            })
-            .collect();
-        for run in runs {
-            if run.len() < 2 {
-                continue;
-            }
-            report.passes += 1;
-            let mut first = true;
-            for p in run {
-                if first {
-                    // The strategy does not plan traverses; the linker does.
-                    path.feed_to(p, MoveRole::Link, params.feed)?;
-                    first = false;
-                } else {
-                    path.feed_to(p, MoveRole::Cut, params.feed)?;
+            let runs: Vec<Vec<DVec3>> = samples
+                .split(|p| p.is_none())
+                .flat_map(|run| {
+                    let run: Vec<DVec3> = run.iter().filter_map(|p| *p).collect();
+                    break_steep(run, params.max_cut_step, &mut report)
+                })
+                .collect();
+            for run in runs {
+                if run.len() < 2 {
+                    continue;
+                }
+                report.passes += 1;
+                let mut first = true;
+                for p in run {
+                    if first {
+                        // The strategy does not plan traverses; the linker does.
+                        path.feed_to(p, MoveRole::Link, params.feed)?;
+                        first = false;
+                    } else {
+                        path.feed_to(p, MoveRole::Cut, params.feed)?;
+                    }
                 }
             }
         }

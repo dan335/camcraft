@@ -12,6 +12,10 @@ pub struct Mesh {
     pub uvs: Vec<DVec2>,
     pub normals: Vec<DVec3>,
     pub indices: Vec<usize>,
+    /// How many triangles each face of the shape gave, in the order the shape's
+    /// faces are explored: the triangles of face `i` follow those of faces `0..i`.
+    /// (camcraft: added so a triangle can be traced back to its B-rep face.)
+    pub face_triangles: Vec<usize>,
 }
 
 pub struct Mesher {
@@ -34,6 +38,7 @@ impl Mesher {
         let mut uvs = vec![];
         let mut normals = vec![];
         let mut indices = vec![];
+        let mut face_triangles = vec![];
 
         let triangulated_shape = Shape::from_shape(self.inner.pin_mut().Shape());
 
@@ -99,6 +104,7 @@ impl Mesher {
                 normals.push(dvec3(normal.X(), normal.Y(), normal.Z()));
             }
 
+            face_triangles.push(triangulation.NbTriangles() as usize);
             for i in 1..=triangulation.NbTriangles() {
                 let triangle = triangulation.Triangle(i);
 
@@ -114,6 +120,6 @@ impl Mesher {
             }
         }
 
-        Ok(Mesh { vertices, uvs, normals, indices })
+        Ok(Mesh { vertices, uvs, normals, indices, face_triangles })
     }
 }

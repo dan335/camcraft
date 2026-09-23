@@ -15,9 +15,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use camcraft_core::job::{
-    Job, LengthUnit, ModelDef, Operation, Setup, StockDef, StockSpec, StrategySpec, ToolSpec,
+    Job, LengthUnit, ModelDef, Operation, Origin, Setup, StockDef, StockSpec, StrategySpec,
+    ToolSpec,
 };
-use camcraft_core::setup::{Meshes, Prepared, prepare};
+use camcraft_core::setup::{Bodies, PrepareError, Prepared, prepare};
+use camcraft_geom::bvh::MeshBvh;
 use camcraft_session::fs::{relative_path, resolve};
 use camcraft_session::{Model, Ran, SessionError, write_job};
 use glam::DVec3;
@@ -85,8 +87,8 @@ impl ModelKey {
 pub enum ModelSlot {
     /// On its way.
     Loading(ModelKey),
-    /// Loaded.
-    Ready(ModelKey, Arc<Model>),
+    /// Loaded, with the index picking casts rays against.
+    Ready(ModelKey, Arc<Model>, Arc<MeshBvh>),
     /// Not loaded, and why; `missing` when the file is not where the job says.
     Failed {
         /// What was asked for.
@@ -101,14 +103,22 @@ pub enum ModelSlot {
 impl ModelSlot {
     fn key(&self) -> &ModelKey {
         match self {
-            ModelSlot::Loading(k) | ModelSlot::Ready(k, _) | ModelSlot::Failed { key: k, .. } => k,
+            ModelSlot::Loading(k) | ModelSlot::Ready(k, ..) | ModelSlot::Failed { key: k, .. } => k,
         }
     }
 
     /// The model, if loaded.
     pub fn model(&self) -> Option<&Arc<Model>> {
         match self {
-            ModelSlot::Ready(_, m) => Some(m),
+            ModelSlot::Ready(_, m, _) => Some(m),
+            _ => None,
+        }
+    }
+
+    /// The model and its picking index, if loaded.
+    pub fn loaded(&self) -> Option<(&Arc<Model>, &Arc<MeshBvh>)> {
+        match self {
+            ModelSlot::Ready(_, m, bvh) => Some((m, bvh)),
             _ => None,
         }
     }
@@ -333,6 +343,7 @@ impl Document {
         });
         let mut setup = Setup::new("Setup 1");
         setup.stocks = vec!["Stock 1".into()];
+        setup.origin = Origin::stock_corner();
         job.setups.push(setup);
         let mut doc = Self::opened(id, None, job);
         doc.selection = Selection::Setup("Setup 1".into());
@@ -419,20 +430,25 @@ impl Document {
 
     /// A model has loaded, or failed to. A reply for something since asked for
     /// differently is dropped.
-    pub fn loaded(&mut self, name: &str, key: &ModelKey, result: Result<Arc<Model>, SessionError>) {
+    pub fn loaded(
+        &mut self,
+        name: &str,
+        key: &ModelKey,
+        result: Result<(Arc<Model>, Arc<MeshBvh>), SessionError>,
+    ) {
         match self.models.get(name) {
             Some(ModelSlot::Loading(k)) if k == key => {}
             _ => return,
         }
         let slot = match result {
-            Ok(model) => {
+            Ok((model, bvh)) => {
                 for n in &model.notes {
                     self.log.push((Level::Info, format!("{name}: {n}")));
                 }
                 for w in &model.warnings {
                     self.log.push((Level::Warn, format!("{name}: {w}")));
                 }
-                ModelSlot::Ready(key.clone(), model)
+                ModelSlot::Ready(key.clone(), model, bvh)
             }
             Err(e) => {
                 let missing = matches!(e, SessionError::ModelMissing { .. });
@@ -524,6 +540,7 @@ impl Document {
                 rename_in(models, from, &to);
             }
         }
+        self.job.rename_model_refs(from, &to);
         if let Some(slot) = self.models.remove(from) {
             self.models.insert(to.clone(), slot);
         }
@@ -624,6 +641,7 @@ impl Document {
     pub fn add_setup(&mut self) -> String {
         let name = free("Setup", self.job.setups.iter().map(|s| s.name.as_str()));
         let mut setup = Setup::new(name.clone());
+        setup.origin = Origin::stock_corner();
         setup.models = self.job.models.iter().map(|m| m.name.clone()).collect();
         setup.stocks = self
             .job
@@ -1036,14 +1054,12 @@ impl Document {
     }
 
     /// Lay out setup `name` for drawing, if anything it depends on has changed.
-    pub fn refresh_layout(&mut self, name: &str) {
-        let Some(index) = self.setup_index(name) else {
-            return;
-        };
-        let Some(inputs) = SetupInputs::of(&self.job, &self.models, index).map(|i| i.layout())
-        else {
-            return;
-        };
+    ///
+    /// Returns how far everything drawn moved when only the work zero did: the
+    /// setup is drawn measured from it, so a view kept on the part moves with it.
+    pub fn refresh_layout(&mut self, name: &str) -> Option<DVec3> {
+        let index = self.setup_index(name)?;
+        let inputs = SetupInputs::of(&self.job, &self.models, index).map(|i| i.layout())?;
         // A model that finishes loading changes the layout without changing the job.
         let ready: Vec<String> = self
             .models
@@ -1058,22 +1074,59 @@ impl Document {
             .and_then(|s| s.layout.as_ref())
             .is_some_and(|l| l.inputs == inputs)
         {
-            return;
+            return None;
         }
-        let meshes: Meshes<'_> = self
+        let meshes: Bodies<'_> = self
             .models
             .iter()
-            .filter_map(|(n, s)| Some((n.as_str(), &s.model()?.mesh)))
+            .filter_map(|(n, s)| Some((n.as_str(), &s.model()?.body)))
             .collect();
-        let prepared = prepare(&self.job, index, &meshes).map_err(|e| e.to_string());
-        let outline = prepared.as_ref().map(outline).unwrap_or_default();
+        let prepared = match prepare(&self.job, index, &meshes) {
+            // A work zero picked on something no longer there: draw the part from
+            // the model's own zero instead, without the axes, which would be a lie,
+            // so it can be seen to pick again. The panel says what is wrong, and a
+            // run refuses the setup until it is fixed.
+            Err(PrepareError::Feature(_)) => {
+                let mut job = self.job.clone();
+                if let Some(s) = job.setups.get_mut(index) {
+                    s.origin = Origin::ModelOrigin {
+                        offset: s.origin.offset(),
+                    };
+                }
+                prepare(&job, index, &meshes).map(|p| (p, false))
+            }
+            other => other.map(|p| (p, true)),
+        };
+        let outline = prepared
+            .as_ref()
+            .map(|(p, found)| {
+                let mut lines = outline(p);
+                if !found {
+                    lines.retain(|l| l.kind == OutlineKind::Stock);
+                }
+                lines
+            })
+            .unwrap_or_default();
+        let prepared = prepared.map(|(p, _)| p).map_err(|e| e.to_string());
         let state = self.setups.entry(name.to_string()).or_default();
+        let before = state
+            .layout
+            .as_ref()
+            .and_then(|l| l.prepared.as_ref().ok())
+            .map(|p| p.frame);
+        let after = prepared.as_ref().ok().map(|p| p.frame);
         state.layout = Some(Layout {
             inputs,
             prepared,
             outline,
             key: next_key(),
         });
+        match (before, after) {
+            (Some(b), Some(a)) if b.orientation == a.orientation && b.origin != a.origin => {
+                Some(b.origin - a.origin)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -1183,6 +1236,82 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/rail-jig.camcraft");
         let job = camcraft_session::read_job(&path).unwrap();
         Document::opened(1, Some(path), job)
+    }
+
+    /// A new job whose setup machines a plate with a hole, loaded as if from disk.
+    fn with_plate() -> (Document, String) {
+        let mut doc = Document::untitled(1);
+        let def = ModelDef {
+            name: "p".into(),
+            path: "p.stl".into(),
+            units: Some(LengthUnit::Mm),
+        };
+        let body = camcraft_geom::topology::Body::derived(
+            camcraft_geom::synthetic::plate_with_hole(20.0, 5.0, 4.0, 32),
+        );
+        let bvh = Arc::new(MeshBvh::new(body.mesh()));
+        let model = Arc::new(Model {
+            bounds: body.mesh().bounds().unwrap(),
+            body,
+            path: "p.stl".into(),
+            units: "mm".into(),
+            notes: Vec::new(),
+            warnings: Vec::new(),
+        });
+        let key = ModelKey::of(Path::new("."), &def, doc.job.tolerance);
+        doc.models
+            .insert("p".into(), ModelSlot::Ready(key, model, bvh));
+        doc.job.models.push(def);
+        doc.job.setups[0].models = vec!["p".into()];
+        let setup = doc.job.setups[0].name.clone();
+        (doc, setup)
+    }
+
+    /// Moving the work zero moves everything drawn, by as much the other way:
+    /// the layout says so, so the view can stay on the part.
+    #[test]
+    fn a_moved_work_zero_says_how_far_the_drawing_moved() {
+        let (mut doc, setup) = with_plate();
+        doc.job.setups[0].origin = Origin::ModelOrigin { offset: [0.0; 3] };
+        assert_eq!(
+            doc.refresh_layout(&setup),
+            None,
+            "the first layout moves nothing"
+        );
+        doc.job.setups[0].origin = Origin::ModelOrigin {
+            offset: [1.0, 2.0, 5.0],
+        };
+        assert_eq!(
+            doc.refresh_layout(&setup),
+            Some(DVec3::new(-1.0, -2.0, -5.0))
+        );
+        assert_eq!(doc.refresh_layout(&setup), None, "nothing changed since");
+        // Turned over, the picture changes altogether: nothing to keep.
+        doc.job.setups[0].orientation = doc.job.setups[0].orientation.flipped();
+        assert_eq!(doc.refresh_layout(&setup), None);
+    }
+
+    /// A work zero picked on something no longer there still draws the part, from
+    /// the model's own zero and without axes, so it can be picked again.
+    #[test]
+    fn a_lost_work_zero_still_shows_the_part() {
+        use camcraft_core::job::{PointRef, Snap};
+        let (mut doc, setup) = with_plate();
+        doc.job.setups[0].origin = Origin::Point {
+            point: PointRef {
+                model: "p".into(),
+                snap: Snap::Vertex,
+                index: 0,
+                at: [99.0, 99.0, 99.0],
+            },
+            offset: [0.0; 3],
+        };
+        doc.refresh_layout(&setup);
+        let layout = doc.setups[&setup].layout.as_ref().unwrap();
+        let p = layout.prepared.as_ref().unwrap();
+        assert!(p.frame.origin.length() < 1e-12);
+        assert!(!layout.outline.is_empty());
+        assert!(layout.outline.iter().all(|l| l.kind == OutlineKind::Stock));
     }
 
     #[test]

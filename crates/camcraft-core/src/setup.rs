@@ -2,18 +2,24 @@
 //! its stock laid out, and everything measured from its work zero.
 //!
 //! Past this point everything is in the setup frame. Strategies, the linker, the
-//! simulator and the post never see a rotation or a model coordinate.
+//! simulator and the post never see a rotation or a model coordinate. The one way
+//! back is [`Prepared::pieces`]: which triangles of the merged part came from which
+//! model, so a triangle picked on the part is a triangle of a model, and so of one
+//! of its faces.
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 use camcraft_geom::mesh::{Aabb, MeshError, TriMesh};
+use camcraft_geom::topology::Body;
 use glam::DVec3;
 
+use crate::features::{self, FeatureError};
 use crate::frame::{BadOrientation, Frame};
 use crate::job::{BoxOf, Job, JobError, Origin, Setup, StockSpec};
 
-/// A setup's models, by name, in model coordinates.
-pub type Meshes<'a> = BTreeMap<&'a str, &'a TriMesh>;
+/// A setup's models, by name, in model coordinates, with their topology.
+pub type Bodies<'a> = BTreeMap<&'a str, &'a Body>;
 
 /// A setup that could not be prepared.
 #[derive(Debug, thiserror::Error)]
@@ -33,6 +39,21 @@ pub enum PrepareError {
     /// The models could not be merged.
     #[error(transparent)]
     Mesh(#[from] MeshError),
+    /// The work zero was picked on something that is no longer there.
+    #[error("work zero: {0}")]
+    Feature(#[from] FeatureError),
+}
+
+/// Where one model's triangles and vertices are in the merged part.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Piece {
+    /// The model, by name.
+    pub model: String,
+    /// Its triangles in the part: triangle `i` of the model is triangle
+    /// `triangles.start + i` of the part.
+    pub triangles: Range<u32>,
+    /// Its vertices in the part, likewise.
+    pub vertices: Range<u32>,
 }
 
 /// A setup in its own frame.
@@ -40,6 +61,8 @@ pub enum PrepareError {
 pub struct Prepared {
     /// Every model the setup machines, as one mesh.
     pub part: TriMesh,
+    /// Which of its triangles came from which model, in the setup's order.
+    pub pieces: Vec<Piece>,
     /// Its bounds.
     pub model_bounds: Aabb,
     /// Each stock block.
@@ -49,6 +72,21 @@ pub struct Prepared {
 }
 
 impl Prepared {
+    /// The model triangle `part_triangle` of the part came from, and its number
+    /// in that model.
+    pub fn piece_of(&self, part_triangle: u32) -> Option<(&Piece, u32)> {
+        let p = self
+            .pieces
+            .iter()
+            .find(|p| p.triangles.contains(&part_triangle))?;
+        Some((p, part_triangle - p.triangles.start))
+    }
+
+    /// Where model `model`'s triangles and vertices are in the part.
+    pub fn piece(&self, model: &str) -> Option<&Piece> {
+        self.pieces.iter().find(|p| p.model == model)
+    }
+
     /// The box around every stock block.
     pub fn stock_bounds(&self) -> Aabb {
         let mut it = self.stocks.iter();
@@ -58,13 +96,14 @@ impl Prepared {
 }
 
 /// The box around the named models, in model coordinates.
-fn bounds_of(names: &[String], meshes: &Meshes<'_>) -> Result<Aabb, PrepareError> {
+fn bounds_of(names: &[String], bodies: &Bodies<'_>) -> Result<Aabb, PrepareError> {
     let mut out: Option<Aabb> = None;
     for n in names {
-        let mesh = meshes
+        let body = bodies
             .get(n.as_str())
             .ok_or_else(|| PrepareError::NotLoaded(n.clone()))?;
-        let b = mesh
+        let b = body
+            .mesh()
             .bounds()
             .ok_or_else(|| PrepareError::EmptyModel(n.clone()))?;
         out = Some(out.map_or(b, |o| o.union(&b)));
@@ -73,7 +112,7 @@ fn bounds_of(names: &[String], meshes: &Meshes<'_>) -> Result<Aabb, PrepareError
 }
 
 /// Where setup `index`'s part and stock are, in its own frame.
-pub fn prepare(job: &Job, index: usize, meshes: &Meshes<'_>) -> Result<Prepared, PrepareError> {
+pub fn prepare(job: &Job, index: usize, bodies: &Bodies<'_>) -> Result<Prepared, PrepareError> {
     let setup: &Setup = job.setups.get(index).ok_or(JobError::NoSetups)?;
     setup.orientation.check()?;
     if setup.models.is_empty() {
@@ -85,13 +124,13 @@ pub fn prepare(job: &Job, index: usize, meshes: &Meshes<'_>) -> Result<Prepared,
         .models
         .iter()
         .map(|n| {
-            meshes
+            bodies
                 .get(n.as_str())
-                .copied()
+                .map(|b| b.mesh())
                 .ok_or_else(|| PrepareError::NotLoaded(n.clone()))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let model_box = bounds_of(&setup.models, meshes)?;
+    let model_box = bounds_of(&setup.models, bodies)?;
 
     // Each block, in model coordinates.
     let mut blocks = Vec::with_capacity(setup.stocks.len());
@@ -109,7 +148,7 @@ pub fn prepare(job: &Job, index: usize, meshes: &Meshes<'_>) -> Result<Prepared,
                 let around = if models.is_empty() {
                     model_box
                 } else {
-                    bounds_of(models, meshes)?
+                    bounds_of(models, bodies)?
                 };
                 Aabb {
                     min: DVec3::new(
@@ -150,9 +189,17 @@ pub fn prepare(job: &Job, index: usize, meshes: &Meshes<'_>) -> Result<Prepared,
     let turned_blocks: Vec<Aabb> = blocks.iter().map(turn).collect();
     let turned_model = turn(&model_box);
 
-    let origin = match setup.origin {
-        Origin::ModelOrigin { offset } => DVec3::from_array(offset),
-        Origin::BoxPoint {
+    let origin = match &setup.origin {
+        Origin::ModelOrigin { offset } => DVec3::from_array(*offset),
+        Origin::Point { point, offset } => {
+            let body = bodies
+                .get(point.model.as_str())
+                .ok_or_else(|| FeatureError::NotLoaded(point.model.clone()))?;
+            let tol = features::tolerance(job.tolerance, body);
+            let (p, _) = features::find_point(body, point, tol)?;
+            o.apply(p) + DVec3::from_array(*offset)
+        }
+        &Origin::BoxPoint {
             of,
             x,
             y,
@@ -191,12 +238,30 @@ pub fn prepare(job: &Job, index: usize, meshes: &Meshes<'_>) -> Result<Prepared,
         merged = TriMesh::merged(&parts)?;
         &merged
     };
+    // Where each model landed in the merge, which appends them in this order.
+    let mut pieces = Vec::with_capacity(parts.len());
+    let (mut t, mut v) = (0u32, 0u32);
+    for (name, mesh) in setup.models.iter().zip(&parts) {
+        let too_large = || MeshError::TooLarge {
+            vertices: mesh.vertices().len(),
+        };
+        let nt = u32::try_from(mesh.len()).map_err(|_| too_large())?;
+        let nv = u32::try_from(mesh.vertices().len()).map_err(|_| too_large())?;
+        pieces.push(Piece {
+            model: name.clone(),
+            triangles: t..t.saturating_add(nt),
+            vertices: v..v.saturating_add(nv),
+        });
+        t = t.saturating_add(nt);
+        v = v.saturating_add(nv);
+    }
     let part = part_in_model.mapped(|p| frame.to_setup(p))?;
     let model_bounds = part
         .bounds()
         .ok_or_else(|| PrepareError::EmptyModel(setup.name.clone()))?;
     Ok(Prepared {
         part,
+        pieces,
         model_bounds,
         stocks: turned_blocks.iter().map(shift).collect(),
         frame,
@@ -247,7 +312,8 @@ mod tests {
     #[test]
     fn the_default_setup_is_the_model_as_drawn() {
         let mesh = brick();
-        let meshes: Meshes<'_> = [("m", &mesh)].into_iter().collect();
+        let body = Body::derived(mesh.clone());
+        let meshes: Bodies<'_> = [("m", &body)].into_iter().collect();
         let j = job(StockSpec::AroundModels {
             models: vec![],
             margin: [2.0, 2.0, 3.0],
@@ -264,7 +330,8 @@ mod tests {
     #[test]
     fn a_flipped_setup_sees_the_underside() {
         let mesh = brick();
-        let meshes: Meshes<'_> = [("m", &mesh)].into_iter().collect();
+        let body = Body::derived(mesh.clone());
+        let meshes: Bodies<'_> = [("m", &body)].into_iter().collect();
         let mut j = job(StockSpec::FixedBox {
             corner: [-1.0, -1.0, -1.0],
             size: [12.0, 22.0, 7.0],
@@ -294,7 +361,8 @@ mod tests {
     #[test]
     fn two_setups_share_one_block() {
         let mesh = brick();
-        let meshes: Meshes<'_> = [("m", &mesh)].into_iter().collect();
+        let body = Body::derived(mesh.clone());
+        let meshes: Bodies<'_> = [("m", &body)].into_iter().collect();
         let mut j = job(StockSpec::AroundModels {
             models: vec![],
             margin: [1.0, 1.0, 1.0],
@@ -319,11 +387,95 @@ mod tests {
 
     #[test]
     fn a_missing_mesh_is_named() {
-        let meshes: Meshes<'_> = BTreeMap::new();
+        let meshes: Bodies<'_> = BTreeMap::new();
         let j = job(StockSpec::default());
         assert!(matches!(
             prepare(&j, 0, &meshes),
             Err(PrepareError::NotLoaded(n)) if n == "m"
         ));
+    }
+
+    /// A work zero on a hole's centre puts the hole's centre at the setup's
+    /// origin, however the part sits.
+    #[test]
+    fn a_work_zero_on_a_picked_point() {
+        use crate::job::{PointRef, Snap};
+        use camcraft_geom::synthetic;
+        use camcraft_geom::topology::EdgeKind;
+        let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 32));
+        let rim = body
+            .topology()
+            .edges()
+            .iter()
+            .position(|e| matches!(e.kind, EdgeKind::Circle(c) if c.center.z > 2.5))
+            .unwrap();
+        let bodies: Bodies<'_> = [("m", &body)].into_iter().collect();
+        let mut j = job(StockSpec::default());
+        j.setups[0].origin = Origin::Point {
+            point: PointRef {
+                model: "m".into(),
+                snap: Snap::CircleCenter,
+                index: u32::try_from(rim).unwrap(),
+                at: [0.0, 0.0, 5.0],
+            },
+            offset: [0.0; 3],
+        };
+        for flipped in [false, true] {
+            if flipped {
+                j.setups[0].orientation = Orientation::default().flipped();
+            }
+            let p = prepare(&j, 0, &bodies).unwrap();
+            let centre = p.frame.to_setup(dvec3(0.0, 0.0, 5.0));
+            assert!(centre.length() < 1e-9, "flipped {flipped}: {centre}");
+        }
+        // Picked on something that is not there: the setup is not laid out.
+        if let Origin::Point { point, .. } = &mut j.setups[0].origin {
+            point.at = [7.0, 7.0, 7.0];
+        }
+        assert!(matches!(
+            prepare(&j, 0, &bodies),
+            Err(PrepareError::Feature(_))
+        ));
+    }
+
+    /// Two models merged: each triangle of the part is traced to its model.
+    #[test]
+    fn pieces_trace_part_triangles_to_their_models() {
+        let a = Body::derived(brick());
+        let two = TriMesh::new(
+            vec![
+                dvec3(0.0, 0.0, 0.0),
+                dvec3(1.0, 0.0, 0.0),
+                dvec3(0.0, 1.0, 0.0),
+                dvec3(1.0, 1.0, 0.0),
+            ],
+            vec![[0, 1, 2], [1, 3, 2]],
+        )
+        .unwrap();
+        let b = Body::derived(two);
+        let bodies: Bodies<'_> = [("m", &a), ("n", &b)].into_iter().collect();
+        let mut j = job(StockSpec::default());
+        j.models.push(ModelDef {
+            name: "n".into(),
+            path: "n.stl".into(),
+            units: None,
+        });
+        j.setups[0].models = vec!["n".into(), "m".into()];
+        let p = prepare(&j, 0, &bodies).unwrap();
+        assert_eq!(p.part.len(), 3);
+        assert_eq!(
+            p.piece_of(0).map(|(p, t)| (p.model.as_str(), t)),
+            Some(("n", 0))
+        );
+        assert_eq!(
+            p.piece_of(1).map(|(p, t)| (p.model.as_str(), t)),
+            Some(("n", 1))
+        );
+        assert_eq!(
+            p.piece_of(2).map(|(p, t)| (p.model.as_str(), t)),
+            Some(("m", 0))
+        );
+        assert_eq!(p.piece_of(3), None);
+        assert_eq!(p.piece("m").unwrap().vertices, 4..7);
     }
 }

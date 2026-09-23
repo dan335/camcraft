@@ -12,6 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
+use camcraft_geom::topology::{Body, EdgeKind, FaceKind, FaceSource};
 use camcraft_import::step::{FileCheck, load_step};
 
 /// Tessellation tolerance, in millimetres. The spike's figure.
@@ -24,8 +25,9 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn check(name: &str, unit: &str, faces: u64, size: [f64; 3]) {
-    let (mesh, report) =
+    let (body, report) =
         load_step(fixture(name), TOLERANCE).unwrap_or_else(|e| panic!("{name}: {e}"));
+    let mesh = body.mesh();
     assert_eq!(report.unit.name, unit, "{name}: unit");
     assert_eq!(report.faces, faces, "{name}: faces");
     assert_eq!(
@@ -39,6 +41,29 @@ fn check(name: &str, unit: &str, faces: u64, size: [f64; 3]) {
         assert!(
             (g - want).abs() < 0.1,
             "{name}: {axis} extent {g:.2} mm, expected {want} mm"
+        );
+    }
+    check_faces(name, &body, faces);
+}
+
+/// The faces are the file's: one per B-rep face, every one with triangles, every
+/// triangle on one. And the part is a closed solid, so every edge runs between
+/// exactly two faces. That last holds only if the kernel gives the two faces either
+/// side of a B-rep edge the very same points along it, which the weld relies on.
+fn check_faces(name: &str, body: &Body, faces: u64) {
+    let t = body.topology();
+    assert_eq!(t.source(), FaceSource::File, "{name}");
+    assert_eq!(t.faces().len() as u64, faces, "{name}: topology faces");
+    assert_eq!(t.triangle_faces().len(), body.mesh().len(), "{name}");
+    for (i, f) in t.faces().iter().enumerate() {
+        assert!(!f.triangles.is_empty(), "{name}: face {i} has no triangles");
+    }
+    for e in t.edges() {
+        assert_eq!(
+            e.faces.len(),
+            2,
+            "{name}: an edge runs along {:?}, not between two faces; the solid is open there",
+            e.faces
         );
     }
 }
@@ -112,7 +137,9 @@ fn concurrent_reads_are_safe() {
                 } else {
                     "lego_4x2_01.step"
                 };
-                scope.spawn(move || load_step(fixture(name), 0.05).map(|(m, _)| (name, m.len())))
+                scope.spawn(move || {
+                    load_step(fixture(name), 0.05).map(|(b, _)| (name, b.mesh().len()))
+                })
             })
             .collect();
         handles.into_iter().map(|h| h.join().unwrap()).collect()
@@ -125,5 +152,67 @@ fn concurrent_reads_are_safe() {
             first, triangles,
             "{name} read differently on another thread"
         );
+    }
+}
+
+/// The hinge jig is all planes, and says so.
+#[test]
+fn a_planar_part_has_only_planes() {
+    let (body, _) = load_step(fixture("hinge_jig.step"), TOLERANCE).unwrap();
+    let t = body.topology();
+    for (i, f) in t.faces().iter().enumerate() {
+        assert!(
+            matches!(f.kind, FaceKind::Plane { .. }),
+            "hinge_jig face {i} is not a plane"
+        );
+    }
+}
+
+/// The rail guide's holes have round rims, and a rim's circle is what a work zero
+/// snaps to.
+#[test]
+fn round_edges_are_circles() {
+    let (body, _) = load_step(fixture("rail_guide.step"), TOLERANCE).unwrap();
+    let t = body.topology();
+    assert_eq!(t.faces().len(), 134);
+    let full = t
+        .edges()
+        .iter()
+        .filter(|e| matches!(e.kind, EdgeKind::Circle(c) if c.full))
+        .count();
+    assert!(full > 0, "no full circles among {} edges", t.edges().len());
+}
+
+/// A face keeps its number, and its plane, when the part is tessellated again at
+/// another tolerance: that is what lets a picked face be found by its number.
+#[test]
+fn faces_keep_their_numbers_across_tolerances() {
+    for name in ["hinge_jig.step", "rail_guide.step"] {
+        let (fine, _) = load_step(fixture(name), 0.01).unwrap();
+        let (coarse, _) = load_step(fixture(name), 0.05).unwrap();
+        let (a, b) = (fine.topology().faces(), coarse.topology().faces());
+        assert_eq!(a.len(), b.len(), "{name}");
+        for (i, (x, y)) in a.iter().zip(b).enumerate() {
+            match (x.kind, y.kind) {
+                (
+                    FaceKind::Plane { normal, offset },
+                    FaceKind::Plane {
+                        normal: n2,
+                        offset: o2,
+                    },
+                ) => {
+                    assert!((normal - n2).length() < 1e-6, "{name}: face {i} turned");
+                    assert!((offset - o2).abs() < 1e-6, "{name}: face {i} moved");
+                }
+                (FaceKind::Curved, FaceKind::Curved) => {
+                    let (p, q) = (x.bounds.unwrap(), y.bounds.unwrap());
+                    assert!(
+                        (p.center() - q.center()).length() < 0.1,
+                        "{name}: curved face {i} moved"
+                    );
+                }
+                other => panic!("{name}: face {i} changed kind: {other:?}"),
+            }
+        }
     }
 }

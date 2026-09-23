@@ -8,7 +8,7 @@
 //! so the zoom and pan limits scale with the part rather than being fixed numbers.
 
 use glam::camera::rh::{proj::directx, view::look_at_mat4};
-use glam::{Mat4, Vec3};
+use glam::{DVec3, Mat4, Vec2, Vec3};
 
 const ROTATION_SPEED: f32 = 0.005;
 const ZOOM_SPEED: f32 = 0.0015;
@@ -69,6 +69,15 @@ impl Camera {
             (radius / (self.fov_y * 0.5).sin()).clamp(self.radius * 0.05, self.radius * 20.0);
     }
 
+    /// Move the camera, and what it frames, by `by`: for when everything drawn has
+    /// moved by that much, so the view stays on the same part of it.
+    pub fn shift(&mut self, by: Vec3) {
+        if by.is_finite() {
+            self.target += by;
+            self.centre += by;
+        }
+    }
+
     /// Back to the framing view.
     pub fn reset(&mut self) {
         *self = Self::framing(self.centre, self.radius);
@@ -98,6 +107,22 @@ impl Camera {
     /// The whole transform, world to clip.
     pub fn view_projection(&self, aspect: f32) -> Mat4 {
         self.projection(aspect) * self.view()
+    }
+
+    /// The ray from the eye through `ndc`, a point on the screen with x right and y
+    /// up, each -1 to 1 across the view, in world coordinates: where it starts,
+    /// and a unit direction.
+    ///
+    /// Built from the same basis [`view`](Self::view) uses, in `f64` from there on,
+    /// so what it hits is what is drawn under that point.
+    pub fn ray(&self, aspect: f32, ndc: Vec2) -> (DVec3, DVec3) {
+        let eye = self.eye();
+        let forward = (self.target - eye).normalize_or_zero();
+        let right = forward.cross(Vec3::Z).normalize_or_zero();
+        let up = right.cross(forward);
+        let tan = (self.fov_y * 0.5).tan();
+        let dir = forward + right * (ndc.x * tan * aspect.max(1e-3)) + up * (ndc.y * tan);
+        (eye.as_dvec3(), dir.as_dvec3().normalize_or_zero())
     }
 
     /// Orbit by a drag, in points.
@@ -221,6 +246,31 @@ mod tests {
         let clip = c.view_projection(1.5) * p.extend(1.0);
         let ndc = clip.truncate() / clip.w;
         assert!(ndc.x.abs() < 1e-4 && ndc.y.abs() < 1e-4, "{ndc:?}");
+    }
+
+    /// A point drawn at some place on the screen lies on the ray through that
+    /// place: picking hits what is drawn.
+    #[test]
+    fn the_ray_through_a_point_on_screen_passes_through_what_is_drawn_there() {
+        let mut c = cam();
+        let aspect = 1.6;
+        for step in 0..12 {
+            let m = c.view_projection(aspect);
+            for p in [
+                Vec3::new(10.0, 20.0, 5.0),
+                Vec3::new(30.0, 0.0, -10.0),
+                Vec3::new(-12.0, 41.0, 22.0),
+            ] {
+                let clip = m * p.extend(1.0);
+                let ndc = clip.truncate() / clip.w;
+                let (o, d) = c.ray(aspect, Vec2::new(ndc.x, ndc.y));
+                let to = p.as_dvec3() - o;
+                let off = (to - d * to.dot(d)).length();
+                assert!(off < 1e-3 * to.length(), "step {step}: {off} off at {p}");
+                assert!((d.length() - 1.0).abs() < 1e-9);
+            }
+            c.orbit(53.0, 17.0);
+        }
     }
 
     #[test]

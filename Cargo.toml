@@ -84,8 +84,10 @@ opt-level = 2
 # an alias of `opencascade::handle<X>`, which holds everywhere but Visual Studio,
 # where it is a derived class. vendor/ holds the crates.io 0.3.0 sources with upstream
 # PR #234 applied (https://github.com/bschwind/opencascade-rs/pull/234, at 00b4505),
-# which changes nothing on GCC or Clang. Delete vendor/ and this block once a
-# release includes it.
+# which changes nothing on GCC or Clang. vendor/opencascade also records how many
+# triangles each B-rep face gave (`Mesh::face_triangles`), which is how a triangle
+# is traced back to the face a person picks; upstream has no equivalent. Delete
+# vendor/ and this block only once a release includes both.
 [patch.crates-io]
 opencascade     = { path = "vendor/opencascade" }
 opencascade-sys = { path = "vendor/opencascade-sys" }

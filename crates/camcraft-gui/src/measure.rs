@@ -116,6 +116,14 @@ impl Measure {
         }
     }
 
+    /// An area, from square millimetres.
+    pub fn area(self, mm2: f64) -> String {
+        match self {
+            Self::Metric => format!("{mm2:.1} mm²"),
+            Self::Imperial => format!("{:.3} in²", mm2 / MM_PER_INCH.powi(2)),
+        }
+    }
+
     /// A volume of material, from cubic millimetres.
     pub fn volume(self, mm3: f64) -> String {
         match self {

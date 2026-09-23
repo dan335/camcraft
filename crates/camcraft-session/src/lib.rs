@@ -31,8 +31,9 @@ use camcraft_core::job::{
     ToolSpec,
 };
 use camcraft_core::run::{OperationResult, RunError, SetupResult, run_prepared};
-use camcraft_core::setup::{Meshes, PrepareError, prepare};
+use camcraft_core::setup::{Bodies, PrepareError, prepare};
 use camcraft_geom::mesh::{Aabb, TriMesh};
+use camcraft_geom::topology::{Body, FaceSource};
 use camcraft_import::step::{FileCheck, StepError, load_step};
 use camcraft_import::stl::{ImportError, load_stl};
 use camcraft_post::op::{LowerError, ProgramSpec, Spin, Units as PostUnits, lower};
@@ -147,8 +148,8 @@ pub enum SessionError {
 /// A model, loaded and measured.
 #[derive(Debug, Clone)]
 pub struct Model {
-    /// The triangles, in millimetres.
-    pub mesh: TriMesh,
+    /// The triangles, in millimetres, and their faces, edges and vertices.
+    pub body: Body,
     /// Their bounds.
     pub bounds: Aabb,
     /// Where it came from.
@@ -159,6 +160,13 @@ pub struct Model {
     pub notes: Vec<String>,
     /// Anything about the import worth a person's attention.
     pub warnings: Vec<String>,
+}
+
+impl Model {
+    /// The triangles, in millimetres.
+    pub fn mesh(&self) -> &TriMesh {
+        self.body.mesh()
+    }
 }
 
 /// A label for units, as a person would write them.
@@ -194,7 +202,7 @@ pub fn load_model(
         .unwrap_or_default();
     let mut notes = Vec::new();
     let mut warnings = Vec::new();
-    let (mesh, label) = match ext.as_str() {
+    let (body, label) = match ext.as_str() {
         "stl" => {
             let units = units.ok_or(SessionError::StlNeedsUnits)?;
             let (mesh, import) = load_stl(path, units)?;
@@ -208,11 +216,12 @@ pub fn load_model(
                 "loaded {} triangles, {} vertices after welding",
                 import.triangles, import.vertices
             ));
-            (mesh, units_label(units).to_string())
+            // An STL file has no faces; they are found from the triangles.
+            (Body::derived(mesh), units_label(units).to_string())
         }
         "step" | "stp" => {
             let started = std::time::Instant::now();
-            let (mesh, report) = load_step(path, tessellation_tolerance(tolerance))?;
+            let (body, report) = load_step(path, tessellation_tolerance(tolerance))?;
             if let Some(said) = units
                 && (said.to_mm() - report.unit.mm).abs() > 1e-9 * said.to_mm()
             {
@@ -247,19 +256,30 @@ pub fn load_model(
                 "tessellated in {:.1} s",
                 started.elapsed().as_secs_f64()
             ));
-            (mesh, format!("{} (from file)", report.unit.name))
+            (body, format!("{} (from file)", report.unit.name))
         }
         _ => return Err(SessionError::UnknownFormat(path.display().to_string())),
     };
+    let t = body.topology();
+    notes.push(format!(
+        "topology: {} face(s) {}, {} edge(s), {} vertices",
+        t.faces().len(),
+        match t.source() {
+            FaceSource::File => "from the file",
+            FaceSource::Derived => "found from the triangles",
+        },
+        t.edges().len(),
+        t.vertices().len()
+    ));
 
-    let bounds = mesh.bounds().ok_or(SessionError::EmptyModel)?;
+    let bounds = body.mesh().bounds().ok_or(SessionError::EmptyModel)?;
     let extent = bounds.extent();
     notes.push(format!(
         "model is {:.1} x {:.1} x {:.1} mm",
         extent.x, extent.y, extent.z
     ));
     Ok(Model {
-        mesh,
+        body,
         bounds,
         path: path.display().to_string(),
         units: label,
@@ -292,15 +312,25 @@ pub fn parse_job(text: &str, name: &str) -> Result<Job, SessionError> {
     };
     match toml::from_str::<Probe>(text).map_err(parse)?.version {
         None => return Err(SessionError::OldJob(name.to_string())),
-        Some(v) if v != JOB_VERSION => return Err(JobError::UnsupportedVersion(v).into()),
+        Some(v) if !(1..=JOB_VERSION).contains(&v) => {
+            return Err(JobError::UnsupportedVersion(v).into());
+        }
         Some(_) => {}
     }
-    toml::from_str(text).map_err(parse)
+    // Read into this build's format. What a file is written as is decided when it
+    // is written (`job_text`), from what the job holds, not from what it was read as.
+    let mut job: Job = toml::from_str(text).map_err(parse)?;
+    job.version = JOB_VERSION;
+    Ok(job)
 }
 
-/// A job as the text of its file.
+/// A job as the text of its file, at the oldest version that holds it
+/// ([`Job::required_version`]): a job an older build can read in full is written
+/// so it can, and one it would misread is written so it refuses it.
 pub fn job_text(job: &Job) -> Result<String, SessionError> {
-    let body = toml::to_string(job)?;
+    let mut job = job.clone();
+    job.version = job.required_version();
+    let body = toml::to_string(&job)?;
     Ok(format!("# camcraft job. Written by camcraft.\n\n{body}"))
 }
 
@@ -373,9 +403,9 @@ pub fn run_setup(job: &Job, index: usize, models: &Models<'_>) -> Result<Ran, Se
         setup.operations.len(),
         job.tolerance
     )];
-    let meshes: Meshes<'_> = models.iter().map(|(n, m)| (*n, &m.mesh)).collect();
-    let prepared = prepare(job, index, &meshes)?;
-    let result = run_prepared(job, index, &prepared)?;
+    let bodies: Bodies<'_> = models.iter().map(|(n, m)| (*n, &m.body)).collect();
+    let prepared = prepare(job, index, &bodies)?;
+    let result = run_prepared(job, index, &prepared, &bodies)?;
     notes.extend(summary(&result));
 
     let mut model_warnings = Vec::new();
@@ -722,6 +752,101 @@ mod tests {
         run_setup(&job, 0, &models).unwrap()
     }
 
+    /// A real part, finished only on its highest flat face, with its work zero on
+    /// a corner of that face: it runs and verifies clean, every cut keeps the
+    /// tool's centre over the face, the corner is the setup's zero, and the job
+    /// is written as version 2 and read back the same.
+    #[test]
+    fn a_real_part_kept_to_a_picked_face() {
+        use camcraft_core::job::{FeatureRef, Origin, PointRef, Snap};
+        use camcraft_core::toolpath::MoveRole;
+        use camcraft_geom::topology::FaceKind;
+        let mut job = small_job();
+        let model = load_job_model(Path::new("."), &job.models[0], job.tolerance).unwrap();
+        let (mesh, t) = (model.mesh(), model.body.topology());
+        let (face, _) = t
+            .faces()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, f)| match f.kind {
+                FaceKind::Plane { normal, offset } if normal.z > 0.99 && f.area > 20.0 => {
+                    Some((u32::try_from(i).ok()?, offset))
+                }
+                _ => None,
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap();
+        let f = t.face(face).unwrap();
+        let tri = mesh.triangle(f.triangles[0] as usize).unwrap();
+        let at = (tri[0] + tri[1] + tri[2]) / 3.0;
+        job.setups[0].operations[0].geometry.faces.push(FeatureRef {
+            model: "hinge".into(),
+            index: face,
+            at: at.to_array(),
+        });
+        let corner = t
+            .edge(f.edges[0])
+            .and_then(|e| e.ends)
+            .map(|[a, _]| a)
+            .unwrap();
+        let position = t.vertex(corner).unwrap().position;
+        job.setups[0].origin = Origin::Point {
+            point: PointRef {
+                model: "hinge".into(),
+                snap: Snap::Vertex,
+                index: corner,
+                at: position.to_array(),
+            },
+            offset: [0.0; 3],
+        };
+        job.validate().unwrap();
+
+        let models: Models<'_> = [("hinge", &model)].into_iter().collect();
+        let ran = run_setup(&job, 0, &models).unwrap();
+        assert!(ran.result.is_clean(), "{:?}", ran.warnings);
+        let frame = ran.result.frame;
+        assert!(frame.to_setup(position).length() < 1e-9);
+
+        // The face's extent in the setup, which every cut must keep over.
+        let (lo, hi) = f
+            .triangles
+            .iter()
+            .filter_map(|&i| mesh.triangle(i as usize))
+            .flatten()
+            .map(|p| frame.to_setup(p).truncate())
+            .fold(
+                (glam::DVec2::splat(f64::MAX), glam::DVec2::splat(f64::MIN)),
+                |(lo, hi), p| (lo.min(p), hi.max(p)),
+            );
+        let cuts: Vec<_> = ran.result.operations[0]
+            .path
+            .moves()
+            .iter()
+            .filter(|m| m.role == MoveRole::Cut)
+            .map(|m| m.to.truncate())
+            .collect();
+        assert!(cuts.len() > 10, "only {} cuts", cuts.len());
+        for p in cuts {
+            assert!(
+                p.x >= lo.x - 0.03
+                    && p.x <= hi.x + 0.03
+                    && p.y >= lo.y - 0.03
+                    && p.y <= hi.y + 0.03,
+                "a cut at {p} leaves the face ({lo} to {hi})"
+            );
+        }
+
+        let text = job_text(&job).unwrap();
+        assert!(
+            text.contains(
+                "version = 2
+"
+            ),
+            "{text}"
+        );
+        assert_eq!(parse_job(&text, "picked").unwrap(), job);
+    }
+
     /// The gate is the one policy both front ends share: a clean job passes, and
     /// an unclean one passes only when forced.
     #[test]
@@ -878,6 +1003,44 @@ mod tests {
             parse_job("version = 9\n", "new.camcraft"),
             Err(SessionError::Job(JobError::UnsupportedVersion(9)))
         ));
+    }
+
+    /// A job is written at the oldest version that holds it: an older build reads
+    /// a job without picks as before, and refuses one with picks by name rather
+    /// than cutting the whole part where one face was asked for.
+    #[test]
+    fn a_job_is_written_at_the_version_it_needs() {
+        let example =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/rail-jig.camcraft");
+        let mut job = read_job(&example).unwrap();
+        let text = job_text(&job).unwrap();
+        assert!(
+            text.contains(
+                "version = 1
+"
+            ),
+            "{text}"
+        );
+        assert_eq!(parse_job(&text, "one").unwrap(), job);
+
+        let model = job.setups[0].models[0].clone();
+        job.setups[0].operations[0]
+            .geometry
+            .faces
+            .push(camcraft_core::job::FeatureRef {
+                model,
+                index: 0,
+                at: [0.0, 0.0, 0.0],
+            });
+        let text = job_text(&job).unwrap();
+        assert!(
+            text.contains(
+                "version = 2
+"
+            ),
+            "{text}"
+        );
+        assert_eq!(parse_job(&text, "two").unwrap(), job);
     }
 
     /// A model that is not where the job says is named, with where it was looked

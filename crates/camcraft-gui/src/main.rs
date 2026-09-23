@@ -10,11 +10,14 @@ mod camera;
 mod document;
 mod file_dialog;
 mod measure;
+mod pick;
+mod picking;
 mod playback;
 mod posting;
 mod properties;
 mod scene;
 mod settings;
+mod slots;
 mod stock_view;
 #[cfg(test)]
 mod test_jobs;

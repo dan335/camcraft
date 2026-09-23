@@ -3,15 +3,22 @@
 //! Every field writes straight into the job. Nothing here runs anything: a change
 //! only marks a setup's result out of date, and Generate runs it again. Lengths and
 //! feeds are shown in the chosen units and kept in millimetres.
+//!
+//! A property filled by picking in the view (a work zero, an operation's faces or
+//! edges) has a Select button that asks the app to arm the view for it
+//! ([`crate::slots`]), and lists what is picked as the engine will find it, so a
+//! pick that is gone says so here first.
 
 use camcraft_core::frame::{Axis, Orientation};
 use camcraft_core::job::{
-    Along, BoxOf, Height, HeightRef, LengthUnit, Operation, Origin, StockSpec, StrategySpec,
+    Along, BoxOf, Containment, FeatureRef, Height, HeightRef, LengthUnit, Operation, Origin,
+    StockSpec, StrategySpec,
 };
 use eframe::egui;
 
 use crate::document::{Document, Level, ModelSlot, Selection, Status};
 use crate::measure::Measure;
+use crate::slots::{Kind, Shown, Slot};
 use crate::tool_editor::{kind_name, paint_tool, tool_fields};
 
 /// Something the panel asks the app to do.
@@ -27,10 +34,30 @@ pub enum PropAction {
     PickTool(String, usize),
     /// Run setup `setup`.
     Generate(String),
+    /// Fill `slot` by picking in the view.
+    Arm(Slot),
+    /// Stop picking.
+    Disarm,
+    /// Row `i` of the list of picked faces or edges is under the pointer.
+    HoverRow(Kind, usize),
+}
+
+/// What the panel needs to know of picking in the view.
+#[derive(Clone, Copy, Default)]
+pub struct Picks<'a> {
+    /// The slot being filled, if any.
+    pub armed: Option<&'a Slot>,
+    /// What the selection's picks are, as the engine finds them.
+    pub shown: Option<&'a Shown>,
 }
 
 /// The panel for `doc`'s selection.
-pub fn show(ui: &mut egui::Ui, doc: &mut Document, m: Measure) -> Vec<PropAction> {
+pub fn show(
+    ui: &mut egui::Ui,
+    doc: &mut Document,
+    m: Measure,
+    picks: Picks<'_>,
+) -> Vec<PropAction> {
     let mut actions = Vec::new();
     match doc.selection.clone() {
         Selection::Job => job(ui, doc, m),
@@ -68,8 +95,10 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, m: Measure) -> Vec<PropAction
             let names: Vec<String> = doc.job.setups.iter().map(|s| s.name.clone()).collect();
             list(ui, names, Selection::Setup, doc);
         }
-        Selection::Setup(name) => setup(ui, doc, m, &name, &mut actions),
-        Selection::Operation(setup, index) => operation(ui, doc, m, &setup, index, &mut actions),
+        Selection::Setup(name) => setup(ui, doc, m, &name, picks, &mut actions),
+        Selection::Operation(setup, index) => {
+            operation(ui, doc, m, &setup, index, picks, &mut actions);
+        }
     }
     actions
 }
@@ -125,7 +154,6 @@ fn section(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
 }
 
 fn job(ui: &mut egui::Ui, doc: &mut Document, m: Measure) {
-    ui.heading(doc.title());
     match &doc.path {
         Some(p) => ui.monospace(p.display().to_string()),
         None => ui.weak("not saved yet"),
@@ -140,15 +168,6 @@ fn job(ui: &mut egui::Ui, doc: &mut Document, m: Measure) {
         ui.label("");
         ui.weak("How closely paths follow the part; STEP models are meshed to a quarter of it.");
         ui.end_row();
-        ui.label("Models");
-        ui.label(doc.job.models.len().to_string());
-        ui.end_row();
-        ui.label("Stocks");
-        ui.label(doc.job.stocks.len().to_string());
-        ui.end_row();
-        ui.label("Setups");
-        ui.label(doc.job.setups.len().to_string());
-        ui.end_row();
     });
     if doc.job.tolerance < 0.001 {
         doc.job.tolerance = 0.001;
@@ -156,7 +175,6 @@ fn job(ui: &mut egui::Ui, doc: &mut Document, m: Measure) {
 
     ui.add_space(8.0);
     ui.strong("Tools in this job");
-    ui.weak("Copies of library tools, chosen in each operation.");
     let used = doc.used_tools();
     egui::Grid::new("job-tools")
         .num_columns(4)
@@ -231,14 +249,14 @@ fn model(
 
     ui.add_space(6.0);
     match doc.models.get(name) {
-        Some(ModelSlot::Ready(_, model)) => {
+        Some(ModelSlot::Ready(_, model, _)) => {
             let e = model.bounds.extent();
             ui.label(format!(
                 "{} × {} × {}, {} triangles, {}",
                 m.number(e.x, 1),
                 m.number(e.y, 1),
                 m.length(e.z, 1),
-                model.mesh.len(),
+                model.mesh().len(),
                 model.units
             ));
         }
@@ -411,6 +429,7 @@ fn setup(
     doc: &mut Document,
     m: Measure,
     name: &str,
+    picks: Picks<'_>,
     actions: &mut Vec<PropAction>,
 ) {
     let Some(i) = doc.setup_index(name) else {
@@ -533,7 +552,9 @@ fn setup(
         });
     });
 
-    section(ui, "Work zero", |ui| origin(ui, m, &mut s.origin));
+    section(ui, "Work zero", |ui| {
+        origin(ui, m, name, &mut s.origin, picks, actions);
+    });
 
     ui.add_space(6.0);
     ui.weak("Each setup starts from its own stock: what one leaves is not carried to the next.");
@@ -622,7 +643,14 @@ fn along_combo(ui: &mut egui::Ui, id: &str, value: &mut Along, names: [&str; 3])
         });
 }
 
-fn origin(ui: &mut egui::Ui, m: Measure, origin: &mut Origin) {
+fn origin(
+    ui: &mut egui::Ui,
+    m: Measure,
+    setup: &str,
+    origin: &mut Origin,
+    picks: Picks<'_>,
+    actions: &mut Vec<PropAction>,
+) {
     let kind = match origin {
         Origin::ModelOrigin { .. } => "the model's own zero",
         Origin::BoxPoint {
@@ -631,10 +659,9 @@ fn origin(ui: &mut egui::Ui, m: Measure, origin: &mut Origin) {
         Origin::BoxPoint {
             of: BoxOf::Model, ..
         } => "a point on the model's box",
+        Origin::Point { .. } => "a point picked on the model",
     };
-    let offset = match origin {
-        Origin::ModelOrigin { offset } | Origin::BoxPoint { offset, .. } => *offset,
-    };
+    let offset = origin.offset();
     egui::ComboBox::from_id_salt("origin-kind")
         .selected_text(kind)
         .show_ui(ui, |ui| {
@@ -648,14 +675,47 @@ fn origin(ui: &mut egui::Ui, m: Measure, origin: &mut Origin) {
                 if ui.selectable_label(false, text).clicked() {
                     *origin = Origin::BoxPoint {
                         of,
-                        x: Along::Center,
-                        y: Along::Center,
-                        z: Along::Max,
+                        x: Along::Min,
+                        y: Along::Min,
+                        z: Along::Min,
                         offset,
                     };
                 }
             }
         });
+
+    // Or picked in the view: a corner, a hole's centre, a point on the stock.
+    let slot = Slot::WorkZero {
+        setup: setup.to_string(),
+    };
+    ui.horizontal(|ui| {
+        if picks.armed == Some(&slot) {
+            if ui.button("Done").clicked() {
+                actions.push(PropAction::Disarm);
+            }
+            ui.weak("click a point in the view");
+        } else if ui
+            .button("Select in view…")
+            .on_hover_text("a corner, a round edge's centre, or a corner or side of the stock")
+            .clicked()
+        {
+            actions.push(PropAction::Arm(slot));
+        }
+    });
+    if let Origin::Point { .. } = origin {
+        match picks.shown.and_then(|s| s.origin.as_ref()) {
+            Some(Ok(what)) => {
+                ui.label(what);
+            }
+            Some(Err(why)) => {
+                ui.colored_label(ui.visuals().error_fg_color, why);
+            }
+            None => {
+                ui.weak("the model is not loaded yet");
+            }
+        }
+    }
+
     grid(ui, "origin", |ui| {
         if let Origin::BoxPoint { x, y, z, .. } = origin {
             ui.label("X");
@@ -669,7 +729,9 @@ fn origin(ui: &mut egui::Ui, m: Measure, origin: &mut Origin) {
             ui.end_row();
         }
         let offset = match origin {
-            Origin::ModelOrigin { offset } | Origin::BoxPoint { offset, .. } => offset,
+            Origin::ModelOrigin { offset }
+            | Origin::BoxPoint { offset, .. }
+            | Origin::Point { offset, .. } => offset,
         };
         for (label, v) in ["Offset X", "Offset Y", "Offset Z"]
             .into_iter()
@@ -681,6 +743,36 @@ fn origin(ui: &mut egui::Ui, m: Measure, origin: &mut Origin) {
         }
     });
     ui.weak("Drawn in the view as red X, green Y and blue Z.");
+}
+
+/// A list of picks, as the engine finds them: each can be taken out, and a row under
+/// the pointer shows its pick in the view.
+fn pick_list(
+    ui: &mut egui::Ui,
+    kind: Kind,
+    list: &mut Vec<FeatureRef>,
+    found: &[Result<String, String>],
+    actions: &mut Vec<PropAction>,
+) {
+    let mut remove = None;
+    for (i, r) in list.iter().enumerate() {
+        ui.horizontal(|ui| {
+            if ui.small_button("×").on_hover_text("take it out").clicked() {
+                remove = Some(i);
+            }
+            let row = match found.get(i) {
+                Some(Ok(what)) => ui.label(what),
+                Some(Err(why)) => ui.colored_label(ui.visuals().error_fg_color, why),
+                None => ui.weak(format!("{} on '{}'", r.index, r.model)),
+            };
+            if row.hovered() {
+                actions.push(PropAction::HoverRow(kind, i));
+            }
+        });
+    }
+    if let Some(i) = remove {
+        list.remove(i);
+    }
 }
 
 fn height_field(ui: &mut egui::Ui, m: Measure, id: &str, h: &mut Height) {
@@ -740,6 +832,7 @@ fn operation(
     m: Measure,
     setup: &str,
     index: usize,
+    picks: Picks<'_>,
     actions: &mut Vec<PropAction>,
 ) {
     let Some(si) = doc.setup_index(setup) else {
@@ -898,6 +991,76 @@ fn operation(
         return;
     };
     section(ui, "Geometry", |ui| {
+        ui.weak(
+            "With nothing picked, the whole part within the stock is machined. Picked faces \
+             and edges keep the tool to their outline seen from above.",
+        );
+        let g = &mut op.geometry;
+        for (kind, title) in [(Kind::Face, "Faces"), (Kind::Edge, "Edges")] {
+            let slot = match kind {
+                Kind::Face => Slot::Faces {
+                    setup: setup.to_string(),
+                    op: index,
+                },
+                Kind::Edge => Slot::Edges {
+                    setup: setup.to_string(),
+                    op: index,
+                },
+            };
+            let (list, found) = match kind {
+                Kind::Face => (&mut g.faces, picks.shown.map(|s| s.faces.as_slice())),
+                Kind::Edge => (&mut g.edges, picks.shown.map(|s| s.edges.as_slice())),
+            };
+            ui.horizontal(|ui| {
+                ui.strong(title);
+                ui.weak(match list.len() {
+                    0 => "none".to_string(),
+                    n => format!("{n} picked"),
+                });
+                if picks.armed == Some(&slot) {
+                    if ui.button("Done").clicked() {
+                        actions.push(PropAction::Disarm);
+                    }
+                } else if ui.small_button("Select in view…").clicked() {
+                    actions.push(PropAction::Arm(slot));
+                }
+                if !list.is_empty() && ui.small_button("Clear").clicked() {
+                    list.clear();
+                }
+            });
+            pick_list(ui, kind, list, found.unwrap_or_default(), actions);
+        }
+        if g.picked() {
+            grid(ui, "containment", |ui| {
+                ui.label("Tool");
+                let name = |c: Containment| match c {
+                    Containment::Center => "centre inside the boundary",
+                    Containment::Inside => "all of it inside",
+                    Containment::Outside => "reaching in from outside",
+                };
+                egui::ComboBox::from_id_salt("containment")
+                    .selected_text(name(g.containment))
+                    .show_ui(ui, |ui| {
+                        for c in [
+                            Containment::Center,
+                            Containment::Inside,
+                            Containment::Outside,
+                        ] {
+                            ui.selectable_value(&mut g.containment, c, name(c));
+                        }
+                    });
+                ui.end_row();
+            });
+            match picks.shown.and_then(|s| s.boundary.as_ref()) {
+                Some(Err(why)) => {
+                    ui.colored_label(ui.visuals().error_fg_color, why);
+                }
+                Some(Ok(())) => {
+                    ui.weak("The boundary is drawn in the view at the stock's top.");
+                }
+                None => {}
+            }
+        }
         grid(ui, "geometry", |ui| {
             ui.label("Margin");
             m.length_field(ui, &mut op.geometry.margin, 0.1, 1000.0, "");

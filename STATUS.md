@@ -119,6 +119,18 @@ each pass next to where the following one starts.
      shows the selected setup as it sits on the machine, with its stock and its
      work zero's axes; each setup keeps its own camera, scrub and stock view. A
      result goes out of date when anything it was made from changes, and says so.
+   - **Picking features: done.** Every model has faces, edges and corners: the
+     file's own B-rep faces for STEP, faces found from the triangles for STL
+     (`camcraft_geom::topology`). A property filled by picking has **Select in
+     view…**, which arms the view for what it takes. Hovering lights what a click
+     would pick. The work zero takes a corner, a round edge's centre or an edge's
+     middle on a model, or a corner, edge or side of the stock. An operation takes
+     faces and edges, which keep Parallel and Z-level rough to their outline seen
+     from above (tool centre, whole tool inside, or reaching in from outside, plus
+     the margin), drawn in the view at the stock's top. With nothing armed, a click
+     shows what is there. Picks are saved as a point on the feature, found again
+     after the model is re-tessellated or renumbered, and refused by name when the
+     model has changed under them (`docs/decisions/0002-feature-references.md`).
    - **Run, check, post: done.** Background runs (Generate, Generate all). The
      checks panel under each setup's result: a HALT banner when anything fails,
      findings by operation, and a click on one at a move scrubs, follows the stock
@@ -153,7 +165,10 @@ actually break cutters on the day:
 
 ## Jobs
 
-A job (`.camcraft`, TOML, `version = 1`) has three groups, as in Fusion:
+A job (`.camcraft`, TOML) has three groups, as in Fusion. It is written as
+`version = 1` unless it holds picked features, which need `version = 2`: an older
+build would skip them and cut the whole part, so it must refuse the file instead.
+Both are read.
 
 - **Models**: design files, referenced by path relative to the job file, never
   copied in. STL needs `units`; STEP states its own.
@@ -161,7 +176,9 @@ A job (`.camcraft`, TOML, `version = 1`) has three groups, as in Fusion:
   name, or the setup's own when none are named) with margins, or a fixed box. A
   top and a bottom setup share one block and see it from each side.
 - **Setups**: which models and stocks each includes (by name), its work offset,
-  post, orientation and work zero, and its operations. Everything past layout
+  post, orientation and work zero (the model's, a point on the stock or model box,
+  or a point picked on a model), and its operations, each optionally kept to picked
+  faces and edges. Everything past layout
   (`core::setup::prepare`) is in the setup's own frame, so strategies, linker,
   simulator and post never see a rotation.
 

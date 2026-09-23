@@ -1,17 +1,32 @@
 //! Spatial index over a triangle mesh.
 //!
 //! The drop-cutter's only spatial question is *"which triangles could the tool
-//! footprint touch at this XY position?"* — a 2D disc query, not a ray cast. This
-//! wraps a bounding volume hierarchy to answer it, querying with a column AABB that
-//! spans the mesh's full Z range.
+//! footprint touch at this XY position?"* — a 2D disc query. This wraps a bounding
+//! volume hierarchy to answer it, querying with a column AABB that spans the mesh's
+//! full Z range.
+//!
+//! Picking in the app and finding a picked face again ask two more: what a ray from
+//! the eye hits first ([`MeshBvh::cast_ray`]), and which triangle lies nearest a
+//! point ([`MeshBvh::nearest`]). Both are exact per triangle; the tree only prunes.
 //!
 //! `parry3d-f64` is glam-native in this version — its `Vector` *is* `glam::DVec3` —
 //! so mesh vertices cross the boundary with no conversion at all.
 
-use crate::mesh::TriMesh;
+use crate::mesh::{TriMesh, closest_point_on_triangle, ray_triangle};
 use glam::DVec3;
 use parry3d_f64::bounding_volume::Aabb;
-use parry3d_f64::partitioning::{Bvh, BvhBuildStrategy};
+use parry3d_f64::partitioning::{Bvh, BvhBuildStrategy, BvhNode};
+use parry3d_f64::query::{PointQuery, Ray};
+
+/// Where a ray first meets a mesh.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RayHit {
+    /// The triangle it meets.
+    pub triangle: u32,
+    /// How far along the ray, in units of its direction: the point is
+    /// `origin + t * dir`.
+    pub t: f64,
+}
 
 /// A bounding volume hierarchy over the triangles of a [`TriMesh`].
 ///
@@ -72,6 +87,49 @@ impl MeshBvh {
             DVec3::new(x + r, y + r, self.z_max + pad),
         );
         out.extend(self.bvh.intersect_aabb(&aabb));
+    }
+
+    /// The first triangle of `mesh` that the ray `origin + t * dir` meets, from
+    /// either side, with `0 <= t <= max_t`.
+    ///
+    /// `mesh` must be the mesh this index was built over. `dir` need not be a unit
+    /// vector; `t` is measured in its units. Non-finite input misses.
+    pub fn cast_ray(
+        &self,
+        mesh: &TriMesh,
+        origin: DVec3,
+        dir: DVec3,
+        max_t: f64,
+    ) -> Option<RayHit> {
+        if !origin.is_finite() || !dir.is_finite() || dir == DVec3::ZERO || max_t.is_nan() {
+            return None;
+        }
+        let ray = Ray::new(origin, dir);
+        let (triangle, t) = self.bvh.cast_ray(&ray, max_t, |leaf, best| {
+            let t = ray_triangle(origin, dir, mesh.triangle(leaf as usize)?)?;
+            (t <= best).then_some(t)
+        })?;
+        Some(RayHit { triangle, t })
+    }
+
+    /// The triangle of `mesh` nearest `p`, and how far away it is, if one lies
+    /// within `max_distance`.
+    ///
+    /// `mesh` must be the mesh this index was built over.
+    pub fn nearest(&self, mesh: &TriMesh, p: DVec3, max_distance: f64) -> Option<(u32, f64)> {
+        if !p.is_finite() || max_distance.is_nan() {
+            return None;
+        }
+        // Just past the limit, so a triangle exactly `max_distance` away is found.
+        let limit = max_distance + max_distance.abs() * 1e-12 + f64::MIN_POSITIVE;
+        self.bvh.find_best(
+            limit,
+            |node: &BvhNode, _| node.aabb().distance_to_local_point(p, true),
+            |leaf, _| {
+                let t = mesh.triangle(leaf as usize)?;
+                Some(closest_point_on_triangle(p, t).distance(p))
+            },
+        )
     }
 }
 
@@ -149,6 +207,94 @@ mod tests {
             bvh.candidates_in_column(0.0, 0.0, bad, &mut out);
             assert!(out.is_empty());
         }
+    }
+
+    fn brute_ray(mesh: &TriMesh, o: DVec3, d: DVec3) -> Option<f64> {
+        (0..mesh.len())
+            .filter_map(|i| ray_triangle(o, d, mesh.triangle(i).unwrap()))
+            .min_by(f64::total_cmp)
+    }
+
+    /// Rays in every direction through a sphere: the index finds exactly the hit a
+    /// search of every triangle finds.
+    #[test]
+    fn ray_casts_agree_with_brute_force() {
+        let mesh = synthetic::uv_sphere(5.0, 12, 18);
+        let bvh = MeshBvh::new(&mesh);
+        for gx in -4..=4 {
+            for gy in -4..=4 {
+                for (o, d) in [
+                    (
+                        dvec3(f64::from(gx) * 1.4, f64::from(gy) * 1.4, 20.0),
+                        dvec3(0.0, 0.0, -1.0),
+                    ),
+                    (
+                        dvec3(-20.0, f64::from(gx), f64::from(gy)),
+                        dvec3(2.0, 0.1, 0.05),
+                    ),
+                    (
+                        dvec3(0.0, 0.0, 0.0),
+                        dvec3(f64::from(gx), f64::from(gy), 1.0),
+                    ),
+                ] {
+                    let fast = bvh.cast_ray(&mesh, o, d, f64::INFINITY).map(|h| h.t);
+                    let slow = brute_ray(&mesh, o, d);
+                    assert_eq!(fast.is_some(), slow.is_some(), "at {o} {d}");
+                    if let (Some(a), Some(b)) = (fast, slow) {
+                        assert!((a - b).abs() < 1e-9, "{a} vs {b} at {o} {d}");
+                    }
+                }
+            }
+        }
+        // Too short to reach, and aimed away.
+        assert!(
+            bvh.cast_ray(&mesh, dvec3(0.0, 0.0, 20.0), dvec3(0.0, 0.0, -1.0), 10.0)
+                .is_none()
+        );
+        assert!(
+            bvh.cast_ray(
+                &mesh,
+                dvec3(0.0, 0.0, 20.0),
+                dvec3(0.0, 0.0, 1.0),
+                f64::INFINITY
+            )
+            .is_none()
+        );
+        assert!(
+            bvh.cast_ray(
+                &mesh,
+                dvec3(f64::NAN, 0.0, 20.0),
+                dvec3(0.0, 0.0, -1.0),
+                1.0
+            )
+            .is_none()
+        );
+        assert!(
+            bvh.cast_ray(&mesh, dvec3(0.0, 0.0, 20.0), DVec3::ZERO, 1.0)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn nearest_triangles_agree_with_brute_force() {
+        let mesh = synthetic::uv_sphere(5.0, 10, 14);
+        let bvh = MeshBvh::new(&mesh);
+        for p in [
+            dvec3(0.0, 0.0, 9.0),
+            dvec3(3.0, -2.0, 1.0),
+            dvec3(0.1, 0.2, 0.3),
+            dvec3(-7.0, 7.0, -7.0),
+        ] {
+            let (_, fast) = bvh.nearest(&mesh, p, f64::INFINITY).unwrap();
+            let slow = (0..mesh.len())
+                .map(|i| closest_point_on_triangle(p, mesh.triangle(i).unwrap()).distance(p))
+                .min_by(f64::total_cmp)
+                .unwrap();
+            assert!((fast - slow).abs() < 1e-12, "{fast} vs {slow} at {p}");
+        }
+        assert!(bvh.nearest(&mesh, dvec3(0.0, 0.0, 9.0), 1.0).is_none());
+        assert!(bvh.nearest(&mesh, dvec3(0.0, 0.0, 9.0), 4.0).is_some());
+        assert!(bvh.nearest(&mesh, dvec3(f64::NAN, 0.0, 0.0), 1.0).is_none());
     }
 
     #[test]

@@ -178,11 +178,156 @@ impl TriMesh {
     }
 }
 
+/// Where the ray `origin + t * dir` meets the triangle, as `t >= 0`, from either
+/// side.
+///
+/// Möller-Trumbore. Two-sided because a picked face is picked whichever way its
+/// triangles happen to be wound, and STL files get that wrong often enough. A ray
+/// in the triangle's plane, or a triangle with no area, misses.
+pub fn ray_triangle(origin: DVec3, dir: DVec3, [a, b, c]: [DVec3; 3]) -> Option<f64> {
+    let (e1, e2) = (b - a, c - a);
+    let p = dir.cross(e2);
+    let det = e1.dot(p);
+    // Relative to the sizes involved, so it holds at any scale.
+    let scale = e1.length() * e2.length() * dir.length();
+    if det.is_nan() || det.abs() <= 1e-12 * scale {
+        return None;
+    }
+    let inv = 1.0 / det;
+    let s = origin - a;
+    let u = s.dot(p) * inv;
+    if !(-1e-12..=1.0 + 1e-12).contains(&u) {
+        return None;
+    }
+    let q = s.cross(e1);
+    let v = dir.dot(q) * inv;
+    if v < -1e-12 || u + v > 1.0 + 1e-12 {
+        return None;
+    }
+    let t = e2.dot(q) * inv;
+    (t >= 0.0 && t.is_finite()).then_some(t)
+}
+
+/// The point of the triangle nearest `p`.
+///
+/// By the triangle's Voronoi regions (Ericson, *Real-Time Collision Detection*,
+/// 5.1.5), so a degenerate triangle still gives the nearest point of what it is: a
+/// segment or a point.
+pub fn closest_point_on_triangle(p: DVec3, [a, b, c]: [DVec3; 3]) -> DVec3 {
+    let (ab, ac, ap) = (b - a, c - a, p - a);
+    let (d1, d2) = (ab.dot(ap), ac.dot(ap));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return a;
+    }
+    let bp = p - b;
+    let (d3, d4) = (ab.dot(bp), ac.dot(bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return b;
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        return a + ab * v;
+    }
+    let cp = p - c;
+    let (d5, d6) = (ab.dot(cp), ac.dot(cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return c;
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        return a + ac * w;
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return b + (c - b) * w;
+    }
+    let sum = va + vb + vc;
+    if sum.is_nan() || sum == 0.0 {
+        // Collinear corners with p off every edge's end: the nearest end will do.
+        return [a, b, c]
+            .into_iter()
+            .min_by(|x, y| x.distance_squared(p).total_cmp(&y.distance_squared(p)))
+            .unwrap_or(a);
+    }
+    let denom = 1.0 / sum;
+    a + ab * (vb * denom) + ac * (vc * denom)
+}
+
+/// The point of the segment `a`-`b` nearest `p`.
+pub fn closest_point_on_segment(p: DVec3, a: DVec3, b: DVec3) -> DVec3 {
+    let ab = b - a;
+    let len2 = ab.length_squared();
+    if len2.is_nan() || len2 <= 0.0 {
+        return a;
+    }
+    a + ab * ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use glam::dvec3;
+
+    #[test]
+    fn rays_hit_triangles_from_either_side_and_miss_beside_them() {
+        let t = [
+            dvec3(0.0, 0.0, 0.0),
+            dvec3(2.0, 0.0, 0.0),
+            dvec3(0.0, 2.0, 0.0),
+        ];
+        let down = ray_triangle(dvec3(0.5, 0.5, 3.0), dvec3(0.0, 0.0, -1.0), t);
+        assert_eq!(down, Some(3.0));
+        let up = ray_triangle(dvec3(0.5, 0.5, -2.0), dvec3(0.0, 0.0, 2.0), t);
+        assert_eq!(up, Some(1.0));
+        assert_eq!(
+            ray_triangle(dvec3(1.5, 1.5, 3.0), dvec3(0.0, 0.0, -1.0), t),
+            None
+        );
+        // Pointing away, and lying in the plane.
+        assert_eq!(
+            ray_triangle(dvec3(0.5, 0.5, 3.0), dvec3(0.0, 0.0, 1.0), t),
+            None
+        );
+        assert_eq!(
+            ray_triangle(dvec3(-1.0, 0.5, 0.0), dvec3(1.0, 0.0, 0.0), t),
+            None
+        );
+        assert_eq!(
+            ray_triangle(dvec3(0.5, 0.5, f64::NAN), dvec3(0.0, 0.0, -1.0), t),
+            None
+        );
+    }
+
+    #[test]
+    fn nearest_points_on_a_triangle_by_region() {
+        let t = [
+            dvec3(0.0, 0.0, 0.0),
+            dvec3(2.0, 0.0, 0.0),
+            dvec3(0.0, 2.0, 0.0),
+        ];
+        let near = |p| closest_point_on_triangle(p, t);
+        assert_eq!(near(dvec3(0.5, 0.5, 4.0)), dvec3(0.5, 0.5, 0.0));
+        assert_eq!(near(dvec3(-1.0, -1.0, 0.0)), t[0]);
+        assert_eq!(near(dvec3(3.0, -1.0, 1.0)), t[1]);
+        assert_eq!(near(dvec3(1.0, -3.0, 0.0)), dvec3(1.0, 0.0, 0.0));
+        assert_eq!(near(dvec3(2.0, 2.0, 0.0)), dvec3(1.0, 1.0, 0.0));
+        // A triangle with no area is the segment it collapses to.
+        let flat = [
+            dvec3(0.0, 0.0, 0.0),
+            dvec3(1.0, 0.0, 0.0),
+            dvec3(2.0, 0.0, 0.0),
+        ];
+        let q = closest_point_on_triangle(dvec3(1.5, 1.0, 0.0), flat);
+        assert!((q - dvec3(1.5, 0.0, 0.0)).length() < 1e-12, "{q}");
+        assert_eq!(
+            closest_point_on_segment(dvec3(5.0, 1.0, 0.0), t[0], t[1]),
+            t[1]
+        );
+    }
 
     fn tri() -> TriMesh {
         TriMesh::new(

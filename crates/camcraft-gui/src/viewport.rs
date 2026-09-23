@@ -12,16 +12,24 @@
 //! Every segment is uploaded once per run, in machine order, so its instance index
 //! *is* its order. Visibility by role and operation, and the scrub, are then a
 //! uniform the vertex shader reads, not a buffer rebuilt on every change.
+//!
+//! What is picked, and what is under the pointer, is drawn over the part: its faces
+//! again, in the accent, through a pipeline that passes where the part's own depth
+//! is equal, so they lie exactly on it; its edges as wide lines; its points as
+//! marks painted over the picture. What the view hits is not decided here: the view
+//! reports where the pointer is and whether it clicked, as a ray, and
+//! [`crate::pick`] answers.
 
 use camcraft_geom::heightmap::narrow;
 use camcraft_geom::mesh::TriMesh;
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use eframe::wgpu;
-use glam::{DVec3, Mat4, Vec3};
+use glam::{DVec3, Mat4, Vec2, Vec3};
 use wgpu::util::DeviceExt;
 
 use crate::camera::Camera;
+use crate::pick::Projector;
 use crate::scene::Scene;
 use crate::stock_view::StockImage;
 use crate::theme;
@@ -37,8 +45,13 @@ const STOCK: u32 = 7;
 const AXIS_X: u32 = 8;
 const AXIS_Y: u32 = 9;
 const AXIS_Z: u32 = 10;
+/// Line kinds for picked edges, the edge under the pointer, and the boundary an
+/// operation is kept to. Always shown, and drawn wider.
+const SELECTED: u32 = 11;
+const HOVER: u32 = 12;
+const BOUNDARY: u32 = 13;
 /// Line kinds in all, and so colours.
-const KINDS: usize = 12;
+const KINDS: usize = 16;
 /// Toolpath width, in points.
 const LINE_WIDTH: f32 = 1.25;
 
@@ -50,7 +63,7 @@ struct Frame {
     viewport: vec4<f32>,
     // Visible kinds (roles, then stock and axes), visible operations, segments shown.
     masks: vec4<u32>,
-    colors: array<vec4<f32>, 12>,
+    colors: array<vec4<f32>, 16>,
 };
 @group(0) @binding(0) var<uniform> f: Frame;
 
@@ -74,7 +87,9 @@ struct VertexIn {
     @location(1) normal: vec3<f32>,
 };
 struct VertexOut {
-    @builtin(position) clip: vec4<f32>,
+    // Invariant, so a picked face drawn again over the part lands at exactly the
+    // part's depth, and the equal depth test passes.
+    @invariant @builtin(position) clip: vec4<f32>,
     @location(0) normal: vec3<f32>,
 };
 
@@ -141,7 +156,9 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32, l: LineI
     var sides = array<f32, 6>(-1.0, -1.0, 1.0, -1.0, 1.0, 1.0);
     let t = ends[vi];
     var clip = mix(ca, cb, t);
-    let offset = normal * sides[vi] * f.viewport.z * 0.5 + dir * (t * 2.0 - 1.0) * f.viewport.z * 0.5;
+    // Picks and the boundary are drawn twice as wide, to read over the part.
+    let width = select(f.viewport.z, f.viewport.z * 2.0, l.kind >= 11u);
+    let offset = normal * sides[vi] * width * 0.5 + dir * (t * 2.0 - 1.0) * width * 0.5;
     clip = vec4<f32>(clip.xy + offset / half * clip.w, clip.z, clip.w);
     // A cut runs exactly on the surface it follows; pull it towards the eye so the
     // surface cannot flicker through it. Scaled by w, so the pull is constant in NDC.
@@ -354,6 +371,9 @@ fn outline_instances(outline: &[Outline]) -> Vec<LineInstance> {
                 OutlineKind::AxisX => AXIS_X,
                 OutlineKind::AxisY => AXIS_Y,
                 OutlineKind::AxisZ => AXIS_Z,
+                OutlineKind::Selected => SELECTED,
+                OutlineKind::Hover => HOVER,
+                OutlineKind::Boundary => BOUNDARY,
             },
             op: 0,
         })
@@ -371,6 +391,12 @@ pub enum OutlineKind {
     AxisY,
     /// Its Z axis.
     AxisZ,
+    /// A picked edge.
+    Selected,
+    /// The edge under the pointer.
+    Hover,
+    /// The boundary an operation is kept to.
+    Boundary,
 }
 
 /// A line that is not a move: the stock's edges and the work zero's axes.
@@ -417,6 +443,32 @@ impl Default for View {
     }
 }
 
+/// Features to draw over the part, in the setup's frame: what is picked, or what
+/// is under the pointer.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Highlight {
+    /// Faces, as their triangles.
+    pub faces: Vec<[Vec3; 3]>,
+    /// Edges, and the boundary an operation is kept to.
+    pub lines: Vec<Outline>,
+    /// Points.
+    pub markers: Vec<DVec3>,
+}
+
+/// Where the pointer is over the view, as the picker needs it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PointerEvent {
+    /// From the eye through the pointer: where it starts, and a unit direction.
+    pub ray: (DVec3, DVec3),
+    /// The pointer, in points.
+    pub pos: egui::Pos2,
+    /// Whether it clicked this frame: pressed and let go without dragging, so an
+    /// orbit never picks.
+    pub clicked: bool,
+    /// Where the setup's frame is drawn.
+    pub projector: Projector,
+}
+
 /// What the viewport is asked to draw, with numbers that change whenever the
 /// underlying data does, so each piece is uploaded once.
 pub struct Content<'a> {
@@ -433,6 +485,29 @@ pub struct Content<'a> {
     pub stock: Option<((u64, usize), &'a StockImage)>,
     /// What is visible.
     pub view: View,
+    /// What is picked.
+    pub selection: Option<(u64, &'a Highlight)>,
+    /// What is under the pointer.
+    pub hover: Option<(u64, &'a Highlight)>,
+    /// What to tell the person, over the view: what a click does now.
+    pub hint: Option<&'a str>,
+}
+
+impl Content<'_> {
+    /// Nothing to draw.
+    pub fn empty() -> Self {
+        Content {
+            part: None,
+            framing: 0,
+            scene: None,
+            outline: None,
+            stock: None,
+            view: View::default(),
+            selection: None,
+            hover: None,
+            hint: None,
+        }
+    }
 }
 
 struct Targets {
@@ -447,8 +522,17 @@ struct Object {
     bind_group: wgpu::BindGroup,
 }
 
+/// A highlight on the GPU: its faces and its lines, either of which may be empty.
+struct HighlightGpu {
+    key: u64,
+    faces: Option<(wgpu::Buffer, u32)>,
+    lines: Option<(wgpu::Buffer, u32)>,
+}
+
 struct Uploaded {
     part: Option<(u64, wgpu::Buffer, u32)>,
+    selection: Option<HighlightGpu>,
+    hover: Option<HighlightGpu>,
     scene: Option<u64>,
     moves: Option<(wgpu::Buffer, u32)>,
     outline: Option<(u64, wgpu::Buffer, u32)>,
@@ -472,12 +556,15 @@ struct Gpu {
     stock_layout: wgpu::BindGroupLayout,
     stock: Option<StockGpu>,
     part_pipeline: wgpu::RenderPipeline,
+    highlight_pipeline: wgpu::RenderPipeline,
     cutter_pipeline: wgpu::RenderPipeline,
     cutter_hidden_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
     frame: wgpu::Buffer,
     frame_group: wgpu::BindGroup,
     part_object: Object,
+    selection_object: Object,
+    hover_object: Object,
     cutter_object: Object,
     cutter_hidden_object: Object,
     targets: Option<Targets>,
@@ -521,21 +608,41 @@ impl Viewport {
         }
     }
 
+    /// Move the view by `by`, for when everything it shows has moved that much.
+    pub fn shift(&mut self, by: DVec3) {
+        self.camera.shift(Vec3::from(v3(by)));
+    }
+
     /// Bring the view in on `point`, keeping the angle it is seen from.
     pub fn focus(&mut self, point: DVec3, radius: f32) {
         self.camera.focus(Vec3::from(v3(point)), radius);
     }
 
-    /// Draw the viewport into the rest of `ui`.
+    /// Draw the viewport into the rest of `ui`, and say where the pointer is over
+    /// it, if it is.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         render_state: Option<&RenderState>,
         content: &Content<'_>,
-    ) {
+    ) -> Option<PointerEvent> {
         let (rect, response) =
             ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
         self.handle_input(ui, &response, rect);
+        let aspect = rect.width() / rect.height().max(1.0);
+        let projector = Projector::new(self.camera.view_projection(aspect), rect);
+        let event = response
+            .hover_pos()
+            .filter(|_| !response.dragged())
+            .map(|pos| {
+                let ndc: Vec2 = projector.ndc(pos);
+                PointerEvent {
+                    ray: self.camera.ray(aspect, ndc),
+                    pos,
+                    clicked: response.clicked(),
+                    projector,
+                }
+            });
 
         let Some(rs) = render_state else {
             ui.painter().text(
@@ -545,7 +652,7 @@ impl Viewport {
                 theme::font(ui.style(), egui::TextStyle::Body),
                 ui.visuals().warn_fg_color,
             );
-            return;
+            return event;
         };
         let gpu = self.gpu.get_or_insert_with(|| Gpu::new(rs));
         gpu.upload(rs, content);
@@ -567,7 +674,6 @@ impl Viewport {
         // Sizes in pixels are small, positive integers; the float came from egui.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let size = [px[0] as u32, px[1] as u32];
-        let aspect = rect.width() / rect.height().max(1.0);
         let frame = FrameInput {
             view_proj: self.camera.view_projection(aspect),
             pixels: px,
@@ -576,7 +682,7 @@ impl Viewport {
             stock: content.stock.is_some(),
         };
         let Some(texture) = gpu.render(rs, size, &frame) else {
-            return;
+            return event;
         };
         ui.painter().image(
             texture,
@@ -584,6 +690,42 @@ impl Viewport {
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
+
+        // Picked points, then the one under the pointer, over the picture.
+        let painter = ui.painter_at(rect);
+        let edge = egui::Stroke::new(1.5, theme::egui_color(theme::BG));
+        for at in content.selection.iter().flat_map(|(_, h)| &h.markers) {
+            if let Some(p) = projector.screen(*at) {
+                painter.circle(p, 5.0, theme::egui_color(theme::SELECTED), edge);
+            }
+        }
+        for at in content.hover.iter().flat_map(|(_, h)| &h.markers) {
+            if let Some(p) = projector.screen(*at) {
+                let ring = egui::Stroke::new(2.0, theme::egui_color(theme::HOVER));
+                painter.circle_stroke(p, 7.0, ring);
+                painter.circle_filled(p, 2.5, theme::egui_color(theme::HOVER));
+            }
+        }
+        if let Some(hint) = content.hint {
+            let galley = painter.layout_no_wrap(
+                hint.to_string(),
+                theme::font(ui.style(), egui::TextStyle::Body),
+                theme::egui_color(theme::BG),
+            );
+            // Low in the view, clear of the card describing what was picked, which
+            // sits at the top.
+            let at = rect.center_bottom() - egui::vec2(0.0, 44.0);
+            let bubble = egui::Rect::from_center_size(
+                at - egui::vec2(0.0, galley.size().y / 2.0),
+                galley.size() + egui::vec2(20.0, 10.0),
+            );
+            painter.rect_filled(bubble, 4.0, theme::egui_color(theme::SELECTED));
+            painter.galley(
+                bubble.center() - galley.size() / 2.0,
+                galley,
+                egui::Color32::BLACK,
+            );
+        }
 
         let faint = ui.visuals().weak_text_color();
         if content.part.is_none() {
@@ -602,6 +744,7 @@ impl Viewport {
             theme::caption(ui.style()),
             faint,
         );
+        event
     }
 
     fn handle_input(&mut self, ui: &egui::Ui, response: &egui::Response, rect: egui::Rect) {
@@ -756,6 +899,14 @@ impl Gpu {
         let part_pipeline = mesh_pipeline("camcraft part", None, true, wgpu::CompareFunction::Less);
         // Translucent, drawn last, and not hiding what is behind it.
         let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
+        // Faces drawn again over the part, where it is: the same triangles at the same
+        // depth pass `LessEqual`, and nothing behind the part does.
+        let highlight_pipeline = mesh_pipeline(
+            "camcraft highlight",
+            blend,
+            false,
+            wgpu::CompareFunction::LessEqual,
+        );
         let cutter_pipeline =
             mesh_pipeline("camcraft cutter", blend, false, wgpu::CompareFunction::Less);
         // The same cutter where something hides it, fainter. The marker's job is to
@@ -908,18 +1059,23 @@ impl Gpu {
             stock_layout,
             stock: None,
             part_pipeline,
+            highlight_pipeline,
             cutter_pipeline,
             cutter_hidden_pipeline,
             line_pipeline,
             frame,
             frame_group,
             part_object: object("camcraft part"),
+            selection_object: object("camcraft selection"),
+            hover_object: object("camcraft hover"),
             cutter_object: object("camcraft cutter"),
             cutter_hidden_object: object("camcraft cutter, hidden"),
             targets: None,
             texture: None,
             up: Uploaded {
                 part: None,
+                selection: None,
+                hover: None,
                 scene: None,
                 moves: None,
                 outline: None,
@@ -1069,6 +1225,41 @@ impl Gpu {
             _ => {}
         }
 
+        for (slot, wanted) in [
+            (&mut self.up.selection, content.selection),
+            (&mut self.up.hover, content.hover),
+        ] {
+            match wanted {
+                Some((key, h)) if slot.as_ref().map(|s| s.key) != Some(key) => {
+                    let faces = flat_vertices(h.faces.iter().copied());
+                    let lines = outline_instances(&h.lines);
+                    let usage = wgpu::BufferUsages::VERTEX;
+                    // A buffer may not be empty: an empty half draws nothing instead.
+                    *slot = Some(HighlightGpu {
+                        key,
+                        faces: (!faces.is_empty()).then(|| {
+                            let buf = vertices(
+                                "camcraft picked faces",
+                                bytemuck::cast_slice(&faces),
+                                usage,
+                            );
+                            (buf, count(faces.len()))
+                        }),
+                        lines: (!lines.is_empty()).then(|| {
+                            let buf = vertices(
+                                "camcraft picked lines",
+                                bytemuck::cast_slice(&lines),
+                                usage,
+                            );
+                            (buf, count(lines.len()))
+                        }),
+                    });
+                }
+                None => *slot = None,
+                _ => {}
+            }
+        }
+
         match content.outline {
             Some((g, outline)) if self.up.outline.as_ref().map(|o| o.0) != Some(g) => {
                 let lines = outline_instances(outline);
@@ -1206,6 +1397,9 @@ impl Gpu {
             (AXIS_X, theme::AXIS_X),
             (AXIS_Y, theme::AXIS_Y),
             (AXIS_Z, theme::AXIS_Z),
+            (SELECTED, theme::SELECTED),
+            (HOVER, theme::HOVER),
+            (BOUNDARY, theme::BOUNDARY),
         ] {
             if let Some(slot) = colors.get_mut(kind as usize) {
                 *slot = theme::linear(color).into_rgba();
@@ -1214,7 +1408,10 @@ impl Gpu {
         let axes = (1 << AXIS_X) | (1 << AXIS_Y) | (1 << AXIS_Z);
         let kinds = (view.roles & 0x7f)
             | if view.stock { 1 << STOCK } else { 0 }
-            | if view.origin { axes } else { 0 };
+            | if view.origin { axes } else { 0 }
+            | (1 << SELECTED)
+            | (1 << HOVER)
+            | (1 << BOUNDARY);
         let shown = u32::try_from(view.shown).unwrap_or(u32::MAX);
         let frame = FrameUniforms {
             view_proj: input.view_proj.to_cols_array_2d(),
@@ -1232,6 +1429,19 @@ impl Gpu {
         };
         rs.queue
             .write_buffer(&self.part_object.uniforms, 0, bytemuck::bytes_of(&part));
+        for (object, color, alpha) in [
+            (&self.selection_object, theme::SELECTED, 0.55),
+            (&self.hover_object, theme::HOVER, 0.4),
+        ] {
+            let mut color = theme::linear(color).into_rgba();
+            color[3] = alpha;
+            let tint = ObjectUniforms {
+                model: Mat4::IDENTITY.to_cols_array_2d(),
+                color,
+            };
+            rs.queue
+                .write_buffer(&object.uniforms, 0, bytemuck::bytes_of(&tint));
+        }
         if let Some((_, tip)) = view.cutter {
             let mut color = theme::linear(theme::AMBER_5).into_rgba();
             // Opaque enough to find at a glance on a large part, and still
@@ -1292,6 +1502,23 @@ impl Gpu {
                 pass.set_bind_group(1, &self.part_object.bind_group, &[]);
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..*n, 0..1);
+
+                // Picked faces over the part, then the one under the pointer.
+                pass.set_pipeline(&self.highlight_pipeline);
+                for (up, object) in [
+                    (&self.up.selection, &self.selection_object),
+                    (&self.up.hover, &self.hover_object),
+                ] {
+                    if let Some(HighlightGpu {
+                        faces: Some((buffer, n)),
+                        ..
+                    }) = up
+                    {
+                        pass.set_bind_group(1, &object.bind_group, &[]);
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                        pass.draw(0..*n, 0..1);
+                    }
+                }
             }
 
             if let (true, Some(stock)) = (input.stock, &self.stock) {
@@ -1315,6 +1542,16 @@ impl Gpu {
             if let Some((_, buffer, n)) = &self.up.outline {
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..6, 0..*n);
+            }
+            for up in [&self.up.selection, &self.up.hover] {
+                if let Some(HighlightGpu {
+                    lines: Some((buffer, n)),
+                    ..
+                }) = up
+                {
+                    pass.set_vertex_buffer(0, buffer.slice(..));
+                    pass.draw(0..6, 0..*n);
+                }
             }
 
             if let Some((op, _)) = view.cutter

@@ -497,5 +497,8 @@ pub fn content(state: &SetupState) -> Content<'_> {
             cutter,
             ..view.view
         },
+        selection: None,
+        hover: None,
+        hint: None,
     }
 }

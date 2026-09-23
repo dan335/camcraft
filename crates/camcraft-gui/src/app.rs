@@ -18,14 +18,15 @@ use crate::browser::{self, BrowserAction};
 use crate::document::{Document, Level, ModelSlot, Status, next_key};
 use crate::file_dialog::{AppFileDialog, Pick};
 use crate::measure::Measure;
+use crate::picking::Picking;
 use crate::playback;
 use crate::posting::{self, Plan};
-use crate::properties::{self, PropAction};
+use crate::properties::{self, Picks, PropAction};
 use crate::settings::Settings;
 use crate::theme;
 use crate::tool_manager::ToolManager;
 use crate::tool_picker::{Picked, ToolPicker};
-use crate::viewport::{Content, View, Viewport};
+use crate::viewport::{Content, Viewport};
 use crate::worker::{DocId, Reply, Request, Task, Worker};
 
 const STORAGE_DIALOG: &str = "file_dialog";
@@ -89,6 +90,8 @@ pub struct App {
     shown: Option<(DocId, String)>,
     worker: Worker,
     viewport: Viewport,
+    /// Picking in the view: what is armed, under the pointer, and looked at.
+    picking: Picking,
     dialog: AppFileDialog,
     /// The tool library, in its own window when open.
     tools: ToolManager,
@@ -128,6 +131,7 @@ impl App {
             shown: None,
             worker: Worker::default(),
             viewport: Viewport::default(),
+            picking: Picking::default(),
             dialog: AppFileDialog::new(dialog),
             tools: ToolManager::new(),
             picker: None,
@@ -415,6 +419,12 @@ impl App {
             && let Some(id) = id
         {
             self.close(id);
+        }
+        // Esc stops picking, or closes what was picked to look at, unless a window
+        // over everything wants it.
+        let modal = self.prompt.is_some() || self.picker.is_some();
+        if !typing && !modal && ctx.input(|i| i.key_pressed(Key::Escape)) {
+            self.picking.escape();
         }
         if !typing {
             if pressed(shift, Key::Z) {
@@ -738,11 +748,22 @@ impl App {
         };
         let id = doc.id;
         let mut actions = Vec::new();
+        let picks = Picks {
+            armed: self.picking.armed(id),
+            shown: self.picking.shown(id),
+        };
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show(ui, |ui| actions = properties::show(ui, doc, m));
+            .show(ui, |ui| actions = properties::show(ui, doc, m, picks));
         for a in actions {
             match a {
+                PropAction::Arm(slot) => self.picking.arm(id, slot),
+                PropAction::Disarm => self.picking.disarm(),
+                PropAction::HoverRow(kind, i) => {
+                    if self.picking.hover_row(kind, i) {
+                        ctx.request_repaint();
+                    }
+                }
                 PropAction::AddModels => self.dialog.open(Pick::AddModels(id), ""),
                 PropAction::Locate(name) => self.dialog.open(Pick::Locate(id, name), ""),
                 PropAction::ProfileFile(setup) => self.dialog.open(Pick::Profile(id, setup), ""),
@@ -1108,17 +1129,14 @@ impl App {
     /// What the viewport should draw this frame.
     fn content(&self) -> Content<'_> {
         let state = self.doc().and_then(|d| d.setups.get(d.active.as_ref()?));
-        match state {
+        let mut content = match state {
             Some(state) => playback::content(state),
-            None => Content {
-                part: None,
-                framing: 0,
-                scene: None,
-                outline: None,
-                stock: None,
-                view: View::default(),
-            },
+            None => Content::empty(),
+        };
+        if let Some(doc) = self.doc() {
+            self.picking.decorate(doc.id, &mut content);
         }
+        content
     }
 
     // ---- for the snapshot harness ------------------------------------------------
@@ -1142,6 +1160,116 @@ impl App {
     #[cfg(all(test, feature = "ui-snapshots"))]
     pub fn doc_for_snapshot(&mut self) -> Option<&mut Document> {
         self.doc_mut()
+    }
+
+    /// Select operation `op` of the showing setup and pick faces for it in the
+    /// view: the two largest that face up, with the third clicked to look at.
+    /// Only the snapshot harness asks. How many faces the model has.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn pick_faces_for_snapshot(&mut self, op: usize) -> usize {
+        use camcraft_core::job::FeatureRef;
+        use camcraft_geom::topology::FaceKind;
+        let Some(doc) = self.docs.get_mut(self.active) else {
+            return 0;
+        };
+        let (Some(setup), id) = (doc.active.clone(), doc.id) else {
+            return 0;
+        };
+        let Some(model) = doc
+            .job
+            .setups
+            .iter()
+            .find(|s| s.name == setup)
+            .and_then(|s| s.models.first().cloned())
+        else {
+            return 0;
+        };
+        let Some((loaded, _)) = doc.models.get(&model).and_then(|s| s.loaded()) else {
+            return 0;
+        };
+        let t = loaded.body.topology();
+        let mut up: Vec<(u32, f64, glam::DVec3)> = t
+            .faces()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, f)| match f.kind {
+                FaceKind::Plane { normal, .. } if normal.z > 0.9 => {
+                    let tri = loaded
+                        .body
+                        .mesh()
+                        .triangle(*f.triangles.first()? as usize)?;
+                    let at = (tri[0] + tri[1] + tri[2]) / 3.0;
+                    Some((u32::try_from(i).ok()?, f.area, at))
+                }
+                _ => None,
+            })
+            .collect();
+        up.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let faces = t.faces().len();
+        doc.selection = crate::document::Selection::Operation(setup.clone(), op);
+        let Some(o) = doc
+            .job
+            .setups
+            .iter_mut()
+            .find(|s| s.name == setup)
+            .and_then(|s| s.operations.get_mut(op))
+        else {
+            return faces;
+        };
+        o.geometry.faces = up
+            .iter()
+            .take(2)
+            .map(|(i, _, at)| FeatureRef {
+                model: model.clone(),
+                index: *i,
+                at: at.to_array(),
+            })
+            .collect();
+        self.picking.arm(
+            id,
+            crate::slots::Slot::Faces {
+                setup: setup.clone(),
+                op,
+            },
+        );
+        if let Some((i, _, at)) = up.get(2) {
+            self.picking.inspect_for_snapshot(
+                id,
+                setup,
+                crate::pick::Target::Face {
+                    model,
+                    face: *i,
+                    at: *at,
+                },
+            );
+        }
+        faces
+    }
+
+    /// Select the showing setup and arm its work zero for picking; where a round
+    /// rim is drawn, and the setup-frame centre it should snap to. Only the
+    /// snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn arm_work_zero_for_snapshot(&mut self) -> Option<(egui::Pos2, glam::DVec3)> {
+        let doc = self.docs.get_mut(self.active)?;
+        let setup = doc.active.clone()?;
+        doc.selection = crate::document::Selection::Setup(setup.clone());
+        let id = doc.id;
+        self.picking.arm(id, crate::slots::Slot::WorkZero { setup });
+        let eye = self.viewport.camera().eye().as_dvec3();
+        let (rim, centre, rect) = self.picking.rim_for_snapshot(eye)?;
+        let aspect = rect.width() / rect.height().max(1.0);
+        let proj =
+            crate::pick::Projector::new(self.viewport.camera().view_projection(aspect), rect);
+        Some((proj.screen(rim)?, centre))
+    }
+
+    /// Press Esc twice: stop picking, and stop looking. Only the snapshot harness
+    /// asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn escape_for_snapshot(&mut self) {
+        self.picking.escape();
+        self.picking.escape();
     }
 
     /// Open the job dialog, as File › Open would. Only the snapshot harness asks.
@@ -1286,14 +1414,29 @@ impl eframe::App for App {
         if let Some(doc) = self.docs.get_mut(self.active) {
             doc.tidy_selection();
             if let Some(name) = doc.active.clone() {
-                doc.refresh_layout(&name);
+                // The work zero moved: keep the view on the part, which moved with
+                // it. The camera is the viewport's if this setup is showing, else
+                // the one kept for it.
+                if let Some(by) = doc.refresh_layout(&name) {
+                    if self.shown.as_ref() == Some(&(doc.id, name.clone())) {
+                        self.viewport.shift(by);
+                    } else if let Some(c) = doc
+                        .setups
+                        .get_mut(&name)
+                        .and_then(|s| s.view.camera.as_mut())
+                    {
+                        c.shift(by.as_vec3());
+                    }
+                }
                 let state = doc.setups.entry(name).or_default();
                 playback::step_scrub(&ctx, state);
                 playback::ensure_stock_image(state);
             }
         }
         self.swap_camera();
-        self.tools.measure = self.measure();
+        let m = self.measure();
+        self.picking.refresh(self.docs.get(self.active), m);
+        self.tools.measure = m;
         self.tools.show(&ctx);
 
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
@@ -1321,11 +1464,19 @@ impl eframe::App for App {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| {
+                    let rect = ui.available_rect_before_wrap();
                     // The viewport is taken out for the call, because the content it
                     // draws borrows the rest of the app.
                     let mut viewport = std::mem::take(&mut self.viewport);
-                    viewport.show(ui, frame.wgpu_render_state(), &self.content());
+                    let event = viewport.show(ui, frame.wgpu_render_state(), &self.content());
                     self.viewport = viewport;
+                    if let Some(doc) = self.docs.get_mut(self.active) {
+                        let id = doc.id;
+                        if self.picking.pointer(doc, event) {
+                            ctx.request_repaint();
+                        }
+                        self.picking.card(&ctx, id, rect, m);
+                    }
                 });
         }
 

@@ -140,6 +140,80 @@ pub fn uv_sphere(r: f64, lat: u32, lon: u32) -> TriMesh {
     TriMesh::new(v, t).unwrap_or_default()
 }
 
+/// A closed box from `min` to `max`, two triangles a side, wound outward.
+///
+/// The simplest solid with known faces, edges and corners: 6, 12 and 8.
+pub fn cuboid(min: DVec3, max: DVec3) -> TriMesh {
+    let corner = |i: u32| {
+        dvec3(
+            if i & 1 == 0 { min.x } else { max.x },
+            if i & 2 == 0 { min.y } else { max.y },
+            if i & 4 == 0 { min.z } else { max.z },
+        )
+    };
+    let v = (0..8).map(corner).collect();
+    // Each side as a quad wound counter-clockwise seen from outside.
+    let quads = [
+        [0, 2, 3, 1], // bottom, -Z
+        [4, 5, 7, 6], // top, +Z
+        [0, 1, 5, 4], // front, -Y
+        [2, 6, 7, 3], // back, +Y
+        [0, 4, 6, 2], // left, -X
+        [1, 3, 7, 5], // right, +X
+    ];
+    let t = quads
+        .iter()
+        .flat_map(|[a, b, c, d]| [[*a, *b, *c], [*a, *c, *d]])
+        .collect();
+    TriMesh::new(v, t).unwrap_or_default()
+}
+
+/// A square plate `[-half, half]` in X and Y and `[0, h]` in Z, with a round
+/// through hole of radius `r` at its centre, made of `segments` facets.
+///
+/// `segments` is rounded up to a multiple of eight, at least eight, so the rays
+/// that join the hole to the outside land on the plate's corners and every side
+/// stays flat. Closed and wound outward. Its faces are known: top, bottom, four
+/// sides and the hole's wall; the hole's rims are circles about the Z axis.
+pub fn plate_with_hole(half: f64, h: f64, r: f64, segments: u32) -> TriMesh {
+    let n = segments.clamp(8, MAX_SUBDIVISION).div_ceil(8) * 8;
+    let mut v = Vec::with_capacity(4 * n as usize);
+    // Four rings: hole bottom, hole top, outside bottom, outside top.
+    for ring in 0..4 {
+        let z = if ring % 2 == 0 { 0.0 } else { h };
+        for i in 0..n {
+            let a = std::f64::consts::TAU * f64::from(i) / f64::from(n);
+            let (s, c) = a.sin_cos();
+            let p = if ring < 2 {
+                dvec3(r * c, r * s, z)
+            } else {
+                // Out along the same ray to the square's edge.
+                let k = half / c.abs().max(s.abs());
+                dvec3(k * c, k * s, z)
+            };
+            v.push(p);
+        }
+    }
+    let at = |ring: u32, i: u32| ring * n + i % n;
+    let mut t = Vec::with_capacity(8 * n as usize);
+    for i in 0..n {
+        let j = i + 1;
+        let (hb0, hb1, ht0, ht1) = (at(0, i), at(0, j), at(1, i), at(1, j));
+        let (ob0, ob1, ot0, ot1) = (at(2, i), at(2, j), at(3, i), at(3, j));
+        t.extend([
+            [ht0, ot0, ot1],
+            [ht0, ot1, ht1], // top, up
+            [hb0, ob1, ob0],
+            [hb0, hb1, ob1], // bottom, down
+            [hb0, ht1, hb1],
+            [hb0, ht0, ht1], // hole wall, in towards the axis
+            [ob0, ob1, ot1],
+            [ob0, ot1, ot0], // outside, out
+        ]);
+    }
+    TriMesh::new(v, t).unwrap_or_default()
+}
+
 /// Upper bound on [`uv_sphere`] subdivision, chosen so the largest possible vertex
 /// index stays far below `u32::MAX`.
 pub const MAX_SUBDIVISION: u32 = 4096;

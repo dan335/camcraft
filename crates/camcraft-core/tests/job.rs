@@ -16,6 +16,7 @@ use camcraft_core::roughing::{RoughingParams, zlevel_rough};
 use camcraft_core::simadapt::sim_moves;
 use camcraft_core::stock::{EffectiveTool, Stock as ToLeave};
 use camcraft_core::tool::{Ball, Flat, ToolProfile};
+use camcraft_geom::contour::Region;
 use camcraft_geom::synthetic;
 use camcraft_sim::stock::{PartSurface, Stock};
 use glam::dvec2;
@@ -45,7 +46,7 @@ fn rough_then_finish_threading_stock_between_them() {
 
     let (rough_raw, rough_report) = zlevel_rough(
         &mut rough_reach,
-        (lo, hi),
+        &Region::rectangle(lo, hi),
         stock.field(),
         &RoughingParams {
             stepdown: 2.0,
@@ -188,7 +189,13 @@ fn a_second_roughing_pass_only_targets_the_leftovers() {
     };
 
     let mut stock = Stock::block(lo, hi, 8.0, -2.0, PITCH).unwrap();
-    let (first, first_report) = zlevel_rough(&mut reach, (lo, hi), stock.field(), &params).unwrap();
+    let (first, first_report) = zlevel_rough(
+        &mut reach,
+        &Region::rectangle(lo, hi),
+        stock.field(),
+        &params,
+    )
+    .unwrap();
     assert!(first_report.rings > 0, "the first pass must find material");
 
     let clearance = ClearanceField::new(stock.field().clone(), 4.0, 12.0).unwrap();
@@ -204,7 +211,13 @@ fn a_second_roughing_pass_only_targets_the_leftovers() {
     .unwrap();
     stock.apply(&sim_moves(&linked), &tool);
 
-    let (_, second_report) = zlevel_rough(&mut reach, (lo, hi), stock.field(), &params).unwrap();
+    let (_, second_report) = zlevel_rough(
+        &mut reach,
+        &Region::rectangle(lo, hi),
+        stock.field(),
+        &params,
+    )
+    .unwrap();
     assert!(
         second_report.rings * 2 < first_report.rings,
         "a second pass should target only the leftovers, not redo the first: \

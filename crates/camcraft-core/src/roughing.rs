@@ -94,8 +94,10 @@ pub struct RoughingReport {
 
 /// Clear material in Z levels.
 ///
-/// `reach` gives where the roughing tool may not be, from the model. `extent` is
-/// the area the operation covers, `stock` the material as it currently stands — so
+/// `reach` gives where the roughing tool may not be, from the model. `area` is
+/// where the tool's centre may go: the stock's footprint, or less where the
+/// operation is kept to picked faces. `stock` is the material as it currently
+/// stands — so
 /// running this after another operation automatically rest-machines, because the
 /// stock field already records what that operation removed.
 ///
@@ -103,7 +105,7 @@ pub struct RoughingReport {
 /// exactly as a finishing pass does. The linker resolves them.
 pub fn zlevel_rough(
     reach: &mut LevelReach<'_>,
-    extent: (DVec2, DVec2),
+    area: &Region,
     stock: &HeightMap,
     params: &RoughingParams,
 ) -> Result<(Toolpath, RoughingReport), StrategyError> {
@@ -119,7 +121,6 @@ pub fn zlevel_rough(
 
     let mut path = Toolpath::new();
     let mut report = RoughingReport::default();
-    let area = Region::rectangle(extent.0, extent.1);
     // Material counts for a ring wherever the cutter would touch it: within the
     // tool's radius, plus a cell's diagonal because the outline is only known to
     // the grid.
@@ -396,7 +397,7 @@ mod tests {
     ) -> Result<(Toolpath, RoughingReport), StrategyError> {
         let tool = flat(radius);
         let mut reach = LevelReach::new(mesh, &tool, TOLERANCE).unwrap();
-        zlevel_rough(&mut reach, (LO, HI), stock, params)
+        zlevel_rough(&mut reach, &Region::rectangle(LO, HI), stock, params)
     }
 
     fn full_stock(top: f64) -> HeightMap {
