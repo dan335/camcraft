@@ -19,6 +19,7 @@ use crate::document::{Document, Level, ModelSlot, Status, next_key};
 use crate::file_dialog::{AppFileDialog, Pick};
 use crate::measure::Measure;
 use crate::playback;
+use crate::posting::{self, Plan};
 use crate::properties::{self, PropAction};
 use crate::settings::Settings;
 use crate::theme;
@@ -45,6 +46,8 @@ enum Prompt {
     Quit,
     /// Job `doc` names models that are not where it says.
     Missing(DocId),
+    /// Post the planned programs? Something stands in the way: see `post_plan`.
+    Post,
 }
 
 /// A session error, worded for this app rather than for the command line.
@@ -60,6 +63,21 @@ pub fn explain(e: &SessionError) -> String {
         }
         other => other.to_string(),
     }
+}
+
+/// Why `names` of `doc` cannot be posted at all, if they cannot: each must have a
+/// result, finished and up to date. A result that did not pass can be posted, but
+/// only once that is confirmed.
+fn post_blocker(doc: &Document, names: &[String]) -> Option<String> {
+    if names.is_empty() {
+        return Some("the job has no setups".into());
+    }
+    names.iter().find_map(|n| match doc.status(n) {
+        Status::NotRun => Some(format!("'{n}' has not been generated")),
+        Status::Running => Some(format!("'{n}' is still generating")),
+        Status::Stale => Some(format!("'{n}' is out of date: generate it again")),
+        Status::Verified | Status::Warnings | Status::Refused => None,
+    })
 }
 
 /// The app's state.
@@ -83,6 +101,10 @@ pub struct App {
     close_after_save: Option<DocId>,
     /// What happened outside any job: a file that would not open.
     log: Vec<(Level, String)>,
+    /// Programs rendered and waiting on [`Prompt::Post`], for job `doc`.
+    post_plan: Option<(DocId, Plan)>,
+    /// Whether posting setups that did not pass their checks has been confirmed.
+    post_anyway: bool,
 }
 
 impl App {
@@ -115,6 +137,8 @@ impl App {
             prompt: None,
             close_after_save: None,
             log: Vec::new(),
+            post_plan: None,
+            post_anyway: false,
         }
     }
 
@@ -510,6 +534,7 @@ impl App {
         let mut close = None;
         let mut generate = None;
         let mut all = false;
+        let mut post: Option<(DocId, Option<String>)> = None;
         ui.horizontal(|ui| {
             for (i, doc) in self.docs.iter().enumerate() {
                 let mut title = doc.title();
@@ -565,8 +590,27 @@ impl App {
                         .on_disabled_hover_text(why.unwrap_or_default())
                         .clicked()
                     {
-                        generate = Some(name);
+                        generate = Some(name.clone());
                     }
+                    let why = post_blocker(doc, std::slice::from_ref(&name));
+                    if ui
+                        .add_enabled(why.is_none(), egui::Button::new(format!("Post {name}…")))
+                        .on_hover_text("write its programs, one per operation, into a folder")
+                        .on_disabled_hover_text(why.unwrap_or_default())
+                        .clicked()
+                    {
+                        post = Some((doc.id, Some(name)));
+                    }
+                }
+                let names: Vec<String> = doc.job.setups.iter().map(|s| s.name.clone()).collect();
+                let why = post_blocker(doc, &names);
+                if ui
+                    .add_enabled(why.is_none(), egui::Button::new("Post all…"))
+                    .on_hover_text("every setup's programs, or none")
+                    .on_disabled_hover_text(why.unwrap_or_default())
+                    .clicked()
+                {
+                    post = Some((doc.id, None));
                 }
                 if let Some(what) = self.worker.busy(doc.id) {
                     ui.label(what);
@@ -576,6 +620,9 @@ impl App {
         });
         if let Some(id) = close {
             self.close(id);
+        }
+        if let Some((id, scope)) = post {
+            self.dialog.open(Pick::PostTo(id, scope), "");
         }
         if all {
             self.generate_all(&ctx);
@@ -663,10 +710,12 @@ impl App {
                     }
                     playback::result(ui, state, m);
                     ui.separator();
+                    focus = playback::checks(ui, state);
+                    ui.separator();
                 } else if state.running.is_none() {
                     ui.weak("Not generated yet.");
                 }
-                focus = playback::controls(ui, state, m);
+                focus = playback::controls(ui, state, m).or(focus);
             });
         });
         if let Some(at) = focus {
@@ -777,6 +826,11 @@ impl App {
                     doc.locate_model(&name, path);
                 }
             }
+            Pick::PostTo(id, scope) => {
+                if let Some(dir) = paths.into_iter().next() {
+                    self.prepare_post(id, scope, &dir);
+                }
+            }
             Pick::Profile(id, setup) => {
                 if let (Some(doc), Some(path)) = (self.find(id), paths.first()) {
                     let post = match &doc.path {
@@ -788,6 +842,61 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// Render job `id`'s programs for `scope` (one setup, or all) into `dir`, and
+    /// write them, or ask first when something stands in the way.
+    fn prepare_post(&mut self, id: DocId, scope: Option<String>, dir: &Path) {
+        let Some(doc) = self.find(id) else {
+            return;
+        };
+        let names: Vec<String> = match scope {
+            Some(name) => vec![name],
+            None => doc.job.setups.iter().map(|s| s.name.clone()).collect(),
+        };
+        if let Some(why) = post_blocker(doc, &names) {
+            doc.note(Level::Warn, format!("not posted: {why}"));
+            return;
+        }
+        // The job each setup ran from: up to date, so the same as the one edited.
+        let entries: Vec<_> = names
+            .iter()
+            .filter_map(|n| {
+                let ran = doc.setups.get(n)?.ran.as_ref()?;
+                let setup = ran.job.setups.iter().find(|s| &s.name == n)?;
+                Some((setup, &ran.ran))
+            })
+            .collect();
+        match posting::plan(&entries, &doc.dir(), dir) {
+            Err(e) => doc.note(Level::Error, format!("not posted: {e}")),
+            Ok(plan) if plan.needs_confirming() => {
+                self.post_plan = Some((id, plan));
+                self.post_anyway = false;
+                self.prompt = Some(Prompt::Post);
+            }
+            Ok(plan) => self.write_post(id, &plan),
+        }
+    }
+
+    fn write_post(&mut self, id: DocId, plan: &Plan) {
+        let Some(doc) = self.find(id) else {
+            return;
+        };
+        match posting::write(plan) {
+            Ok(n) => {
+                for (setup, _) in &plan.refused {
+                    doc.note(
+                        Level::Warn,
+                        format!("posted '{setup}' although it did NOT pass its checks"),
+                    );
+                }
+                doc.note(
+                    Level::Info,
+                    format!("posted {n} program(s) to {}", plan.dir.display()),
+                );
+            }
+            Err(e) => doc.note(Level::Error, format!("posting failed: {e}")),
         }
     }
 
@@ -920,6 +1029,68 @@ impl App {
                         done = true;
                     }
                 }
+                Prompt::Post => {
+                    let Some((id, plan)) = self.post_plan.as_ref() else {
+                        done = true;
+                        return;
+                    };
+                    ui.heading(format!(
+                        "Post {} program(s) to {}?",
+                        plan.programs.len(),
+                        plan.dir.display()
+                    ));
+                    if !plan.refused.is_empty() {
+                        ui.colored_label(
+                            ui.visuals().error_fg_color,
+                            "These setups did NOT pass their checks. Their programs are \
+                             not safe to run as they stand:",
+                        );
+                        egui::ScrollArea::vertical()
+                            .id_salt("refused")
+                            .max_height(180.0)
+                            .show(ui, |ui| {
+                                for (setup, why) in &plan.refused {
+                                    ui.strong(setup);
+                                    for w in why {
+                                        ui.label(format!("• {w}"));
+                                    }
+                                }
+                            });
+                        ui.checkbox(
+                            &mut self.post_anyway,
+                            "I know why, and want these programs anyway",
+                        );
+                    }
+                    if !plan.overwrites.is_empty() {
+                        ui.label("These files are there already, and will be replaced:");
+                        for p in plan.overwrites.iter().take(8) {
+                            let name = p.file_name().map(|n| n.to_string_lossy().into_owned());
+                            ui.monospace(name.unwrap_or_default());
+                        }
+                        if plan.overwrites.len() > 8 {
+                            ui.weak(format!("and {} more", plan.overwrites.len() - 8));
+                        }
+                    }
+                    let go = if plan.refused.is_empty() {
+                        "Replace and post"
+                    } else {
+                        "Post anyway"
+                    };
+                    let allowed = plan.refused.is_empty() || self.post_anyway;
+                    let id = *id;
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(allowed, egui::Button::new(go)).clicked() {
+                            then = Some(Box::new(move |app: &mut Self| {
+                                if let Some((_, plan)) = app.post_plan.take() {
+                                    app.write_post(id, &plan);
+                                }
+                            }));
+                        }
+                        if ui.button("Cancel").clicked() {
+                            done = true;
+                        }
+                    });
+                }
             }
         });
         if let Some(f) = then {
@@ -930,6 +1101,7 @@ impl App {
             }
         } else if done || modal.should_close() {
             self.prompt = None;
+            self.post_plan = None;
         }
     }
 
@@ -1044,6 +1216,38 @@ impl App {
         let at = playback::jump_to(state, deepest);
         self.viewport.focus(at, 12.0);
         Some(deepest.drop)
+    }
+
+    /// Make one of the showing setup's checks fail, as a rapid through the part
+    /// would, then post every setup into `dir`: the HALT banner, and the prompt
+    /// that asks before posting anyway. Only the snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn fail_a_check_and_post_for_snapshot(&mut self, dir: &Path) {
+        use camcraft_session::checks::Level as CheckLevel;
+        let id = self.doc().map(|d| d.id);
+        if let Some(ran) = self.state_for_snapshot().and_then(|s| s.ran.as_mut()) {
+            let len = ran
+                .ran
+                .result
+                .operations
+                .first()
+                .map_or(0, |o| o.path.len());
+            if let Some(f) = ran
+                .ran
+                .checks
+                .groups
+                .get_mut(1)
+                .and_then(|g| g.findings.iter_mut().find(|f| f.code == "CC102"))
+            {
+                f.level = CheckLevel::Fail;
+                f.message = "1 rapid(s) pass through the part".into();
+                f.detail = "deepest 2.40 mm under the cutter".into();
+                f.at_move = Some(len / 2);
+            }
+        }
+        if let Some(id) = id {
+            self.prepare_post(id, None, dir);
+        }
     }
 
     /// Use a library of two machines' folders, kept at `path`. Only the snapshot

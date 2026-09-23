@@ -39,61 +39,58 @@ fn stderr(out: &Output) -> String {
 #[test]
 fn a_step_file_is_read_in_its_own_units() {
     let dir = scratch("a_step_file_is_read_in_its_own_units");
-    let json = dir.join("hinge.json");
     let out = camcraft(&[
-        "inspect",
+        "post",
         &fixture("hinge_jig.step"),
         "--tolerance",
         "0.05",
         "--out",
-        json.to_str().unwrap(),
+        dir.join("hinge.nc").to_str().unwrap(),
     ]);
+    let err = stderr(&out);
     assert!(
-        matches!(out.status.code(), Some(0 | 2)),
-        "exited {:?}: {}",
-        out.status.code(),
-        stderr(&out)
+        err.contains("read STEP in inch"),
+        "exited {:?}: {err}",
+        out.status.code()
     );
-    let doc: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&json).unwrap()).unwrap();
-    assert_eq!(doc["job"]["units"], "inch (from file)");
     // An inch part at its real size, 25.4 x 31.8 x 33.3 mm, not 25.4 times smaller.
-    let (min, max) = (&doc["part"]["min"], &doc["part"]["max"]);
-    let x = max[0].as_f64().unwrap() - min[0].as_f64().unwrap();
-    assert!((x - 25.4).abs() < 0.1, "X extent {x}");
+    assert!(err.contains("model is 25.4 x 31.8 x 33.3 mm"), "{err}");
 }
 
 #[test]
 fn units_that_contradict_a_step_file_are_refused() {
     let out = camcraft(&[
-        "inspect",
+        "post",
         &fixture("hinge_jig.step"),
         "--units",
         "mm",
         "--out",
-        "never-written.json",
+        "never-written.nc",
     ]);
     assert_eq!(out.status.code(), Some(1));
     let err = stderr(&out);
     assert!(err.contains("--units mm") && err.contains("inch"), "{err}");
-    assert!(!Path::new("never-written.json").exists());
+    assert!(!Path::new("never-written.nc").exists());
 }
 
 #[test]
 fn units_that_agree_with_a_step_file_are_accepted() {
     let dir = scratch("units_that_agree_with_a_step_file_are_accepted");
-    let json = dir.join("hinge.json");
     let out = camcraft(&[
-        "inspect",
+        "post",
         &fixture("hinge_jig.step"),
         "--units",
         "inch",
         "--tolerance",
         "0.05",
         "--out",
-        json.to_str().unwrap(),
+        dir.join("hinge.nc").to_str().unwrap(),
     ]);
-    assert!(matches!(out.status.code(), Some(0 | 2)), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("read STEP in inch"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]
@@ -102,10 +99,10 @@ fn an_stl_without_units_is_refused() {
     let stl = dir.join("empty.stl");
     std::fs::write(&stl, "solid t\nendsolid t\n").unwrap();
     let out = camcraft(&[
-        "inspect",
+        "post",
         stl.to_str().unwrap(),
         "--out",
-        dir.join("x.json").to_str().unwrap(),
+        dir.join("x.nc").to_str().unwrap(),
     ]);
     assert_eq!(out.status.code(), Some(1));
     assert!(stderr(&out).contains("--units"), "{}", stderr(&out));
@@ -113,7 +110,7 @@ fn an_stl_without_units_is_refused() {
 
 #[test]
 fn an_unknown_format_is_refused() {
-    let out = camcraft(&["inspect", "part.obj", "--units", "mm", "--out", "x.json"]);
+    let out = camcraft(&["post", "part.obj", "--units", "mm", "--out", "x.nc"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(stderr(&out).contains(".step"), "{}", stderr(&out));
 }
@@ -134,17 +131,12 @@ fn two_tools_on_one_number_are_refused() {
     );
     assert_ne!(clash, example, "the edit must land");
     std::fs::write(&job, clash).unwrap();
-    let out = camcraft(&[
-        "job",
-        job.to_str().unwrap(),
-        "--inspect",
-        dir.join("x.json").to_str().unwrap(),
-    ]);
+    let out = camcraft(&["job", job.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(1));
     let err = stderr(&out);
     assert!(err.contains("T1") && err.contains("load one"), "{err}");
     assert!(
-        !dir.join("x.json").exists(),
-        "nothing is computed for a refused job"
+        !err.contains("checks passed") && !err.contains("check(s) FAILED"),
+        "nothing is computed for a refused job: {err}"
     );
 }

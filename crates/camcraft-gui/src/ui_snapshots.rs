@@ -141,6 +141,15 @@ fn main_window_after_a_run() {
         .settings_for_snapshot(crate::measure::Measure::Imperial);
     h.run_steps(3);
     shoot(&mut h, "steep_deepest_imperial");
+
+    // A check fails: the HALT banner, and posting asks before writing anyway.
+    h.state_mut()
+        .settings_for_snapshot(crate::measure::Measure::Metric);
+    let out = output_dir().join("posted");
+    let _ = std::fs::remove_dir_all(&out);
+    h.state_mut().fail_a_check_and_post_for_snapshot(&out);
+    h.run_steps(3);
+    shoot(&mut h, "checks_failed_post_prompt");
 }
 
 /// A job with a top and a bottom setup sharing one block, open beside the example,

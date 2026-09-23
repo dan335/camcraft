@@ -78,9 +78,6 @@ for f in files:
     owner = next((n for n, m in members.items() if f.startswith(m["dir"] + "/")), None)
     if owner:
         hit.add(owner)
-    elif f.startswith("viewer/"):
-        # The app checks its colours and type against viewer/tokens.css.
-        hit.add("camcraft-gui")
     elif not docs_only(f):
         print("ALL")
         sys.exit()

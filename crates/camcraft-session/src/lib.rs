@@ -9,7 +9,8 @@
 //! - where a job's model files are ([`fs::resolve`]), and how a job is read and
 //!   written ([`read_job`], [`write_job`]),
 //! - the one engine path ([`run_setup`]),
-//! - the one verification policy ([`gate`]),
+//! - the one set of checks ([`checks`]) and the one verification policy
+//!   ([`gate`]): no program from a setup with a failure among them,
 //! - and how a program is named and rendered ([`program`], [`program_name`]).
 //!
 //! Position in the dependency DAG: depends on every library crate, and only the two
@@ -17,8 +18,8 @@
 //! what happened as data (`notes` and `warnings`), and each front end presents it
 //! in its own way.
 
+pub mod checks;
 pub mod fs;
-pub mod inspection;
 pub mod library;
 
 use std::collections::BTreeMap;
@@ -37,6 +38,8 @@ use camcraft_import::stl::{ImportError, load_stl};
 use camcraft_post::op::{LowerError, ProgramSpec, Spin, Units as PostUnits, lower};
 use camcraft_post::profile::{Profile, ProfileError};
 use camcraft_post::render::{RenderReport, render};
+
+use crate::checks::Checks;
 
 pub use camcraft_import::stl::Units;
 
@@ -353,6 +356,8 @@ pub struct Ran {
     pub notes: Vec<String>,
     /// Everything worth a person's attention: the setup's and its models'.
     pub warnings: Vec<String>,
+    /// What the checks found. The gate is "no failures here".
+    pub checks: Checks,
 }
 
 /// The one engine path: setup `index` of `job`, with its models.
@@ -373,17 +378,29 @@ pub fn run_setup(job: &Job, index: usize, models: &Models<'_>) -> Result<Ran, Se
     let result = run_prepared(job, index, &prepared)?;
     notes.extend(summary(&result));
 
-    let mut warnings = result.warnings();
+    let mut model_warnings = Vec::new();
     for m in job.models_for(index) {
         if let Some(model) = models.get(m.name.as_str()) {
-            warnings.extend(model.warnings.iter().map(|w| format!("{}: {w}", m.name)));
+            model_warnings.extend(model.warnings.iter().map(|w| format!("{}: {w}", m.name)));
         }
     }
+    let checks = checks::check(
+        job,
+        index,
+        &prepared.part,
+        &result.operations,
+        &result.verify,
+        result.verify_budget,
+        &model_warnings,
+    );
+    let mut warnings = result.warnings();
+    warnings.extend(model_warnings);
     Ok(Ran {
         result,
         part: prepared.part,
         notes,
         warnings,
+        checks,
     })
 }
 
@@ -422,10 +439,17 @@ pub enum Passed {
     Forced,
 }
 
-/// The one verification policy: no program from a setup that did not verify,
-/// unless the caller insists.
+impl Ran {
+    /// Whether it may be posted: it verified, and no check fails.
+    pub fn passed(&self) -> bool {
+        self.result.is_clean() && self.checks.passed()
+    }
+}
+
+/// The one verification policy: no program from a setup that did not verify, or
+/// that any check fails, unless the caller insists.
 pub fn gate(ran: &Ran, force: bool) -> Result<Passed, SessionError> {
-    if ran.result.is_clean() {
+    if ran.passed() {
         Ok(Passed::Verified)
     } else if force {
         Ok(Passed::Forced)
@@ -708,6 +732,112 @@ mod tests {
         // Make it unclean the way the simulator would: a rapid through material.
         let op = ran.result.operations.first_mut().unwrap();
         op.sim.rapid_contacts = 1;
+        assert!(matches!(gate(&ran, false), Err(SessionError::Refused)));
+        assert_eq!(gate(&ran, true).unwrap(), Passed::Forced);
+    }
+
+    /// Re-check a run after its first operation's path has been tampered with.
+    fn recheck(ran: &Ran, tamper: impl FnOnce(&mut camcraft_core::toolpath::Toolpath)) -> Checks {
+        let job = small_job();
+        let mut ops = ran.result.operations.clone();
+        tamper(&mut ops[0].path);
+        checks::check(
+            &job,
+            0,
+            &ran.part,
+            &ops,
+            &ran.result.verify,
+            ran.result.verify_budget,
+            &[],
+        )
+    }
+
+    fn failed(checks: &Checks) -> Vec<&'static str> {
+        checks.failures().map(|(_, f)| f.code).collect()
+    }
+
+    /// A clean run passes every failure check, and says so check by check.
+    #[test]
+    fn a_clean_run_passes_its_checks() {
+        let ran = run_small();
+        assert!(ran.checks.passed(), "{:?}", ran.checks.failure_lines());
+        let passed: Vec<&str> = ran
+            .checks
+            .groups
+            .iter()
+            .flat_map(|g| &g.findings)
+            .filter(|f| f.level == checks::Level::Pass)
+            .map(|f| f.code)
+            .collect();
+        for code in [
+            "CC101", "CC102", "CC103", "CC104", "CC105", "CC106", "CC107",
+        ] {
+            assert!(passed.contains(&code), "{code} not reported as passed");
+        }
+    }
+
+    /// Each failure the checks exist for is found, and found at its move, from the
+    /// path alone: the engine's own reports still say all is well.
+    #[test]
+    fn the_checks_find_what_is_wrong_with_a_path() {
+        use camcraft_core::toolpath::MoveRole;
+        use glam::dvec3;
+        let ran = run_small();
+        let b = ran.part.bounds().unwrap();
+        let mid = b.center();
+
+        // A rapid straight through the middle of the part.
+        let c = recheck(&ran, |p| {
+            p.rapid_to(dvec3(b.min.x - 10.0, mid.y, mid.z)).unwrap();
+            p.rapid_to(dvec3(b.max.x + 10.0, mid.y, mid.z)).unwrap();
+        });
+        assert_eq!(failed(&c), ["CC102"]);
+        // At one of the two added rapids: the first also cuts through the part on
+        // its way down.
+        let at = c.failures().next().unwrap().1.at_move.unwrap();
+        assert!(at >= ran.result.operations[0].path.len(), "{at}");
+
+        // A plunge that travels sideways.
+        let c = recheck(&ran, |p| {
+            let at = p.moves().last().unwrap().to;
+            p.feed_to(at + dvec3(3.0, 0.0, -1.0), MoveRole::Plunge, 300.0)
+                .unwrap();
+        });
+        assert_eq!(failed(&c), ["CC103"]);
+
+        // A hole the linker never filled.
+        let c = recheck(&ran, |p| {
+            let at = p.moves().last().unwrap().to;
+            p.feed_to(at + dvec3(1.0, 0.0, 0.0), MoveRole::Link, 300.0)
+                .unwrap();
+        });
+        assert_eq!(failed(&c), ["CC101"]);
+
+        // A plunge at cutting feed, in short moves.
+        let c = recheck(&ran, |p| {
+            let at = p.moves().last().unwrap().to;
+            for k in 1..=5 {
+                let k = f64::from(k);
+                p.feed_to(at + dvec3(0.001 * k, 0.0, -0.3 * k), MoveRole::Cut, 300.0)
+                    .unwrap();
+            }
+        });
+        assert_eq!(failed(&c), ["CC105"]);
+    }
+
+    /// The gate is "no failures": a path the engine is happy with, but the checks
+    /// are not, is refused.
+    #[test]
+    fn a_failed_check_closes_the_gate() {
+        use camcraft_core::toolpath::MoveRole;
+        use glam::dvec3;
+        let mut ran = run_small();
+        assert!(ran.result.is_clean());
+        ran.checks = recheck(&ran, |p| {
+            let at = p.moves().last().unwrap().to;
+            p.feed_to(at + dvec3(3.0, 0.0, -1.0), MoveRole::Plunge, 300.0)
+                .unwrap();
+        });
         assert!(matches!(gate(&ran, false), Err(SessionError::Refused)));
         assert_eq!(gate(&ran, true).unwrap(), Passed::Forced);
     }

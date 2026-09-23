@@ -1,10 +1,11 @@
-//! What the inspector shows is what the machine runs.
+//! What the app shows is what the machine runs.
 //!
-//! These drive the real binary. The inspection document and the G-code must come
-//! from one engine path, so the check is direct: parse every program back into
-//! positions and compare them with the path the inspection document holds, move for
-//! move. A second, approximate path for the picture is exactly the defect this
-//! guards against -- a bug could live in only the one nobody looks at.
+//! These drive the real binary. The app runs a setup through
+//! `camcraft_session::run_setup` and draws what comes back; the G-code must come
+//! from that same path. So the check is direct: parse every program back into
+//! positions and compare them with the paths `run_setup` produces, move for move. A
+//! second, approximate path for the picture is exactly the defect this guards
+//! against -- a bug could live in only the one nobody looks at.
 
 #![allow(
     clippy::unwrap_used,
@@ -17,9 +18,10 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use camcraft_core::toolpath::{MoveRole, Toolpath};
 use camcraft_geom::mesh::TriMesh;
 use camcraft_geom::synthetic;
-use serde_json::Value;
+use camcraft_session::{Models, load_job_model, read_job, run_setup};
 
 const JOB: &str = r#"
 version = 1
@@ -115,17 +117,9 @@ fn camcraft(args: &[&str]) -> std::process::Output {
     out
 }
 
-fn read_json(path: &Path) -> Value {
-    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
-}
-
 /// Position as the post writes it: three decimals, and -0 is 0.
-fn at(v: &Value) -> [f64; 3] {
-    let a = v.as_array().unwrap();
-    std::array::from_fn(|i| {
-        let x = a.get(i).and_then(Value::as_f64).unwrap();
-        format!("{x:.3}").parse::<f64>().unwrap() + 0.0
-    })
+fn at(p: glam::DVec3) -> [f64; 3] {
+    [p.x, p.y, p.z].map(|x| format!("{x:.3}").parse::<f64>().unwrap() + 0.0)
 }
 
 /// Every motion in a Masso program: `(rapid, position)` per block that moves.
@@ -161,25 +155,63 @@ fn motions(program: &str) -> Vec<(bool, [f64; 3])> {
 
 /// The path as the post will have written it: rounded, and without the moves that
 /// round to where the tool already is, which the renderer rightly drops.
-fn expected(path: &Value) -> Vec<(bool, [f64; 3])> {
+fn expected(path: &Toolpath) -> Vec<(bool, [f64; 3])> {
     let mut out: Vec<(bool, [f64; 3])> = Vec::new();
-    for m in path.as_array().unwrap() {
-        let p = at(&m["to"]);
+    for m in path.moves() {
+        let p = at(m.to);
         if out.last().is_some_and(|(_, q)| *q == p) {
             continue;
         }
-        out.push((m["role"] == "rapid", p));
+        out.push((m.role == MoveRole::Rapid, p));
     }
     out
 }
 
+/// Setup 0 of the job at `path`, run in-process exactly as the app runs it.
+fn run_in_process(path: &Path) -> Vec<(String, Toolpath)> {
+    let job = read_job(path).unwrap();
+    let dir = path.parent().unwrap();
+    let loaded: Vec<_> = job
+        .models_for(0)
+        .into_iter()
+        .map(|m| {
+            (
+                m.name.clone(),
+                load_job_model(dir, m, job.tolerance).unwrap(),
+            )
+        })
+        .collect();
+    let models: Models<'_> = loaded.iter().map(|(n, m)| (n.as_str(), m)).collect();
+    run_setup(&job, 0, &models)
+        .unwrap()
+        .result
+        .operations
+        .into_iter()
+        .map(|o| (o.name, o.path))
+        .collect()
+}
+
+fn assert_same(name: &str, program: &Path, want: &[(bool, [f64; 3])]) {
+    let got = motions(&std::fs::read_to_string(program).unwrap());
+    assert!(want.len() > 50, "{name}: suspiciously short path");
+    assert_eq!(
+        got.len(),
+        want.len(),
+        "{name}: program has {} motions, the run has {}",
+        got.len(),
+        want.len()
+    );
+    for (k, (g, w)) in got.iter().zip(want).enumerate() {
+        assert_eq!(g, w, "{name}: motion {k} differs");
+    }
+}
+
 #[test]
-fn every_program_is_the_path_the_inspector_shows() {
-    let dir = scratch("every_program_is_the_path_the_inspector_shows");
+fn every_program_is_the_path_the_app_shows() {
+    let dir = scratch("every_program_is_the_path_the_app_shows");
     dome(&dir);
     let job = dir.join("job.camcraft");
     std::fs::write(&job, JOB).unwrap();
-    let json = dir.join("inspect.json");
     let programs = dir.join("out");
 
     camcraft(&[
@@ -187,45 +219,27 @@ fn every_program_is_the_path_the_inspector_shows() {
         job.to_str().unwrap(),
         "--profile",
         "masso",
-        "--inspect",
-        json.to_str().unwrap(),
         "--out",
         programs.to_str().unwrap(),
     ]);
 
-    let doc = read_json(&json);
-    assert_eq!(doc["format"], 2);
-    let ops = doc["operations"].as_array().unwrap();
-    let names: Vec<&str> = ops.iter().map(|o| o["name"].as_str().unwrap()).collect();
+    let ops = run_in_process(&job);
+    let names: Vec<&str> = ops.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(names, ["rough", "finish"], "every operation, in order");
-
-    for (i, op) in ops.iter().enumerate() {
-        let name = op["name"].as_str().unwrap();
+    for (i, (name, path)) in ops.iter().enumerate() {
         let file = programs.join(format!("top-{:02}-{name}.nc", i + 1));
-        let got = motions(&std::fs::read_to_string(&file).unwrap());
-        let want = expected(&op["path"]);
-        assert!(want.len() > 50, "{name}: suspiciously short path");
-        assert_eq!(
-            got.len(),
-            want.len(),
-            "{name}: program has {} motions, inspection shows {}",
-            got.len(),
-            want.len()
-        );
-        for (k, (g, w)) in got.iter().zip(&want).enumerate() {
-            assert_eq!(g, w, "{name}: motion {k} differs");
-        }
+        assert_same(name, &file, &expected(path));
     }
 }
 
-/// `inspect` is a one-operation job, not a separate engine path.
+/// `post` is a one-operation job, not a separate engine path.
 #[test]
-fn inspect_is_the_same_path_as_the_equivalent_job() {
-    let dir = scratch("inspect_is_the_same_path_as_the_equivalent_job");
+fn post_is_the_same_path_as_the_equivalent_job() {
+    let dir = scratch("post_is_the_same_path_as_the_equivalent_job");
     let model = dome(&dir);
-    let flags = dir.join("flags.json");
+    let flags = dir.join("flags.nc");
     camcraft(&[
-        "inspect",
+        "post",
         model.to_str().unwrap(),
         "--units",
         "mm",
@@ -241,6 +255,8 @@ fn inspect_is_the_same_path_as_the_equivalent_job() {
         "5",
         "--feed",
         "2000",
+        "--tool-number",
+        "1",
         "--out",
         flags.to_str().unwrap(),
     ]);
@@ -255,6 +271,7 @@ tolerance = 0.1
 [tools.cutter]
 kind = "ball"
 diameter = 3.0
+number = 1
 [[model]]
 name = "dome"
 path = "dome.stl"
@@ -276,54 +293,34 @@ linking = { retract_feed = 2000.0, plunge_feed = 500.0 }
 "#,
     )
     .unwrap();
-    let file = dir.join("file.json");
-    camcraft(&[
-        "job",
-        job.to_str().unwrap(),
-        "--inspect",
-        file.to_str().unwrap(),
-    ]);
+    let out = dir.join("out");
+    camcraft(&["job", job.to_str().unwrap(), "--out", out.to_str().unwrap()]);
 
-    let (a, b) = (read_json(&flags), read_json(&file));
-    let (pa, pb) = (&a["operations"][0]["path"], &b["operations"][0]["path"]);
-    assert!(pa.as_array().unwrap().len() > 50);
-    assert!(pa == pb, "inspect and job produced different paths");
-    assert_eq!(a["job"]["verify"], b["job"]["verify"]);
+    let from_job = motions(&std::fs::read_to_string(out.join("finish-01-finish.nc")).unwrap());
+    assert!(from_job.len() > 50);
+    assert_same("post", &flags, &from_job);
 }
 
-/// Inspecting alone writes nothing a machine can read.
+/// Without `--out`, a job is run and checked, and nothing is written.
 #[test]
-fn job_with_only_inspect_writes_no_program() {
-    let dir = scratch("job_with_only_inspect_writes_no_program");
+fn a_job_without_out_writes_nothing() {
+    let dir = scratch("a_job_without_out_writes_nothing");
     dome(&dir);
     let job = dir.join("job.camcraft");
     std::fs::write(&job, JOB).unwrap();
-    let json = dir.join("inspect.json");
-    camcraft(&[
-        "job",
-        job.to_str().unwrap(),
-        "--inspect",
-        json.to_str().unwrap(),
-    ]);
-    assert!(json.exists());
+    let out = camcraft(&["job", job.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("checks passed"), "{err}");
     let written: Vec<_> = std::fs::read_dir(&dir)
         .unwrap()
         .filter_map(Result::ok)
-        .filter(|e| e.path().extension().is_some_and(|x| x == "nc"))
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n != "job.camcraft" && n != "dome.stl")
+        })
         .collect();
-    assert!(written.is_empty(), "wrote programs: {written:?}");
-}
-
-/// Neither output asked for is a mistake, and is refused before any work is done.
-#[test]
-fn job_with_no_output_is_refused() {
-    let out = Command::new(env!("CARGO_BIN_EXE_camcraft"))
-        .args(["job", "job.camcraft"])
-        .output()
-        .unwrap();
-    assert!(!out.status.success());
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("--out") && err.contains("--inspect"), "{err}");
+    assert!(written.is_empty(), "wrote: {written:?}");
 }
 
 /// A job's models are found beside it, and an STL among them must say its units.
@@ -334,7 +331,7 @@ fn a_job_names_its_own_models() {
     let job = dir.join("job.camcraft");
     std::fs::write(&job, JOB.replace("units = \"mm\"\n", "")).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_camcraft"))
-        .args(["job", job.to_str().unwrap(), "--inspect", "x.json"])
+        .args(["job", job.to_str().unwrap()])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
@@ -346,7 +343,7 @@ fn a_job_names_its_own_models() {
 
     std::fs::write(&job, JOB.replace("dome.stl", "elsewhere/dome.stl")).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_camcraft"))
-        .args(["job", job.to_str().unwrap(), "--inspect", "x.json"])
+        .args(["job", job.to_str().unwrap()])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));

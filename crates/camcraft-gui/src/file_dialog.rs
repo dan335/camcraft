@@ -30,6 +30,8 @@ pub enum Pick {
     Locate(DocId, String),
     /// A machine profile file for setup `setup` of job `doc`.
     Profile(DocId, String),
+    /// The folder to post job `doc`'s programs into: one setup's, or every setup's.
+    PostTo(DocId, Option<String>),
 }
 
 /// The dialog and whatever it is currently answering.
@@ -79,14 +81,18 @@ impl AppFileDialog {
             Pick::AddModels(_) => ("Add models", MODELS),
             Pick::Locate(_, _) => ("Find the model", MODELS),
             Pick::Profile(_, _) => ("Choose a machine profile", PROFILES),
+            Pick::PostTo(_, _) => ("Post programs into", PROFILES),
         };
         config.title = Some(title.to_owned());
         config.default_file_filter = Some(filter.to_owned());
         config.default_file_name = name.to_owned();
         let many = matches!(pick, Pick::OpenJobs | Pick::AddModels(_));
         let save = matches!(pick, Pick::SaveJob(_));
+        let folder = matches!(pick, Pick::PostTo(_, _));
         self.dialog.set_user_data(pick);
-        if save {
+        if folder {
+            self.dialog.pick_directory();
+        } else if save {
             self.dialog.save_file();
         } else if many {
             self.dialog.pick_multiple();

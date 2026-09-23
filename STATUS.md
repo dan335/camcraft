@@ -2,10 +2,11 @@
 
 Last updated 2026-09-23. Read this before picking the work back up.
 
-**0.1 is feature-complete: 0.1-a to 0.1-d, the `job.toml` contract, and an
-inspector that shows the real multi-operation job.** All gates green. The engine
-takes a STEP or STL model and a job file and writes G-code, and refuses to write a
-program the simulator has not verified against material.
+**0.2 is feature-complete bar the carried items: the desktop app runs, checks and
+posts jobs.** All gates green. The engine takes a STEP or STL model and a job file
+and writes G-code, and refuses to write a program that fails a check, the
+simulator's against material among them. The web inspector is gone; the app is
+where a job is looked at.
 
 **Nothing has been cut yet.** See *Before the first cut* below — there are things
 only the machine can tell us.
@@ -15,11 +16,13 @@ only the machine can tell us.
 ```powershell
 cd D:\rust\camcraft
 
-# Look first: every operation's path as JSON, no G-code written
-cargo run --release -p camcraft-cli -- job examples\rail-jig.camcraft --inspect job.json
-bash scripts/view.sh     # then drop job.json on the page
+# Look first, in the app: Generate, read the checks, scrub, then Post
+bash scripts/run.sh examples\rail-jig.camcraft
 
-# Then write one program per operation (--inspect and --out can go together)
+# Or from the command line: run and check, nothing written
+cargo run --release -p camcraft-cli -- job examples\rail-jig.camcraft
+
+# Then write one program per operation
 cargo run --release -p camcraft-cli -- job examples\rail-jig.camcraft --out out
 ```
 
@@ -29,15 +32,22 @@ has its own post, work offset, orientation and work zero, and programs are named
 every setup's post. A STEP file states its own units; an STL model needs
 `units = "mm"` or `"inch"` in the job.
 
-`inspect` and `post` still exist for a single finishing pass described with flags.
-They build a one-operation job and go through the same `run_job` as `job`, so there
-is exactly one engine path. The inspection JSON is written *before* the verification
-gate, so a job that is refused can still be looked at.
-`crates/camcraft-cli/tests/one_path.rs` parses every written program back into
-positions and compares them with the inspection JSON, move for move.
+`post` still exists for a single finishing pass described with flags. It builds a
+one-operation job and goes through the same `run_setup` as `job` and the app, so
+there is exactly one engine path. `crates/camcraft-cli/tests/one_path.rs` parses
+every written program back into positions and compares them with the paths
+`run_setup` produces in-process, move for move.
 
-Exit codes: `0` clean, `2` ran with warnings worth reading, `1` refused because the
-simulator objected. `--force` overrides and says loudly that it did.
+**Checks** (`camcraft_session::checks`) are one list, printed by the command line
+and shown in the app: `CC1xx` failures (unresolved links, a rapid through the part,
+a sideways plunge or retract, feeds that do not suit their move, a plunge at cutting
+feed, a rapid through material, a gouge) and `CC2xx` advisories. They are
+re-derived from the path and the exact part where they can be — the rapid check
+lowers the job's cutter along every rapid — rather than echoing the engine's own
+report. The gate is "no failures".
+
+Exit codes: `0` clean, `2` ran with warnings worth reading, `1` a check failed (and,
+with `--out`, nothing was written). `--force` overrides and says loudly that it did.
 
 Last full run on the 237 × 227 × 76 mm router jig, read straight from
 `sled_base.step`, 17 s on an M-series Mac (26 s before roughing came from the model):
@@ -84,9 +94,7 @@ each pass next to where the following one starts.
      readable on Retina. A scrub through the whole program in machine order, with
      arrow-key stepping and a readout of the move. Toggles by role, by operation,
      for the part and for the stock outline. The job's own cutter is drawn at the
-     scrub position, and still shows, fainter, when a pocket hides it. The web
-     inspector stays only until its checks panel is ported (item 5), then
-     `viewer/` goes.
+     scrub position, and still shows, fainter, when a pocket hides it.
    - **Simulated stock view: done.** The material at any stage (the block, after
      each operation, or following the scrub), coloured by the verifier's own rule:
      red below the part, amber left above it (deeper amber for more), grey finished,
@@ -106,13 +114,19 @@ each pass next to where the following one starts.
      shows the selected setup as it sits on the machine, with its stock and its
      work zero's axes; each setup keeps its own camera, scrub and stock view. A
      result goes out of date when anything it was made from changes, and says so.
-   - **Run, check, post:** background runs are done (Generate, Generate all).
-     Still to come: the checks panel, and posting from the app with the same
-     refusal to post an unverified setup as the CLI (`camcraft job` posts today).
+   - **Run, check, post: done.** Background runs (Generate, Generate all). The
+     checks panel under each setup's result: a HALT banner when anything fails,
+     findings by operation, and a click on one at a move scrubs, follows the stock
+     and flies the camera there. **Post {setup}…** and **Post all…** write the
+     same programs, names and folder layout as `camcraft job --out`, all setups or
+     none, from results that are up to date; they ask before replacing files, and
+     a setup that failed a check is posted only after ticking "I know why" and
+     pressing Post anyway. The web inspector, `scripts/view.sh` and `--inspect`
+     are gone; the design tokens moved to `crates/camcraft-gui/design/tokens.css`.
    - **Steep descents: done.** A plunge is a *continuous* descent steeper than
      `PLUNGE_RATIO` (10:1) that falls further than `max_cut_step`, measured over
      the whole run of moves, not move by move. Finishing breaks its passes there,
-     and the gate refuses any that remains; the viewer and the app measure it the
+     and the gate refuses any that remains; the checks and the app measure it the
      same way.
 
    Also carried along: items 1 and 2 above, and the OpenCascade licensing decision.
@@ -299,8 +313,7 @@ Worth knowing, because each was found by looking rather than by a test passing:
   The part that exposed it is private. A synthetic sculpted-surface fixture should
   replace it.
 - **This has now been worked on from macOS as well as Windows.** Paths above are the
-  Windows ones. `scripts/view.sh` falls back to `python3`, because macOS has no
-  `python`.
+  Windows ones.
 - **Run `bash scripts/check.sh` unpiped.** Piping through `tail` buffers the whole run
   and hides progress.
 - There is no CI while the repo is private, so that script is the only thing between a
@@ -314,10 +327,9 @@ camcraft-import   STL and STEP (OpenCascade), checked against the file -> geom
 camcraft-sim      material removal: stock updater + gouge oracle     -> geom
 camcraft-core     tools, reach, strategies, toolpaths, job, run      -> geom, sim
 camcraft-post     Op IR, TOML dialect renderers                      -> geom, core
-camcraft-session  load, run, gate, post: shared by CLI and app        -> all libraries
-camcraft-cli      inspect / post / job                                -> session
+camcraft-session  load, run, check, gate, post: shared by CLI and app -> all libraries
+camcraft-cli      post / job                                          -> session
 camcraft-gui      desktop app: egui/eframe, wgpu viewport             -> session
-viewer/           local inspector; part geometry never leaves the machine
 ```
 
 `core` cannot see `post`, so it cannot name a G-code concept. That is what keeps

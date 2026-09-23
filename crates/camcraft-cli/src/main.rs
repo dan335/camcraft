@@ -4,15 +4,14 @@
 //! `camcraft-session`, which the desktop app shares, so the two cannot disagree
 //! about what a file means, what runs or what is allowed to be posted.
 //!
-//! Every subcommand runs through one engine path. `inspect` and `post` describe a
-//! single finishing operation with flags, and are turned into a one-operation job
-//! before anything is computed; `job` reads a job file, with its models, stocks and
-//! setups. What the
-//! inspector draws and what the post writes therefore come from the same path, move
-//! for move.
+//! Every subcommand runs through one engine path, the one the desktop app runs.
+//! `post` describes a single finishing operation with flags, and is turned into a
+//! one-operation job before anything is computed; `job` reads a job file, with its
+//! models, stocks and setups. What the app draws and what the post writes
+//! therefore come from the same path, move for move.
 //!
-//! `inspect` writes no G-code, which is deliberate: nothing that can reach a
-//! machine comes out of it.
+//! Every run is checked ([`camcraft_session::checks`]), and the list is printed.
+//! `job` without `--out` stops there: it runs and checks, and writes nothing.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -20,12 +19,12 @@ use std::process::ExitCode;
 use std::collections::BTreeMap;
 
 use camcraft_core::job::{Job as JobSpec, LengthUnit, ModelDef};
+use camcraft_session::checks::{Checks, Level};
 use camcraft_session::{
-    FinishSpec, FinishTool, Model, Models, Passed, Ran, SessionError, Units, gate, inspection,
-    load_job_model, load_model, load_profile, program, program_name, read_job, run_setup,
-    single_operation,
+    FinishSpec, FinishTool, Model, Models, Passed, Ran, SessionError, Units, gate, load_job_model,
+    load_model, load_profile, program, program_name, read_job, run_setup, single_operation,
 };
-use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// Generate 3-axis CNC toolpaths from a 3D model.
 #[derive(Parser, Debug)]
@@ -37,28 +36,22 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Compute a finishing pass and write part + path as JSON for inspection.
-    ///
-    /// Emits nothing a machine can read. Look at the result before cutting.
-    Inspect(InspectArgs),
     /// Write a G-code program for a single finishing pass.
     ///
-    /// Refuses unless the simulator verifies the result against the part, because a
-    /// file that can reach a machine should have been checked against material and
-    /// not merely against geometry.
+    /// Refuses unless the result passes its checks, the simulator's against the
+    /// part among them, because a file that can reach a machine should have been
+    /// checked against material and not merely against geometry.
     Post(PostArgs),
     /// Run a job file: its setups, each with its own models, stock and post.
     ///
     /// A setup's operations run in order against one block of material, each
-    /// reading what the last one left. Writes one program per operation, named
-    /// after its setup, and refuses to write any unless every setup run verified.
-    /// `--inspect` writes what will run as JSON for the inspector, and is written
-    /// even when verification fails, because that is when it is needed.
+    /// reading what the last one left. Every setup is checked and the findings
+    /// printed. With `--out`, writes one program per operation, named after its
+    /// setup, and refuses to write any unless every setup passed its checks.
     Job(JobArgs),
 }
 
 #[derive(Parser, Debug)]
-#[command(group(ArgGroup::new("output").required(true).multiple(true).args(["out", "inspect"])))]
 struct JobArgs {
     /// The job file (`.camcraft`). Its models are found relative to it.
     job: PathBuf,
@@ -73,16 +66,12 @@ struct JobArgs {
     #[arg(long)]
     profile: Option<String>,
 
-    /// Directory to write programs into. One file per operation.
+    /// Directory to write programs into. One file per operation. Without it, the
+    /// setups are run and checked, and nothing is written.
     #[arg(short, long)]
     out: Option<PathBuf>,
 
-    /// Write every operation's path as JSON for the inspector. With more than one
-    /// setup, one file each, named after the setup.
-    #[arg(long)]
-    inspect: Option<PathBuf>,
-
-    /// Write programs even though verification failed.
+    /// Write programs even though checks failed.
     #[arg(long)]
     force: bool,
 }
@@ -90,7 +79,7 @@ struct JobArgs {
 #[derive(Parser, Debug)]
 struct PostArgs {
     #[command(flatten)]
-    job: InspectArgs,
+    job: FlagArgs,
 
     /// Machine profile: a builtin name, or a path to a TOML profile.
     #[arg(long, default_value = "masso")]
@@ -108,16 +97,17 @@ struct PostArgs {
     #[arg(long, default_value_t = 1)]
     tool_number: u32,
 
-    /// Write the program even though verification failed.
+    /// Write the program even though checks failed.
     ///
     /// Prints what is wrong first. Reach for this only when you know why the
-    /// simulator objects and have decided it is wrong.
+    /// checks object and have decided they are wrong.
     #[arg(long)]
     force: bool,
 }
 
+/// A single finishing pass, described with flags.
 #[derive(Parser, Debug)]
-struct InspectArgs {
+struct FlagArgs {
     /// Model to machine (`.stl`, `.step` or `.stp`).
     model: PathBuf,
 
@@ -162,7 +152,7 @@ struct InspectArgs {
     #[arg(long, default_value_t = 1200.0)]
     feed: f64,
 
-    /// Where to write the output.
+    /// Where to write the program.
     #[arg(short, long)]
     out: PathBuf,
 }
@@ -212,7 +202,6 @@ fn main() -> ExitCode {
     let outcome = match cli.command {
         Command::Job(args) => job(args),
         Command::Post(args) => post(args),
-        Command::Inspect(args) => inspect(args),
     };
     match outcome {
         Ok(0) => ExitCode::SUCCESS,
@@ -269,56 +258,52 @@ fn execute(job: &JobSpec, setup: usize, models: &Models<'_>) -> Fallible<Ran> {
     Ok(ran)
 }
 
-fn write_inspection(
-    path: &Path,
-    model: &str,
-    units: &str,
-    job: &JobSpec,
-    setup: usize,
-    ran: &Ran,
-) -> Fallible<()> {
-    let doc = inspection::document(
-        model,
-        units,
-        &ran.part,
-        job,
-        setup,
-        &ran.result,
-        &ran.warnings,
-    );
-    std::fs::write(path, serde_json::to_string(&doc)?)?;
-    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    let moves: usize = ran.result.operations.iter().map(|o| o.path.len()).sum();
-    tracing::info!(
-        "wrote {moves} moves in {} operation(s) ({}) to {}",
-        ran.result.operations.len(),
-        human_size(size),
-        path.display()
-    );
-    Ok(())
-}
-
 /// The shared verification policy, with this command line's explanation.
+///
+/// The failures themselves were printed with the checks.
 fn check_gate(ran: &Ran, force: bool, look_first: &str) -> Fallible<()> {
     match gate(ran, force) {
         Ok(Passed::Verified) => Ok(()),
         Ok(Passed::Forced) => {
-            tracing::warn!("--force given: writing a program that did NOT verify");
+            tracing::warn!("--force given: writing a program that did NOT pass its checks");
             Ok(())
         }
         Err(e) => {
-            // The caller never reaches its own warning report on this path, so say
-            // what is wrong here, before refusing.
-            for w in &ran.warnings {
-                tracing::warn!("{w}");
-            }
             tracing::error!(
-                "refusing to write a program that did not verify. Look at it first:\n  \
-                 {look_first}\n  bash scripts/view.sh\n\
-                 If you understand why the simulator objects, re-run with --force."
+                "refusing to write a program that did not pass its checks. Look at it \
+                 first:\n  {look_first}\n\
+                 If you understand why the checks object, re-run with --force."
             );
             Err(e.into())
         }
+    }
+}
+
+/// Print what the checks found: failures as errors, advisories as warnings and
+/// notes, and a line for what passed.
+fn report_checks(title: &str, checks: &Checks) {
+    let mut passed = 0;
+    for group in &checks.groups {
+        for f in &group.findings {
+            let detail = if f.detail.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", f.detail)
+            };
+            let line = format!("{} {}: {}{detail}", f.code, group.title, f.message);
+            match f.level {
+                Level::Fail => tracing::error!("{line}"),
+                Level::Warn => tracing::warn!("{line}"),
+                Level::Note => tracing::info!("{line}"),
+                Level::Pass => passed += 1,
+            }
+        }
+    }
+    let failed = checks.failures().count();
+    if failed == 0 {
+        tracing::info!("{title}: all {passed} checks passed");
+    } else {
+        tracing::error!("{title}: {failed} check(s) FAILED. Do not run this program.");
     }
 }
 
@@ -390,30 +375,9 @@ fn job(args: JobArgs) -> Fallible<usize> {
         runs.push((i, execute(&job, i, &models)?));
     }
 
-    // Before the gate, not after it: a job that failed to verify is exactly the one
-    // that needs looking at.
-    if let Some(path) = &args.inspect {
-        for (i, ran) in &runs {
-            let Some(setup) = job.setups.get(*i) else {
-                continue;
-            };
-            let names: Vec<&str> = setup.models.iter().map(String::as_str).collect();
-            let units: Vec<&str> = setup
-                .models
-                .iter()
-                .filter_map(|n| loaded.get(n))
-                .map(|m| m.units.as_str())
-                .collect();
-            let target = if runs.len() == 1 {
-                path.clone()
-            } else {
-                let stem = path
-                    .file_stem()
-                    .map_or_else(|| "inspect".into(), |s| s.to_string_lossy().to_string());
-                path.with_file_name(format!("{stem}-{}.json", setup.name))
-            };
-            write_inspection(&target, &names.join(", "), &units.join(", "), &job, *i, ran)?;
-        }
+    for (i, ran) in &runs {
+        let name = job.setups.get(*i).map_or("setup", |s| s.name.as_str());
+        report_checks(&format!("setup {name}"), &ran.checks);
     }
 
     if let Some(dir) = &args.out {
@@ -423,7 +387,7 @@ fn job(args: JobArgs) -> Fallible<usize> {
             check_gate(
                 ran,
                 args.force,
-                "camcraft job ... --inspect path.json, then drop it on the inspector",
+                "bash scripts/run.sh JOB, to open it in the app",
             )?;
         }
         std::fs::create_dir_all(dir)?;
@@ -441,18 +405,15 @@ fn job(args: JobArgs) -> Fallible<usize> {
         }
     }
 
-    let mut count = 0;
-    for (_, ran) in &runs {
-        for w in &ran.warnings {
-            tracing::warn!("{w}");
-        }
-        count += ran.warnings.len();
+    let failed: usize = runs.iter().map(|(_, r)| r.checks.failures().count()).sum();
+    if args.out.is_none() && failed > 0 {
+        return Err(format!("{failed} check(s) failed").into());
     }
-    Ok(count)
+    Ok(runs.iter().map(|(_, r)| r.warnings.len()).sum())
 }
 
-/// The job `inspect` and `post` describe with flags, and its model, loaded.
-fn flag_job(args: &InspectArgs, wcs: u8, rpm: u32, number: u32) -> Fallible<(JobSpec, Model)> {
+/// The job `post` describes with flags, and its model, loaded.
+fn flag_job(args: &FlagArgs, wcs: u8, rpm: u32, number: u32) -> Fallible<(JobSpec, Model)> {
     let model = load(&args.model, args.units, args.tolerance)?;
     let def = ModelDef {
         name: "model".into(),
@@ -467,10 +428,11 @@ fn post(args: PostArgs) -> Fallible<usize> {
     let (job, model) = flag_job(&args.job, args.wcs, args.rpm, args.tool_number)?;
     let models: Models<'_> = [("model", &model)].into_iter().collect();
     let ran = execute(&job, 0, &models)?;
+    report_checks("post", &ran.checks);
     check_gate(
         &ran,
         args.force,
-        "camcraft inspect ... --out path.json, then drop it on the inspector",
+        "camcraft job with a job file and no --out, or open it in the app",
     )?;
 
     let profile = load_profile(&args.profile, None)?;
@@ -484,26 +446,11 @@ fn post(args: PostArgs) -> Fallible<usize> {
         .file_stem()
         .map_or_else(|| "camcraft".into(), |s| s.to_string_lossy().to_string());
     write_program(op, args.wcs, &profile, &name, out)?;
-
-    for w in &ran.warnings {
-        tracing::warn!("{w}");
-    }
     Ok(ran.warnings.len())
 }
 
-fn inspect(args: InspectArgs) -> Fallible<usize> {
-    let (job, model) = flag_job(&args, 54, 18000, 1)?;
-    let models: Models<'_> = [("model", &model)].into_iter().collect();
-    let ran = execute(&job, 0, &models)?;
-    write_inspection(&args.out, &model.path, &model.units, &job, 0, &ran)?;
-    for w in &ran.warnings {
-        tracing::warn!("{w}");
-    }
-    Ok(ran.warnings.len())
-}
-
-/// The finishing pass that `inspect` and `post` describe with flags.
-fn finish_spec(args: &InspectArgs, wcs: u8, rpm: u32, number: u32) -> FinishSpec {
+/// The finishing pass that `post` describes with flags.
+fn finish_spec(args: &FlagArgs, wcs: u8, rpm: u32, number: u32) -> FinishSpec {
     FinishSpec {
         tool: match args.tool {
             ToolArg::Ball => FinishTool::Ball,
@@ -520,16 +467,5 @@ fn finish_spec(args: &InspectArgs, wcs: u8, rpm: u32, number: u32) -> FinishSpec
         wcs,
         rpm,
         number,
-    }
-}
-
-fn human_size(bytes: u64) -> String {
-    // Only for a log line; sizes past 2^53 bytes are not a real concern.
-    #[allow(clippy::cast_precision_loss)]
-    let kb = bytes as f64 / 1024.0;
-    if kb > 1024.0 {
-        format!("{:.1} MB", kb / 1024.0)
-    } else {
-        format!("{kb:.0} KB")
     }
 }

@@ -45,9 +45,9 @@ pub fn status_text(status: Status) -> &'static str {
     match status {
         Status::NotRun => "not generated",
         Status::Running => "generating",
-        Status::Verified => "verified",
-        Status::Warnings => "verified, with warnings",
-        Status::Refused => "NOT verified",
+        Status::Verified => "passed its checks",
+        Status::Warnings => "passed its checks, with warnings",
+        Status::Refused => "checks FAILED: it would be refused",
         Status::Stale => "out of date",
     }
 }

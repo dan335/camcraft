@@ -4,6 +4,7 @@
 //! All of it is per setup, kept in its [`SetupState`], so each setup of each open
 //! job keeps its own place.
 
+use camcraft_session::checks::{Finding, Level};
 use eframe::egui;
 use glam::DVec3;
 
@@ -125,9 +126,6 @@ pub fn result(ui: &mut egui::Ui, state: &SetupState, m: Measure) {
                 m.length(v.deepest_gouge_mm, 3)
             ),
         );
-    }
-    for w in &ran.ran.warnings {
-        ui.colored_label(ui.visuals().warn_fg_color, w);
     }
 }
 
@@ -275,7 +273,7 @@ pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option
     if !scene.steep.is_empty() {
         ui.separator();
         ui.heading("Steep descents");
-        ui.weak("cutting moves that drop further than allowed while barely advancing");
+        ui.weak("cutting descents that drop further than allowed while barely advancing");
         let setup = ran
             .job
             .setups
@@ -291,7 +289,7 @@ pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option
                 .and_then(|s| s.operations.get(i))
                 .map_or(0.0, |o| o.passes.max_cut_step);
             ui.label(format!(
-                "{}. {}: {} move(s), deepest {} of {} allowed",
+                "{}. {}: {} descent(s), deepest {} of {} allowed",
                 i + 1,
                 op.name,
                 mine.len(),
@@ -327,6 +325,108 @@ pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option
             });
     }
     go.map(|s| jump_to(state, s))
+}
+
+/// What the checks found for this setup's run, failures first; clicking a finding
+/// that is at a move goes there. Returns a point to bring the camera in on.
+pub fn checks(ui: &mut egui::Ui, state: &mut SetupState) -> Option<DVec3> {
+    let ran = state.ran.as_ref()?;
+    let checks = &ran.ran.checks;
+    let scene = &ran.scene;
+    ui.heading("Checks");
+    let failed = checks.failures().count();
+    if failed > 0 {
+        egui::Frame::new()
+            .fill(theme::egui_color(theme::ERR).gamma_multiply(0.18))
+            .stroke(egui::Stroke::new(1.0, theme::egui_color(theme::ERR)))
+            .inner_margin(6.0)
+            .corner_radius(4.0)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.colored_label(
+                    theme::egui_color(theme::ERR),
+                    egui::RichText::new(format!(
+                        "HALT: {failed} check(s) failed. Do not run this program."
+                    ))
+                    .strong(),
+                );
+            });
+    }
+    let mut go = None;
+    let mut passed = Vec::new();
+    for group in &checks.groups {
+        let shown: Vec<_> = group
+            .findings
+            .iter()
+            .filter(|f| f.level != Level::Pass)
+            .collect();
+        passed.extend(
+            group
+                .findings
+                .iter()
+                .filter(|f| f.level == Level::Pass)
+                .map(|f| (group, f)),
+        );
+        if shown.is_empty() {
+            continue;
+        }
+        ui.strong(&group.title);
+        for f in shown {
+            // A finding at a move is the segment ending there: move `k` of an
+            // operation ends segment `k - 1` of its span.
+            let segment = group
+                .op
+                .zip(f.at_move)
+                .and_then(|(op, k)| Some(scene.ops.get(op)?.first + k.saturating_sub(1)))
+                .filter(|&i| i < scene.segments.len());
+            if finding(ui, f, segment.is_some()) {
+                go = segment;
+            }
+        }
+    }
+    egui::CollapsingHeader::new(format!("{} passed", passed.len()))
+        .id_salt("passed")
+        .show(ui, |ui| {
+            for (group, f) in passed {
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(theme::egui_color(theme::PATH_CUT), "pass");
+                    ui.monospace(f.code);
+                    ui.label(format!("{}: {}", group.title, f.message));
+                });
+            }
+        });
+    let i = go?;
+    let at = scene.segments.get(i)?.b;
+    state.view.scrub = i + 1;
+    state.view.stock_mode = StockMode::Follow;
+    Some(at)
+}
+
+/// One finding. Returns whether it was clicked, when it goes somewhere.
+fn finding(ui: &mut egui::Ui, f: &Finding, goes: bool) -> bool {
+    let (word, color) = match f.level {
+        Level::Fail => ("FAIL", theme::ERR),
+        Level::Warn => ("warn", theme::AMBER_5),
+        Level::Note => ("note", theme::GRAY_7),
+        Level::Pass => ("pass", theme::PATH_CUT),
+    };
+    let mut clicked = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.colored_label(theme::egui_color(color), egui::RichText::new(word).strong());
+        ui.monospace(f.code);
+        if goes {
+            clicked = ui
+                .link(&f.message)
+                .on_hover_text("go there: scrub to it and follow the stock")
+                .clicked();
+        } else {
+            ui.label(&f.message);
+        }
+    });
+    if !f.detail.is_empty() {
+        ui.weak(&f.detail);
+    }
+    clicked
 }
 
 /// Move the scrub to a steep descent, following the stock; where to look.

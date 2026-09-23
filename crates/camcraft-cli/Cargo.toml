@@ -17,13 +17,12 @@ camcraft-core.workspace    = true
 camcraft-post.workspace    = true
 camcraft-session.workspace = true
 clap.workspace             = true
-serde_json.workspace       = true
 tracing.workspace          = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
 camcraft-geom.workspace = true
-serde_json.workspace    = true
+glam.workspace          = true
 
 [lints]
 workspace = true

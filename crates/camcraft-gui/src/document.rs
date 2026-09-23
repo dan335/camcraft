@@ -286,7 +286,7 @@ pub enum Status {
     Verified,
     /// Ran and verified, with warnings worth reading.
     Warnings,
-    /// Ran and did not verify: it would be refused.
+    /// Ran and did not verify, or a check failed: it would be refused.
     Refused,
     /// Ran, but has changed since.
     Stale,
@@ -972,12 +972,15 @@ impl Document {
                 let mut lines: Vec<(Level, String)> =
                     ran.notes.iter().map(|n| (Level::Info, n.clone())).collect();
                 lines.extend(ran.warnings.iter().map(|w| (Level::Warn, w.clone())));
-                lines.push(if ran.result.is_clean() {
-                    (Level::Info, format!("'{name}' verified: it may be posted"))
+                lines.push(if ran.passed() {
+                    (
+                        Level::Info,
+                        format!("'{name}' passed its checks: it may be posted"),
+                    )
                 } else {
                     (
                         Level::Error,
-                        format!("'{name}' NOT verified: it would be refused"),
+                        format!("'{name}' did NOT pass its checks: it would be refused"),
                     )
                 });
                 let Some(setup) = job.setups.get(index) else {
@@ -1023,7 +1026,7 @@ impl Document {
             .and_then(|i| SetupInputs::of(&self.job, &self.models, i));
         if now.as_ref() != Some(&ran.inputs) {
             Status::Stale
-        } else if !ran.ran.result.is_clean() {
+        } else if !ran.ran.passed() {
             Status::Refused
         } else if ran.ran.warnings.is_empty() {
             Status::Verified

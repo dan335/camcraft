@@ -1,8 +1,8 @@
 //! Colours from the CamCraft Design System.
 //!
 //! Source: claude.ai/design project "CamCraft Design System", `tokens/colors.css`,
-//! vendored for the web inspector in `viewer/tokens.css`. Re-copy when the design
-//! system changes; do not invent values here.
+//! vendored in `design/tokens.css` beside this crate, which the tests hold these
+//! values to. Re-copy when the design system changes; do not invent values here.
 //!
 //! Colours and the type scale so far. The rest of the system (surfaces, the amber
 //! accent as the selection colour, IBM Plex Sans and Fira Code) joins them here.
@@ -195,7 +195,7 @@ mod tests {
     /// than trusted to have been copied correctly.
     #[test]
     fn colours_match_the_vendored_tokens() {
-        let css = include_str!("../../../viewer/tokens.css");
+        let css = include_str!("../design/tokens.css");
         let hex = |c: [u8; 3]| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
         for (token, value) in [
             ("--gray-0:", BG),
@@ -221,7 +221,7 @@ mod tests {
     /// The type scale is the design system's too.
     #[test]
     fn type_sizes_match_the_vendored_tokens() {
-        let css = include_str!("../../../viewer/tokens.css");
+        let css = include_str!("../design/tokens.css");
         for (token, size) in [
             ("--text-xs:", TEXT_XS),
             ("--text-sm:", TEXT_SM),

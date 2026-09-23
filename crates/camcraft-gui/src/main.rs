@@ -11,6 +11,7 @@ mod document;
 mod file_dialog;
 mod measure;
 mod playback;
+mod posting;
 mod properties;
 mod scene;
 mod settings;
