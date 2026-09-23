@@ -34,6 +34,13 @@ use crate::toolpath::{Toolpath, ToolpathError};
 /// real surfaces measured on the router jig top out near 3.
 pub const PLUNGE_RATIO: f64 = 10.0;
 
+/// Material further above the part than this, in millimetres, counts as left over.
+///
+/// Leftover is not a failure; it is where the cutter could not reach. It is named
+/// here so that anything drawing the material classifies it by the same rule the
+/// verifier counts it by.
+pub const LEFTOVER_LIMIT: f64 = 1.0;
+
 /// A job that could not be run.
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
@@ -155,6 +162,10 @@ pub struct JobResult {
     pub stock_max: DVec2,
     /// The heights symbolic references resolved against.
     pub heights: HeightContext,
+    /// The material before the first operation, then after each: one more than
+    /// there are operations, the last equal to `stock`. The keyframes a replay
+    /// starts from.
+    pub stages: Vec<SimStock>,
 }
 
 impl JobResult {
@@ -210,17 +221,20 @@ pub fn run_job(job: &Job, mesh: &TriMesh) -> Result<JobResult, RunError> {
     let cutter = DropCutter::new(mesh);
 
     let mut operations = Vec::with_capacity(job.operations.len());
+    let mut stages = Vec::with_capacity(job.operations.len() + 1);
+    stages.push(stock.clone());
     for op in &job.operations {
         operations.push(run_operation(
             job, op, &cutter, &ctx, lo, hi, &mut stock, sim_pitch,
         )?);
+        stages.push(stock.clone());
     }
 
     let part = PartSurface::from_mesh(mesh, lo, hi, sim_pitch)?;
     // The simulator resolves the surface on a grid, so it cannot be held finer than
     // one cell plus the chordal tolerance the paths were built to.
     let budget = job.tolerance + sim_pitch;
-    let verify = stock.verify(&part, budget, 1.0);
+    let verify = stock.verify(&part, budget, LEFTOVER_LIMIT);
 
     Ok(JobResult {
         operations,
@@ -231,7 +245,26 @@ pub fn run_job(job: &Job, mesh: &TriMesh) -> Result<JobResult, RunError> {
         stock_min: lo,
         stock_max: hi,
         heights: ctx,
+        stages,
     })
+}
+
+/// The tool an operation cuts with, as the simulator sweeps it: the job's cutter,
+/// grown by the operation's stock to leave.
+///
+/// The one place this is built, so a replay of the material sweeps exactly the
+/// tool the run did.
+pub fn cutting_tool(job: &Job, op: &Operation) -> Result<EffectiveTool, RunError> {
+    let spec = job.tool_for(op).ok_or_else(|| JobError::UnknownTool {
+        op: op.name.clone(),
+        tool: op.tool.clone(),
+    })?;
+    let base = spec.build()?;
+    let leave = ToLeave::new(
+        op.passes.stock_to_leave.radial,
+        op.passes.stock_to_leave.axial,
+    )?;
+    Ok(EffectiveTool::new(&base, leave)?)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -249,12 +282,7 @@ fn run_operation(
         op: op.name.clone(),
         tool: op.tool.clone(),
     })?;
-    let base = spec.build()?;
-    let leave = ToLeave::new(
-        op.passes.stock_to_leave.radial,
-        op.passes.stock_to_leave.axial,
-    )?;
-    let tool = EffectiveTool::new(&base, leave)?;
+    let tool = cutting_tool(job, op)?;
     let mut warnings = Vec::new();
 
     // The sweep covers the model plus the tool, plus whatever extra was asked for.
