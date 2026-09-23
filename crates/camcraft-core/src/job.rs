@@ -759,7 +759,12 @@ pub enum ToolKind {
     Bullnose,
     /// A cone: a V-bit, or a chamfer mill with a flat tip.
     Cone,
+    /// A twist drill: its point is a cone, 118° unless its angle says otherwise.
+    Drill,
 }
+
+/// The point angle a drill has when none is given.
+pub const DRILL_POINT: f64 = 118.0;
 
 impl ToolSpec {
     /// Every problem with the tool's fields, each against the field it concerns,
@@ -908,6 +913,10 @@ impl ToolSpec {
                 let angle = self.angle.unwrap_or(0.0);
                 Cone::new(r, self.tip_diameter / 2.0, (angle / 2.0).to_radians()).map(Cutter::from)
             }
+            ToolKind::Drill => {
+                let angle = self.angle.unwrap_or(DRILL_POINT);
+                Cone::new(r, 0.0, (angle / 2.0).to_radians()).map(Cutter::from)
+            }
         }
     }
 }
@@ -959,6 +968,15 @@ pub enum StrategySpec {
         /// Rings shorter than this are not worth the entry.
         #[serde(default = "default_min_ring")]
         min_ring_length: f64,
+    },
+    /// Holes, picked by their rims, each drilled straight down.
+    Drill {
+        /// Depth of each peck, backing out between; all at once when not given.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        peck: Option<f64>,
+        /// Seconds to pause at the bottom, for a canned cycle that can.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dwell: Option<f64>,
     },
 }
 
@@ -1104,6 +1122,17 @@ impl Operation {
     /// levels need far too many offsets) and cannot leave stock (grown by a ball it
     /// is not a cone); it finishes, engraves and chamfers.
     pub fn cannot_use(&self, tool: &ToolSpec) -> Option<&'static str> {
+        let drilling = matches!(self.strategy, StrategySpec::Drill { .. });
+        if tool.kind == ToolKind::Drill && !drilling {
+            return Some("a drill only drills; use a drilling operation");
+        }
+        if drilling && !matches!(tool.kind, ToolKind::Drill | ToolKind::Flat) {
+            return Some("drill holes with a drill, or a flat end mill that plunges");
+        }
+        let leave = self.passes.stock_to_leave;
+        if drilling && (leave.radial != 0.0 || leave.axial != 0.0) {
+            return Some("a hole is drilled to size: set stock to leave to zero");
+        }
         if tool.kind != ToolKind::Cone {
             return None;
         }
@@ -1132,10 +1161,10 @@ impl Operation {
         if let Some(stepover) = preset.stepover {
             self.passes.stepover = stepover;
         }
-        if let (Some(d), StrategySpec::ZlevelRough { stepdown, .. }) =
-            (preset.stepdown, &mut self.strategy)
-        {
-            *stepdown = d;
+        match (preset.stepdown, &mut self.strategy) {
+            (Some(d), StrategySpec::ZlevelRough { stepdown, .. }) => *stepdown = d,
+            (Some(d), StrategySpec::Drill { peck, .. }) => *peck = Some(d),
+            _ => {}
         }
         if let Some(s) = preset.stock_to_leave {
             self.passes.stock_to_leave = s;
@@ -1155,6 +1184,7 @@ impl Operation {
             ramp_feed: None,
             stepdown: match self.strategy {
                 StrategySpec::ZlevelRough { stepdown, .. } => Some(stepdown),
+                StrategySpec::Drill { peck, .. } => peck,
                 StrategySpec::Parallel { .. } => None,
             },
             stepover: Some(self.passes.stepover),
@@ -1185,11 +1215,14 @@ impl Operation {
         {
             out.push("stepover");
         }
-        if let (Some(d), StrategySpec::ZlevelRough { stepdown, .. }) =
-            (preset.stepdown, &self.strategy)
-            && !same(d, *stepdown)
-        {
-            out.push("stepdown");
+        match (preset.stepdown, &self.strategy) {
+            (Some(d), StrategySpec::ZlevelRough { stepdown, .. }) if !same(d, *stepdown) => {
+                out.push("stepdown");
+            }
+            (Some(d), StrategySpec::Drill { peck, .. }) if !peck.is_some_and(|p| same(d, p)) => {
+                out.push("peck");
+            }
+            _ => {}
         }
         if let Some(s) = preset.stock_to_leave {
             let now = self.passes.stock_to_leave;
@@ -1667,6 +1700,19 @@ impl Job {
             if let StrategySpec::ZlevelRough { stepdown, .. } = op.strategy {
                 positive(&format!("{at}.stepdown"), stepdown)?;
             }
+            if let StrategySpec::Drill { peck, dwell } = op.strategy {
+                if let Some(p) = peck {
+                    positive(&format!("{at}.peck"), p)?;
+                }
+                if let Some(d) = dwell
+                    && !(d.is_finite() && d >= 0.0)
+                {
+                    return Err(JobError::BadValue {
+                        field: format!("{at}.dwell"),
+                        value: d,
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -2030,6 +2076,41 @@ tool = "t"
         assert_eq!(field(|t| t.tip_diameter = 7.0), ["tip_diameter"]);
     }
 
+    /// A drill drills and nothing else, and a drilling operation takes a drill or a
+    /// flat end mill.
+    #[test]
+    fn drills_drill_and_only_drill() {
+        let drill: ToolSpec =
+            toml::from_str("kind = \"drill\"\ndiameter = 6.0\nnumber = 4\n").unwrap();
+        assert!(drill.check().is_empty(), "{:?}", drill.check());
+        let Cutter::Cone(point) = drill.build().unwrap() else {
+            panic!("a drill's point is a cone");
+        };
+        assert!((point.rise() - 1.0 / 59f64.to_radians().tan()).abs() < 1e-12);
+        assert_eq!(point.tip(), 0.0);
+
+        let mut j = sample();
+        j.tools.insert("d".into(), drill);
+        j.setups[0].operations[1].tool = Some("d".into());
+        assert!(matches!(j.validate(), Err(JobError::WrongTool { .. })));
+        j.setups[0].operations[1].strategy = StrategySpec::Drill {
+            peck: Some(2.0),
+            dwell: None,
+        };
+        j.validate().unwrap();
+        j.setups[0].operations[1].tool = Some("finish-4-ball".into());
+        assert!(matches!(j.validate(), Err(JobError::WrongTool { .. })));
+        j.setups[0].operations[1].tool = Some("d".into());
+        j.setups[0].operations[1].strategy = StrategySpec::Drill {
+            peck: Some(0.0),
+            dwell: None,
+        };
+        assert!(matches!(j.validate(), Err(JobError::BadValue { .. })));
+
+        let text = toml::to_string(&j).unwrap();
+        assert!(text.contains(r#"strategy = "drill""#), "{text}");
+    }
+
     /// A V-bit finishes, but neither roughs in Z levels nor leaves stock.
     #[test]
     fn a_vbit_is_refused_where_it_cannot_cut() {
@@ -2176,11 +2257,11 @@ tool = "t"
         let ops = &j.setups[0].operations;
         match ops[0].strategy {
             StrategySpec::ZlevelRough { stepdown, .. } => assert_eq!(stepdown, 2.0),
-            StrategySpec::Parallel { .. } => panic!("first operation should be roughing"),
+            _ => panic!("first operation should be roughing"),
         }
         match ops[1].strategy {
             StrategySpec::Parallel { angle } => assert_eq!(angle, 90.0),
-            StrategySpec::ZlevelRough { .. } => panic!("second operation should be finishing"),
+            _ => panic!("second operation should be finishing"),
         }
     }
 

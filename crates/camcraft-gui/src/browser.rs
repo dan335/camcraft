@@ -363,6 +363,16 @@ fn setup_menu(
         ));
         ui.close();
     }
+    if ui.button("New drilling").clicked() {
+        edits.borrow_mut().push(Edit::AddOperation(
+            name.to_string(),
+            StrategySpec::Drill {
+                peck: None,
+                dwell: None,
+            },
+        ));
+        ui.close();
+    }
     ui.separator();
     if ui.button("Duplicate").clicked() {
         edits

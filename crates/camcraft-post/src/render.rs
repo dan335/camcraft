@@ -8,7 +8,7 @@
 use std::fmt::Write as _;
 
 use camcraft_core::toolpath::MoveRole;
-use glam::DVec3;
+use glam::{DVec2, DVec3};
 
 use crate::op::{CompSide, Coolant, CycleKind, Op, Spin, Units};
 use crate::profile::{ArcStyle, Profile, ToolChangeStyle};
@@ -161,14 +161,16 @@ impl<'a> Writer<'a> {
             }
             Op::Cycle {
                 kind,
+                at,
                 depth,
                 retract,
                 peck,
+                dwell,
                 feed,
             } => {
-                self.report.reserved_used += 1;
-                self.cycle(*kind, *depth, *retract, *peck, *feed);
+                self.cycle(*kind, *at, *depth, *retract, *peck, *dwell, *feed);
             }
+            Op::CycleEnd => self.raw("G80"),
             Op::CutterComp { side, d } => {
                 self.report.reserved_used += 1;
                 let g = match side {
@@ -294,21 +296,39 @@ impl<'a> Writer<'a> {
         self.feed = Some(f);
     }
 
-    fn cycle(&mut self, kind: CycleKind, depth: f64, retract: f64, peck: Option<f64>, feed: f64) {
+    #[allow(clippy::too_many_arguments)]
+    fn cycle(
+        &mut self,
+        kind: CycleKind,
+        at: DVec2,
+        depth: f64,
+        retract: f64,
+        peck: Option<f64>,
+        dwell: Option<f64>,
+        feed: f64,
+    ) {
         let g = match kind {
             CycleKind::Drill => "G81",
+            CycleKind::DrillDwell => "G82",
             CycleKind::Peck => "G83",
             CycleKind::Tap => "G84",
             CycleKind::Bore => "G85",
         };
+        // Every word every time: a cycle is modal, but a program read by a person
+        // should say where each hole is and how deep, whatever came before.
         let mut block = format!(
-            "{g} Z{} R{} F{}",
+            "{g} X{} Y{} Z{} R{} F{}",
+            self.p.axis(at.x),
+            self.p.axis(at.y),
             self.p.axis(depth),
             self.p.axis(retract),
             self.p.feed(feed)
         );
         if let Some(q) = peck {
             let _ = write!(block, " Q{}", self.p.axis(q));
+        }
+        if let Some(p) = dwell {
+            let _ = write!(block, " P{}", self.p.feed(p));
         }
         self.raw(&block);
         // A cycle leaves the machine in its own modal group and moves the tool.
@@ -458,9 +478,11 @@ mod tests {
             },
             Op::Cycle {
                 kind: CycleKind::Peck,
+                at: glam::dvec2(1.0, 2.0),
                 depth: -5.0,
                 retract: 2.0,
                 peck: Some(1.0),
+                dwell: None,
                 feed: 200.0,
             },
         ];
@@ -469,7 +491,12 @@ mod tests {
         assert!(g.contains("I5.000"), "IJ centre missing:\n{g}");
         assert!(g.contains("G83"), "peck cycle missing:\n{g}");
         assert!(g.contains("Q1.000"));
-        assert_eq!(report.reserved_used, 2);
+        assert!(
+            g.contains("X1.000 Y2.000"),
+            "the hole's place missing:\n{g}"
+        );
+        // A cycle is emitted now, by drilling; only the arc is still reserved.
+        assert_eq!(report.reserved_used, 1);
     }
 
     /// Raw text is a hole in the renderer's knowledge; suppressing against stale

@@ -10,6 +10,9 @@ comment   = ["(", ")"]
 
 arc_style   = "ij"
 tool_change = "m6"
+# Masso documents G81, G82, G83 and G80. Off until they have been dry-run on the
+# machine; off, a drilling operation is posted as plain moves instead.
+drill_cycles = false
 
 header = [
   "({name})",

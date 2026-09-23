@@ -19,11 +19,12 @@
 
 #![allow(clippy::unwrap_used, clippy::panic)]
 
+use camcraft_core::drilling::Hole;
 use camcraft_core::toolpath::{MoveRole, Toolpath};
-use camcraft_post::op::{Coolant, ProgramSpec, Spin, Units, lower};
+use camcraft_post::op::{Coolant, DrillCycles, ProgramSpec, Spin, Units, lower};
 use camcraft_post::profile::Profile;
 use camcraft_post::render::render;
-use glam::dvec3;
+use glam::{dvec2, dvec3};
 
 /// A path exercising every move role the engine currently produces, plus the
 /// coordinate cases that formatting gets wrong: negatives, a value that rounds, and
@@ -59,6 +60,7 @@ fn spec() -> ProgramSpec {
         spin: Spin::Clockwise,
         coolant: Some(Coolant::Flood),
         units: Units::Millimetres,
+        drill: None,
     }
 }
 
@@ -66,8 +68,14 @@ fn check(profile_name: &str) {
     let profile = Profile::builtin(profile_name)
         .unwrap_or_else(|| panic!("no builtin profile {profile_name}"))
         .unwrap();
-    let ops = lower(&fixture(), &spec()).unwrap();
-    let (got, report) = render(&ops, &profile, "golden");
+    check_against(&profile, &fixture(), &spec(), profile_name);
+}
+
+/// Render `path` for `profile` and compare with `tests/golden/<file>.nc`.
+fn check_against(profile: &Profile, path: &Toolpath, spec: &ProgramSpec, file: &str) {
+    let profile_name = file;
+    let ops = lower(path, spec).unwrap();
+    let (got, report) = render(&ops, profile, "golden");
 
     assert!(report.lines > 10, "suspiciously short program");
     assert_eq!(
@@ -77,7 +85,7 @@ fn check(profile_name: &str) {
 
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden")
-        .join(format!("{profile_name}.nc"));
+        .join(format!("{file}.nc"));
 
     if std::env::var("UPDATE_GOLDEN").is_ok() {
         if let Some(dir) = path.parent() {
@@ -118,6 +126,57 @@ fn masso_output_is_stable() {
 #[test]
 fn grbl_output_is_stable() {
     check("grbl");
+}
+
+/// Three holes, drilled as canned cycles on a controller that takes them: across
+/// to the first at the clearance height, one line a hole returning there, then
+/// G80. The path is ignored when the holes are given.
+fn drilling(peck: Option<f64>, dwell: Option<f64>) -> ProgramSpec {
+    let hole = |x: f64, y: f64| Hole {
+        at: dvec2(x, y),
+        top: 5.0,
+        bottom: -1.5,
+        radius: 3.0,
+    };
+    ProgramSpec {
+        op_name: "holes".into(),
+        strategy: "drill".into(),
+        tool: 4,
+        tool_comment: "6mm drill".into(),
+        coolant: None,
+        drill: Some(DrillCycles {
+            holes: vec![hole(10.0, 10.0), hole(30.0, 10.0), hole(-12.345, 40.0)],
+            peck,
+            dwell,
+            feed: 250.0,
+            clearance: 20.0,
+        }),
+        ..spec()
+    }
+}
+
+fn masso_with_cycles() -> Profile {
+    let mut p = Profile::builtin("masso").unwrap().unwrap();
+    p.drill_cycles = true;
+    p
+}
+
+#[test]
+fn drilling_cycles_are_stable() {
+    let p = masso_with_cycles();
+    check_against(&p, &Toolpath::new(), &drilling(None, None), "masso-drill");
+    check_against(
+        &p,
+        &Toolpath::new(),
+        &drilling(Some(2.0), None),
+        "masso-peck",
+    );
+    check_against(
+        &p,
+        &Toolpath::new(),
+        &drilling(None, Some(0.5)),
+        "masso-dwell",
+    );
 }
 
 /// Every builtin profile must have a golden file. Adding a profile without one

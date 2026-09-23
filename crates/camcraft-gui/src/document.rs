@@ -724,6 +724,7 @@ impl Document {
         let base = match strategy {
             StrategySpec::Parallel { .. } => "finish",
             StrategySpec::ZlevelRough { .. } => "rough",
+            StrategySpec::Drill { .. } => "drill",
         };
         let name = free(base, s.operations.iter().map(|o| o.name.as_str()));
         let tool = s.operations.last().and_then(|o| o.tool.clone());

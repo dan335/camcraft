@@ -5,7 +5,7 @@
 //! give are assumed from its diameter and marked as assumed, so the picture never
 //! claims more than the tool says.
 
-use camcraft_core::job::{ToolKind, ToolSpec};
+use camcraft_core::job::{DRILL_POINT, ToolKind, ToolSpec};
 
 /// What a region of the drawing is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,11 +56,13 @@ pub fn tip_profile(tool: &ToolSpec) -> Vec<(f64, f64)> {
         0.5
     };
     let mut out = vec![(0.0, 0.0)];
-    if tool.kind == ToolKind::Cone {
-        let tip = (tool.tip_diameter / 2.0).clamp(0.0, r);
-        let half = (tool.angle.unwrap_or(90.0) / 2.0)
-            .clamp(1.0, 89.0)
-            .to_radians();
+    if matches!(tool.kind, ToolKind::Cone | ToolKind::Drill) {
+        let (tip, angle) = match tool.kind {
+            ToolKind::Drill => (0.0, tool.angle.unwrap_or(DRILL_POINT)),
+            _ => (tool.tip_diameter / 2.0, tool.angle.unwrap_or(90.0)),
+        };
+        let tip = tip.clamp(0.0, r);
+        let half = (angle / 2.0).clamp(1.0, 89.0).to_radians();
         if tip > 0.0 {
             out.push((tip, 0.0));
         }
@@ -70,7 +72,7 @@ pub fn tip_profile(tool: &ToolSpec) -> Vec<(f64, f64)> {
     let corner = match tool.kind {
         ToolKind::Ball => r,
         ToolKind::Bullnose => tool.corner.clamp(0.0, r),
-        ToolKind::Flat | ToolKind::Cone => 0.0,
+        ToolKind::Flat | ToolKind::Cone | ToolKind::Drill => 0.0,
     };
     if corner < r {
         out.push((r - corner, 0.0));

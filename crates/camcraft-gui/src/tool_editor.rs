@@ -3,8 +3,8 @@
 
 use camcraft_core::cutting;
 use camcraft_core::job::{
-    Coolant, Holder, HolderSegment, Preset, SpindleDirection, StockToLeave, ToolFieldError,
-    ToolKind, ToolMaterial, ToolSpec, free_preset_name,
+    Coolant, DRILL_POINT, Holder, HolderSegment, Preset, SpindleDirection, StockToLeave,
+    ToolFieldError, ToolKind, ToolMaterial, ToolSpec, free_preset_name,
 };
 use eframe::egui;
 
@@ -62,6 +62,7 @@ pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure) {
                     ToolKind::Ball,
                     ToolKind::Bullnose,
                     ToolKind::Cone,
+                    ToolKind::Drill,
                 ] {
                     ui.selectable_value(&mut tool.kind, k, kind_name(k));
                 }
@@ -73,6 +74,25 @@ pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure) {
         length(ui, m, "Diameter", &mut tool.diameter, &errors, "diameter");
         if tool.kind == ToolKind::Bullnose {
             length(ui, m, "Corner radius", &mut tool.corner, &errors, "corner");
+        }
+        if tool.kind == ToolKind::Drill {
+            ui.label("Point angle");
+            ui.horizontal(|ui| {
+                let mut a = tool.angle.unwrap_or(DRILL_POINT);
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut a)
+                            .speed(0.5)
+                            .range(60.0..=179.0)
+                            .suffix("°"),
+                    )
+                    .changed()
+                {
+                    tool.angle = ((a - DRILL_POINT).abs() > 1e-9).then_some(a);
+                }
+                field_error(ui, &errors, "angle");
+            });
+            ui.end_row();
         }
         if tool.kind == ToolKind::Cone {
             ui.label("Angle");
@@ -523,6 +543,7 @@ pub fn kind_name(kind: ToolKind) -> &'static str {
         ToolKind::Ball => "ball",
         ToolKind::Bullnose => "bullnose",
         ToolKind::Cone => "V-bit / chamfer",
+        ToolKind::Drill => "drill",
     }
 }
 

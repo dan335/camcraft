@@ -30,14 +30,14 @@ use camcraft_core::job::{
     ModelDef, Operation, Passes, Setup, SpindleDirection, StockDef, StockSpec, StockToLeave,
     StrategySpec, ToolKind, ToolSpec,
 };
-use camcraft_core::run::{OperationResult, RunError, SetupResult, run_prepared};
+use camcraft_core::run::{OperationResult, RunError, SetupResult, StrategyDetail, run_prepared};
 use camcraft_core::setup::{Bodies, PrepareError, prepare};
 use camcraft_geom::mesh::{Aabb, TriMesh};
 use camcraft_geom::topology::{Body, FaceSource};
 use camcraft_import::step::{FileCheck, StepError, load_step};
 use camcraft_import::stl::{ImportError, load_stl};
 use camcraft_post::op::{
-    Coolant as PostCoolant, LowerError, ProgramSpec, Spin, Units as PostUnits, lower,
+    Coolant as PostCoolant, DrillCycles, LowerError, ProgramSpec, Spin, Units as PostUnits, lower,
 };
 use camcraft_post::profile::{Profile, ProfileError};
 use camcraft_post::render::{RenderReport, render};
@@ -557,6 +557,16 @@ pub fn program(
             Coolant::Mist => Some(PostCoolant::Mist),
         },
         units: PostUnits::Millimetres,
+        drill: match &op.detail {
+            StrategyDetail::Drill(r) if profile.drill_cycles => Some(DrillCycles {
+                holes: r.holes.clone(),
+                peck: r.peck,
+                dwell: r.dwell,
+                feed: r.feed,
+                clearance: op.clearance_z,
+            }),
+            _ => None,
+        },
     };
     let ops = lower(&op.path, &spec)?;
     Ok(render(&ops, profile, name))
@@ -988,6 +998,36 @@ mod tests {
         assert!(report.motion_blocks > 10);
         let word = |w: &str| text.split_whitespace().any(|x| x == w);
         assert!(word("M3") && !word("M8"), "{text}");
+    }
+
+    /// A drilling operation is posted as canned cycles only for a profile that
+    /// takes them; otherwise as its moves.
+    #[test]
+    fn holes_are_cycles_only_where_the_profile_takes_them() {
+        use camcraft_core::drilling::{DrillReport, Hole};
+        let ran = run_small();
+        let mut op = ran.result.operations.first().unwrap().clone();
+        op.detail = StrategyDetail::Drill(DrillReport {
+            holes: vec![Hole {
+                at: glam::dvec2(3.0, 4.0),
+                top: 5.0,
+                bottom: 0.0,
+                radius: 2.0,
+            }],
+            peck: Some(1.5),
+            dwell: None,
+            feed: 200.0,
+        });
+        let mut profile = load_profile("masso", None).unwrap();
+        let (moves, _) = program(&op, 54, &profile, "01-holes").unwrap();
+        assert!(!moves.contains("G83"), "{moves}");
+        profile.drill_cycles = true;
+        let (cycles, _) = program(&op, 54, &profile, "01-holes").unwrap();
+        assert!(
+            cycles.contains("G83 X3.000 Y4.000 Z0.000 R7.000"),
+            "{cycles}"
+        );
+        assert!(cycles.contains("G80"), "{cycles}");
     }
 
     /// A tool's spindle direction and coolant reach the program.

@@ -425,6 +425,8 @@ fn operation_findings(
                 ));
             }
         }
+        // A hole the tool does not fit is among the run's own warnings.
+        StrategyDetail::Drill(_) => {}
     }
     if op.links.suspicious_plunges > 0 {
         out.push(finding(

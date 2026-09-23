@@ -13,11 +13,13 @@
 
 use camcraft_geom::contour::Region;
 use camcraft_geom::mesh::{Aabb, TriMesh};
+use camcraft_geom::topology::EdgeKind;
 use camcraft_sim::stock::{PartSurface, SimReport, Stock as SimStock, StockError, VerifyReport};
 use glam::{DVec2, dvec2};
 
+use crate::drilling::{DrillParams, DrillReport, Hole, HoleError, drill, holes, nearest_first};
 use crate::dropcutter::DropCutter;
-use crate::features::{FeatureError, machining_boundary};
+use crate::features::{Chain, FeatureError, machining_boundary, picked_chains};
 use crate::frame::Frame;
 use crate::job::{
     Coolant, HeightContext, Job, JobError, Operation, SpindleDirection, StrategySpec,
@@ -83,6 +85,14 @@ pub enum RunError {
         /// Why.
         source: FeatureError,
     },
+    /// A drilling operation's picks are not holes.
+    #[error("operation '{op}': {source}")]
+    Holes {
+        /// Which operation.
+        op: String,
+        /// Why.
+        source: HoleError,
+    },
     /// The stock could not be built.
     #[error("cannot build stock: {0}")]
     Stock(#[from] StockError),
@@ -101,12 +111,14 @@ pub enum RunError {
 ///
 /// Carried through rather than flattened into warnings, so that anything looking
 /// at a result -- the inspector above all -- sees the same numbers the run did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum StrategyDetail {
     /// Raster finishing.
     Parallel(StrategyReport),
     /// Z-level clearing.
     ZlevelRough(RoughingReport),
+    /// Drilling.
+    Drill(DrillReport),
 }
 
 /// What one operation produced.
@@ -269,17 +281,24 @@ pub fn run_prepared(
     stages.push(stock.clone());
     for op in &setup.operations {
         let tool = cutting_tool(job, op)?;
-        let limit = machining_boundary(
-            &op.geometry,
-            prepared,
-            bodies,
-            tool.max_radius(),
-            job.tolerance,
-        )
-        .map_err(|source| RunError::Feature {
+        let feature = |source| RunError::Feature {
             op: op.name.clone(),
             source,
-        })?;
+        };
+        // A drilling operation's picked edges are its holes, not a boundary.
+        let (limit, holes) = if let StrategySpec::Drill { .. } = op.strategy {
+            (None, drill_holes(job, op, prepared, bodies, &ctx)?)
+        } else {
+            let limit = machining_boundary(
+                &op.geometry,
+                prepared,
+                bodies,
+                tool.max_radius(),
+                job.tolerance,
+            )
+            .map_err(feature)?;
+            (limit, Vec::new())
+        };
         operations.push(run_operation(
             job,
             op,
@@ -288,6 +307,7 @@ pub fn run_prepared(
             &ctx,
             (lo, hi),
             limit.as_ref(),
+            &holes,
             &mut stock,
         )?);
         stages.push(stock.clone());
@@ -330,6 +350,44 @@ pub fn cutting_tool(job: &Job, op: &Operation) -> Result<EffectiveTool, RunError
     Ok(EffectiveTool::of(&base, leave)?)
 }
 
+/// The holes a drilling operation's picked rims make, in the setup's frame, in the
+/// order they are drilled.
+fn drill_holes(
+    job: &Job,
+    op: &Operation,
+    prepared: &Prepared,
+    bodies: &Bodies<'_>,
+    ctx: &HeightContext,
+) -> Result<Vec<Hole>, RunError> {
+    let chains =
+        picked_chains(&op.geometry, prepared, bodies, job.tolerance).map_err(|source| {
+            RunError::Feature {
+                op: op.name.clone(),
+                source,
+            }
+        })?;
+    let circle = |c: &Chain| {
+        let body = bodies.get(c.model.as_str())?;
+        match body.topology().edge(c.edge)?.kind {
+            EdgeKind::Circle(circle) => {
+                Some((prepared.frame.to_setup(circle.center), circle.radius))
+            }
+            _ => None,
+        }
+    };
+    let bottom = op
+        .geometry
+        .bottom
+        .map_or(ctx.model_bottom, |h| h.resolve(ctx));
+    let found = holes(&chains, circle, bottom, job.tolerance.max(0.01)).map_err(|source| {
+        RunError::Holes {
+            op: op.name.clone(),
+            source,
+        }
+    })?;
+    Ok(nearest_first(&found))
+}
+
 fn unknown_tool(op: &Operation) -> JobError {
     match &op.tool {
         Some(tool) => JobError::UnknownTool {
@@ -351,6 +409,7 @@ fn run_operation(
     ctx: &HeightContext,
     (lo, hi): (DVec2, DVec2),
     limit: Option<&Region>,
+    holes: &[Hole],
     stock: &mut SimStock,
 ) -> Result<OperationResult, RunError> {
     let spec = job.tool_for(op).ok_or_else(|| unknown_tool(op))?;
@@ -432,11 +491,43 @@ fn run_operation(
             }
             (path, report.rings, StrategyDetail::ZlevelRough(report))
         }
+        StrategySpec::Drill { peck, dwell } => {
+            let params = DrillParams {
+                peck,
+                feed: op.linking.plunge_feed,
+                retract_feed: op.linking.retract_feed,
+            };
+            let path = drill(holes, &params).map_err(|source| RunError::Strategy {
+                op: op.name.clone(),
+                source,
+            })?;
+            let width = spec.diameter;
+            for h in holes {
+                if (2.0 * h.radius - width).abs() > job.tolerance.max(0.01) {
+                    warnings.push(format!(
+                        "the hole at ({:.3}, {:.3}) is {:.3} mm across but the tool is {:.3} mm",
+                        h.at.x,
+                        h.at.y,
+                        2.0 * h.radius,
+                        width
+                    ));
+                }
+            }
+            let report = DrillReport {
+                holes: holes.to_vec(),
+                peck,
+                dwell,
+                feed: params.feed,
+            };
+            (path, holes.len() as u64, StrategyDetail::Drill(report))
+        }
     };
 
     // Ordering is a Toolpath -> Toolpath transform, applied before linking so the
-    // retracts it needs are planned around the order actually used.
-    let (ordered, order) = if op.linking.reorder {
+    // retracts it needs are planned around the order actually used. Holes are
+    // already in order, and a hole reversed would be drilled from the bottom up.
+    let drilling = matches!(op.strategy, StrategySpec::Drill { .. });
+    let (ordered, order) = if op.linking.reorder && !drilling {
         order_passes(&raw, op.linking.allow_reverse)?
     } else {
         (raw, Default::default())
@@ -502,6 +593,7 @@ fn run_operation(
         strategy: match op.strategy {
             StrategySpec::Parallel { .. } => "parallel",
             StrategySpec::ZlevelRough { .. } => "zlevel-rough",
+            StrategySpec::Drill { .. } => "drill",
         },
         path,
         tool_number: spec.number,
@@ -807,6 +899,81 @@ heights = { clearance = { ref = "stock-top", offset = 6.0 } }
         });
         g.containment = containment;
         (job, body)
+    }
+
+    /// The plate's 8 mm hole, picked by its top rim and drilled through with an
+    /// 8 mm drill in pecks: one hole, drilled to the model's bottom, each peck
+    /// backing out, and the result verifies.
+    fn drilled(peck: Option<f64>) -> (SetupResult, Job) {
+        use crate::features::find_edge;
+        use crate::job::{FeatureRef, ToolSpec};
+        let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
+        let mut job: Job = toml::from_str(JOB).unwrap();
+        job.tools.insert(
+            "drill".into(),
+            toml::from_str::<ToolSpec>("kind = \"drill\"\ndiameter = 8.0\nnumber = 3\n").unwrap(),
+        );
+        job.setups[0].operations.retain(|op| op.name == "finish");
+        let op = &mut job.setups[0].operations[0];
+        op.name = "holes".into();
+        op.tool = Some("drill".into());
+        op.strategy = StrategySpec::Drill { peck, dwell: None };
+        let pick = FeatureRef {
+            model: "dome".into(),
+            index: 0,
+            at: [4.0, 0.0, 5.0],
+        };
+        let edge = find_edge(&body, &pick, 0.01).unwrap().index;
+        op.geometry.edges.push(FeatureRef {
+            index: edge,
+            ..pick
+        });
+        let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+        (run_setup(&job, 0, &bodies).unwrap(), job)
+    }
+
+    #[test]
+    fn a_hole_is_drilled_through_in_pecks() {
+        let (result, _) = drilled(Some(2.0));
+        let op = &result.operations[0];
+        let StrategyDetail::Drill(report) = &op.detail else {
+            panic!("reported {:?}", op.detail);
+        };
+        assert_eq!(report.holes.len(), 1);
+        let hole = report.holes[0];
+        assert!(hole.at.length() < 1e-6, "{hole:?}");
+        assert!((hole.top - hole.bottom - 5.0).abs() < 1e-6, "{hole:?}");
+        assert_eq!(op.strategy, "drill");
+        assert!(op.warnings.is_empty(), "{:?}", op.warnings);
+        // Down to the bottom in three pecks, backing out between.
+        let deepest = op
+            .path
+            .moves()
+            .iter()
+            .map(|m| m.to.z)
+            .fold(f64::MAX, f64::min);
+        assert!((deepest - hole.bottom).abs() < 1e-9);
+        let retracts = op
+            .path
+            .moves()
+            .iter()
+            .filter(|m| m.role == crate::toolpath::MoveRole::Retract)
+            .count();
+        assert!(retracts >= 3, "{retracts} retracts");
+        assert!(result.is_clean(), "{:?}", result.warnings());
+        assert!(result.verify.gouged == 0);
+    }
+
+    /// A drill too small for its hole is drilled, and said.
+    #[test]
+    fn a_drill_the_wrong_size_is_said() {
+        let (_, mut job) = drilled(None);
+        job.tools.get_mut("drill").unwrap().diameter = 6.0;
+        let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
+        let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+        let result = run_setup(&job, 0, &bodies).unwrap();
+        let w = &result.operations[0].warnings;
+        assert!(w.iter().any(|w| w.contains("8.000 mm across")), "{w:?}");
     }
 
     fn cuts(result: &SetupResult) -> Vec<DVec2> {

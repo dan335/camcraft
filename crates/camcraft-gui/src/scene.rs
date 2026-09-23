@@ -540,6 +540,7 @@ passes = { stepover = 2.0, feed = 2000.0 }
                 tip_diameter: 1.0,
                 ..tool(ToolKind::Cone, 6.0, 0.0)
             },
+            tool(ToolKind::Drill, 6.0, 0.0),
         ] {
             let mesh = cutter_mesh(&t);
             let points = || mesh.iter().flatten();
@@ -558,6 +559,7 @@ passes = { stepover = 2.0, feed = 2000.0 }
                 ToolKind::Ball => assert!(floor < 1e-4),
                 ToolKind::Bullnose => assert!((floor - 2.0).abs() < 1e-4),
                 ToolKind::Cone => assert!((floor - 0.5).abs() < 1e-4, "{floor}"),
+                ToolKind::Drill => assert!(floor < 1e-4, "{floor}"),
             }
         }
     }

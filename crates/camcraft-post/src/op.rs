@@ -13,13 +13,15 @@
 //!
 //! # Reserved variants
 //!
-//! [`Op::Arc`], [`Op::Cycle`] and [`Op::CutterComp`] are defined and rendered but
-//! nothing emits them in 0.1. They exist so arc fitting, drill cycles and cutter
-//! compensation can arrive as additions rather than as a change to this type — the
-//! same reason strategies emit toolpaths instead of instructions.
+//! [`Op::Arc`] and [`Op::CutterComp`] are defined and rendered but nothing emits
+//! them yet. They exist so arc fitting and cutter compensation can arrive as
+//! additions rather than as a change to this type — the same reason strategies emit
+//! toolpaths instead of instructions. [`Op::Cycle`] arrived that way: a drilling
+//! operation posted for a profile that takes canned cycles is one per hole.
 
+use camcraft_core::drilling::Hole;
 use camcraft_core::toolpath::{MoveKind, MoveRole, Toolpath};
-use glam::DVec3;
+use glam::{DVec2, DVec3, dvec3};
 
 /// Which unit the program is written in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,11 +50,13 @@ pub enum Coolant {
     Mist,
 }
 
-/// A canned drilling cycle. Reserved; nothing emits these in 0.1.
+/// A canned drilling cycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CycleKind {
     /// Simple drill (`G81`).
     Drill,
+    /// Drill with a pause at the bottom (`G82`).
+    DrillDwell,
     /// Peck drill (`G83`).
     Peck,
     /// Tapping (`G84`).
@@ -139,19 +143,25 @@ pub enum Op {
         /// Feed in mm/min.
         feed: f64,
     },
-    /// Canned cycle. Reserved.
+    /// Canned cycle: one hole.
     Cycle {
         /// Which cycle.
         kind: CycleKind,
+        /// Where the hole is.
+        at: DVec2,
         /// Final depth.
         depth: f64,
         /// Retract height.
         retract: f64,
         /// Peck increment, where the cycle uses one.
         peck: Option<f64>,
+        /// Seconds to pause at the bottom, where the cycle does.
+        dwell: Option<f64>,
         /// Feed in mm/min.
         feed: f64,
     },
+    /// End of a run of canned cycles (`G80`).
+    CycleEnd,
     /// Cutter compensation. Reserved.
     CutterComp {
         /// Which side.
@@ -190,6 +200,24 @@ pub struct ProgramSpec {
     pub coolant: Option<Coolant>,
     /// Program units.
     pub units: Units,
+    /// The holes of a drilling operation, to write as canned cycles instead of
+    /// its moves; only for a profile that takes them.
+    pub drill: Option<DrillCycles>,
+}
+
+/// A drilling operation's holes, as canned cycles.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrillCycles {
+    /// The holes, in the order drilled.
+    pub holes: Vec<Hole>,
+    /// Depth of each peck (`G83`), if it pecks.
+    pub peck: Option<f64>,
+    /// Seconds to pause at the bottom (`G82`), if it does and does not peck.
+    pub dwell: Option<f64>,
+    /// Feed down into each hole, in mm/min.
+    pub feed: f64,
+    /// The height the tool crosses between holes at, and returns to (`G98`).
+    pub clearance: f64,
 }
 
 impl Default for ProgramSpec {
@@ -205,6 +233,7 @@ impl Default for ProgramSpec {
             spin: Spin::Clockwise,
             coolant: None,
             units: Units::Millimetres,
+            drill: None,
         }
     }
 }
@@ -264,6 +293,55 @@ pub fn lower(path: &Toolpath, spec: &ProgramSpec) -> Result<Vec<Op>, LowerError>
         out.push(Op::CoolantOn(c));
     }
 
+    if let Some(d) = &spec.drill {
+        cycles(d, &mut out);
+    } else {
+        moves(path, &mut out);
+    }
+
+    if spec.coolant.is_some() {
+        out.push(Op::CoolantOff);
+    }
+    out.push(Op::SpindleOff);
+    out.push(Op::SectionEnd);
+    out.push(Op::ProgramEnd);
+    Ok(out)
+}
+
+/// Each hole as one canned cycle: across at the clearance height to the first,
+/// then each cycle returning there (`G98`) before the next, and `G80` after.
+fn cycles(d: &DrillCycles, out: &mut Vec<Op>) {
+    let Some(first) = d.holes.first() else {
+        return;
+    };
+    out.push(Op::Rapid {
+        to: dvec3(first.at.x, first.at.y, d.clearance),
+    });
+    out.push(Op::Raw("G98".into()));
+    let kind = match (d.peck, d.dwell) {
+        (Some(_), _) => CycleKind::Peck,
+        (None, Some(_)) => CycleKind::DrillDwell,
+        (None, None) => CycleKind::Drill,
+    };
+    for h in &d.holes {
+        out.push(Op::Cycle {
+            kind,
+            at: h.at,
+            depth: h.bottom,
+            retract: h.retract(),
+            peck: d.peck,
+            dwell: if kind == CycleKind::DrillDwell {
+                d.dwell
+            } else {
+                None
+            },
+            feed: d.feed,
+        });
+    }
+    out.push(Op::CycleEnd);
+}
+
+fn moves(path: &Toolpath, out: &mut Vec<Op>) {
     for m in path.moves() {
         match (m.kind, m.role, m.feed) {
             (MoveKind::Linear, MoveRole::Rapid, _) => out.push(Op::Rapid { to: m.to }),
@@ -284,14 +362,6 @@ pub fn lower(path: &Toolpath, spec: &ProgramSpec) -> Result<Vec<Op>, LowerError>
             _ => {}
         }
     }
-
-    if spec.coolant.is_some() {
-        out.push(Op::CoolantOff);
-    }
-    out.push(Op::SpindleOff);
-    out.push(Op::SectionEnd);
-    out.push(Op::ProgramEnd);
-    Ok(out)
 }
 
 #[cfg(test)]

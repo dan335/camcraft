@@ -238,6 +238,7 @@ impl Row<'_> {
             "ball end mill" => ToolKind::Ball,
             "bull nose end mill" => ToolKind::Bullnose,
             "chamfer mill" | "spot drill" => ToolKind::Cone,
+            "drill" => ToolKind::Drill,
             "" => return Err("no tool type".into()),
             other => return Err(format!("'{other}' tools are not supported yet")),
         };
@@ -254,7 +255,7 @@ impl Row<'_> {
             // angle is the whole point.
             angle: match kind_text.to_ascii_lowercase().as_str() {
                 "chamfer mill" => self.number("tool_taperAngle").map(|a| 2.0 * a),
-                "spot drill" => self.number("tool_tipAngle"),
+                "spot drill" | "drill" => self.number("tool_tipAngle"),
                 _ => None,
             },
             tip_diameter: match kind {
@@ -440,6 +441,16 @@ mod tests {
         let spot = &got.tools[1].1;
         assert_eq!(spot.angle, Some(120.0));
         assert_eq!(spot.tip_diameter, 0.0);
+    }
+
+    #[test]
+    fn drills_come_in_with_their_point() {
+        let text = "\"Type (tool_type)\",\"Unit (tool_unit)\",\"Diameter (tool_diameter)\",\
+                    \"Tip Angle (tool_tipAngle)\"\n\"drill\",\"millimeters\",5,135\n";
+        let got = import(text).unwrap();
+        let drill = &got.tools[0].1;
+        assert_eq!(drill.kind, ToolKind::Drill);
+        assert_eq!(drill.angle, Some(135.0));
     }
 
     #[test]

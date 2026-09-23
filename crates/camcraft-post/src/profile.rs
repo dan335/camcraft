@@ -98,6 +98,10 @@ pub struct Profile {
     pub arc_style: ArcStyle,
     /// Tool change style.
     pub tool_change: ToolChangeStyle,
+    /// Whether the controller takes canned drilling cycles (`G81`, `G82`, `G83`,
+    /// `G80`). Off, a drilling operation is posted as its moves.
+    #[serde(default)]
+    pub drill_cycles: bool,
     /// Lines emitted before anything else. `{name}` is replaced.
     pub header: Vec<String>,
     /// Lines emitted at the end.

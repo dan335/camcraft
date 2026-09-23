@@ -54,6 +54,8 @@ pub mod job;
 
 pub mod cutting;
 
+pub mod drilling;
+
 pub mod frame;
 
 pub mod setup;

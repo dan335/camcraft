@@ -574,6 +574,15 @@ fn setup(
                 },
             );
         }
+        if ui.small_button("+ drilling").clicked() {
+            doc.add_operation(
+                name,
+                StrategySpec::Drill {
+                    peck: None,
+                    dwell: None,
+                },
+            );
+        }
     });
     let ops: Vec<String> = doc
         .job
@@ -864,25 +873,29 @@ fn operation(
         new_name = name_field(ui, ui.id().with(("op-name", setup, index)), &op.name);
         ui.end_row();
         ui.label("Strategy");
-        let parallel = matches!(op.strategy, StrategySpec::Parallel { .. });
+        let name = |s: &StrategySpec| match s {
+            StrategySpec::Parallel { .. } => "parallel",
+            StrategySpec::ZlevelRough { .. } => "z-level rough",
+            StrategySpec::Drill { .. } => "drilling",
+        };
         egui::ComboBox::from_id_salt("strategy")
-            .selected_text(if parallel {
-                "parallel"
-            } else {
-                "z-level rough"
-            })
+            .selected_text(name(&op.strategy))
             .show_ui(ui, |ui| {
-                if ui.selectable_label(parallel, "parallel").clicked() {
-                    Document::set_strategy(op, StrategySpec::Parallel { angle: 0.0 });
-                }
-                if ui.selectable_label(!parallel, "z-level rough").clicked() {
-                    Document::set_strategy(
-                        op,
-                        StrategySpec::ZlevelRough {
-                            stepdown: 2.0,
-                            min_ring_length: 3.0,
-                        },
-                    );
+                for s in [
+                    StrategySpec::Parallel { angle: 0.0 },
+                    StrategySpec::ZlevelRough {
+                        stepdown: 2.0,
+                        min_ring_length: 3.0,
+                    },
+                    StrategySpec::Drill {
+                        peck: None,
+                        dwell: None,
+                    },
+                ] {
+                    let on = std::mem::discriminant(&op.strategy) == std::mem::discriminant(&s);
+                    if ui.selectable_label(on, name(&s)).clicked() {
+                        Document::set_strategy(op, s);
+                    }
                 }
             });
         ui.end_row();
@@ -906,6 +919,45 @@ fn operation(
                 ui.end_row();
                 ui.label("Shortest ring");
                 m.length_field(ui, min_ring_length, 0.1, 1000.0, "");
+                ui.end_row();
+            }
+            StrategySpec::Drill { peck, dwell } => {
+                ui.label("Peck");
+                ui.horizontal(|ui| {
+                    let mut on = peck.is_some();
+                    if ui.checkbox(&mut on, "").changed() {
+                        *peck = on.then_some(2.0);
+                    }
+                    match peck.as_mut() {
+                        Some(p) => {
+                            m.length_field(ui, p, 0.05, 100.0, "");
+                        }
+                        None => {
+                            ui.weak("all the way at once");
+                        }
+                    }
+                });
+                ui.end_row();
+                ui.label("Dwell");
+                ui.horizontal(|ui| {
+                    let mut on = dwell.is_some();
+                    if ui.checkbox(&mut on, "").changed() {
+                        *dwell = on.then_some(0.5);
+                    }
+                    match dwell.as_mut() {
+                        Some(d) => {
+                            ui.add(
+                                egui::DragValue::new(d)
+                                    .speed(0.05)
+                                    .range(0.0..=60.0)
+                                    .suffix(" s at the bottom"),
+                            );
+                        }
+                        None => {
+                            ui.weak("none");
+                        }
+                    }
+                });
                 ui.end_row();
             }
         }
@@ -995,11 +1047,15 @@ fn operation(
     let Some(op) = operation_mut(doc, si, index) else {
         return;
     };
+    let drilling = matches!(op.strategy, StrategySpec::Drill { .. });
     section(ui, "Geometry", |ui| {
-        ui.weak(
+        ui.weak(if drilling {
+            "Pick the round edge at the top of each hole. Pick its bottom edge too to \
+             drill to there; otherwise each hole is drilled to the bottom height below."
+        } else {
             "With nothing picked, the whole part within the stock is machined. Picked faces \
-             and edges keep the tool to their outline seen from above.",
-        );
+             and edges keep the tool to their outline seen from above."
+        });
         let g = &mut op.geometry;
         for (kind, title) in [(Kind::Face, "Faces"), (Kind::Edge, "Edges")] {
             let slot = match kind {
@@ -1035,7 +1091,7 @@ fn operation(
             });
             pick_list(ui, kind, list, found.unwrap_or_default(), actions);
         }
-        if g.picked() {
+        if g.picked() && !drilling {
             grid(ui, "containment", |ui| {
                 ui.label("Tool");
                 let name = |c: Containment| match c {

@@ -237,9 +237,21 @@ and the tool drawing and 3D cutter show its flank. A cone finishes; it is refuse
 for Z-level roughing, whose reach offsets a widening flank would multiply, and for
 stock to leave, since a cone grown by a ball is no longer a cone.
 
+**Drills and drilling.** A drill is a tool whose point is a cone (118° unless
+given), and it drills only. A drilling operation's holes are picked by their round
+top rims; pick a hole's bottom rim too and it is drilled to there, otherwise to the
+operation's bottom height. A rim that is not level in the setup, or an edge that is
+not round, is refused by name. Each hole is a pass: across at clearance, down (in
+pecks, backing out 2 mm above the rim between, when asked), and out, nearest hole
+next; so it is simulated and checked like any other path, and a drill that does
+not match its hole's size is said. Posted as those moves by default. A profile with
+`drill_cycles = true` gets one canned cycle a hole instead (G81, G82 with a dwell,
+G83 with pecks; G98, then G80), checked against golden files; both built-in
+profiles leave it off until cycles have been dry-run on the machine. Fusion drills
+import as drills.
+
 The work offset manager is to join the toolbar. Not yet: Fusion's own `.json`
-libraries, which carry holders; drills and a drilling operation; tapered ball
-mills.
+libraries, which carry holders; tapered ball mills.
 
 ## Playback (after 0.2): how it is set up
 
