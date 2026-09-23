@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# Patched third-party crates, see [patch.crates-io] below. Not ours to lint or test.
+exclude = ["vendor"]
 
 [workspace.package]
 version      = "0.1.0"
@@ -77,3 +79,13 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.camcraft-core]
 opt-level = 2
+
+# opencascade 0.3.0 does not build with MSVC: it assumes OpenCascade's `Handle_X` is
+# an alias of `opencascade::handle<X>`, which holds everywhere but Visual Studio,
+# where it is a derived class. vendor/ holds the crates.io 0.3.0 sources with upstream
+# PR #234 applied (https://github.com/bschwind/opencascade-rs/pull/234, at 00b4505),
+# which changes nothing on GCC or Clang. Delete vendor/ and this block once a
+# release includes it.
+[patch.crates-io]
+opencascade     = { path = "vendor/opencascade" }
+opencascade-sys = { path = "vendor/opencascade-sys" }

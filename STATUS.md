@@ -17,7 +17,7 @@ only the machine can tell us.
 cd D:\rust\camcraft
 
 # Look first, in the app: Generate, read the checks, scrub, then Post
-bash scripts/run.sh examples\rail-jig.camcraft
+scripts\run.bat examples\rail-jig.camcraft
 
 # Or from the command line: run and check, nothing written
 cargo run --release -p camcraft-cli -- job examples\rail-jig.camcraft
@@ -66,11 +66,15 @@ each pass next to where the following one starts.
 
 ## What is next, in order
 
-1. **Build on Windows once.** STEP import was built and tested on macOS only. The
-   spike needed `advapi32` linked explicitly on MSVC, and
-   `crates/camcraft-import/build.rs` does that, but the spike reported sixteen
-   unresolved externals and named only that one library. If more appear, the
-   libraries that define them go in the same file.
+1. **Build on Windows: done.** opencascade 0.3.0 did not compile with MSVC: it
+   assumes OpenCascade's `Handle_X` is an alias of `opencascade::handle<X>`, which
+   Visual Studio makes a derived class instead (`Standard_Handle.hxx`). `vendor/`
+   holds the crates.io 0.3.0 sources with upstream PR #234 applied
+   (bschwind/opencascade-rs, reviewed line by line; it changes nothing on GCC or
+   Clang), patched in from the root `Cargo.toml`. Delete both once a release
+   includes the fix. Release and debug builds both link, no further libraries were
+   needed, and `camcraft job examples\rail-jig.camcraft` reads the STEP part and
+   passes all 13 checks on Windows 11 with MSVC 14.44.
 2. **STL format detection: done.** A nameless ASCII file (`solid` then a newline,
    as most opencamlib samples begin) was read as binary and failed, and a binary
    file whose header began `solid ` would have been read as ASCII. The format is
