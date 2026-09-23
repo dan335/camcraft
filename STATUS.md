@@ -71,10 +71,11 @@ each pass next to where the following one starts.
    `crates/camcraft-import/build.rs` does that, but the spike reported sixteen
    unresolved externals and named only that one library. If more appear, the
    libraries that define them go in the same file.
-2. **Nameless ASCII STL fails to load.** A file beginning `solid` followed by a
-   newline (no name) is read as binary and fails with "failed to fill whole buffer".
-   Most opencamlib sample files are like this. `stl_io` appears to detect ASCII by
-   `solid ` with a trailing space; detect it ourselves before handing over.
+2. **STL format detection: done.** A nameless ASCII file (`solid` then a newline,
+   as most opencamlib samples begin) was read as binary and failed, and a binary
+   file whose header began `solid ` would have been read as ASCII. The format is
+   now decided before `stl_io` sees the file: a binary STL is exactly as long as
+   the triangle count in its header says.
 3. **0.2: a native desktop app.** Agreed scope, high level; each item gets its own
    detailed plan before work starts:
    - **App shell: done.** `camcraft-gui`, on eframe/egui 0.36 with wgpu, and
@@ -129,7 +130,7 @@ each pass next to where the following one starts.
      and the gate refuses any that remains; the checks and the app measure it the
      same way.
 
-   Also carried along: items 1 and 2 above, and the OpenCascade licensing decision.
+   Also carried along: item 1 above, and the OpenCascade licensing decision.
    Not in 0.2: new strategies (2D profile, pocket, drilling, waterline, adaptive),
    arc fitting, and feeds and speeds. Those are 0.3. The first physical cut can
    happen whenever it is ready and does not gate the release.
