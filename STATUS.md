@@ -157,6 +157,13 @@ material cut as the tool moves. Item 3 was designed so this is an addition:
   feed height just above the material first. This is a linker improvement, and
   worth doing before the first real cut.
 
+- **One unexplained STEP read failure.** During a full gate run on 2026-09-23, two
+  session tests reading `hinge_jig.step` failed with OpenCascade's "failed to read
+  STEP file". The same tests passed 80 times since, with and without a new lock
+  that serialises every OpenCascade call (`camcraft_import::step`). The lock stays
+  as a precaution, since OpenCascade's data exchange uses process-wide statics.
+  If it happens again, capture the run: this is not understood.
+
 Deferred on purpose: these are hard to judge until the GUI can show what is going
 on. Come back to them once it can.
 

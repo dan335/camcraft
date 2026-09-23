@@ -24,12 +24,16 @@
 //! not, and the checks are reported as skipped rather than passed.
 
 use std::path::Path;
+use std::sync::{Mutex, PoisonError};
 
 use camcraft_geom::mesh::{MeshError, TriMesh};
 use glam::{DVec3, dvec3};
 
 use crate::part21::{self, LengthUnit, Part21Error};
 use crate::weld::Welder;
+
+/// Serialises every call into OpenCascade. See [`load_step`].
+static KERNEL: Mutex<()> = Mutex::new(());
 
 /// A STEP file that could not be turned into a trustworthy mesh.
 #[derive(Debug, thiserror::Error)]
@@ -175,20 +179,30 @@ pub fn load_step(
         path: name.clone(),
         detail,
     };
-    let shape =
-        opencascade::primitives::Shape::read_step(path).map_err(|e| kernel(e.to_string()))?;
-    let meshed = shape.faces().count() as u64;
-    if meshed < facts.faces {
-        return Err(StepError::DroppedFaces {
-            path: name,
-            in_file: facts.faces,
-            meshed,
-        });
-    }
-    // Refuses outright if any face could not be triangulated.
-    let soup = shape
-        .mesh_with_tolerance(tolerance)
-        .map_err(|e| kernel(e.to_string()))?;
+    let soup = {
+        // One kernel call at a time, across every thread. OpenCascade's data
+        // exchange keeps its settings in process-wide statics, so this does not
+        // rely on every caller happening to read on one thread. A read once failed
+        // during a full gate run with "failed to read STEP file" on a fixture that
+        // reads fine alone; that was never reproduced (0 of 80 runs, with and
+        // without this lock), so this is a precaution, not a proven fix. The shape
+        // is declared after the guard, so it is dropped while the lock is held.
+        let _kernel = KERNEL.lock().unwrap_or_else(PoisonError::into_inner);
+        let shape =
+            opencascade::primitives::Shape::read_step(path).map_err(|e| kernel(e.to_string()))?;
+        let meshed = shape.faces().count() as u64;
+        if meshed < facts.faces {
+            return Err(StepError::DroppedFaces {
+                path: name,
+                in_file: facts.faces,
+                meshed,
+            });
+        }
+        // Refuses outright if any face could not be triangulated.
+        shape
+            .mesh_with_tolerance(tolerance)
+            .map_err(|e| kernel(e.to_string()))?
+    };
 
     let mut weld = Welder::default();
     let mut triangles = 0;

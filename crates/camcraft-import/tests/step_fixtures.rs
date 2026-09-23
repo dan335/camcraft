@@ -98,3 +98,32 @@ fn private_fixtures_when_available() {
     }
     assert!(seen > 0, "CAMCRAFT_FIXTURES is set but holds no STEP files");
 }
+
+/// Many threads reading STEP at once all succeed and all agree. A guard on the
+/// importer's kernel lock. It has not been seen to fail without the lock, so it
+/// does not prove the lock necessary; it holds the behaviour the lock is there for.
+#[test]
+fn concurrent_reads_are_safe() {
+    let results: Vec<_> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let name = if i % 2 == 0 {
+                    "hinge_jig.step"
+                } else {
+                    "lego_4x2_01.step"
+                };
+                scope.spawn(move || load_step(fixture(name), 0.05).map(|(m, _)| (name, m.len())))
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut sizes = std::collections::BTreeMap::new();
+    for r in results {
+        let (name, triangles) = r.unwrap_or_else(|e| panic!("a concurrent read failed: {e}"));
+        let first = *sizes.entry(name).or_insert(triangles);
+        assert_eq!(
+            first, triangles,
+            "{name} read differently on another thread"
+        );
+    }
+}
