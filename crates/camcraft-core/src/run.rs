@@ -26,15 +26,7 @@ use crate::stock::{EffectiveTool, Stock as ToLeave, StockError as ToLeaveError};
 use crate::tool::{ToolError, ToolProfile};
 use crate::toolpath::{Toolpath, ToolpathError};
 
-/// Descent-to-advance ratio past which a cutting move is really a plunge.
-///
-/// Two conditions make a plunge, not one. Steepness alone is safe: a ball riding
-/// down a near-vertical but *smooth* face descends faster than it advances and is
-/// fully supported. Depth alone is safe too: a long gentle descent is just a cut.
-/// The hazard is both together -- dropping a long way while barely advancing, which
-/// engages the end of the cutter rather than its side. Ten is about 84 degrees;
-/// real surfaces measured on the router jig top out near 3.
-pub const PLUNGE_RATIO: f64 = 10.0;
+pub use crate::toolpath::PLUNGE_RATIO;
 
 /// Material further above the part than this, in millimetres, counts as left over.
 ///
@@ -130,18 +122,26 @@ pub struct OperationResult {
     /// The clearance height, resolved. Traverses fly over the material by the
     /// clearance offset, and never lower than this where the material is unknown.
     pub clearance_z: f64,
-    /// Cutting moves steeper than [`PLUNGE_RATIO`].
+    /// Continuous cutting descents steeper than [`PLUNGE_RATIO`].
     pub steep_cut_descents: u64,
     /// Deepest of those, in millimetres.
     pub deepest_cut_descent_mm: f64,
+    /// How deep a steep descent may be before it is a plunge, in millimetres: the
+    /// operation's `max_cut_step`.
+    pub max_cut_step: f64,
     /// Anything the caller should look at.
     pub warnings: Vec<String>,
 }
 
 impl OperationResult {
     /// Whether this operation is safe to run as it stands.
+    ///
+    /// A plunge at cutting feed is as unsafe as a rapid through material, so a
+    /// steep descent deeper than the allowance fails the operation, not just warns.
     pub fn is_clean(&self) -> bool {
-        self.sim.is_clean() && !self.path.has_unplanned_links()
+        self.sim.is_clean()
+            && !self.path.has_unplanned_links()
+            && self.deepest_cut_descent_mm <= self.max_cut_step
     }
 }
 
@@ -439,8 +439,8 @@ fn run_operation(
     let (steep, deepest) = path.steep_cut_descents(start, PLUNGE_RATIO);
     if deepest > op.passes.max_cut_step {
         warnings.push(format!(
-            "deepest cutting descent {deepest:.2} mm exceeds the {:.2} mm allowance \
-             ({steep} steep move(s))",
+            "a steep cutting descent of {deepest:.2} mm exceeds the {:.2} mm \
+             allowance: a plunge at cutting feed ({steep} steep descent(s))",
             op.passes.max_cut_step
         ));
     }
@@ -463,6 +463,7 @@ fn run_operation(
         clearance_z,
         steep_cut_descents: steep,
         deepest_cut_descent_mm: deepest,
+        max_cut_step: op.passes.max_cut_step,
         warnings,
     })
 }
@@ -551,6 +552,19 @@ heights = { clearance = { ref = "stock-top", offset = 6.0 } }
     }
 
     /// Whatever looks at a result sees the run's own reports, not a recomputation.
+    /// A plunge at cutting feed is refused like a rapid through material, not
+    /// merely warned about. The strategy breaks passes before it gets here; this is
+    /// the backstop, so it is tested directly.
+    #[test]
+    fn a_descent_past_the_allowance_fails_the_operation() {
+        let job: Job = toml::from_str(JOB).unwrap();
+        let result = run_job(&job, &dome()).unwrap();
+        let mut finish = result.operations[1].clone();
+        assert!(finish.is_clean(), "{:?}", finish.warnings);
+        finish.deepest_cut_descent_mm = finish.max_cut_step + 0.01;
+        assert!(!finish.is_clean());
+    }
+
     #[test]
     fn results_carry_what_the_run_reported() {
         let job: Job = toml::from_str(JOB).unwrap();

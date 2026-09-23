@@ -26,6 +26,30 @@
 
 use glam::DVec3;
 
+/// Descent-to-advance ratio past which a cutting move is falling rather than
+/// cutting along.
+///
+/// Two conditions make a plunge, not one. Steepness alone is safe: a ball riding
+/// down a near-vertical but *smooth* face descends faster than it advances and is
+/// fully supported, for a short way. Depth alone is safe too: a long gentle descent
+/// is just a cut. The hazard is both together — dropping a long way while barely
+/// advancing, which engages the end of the cutter rather than its side. So a plunge
+/// is a continuous descent steeper than this that falls further than the
+/// operation's `max_cut_step`. Ten is about 84 degrees; real surfaces measured on
+/// the router jig top out near 3.
+pub const PLUNGE_RATIO: f64 = 10.0;
+
+/// One continuous steep descent: moves `first..=last`, falling `depth` in all.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Descent {
+    /// Index of its first move.
+    pub first: usize,
+    /// Index of its last move.
+    pub last: usize,
+    /// How far it falls, in millimetres.
+    pub depth: f64,
+}
+
 /// Why a move exists.
 ///
 /// Ordering is not meaningful; this is a tag, not a scale.
@@ -202,8 +226,8 @@ impl Toolpath {
         self.moves.iter().any(|m| m.role.is_unplanned())
     }
 
-    /// Cutting moves that descend more steeply than `max_ratio` (fall per unit of
-    /// horizontal travel), and the deepest such descent in millimetres.
+    /// Every continuous steep descent: a run of consecutive cutting moves, each
+    /// falling more steeply than `max_ratio` (fall per unit of horizontal travel).
     ///
     /// A cutting move that drops a long way while barely advancing is a full-depth
     /// plunge wearing a `Cut` label, and at cutting feed that is how end mills get
@@ -211,25 +235,43 @@ impl Toolpath {
     /// parallel pass crossing a vertical wall samples the top on one side and the
     /// floor on the other, and both samples are correct.
     ///
+    /// A descent is measured over the whole run, not move by move: a plunge split
+    /// into short moves is still the same plunge, and judging each piece alone
+    /// would let it through.
+    ///
     /// Detecting it is not optional politeness: every other check in this crate
     /// passes on such a path, because every individual point really is on the
     /// surface. Only the *connection* between them is unmachinable.
-    pub fn steep_cut_descents(&self, from: DVec3, max_ratio: f64) -> (u64, f64) {
+    pub fn steep_descents(&self, from: DVec3, max_ratio: f64) -> Vec<Descent> {
+        let mut out = Vec::new();
         let mut at = from;
-        let mut count = 0;
-        let mut deepest: f64 = 0.0;
-        for m in &self.moves {
-            if m.role == MoveRole::Cut {
-                let drop = at.z - m.to.z;
-                let flat = (m.to.truncate() - at.truncate()).length();
-                if drop > 0.0 && drop > flat * max_ratio {
-                    count += 1;
-                    deepest = deepest.max(drop);
-                }
+        let mut current: Option<Descent> = None;
+        for (i, m) in self.moves.iter().enumerate() {
+            let drop = at.z - m.to.z;
+            let flat = (m.to.truncate() - at.truncate()).length();
+            if m.role == MoveRole::Cut && drop > 0.0 && drop > flat * max_ratio {
+                let d = current.get_or_insert(Descent {
+                    first: i,
+                    last: i,
+                    depth: 0.0,
+                });
+                d.last = i;
+                d.depth += drop;
+            } else if let Some(d) = current.take() {
+                out.push(d);
             }
             at = m.to;
         }
-        (count, deepest)
+        out.extend(current);
+        out
+    }
+
+    /// How many continuous steep descents there are (see
+    /// [`steep_descents`](Self::steep_descents)), and the deepest, in millimetres.
+    pub fn steep_cut_descents(&self, from: DVec3, max_ratio: f64) -> (u64, f64) {
+        let all = self.steep_descents(from, max_ratio);
+        let deepest = all.iter().map(|d| d.depth).fold(0.0, f64::max);
+        (all.len() as u64, deepest)
     }
 
     /// Total length of moves whose role cuts, in millimetres.
@@ -249,7 +291,12 @@ impl Toolpath {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 mod tests {
     use super::*;
     use glam::dvec3;
@@ -377,6 +424,36 @@ mod tests {
         up.feed_to(dvec3(0.01, 0.0, 27.0), MoveRole::Cut, 500.0)
             .unwrap();
         assert_eq!(up.steep_cut_descents(dvec3(0.0, 0.0, 10.0), 1.0).0, 0);
+    }
+
+    /// A plunge split into short moves is the same plunge: one descent, measured
+    /// in full, so no single move's smallness lets it through.
+    #[test]
+    fn a_split_plunge_is_one_descent() {
+        let mut t = Toolpath::new();
+        t.feed_to(dvec3(5.0, 0.0, 10.0), MoveRole::Cut, 500.0)
+            .unwrap();
+        for k in 1..=6 {
+            let k = f64::from(k);
+            t.feed_to(
+                dvec3(5.0 + k * 0.01, 0.0, 10.0 - k * 0.4),
+                MoveRole::Cut,
+                500.0,
+            )
+            .unwrap();
+        }
+        // Along, then down again: a second, separate descent.
+        t.feed_to(dvec3(8.0, 0.0, 7.6), MoveRole::Cut, 500.0)
+            .unwrap();
+        t.feed_to(dvec3(8.01, 0.0, 7.3), MoveRole::Cut, 500.0)
+            .unwrap();
+
+        let all = t.steep_descents(dvec3(5.0, 0.0, 10.0), 10.0);
+        assert_eq!(all.len(), 2, "{all:?}");
+        assert!((all[0].depth - 2.4).abs() < 1e-9, "{all:?}");
+        assert_eq!((all[0].first, all[0].last), (1, 6));
+        assert!((all[1].depth - 0.3).abs() < 1e-9, "{all:?}");
+        assert_eq!(t.steep_cut_descents(dvec3(5.0, 0.0, 10.0), 10.0).0, 2);
     }
 
     #[test]

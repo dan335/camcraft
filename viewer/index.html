@@ -578,27 +578,37 @@ function checkOperation(op, heights) {
     : add('fail', 'CC104', nofeed + ' feeding move(s) without a feed, ' +
           rapidfeed + ' rapid(s) with one');
 
-  let steep = 0, deepest = 0;
+  // Continuous descents: a run of cutting moves each steeper than 10:1 is one
+  // descent, measured in full, as the engine measures it. A plunge split into
+  // short moves is still the same plunge.
+  let steep = 0, deepest = 0, run = 0;
   prev = null;
   for (const m of path) {
+    let falling = false;
     if (prev && m.role === 'cut') {
       const fall = prev.to[2] - m.to[2];
       const flat = Math.hypot(m.to[0] - prev.to[0], m.to[1] - prev.to[1]);
-      if (fall > 0 && fall > flat * 10) { steep++; deepest = Math.max(deepest, fall); }
+      if (fall > 0 && fall > flat * 10) {
+        if (run === 0) steep++;
+        run += fall; falling = true;
+        deepest = Math.max(deepest, run);
+      }
     }
+    if (!falling) run = 0;
     prev = m;
   }
   // Two conditions. Steepness alone is safe (a ball riding a smooth near-vertical
-  // face descends faster than it advances and stays supported); depth alone is just
-  // a cut. Dropping a long way while barely advancing engages the end of the cutter
-  // instead of its side, and that is the thing that snaps bits.
+  // face descends faster than it advances and stays supported, for a short way);
+  // depth alone is just a cut. Dropping a long way while barely advancing engages
+  // the end of the cutter instead of its side, and that is the thing that snaps
+  // bits. The engine refuses the same thing.
   const allow = typeof op.max_cut_step === 'number' ? op.max_cut_step : 0.5;
   deepest <= allow
     ? add('pass', 'CC105', 'no cutting move descends past the allowance',
           'deepest ' + deepest.toFixed(3) + ' mm of ' + allow.toFixed(2) + ' mm allowed')
     : add('fail', 'CC105', 'deepest cutting descent ' + deepest.toFixed(2) +
           ' mm exceeds the ' + allow.toFixed(2) + ' mm allowance',
-          steep + ' steep move(s) — a plunge at cutting feed will break cutters');
+          steep + ' steep descent(s) — a plunge at cutting feed will break cutters');
 
   // What the engine's simulator saw. Reported, not re-derived: the viewer has the
   // part but not the material, and only the simulator knows what was left standing.

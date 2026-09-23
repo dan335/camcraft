@@ -49,7 +49,7 @@ pub struct Steep {
     pub index: usize,
     /// Which operation, from zero.
     pub op: usize,
-    /// How far it drops, in millimetres.
+    /// How far it drops in all, in millimetres.
     pub drop: f64,
     /// Where it ends.
     pub at: DVec3,
@@ -77,8 +77,8 @@ pub struct Scene {
     pub ops: Vec<OpSpan>,
     /// Segments per role, indexed as [`theme::ROLES`].
     pub role_counts: [usize; 7],
-    /// Cutting moves steeper than [`PLUNGE_RATIO`] and deeper than their
-    /// operation's `max_cut_step`, in machine order.
+    /// Continuous cutting descents steeper than [`PLUNGE_RATIO`] and deeper than
+    /// their operation's `max_cut_step`, in machine order, each at its last move.
     pub steep: Vec<Steep>,
 }
 
@@ -109,21 +109,6 @@ impl Scene {
                 let [from, to] = pair else { continue };
                 let (a, b) = (from.to, to.to);
                 clock += duration(a, b, to.feed);
-                let fall = a.z - b.z;
-                let advance = (b.truncate() - a.truncate()).length();
-                // The core's rule, from the core's constant: steep, and too deep.
-                if to.role == MoveRole::Cut
-                    && fall > 0.0
-                    && fall > advance * PLUNGE_RATIO
-                    && fall > allowance
-                {
-                    scene.steep.push(Steep {
-                        index: scene.segments.len(),
-                        op: i,
-                        drop: fall,
-                        at: b,
-                    });
-                }
                 scene.segments.push(Segment {
                     a,
                     b,
@@ -135,6 +120,23 @@ impl Scene {
                 let r = theme::role_index(to.role) as usize;
                 if let Some(c) = scene.role_counts.get_mut(r) {
                     *c += 1;
+                }
+            }
+            // The core's own finding, by the core's rule: continuous descents
+            // steeper than the plunge ratio, too deep for the allowance. Segment `k`
+            // of this operation ends at move `k + 1`.
+            let moves = run.path.moves();
+            let start = moves.first().map_or(DVec3::ZERO, |m| m.to);
+            for d in run.path.steep_descents(start, PLUNGE_RATIO) {
+                if d.depth > allowance
+                    && let Some(end) = moves.get(d.last)
+                {
+                    scene.steep.push(Steep {
+                        index: first + d.last.saturating_sub(1),
+                        op: i,
+                        drop: d.depth,
+                        at: end.to,
+                    });
                 }
             }
             let cutter = setup
@@ -443,18 +445,22 @@ passes = { stepover = 2.0, feed = 2000.0 }
                 assert_eq!(seg.b, s.at);
                 assert!(s.drop > allowance);
             }
-            // Every ratio-steep cut, whatever its depth, is what the core counted.
+            // Every continuous ratio-steep descent, whatever its depth, is what the
+            // core counted: runs of steep cutting segments, counted here afresh.
             let span = &scene.ops[i];
-            let steep = scene.segments[span.first..span.first + span.count]
-                .iter()
-                .filter(|g| {
-                    let fall = g.a.z - g.b.z;
-                    g.role == MoveRole::Cut
-                        && fall > 0.0
-                        && fall > (g.b.truncate() - g.a.truncate()).length() * PLUNGE_RATIO
-                })
-                .count();
-            assert_eq!(steep as u64, run.steep_cut_descents, "{}", run.name);
+            let mut runs = 0;
+            let mut inside = false;
+            for g in &scene.segments[span.first..span.first + span.count] {
+                let fall = g.a.z - g.b.z;
+                let steep = g.role == MoveRole::Cut
+                    && fall > 0.0
+                    && fall > (g.b.truncate() - g.a.truncate()).length() * PLUNGE_RATIO;
+                if steep && !inside {
+                    runs += 1;
+                }
+                inside = steep;
+            }
+            assert_eq!(runs, run.steep_cut_descents, "{}", run.name);
         }
     }
 

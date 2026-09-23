@@ -109,7 +109,11 @@ each pass next to where the following one starts.
    - **Run, check, post:** background runs are done (Generate, Generate all).
      Still to come: the checks panel, and posting from the app with the same
      refusal to post an unverified setup as the CLI (`camcraft job` posts today).
-   - **Then decide the steep-descent fix and gate policy,** once for both.
+   - **Steep descents: done.** A plunge is a *continuous* descent steeper than
+     `PLUNGE_RATIO` (10:1) that falls further than `max_cut_step`, measured over
+     the whole run of moves, not move by move. Finishing breaks its passes there,
+     and the gate refuses any that remains; the viewer and the app measure it the
+     same way.
 
    Also carried along: items 1 and 2 above, and the OpenCascade licensing decision.
    Not in 0.2: new strategies (2D profile, pocket, drilling, waterline, adaptive),
@@ -204,29 +208,6 @@ material cut as the tool moves. Item 3 was designed so this is an addition:
   as a precaution, since OpenCascade's data exchange uses process-wide statics.
   If it happens again, capture the run: this is not understood.
 
-Deferred on purpose: these are hard to judge until the GUI can show what is going
-on. Come back to them once it can.
-
-- **The viewer and the gate disagree about steep descents.** A cutting move that
-  drops further than `max_cut_step` while barely advancing is a plunge at cutting
-  feed. The viewer calls it a blocking failure (CC105, HALT). The engine only warns:
-  it still writes the program and exits 2. Seen on real output: `mount_rush.stl` from
-  the opencamlib samples gets a 0.76 mm descent from a single finishing pass, and a
-  0.93 mm one under `rail-jig.toml`. The same numbers came out before the
-  one-engine-path change, so this is old behaviour. Either the gate should refuse it
-  (as the viewer implies), or the viewer should call it a warning.
-
-  *Why they get through at all* (found, not yet fixed). `refine` in
-  `crates/camcraft-core/src/parallel.rs` accepts a span as soon as its midpoint lies
-  within tolerance of the chord. It only reaches the wall-break check when that test
-  fails and the span has shrunk to the geometric limit. A steep but *straight* face
-  passes the chord test, so its depth is never compared with `max_cut_step`. In the
-  `rail-jig.toml` finishing pass on `mount_rush.stl`, moves 444 and 445 drop 0.93 mm
-  and 0.51 mm over 0.047 mm and 0.023 mm of travel, 1.44 mm almost straight down at
-  cutting feed. Only `steep_cut_descents`, run afterwards, notices, and it only
-  warns. Likely fix: check depth before accepting a span, so the pass breaks there
-  like at any other wall. Then decide what the gate does with whatever is left.
-
 ## Grids are only for stock
 
 A rule, not a preference. Height fields represent material — the simulation, rest
@@ -264,6 +245,14 @@ Worth knowing, because each was found by looking rather than by a test passing:
   Clipper's 0.01 mm: a staircase on every curved wall of a smooth CAD part, and on
   the jobs tested it also cleared far less than it could (the two-block test job
   kept almost all its material). See *Grids are only for stock*.
+- **Plunges got through finishing, split small.** A steep face that is straight
+  passes refinement's chord test at once, so its depth was never compared with
+  `max_cut_step`, and the check afterwards judged each move alone. On
+  `mount_rush.stl` two moves fell 1.44 mm over 0.07 mm of travel at cutting feed,
+  and the engine only warned while the viewer called it a failure. Descents are
+  now measured continuously, finishing breaks its passes at them, and the gate
+  refuses what remains. The sled's finishing now leaves nothing past the
+  allowance (deepest 0.48 mm), where it used to warn of 0.65 mm.
 - **Rapids could clip terraces.** The linker's clearance looked at five points under
   the cutter, centre and compass, and a rapid running tangent to roughing's
   terraces passed material on its diagonal. It now takes the highest cell anywhere

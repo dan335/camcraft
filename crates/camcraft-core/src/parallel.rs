@@ -26,7 +26,7 @@ use camcraft_geom::mesh::Aabb;
 use glam::{DVec2, DVec3, dvec2, dvec3};
 
 use crate::dropcutter::{DropCutter, DropTest};
-use crate::toolpath::{MoveRole, Toolpath, ToolpathError};
+use crate::toolpath::{MoveRole, PLUNGE_RATIO, Toolpath, ToolpathError};
 
 /// How to lay out the passes.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -119,7 +119,8 @@ pub struct StrategyReport {
     /// must not be joined by a cut. Common on the outermost scanlines, which graze
     /// the edge of the part.
     pub coverage_breaks: u64,
-    /// Passes broken because the surface dropped further than `max_cut_step`.
+    /// Passes broken because the surface dropped further than `max_cut_step`,
+    /// at a wall or down a face steeper than [`PLUNGE_RATIO`].
     ///
     /// Not a fault. Each one is a plunge that would otherwise have been cut at
     /// feed, and is now a retract and a controlled re-entry.
@@ -203,8 +204,14 @@ pub fn parallel_finish<T: DropTest>(
             &mut report,
         );
 
-        for run in samples.split(|p| p.is_none()) {
-            let run: Vec<DVec3> = run.iter().filter_map(|p| *p).collect();
+        let runs: Vec<Vec<DVec3>> = samples
+            .split(|p| p.is_none())
+            .flat_map(|run| {
+                let run: Vec<DVec3> = run.iter().filter_map(|p| *p).collect();
+                break_steep(run, params.max_cut_step, &mut report)
+            })
+            .collect();
+        for run in runs {
             if run.len() < 2 {
                 continue;
             }
@@ -223,6 +230,53 @@ pub fn parallel_finish<T: DropTest>(
     }
 
     Ok((path, report))
+}
+
+/// Break a run wherever it falls, or climbs, further than `max_cut_step` while
+/// steeper than [`PLUNGE_RATIO`].
+///
+/// Refinement only breaks at a genuine discontinuity. A steep face that is
+/// straight passes the chord test at once, so a pass would ride down it at
+/// cutting feed; and split finely, each move alone falls little while the whole
+/// still plunges. So the run is judged here, as the gate judges it: by each
+/// continuous steep stretch in full. Both directions, because ordering may reverse
+/// a pass and turn a climb into a descent.
+///
+/// The stretch is left out: the linker retracts from its top and plunges, at the
+/// plunge feed, to its foot.
+fn break_steep(run: Vec<DVec3>, max_cut_step: f64, report: &mut StrategyReport) -> Vec<Vec<DVec3>> {
+    // How far a segment falls (negative: climbs), when it is steeper than the ratio.
+    let steep = |a: DVec3, b: DVec3| -> Option<f64> {
+        let fall = a.z - b.z;
+        let flat = (b.truncate() - a.truncate()).length();
+        (fall.abs() > flat * PLUNGE_RATIO).then_some(fall)
+    };
+    let mut out = Vec::new();
+    let mut piece: Vec<DVec3> = Vec::new();
+    let mut i = 0;
+    while let Some(&p) = run.get(i) {
+        piece.push(p);
+        // The steep stretch starting here, all one way: where it ends and how far.
+        let mut j = i;
+        let mut total = 0.0;
+        while let (Some(&a), Some(&b)) = (run.get(j), run.get(j + 1)) {
+            let Some(f) = steep(a, b) else { break };
+            if j > i && (f > 0.0) != (total > 0.0) {
+                break;
+            }
+            total += f;
+            j += 1;
+        }
+        if total.abs() > max_cut_step {
+            report.wall_breaks += 1;
+            out.push(std::mem::take(&mut piece));
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out.push(piece);
+    out
 }
 
 /// Convenience: sweep the whole XY extent of a mesh's bounds.
@@ -602,7 +656,7 @@ mod tests {
         };
         let (before, before_report) = parallel_finish(&dc, &tool, lo, hi, &through).unwrap();
         let b_start = before.moves().first().unwrap().to;
-        let (_, b_deep) = before.steep_cut_descents(b_start, 1.0);
+        let (_, b_deep) = before.steep_cut_descents(b_start, PLUNGE_RATIO);
         assert_eq!(before_report.wall_breaks, 0);
         assert!(
             b_deep > step_height * 0.5,
@@ -612,7 +666,7 @@ mod tests {
         // Default allowance: the step is no longer traversed as a cut.
         let (after, after_report) = parallel_finish(&dc, &tool, lo, hi, &base).unwrap();
         let a_start = after.moves().first().unwrap().to;
-        let (_, a_deep) = after.steep_cut_descents(a_start, 1.0);
+        let (_, a_deep) = after.steep_cut_descents(a_start, PLUNGE_RATIO);
         assert!(
             after_report.wall_breaks > 0,
             "the step must break the passes"
@@ -626,6 +680,63 @@ mod tests {
             a_deep < b_deep / 10.0,
             "breaking should cut the worst descent by an order of magnitude: {b_deep} -> {a_deep}"
         );
+    }
+
+    /// The gap this closes: a steep face that is *straight* passes the chord test
+    /// at once, so refinement never looks at its depth, and a pass rode down it at
+    /// cutting feed. Measured as the gate measures, as one continuous descent, the
+    /// pass must now break, and nothing left may plunge further than allowed.
+    #[test]
+    fn a_straight_steep_face_breaks_the_pass() {
+        // A flat top at 10 for x < 0, a straight 20:1 ramp (about 87 degrees) down
+        // to a floor at 0 by x = 0.5, and the floor beyond.
+        let y = 10.0;
+        let pts = [(-10.0, 10.0), (0.0, 10.0), (0.5, 0.0), (10.0, 0.0)];
+        let mut vertices = Vec::new();
+        for &(x, z) in &pts {
+            vertices.push(dvec3(x, -y, z));
+            vertices.push(dvec3(x, y, z));
+        }
+        let triangles = (0..3u32)
+            .flat_map(|k| {
+                let (a, b, c, d) = (2 * k, 2 * k + 1, 2 * k + 2, 2 * k + 3);
+                [[a, c, d], [a, d, b]]
+            })
+            .collect();
+        let mesh = camcraft_geom::mesh::TriMesh::new(vertices, triangles).unwrap();
+        let dc = DropCutter::new(&mesh);
+        let tool = Ball::new(2.0).unwrap();
+        let (path, report) =
+            parallel_finish(&dc, &tool, dvec2(-6.0, -2.0), dvec2(6.0, 2.0), &params()).unwrap();
+        assert!(report.wall_breaks > 0, "the ramp must break the passes");
+        let cut = |f: fn(f64) -> bool| {
+            path.moves()
+                .iter()
+                .any(|m| m.role == MoveRole::Cut && f(m.to.x))
+        };
+        assert!(
+            cut(|x| x < -3.0) && cut(|x| x > 4.0),
+            "both flats are still cut"
+        );
+        let start = path.moves().first().unwrap().to;
+        let (_, deepest) = path.steep_cut_descents(start, PLUNGE_RATIO);
+        assert!(
+            deepest <= params().max_cut_step,
+            "a {deepest} mm descent is left, past the {} mm allowance",
+            params().max_cut_step
+        );
+    }
+
+    /// A steep face that is not a plunge — 3:1, as steep as the router jig gets —
+    /// is ridden, not broken.
+    #[test]
+    fn a_steep_but_cuttable_face_is_ridden() {
+        let mesh = synthetic::inclined_plane(-3.0, 0.0, 0.0, 10.0);
+        let dc = DropCutter::new(&mesh);
+        let tool = Ball::new(2.0).unwrap();
+        let (_, report) =
+            parallel_finish(&dc, &tool, dvec2(-2.0, -2.0), dvec2(2.0, 2.0), &params()).unwrap();
+        assert_eq!(report.wall_breaks, 0);
     }
 
     /// Breaking must not be indiscriminate. A smooth dome has no discontinuity, so
