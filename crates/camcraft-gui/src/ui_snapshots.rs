@@ -174,6 +174,8 @@ fn tool_manager() {
                 },
                 manager,
             );
+        // Before the first frame, as the app does at startup.
+        crate::theme::apply(&h.ctx);
         h.run_steps(3);
         match h.render() {
             Ok(image) => {

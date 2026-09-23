@@ -1024,18 +1024,21 @@ fn paint_tool(ui: &mut egui::Ui, tool: &ToolSpec) {
         ],
         egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
     );
+    // Just below the face line, at the right edge: above it the holder is at its
+    // widest, and below it only the narrower cutter, centred. Anywhere nearer the
+    // middle, dim text lands on the grey shank and disappears.
     painter.text(
-        egui::pos2(rect.left() + 10.0, face - 4.0),
-        egui::Align2::LEFT_BOTTOM,
+        egui::pos2(rect.right() - 10.0, face + 4.0),
+        egui::Align2::RIGHT_TOP,
         format!("stickout {:.1} mm", d.holder_face),
-        egui::FontId::monospace(11.0),
+        theme::caption(ui.style()),
         ui.visuals().weak_text_color(),
     );
     painter.text(
         egui::pos2(rect.right() - 10.0, rect.bottom() - 6.0),
         egui::Align2::RIGHT_BOTTOM,
         format!("Ø {:.2} mm", tool.diameter),
-        egui::FontId::monospace(11.0),
+        theme::caption(ui.style()),
         ui.visuals().text_color(),
     );
     if !d.assumed.is_empty() {

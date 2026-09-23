@@ -137,6 +137,7 @@ fn explain(e: &SessionError) -> String {
 impl App {
     /// The app, restoring what the file dialog remembers.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        theme::apply(&cc.egui_ctx);
         let storage = cc
             .storage
             .and_then(|s| eframe::get_value(s, STORAGE_DIALOG));

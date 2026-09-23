@@ -482,7 +482,7 @@ impl Viewport {
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "3D view needs a GPU (wgpu), which is not available",
-                egui::FontId::proportional(14.0),
+                theme::font(ui.style(), egui::TextStyle::Body),
                 ui.visuals().warn_fg_color,
             );
             return;
@@ -531,7 +531,7 @@ impl Viewport {
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "Open a model to see it here",
-                egui::FontId::proportional(16.0),
+                theme::font(ui.style(), egui::TextStyle::Heading),
                 faint,
             );
         }
@@ -539,7 +539,7 @@ impl Viewport {
             rect.left_bottom() + egui::vec2(12.0, -10.0),
             egui::Align2::LEFT_BOTTOM,
             "drag to orbit · shift-drag or right-drag to pan · scroll to zoom · R resets",
-            egui::FontId::monospace(11.0),
+            theme::caption(ui.style()),
             faint,
         );
     }

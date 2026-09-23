@@ -4,8 +4,8 @@
 //! vendored for the web inspector in `viewer/tokens.css`. Re-copy when the design
 //! system changes; do not invent values here.
 //!
-//! Only what the viewport needs for now. The rest of the system (surfaces, text,
-//! the amber accent, IBM Plex Sans and Fira Code) becomes an egui theme here later.
+//! Colours and the type scale so far. The rest of the system (surfaces, the amber
+//! accent as the selection colour, IBM Plex Sans and Fira Code) joins them here.
 
 use camcraft_core::toolpath::MoveRole;
 
@@ -39,6 +39,79 @@ pub const ERR: [u8; 3] = [0xFF, 0x5C, 0x5C];
 pub const GRAY_5: [u8; 3] = [0x3A, 0x3E, 0x48];
 /// `--gray-8`: material finished to the part.
 pub const GRAY_8: [u8; 3] = [0xB9, 0xBD, 0xC7];
+
+/// `--text-xs`, from `tokens/typography.css`: captions on drawings and the view.
+pub const TEXT_XS: f32 = 11.0;
+/// `--text-sm`: small print.
+pub const TEXT_SM: f32 = 12.0;
+/// `--text-base`: body text, buttons, fields.
+pub const TEXT_BASE: f32 = 14.0;
+/// `--text-md`: section headings.
+pub const TEXT_MD: f32 = 16.0;
+
+/// A named text style for captions: monospace at `--text-xs`, as the web
+/// inspector set its figures and hints.
+pub const CAPTION: &str = "caption";
+
+/// Set the design system's type scale on every theme egui has, so it holds in dark
+/// and light alike. Called once, when the app starts.
+pub fn apply(ctx: &eframe::egui::Context) {
+    use eframe::egui::{FontFamily, FontId, TextStyle};
+    ctx.all_styles_mut(|style| {
+        style.text_styles = [
+            (
+                TextStyle::Small,
+                FontId::new(TEXT_SM, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Body,
+                FontId::new(TEXT_BASE, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Button,
+                FontId::new(TEXT_BASE, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Heading,
+                FontId::new(TEXT_MD, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Monospace,
+                FontId::new(TEXT_BASE, FontFamily::Monospace),
+            ),
+            (
+                TextStyle::Name(CAPTION.into()),
+                FontId::new(TEXT_XS, FontFamily::Monospace),
+            ),
+        ]
+        .into();
+    });
+}
+
+/// The font for a named or built-in text style, as the current style sets it.
+///
+/// A style that has not been set, as before [`apply`] has run, falls back to the
+/// scale rather than failing: egui's own lookup panics on a missing style.
+pub fn font(style: &eframe::egui::Style, text: eframe::egui::TextStyle) -> eframe::egui::FontId {
+    use eframe::egui::{FontFamily, FontId, TextStyle};
+    if let Some(f) = style.text_styles.get(&text) {
+        return f.clone();
+    }
+    match text {
+        TextStyle::Name(ref n) if n.as_ref() == CAPTION => {
+            FontId::new(TEXT_XS, FontFamily::Monospace)
+        }
+        TextStyle::Monospace => FontId::new(TEXT_BASE, FontFamily::Monospace),
+        TextStyle::Small => FontId::new(TEXT_SM, FontFamily::Proportional),
+        TextStyle::Heading => FontId::new(TEXT_MD, FontFamily::Proportional),
+        _ => FontId::new(TEXT_BASE, FontFamily::Proportional),
+    }
+}
+
+/// The caption font, as the current style sets it.
+pub fn caption(style: &eframe::egui::Style) -> eframe::egui::FontId {
+    font(style, eframe::egui::TextStyle::Name(CAPTION.into()))
+}
 
 /// Every role, in the order the controls list them.
 pub const ROLES: [MoveRole; 7] = [
@@ -136,6 +209,46 @@ mod tests {
             let want = format!("{token}{}", hex(value));
             assert!(css.contains(&want), "tokens.css has no {want}");
         }
+    }
+
+    /// The type scale is the design system's too.
+    #[test]
+    fn type_sizes_match_the_vendored_tokens() {
+        let css = include_str!("../../../viewer/tokens.css");
+        for (token, size) in [
+            ("--text-xs:", TEXT_XS),
+            ("--text-sm:", TEXT_SM),
+            ("--text-base:", TEXT_BASE),
+            ("--text-md:", TEXT_MD),
+        ] {
+            let want = format!("{token}{size}px");
+            assert!(css.contains(&want), "tokens.css has no {want}");
+        }
+    }
+
+    /// Applied, every text style takes its size from the scale, and the caption
+    /// style exists for the labels that used to fix their own size.
+    #[test]
+    fn applying_sets_every_text_style() {
+        use eframe::egui::{Context, TextStyle, Theme};
+        let ctx = Context::default();
+        apply(&ctx);
+        for theme in [Theme::Dark, Theme::Light] {
+            let style = ctx.style_of(theme);
+            assert_eq!(font(&style, TextStyle::Body).size, TEXT_BASE);
+            assert_eq!(font(&style, TextStyle::Button).size, TEXT_BASE);
+            assert_eq!(font(&style, TextStyle::Heading).size, TEXT_MD);
+            assert_eq!(font(&style, TextStyle::Small).size, TEXT_SM);
+            assert_eq!(caption(&style).size, TEXT_XS);
+        }
+    }
+
+    /// Before the theme is applied, looking a style up falls back to the scale
+    /// instead of panicking, as egui's own lookup would.
+    #[test]
+    fn a_missing_style_falls_back_to_the_scale() {
+        let bare = eframe::egui::Style::default();
+        assert_eq!(caption(&bare).size, TEXT_XS);
     }
 
     #[test]
