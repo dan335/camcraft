@@ -11,7 +11,9 @@ use camcraft_session::{Model, SessionError, Units, read_job};
 use eframe::egui;
 
 use crate::file_dialog::{AppFileDialog, Pick};
+use crate::measure::Measure;
 use crate::scene::{Scene, Steep, clock};
+use crate::settings::Settings;
 use crate::stock_view::{CLASSES, StockImage, class_color, class_name};
 use crate::theme;
 use crate::tool_manager::{Event as ToolEvent, ToolManager};
@@ -23,6 +25,7 @@ use crate::worker::{Outcome, Reply, Request, Worker};
 const PREVIEW_TOLERANCE: f64 = 0.05;
 
 const STORAGE_DIALOG: &str = "file_dialog";
+const STORAGE_SETTINGS: &str = "settings";
 
 /// Which material to draw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +82,8 @@ pub struct App {
     stock_images: Vec<Option<StockImage>>,
     /// The tool manager, in its own window when open.
     tools: ToolManager,
+    settings: Settings,
+    settings_open: bool,
     log: Vec<(Level, String)>,
 }
 
@@ -141,6 +146,10 @@ impl App {
         let storage = cc
             .storage
             .and_then(|s| eframe::get_value(s, STORAGE_DIALOG));
+        let settings = cc
+            .storage
+            .and_then(|s| eframe::get_value(s, STORAGE_SETTINGS))
+            .unwrap_or_default();
         Self {
             dialog: AppFileDialog::new(storage),
             worker: Worker::default(),
@@ -163,6 +172,8 @@ impl App {
             hide_part_with_stock: true,
             stock_images: Vec::new(),
             tools: ToolManager::new(),
+            settings,
+            settings_open: false,
             log: Vec::new(),
         }
     }
@@ -228,6 +239,10 @@ impl App {
         app
     }
 
+    fn measure(&self) -> Measure {
+        self.settings.measure
+    }
+
     fn note(&mut self, level: Level, text: impl Into<String>) {
         self.log.push((level, text.into()));
     }
@@ -255,10 +270,10 @@ impl App {
                 self.note(
                     Level::Info,
                     format!(
-                        "job: {} ({} operation(s), tolerance {} mm)",
+                        "job: {} ({} operation(s), tolerance {})",
                         path.display(),
                         job.operations.len(),
-                        job.tolerance
+                        self.measure().length_trimmed(job.tolerance)
                     ),
                 );
                 self.tools.set_job(&path, &job);
@@ -352,6 +367,14 @@ impl App {
         Some(deepest.drop)
     }
 
+    /// Show lengths in `measure`, with the settings window open. Only the snapshot
+    /// harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn settings_for_snapshot(&mut self, measure: Measure) {
+        self.settings.measure = measure;
+        self.settings_open = true;
+    }
+
     fn load(&mut self, ctx: &egui::Context) {
         let Some(path) = self.model_path.clone() else {
             return;
@@ -435,6 +458,7 @@ impl App {
 
     fn side(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        let m = self.measure();
         let idle = self.busy().is_none() && !self.dialog.is_open();
 
         ui.heading("Model");
@@ -465,11 +489,16 @@ impl App {
         if let Some(model) = &self.model {
             let e = model.bounds.extent();
             egui::Grid::new("model").num_columns(2).show(ui, |ui| {
-                ui.label("units");
+                ui.label("file units");
                 ui.label(&model.units);
                 ui.end_row();
                 ui.label("size");
-                ui.label(format!("{:.1} × {:.1} × {:.1} mm", e.x, e.y, e.z));
+                ui.label(format!(
+                    "{} × {} × {}",
+                    m.number(e.x, 1),
+                    m.number(e.y, 1),
+                    m.length(e.z, 1)
+                ));
                 ui.end_row();
                 ui.label("triangles");
                 ui.label(model.mesh.len().to_string());
@@ -487,7 +516,7 @@ impl App {
         }
         if let (Some(path), Some(job)) = (&self.job_path, &self.job) {
             ui.monospace(file_name(path));
-            ui.label(format!("tolerance {} mm", job.tolerance));
+            ui.label(format!("tolerance {}", m.length_trimmed(job.tolerance)));
             for (i, op) in job.operations.iter().enumerate() {
                 let strategy = match op.strategy {
                     StrategySpec::Parallel { .. } => "parallel",
@@ -495,7 +524,7 @@ impl App {
                 };
                 let tool = job.tool_for(op).map_or_else(String::new, |t| {
                     let kind = format!("{:?}", t.kind).to_lowercase();
-                    format!(", {kind} Ø{}", t.diameter)
+                    format!(", {kind} Ø{}", m.length_trimmed(t.diameter))
                 });
                 ui.label(format!("{}. {} — {strategy}{tool}", i + 1, op.name));
             }
@@ -530,7 +559,7 @@ impl App {
                     for op in &outcome.ran.result.operations {
                         ui.label(&op.name);
                         ui.label(op.passes.to_string());
-                        ui.label(format!("{:.1} cm³", op.sim.removed_mm3 / 1000.0));
+                        ui.label(m.volume(op.sim.removed_mm3));
                         ui.label(op.sim.rapid_contacts.to_string());
                         ui.end_row();
                     }
@@ -545,8 +574,9 @@ impl App {
                 ui.colored_label(
                     ui.visuals().error_fg_color,
                     format!(
-                        "NOT verified: {} gouged column(s), deepest {:.3} mm.",
-                        v.gouged, v.deepest_gouge_mm
+                        "NOT verified: {} gouged column(s), deepest {}.",
+                        v.gouged,
+                        m.length(v.deepest_gouge_mm, 3)
                     ),
                 );
             }
@@ -562,6 +592,7 @@ impl App {
         let Some(scene) = &self.scene else {
             return;
         };
+        let m = self.settings.measure;
         let view = &mut self.view;
 
         ui.separator();
@@ -623,13 +654,16 @@ impl App {
         if let Some(at) = scene.at(self.scrub) {
             let s = at.segment;
             ui.label(format!("{}. {}", at.op + 1, at.op_name));
-            let feed = s.feed.map_or_else(String::new, |f| format!("  F{f:.0}"));
+            let feed = s
+                .feed
+                .map_or_else(String::new, |f| format!("  F{}", m.feed_number(f)));
             ui.monospace(format!(
-                "{} to {:.2}, {:.2}, {:.2}{feed}",
+                "{} to {}, {}, {} {}{feed}",
                 theme::role_name(s.role),
-                s.b.x,
-                s.b.y,
-                s.b.z
+                m.number(s.b.x, 2),
+                m.number(s.b.y, 2),
+                m.number(s.b.z, 2),
+                m.unit()
             ));
         }
         if let Some(at) = scene.at(self.scrub) {
@@ -704,27 +738,30 @@ impl App {
                     .and_then(|j| j.operations.get(i))
                     .map_or(0.0, |o| o.passes.max_cut_step);
                 ui.label(format!(
-                    "{}. {}: {} move(s), deepest {deepest:.2} mm of {allowance:.2} allowed",
+                    "{}. {}: {} move(s), deepest {} of {} allowed",
                     i + 1,
                     op.name,
-                    mine.len()
+                    mine.len(),
+                    m.length(deepest, 2),
+                    m.length(allowance, 2)
                 ));
             }
             // Deepest first: the worst is the one to look at.
             let mut worst: Vec<Steep> = scene.steep.clone();
             worst.sort_by(|a, b| b.drop.total_cmp(&a.drop));
+            ui.weak(format!("drop, operation and position ({})", m.unit()));
             egui::ScrollArea::vertical()
                 .id_salt("steep")
                 .max_height(160.0)
                 .show(ui, |ui| {
                     for s in worst.iter().take(200) {
                         let label = format!(
-                            "{:.2} mm  {}. at {:.1}, {:.1}, {:.1}",
-                            s.drop,
+                            "{}  {}. at {}, {}, {}",
+                            m.number(s.drop, 2),
                             s.op + 1,
-                            s.at.x,
-                            s.at.y,
-                            s.at.z
+                            m.number(s.at.x, 1),
+                            m.number(s.at.y, 1),
+                            m.number(s.at.z, 1)
                         );
                         if ui
                             .selectable_label(false, egui::RichText::new(label).monospace())
@@ -819,12 +856,13 @@ impl eframe::App for App {
         }
         self.step_scrub(&ctx);
         self.ensure_stock_image();
+        self.tools.measure = self.measure();
         if let Some(ToolEvent::JobSaved(path)) = self.tools.show(&ctx) {
             self.note(Level::Info, "tools saved to the job; reading it again");
             self.open_job(&ctx, path);
         }
 
-        // The setup toolbar: tools now, work offsets later.
+        // The setup toolbar: tools and settings now, work offsets later.
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 if ui
@@ -834,8 +872,16 @@ impl eframe::App for App {
                 {
                     self.tools.open = !self.tools.open;
                 }
+                if ui
+                    .selectable_label(self.settings_open, "Settings")
+                    .on_hover_text("units, and how the app shows things")
+                    .clicked()
+                {
+                    self.settings_open = !self.settings_open;
+                }
             });
         });
+        self.settings.show(&ctx, &mut self.settings_open);
         if let Some((pick, path)) = self.dialog.update(&ctx) {
             match pick {
                 Pick::Model => self.open_model(&ctx, path),
@@ -870,6 +916,9 @@ impl eframe::App for App {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        // eframe saves on the way out, so a library edit still in a field is kept.
+        self.tools.save_library();
         eframe::set_value(storage, STORAGE_DIALOG, self.dialog.storage());
+        eframe::set_value(storage, STORAGE_SETTINGS, &self.settings);
     }
 }

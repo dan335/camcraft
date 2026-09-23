@@ -134,6 +134,12 @@ fn main_window_after_a_run() {
     println!("deepest steep descent {deepest:?}");
     h.run_steps(3);
     shoot(&mut h, "steep_deepest");
+
+    // The same, in inches, with the settings window that chose them open.
+    h.state_mut()
+        .settings_for_snapshot(crate::measure::Measure::Imperial);
+    h.run_steps(3);
+    shoot(&mut h, "steep_deepest_imperial");
 }
 
 /// The file dialog, open on the model filter: drawn inside the app, themed with it.
@@ -226,6 +232,11 @@ fn tool_manager() {
     };
     manager.show_for_snapshot(Source::Library, "bullnose-8", Some(described.clone()));
     let mut manager = shoot_manager(manager, "tools_library");
+
+    // The same tool shown in inches: the fields and labels are wider.
+    manager.measure = crate::measure::Measure::Imperial;
+    let mut manager = shoot_manager(manager, "tools_library_imperial");
+    manager.measure = crate::measure::Measure::Metric;
 
     // Flutes longer than the stickout: the error sits beside the field.
     let wrong = ToolSpec {

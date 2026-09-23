@@ -7,7 +7,9 @@
 mod app;
 mod camera;
 mod file_dialog;
+mod measure;
 mod scene;
+mod settings;
 mod stock_view;
 mod theme;
 mod tool_drawing;

@@ -1,10 +1,11 @@
 //! The tool manager: the job's tools and the user's library, side by side, after
 //! Fusion's Tool Library.
 //!
-//! It opens in its own OS window. Tools are edited in place and saved per source.
-//! The job's are written back into its file with the rest of the file left as it
-//! was (`camcraft_session::job_file`); the library's go to the user's app-data
-//! folder (`camcraft_session::library`). Copying between the two is literal, and a
+//! It opens in its own OS window. Tools are edited in place. The job's are saved
+//! when asked, since a save re-plans the job, and are written back into its file
+//! with the rest of the file left as it was (`camcraft_session::job_file`). The
+//! library saves itself whenever an edit is finished and every tool checks clean,
+//! to the user's app-data folder (`camcraft_session::library`). Copying between the two is literal, and a
 //! job keeps copies, never links, so it still cuts what was verified after the
 //! library changes.
 
@@ -18,6 +19,7 @@ use camcraft_session::job_file;
 use camcraft_session::library::{Library, free_name, library_path};
 use eframe::egui;
 
+use crate::measure::Measure;
 use crate::theme;
 use crate::tool_drawing::{Part, draw};
 
@@ -120,11 +122,16 @@ enum Sort {
 pub struct ToolManager {
     /// Whether its window is showing.
     pub open: bool,
+    /// How lengths and feeds are shown; the tools themselves stay in millimetres.
+    pub measure: Measure,
     source: Source,
     job: Option<JobSide>,
     library_path: Option<PathBuf>,
     library: Set,
     library_error: Option<String>,
+    /// Why the library's edits are not saved yet, and the edits that got that
+    /// answer, so a failure is not retried every frame.
+    library_unsaved: Option<(String, BTreeMap<String, ToolSpec>)>,
     selected: Option<String>,
     name_buffer: String,
     filter: String,
@@ -156,11 +163,13 @@ impl ToolManager {
         };
         Self {
             open: false,
+            measure: Measure::default(),
             source: Source::Library,
             job: None,
             library_path: Some(path),
             library: Set::new(library.tools),
             library_error,
+            library_unsaved: None,
             selected: None,
             name_buffer: String::new(),
             filter: String::new(),
@@ -206,6 +215,41 @@ impl ToolManager {
         self.select(Some(name.to_string()));
     }
 
+    /// Save the library if it has edits and they can be kept. The manager does
+    /// this itself as edits finish; the app calls it too, on the way out.
+    pub fn save_library(&mut self) {
+        if !self.library.dirty() {
+            self.library_unsaved = None;
+            return;
+        }
+        if self
+            .library_unsaved
+            .as_ref()
+            .is_some_and(|(_, tried)| *tried == self.library.edited)
+        {
+            return;
+        }
+        let why = if self.library_error.is_some() {
+            // Writing now would replace the file that failed to load with only
+            // what has been added since.
+            Some("the library file could not be read, so it is not written over".into())
+        } else if let Some(path) = self.library_path.clone() {
+            let lib = Library {
+                tools: self.library.edited.clone(),
+            };
+            lib.save(&path).err().map(|e| e.to_string())
+        } else {
+            Some("there is nowhere to keep the library".into())
+        };
+        match why {
+            None => {
+                self.library.saved();
+                self.library_unsaved = None;
+            }
+            Some(why) => self.library_unsaved = Some((why, self.library.edited.clone())),
+        }
+    }
+
     /// Whether anything is unsaved.
     pub fn dirty(&self) -> bool {
         self.library.dirty() || self.job.as_ref().is_some_and(|j| j.set.dirty())
@@ -244,6 +288,7 @@ impl ToolManager {
                 .with_min_inner_size([860.0, 480.0]),
             |ui, _class| {
                 if ui.ctx().input(|i| i.viewport().close_requested()) {
+                    self.save_library();
                     if self.dirty() {
                         ui.ctx()
                             .send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -271,6 +316,11 @@ impl ToolManager {
                 egui::ScrollArea::vertical().show(ui, |ui| self.editor(ui));
             });
         egui::CentralPanel::default().show(ui, |ui| self.table(ui));
+        // An edit is finished once no field is being typed in or dragged.
+        let ctx = ui.ctx();
+        if ctx.memory(|m| m.focused().is_none()) && ctx.dragged_id().is_none() {
+            self.save_library();
+        }
         event
     }
 
@@ -319,11 +369,7 @@ impl ToolManager {
                     self.select(None);
                 }
             });
-            let lib_text = format!(
-                "Library ({}){}",
-                self.library.edited.len(),
-                if self.library.dirty() { " •" } else { "" }
-            );
+            let lib_text = format!("Library ({})", self.library.edited.len());
             if ui
                 .selectable_label(self.source == Source::Library, lib_text)
                 .clicked()
@@ -332,15 +378,17 @@ impl ToolManager {
                 self.select(None);
             }
             ui.separator();
-            let dirty = self.set().is_some_and(Set::dirty);
-            if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
-                event = self.save();
-            }
-            if ui.add_enabled(dirty, egui::Button::new("Revert")).clicked()
-                && let Some(set) = self.set_mut()
-            {
-                set.revert();
-                self.select(None);
+            if self.source == Source::Job {
+                let dirty = self.set().is_some_and(Set::dirty);
+                if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
+                    event = self.save();
+                }
+                if ui.add_enabled(dirty, egui::Button::new("Revert")).clicked()
+                    && let Some(set) = self.set_mut()
+                {
+                    set.revert();
+                    self.select(None);
+                }
             }
             if let Some((ok, text)) = &self.message {
                 let color = if *ok {
@@ -355,57 +403,36 @@ impl ToolManager {
             if let Some(e) = &self.library_error {
                 ui.colored_label(ui.visuals().error_fg_color, e);
             } else if let Some(p) = &self.library_path {
-                ui.weak(format!("kept in {}", p.display()));
+                ui.weak(format!("saved as you go, in {}", p.display()));
+            }
+            if let Some((why, _)) = &self.library_unsaved {
+                ui.colored_label(ui.visuals().error_fg_color, format!("not saved: {why}"));
             }
         }
         event
     }
 
+    /// Save the job's tools into its file. The library saves itself.
     fn save(&mut self) -> Option<Event> {
-        let problems: Vec<String> = self
-            .set()
-            .map(|s| {
-                s.edited
-                    .iter()
-                    .flat_map(|(n, t)| t.check().into_iter().map(move |e| format!("{n}: {e}")))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let j = self.job.as_mut()?;
+        let problems: Vec<String> = j
+            .set
+            .edited
+            .iter()
+            .flat_map(|(n, t)| t.check().into_iter().map(move |e| format!("{n}: {e}")))
+            .collect();
         if let Some(first) = problems.first() {
             self.message = Some((false, format!("not saved: {first}")));
             return None;
         }
-        match self.source {
-            Source::Job => {
-                let j = self.job.as_mut()?;
-                match job_file::save_tools(&j.path, &j.set.original, &j.set.edited, &j.set.renames)
-                {
-                    Ok(()) => {
-                        j.set.saved();
-                        self.message = Some((true, "saved to the job file".into()));
-                        Some(Event::JobSaved(j.path.clone()))
-                    }
-                    Err(e) => {
-                        self.message = Some((false, format!("not saved: {e}")));
-                        None
-                    }
-                }
+        match job_file::save_tools(&j.path, &j.set.original, &j.set.edited, &j.set.renames) {
+            Ok(()) => {
+                j.set.saved();
+                self.message = Some((true, "saved to the job file".into()));
+                Some(Event::JobSaved(j.path.clone()))
             }
-            Source::Library => {
-                let Some(path) = self.library_path.clone() else {
-                    self.message = Some((false, "there is nowhere to keep the library".into()));
-                    return None;
-                };
-                let lib = Library {
-                    tools: self.library.edited.clone(),
-                };
-                match lib.save(&path) {
-                    Ok(()) => {
-                        self.library.saved();
-                        self.message = Some((true, "library saved".into()));
-                    }
-                    Err(e) => self.message = Some((false, format!("not saved: {e}"))),
-                }
+            Err(e) => {
+                self.message = Some((false, format!("not saved: {e}")));
                 None
             }
         }
@@ -471,6 +498,7 @@ impl ToolManager {
             .map(|j| j.users.clone())
             .unwrap_or_default();
         let source = self.source;
+        let m = self.measure;
         let mut clicked = None;
         let mut sort = self.sort;
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -483,9 +511,14 @@ impl ToolManager {
                         header(ui, label, key, &mut sort);
                     }
                     ui.strong("type");
-                    header(ui, "Ø", Some(Sort::Diameter), &mut sort);
+                    header(
+                        ui,
+                        &format!("Ø {}", m.unit()),
+                        Some(Sort::Diameter),
+                        &mut sort,
+                    );
                     ui.strong("flutes");
-                    ui.strong("stickout");
+                    ui.strong(format!("stickout {}", m.unit()));
                     ui.strong("description");
                     ui.end_row();
                     for (name, tool) in rows {
@@ -499,12 +532,9 @@ impl ToolManager {
                             clicked = Some(name.clone());
                         }
                         ui.label(kind_name(tool.kind));
-                        ui.label(format!("{:.2}", tool.diameter));
+                        ui.label(m.number(tool.diameter, 2));
                         ui.label(tool.flutes.map_or_else(|| "–".into(), |f| f.to_string()));
-                        ui.label(
-                            tool.stickout
-                                .map_or_else(|| "–".into(), |s| format!("{s:.1}")),
-                        );
+                        ui.label(tool.stickout.map_or_else(|| "–".into(), |s| m.number(s, 1)));
                         ui.label(&tool.comment);
                         ui.end_row();
                     }
@@ -578,14 +608,11 @@ impl ToolManager {
         };
         let as_name = free_name(name, &set.edited);
         set.edited.insert(as_name.clone(), tool);
-        let place = match target {
-            Source::Job => "the job",
-            Source::Library => "the library",
+        let text = match target {
+            Source::Job => format!("copied to the job as '{as_name}'; save the job to keep it"),
+            Source::Library => format!("copied to the library as '{as_name}'"),
         };
-        self.message = Some((
-            true,
-            format!("copied to {place} as '{as_name}'; save it there to keep it"),
-        ));
+        self.message = Some((true, text));
     }
 
     fn editor(&mut self, ui: &mut egui::Ui) {
@@ -599,6 +626,7 @@ impl ToolManager {
         };
         let mut tool = original.clone();
         let errors = tool.check();
+        let m = self.measure;
 
         // The name, applied when editing finishes.
         ui.horizontal(|ui| {
@@ -631,7 +659,7 @@ impl ToolManager {
             ui.weak(format!("used by {}", ops.join(", ")));
         }
 
-        paint_tool(ui, &tool);
+        paint_tool(ui, &tool, m);
 
         let section = |ui: &mut egui::Ui, title: &str, body: &mut dyn FnMut(&mut egui::Ui)| {
             egui::CollapsingHeader::new(title)
@@ -675,9 +703,9 @@ impl ToolManager {
                     }
                 });
             ui.end_row();
-            length(ui, "Diameter", &mut tool.diameter, &errors, "diameter");
+            length(ui, m, "Diameter", &mut tool.diameter, &errors, "diameter");
             if tool.kind == ToolKind::Bullnose {
-                length(ui, "Corner radius", &mut tool.corner, &errors, "corner");
+                length(ui, m, "Corner radius", &mut tool.corner, &errors, "corner");
             }
             ui.label("Flutes");
             ui.horizontal(|ui| {
@@ -695,6 +723,7 @@ impl ToolManager {
             ui.end_row();
             opt_length(
                 ui,
+                m,
                 "Flute length",
                 &mut tool.flute_length,
                 2.0 * tool.diameter,
@@ -703,6 +732,7 @@ impl ToolManager {
             );
             opt_length(
                 ui,
+                m,
                 "Shoulder length",
                 &mut tool.shoulder_length,
                 2.5 * tool.diameter,
@@ -714,6 +744,7 @@ impl ToolManager {
         section(ui, "Shank & holder", &mut |ui| {
             opt_length(
                 ui,
+                m,
                 "Shank diameter",
                 &mut tool.shank_diameter,
                 tool.diameter,
@@ -722,6 +753,7 @@ impl ToolManager {
             );
             opt_length(
                 ui,
+                m,
                 "Stickout",
                 &mut tool.stickout,
                 4.0 * tool.diameter,
@@ -730,6 +762,7 @@ impl ToolManager {
             );
             opt_length(
                 ui,
+                m,
                 "Overall length",
                 &mut tool.overall_length,
                 8.0 * tool.diameter,
@@ -754,18 +787,8 @@ impl ToolManager {
                     for (i, seg) in h.segments.iter_mut().enumerate() {
                         ui.horizontal(|ui| {
                             ui.weak(format!("{}", i + 1));
-                            ui.add(
-                                egui::DragValue::new(&mut seg.diameter)
-                                    .speed(0.1)
-                                    .prefix("Ø ")
-                                    .suffix(" mm"),
-                            );
-                            ui.add(
-                                egui::DragValue::new(&mut seg.length)
-                                    .speed(0.1)
-                                    .prefix("L ")
-                                    .suffix(" mm"),
-                            );
+                            m.length_field(ui, &mut seg.diameter, 0.1, 1000.0, "Ø ");
+                            m.length_field(ui, &mut seg.length, 0.1, 1000.0, "L ");
                             if ui.small_button("remove").clicked() {
                                 remove = Some(i);
                             }
@@ -800,6 +823,7 @@ impl ToolManager {
             let cutting = tool.cutting.get_or_insert_with(CuttingData::default);
             opt_feed(
                 ui,
+                m,
                 "Cutting feed",
                 &mut cutting.feed,
                 &errors,
@@ -807,6 +831,7 @@ impl ToolManager {
             );
             opt_feed(
                 ui,
+                m,
                 "Plunge feed",
                 &mut cutting.plunge_feed,
                 &errors,
@@ -814,6 +839,7 @@ impl ToolManager {
             );
             opt_feed(
                 ui,
+                m,
                 "Ramp feed",
                 &mut cutting.ramp_feed,
                 &errors,
@@ -903,15 +929,17 @@ fn field_error(ui: &mut egui::Ui, errors: &[ToolFieldError], field: &str) {
     }
 }
 
-fn length(ui: &mut egui::Ui, label: &str, value: &mut f64, errors: &[ToolFieldError], field: &str) {
+fn length(
+    ui: &mut egui::Ui,
+    m: Measure,
+    label: &str,
+    value: &mut f64,
+    errors: &[ToolFieldError],
+    field: &str,
+) {
     ui.label(label);
     ui.horizontal(|ui| {
-        ui.add(
-            egui::DragValue::new(value)
-                .speed(0.05)
-                .range(0.0..=1000.0)
-                .suffix(" mm"),
-        );
+        m.length_field(ui, value, 0.05, 1000.0, "");
         field_error(ui, errors, field);
     });
     ui.end_row();
@@ -919,6 +947,7 @@ fn length(ui: &mut egui::Ui, label: &str, value: &mut f64, errors: &[ToolFieldEr
 
 fn opt_length(
     ui: &mut egui::Ui,
+    m: Measure,
     label: &str,
     value: &mut Option<f64>,
     default: f64,
@@ -932,12 +961,7 @@ fn opt_length(
             *value = on.then_some(default);
         }
         if let Some(v) = value.as_mut() {
-            ui.add(
-                egui::DragValue::new(v)
-                    .speed(0.1)
-                    .range(0.0..=1000.0)
-                    .suffix(" mm"),
-            );
+            m.length_field(ui, v, 0.1, 1000.0, "");
         } else {
             ui.weak("not given");
         }
@@ -948,6 +972,7 @@ fn opt_length(
 
 fn opt_feed(
     ui: &mut egui::Ui,
+    m: Measure,
     label: &str,
     value: &mut Option<f64>,
     errors: &[ToolFieldError],
@@ -960,12 +985,7 @@ fn opt_feed(
             *value = on.then_some(1000.0);
         }
         if let Some(v) = value.as_mut() {
-            ui.add(
-                egui::DragValue::new(v)
-                    .speed(10.0)
-                    .range(0.0..=50000.0)
-                    .suffix(" mm/min"),
-            );
+            m.feed_field(ui, v, 50000.0);
         } else {
             ui.weak("not given");
         }
@@ -984,7 +1004,7 @@ fn opt_text(ui: &mut egui::Ui, label: &str, value: &mut Option<String>) {
 }
 
 /// The tool, side on and to scale, with its holder face marked.
-fn paint_tool(ui: &mut egui::Ui, tool: &ToolSpec) {
+fn paint_tool(ui: &mut egui::Ui, tool: &ToolSpec, m: Measure) {
     let d = draw(tool);
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), 220.0),
@@ -1030,14 +1050,14 @@ fn paint_tool(ui: &mut egui::Ui, tool: &ToolSpec) {
     painter.text(
         egui::pos2(rect.right() - 10.0, face + 4.0),
         egui::Align2::RIGHT_TOP,
-        format!("stickout {:.1} mm", d.holder_face),
+        format!("stickout {}", m.length(d.holder_face, 1)),
         theme::caption(ui.style()),
         ui.visuals().weak_text_color(),
     );
     painter.text(
         egui::pos2(rect.right() - 10.0, rect.bottom() - 6.0),
         egui::Align2::RIGHT_BOTTOM,
-        format!("Ø {:.2} mm", tool.diameter),
+        format!("Ø {}", m.length(tool.diameter, 2)),
         theme::caption(ui.style()),
         ui.visuals().text_color(),
     );
@@ -1150,7 +1170,6 @@ mod tests {
             !m.job.as_ref().unwrap().set.dirty(),
             "the saved job is clean"
         );
-        assert!(m.library.dirty(), "the library was not saved, and says so");
 
         let written = std::fs::read_to_string(&path).unwrap();
         let gone: Vec<&str> = example
@@ -1181,6 +1200,65 @@ mod tests {
             text.contains("T5 M6"),
             "the program does not load T5:\n{}",
             &text[..400.min(text.len())]
+        );
+    }
+
+    /// A library edit is written as soon as it is kept, with nothing to press.
+    #[test]
+    fn the_library_saves_itself() {
+        let dir = std::env::temp_dir().join(format!("camcraft-tm-lib-{}", std::process::id()));
+        let path = dir.join("library.toml");
+        let _ = std::fs::remove_file(&path);
+        let mut m = ToolManager::with_library(path.clone());
+        m.library
+            .edited
+            .insert("flat-6".into(), ToolSpec::default());
+        m.save_library();
+        assert!(!m.library.dirty());
+        let again = ToolManager::with_library(path);
+        assert!(again.library.edited.contains_key("flat-6"));
+    }
+
+    /// A tool that does not check clean holds the save back, and says why, until
+    /// it is fixed.
+    #[test]
+    fn a_bad_library_tool_is_not_saved() {
+        let dir = std::env::temp_dir().join(format!("camcraft-tm-bad-{}", std::process::id()));
+        let path = dir.join("library.toml");
+        let _ = std::fs::remove_file(&path);
+        let mut m = ToolManager::with_library(path.clone());
+        let bad = ToolSpec {
+            diameter: -1.0,
+            ..ToolSpec::default()
+        };
+        m.library.edited.insert("bad".into(), bad);
+        m.save_library();
+        assert!(m.library.dirty());
+        assert!(m.library_unsaved.is_some());
+        assert!(!path.exists());
+        m.library.edited.get_mut("bad").unwrap().diameter = 6.0;
+        m.save_library();
+        assert!(!m.library.dirty());
+        assert!(m.library_unsaved.is_none());
+    }
+
+    /// A library file that could not be read is never written over.
+    #[test]
+    fn an_unreadable_library_is_not_written_over() {
+        let dir = std::env::temp_dir().join(format!("camcraft-tm-unread-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("library.toml");
+        std::fs::write(&path, "this is not toml [").unwrap();
+        let mut m = ToolManager::with_library(path.clone());
+        assert!(m.library_error.is_some());
+        m.library
+            .edited
+            .insert("flat-6".into(), ToolSpec::default());
+        m.save_library();
+        assert!(m.library.dirty());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "this is not toml ["
         );
     }
 
