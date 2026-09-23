@@ -20,6 +20,11 @@ camcraft-post   = { path = "crates/camcraft-post",   version = "0.1.0" }
 camcraft-session = { path = "crates/camcraft-session", version = "0.1.0" }
 
 # external
+bytemuck           = { version = "1", features = ["derive"] }
+eframe             = "0.36"
+egui_extras        = "0.36"
+egui-file-dialog   = { version = "0.15", default-features = false, features = ["serde"] }
+egui_kittest       = { version = "0.36", features = ["eframe", "wgpu", "snapshot"] }
 clap               = { version = "4.6", features = ["derive"] }
 clipper2           = "0.6"
 glam               = { version = "0.33", features = ["serde"] }

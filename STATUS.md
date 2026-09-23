@@ -64,9 +64,14 @@ each pass next to where the following one starts.
    `solid ` with a trailing space; detect it ourselves before handing over.
 3. **0.2: a native desktop app.** Agreed scope, high level; each item gets its own
    detailed plan before work starts:
-   - **App shell:** a `camcraft-gui` crate on the same engine path as the CLI
-     (`run_job`, the importers, the posts), native Rust, macOS and Windows.
-     Probably egui/eframe with a wgpu viewport; to be settled in its plan.
+   - **App shell: done.** `camcraft-gui`, on eframe/egui 0.36 with wgpu, and
+     `egui-file-dialog` as in nodemangler. It opens a STEP or STL model and a job,
+     runs it on a worker thread exactly as `camcraft job` does, and shows the part
+     Z-up with the result and a log. The orchestration moved out of the CLI into
+     `camcraft-session`, which both use. Run with
+     `cargo run --release -p camcraft-gui`. Headless PNGs of the real UI:
+     `cargo test --release -p camcraft-gui --features ui-snapshots -- --ignored`,
+     written to `target/ui-snapshots/`. Built and looked at on macOS only.
    - **3D viewport:** everything the web inspector does, ported, then replacing it.
    - **Simulated stock view:** the material after each operation, and where it was
      left standing or gouged. This is the view the steep-descent question waits for.
@@ -183,7 +188,9 @@ camcraft-import   STL and STEP (OpenCascade), checked against the file -> geom
 camcraft-sim      material removal: stock updater + gouge oracle     -> geom
 camcraft-core     tools, CL maps, strategies, toolpaths, job, run    -> geom, sim
 camcraft-post     Op IR, TOML dialect renderers                      -> geom, core
-camcraft-cli      inspect / post / job, all through run_job           -> all
+camcraft-session  load, run, gate, post: shared by CLI and app        -> all libraries
+camcraft-cli      inspect / post / job                                -> session
+camcraft-gui      desktop app: egui/eframe, wgpu viewport             -> session
 viewer/           local inspector; part geometry never leaves the machine
 ```
 

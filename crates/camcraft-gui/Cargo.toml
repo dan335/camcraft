@@ -1,0 +1,34 @@
+[package]
+name        = "camcraft-gui"
+description = "camcraft desktop app: open a part and a job, run it, see what will be cut."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[[bin]]
+name = "camcraft-gui"
+path = "src/main.rs"
+
+[dependencies]
+camcraft-core.workspace    = true
+camcraft-geom.workspace    = true
+camcraft-session.workspace = true
+bytemuck.workspace         = true
+eframe = { workspace = true, features = ["persistence"] }
+egui_extras.workspace      = true
+egui-file-dialog.workspace = true
+glam.workspace             = true
+serde.workspace            = true
+egui_kittest = { workspace = true, optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+
+[features]
+# Renders real UI headlessly to PNGs under target/ui-snapshots. Off by default:
+# the snapshot harness is a long compile, and the tests need a GPU adapter.
+ui-snapshots = ["dep:egui_kittest", "dep:image"]
+
+[lints]
+workspace = true

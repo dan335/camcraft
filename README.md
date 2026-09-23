@@ -19,8 +19,10 @@ what the simulator cannot check for you.
 - **3D-mesh-first.** Real surface machining, not 2.5D with 3D bolted on.
 - **Native and parallel.** No mesh decimation, no vertex budgets, no accuracy traded
   for speed.
-- **Headless.** A CLI and a library. Preview through any G-code viewer (CAMotics,
-  NC Viewer, your sender). No GUI in 0.1.
+- **A CLI and a desktop app on one engine path.** The `camcraft` command line
+  scripts it. `camcraft-gui` (0.2, in progress) opens a part and a job, runs it,
+  and shows the result. Both go through the same library, so they cannot disagree
+  about what runs.
 
 ## Architecture
 
@@ -32,7 +34,9 @@ camcraft-import   STL and STEP to meshes                          -> geom
 camcraft-sim      material removal: stock updater + gouge oracle  -> geom
 camcraft-core     tools, CL maps, strategies, toolpaths, linking  -> geom, sim
 camcraft-post     Op IR, TOML-driven dialect renderers            -> geom, core
-camcraft-cli      model + job.toml -> .nc                         -> all
+camcraft-session  load, run, gate, post: shared by both front ends -> all libraries
+camcraft-cli      model + job.toml -> .nc                         -> session
+camcraft-gui      desktop app (egui, wgpu)                        -> session
 ```
 
 `core` does not depend on `post`. It therefore *cannot* reference a G-code concept,
@@ -46,8 +50,9 @@ Arc fitting, tabs, lead in/out, feed optimisation and cutter compensation are ea
 `Toolpath -> Toolpath` transform. They have nowhere to live if a strategy emits
 instructions directly, so no strategy ever does.
 
-`import` is a leaf that only `cli` depends on, so whatever the STEP backend costs to
-build, the inner development loop never pays it.
+`import` is reached only through `session`, which only the two binaries use. So
+whatever the STEP backend costs to build, the inner development loop on
+`geom` / `sim` / `core` / `post` never pays it.
 
 ## Conventions
 
@@ -99,7 +104,7 @@ Restore the GitHub Actions workflow when the repository goes public.
 
 From 0.1-d, `camcraft-import` pulls in OpenCascade, which adds **cmake and a C++
 toolchain** as prerequisites (on Windows, build from an MSVC environment so cmake can
-find `cl.exe`). That crate is a leaf only `camcraft-cli` depends on, so the inner loop
+find `cl.exe`). That crate is reached only by the two binaries, so the inner loop
 on `geom` / `sim` / `core` / `post` never pays that cost. Reasoning in
 [docs/decisions/0001-step-backend.md](docs/decisions/0001-step-backend.md).
 
