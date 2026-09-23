@@ -232,5 +232,9 @@ fn tool_manager() {
         ..described
     };
     manager.show_for_snapshot("bullnose-8", Some(wrong));
-    shoot_manager(manager, "tools_error");
+    let mut manager = shoot_manager(manager, "tools_error");
+
+    // Folders for two machines, the first open with the tools inside it.
+    manager.folders_for_snapshot();
+    shoot_manager(manager, "tools_library_folders");
 }

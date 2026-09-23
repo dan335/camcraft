@@ -113,13 +113,14 @@ actually break cutters on the day:
 ## Tool manager
 
 **Tools** in the app's toolbar opens a separate window, after Fusion's Tool Library,
-with the open job's tools and a per-user library
-(`~/Library/Application Support/camcraft/tools.toml`, or `CAMCRAFT_TOOL_LIBRARY`).
-Tools carry Fusion-style detail: flutes, lengths, shank, stickout, holder, material,
-vendor and suggested feeds. Each gets a scale drawing and per-field checks. Jobs keep
-copies of library tools, not links. Saving a job's tools edits the file in place
-through `toml_edit`, keeping comments and changing only those tools' lines, and a
-rename carries its operations with it. A job whose used tools share a T number is
+with the per-user library only
+(`~/Library/Application Support/camcraft/tools.toml`, or `CAMCRAFT_TOOL_LIBRARY`),
+which saves itself as you edit. Tools are grouped in folders that nest (a folder per
+machine, say); drag a tool onto a folder, or use Move to. A library from before
+folders reads as its top folder. Tools carry Fusion-style detail: flutes, lengths,
+shank, stickout, holder, material, vendor and suggested feeds. Each gets a scale
+drawing and per-field checks. A job's tools are chosen inside its operations, which
+copy them into the job, never link them. A job whose used tools share a T number is
 refused, by the CLI too.
 
 The work offset manager is to join the toolbar. Not yet: importing Fusion
