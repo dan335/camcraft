@@ -66,3 +66,15 @@ codegen-units = 1
 # Geometry work is unusably slow in an unoptimised debug build; tests included.
 [profile.dev.package."*"]
 opt-level = 2
+
+# The same holds for our own geometry crates: their tests spend their time in
+# drop-cutting, simulation and roughing, and ran about twice as fast optimised
+# (measured: core's unit tests 63-89 s -> 34 s, pipeline 57 s -> 24 s, job 48 s
+# -> 20 s, oracle 37 s -> 16 s). Debug assertions and debug info stay on, so a
+# failing test still reports properly; only the compile gets a few seconds longer.
+[profile.dev.package.camcraft-geom]
+opt-level = 2
+[profile.dev.package.camcraft-sim]
+opt-level = 2
+[profile.dev.package.camcraft-core]
+opt-level = 2

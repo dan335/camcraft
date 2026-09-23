@@ -86,9 +86,17 @@ There is deliberately **no CI** while this repository is private, so one script 
 the only thing standing between a mistake and `main`. Run it before every push:
 
 ```sh
-bash scripts/check.sh          # fmt, clippy, tests, docs, determinism
-bash scripts/check.sh --full   # the above plus benchmarks
+bash scripts/check.sh            # the crates your changes can affect: before committing
+bash scripts/check.sh --dry-run  # which crates that is, without running anything
+bash scripts/check.sh --all      # every crate: before pushing
+bash scripts/check.sh --full     # every crate, plus benchmarks
 ```
+
+By default it checks only what the uncommitted changes can affect: the crates they
+touch and every crate that depends on them. A change to `camcraft-gui` checks only
+`camcraft-gui`; one to `camcraft-core` checks core and everything above it. Anything
+outside `crates/` that is not documentation (a manifest, the lockfile, an example,
+a fixture) checks everything.
 
 Run it unpiped. Piping through `tail` buffers the whole run and hides progress on
 a suite that now takes minutes; read the tail of the output afterwards instead.
