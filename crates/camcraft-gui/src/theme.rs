@@ -29,6 +29,8 @@ pub const PATH_LEAD: [u8; 3] = [0x4F, 0xD1, 0xFF];
 /// `--amber-5`, the accent: the spindle-warning colour. The cutter is drawn in it,
 /// and material left above the part at its thickest.
 pub const AMBER_5: [u8; 3] = [0xF5, 0xA5, 0x24];
+/// `--amber-3`: highlight on amber.
+pub const AMBER_3: [u8; 3] = [0xFF, 0xE1, 0xA3];
 /// `--amber-7`: material only just left above the part.
 pub const AMBER_7: [u8; 3] = [0x8A, 0x58, 0x06];
 /// `--err`: material cut below the part.
@@ -126,6 +128,7 @@ mod tests {
             ("--path-lead:", PATH_LEAD),
             ("--amber-5:", AMBER_5),
             ("--amber-7:", AMBER_7),
+            ("--amber-3:", AMBER_3),
             ("--err:", ERR),
             ("--gray-5:", GRAY_5),
             ("--gray-8:", GRAY_8),

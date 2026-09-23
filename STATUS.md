@@ -109,6 +109,21 @@ actually break cutters on the day:
   spindle matches `diameter`, or whether the stock is the size the job was told.
 - Roughing is conservative contour-parallel clearing. It has never cut anything.
 
+## Tool manager
+
+**Tools** in the app's toolbar opens a separate window, after Fusion's Tool Library,
+with the open job's tools and a per-user library
+(`~/Library/Application Support/camcraft/tools.toml`, or `CAMCRAFT_TOOL_LIBRARY`).
+Tools carry Fusion-style detail: flutes, lengths, shank, stickout, holder, material,
+vendor and suggested feeds. Each gets a scale drawing and per-field checks. Jobs keep
+copies of library tools, not links. Saving a job's tools edits the file in place
+through `toml_edit`, keeping comments and changing only those tools' lines, and a
+rename carries its operations with it. A job whose used tools share a T number is
+refused, by the CLI too.
+
+The work offset manager is to join the toolbar. Not yet: importing Fusion
+libraries, computing feeds and speeds from the cutting data, and more cutter types.
+
 ## Playback (after 0.2): how it is set up
 
 The user wants Fusion-style simulation: play, pause, step, seek and speed, with the

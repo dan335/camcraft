@@ -14,6 +14,7 @@ use crate::file_dialog::{AppFileDialog, Pick};
 use crate::scene::{Scene, Steep, clock};
 use crate::stock_view::{CLASSES, StockImage, class_color, class_name};
 use crate::theme;
+use crate::tool_manager::{Event as ToolEvent, ToolManager};
 use crate::viewport::{Content, View, Viewport};
 use crate::worker::{Outcome, Reply, Request, Worker};
 
@@ -76,6 +77,8 @@ pub struct App {
     hide_part_with_stock: bool,
     /// The material at each stage, classified and coloured, built when first shown.
     stock_images: Vec<Option<StockImage>>,
+    /// The tool manager, in its own window when open.
+    tools: ToolManager,
     log: Vec<(Level, String)>,
 }
 
@@ -158,6 +161,7 @@ impl App {
             stock_mode: StockMode::Off,
             hide_part_with_stock: true,
             stock_images: Vec::new(),
+            tools: ToolManager::new(),
             log: Vec::new(),
         }
     }
@@ -256,6 +260,7 @@ impl App {
                         job.tolerance
                     ),
                 );
+                self.tools.set_job(&path, &job);
                 self.job = Some(job);
                 self.job_path = Some(path);
                 // The preview was tessellated without a job; look again at the
@@ -813,6 +818,23 @@ impl eframe::App for App {
         }
         self.step_scrub(&ctx);
         self.ensure_stock_image();
+        if let Some(ToolEvent::JobSaved(path)) = self.tools.show(&ctx) {
+            self.note(Level::Info, "tools saved to the job; reading it again");
+            self.open_job(&ctx, path);
+        }
+
+        // The setup toolbar: tools now, work offsets later.
+        egui::Panel::top("toolbar").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(self.tools.open, "Tools")
+                    .on_hover_text("set up cutters: this job's, and your library")
+                    .clicked()
+                {
+                    self.tools.open = !self.tools.open;
+                }
+            });
+        });
         if let Some((pick, path)) = self.dialog.update(&ctx) {
             match pick {
                 Pick::Model => self.open_model(&ctx, path),

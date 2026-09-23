@@ -282,11 +282,20 @@ impl ToolSpec {
             .iter()
             .filter_map(|(f, v)| v.map(|v| (*f, v)))
             .collect();
+        let words = |field: &str| match field {
+            "flute_length" => "the flute length",
+            "shoulder_length" => "the shoulder length",
+            "stickout" => "the stickout",
+            _ => "the overall length",
+        };
         for pair in known.windows(2) {
             if let [(shorter, a), (longer, b)] = pair
                 && a > b
             {
-                bad(shorter, format!("{a} mm is longer than {longer} ({b} mm)"));
+                bad(
+                    shorter,
+                    format!("{a} mm is longer than {} ({b} mm)", words(longer)),
+                );
             }
         }
         if let Some(h) = &self.holder {

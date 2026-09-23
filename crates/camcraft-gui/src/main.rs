@@ -10,6 +10,8 @@ mod file_dialog;
 mod scene;
 mod stock_view;
 mod theme;
+mod tool_drawing;
+mod tool_manager;
 #[cfg(all(test, feature = "ui-snapshots"))]
 mod ui_snapshots;
 mod viewport;
