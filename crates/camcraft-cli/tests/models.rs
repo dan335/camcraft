@@ -117,3 +117,32 @@ fn an_unknown_format_is_refused() {
     assert_eq!(out.status.code(), Some(1));
     assert!(stderr(&out).contains(".step"), "{}", stderr(&out));
 }
+
+/// Two tools a job uses may not share a T number: the machine would load one cutter
+/// and run the other's program. Refused before anything is computed.
+#[test]
+fn two_tools_on_one_number_are_refused() {
+    let dir = scratch("two_tools_on_one_number_are_refused");
+    let job = dir.join("job.toml");
+    let example = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/rail-jig.toml"),
+    )
+    .unwrap();
+    let clash = example.replace("number = 2", "number = 1");
+    assert_ne!(clash, example, "the edit must land");
+    std::fs::write(&job, clash).unwrap();
+    let out = camcraft(&[
+        "job",
+        &fixture("hinge_jig.step"),
+        job.to_str().unwrap(),
+        "--inspect",
+        dir.join("x.json").to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(err.contains("T1") && err.contains("load one"), "{err}");
+    assert!(
+        !dir.join("x.json").exists(),
+        "nothing is computed for a refused job"
+    );
+}

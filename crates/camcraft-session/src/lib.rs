@@ -16,6 +16,8 @@
 //! in its own way.
 
 pub mod inspection;
+pub mod job_file;
+pub mod library;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -416,6 +418,7 @@ pub fn single_operation(spec: &FinishSpec) -> Job {
         number: spec.number,
         rpm: spec.rpm,
         comment: format!("{}mm {shape}", spec.diameter),
+        ..ToolSpec::default()
     };
     Job {
         tolerance: spec.tolerance,

@@ -27,6 +27,7 @@ egui-file-dialog   = { version = "0.15", default-features = false, features = ["
 egui_kittest       = { version = "0.36", features = ["eframe", "wgpu", "snapshot"] }
 clap               = { version = "4.6", features = ["derive"] }
 clipper2           = "0.6"
+directories        = "6"
 glam               = { version = "0.33", features = ["serde"] }
 # STEP backend, see docs/decisions/0001-step-backend.md. Builds OpenCascade from
 # source: cmake and a C++ toolchain are prerequisites, and only camcraft-import
@@ -40,6 +41,7 @@ serde_json         = "1.0"
 stl_io             = "0.11"
 thiserror          = "2.0"
 toml               = "1.1"
+toml_edit          = "0.25"
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

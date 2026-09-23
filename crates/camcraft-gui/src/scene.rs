@@ -529,9 +529,7 @@ passes = { stepover = 2.0, feed = 2000.0 }
             kind,
             diameter,
             corner,
-            number: 1,
-            rpm: 18000,
-            comment: String::new(),
+            ..ToolSpec::default()
         }
     }
 
