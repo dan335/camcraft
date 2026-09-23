@@ -627,7 +627,8 @@ mod tests {
             unreachable!("no point");
         };
         assert_eq!(point.snap, Snap::Vertex);
-        assert_eq!(point.at, [20.0, 20.0, 5.0]);
+        let at = DVec3::from(point.at);
+        assert!(at.distance(dvec3(20.0, 20.0, 5.0)) < 1e-9, "{at}");
         // A bottom corner lies straight under the top one, and is hidden by it.
         let v = scene.models[0]
             .vertices
