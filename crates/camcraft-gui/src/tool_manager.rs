@@ -10,11 +10,11 @@
 //! edit is finished and every tool checks clean, to the user's app-data folder
 //! (`camcraft_session::library`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use camcraft_core::job::ToolSpec;
 use camcraft_session::library::{
-    Folder, FolderPath, Library, folder_label, free_name, library_path,
+    Folder, FolderPath, Library, folder_label, free_name, fusion_csv, library_path,
 };
 use eframe::egui;
 
@@ -138,6 +138,8 @@ pub struct ToolManager {
     message: Option<(bool, String)>,
     /// Closing was asked for with unsaved changes.
     closing: bool,
+    /// The person asked to import a Fusion tool library; the app opens the dialog.
+    pub import_requested: bool,
 }
 
 impl ToolManager {
@@ -177,6 +179,7 @@ impl ToolManager {
             sort: Sort::Number,
             message: None,
             closing: false,
+            import_requested: false,
         }
     }
 
@@ -246,6 +249,66 @@ impl ToolManager {
     /// Whether anything is unsaved.
     pub fn dirty(&self) -> bool {
         self.library.dirty()
+    }
+
+    /// Bring the tools in the Fusion tool library CSV at `path` into the folder
+    /// showing. A tool already there gets the file's presets beside its own.
+    pub fn import_fusion(&mut self, path: &Path) {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) => {
+                self.message = Some((false, format!("{}: {e}", path.display())));
+                return;
+            }
+        };
+        let imported = match fusion_csv::import(&text) {
+            Ok(i) => i,
+            Err(e) => {
+                self.message = Some((false, format!("{}: {e}", path.display())));
+                return;
+            }
+        };
+        let Some(folder) = self.library.edited.at_mut(&self.folder) else {
+            return;
+        };
+        let merged = fusion_csv::merge(folder, imported.tools);
+        let mut said = Vec::new();
+        if !merged.added.is_empty() {
+            said.push(format!("added {}", merged.added.join(", ")));
+        }
+        for (name, n) in &merged.extended {
+            said.push(match n {
+                0 => format!("'{name}' already has these presets"),
+                1 => format!("added 1 preset to '{name}'"),
+                n => format!("added {n} presets to '{name}'"),
+            });
+        }
+        if !imported.skipped.is_empty() {
+            said.push(format!(
+                "skipped {}: {}",
+                imported.skipped.len(),
+                imported.skipped.join("; ")
+            ));
+        }
+        if said.is_empty() {
+            said.push("no tools in it".into());
+        }
+        let file = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |f| f.to_string_lossy().into_owned(),
+        );
+        self.message = Some((
+            imported.skipped.is_empty(),
+            format!("{file}: {}", said.join("; ")),
+        ));
+        let first = merged
+            .added
+            .first()
+            .or_else(|| merged.extended.first().map(|(n, _)| n))
+            .cloned();
+        if let Some(name) = first {
+            self.select(Some((self.folder.clone(), name)));
+        }
     }
 
     fn select(&mut self, tool: Option<(FolderPath, String)>) {
@@ -520,6 +583,16 @@ impl ToolManager {
             ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("filter"));
             if ui.button("New").clicked() {
                 self.new_tool();
+            }
+            if ui
+                .button("Import…")
+                .on_hover_text(
+                    "Import a Fusion tool library exported as CSV, as makers publish them, \
+                     into this folder",
+                )
+                .clicked()
+            {
+                self.import_requested = true;
             }
             let selected = self.selected.clone();
             if ui
@@ -929,6 +1002,24 @@ mod tests {
     fn manager(name: &str) -> ToolManager {
         let dir = std::env::temp_dir().join(format!("camcraft-tm-{name}-{}", std::process::id()));
         ToolManager::with_library(dir.join("never-written.toml"))
+    }
+
+    /// A maker's Fusion library lands in the folder showing, selected, and said
+    /// so; a file that is not one is said to be not one.
+    #[test]
+    fn a_fusion_library_is_imported_into_the_folder_showing() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/tools");
+        let mut m = manager("import");
+        let folder = m.library.edited.create(&[], "onefinity").unwrap();
+        m.folder = folder.clone();
+        m.import_fusion(&fixtures.join("srf4-250up.csv"));
+        let tool = &m.library.edited.at(&folder).unwrap().tools["SRF4-250UP"];
+        assert_eq!(tool.presets.len(), 4);
+        assert_eq!(m.selected, Some((folder, "SRF4-250UP".to_string())));
+        assert!(matches!(&m.message, Some((true, t)) if t.contains("added SRF4-250UP")));
+
+        m.import_fusion(&fixtures.join("../step/sled_base.step"));
+        assert!(matches!(&m.message, Some((false, _))), "{:?}", m.message);
     }
 
     /// Moving the tool being edited keeps it selected where it went, and a folder

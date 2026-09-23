@@ -221,8 +221,16 @@ and its coolant (off, flood M8 or mist M7), and the program says so; before, eve
 program was M3 with no coolant. A job with a tool that turns backwards or wants
 coolant is written as version 3, since an older build would drop either silently.
 
-The work offset manager is to join the toolbar. Not yet: importing Fusion
-libraries, and more cutter types.
+**Import…** reads a Fusion tool library exported as CSV, as makers such as Bits &
+Bits publish theirs (`fixtures/tools/` holds two), into the folder showing. Each
+tool's rows become one tool with a preset per row, named as Fusion named it, in
+millimetres; columns are found by their key, not their place. A tool the folder
+already has (same product and diameter) gets the file's presets beside its own
+instead of a twin. Types this build cannot cut with (drills, chamfer mills) are
+skipped, and the manager says which and why.
+
+The work offset manager is to join the toolbar. Not yet: Fusion's own `.json`
+libraries, which carry holders, and more cutter types.
 
 ## Playback (after 0.2): how it is set up
 

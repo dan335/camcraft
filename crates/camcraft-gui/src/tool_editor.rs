@@ -4,7 +4,7 @@
 use camcraft_core::cutting;
 use camcraft_core::job::{
     Coolant, Holder, HolderSegment, Preset, SpindleDirection, StockToLeave, ToolFieldError,
-    ToolKind, ToolMaterial, ToolSpec,
+    ToolKind, ToolMaterial, ToolSpec, free_preset_name,
 };
 use eframe::egui;
 
@@ -328,18 +328,6 @@ fn presets(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFie
             ..Preset::default()
         });
     }
-}
-
-/// `base`, or `base 2`, `base 3`… if a preset already has that name.
-fn free_preset_name(presets: &[Preset], base: &str) -> String {
-    let taken = |n: &str| presets.iter().any(|p| p.name == n);
-    if !taken(base) {
-        return base.to_string();
-    }
-    (2..)
-        .map(|k| format!("{base} {k}"))
-        .find(|n| !taken(n))
-        .unwrap_or_default()
 }
 
 fn preset_fields(

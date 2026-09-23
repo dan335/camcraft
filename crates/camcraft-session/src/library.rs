@@ -21,6 +21,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::fs::write_atomically;
 
+pub mod fusion_csv;
+
 /// Overrides where the library lives.
 pub const LIBRARY_ENV: &str = "CAMCRAFT_TOOL_LIBRARY";
 

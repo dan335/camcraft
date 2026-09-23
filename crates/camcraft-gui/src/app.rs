@@ -852,6 +852,11 @@ impl App {
                     self.prepare_post(id, scope, &dir);
                 }
             }
+            Pick::ImportTools => {
+                for path in &paths {
+                    self.tools.import_fusion(path);
+                }
+            }
             Pick::Profile(id, setup) => {
                 if let (Some(doc), Some(path)) = (self.find(id), paths.first()) {
                     let post = match &doc.path {
@@ -1430,6 +1435,9 @@ impl eframe::App for App {
         self.picking.refresh(self.docs.get(self.active), m);
         self.tools.measure = m;
         self.tools.show(&ctx);
+        if std::mem::take(&mut self.tools.import_requested) {
+            self.dialog.open(Pick::ImportTools, "");
+        }
 
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::top("tabs").show(ui, |ui| self.tabs(ui));

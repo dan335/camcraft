@@ -16,6 +16,7 @@ use crate::worker::DocId;
 const JOBS: &str = "Jobs (.camcraft)";
 const MODELS: &str = "Models (STEP, STL)";
 const PROFILES: &str = "Machine profiles (TOML)";
+const TOOLS: &str = "Fusion tool libraries (CSV)";
 
 /// What a pick is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +33,8 @@ pub enum Pick {
     Profile(DocId, String),
     /// The folder to post job `doc`'s programs into: one setup's, or every setup's.
     PostTo(DocId, Option<String>),
+    /// Fusion tool library exports to bring into the tool library.
+    ImportTools,
 }
 
 /// The dialog and whatever it is currently answering.
@@ -63,6 +66,7 @@ impl AppFileDialog {
                 PROFILES,
                 Filter::new(|p: &Path| has_extension(p, &["toml"])),
             )
+            .add_file_filter(TOOLS, Filter::new(|p: &Path| has_extension(p, &["csv"])))
             .add_save_extension("Job", "camcraft")
             .default_save_extension("Job");
         let dialog = match storage {
@@ -82,11 +86,15 @@ impl AppFileDialog {
             Pick::Locate(_, _) => ("Find the model", MODELS),
             Pick::Profile(_, _) => ("Choose a machine profile", PROFILES),
             Pick::PostTo(_, _) => ("Post programs into", PROFILES),
+            Pick::ImportTools => ("Import Fusion tool libraries", TOOLS),
         };
         config.title = Some(title.to_owned());
         config.default_file_filter = Some(filter.to_owned());
         config.default_file_name = name.to_owned();
-        let many = matches!(pick, Pick::OpenJobs | Pick::AddModels(_));
+        let many = matches!(
+            pick,
+            Pick::OpenJobs | Pick::AddModels(_) | Pick::ImportTools
+        );
         let save = matches!(pick, Pick::SaveJob(_));
         let folder = matches!(pick, Pick::PostTo(_, _));
         self.dialog.set_user_data(pick);
@@ -106,7 +114,9 @@ impl AppFileDialog {
         self.dialog.update(ctx);
         let pick = self.dialog.user_data::<Pick>()?.clone();
         let paths = match pick {
-            Pick::OpenJobs | Pick::AddModels(_) => self.dialog.take_picked_multiple()?,
+            Pick::OpenJobs | Pick::AddModels(_) | Pick::ImportTools => {
+                self.dialog.take_picked_multiple()?
+            }
             _ => vec![self.dialog.take_picked()?],
         };
         Some((pick, paths))

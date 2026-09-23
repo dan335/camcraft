@@ -29,6 +29,7 @@ egui-file-dialog   = { version = "0.15", default-features = false, features = ["
 egui_kittest       = { version = "0.36", features = ["eframe", "wgpu", "snapshot"] }
 clap               = { version = "4.6", features = ["derive"] }
 clipper2-rust      = "1.2"
+csv                = "1.4"
 directories        = "6"
 glam               = { version = "0.33", features = ["serde"] }
 # STEP backend, see docs/decisions/0001-step-backend.md. Builds OpenCascade from

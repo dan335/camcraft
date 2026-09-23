@@ -609,6 +609,18 @@ pub struct Preset {
     pub stock_to_leave: Option<StockToLeave>,
 }
 
+/// `base`, or `base 2`, `base 3`… if one of `presets` already has that name.
+pub fn free_preset_name(presets: &[Preset], base: &str) -> String {
+    let taken = |n: &str| presets.iter().any(|p| p.name == n);
+    if !taken(base) {
+        return base.to_string();
+    }
+    (2..)
+        .map(|k| format!("{base} {k}"))
+        .find(|n| !taken(n))
+        .unwrap_or_default()
+}
+
 impl ToolSpec {
     /// The preset called `name`.
     pub fn preset(&self, name: &str) -> Option<&Preset> {
