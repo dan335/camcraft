@@ -134,12 +134,25 @@ impl Measure {
         max: f64,
         prefix: &str,
     ) -> egui::Response {
-        self.field(ui, mm, speed, max, prefix, self.unit(), 4)
+        self.field(ui, mm, speed, 0.0, max, prefix, self.unit(), 4)
+    }
+
+    /// As [`length_field`](Self::length_field), for a length that may be negative:
+    /// an offset or a position.
+    pub fn signed_length_field(
+        self,
+        ui: &mut egui::Ui,
+        mm: &mut f64,
+        speed: f64,
+        limit: f64,
+        prefix: &str,
+    ) -> egui::Response {
+        self.field(ui, mm, speed, -limit, limit, prefix, self.unit(), 4)
     }
 
     /// An editor for a feed kept in mm/min, shown in this unit.
     pub fn feed_field(self, ui: &mut egui::Ui, mm_per_min: &mut f64, max: f64) -> egui::Response {
-        self.field(ui, mm_per_min, 10.0, max, "", self.feed_unit(), 1)
+        self.field(ui, mm_per_min, 10.0, 0.0, max, "", self.feed_unit(), 1)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -148,6 +161,7 @@ impl Measure {
         ui: &mut egui::Ui,
         mm: &mut f64,
         speed: f64,
+        min: f64,
         max: f64,
         prefix: &str,
         unit: &str,
@@ -156,7 +170,7 @@ impl Measure {
         let mut shown = self.show(*mm);
         let mut drag = egui::DragValue::new(&mut shown)
             .speed(self.show(speed))
-            .range(0.0..=self.show(max))
+            .range(self.show(min)..=self.show(max))
             .prefix(prefix)
             .suffix(format!(" {unit}"));
         // Metric keeps egui's own choice, as before there was a choice.

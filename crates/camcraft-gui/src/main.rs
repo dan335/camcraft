@@ -5,9 +5,13 @@
 //! two cannot disagree about what a file means, what runs, or what may be posted.
 
 mod app;
+mod browser;
 mod camera;
+mod document;
 mod file_dialog;
 mod measure;
+mod playback;
+mod properties;
 mod scene;
 mod settings;
 mod stock_view;
@@ -17,6 +21,7 @@ mod theme;
 mod tool_drawing;
 mod tool_editor;
 mod tool_manager;
+mod tool_picker;
 #[cfg(all(test, feature = "ui-snapshots"))]
 mod ui_snapshots;
 mod viewport;
@@ -24,13 +29,16 @@ mod worker;
 
 use eframe::egui;
 
-/// The job named on the command line, if any: `camcraft-gui [JOB]`.
-fn job_from_args() -> Option<std::path::PathBuf> {
-    std::env::args_os().nth(1).map(std::path::PathBuf::from)
+/// The jobs named on the command line: `camcraft-gui [JOB]...`, each in a tab.
+fn jobs_from_args() -> Vec<std::path::PathBuf> {
+    std::env::args_os()
+        .skip(1)
+        .map(std::path::PathBuf::from)
+        .collect()
 }
 
 fn main() -> eframe::Result {
-    let job = job_from_args();
+    let jobs = jobs_from_args();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("camcraft")
@@ -41,6 +49,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "camcraft",
         options,
-        Box::new(|cc| Ok(Box::new(app::App::with_job(cc, job)))),
+        Box::new(|cc| Ok(Box::new(app::App::with_jobs(cc, jobs)))),
     )
 }

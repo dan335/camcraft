@@ -1,6 +1,6 @@
 # Where this is
 
-Last updated 2026-09-22. Read this before picking the work back up.
+Last updated 2026-09-23. Read this before picking the work back up.
 
 **0.1 is feature-complete: 0.1-a to 0.1-d, the `job.toml` contract, and an
 inspector that shows the real multi-operation job.** All gates green. The engine
@@ -66,11 +66,15 @@ each pass next to where the following one starts.
 3. **0.2: a native desktop app.** Agreed scope, high level; each item gets its own
    detailed plan before work starts:
    - **App shell: done.** `camcraft-gui`, on eframe/egui 0.36 with wgpu, and
-     `egui-file-dialog` as in nodemangler. It opens a STEP or STL model and a job,
-     runs it on a worker thread exactly as `camcraft job` does, and shows the part
-     Z-up with the result and a log. The orchestration moved out of the CLI into
+     `egui-file-dialog` as in nodemangler. Jobs are documents, as in Fusion: File
+     › New, Open (several at once), Open Recent, Save, Save As and Close, each job
+     in its own tab (⌃Tab switches), with a prompt before unsaved work is lost, and
+     undo/redo (⌘Z, ⌘⇧Z) of whole edits. A job's models load in the background; a
+     model not where the job says is asked about, and can be found elsewhere.
+     Setups run on worker threads exactly as `camcraft job` runs them, several at
+     once, from the job as it is on screen, saved or not. The orchestration lives in
      `camcraft-session`, which both use. Run with
-     `cargo run --release -p camcraft-gui [MODEL] [JOB]`; the files are optional. Headless PNGs of the real UI:
+     `bash scripts/run.sh [JOB]...`. Headless PNGs of the real UI:
      `cargo test --release -p camcraft-gui --features ui-snapshots -- --ignored`,
      written to `target/ui-snapshots/`. Built and looked at on macOS only.
    - **3D viewport: done, bar the checks.** Every operation's toolpath, coloured by
@@ -88,10 +92,21 @@ each pass next to where the following one starts.
      and a test holds them equal. **Steep descents** are listed deepest first; clicking one
      scrubs to it, follows the stock and flies the camera there. The scrub readout
      gives estimated machining time.
-   - **Job editing:** forms that read and write `job.toml`, so file and app stay
-     interchangeable.
-   - **Run, check, post:** background runs with progress, the checks panel, and the
-     same refusal to post an unverified job as the CLI.
+   - **Job editing: done.** The job's tree, after Fusion's browser: Models,
+     Stocks and Setups, each setup with its operations and a status dot (not run,
+     running, verified, warnings, refused, out of date). Right-click adds, copies,
+     moves and removes; the properties panel edits whatever is selected: a model's
+     file and STL units, a stock's shape (around models, or a fixed box), a setup's
+     models and stocks, work offset, post, orientation (the 24 square ways a part
+     sits, with Turn over) and work zero (the model's, or a point on the stock or
+     model box, plus an offset), and every operation parameter. An operation's tool
+     is chosen from the job's tools or a library folder, and copied in. The view
+     shows the selected setup as it sits on the machine, with its stock and its
+     work zero's axes; each setup keeps its own camera, scrub and stock view. A
+     result goes out of date when anything it was made from changes, and says so.
+   - **Run, check, post:** background runs are done (Generate, Generate all).
+     Still to come: the checks panel, and posting from the app with the same
+     refusal to post an unverified setup as the CLI (`camcraft job` posts today).
    - **Then decide the steep-descent fix and gate policy,** once for both.
 
    Also carried along: items 1 and 2 above, and the OpenCascade licensing decision.
@@ -109,6 +124,26 @@ actually break cutters on the day:
 - Nothing knows whether the WCS is where the job assumes, whether the tool in the
   spindle matches `diameter`, or whether the stock is the size the job was told.
 - Roughing is conservative contour-parallel clearing. It has never cut anything.
+
+## Jobs
+
+A job (`.camcraft`, TOML, `version = 1`) has three groups, as in Fusion:
+
+- **Models**: design files, referenced by path relative to the job file, never
+  copied in. STL needs `units`; STEP states its own.
+- **Stocks**: blocks of material in model coordinates, either around models (by
+  name, or the setup's own when none are named) with margins, or a fixed box. A
+  top and a bottom setup share one block and see it from each side.
+- **Setups**: which models and stocks each includes (by name), its work offset,
+  post, orientation and work zero, and its operations. Everything past layout
+  (`core::setup::prepare`) is in the setup's own frame, so strategies, linker,
+  simulator and post never see a rotation.
+
+Each setup simulates from its own stock: the material is a height field seen from
+above, so what the top leaves cannot be carried to a flipped bottom. That needs a
+volumetric stock, later. The old `job.toml` format is refused by name; there is no
+converter. `examples/rail-jig.camcraft` is the reference job. With the default
+orientation and work zero, a run is bit-identical to before setups existed.
 
 ## Tool manager
 

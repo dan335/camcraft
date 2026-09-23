@@ -1,230 +1,127 @@
-//! The window: the job on the left, the part in the middle, a log beneath.
+//! The window: open jobs in tabs, each with its tree on the left, the properties of
+//! what is selected on the right, the part in the middle and a log beneath.
 //!
-//! What runs is exactly what `camcraft job` runs. A run takes the setup as the app
-//! holds it and goes through `camcraft-session`, so the app never holds a second
-//! opinion about the engine.
+//! A job is a document, as in any program: New, Open, Save, Save As and Close,
+//! with a prompt before unsaved work is lost. Each tab keeps its own models,
+//! results and view, and switching between them is immediate.
+//!
+//! What runs is exactly what `camcraft job` runs. Generate takes the setup as the
+//! app holds it and goes through `camcraft-session`, so the app never holds a
+//! second opinion about the engine.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use camcraft_core::job::{Job, StrategySpec};
-use camcraft_core::setup::{Meshes, Prepared, prepare};
-use camcraft_geom::mesh::TriMesh;
-use camcraft_session::{Model, SessionError};
+use camcraft_session::SessionError;
 use eframe::egui;
 
+use crate::browser::{self, BrowserAction};
+use crate::document::{Document, Level, ModelSlot, Status, next_key};
 use crate::file_dialog::{AppFileDialog, Pick};
 use crate::measure::Measure;
-use crate::scene::{Scene, Steep, clock};
+use crate::playback;
+use crate::properties::{self, PropAction};
 use crate::settings::Settings;
-use crate::stock_view::{CLASSES, StockImage, class_color, class_name};
 use crate::theme;
 use crate::tool_manager::ToolManager;
+use crate::tool_picker::{Picked, ToolPicker};
 use crate::viewport::{Content, View, Viewport};
-use crate::worker::{Outcome, Reply, Request, Worker};
+use crate::worker::{DocId, Reply, Request, Task, Worker};
 
 const STORAGE_DIALOG: &str = "file_dialog";
 const STORAGE_SETTINGS: &str = "settings";
+const STORAGE_RECENT: &str = "recent_jobs";
+/// Jobs remembered under Open Recent.
+const RECENT: usize = 10;
 
-/// Which material to draw.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StockMode {
-    /// None.
-    Off,
-    /// As it stood when the scrubbed operation began, or after it once the scrub
-    /// reaches its end.
-    Follow,
-    /// A fixed stage: the block before everything is 0, after operation `n` is
-    /// `n + 1`.
-    Stage(usize),
-}
+/// What answering a prompt does, once the prompt is drawn.
+type Answer = Box<dyn FnOnce(&mut App)>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Level {
-    Info,
-    Warn,
-    Error,
-}
-
-/// The app's state.
-pub struct App {
-    dialog: AppFileDialog,
-    worker: Worker,
-    viewport: Viewport,
-    job_path: Option<PathBuf>,
-    job: Option<Job>,
-    /// The job's models, loaded, by name.
-    models: BTreeMap<String, Arc<Model>>,
-    /// Which setup is showing.
-    setup: usize,
-    /// The setup's part and stock, in its frame, from its models as loaded.
-    prepared: Option<Prepared>,
-    /// Changes whenever the part drawn does, so the viewport uploads a new mesh once.
-    generation: u64,
-    outcome: Option<Outcome>,
-    /// What the last run drew: toolpaths, stock and cutters.
-    scene: Option<Scene>,
-    /// Changes whenever `scene` does, so it is uploaded once.
-    scene_generation: u64,
-    /// Changes only when a different job or setup is opened, so the view is framed
-    /// on it once and never snapped back by a re-run.
-    opened: u64,
-    view: View,
-    /// Segments shown, in machine order: the scrub.
-    scrub: usize,
-    show_cutter: bool,
-    /// All toolpaths at once, over the per-role choices, so the material can be
-    /// seen without them.
-    show_paths: bool,
-    stock_mode: StockMode,
-    /// The material covers the part, so the part is hidden while it shows.
-    hide_part_with_stock: bool,
-    /// The material at each stage, classified and coloured, built when first shown.
-    stock_images: Vec<Option<StockImage>>,
-    /// The tool manager, in its own window when open.
-    tools: ToolManager,
-    settings: Settings,
-    settings_open: bool,
-    log: Vec<(Level, String)>,
-}
-
-/// `12345` as `12,345`, as the inspector printed counts.
-fn thousands(n: usize) -> String {
-    let digits = n.to_string();
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
-}
-
-/// A checkbox for one bit of a mask.
-fn bit(ui: &mut egui::Ui, mask: &mut u32, index: usize, label: impl Into<egui::WidgetText>) {
-    let Some(flag) = u32::try_from(index).ok().and_then(|i| 1u32.checked_shl(i)) else {
-        return;
-    };
-    let mut on = *mask & flag != 0;
-    if ui.checkbox(&mut on, label).changed() {
-        if on {
-            *mask |= flag;
-        } else {
-            *mask &= !flag;
-        }
-    }
-}
-
-fn file_name(path: &Path) -> String {
-    path.file_name().map_or_else(
-        || path.display().to_string(),
-        |n| n.to_string_lossy().into_owned(),
-    )
+/// A question the app is waiting on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Prompt {
+    /// Close job `doc`, which has unsaved changes?
+    Close(DocId),
+    /// Quit, with unsaved changes in some jobs?
+    Quit,
+    /// Job `doc` names models that are not where it says.
+    Missing(DocId),
 }
 
 /// A session error, worded for this app rather than for the command line.
-fn explain(e: &SessionError) -> String {
+pub fn explain(e: &SessionError) -> String {
     match e {
         SessionError::InModel { name, source }
             if matches!(**source, SessionError::StlNeedsUnits) =>
         {
             format!(
-                "model '{name}' is an STL, which carries no units. Say whether it is in \
-                 millimetres or inches; guessing would make an inch part 25.4 times too \
-                 small."
+                "model '{name}' is an STL, which carries no units. Choose millimetres or \
+                 inches for it; guessing would make an inch part 25.4 times too small."
             )
         }
         other => other.to_string(),
     }
 }
 
+/// The app's state.
+pub struct App {
+    docs: Vec<Document>,
+    /// The tab showing.
+    active: usize,
+    /// Whose camera the viewport holds: a job and a setup.
+    shown: Option<(DocId, String)>,
+    worker: Worker,
+    viewport: Viewport,
+    dialog: AppFileDialog,
+    /// The tool library, in its own window when open.
+    tools: ToolManager,
+    picker: Option<ToolPicker>,
+    settings: Settings,
+    settings_open: bool,
+    recent: Vec<PathBuf>,
+    prompt: Option<Prompt>,
+    /// Close this job once it has been saved.
+    close_after_save: Option<DocId>,
+    /// What happened outside any job: a file that would not open.
+    log: Vec<(Level, String)>,
+}
+
 impl App {
-    /// The app, restoring what the file dialog remembers.
+    /// The app, restoring what it remembers.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
-        let storage = cc
+        let dialog = cc
             .storage
             .and_then(|s| eframe::get_value(s, STORAGE_DIALOG));
         let settings = cc
             .storage
             .and_then(|s| eframe::get_value(s, STORAGE_SETTINGS))
             .unwrap_or_default();
+        let recent = cc
+            .storage
+            .and_then(|s| eframe::get_value(s, STORAGE_RECENT))
+            .unwrap_or_default();
         Self {
-            dialog: AppFileDialog::new(storage),
+            docs: Vec::new(),
+            active: 0,
+            shown: None,
             worker: Worker::default(),
             viewport: Viewport::default(),
-            job_path: None,
-            job: None,
-            models: BTreeMap::new(),
-            setup: 0,
-            prepared: None,
-            generation: 0,
-            outcome: None,
-            scene: None,
-            scene_generation: 0,
-            opened: 0,
-            view: View::default(),
-            scrub: 0,
-            show_cutter: true,
-            show_paths: true,
-            stock_mode: StockMode::Off,
-            hide_part_with_stock: true,
-            stock_images: Vec::new(),
+            dialog: AppFileDialog::new(dialog),
             tools: ToolManager::new(),
+            picker: None,
             settings,
             settings_open: false,
+            recent,
+            prompt: None,
+            close_after_save: None,
             log: Vec::new(),
         }
     }
 
-    /// Forget the last run: its result and everything drawn from it.
-    fn clear_run(&mut self) {
-        self.outcome = None;
-        self.scene = None;
-        self.stock_images.clear();
-    }
-
-    /// The stage the stock view shows, if any.
-    fn stage_shown(&self) -> Option<usize> {
-        match self.stock_mode {
-            StockMode::Off => None,
-            StockMode::Stage(i) => Some(i),
-            StockMode::Follow => {
-                let scene = self.scene.as_ref()?;
-                let at = scene.position(self.scrub);
-                let moves = scene.ops.get(at.op).map_or(0, |o| o.count + 1);
-                Some(if at.moves >= moves { at.op + 1 } else { at.op })
-            }
-        }
-    }
-
-    /// Classify the shown stage's material, the first time it is shown.
-    fn ensure_stock_image(&mut self) {
-        let (Some(stage), Some(outcome)) = (self.stage_shown(), &self.outcome) else {
-            return;
-        };
-        let result = &outcome.ran.result;
-        if let (Some(slot @ None), Some(stock)) =
-            (self.stock_images.get_mut(stage), result.stages.get(stage))
-        {
-            *slot = Some(StockImage::build(stock, &result.part, result.verify_budget));
-        }
-    }
-
-    /// Move the scrub to a steep descent and look at it closely, with the material
-    /// as it stood.
-    fn jump_to(&mut self, steep: Steep) {
-        self.scrub = steep.index + 1;
-        self.stock_mode = StockMode::Follow;
-        self.viewport.focus(steep.at, 12.0);
-    }
-
-    /// The app, with a job already open, as from the command line.
-    pub fn with_job(cc: &eframe::CreationContext<'_>, job: Option<PathBuf>) -> Self {
+    /// The app, with jobs already open, as from the command line.
+    pub fn with_jobs(cc: &eframe::CreationContext<'_>, jobs: Vec<PathBuf>) -> Self {
         let mut app = Self::new(cc);
-        if let Some(job) = job {
+        for job in jobs {
             app.open_job(&cc.egui_ctx, job);
         }
         app
@@ -234,641 +131,415 @@ impl App {
         self.settings.measure
     }
 
-    fn note(&mut self, level: Level, text: impl Into<String>) {
-        self.log.push((level, text.into()));
+    fn doc(&self) -> Option<&Document> {
+        self.docs.get(self.active)
     }
 
-    /// Open a job file and its models, as if picked.
+    fn doc_mut(&mut self) -> Option<&mut Document> {
+        self.docs.get_mut(self.active)
+    }
+
+    fn find(&mut self, id: DocId) -> Option<&mut Document> {
+        self.docs.iter_mut().find(|d| d.id == id)
+    }
+
+    // ---- files ----------------------------------------------------------------
+
+    /// A new, empty job in its own tab.
+    pub fn new_job(&mut self) {
+        self.docs.push(Document::untitled(next_key()));
+        self.active = self.docs.len() - 1;
+    }
+
+    /// Open a job file in its own tab, or show its tab if it is open already.
     pub fn open_job(&mut self, ctx: &egui::Context, path: PathBuf) {
-        self.note(Level::Info, format!("job: {}", path.display()));
-        self.worker.start(ctx, Request::Open { path });
+        let wanted = path.canonicalize().ok();
+        let same = |p: &Path| p == path || (wanted.is_some() && p.canonicalize().ok() == wanted);
+        if let Some(i) = self
+            .docs
+            .iter()
+            .position(|d| d.path.as_deref().is_some_and(same))
+        {
+            self.active = i;
+            return;
+        }
+        self.worker
+            .start(ctx, next_key(), Task::Open, Request::Open { path });
     }
 
-    /// Lay out the showing setup from the models as loaded, for drawing before any
-    /// run. Says nothing when the setup is not complete yet.
-    fn prepare_setup(&mut self) {
-        self.prepared = self.job.as_ref().and_then(|job| {
-            let meshes: Meshes<'_> = self
-                .models
-                .iter()
-                .map(|(n, m)| (n.as_str(), &m.mesh))
-                .collect();
-            prepare(job, self.setup, &meshes).ok()
-        });
-        self.generation += 1;
+    fn remember(&mut self, path: &Path) {
+        self.recent.retain(|p| p != path);
+        self.recent.insert(0, path.to_path_buf());
+        self.recent.truncate(RECENT);
     }
 
-    /// Show setup `index`.
-    fn show_setup(&mut self, index: usize) {
-        self.setup = index;
-        self.clear_run();
-        self.prepare_setup();
-        self.opened += 1;
+    /// Save job `id` to `path`, or where it was when `path` is `None`, asking where
+    /// if it has never been saved.
+    fn save_job(&mut self, id: DocId, path: Option<PathBuf>) {
+        let Some(doc) = self.find(id) else {
+            return;
+        };
+        let Some(path) = path.or_else(|| doc.path.clone()) else {
+            self.save_as(id);
+            return;
+        };
+        match doc.save_to(&path) {
+            Ok(()) => {
+                let saved = doc.path.clone().unwrap_or(path);
+                doc.note(Level::Info, format!("saved {}", saved.display()));
+                self.remember(&saved);
+                if self.close_after_save == Some(id) {
+                    self.close_after_save = None;
+                    self.remove(id);
+                }
+            }
+            Err(e) => doc.note(Level::Error, explain(&e)),
+        }
     }
 
-    /// Run the showing setup, the way `camcraft job` does.
+    fn save_as(&mut self, id: DocId) {
+        let name = self
+            .find(id)
+            .map(|d| format!("{}.camcraft", d.title()))
+            .unwrap_or_default();
+        self.dialog.open(Pick::SaveJob(id), &name);
+    }
+
+    /// Close job `id`, asking first if it has unsaved changes.
+    fn close(&mut self, id: DocId) {
+        if self.find(id).is_some_and(|d| d.dirty()) {
+            self.prompt = Some(Prompt::Close(id));
+        } else {
+            self.remove(id);
+        }
+    }
+
+    fn remove(&mut self, id: DocId) {
+        if let Some(i) = self.docs.iter().position(|d| d.id == id) {
+            self.docs.remove(i);
+            if self.active >= i && self.active > 0 {
+                self.active -= 1;
+            }
+        }
+        if self.shown.as_ref().is_some_and(|(d, _)| *d == id) {
+            self.shown = None;
+        }
+    }
+
+    // ---- work -----------------------------------------------------------------
+
+    /// Run setup `setup` of the showing job.
+    fn generate(&mut self, ctx: &egui::Context, setup: &str) {
+        let Some(doc) = self.docs.get_mut(self.active) else {
+            return;
+        };
+        let Some(index) = doc.setup_index(setup) else {
+            return;
+        };
+        if let Some(why) = doc.cannot_run(index) {
+            doc.note(Level::Warn, format!("'{setup}' cannot run: {why}"));
+            return;
+        }
+        let Some(models) = doc.models_for_run(index) else {
+            return;
+        };
+        let seq = doc.started(setup);
+        doc.note(Level::Info, format!("generating '{setup}'…"));
+        let request = Request::Run {
+            job: Box::new(doc.job.clone()),
+            setup: index,
+            models,
+        };
+        let task = Task::Run {
+            setup: setup.to_string(),
+            seq,
+        };
+        self.worker.start(ctx, doc.id, task, request);
+    }
+
+    /// Run every setup of the showing job.
+    fn generate_all(&mut self, ctx: &egui::Context) {
+        let names: Vec<String> = self
+            .doc()
+            .map(|d| d.job.setups.iter().map(|s| s.name.clone()).collect())
+            .unwrap_or_default();
+        for name in names {
+            self.generate(ctx, &name);
+        }
+    }
+
+    /// Run the showing setup, as Generate does. Only the snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
     pub fn start_run(&mut self, ctx: &egui::Context) {
-        let Some(job) = self.job.clone() else {
-            return;
-        };
-        self.note(Level::Info, "running…");
-        let models = job
-            .models_for(self.setup)
-            .iter()
-            .filter_map(|m| Some((m.name.clone(), self.models.get(&m.name)?.clone())))
-            .collect();
-        self.worker.start(
-            ctx,
-            Request::Run {
-                job: Box::new(job),
-                setup: self.setup,
-                models,
-            },
-        );
+        if let Some(name) = self.doc().and_then(|d| d.active.clone()) {
+            self.generate(ctx, &name);
+        }
     }
 
-    /// Whether the worker is busy, and with what.
+    /// Whether anything is running. Only the snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
     pub fn busy(&self) -> Option<&'static str> {
-        self.worker.busy()
+        (!self.worker.idle()).then_some("working")
     }
 
-    /// The last run's result, if any. Only the snapshot harness asks.
-    #[cfg(all(test, feature = "ui-snapshots"))]
-    pub fn outcome(&self) -> Option<&Outcome> {
-        self.outcome.as_ref()
-    }
-
-    /// Open the job dialog, as the button would. Only the snapshot harness asks.
-    #[cfg(all(test, feature = "ui-snapshots"))]
-    pub fn open_dialog_for_snapshot(&mut self) {
-        self.dialog.open(Pick::Job);
-    }
-
-    /// Put the scrub part-way through operation `op`, and show only `roles`. Only
-    /// the snapshot harness asks.
-    #[cfg(all(test, feature = "ui-snapshots"))]
-    pub fn set_view_for_snapshot(&mut self, op: usize, fraction: f64, roles: u32) {
-        if let Some(span) = self.scene.as_ref().and_then(|s| s.ops.get(op)) {
-            // A fraction of a count, for a test's choice of frame.
-            #[allow(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                clippy::cast_precision_loss
-            )]
-            let into = (span.count as f64 * fraction) as usize;
-            self.scrub = span.first + into.min(span.count);
-        }
-        self.view.roles = roles;
-    }
-
-    /// Show the stock at a fixed stage, or following the scrub. Only the snapshot
-    /// harness asks.
-    #[cfg(all(test, feature = "ui-snapshots"))]
-    pub fn set_stock_for_snapshot(&mut self, stage: Option<usize>) {
-        self.stock_mode = stage.map_or(StockMode::Follow, StockMode::Stage);
-        self.view.roles = u32::MAX;
-        self.show_paths = false;
-    }
-
-    /// Go to the deepest steep descent, as clicking it would. Only the snapshot
-    /// harness asks.
-    #[cfg(all(test, feature = "ui-snapshots"))]
-    pub fn jump_to_deepest_for_snapshot(&mut self) -> Option<f64> {
-        let deepest = self
-            .scene
-            .as_ref()?
-            .steep
-            .iter()
-            .copied()
-            .max_by(|a, b| a.drop.total_cmp(&b.drop))?;
-        self.jump_to(deepest);
-        Some(deepest.drop)
-    }
-
-    /// Show lengths in `measure`, with the settings window open. Only the snapshot
-    /// harness asks.
-    #[cfg(all(test, feature = "ui-snapshots"))]
-    pub fn settings_for_snapshot(&mut self, measure: Measure) {
-        self.settings.measure = measure;
-        self.settings_open = true;
-    }
-
-    fn can_run(&self) -> bool {
-        let ready = self.job.as_ref().is_some_and(|job| {
-            job.check_common().is_ok()
-                && job.check_setup(self.setup).is_ok()
-                && job
-                    .models_for(self.setup)
-                    .iter()
-                    .all(|m| self.models.contains_key(&m.name))
-        });
-        ready && self.busy().is_none()
-    }
-
-    fn accept(&mut self, reply: Reply) {
-        match reply {
-            Reply::Opened(opened) => match *opened {
-                Ok(opened) => {
-                    self.clear_run();
-                    self.models.clear();
-                    for (name, model) in opened.models {
-                        match model {
-                            Ok(model) => {
-                                for n in &model.notes {
-                                    self.log.push((Level::Info, format!("{name}: {n}")));
-                                }
-                                for w in &model.warnings {
-                                    self.log.push((Level::Warn, format!("{name}: {w}")));
-                                }
-                                self.models.insert(name, model);
-                            }
-                            Err(e) => self.note(Level::Error, explain(&e)),
-                        }
-                    }
-                    let job = opened.job;
-                    self.note(
-                        Level::Info,
-                        format!(
-                            "{} setup(s), {} model(s), tolerance {}",
-                            job.setups.len(),
-                            job.models.len(),
-                            self.measure().length_trimmed(job.tolerance)
-                        ),
+    fn accept(&mut self, id: DocId, task: Task, reply: Reply) {
+        match (task, reply) {
+            (Task::Open, Reply::Opened(opened)) => match *opened {
+                Ok((path, job)) => {
+                    let mut doc = Document::opened(id, Some(path.clone()), job);
+                    let text = format!(
+                        "opened {}: {} model(s), {} setup(s)",
+                        path.display(),
+                        doc.job.models.len(),
+                        doc.job.setups.len()
                     );
-                    if let Err(e) = job.check_common() {
-                        self.note(Level::Warn, e.to_string());
+                    doc.note(Level::Info, text);
+                    if let Err(e) = doc.job.check_common() {
+                        doc.note(Level::Warn, e.to_string());
                     }
-                    self.job = Some(job);
-                    self.job_path = Some(opened.path);
-                    self.show_setup(0);
+                    self.remember(&path);
+                    self.docs.push(doc);
+                    self.active = self.docs.len() - 1;
                 }
-                Err(e) => self.note(Level::Error, explain(&e)),
+                Err(e) => self.log.push((Level::Error, explain(&e))),
             },
-            Reply::Ran(outcome) => match *outcome {
-                Ok(outcome) => {
-                    for n in &outcome.ran.notes {
-                        self.log.push((Level::Info, n.clone()));
-                    }
-                    for w in &outcome.ran.warnings {
-                        self.log.push((Level::Warn, w.clone()));
-                    }
-                    let verdict = if outcome.ran.result.is_clean() {
-                        (Level::Info, "verified: the setup may be posted")
-                    } else {
-                        (Level::Error, "NOT verified: the setup would be refused")
-                    };
-                    self.note(verdict.0, verdict.1);
-                    self.generation += 1;
-                    let Some(setup) = outcome.job.setups.get(outcome.setup) else {
-                        return;
-                    };
-                    let scene = Scene::build(&outcome.job, setup, &outcome.ran.result);
-                    // A new run starts fully shown, every operation visible.
-                    self.scrub = scene.segments.len();
-                    self.view.ops = u32::MAX;
-                    self.stock_images = vec![None; outcome.ran.result.stages.len()];
-                    self.scene = Some(scene);
-                    self.scene_generation += 1;
-                    self.outcome = Some(outcome);
-                }
-                Err(e) => self.note(Level::Error, explain(&e)),
-            },
-            Reply::Died(what) => self.note(
-                Level::Error,
-                format!(
-                    "the engine stopped while {what} and gave no answer. This is a bug; \
-                     the command line may say more."
-                ),
-            ),
-        }
-    }
-
-    /// The part drawn: as the last run of this setup machined it, or as laid out.
-    fn part(&self) -> Option<&TriMesh> {
-        match &self.outcome {
-            Some(o) if o.setup == self.setup => Some(&o.ran.part),
-            _ => self.prepared.as_ref().map(|p| &p.part),
-        }
-    }
-
-    fn side(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
-        let m = self.measure();
-        let idle = self.busy().is_none() && !self.dialog.is_open();
-
-        ui.heading("Job");
-        if ui
-            .add_enabled(idle, egui::Button::new("Open job…"))
-            .clicked()
-        {
-            self.dialog.open(Pick::Job);
-        }
-        let mut pick_setup = None;
-        if let (Some(path), Some(job)) = (&self.job_path, &self.job) {
-            ui.monospace(file_name(path));
-            ui.label(format!("tolerance {}", m.length_trimmed(job.tolerance)));
-
-            ui.add_space(4.0);
-            ui.strong("Models");
-            for def in &job.models {
-                match self.models.get(&def.name) {
-                    Some(model) => {
-                        let e = model.bounds.extent();
-                        ui.label(format!(
-                            "{}  {} × {} × {}, {} triangles",
-                            def.name,
-                            m.number(e.x, 1),
-                            m.number(e.y, 1),
-                            m.length(e.z, 1),
-                            thousands(model.mesh.len())
-                        ));
-                    }
-                    None => {
-                        ui.colored_label(
-                            ui.visuals().error_fg_color,
-                            format!("{}  not loaded: {}", def.name, def.path),
-                        );
-                    }
+            (Task::Load { name, key }, Reply::Loaded(result)) => {
+                if let Some(doc) = self.find(id) {
+                    doc.loaded(&name, &key, result);
                 }
             }
-
-            ui.add_space(4.0);
-            ui.strong("Setup");
-            let current = job
-                .setups
-                .get(self.setup)
-                .map_or_else(String::new, |s| s.name.clone());
-            egui::ComboBox::from_id_salt("setup")
-                .selected_text(current)
-                .show_ui(ui, |ui| {
-                    for (i, s) in job.setups.iter().enumerate() {
-                        if ui.selectable_label(i == self.setup, &s.name).clicked() {
-                            pick_setup = Some(i);
+            (Task::Run { setup, seq }, Reply::Ran(ran)) => {
+                if let Some(doc) = self.find(id) {
+                    doc.finished(&setup, seq, *ran);
+                }
+            }
+            (task, Reply::Died(what)) => {
+                let text = format!(
+                    "the engine stopped while {what} and gave no answer. This is a bug; the \
+                     command line may say more."
+                );
+                match self.find(id) {
+                    Some(doc) => {
+                        if let Task::Run { setup, seq } = &task {
+                            doc.finished(setup, *seq, Err(SessionError::Refused));
                         }
+                        doc.note(Level::Error, text);
                     }
-                });
-            if let Some(setup) = job.setups.get(self.setup) {
-                ui.label(format!("G{}, post {}", setup.wcs, setup.post));
-                for (i, op) in setup.operations.iter().enumerate() {
-                    let strategy = match op.strategy {
-                        StrategySpec::Parallel { .. } => "parallel",
-                        StrategySpec::ZlevelRough { .. } => "z-level rough",
-                    };
-                    let tool = job.tool_for(op).map_or_else(String::new, |t| {
-                        let kind = format!("{:?}", t.kind).to_lowercase();
-                        format!(", {kind} Ø{}", m.length_trimmed(t.diameter))
-                    });
-                    ui.label(format!("{}. {} — {strategy}{tool}", i + 1, op.name));
+                    None => self.log.push((Level::Error, text)),
                 }
-                if let Err(e) = job.check_setup(self.setup) {
-                    ui.colored_label(ui.visuals().warn_fg_color, e.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    /// Start loading every model a job needs and does not have.
+    fn load_models(&mut self, ctx: &egui::Context) {
+        for doc in &mut self.docs {
+            let dir = doc.dir();
+            for (def, key) in doc.wanted_loads() {
+                doc.loading(&def.name, key.clone());
+                let task = Task::Load {
+                    name: def.name.clone(),
+                    key,
+                };
+                let request = Request::Load {
+                    dir: dir.clone(),
+                    model: def,
+                    tolerance: doc.job.tolerance,
+                };
+                self.worker.start(ctx, doc.id, task, request);
+            }
+            // Once loading settles, say once which models were not found.
+            let settled = !doc
+                .models
+                .values()
+                .any(|s| matches!(s, ModelSlot::Loading(_)));
+            if settled && !doc.asked_missing && !doc.missing_models().is_empty() {
+                doc.asked_missing = true;
+                if self.prompt.is_none() {
+                    self.prompt = Some(Prompt::Missing(doc.id));
                 }
             }
         }
-        if let Some(i) = pick_setup
-            && i != self.setup
-        {
-            self.show_setup(i);
-        }
+    }
 
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(self.can_run(), egui::Button::new("Run"))
-                .clicked()
+    // ---- the frame ------------------------------------------------------------
+
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let typing = ctx.memory(|m| m.focused().is_some());
+        let pressed =
+            |mods, key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(mods, key)));
+        let shift = Modifiers::COMMAND | Modifiers::SHIFT;
+        let id = self.doc().map(|d| d.id);
+        if pressed(shift, Key::S) {
+            if let Some(id) = id {
+                self.save_as(id);
+            }
+        } else if pressed(Modifiers::COMMAND, Key::S)
+            && let Some(id) = id
+        {
+            self.save_job(id, None);
+        }
+        if pressed(Modifiers::COMMAND, Key::N) {
+            self.new_job();
+        }
+        if pressed(Modifiers::COMMAND, Key::O) {
+            self.dialog.open(Pick::OpenJobs, "");
+        }
+        if pressed(Modifiers::COMMAND, Key::W)
+            && let Some(id) = id
+        {
+            self.close(id);
+        }
+        if !typing {
+            if pressed(shift, Key::Z) {
+                if let Some(d) = self.doc_mut() {
+                    d.redo();
+                }
+            } else if pressed(Modifiers::COMMAND, Key::Z)
+                && let Some(d) = self.doc_mut()
             {
-                self.start_run(&ctx);
-            }
-            if let Some(what) = self.busy() {
-                ui.spinner();
-                ui.label(what);
-            }
-        });
-
-        if let Some(outcome) = &self.outcome {
-            ui.separator();
-            ui.heading("Result");
-            egui::Grid::new("result")
-                .num_columns(4)
-                .striped(true)
-                .show(ui, |ui| {
-                    ui.strong("operation");
-                    ui.strong("passes");
-                    ui.strong("removed");
-                    ui.strong("rapid hits");
-                    ui.end_row();
-                    for op in &outcome.ran.result.operations {
-                        ui.label(&op.name);
-                        ui.label(op.passes.to_string());
-                        ui.label(m.volume(op.sim.removed_mm3));
-                        ui.label(op.sim.rapid_contacts.to_string());
-                        ui.end_row();
-                    }
-                });
-            let v = &outcome.ran.result.verify;
-            if outcome.ran.result.is_clean() {
-                ui.colored_label(
-                    ui.visuals().text_color(),
-                    format!("Verified: {} columns compared, no gouges.", v.compared),
-                );
-            } else {
-                ui.colored_label(
-                    ui.visuals().error_fg_color,
-                    format!(
-                        "NOT verified: {} gouged column(s), deepest {}.",
-                        v.gouged,
-                        m.length(v.deepest_gouge_mm, 3)
-                    ),
-                );
-            }
-            for w in &outcome.ran.warnings {
-                ui.colored_label(ui.visuals().warn_fg_color, w);
+                d.undo();
             }
         }
-        self.controls(ui);
-    }
-
-    /// What to show, and the scrub through the program in machine order.
-    fn controls(&mut self, ui: &mut egui::Ui) {
-        let Some(scene) = &self.scene else {
-            return;
-        };
-        let m = self.settings.measure;
-        let view = &mut self.view;
-
-        ui.separator();
-        ui.heading("Show");
-        ui.checkbox(&mut view.part, "part");
-        ui.checkbox(&mut view.stock, "stock outline");
-        ui.checkbox(&mut self.show_cutter, "cutter at the scrub");
-        ui.checkbox(&mut self.show_paths, "toolpaths");
-        ui.add_space(4.0);
-        for (i, role) in theme::ROLES.iter().enumerate() {
-            let n = scene.role_counts.get(i).copied().unwrap_or(0);
-            if n == 0 {
-                continue;
+        let n = self.docs.len();
+        if n > 1 {
+            if pressed(Modifiers::CTRL | Modifiers::SHIFT, Key::Tab) {
+                self.active = (self.active + n - 1) % n;
+            } else if pressed(Modifiers::CTRL, Key::Tab) {
+                self.active = (self.active + 1) % n;
             }
-            ui.horizontal(|ui| {
-                bit(ui, &mut view.roles, i, "");
-                let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                ui.painter()
-                    .rect_filled(r, 2.0, theme::egui_color(theme::role_srgb(*role)));
-                ui.label(theme::role_name(*role));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.weak(thousands(n));
-                });
-            });
-        }
-        let mut jump = None;
-        if scene.ops.len() > 1 {
-            ui.add_space(4.0);
-            for (i, op) in scene.ops.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    bit(ui, &mut view.ops, i, format!("{}. {}", i + 1, op.name));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .small_button("scrub to end")
-                            .on_hover_text("show everything up to the end of this operation")
-                            .clicked()
-                        {
-                            jump = Some(op.first + op.count);
-                        }
-                        ui.weak(thousands(op.count));
-                    });
-                });
-            }
-        }
-        if let Some(end) = jump {
-            self.scrub = end;
-        }
-
-        ui.separator();
-        ui.heading("Move order");
-        let total = scene.segments.len();
-        ui.spacing_mut().slider_width = ui.available_width() - 8.0;
-        ui.add(egui::Slider::new(&mut self.scrub, 0..=total).show_value(false));
-        ui.label(format!(
-            "showing {} / {}",
-            thousands(self.scrub),
-            thousands(total)
-        ));
-        if let Some(at) = scene.at(self.scrub) {
-            let s = at.segment;
-            ui.label(format!("{}. {}", at.op + 1, at.op_name));
-            let feed = s
-                .feed
-                .map_or_else(String::new, |f| format!("  F{}", m.feed_number(f)));
-            ui.monospace(format!(
-                "{} to {}, {}, {} {}{feed}",
-                theme::role_name(s.role),
-                m.number(s.b.x, 2),
-                m.number(s.b.y, 2),
-                m.number(s.b.z, 2),
-                m.unit()
-            ));
-        }
-        if let Some(at) = scene.at(self.scrub) {
-            ui.label(format!(
-                "{} of {}, estimated",
-                clock(at.segment.ends_at),
-                clock(scene.total_time())
-            ));
-        }
-        ui.weak("Left and Right arrows step one move; with Shift, a hundred.");
-
-        ui.separator();
-        ui.heading("Stock");
-        let stage_name = |i: usize| match i {
-            0 => "the block, before anything".to_string(),
-            n => scene
-                .ops
-                .get(n - 1)
-                .map_or_else(String::new, |o| format!("after {n}. {}", o.name)),
-        };
-        let selected = match self.stock_mode {
-            StockMode::Off => "off".to_string(),
-            StockMode::Follow => "follow the scrub".to_string(),
-            StockMode::Stage(i) => stage_name(i),
-        };
-        egui::ComboBox::from_id_salt("stock")
-            .selected_text(selected)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.stock_mode, StockMode::Off, "off");
-                ui.selectable_value(&mut self.stock_mode, StockMode::Follow, "follow the scrub");
-                for i in 0..=scene.ops.len() {
-                    ui.selectable_value(&mut self.stock_mode, StockMode::Stage(i), stage_name(i));
-                }
-            });
-        ui.checkbox(
-            &mut self.hide_part_with_stock,
-            "hide the part while showing it",
-        );
-        let image = self
-            .stage_shown()
-            .and_then(|i| self.stock_images.get(i))
-            .and_then(Option::as_ref);
-        if let Some(image) = image {
-            for class in CLASSES {
-                ui.horizontal(|ui| {
-                    let (r, _) =
-                        ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                    ui.painter()
-                        .rect_filled(r, 2.0, theme::egui_color(class_color(class)));
-                    ui.label(class_name(class));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.weak(thousands(image.count(class)));
-                    });
-                });
-            }
-            ui.weak("cells of the simulated material, by the verifier's rule");
-        }
-
-        let mut jump = None;
-        if !scene.steep.is_empty() {
-            ui.separator();
-            ui.heading("Steep descents");
-            ui.weak("cutting moves that drop further than allowed while barely advancing");
-            let setup = self
-                .outcome
-                .as_ref()
-                .and_then(|o| o.job.setups.get(o.setup));
-            for (i, op) in scene.ops.iter().enumerate() {
-                let mine: Vec<&Steep> = scene.steep.iter().filter(|s| s.op == i).collect();
-                if mine.is_empty() {
-                    continue;
-                }
-                let deepest = mine.iter().map(|s| s.drop).fold(0.0, f64::max);
-                let allowance = setup
-                    .and_then(|s| s.operations.get(i))
-                    .map_or(0.0, |o| o.passes.max_cut_step);
-                ui.label(format!(
-                    "{}. {}: {} move(s), deepest {} of {} allowed",
-                    i + 1,
-                    op.name,
-                    mine.len(),
-                    m.length(deepest, 2),
-                    m.length(allowance, 2)
-                ));
-            }
-            // Deepest first: the worst is the one to look at.
-            let mut worst: Vec<Steep> = scene.steep.clone();
-            worst.sort_by(|a, b| b.drop.total_cmp(&a.drop));
-            ui.weak(format!("drop, operation and position ({})", m.unit()));
-            egui::ScrollArea::vertical()
-                .id_salt("steep")
-                .max_height(160.0)
-                .show(ui, |ui| {
-                    for s in worst.iter().take(200) {
-                        let label = format!(
-                            "{}  {}. at {}, {}, {}",
-                            m.number(s.drop, 2),
-                            s.op + 1,
-                            m.number(s.at.x, 1),
-                            m.number(s.at.y, 1),
-                            m.number(s.at.z, 1)
-                        );
-                        if ui
-                            .selectable_label(false, egui::RichText::new(label).monospace())
-                            .on_hover_text("go there: scrub to it and follow the stock")
-                            .clicked()
-                        {
-                            jump = Some(*s);
-                        }
-                    }
-                });
-        }
-        if let Some(s) = jump {
-            self.jump_to(s);
         }
     }
 
-    /// Arrow keys step the scrub, unless a widget has the keyboard.
-    fn step_scrub(&mut self, ctx: &egui::Context) {
-        let Some(total) = self.scene.as_ref().map(|s| s.segments.len()) else {
-            return;
-        };
-        if ctx.memory(|m| m.focused().is_some()) {
-            return;
-        }
-        let (left, right, shift) = ctx.input(|i| {
-            (
-                i.key_pressed(egui::Key::ArrowLeft),
-                i.key_pressed(egui::Key::ArrowRight),
-                i.modifiers.shift,
-            )
-        });
-        let step = if shift { 100 } else { 1 };
-        if right {
-            self.scrub = (self.scrub + step).min(total);
-        }
-        if left {
-            self.scrub = self.scrub.saturating_sub(step);
-        }
-    }
-
-    /// What the viewport should draw this frame.
-    fn content(&self) -> Content<'_> {
-        let total = self.scene.as_ref().map_or(0, |s| s.segments.len());
-        let cutter = self
-            .scene
-            .as_ref()
-            .filter(|_| self.show_cutter && self.scrub < total)
-            .and_then(|s| s.at(self.scrub))
-            .map(|at| (at.op, at.segment.b));
-        let stock = self.stage_shown().and_then(|i| {
-            let image = self.stock_images.get(i)?.as_ref()?;
-            Some(((self.scene_generation, i), image))
-        });
-        let part = self.view.part && !(stock.is_some() && self.hide_part_with_stock);
-        Content {
-            part: self.part().map(|mesh| (self.generation, mesh)),
-            framing: self.opened,
-            scene: self.scene.as_ref().map(|s| (self.scene_generation, s)),
-            stock,
-            view: View {
-                part,
-                roles: if self.show_paths { self.view.roles } else { 0 },
-                shown: self.scrub,
-                cutter,
-                ..self.view
-            },
-        }
-    }
-
-    fn log_panel(&self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical()
-            .stick_to_bottom(true)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for (level, text) in &self.log {
-                    let color = match level {
-                        Level::Info => ui.visuals().text_color(),
-                        Level::Warn => ui.visuals().warn_fg_color,
-                        Level::Error => ui.visuals().error_fg_color,
-                    };
-                    ui.label(egui::RichText::new(text).monospace().color(color));
-                }
-            });
-    }
-}
-
-impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+    fn menu(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        if let Some(reply) = self.worker.poll() {
-            self.accept(reply);
-        }
-        self.step_scrub(&ctx);
-        self.ensure_stock_image();
-        self.tools.measure = self.measure();
-        self.tools.show(&ctx);
-
-        // The setup toolbar: tools and settings now, work offsets later.
-        egui::Panel::top("toolbar").show(ui, |ui| {
-            ui.horizontal(|ui| {
+        let id = self.doc().map(|d| d.id);
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("New").clicked() {
+                    self.new_job();
+                    ui.close();
+                }
+                if ui.button("Open…").clicked() {
+                    self.dialog.open(Pick::OpenJobs, "");
+                    ui.close();
+                }
+                ui.add_enabled_ui(!self.recent.is_empty(), |ui| {
+                    ui.menu_button("Open Recent", |ui| {
+                        for path in self.recent.clone() {
+                            if ui.button(path.display().to_string()).clicked() {
+                                self.open_job(&ctx, path);
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+                ui.separator();
+                ui.add_enabled_ui(id.is_some(), |ui| {
+                    if ui.button("Save").clicked()
+                        && let Some(id) = id
+                    {
+                        self.save_job(id, None);
+                        ui.close();
+                    }
+                    if ui.button("Save As…").clicked()
+                        && let Some(id) = id
+                    {
+                        self.save_as(id);
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("Close").clicked()
+                        && let Some(id) = id
+                    {
+                        self.close(id);
+                        ui.close();
+                    }
+                });
+            });
+            ui.menu_button("Edit", |ui| {
+                let (undo, redo) = self
+                    .doc()
+                    .map_or((false, false), |d| (d.can_undo(), d.can_redo()));
+                if ui.add_enabled(undo, egui::Button::new("Undo")).clicked() {
+                    if let Some(d) = self.doc_mut() {
+                        d.undo();
+                    }
+                    ui.close();
+                }
+                if ui.add_enabled(redo, egui::Button::new("Redo")).clicked() {
+                    if let Some(d) = self.doc_mut() {
+                        d.redo();
+                    }
+                    ui.close();
+                }
+            });
+            ui.menu_button("Setup", |ui| {
+                let active = self.doc().and_then(|d| d.active.clone());
                 if ui
-                    .selectable_label(self.tools.open, "Tools")
-                    .on_hover_text("your tool library")
+                    .add_enabled(active.is_some(), egui::Button::new("Generate"))
+                    .clicked()
+                    && let Some(name) = active
+                {
+                    self.generate(&ctx, &name);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(id.is_some(), egui::Button::new("Generate all"))
+                    .clicked()
+                {
+                    self.generate_all(&ctx);
+                    ui.close();
+                }
+            });
+            ui.menu_button("View", |ui| {
+                if ui.checkbox(&mut self.tools.open, "Tool library").clicked() {
+                    ui.close();
+                }
+                if ui.checkbox(&mut self.settings_open, "Settings").clicked() {
+                    ui.close();
+                }
+            });
+        });
+    }
+
+    fn tabs(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let mut close = None;
+        let mut generate = None;
+        let mut all = false;
+        ui.horizontal(|ui| {
+            for (i, doc) in self.docs.iter().enumerate() {
+                let mut title = doc.title();
+                if doc.dirty() {
+                    title.push_str(" •");
+                }
+                let r = ui.selectable_label(i == self.active, title);
+                let r = match &doc.path {
+                    Some(p) => r.on_hover_text(p.display().to_string()),
+                    None => r.on_hover_text("not saved yet"),
+                };
+                if r.clicked() {
+                    self.active = i;
+                }
+                if ui
+                    .small_button("×")
+                    .on_hover_text("close this job")
+                    .clicked()
+                {
+                    close = Some(doc.id);
+                }
+                ui.separator();
+            }
+            if ui.small_button("+").on_hover_text("new job").clicked() {
+                self.new_job();
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .selectable_label(self.tools.open, "Tool library")
+                    .on_hover_text("your tools, in folders")
                     .clicked()
                 {
                     self.tools.open = !self.tools.open;
@@ -880,37 +551,595 @@ impl eframe::App for App {
                 {
                     self.settings_open = !self.settings_open;
                 }
+                ui.separator();
+                let Some(doc) = self.docs.get(self.active) else {
+                    return;
+                };
+                if ui.button("Generate all").clicked() {
+                    all = true;
+                }
+                if let Some(name) = doc.active.clone() {
+                    let why = doc.setup_index(&name).and_then(|i| doc.cannot_run(i));
+                    if ui
+                        .add_enabled(why.is_none(), egui::Button::new(format!("Generate {name}")))
+                        .on_disabled_hover_text(why.unwrap_or_default())
+                        .clicked()
+                    {
+                        generate = Some(name);
+                    }
+                }
+                if let Some(what) = self.worker.busy(doc.id) {
+                    ui.label(what);
+                    ui.spinner();
+                }
             });
         });
+        if let Some(id) = close {
+            self.close(id);
+        }
+        if all {
+            self.generate_all(&ctx);
+        } else if let Some(name) = generate {
+            self.generate(&ctx, &name);
+        }
+    }
+
+    /// With no job open: what can be done.
+    fn start_screen(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        ui.vertical_centered(|ui| {
+            ui.add_space(ui.available_height() * 0.25);
+            ui.heading("camcraft");
+            ui.add_space(12.0);
+            if ui.button("New job").clicked() {
+                self.new_job();
+            }
+            if ui.button("Open job…").clicked() {
+                self.dialog.open(Pick::OpenJobs, "");
+            }
+            if !self.worker.idle() {
+                ui.add_space(8.0);
+                ui.spinner();
+            }
+            if !self.recent.is_empty() {
+                ui.add_space(16.0);
+                ui.weak("Recent");
+                for path in self.recent.clone() {
+                    let name = path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |n| n.to_string_lossy().into_owned(),
+                    );
+                    if ui
+                        .link(name)
+                        .on_hover_text(path.display().to_string())
+                        .clicked()
+                    {
+                        self.open_job(&ctx, path);
+                    }
+                }
+            }
+            for (level, text) in &self.log {
+                let color = match level {
+                    Level::Error => ui.visuals().error_fg_color,
+                    Level::Warn => ui.visuals().warn_fg_color,
+                    Level::Info => ui.visuals().text_color(),
+                };
+                ui.colored_label(color, text);
+            }
+        });
+    }
+
+    fn left(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let m = self.measure();
+        let Some(doc) = self.docs.get_mut(self.active) else {
+            return;
+        };
+        let id = doc.id;
+        let mut actions = Vec::new();
+        egui::Panel::top("browser")
+            .resizable(true)
+            .default_size(300.0)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| actions = browser::show(ui, doc));
+            });
+        let mut focus = None;
+        egui::CentralPanel::default().show(ui, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                let Some(name) = doc.active.clone() else {
+                    return;
+                };
+                let status = doc.status(&name);
+                let state = doc.setups.entry(name.clone()).or_default();
+                ui.heading(format!("Setup {name}"));
+                if state.ran.is_some() {
+                    if status == Status::Stale {
+                        ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            "Out of date: the setup has changed since this ran. Generate it again.",
+                        );
+                    }
+                    playback::result(ui, state, m);
+                    ui.separator();
+                } else if state.running.is_none() {
+                    ui.weak("Not generated yet.");
+                }
+                focus = playback::controls(ui, state, m);
+            });
+        });
+        if let Some(at) = focus {
+            self.viewport.focus(at, 12.0);
+        }
+        for a in actions {
+            match a {
+                BrowserAction::AddModels => self.dialog.open(Pick::AddModels(id), ""),
+                BrowserAction::Locate(name) => self.dialog.open(Pick::Locate(id, name), ""),
+                BrowserAction::Generate(name) => self.generate(&ctx, &name),
+            }
+        }
+    }
+
+    fn right(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let m = self.measure();
+        let Some(doc) = self.docs.get_mut(self.active) else {
+            return;
+        };
+        let id = doc.id;
+        let mut actions = Vec::new();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| actions = properties::show(ui, doc, m));
+        for a in actions {
+            match a {
+                PropAction::AddModels => self.dialog.open(Pick::AddModels(id), ""),
+                PropAction::Locate(name) => self.dialog.open(Pick::Locate(id, name), ""),
+                PropAction::ProfileFile(setup) => self.dialog.open(Pick::Profile(id, setup), ""),
+                PropAction::Generate(name) => self.generate(&ctx, &name),
+                PropAction::PickTool(setup, op) => {
+                    if let Some(doc) = self.find(id) {
+                        let picker = ToolPicker::new(id, setup, op, &doc.job);
+                        self.picker = Some(picker);
+                    }
+                }
+            }
+        }
+    }
+
+    fn log_panel(&self, ui: &mut egui::Ui) {
+        let lines = self.doc().map_or(&self.log, |d| &d.log);
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(true)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for (level, text) in lines {
+                    let color = match level {
+                        Level::Info => ui.visuals().text_color(),
+                        Level::Warn => ui.visuals().warn_fg_color,
+                        Level::Error => ui.visuals().error_fg_color,
+                    };
+                    ui.label(egui::RichText::new(text).monospace().color(color));
+                }
+            });
+    }
+
+    /// Hand the viewport the camera of the setup now showing, keeping the last one's.
+    fn swap_camera(&mut self) {
+        let now = self.doc().and_then(|d| Some((d.id, d.active.clone()?)));
+        if now == self.shown {
+            return;
+        }
+        let camera = self.viewport.camera();
+        if let Some((id, name)) = self.shown.take()
+            && let Some(state) = self
+                .docs
+                .iter_mut()
+                .find(|d| d.id == id)
+                .and_then(|d| d.setups.get_mut(&name))
+        {
+            state.view.camera = Some(camera);
+        }
+        if let Some((id, name)) = &now
+            && let Some(doc) = self.docs.iter_mut().find(|d| d.id == *id)
+        {
+            let state = doc.setups.entry(name.clone()).or_default();
+            self.viewport
+                .use_camera(state.view.camera, state.view.framing);
+        }
+        self.shown = now;
+    }
+
+    fn picks(&mut self, ctx: &egui::Context) {
+        let Some((pick, paths)) = self.dialog.update(ctx) else {
+            return;
+        };
+        match pick {
+            Pick::OpenJobs => {
+                for p in paths {
+                    self.open_job(ctx, p);
+                }
+            }
+            Pick::SaveJob(id) => {
+                if let Some(path) = paths.into_iter().next() {
+                    self.save_job(id, Some(path));
+                }
+            }
+            Pick::AddModels(id) => {
+                if let Some(doc) = self.find(id) {
+                    let names = doc.add_models(&paths);
+                    doc.note(Level::Info, format!("added {}", names.join(", ")));
+                }
+            }
+            Pick::Locate(id, name) => {
+                if let (Some(doc), Some(path)) = (self.find(id), paths.first()) {
+                    doc.locate_model(&name, path);
+                }
+            }
+            Pick::Profile(id, setup) => {
+                if let (Some(doc), Some(path)) = (self.find(id), paths.first()) {
+                    let post = match &doc.path {
+                        Some(_) => camcraft_session::fs::relative_path(&doc.dir(), path),
+                        None => path.display().to_string(),
+                    };
+                    if let Some(s) = doc.job.setups.iter_mut().find(|s| s.name == setup) {
+                        s.post = post;
+                    }
+                }
+            }
+        }
+    }
+
+    fn tool_picker(&mut self, ctx: &egui::Context) {
+        let Some(picker) = self.picker.as_mut() else {
+            return;
+        };
+        let (id, setup, op) = picker.target.clone();
+        let m = self.settings.measure;
+        let library = self.tools.library();
+        let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else {
+            self.picker = None;
+            return;
+        };
+        let Some(outcome) = picker.show(ctx, &doc.job, library, m) else {
+            return;
+        };
+        self.picker = None;
+        let Some(picked) = outcome else {
+            return;
+        };
+        let name = match picked {
+            Picked::Job(name) => name,
+            Picked::Library(hint, spec) => doc.adopt_tool(&hint, &spec),
+        };
+        if let Some(o) = doc
+            .job
+            .setups
+            .iter_mut()
+            .find(|s| s.name == setup)
+            .and_then(|s| s.operations.get_mut(op))
+        {
+            o.tool = Some(name);
+        }
+    }
+
+    fn prompts(&mut self, ctx: &egui::Context) {
+        let Some(prompt) = self.prompt.clone() else {
+            return;
+        };
+        let mut done = false;
+        let mut then: Option<Answer> = None;
+        let modal = egui::Modal::new(egui::Id::new("prompt")).show(ctx, |ui| {
+            ui.set_width(420.0);
+            match &prompt {
+                Prompt::Close(id) => {
+                    let id = *id;
+                    let title = self
+                        .docs
+                        .iter()
+                        .find(|d| d.id == id)
+                        .map(Document::title)
+                        .unwrap_or_default();
+                    ui.heading(format!("Save changes to {title}?"));
+                    ui.label("They are lost if you close without saving.");
+                    ui.horizontal(|ui| {
+                        if ui.button("Save").clicked() {
+                            then = Some(Box::new(move |app: &mut Self| {
+                                app.close_after_save = Some(id);
+                                app.save_job(id, None);
+                            }));
+                        }
+                        if ui.button("Don't save").clicked() {
+                            then = Some(Box::new(move |app: &mut Self| app.remove(id)));
+                        }
+                        if ui.button("Cancel").clicked() {
+                            done = true;
+                        }
+                    });
+                }
+                Prompt::Quit => {
+                    ui.heading("Quit with unsaved changes?");
+                    let unsaved: Vec<&Document> = self.docs.iter().filter(|d| d.dirty()).collect();
+                    for d in &unsaved {
+                        ui.label(format!("• {}", d.title()));
+                    }
+                    let all_have_a_place = unsaved.iter().all(|d| d.path.is_some());
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(all_have_a_place, egui::Button::new("Save all and quit"))
+                            .on_disabled_hover_text(
+                                "a new job needs a place first: save it with Save As",
+                            )
+                            .clicked()
+                        {
+                            then = Some(Box::new(|app: &mut Self| {
+                                let ids: Vec<DocId> = app
+                                    .docs
+                                    .iter()
+                                    .filter(|d| d.dirty())
+                                    .map(|d| d.id)
+                                    .collect();
+                                for id in ids {
+                                    app.save_job(id, None);
+                                }
+                                if app.docs.iter().all(|d| !d.dirty()) {
+                                    app.docs.clear();
+                                }
+                            }));
+                        }
+                        if ui.button("Quit without saving").clicked() {
+                            then = Some(Box::new(|app: &mut Self| app.docs.clear()));
+                        }
+                        if ui.button("Cancel").clicked() {
+                            done = true;
+                        }
+                    });
+                }
+                Prompt::Missing(id) => {
+                    let id = *id;
+                    let (title, missing) = self
+                        .docs
+                        .iter()
+                        .find(|d| d.id == id)
+                        .map(|d| (d.title(), d.missing_models()))
+                        .unwrap_or_default();
+                    ui.heading(format!("{title}: models not found"));
+                    ui.label("These are not where the job says. Find each, or leave it for now.");
+                    for name in missing {
+                        ui.horizontal(|ui| {
+                            ui.label(&name);
+                            if ui.button("Find…").clicked() {
+                                then = Some(Box::new(move |app: &mut Self| {
+                                    app.dialog.open(Pick::Locate(id, name), "");
+                                }));
+                            }
+                        });
+                    }
+                    if ui.button("Later").clicked() {
+                        done = true;
+                    }
+                }
+            }
+        });
+        if let Some(f) = then {
+            self.prompt = None;
+            f(self);
+            if prompt == Prompt::Quit && self.docs.is_empty() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        } else if done || modal.should_close() {
+            self.prompt = None;
+        }
+    }
+
+    /// What the viewport should draw this frame.
+    fn content(&self) -> Content<'_> {
+        let state = self.doc().and_then(|d| d.setups.get(d.active.as_ref()?));
+        match state {
+            Some(state) => playback::content(state),
+            None => Content {
+                part: None,
+                framing: 0,
+                scene: None,
+                outline: None,
+                stock: None,
+                view: View::default(),
+            },
+        }
+    }
+
+    // ---- for the snapshot harness ------------------------------------------------
+
+    /// The showing setup's last run, if any. Only the snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn outcome(&self) -> Option<&camcraft_session::Ran> {
+        let d = self.doc()?;
+        Some(&d.setups.get(d.active.as_ref()?)?.ran.as_ref()?.ran)
+    }
+
+    /// The showing setup's state. Only the snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    fn state_for_snapshot(&mut self) -> Option<&mut crate::document::SetupState> {
+        let d = self.docs.get_mut(self.active)?;
+        let name = d.active.clone()?;
+        d.setups.get_mut(&name)
+    }
+
+    /// The showing job. Only the snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn doc_for_snapshot(&mut self) -> Option<&mut Document> {
+        self.doc_mut()
+    }
+
+    /// Open the job dialog, as File › Open would. Only the snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn open_dialog_for_snapshot(&mut self) {
+        self.dialog.open(Pick::OpenJobs, "");
+    }
+
+    /// Ask to close the showing job, as ⌘W would. Only the snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn close_for_snapshot(&mut self) {
+        if let Some(id) = self.doc().map(|d| d.id) {
+            self.close(id);
+        }
+    }
+
+    /// Open the tool picker for an operation, or close it for `None`. Only the
+    /// snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn pick_tool_for_snapshot(&mut self, target: Option<(&str, usize)>) {
+        self.picker = target.and_then(|(setup, op)| {
+            let d = self.doc()?;
+            Some(ToolPicker::new(d.id, setup.into(), op, &d.job))
+        });
+    }
+
+    /// Put the scrub part-way through operation `op`, and show only `roles`. Only
+    /// the snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn set_view_for_snapshot(&mut self, op: usize, fraction: f64, roles: u32) {
+        let Some(state) = self.state_for_snapshot() else {
+            return;
+        };
+        if let Some(span) = state.ran.as_ref().and_then(|r| r.scene.ops.get(op)) {
+            // A fraction of a count, for a test's choice of frame.
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss
+            )]
+            let into = (span.count as f64 * fraction) as usize;
+            state.view.scrub = span.first + into.min(span.count);
+        }
+        state.view.view.roles = roles;
+    }
+
+    /// Show the stock at a fixed stage, or following the scrub. Only the snapshot
+    /// harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn set_stock_for_snapshot(&mut self, stage: Option<usize>) {
+        use crate::document::StockMode;
+        if let Some(state) = self.state_for_snapshot() {
+            state.view.stock_mode = stage.map_or(StockMode::Follow, StockMode::Stage);
+            state.view.view.roles = u32::MAX;
+            state.view.show_paths = false;
+        }
+    }
+
+    /// Go to the deepest steep descent, as clicking it would. Only the snapshot
+    /// harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn jump_to_deepest_for_snapshot(&mut self) -> Option<f64> {
+        let state = self.state_for_snapshot()?;
+        let deepest = state
+            .ran
+            .as_ref()?
+            .scene
+            .steep
+            .iter()
+            .copied()
+            .max_by(|a, b| a.drop.total_cmp(&b.drop))?;
+        let at = playback::jump_to(state, deepest);
+        self.viewport.focus(at, 12.0);
+        Some(deepest.drop)
+    }
+
+    /// Use a library of two machines' folders, kept at `path`. Only the snapshot
+    /// harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn library_for_snapshot(&mut self, path: PathBuf) {
+        self.tools = ToolManager::with_library(path);
+        self.tools.folders_for_snapshot();
+    }
+
+    /// Show lengths in `measure`, with the settings window open. Only the snapshot
+    /// harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn settings_for_snapshot(&mut self, measure: Measure) {
+        self.settings.measure = measure;
+        self.settings_open = true;
+    }
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        for (id, task, reply) in self.worker.poll() {
+            self.accept(id, task, reply);
+        }
+        // Not while a field is being typed in or dragged: dragging the tolerance
+        // would otherwise tessellate every model at every step of the drag.
+        let editing = ctx.memory(|m| m.focused().is_some()) || ctx.dragged_id().is_some();
+        if !editing {
+            self.load_models(&ctx);
+        }
+        self.shortcuts(&ctx);
+        if self.active >= self.docs.len() {
+            self.active = self.docs.len().saturating_sub(1);
+        }
+        if let Some(doc) = self.docs.get_mut(self.active) {
+            doc.tidy_selection();
+            if let Some(name) = doc.active.clone() {
+                doc.refresh_layout(&name);
+                let state = doc.setups.entry(name).or_default();
+                playback::step_scrub(&ctx, state);
+                playback::ensure_stock_image(state);
+            }
+        }
+        self.swap_camera();
+        self.tools.measure = self.measure();
+        self.tools.show(&ctx);
+
+        egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
+        egui::Panel::top("tabs").show(ui, |ui| self.tabs(ui));
         self.settings.show(&ctx, &mut self.settings_open);
-        if let Some((pick, path)) = self.dialog.update(&ctx) {
-            match pick {
-                Pick::Job => self.open_job(&ctx, path),
+        self.picks(&ctx);
+        self.tool_picker(&ctx);
+        self.prompts(&ctx);
+
+        if self.docs.is_empty() {
+            egui::CentralPanel::default().show(ui, |ui| self.start_screen(ui));
+        } else {
+            egui::Panel::left("side")
+                .resizable(true)
+                .default_size(320.0)
+                .show(ui, |ui| self.left(ui));
+            egui::Panel::right("properties")
+                .resizable(true)
+                .default_size(380.0)
+                .show(ui, |ui| self.right(ui));
+            egui::Panel::bottom("log")
+                .resizable(true)
+                .default_size(130.0)
+                .show(ui, |ui| self.log_panel(ui));
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
+                    // The viewport is taken out for the call, because the content it
+                    // draws borrows the rest of the app.
+                    let mut viewport = std::mem::take(&mut self.viewport);
+                    viewport.show(ui, frame.wgpu_render_state(), &self.content());
+                    self.viewport = viewport;
+                });
+        }
+
+        // An edit is finished once no field is being typed in or dragged: then it
+        // becomes one step to undo.
+        if ctx.memory(|m| m.focused().is_none()) && ctx.dragged_id().is_none() {
+            for d in &mut self.docs {
+                d.checkpoint();
             }
         }
 
-        egui::Panel::left("side")
-            .resizable(true)
-            .default_size(320.0)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| self.side(ui));
-            });
-        egui::Panel::bottom("log")
-            .resizable(true)
-            .default_size(150.0)
-            .show(ui, |ui| self.log_panel(ui));
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE)
-            .show(ui, |ui| {
-                // The viewport is taken out for the call, because the content it
-                // draws borrows the rest of the app.
-                let mut viewport = std::mem::take(&mut self.viewport);
-                viewport.show(ui, frame.wgpu_render_state(), &self.content());
-                self.viewport = viewport;
-            });
+        if ctx.input(|i| i.viewport().close_requested()) && self.docs.iter().any(Document::dirty) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.prompt = Some(Prompt::Quit);
+        }
 
-        // Keep the spinner turning while the worker runs; its reply wakes us anyway.
-        if self.busy().is_some() {
+        // Keep the spinners turning while work runs; its reply wakes us anyway.
+        if !self.worker.idle() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
@@ -920,5 +1149,6 @@ impl eframe::App for App {
         self.tools.save_library();
         eframe::set_value(storage, STORAGE_DIALOG, self.dialog.storage());
         eframe::set_value(storage, STORAGE_SETTINGS, &self.settings);
+        eframe::set_value(storage, STORAGE_RECENT, &self.recent);
     }
 }

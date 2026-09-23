@@ -30,8 +30,15 @@ use crate::theme;
 const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const SAMPLES: u32 = 4;
-/// Line kind reserved for the stock outline, after the seven move roles.
+/// Line kind for the stock outline, after the seven move roles; the work zero's
+/// axes follow it.
 const STOCK: u32 = 7;
+/// Line kinds for the work zero's X, Y and Z axes.
+const AXIS_X: u32 = 8;
+const AXIS_Y: u32 = 9;
+const AXIS_Z: u32 = 10;
+/// Line kinds in all, and so colours.
+const KINDS: usize = 12;
 /// Toolpath width, in points.
 const LINE_WIDTH: f32 = 1.25;
 
@@ -41,9 +48,9 @@ struct Frame {
     light: vec4<f32>,
     // Viewport width and height in pixels, line width in pixels, depth pull.
     viewport: vec4<f32>,
-    // Visible kinds (roles, then stock), visible operations, segments shown.
+    // Visible kinds (roles, then stock and axes), visible operations, segments shown.
     masks: vec4<u32>,
-    colors: array<vec4<f32>, 8>,
+    colors: array<vec4<f32>, 12>,
 };
 @group(0) @binding(0) var<uniform> f: Frame;
 
@@ -75,8 +82,9 @@ struct VertexOut {
 fn vs(v: VertexIn) -> VertexOut {
     var out: VertexOut;
     out.clip = f.view_proj * o.model * vec4<f32>(v.position, 1.0);
-    // Objects are only ever translated, so normals need no transform.
-    out.normal = v.normal;
+    // Objects are only ever turned and moved, never scaled, so the model matrix
+    // turns normals too.
+    out.normal = (o.model * vec4<f32>(v.normal, 0.0)).xyz;
     return out;
 }
 
@@ -269,7 +277,7 @@ struct FrameUniforms {
     light: [f32; 4],
     viewport: [f32; 4],
     masks: [u32; 4],
-    colors: [[f32; 4]; 8],
+    colors: [[f32; 4]; KINDS],
 }
 
 #[repr(C)]
@@ -322,8 +330,8 @@ fn mesh_triangles(mesh: &TriMesh) -> impl Iterator<Item = [Vec3; 3]> + '_ {
         .map(|t| t.map(|p| Vec3::from(v3(p))))
 }
 
-fn line_instances(scene: &Scene) -> (Vec<LineInstance>, Vec<LineInstance>) {
-    let moves = scene
+fn line_instances(scene: &Scene) -> Vec<LineInstance> {
+    scene
         .segments
         .iter()
         .map(|s| LineInstance {
@@ -332,18 +340,48 @@ fn line_instances(scene: &Scene) -> (Vec<LineInstance>, Vec<LineInstance>) {
             kind: theme::role_index(s.role),
             op: s.op,
         })
-        .collect();
-    let stock = scene
-        .stock
+        .collect()
+}
+
+fn outline_instances(outline: &[Outline]) -> Vec<LineInstance> {
+    outline
         .iter()
-        .map(|(a, b)| LineInstance {
-            a: v3(*a),
-            b: v3(*b),
-            kind: STOCK,
+        .map(|o| LineInstance {
+            a: v3(o.a),
+            b: v3(o.b),
+            kind: match o.kind {
+                OutlineKind::Stock => STOCK,
+                OutlineKind::AxisX => AXIS_X,
+                OutlineKind::AxisY => AXIS_Y,
+                OutlineKind::AxisZ => AXIS_Z,
+            },
             op: 0,
         })
-        .collect();
-    (moves, stock)
+        .collect()
+}
+
+/// What an outline line shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutlineKind {
+    /// An edge of the stock.
+    Stock,
+    /// The work zero's X axis.
+    AxisX,
+    /// Its Y axis.
+    AxisY,
+    /// Its Z axis.
+    AxisZ,
+}
+
+/// A line that is not a move: the stock's edges and the work zero's axes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Outline {
+    /// One end.
+    pub a: DVec3,
+    /// The other.
+    pub b: DVec3,
+    /// What it shows.
+    pub kind: OutlineKind,
 }
 
 /// What to show this frame, decided by the controls.
@@ -351,8 +389,10 @@ fn line_instances(scene: &Scene) -> (Vec<LineInstance>, Vec<LineInstance>) {
 pub struct View {
     /// Draw the part.
     pub part: bool,
-    /// Draw the block of material.
+    /// Draw the stock's outline.
     pub stock: bool,
+    /// Draw the work zero's axes.
+    pub origin: bool,
     /// Bit per role, in [`theme::ROLES`] order.
     pub roles: u32,
     /// Bit per operation, from zero. Operations past 32 are always shown.
@@ -368,6 +408,7 @@ impl Default for View {
         Self {
             part: true,
             stock: false,
+            origin: true,
             roles: u32::MAX,
             ops: u32::MAX,
             shown: usize::MAX,
@@ -384,8 +425,10 @@ pub struct Content<'a> {
     /// Changes when a different model is opened, and only then: the view is framed
     /// on it once. Re-running the same model must not snap the camera back.
     pub framing: u64,
-    /// The run's toolpaths, stock and cutters.
+    /// The run's toolpaths and cutters.
     pub scene: Option<(u64, &'a Scene)>,
+    /// The stock's edges and the work zero's axes.
+    pub outline: Option<(u64, &'a [Outline])>,
     /// The simulated material to draw, with a key that changes whenever it does.
     pub stock: Option<((u64, usize), &'a StockImage)>,
     /// What is visible.
@@ -408,7 +451,7 @@ struct Uploaded {
     part: Option<(u64, wgpu::Buffer, u32)>,
     scene: Option<u64>,
     moves: Option<(wgpu::Buffer, u32)>,
-    stock: Option<(wgpu::Buffer, u32)>,
+    outline: Option<(u64, wgpu::Buffer, u32)>,
     /// One per operation; `None` where the job named no tool that could be drawn.
     cutters: Vec<Option<(wgpu::Buffer, u32)>>,
 }
@@ -461,6 +504,23 @@ impl Default for Viewport {
 }
 
 impl Viewport {
+    /// The camera as it stands, to keep while something else is shown.
+    pub fn camera(&self) -> Camera {
+        self.camera
+    }
+
+    /// Look through `camera`, kept from before, or frame the next part shown under
+    /// `framing` afresh when there is none.
+    pub fn use_camera(&mut self, camera: Option<Camera>, framing: u64) {
+        match camera {
+            Some(c) => {
+                self.camera = c;
+                self.framed = Some(framing);
+            }
+            None => self.framed = None,
+        }
+    }
+
     /// Bring the view in on `point`, keeping the angle it is seen from.
     pub fn focus(&mut self, point: DVec3, radius: f32) {
         self.camera.focus(Vec3::from(v3(point)), radius);
@@ -530,7 +590,7 @@ impl Viewport {
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "Open a model to see it here",
+                "Add a model to the job to see it here",
                 theme::font(ui.style(), egui::TextStyle::Heading),
                 faint,
             );
@@ -862,7 +922,7 @@ impl Gpu {
                 part: None,
                 scene: None,
                 moves: None,
-                stock: None,
+                outline: None,
                 cutters: Vec::new(),
             },
         }
@@ -1009,21 +1069,32 @@ impl Gpu {
             _ => {}
         }
 
+        match content.outline {
+            Some((g, outline)) if self.up.outline.as_ref().map(|o| o.0) != Some(g) => {
+                let lines = outline_instances(outline);
+                // A buffer may not be empty; an empty outline draws nothing instead.
+                self.up.outline = (!lines.is_empty()).then(|| {
+                    let buf = vertices(
+                        "camcraft outline",
+                        bytemuck::cast_slice(&lines),
+                        wgpu::BufferUsages::VERTEX,
+                    );
+                    (g, buf, count(lines.len()))
+                });
+            }
+            None => self.up.outline = None,
+            _ => {}
+        }
+
         match content.scene {
             Some((g, scene)) if self.up.scene != Some(g) => {
-                let (moves, stock) = line_instances(scene);
+                let moves = line_instances(scene);
                 let usage = wgpu::BufferUsages::VERTEX;
                 // A buffer may not be empty; an empty scene draws nothing instead.
                 self.up.moves = (!moves.is_empty()).then(|| {
                     (
                         vertices("camcraft moves", bytemuck::cast_slice(&moves), usage),
                         count(moves.len()),
-                    )
-                });
-                self.up.stock = (!stock.is_empty()).then(|| {
-                    (
-                        vertices("camcraft stock", bytemuck::cast_slice(&stock), usage),
-                        count(stock.len()),
                     )
                 });
                 self.up.cutters = scene
@@ -1042,7 +1113,6 @@ impl Gpu {
             None => {
                 self.up.scene = None;
                 self.up.moves = None;
-                self.up.stock = None;
                 self.up.cutters.clear();
             }
             _ => {}
@@ -1127,14 +1197,24 @@ impl Gpu {
         let targets = self.targets.as_ref()?;
         let view = input.view;
 
-        let mut colors = [[0.0; 4]; 8];
+        let mut colors = [[0.0; 4]; KINDS];
         for (slot, role) in colors.iter_mut().zip(theme::ROLES) {
             *slot = theme::linear(theme::role_srgb(role)).into_rgba();
         }
-        if let Some(stock) = colors.get_mut(STOCK as usize) {
-            *stock = theme::linear(theme::GRAY_7).into_rgba();
+        for (kind, color) in [
+            (STOCK, theme::GRAY_7),
+            (AXIS_X, theme::AXIS_X),
+            (AXIS_Y, theme::AXIS_Y),
+            (AXIS_Z, theme::AXIS_Z),
+        ] {
+            if let Some(slot) = colors.get_mut(kind as usize) {
+                *slot = theme::linear(color).into_rgba();
+            }
         }
-        let kinds = (view.roles & 0x7f) | if view.stock { 1 << STOCK } else { 0 };
+        let axes = (1 << AXIS_X) | (1 << AXIS_Y) | (1 << AXIS_Z);
+        let kinds = (view.roles & 0x7f)
+            | if view.stock { 1 << STOCK } else { 0 }
+            | if view.origin { axes } else { 0 };
         let shown = u32::try_from(view.shown).unwrap_or(u32::MAX);
         let frame = FrameUniforms {
             view_proj: input.view_proj.to_cols_array_2d(),
@@ -1232,7 +1312,7 @@ impl Gpu {
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..6, 0..(*n).min(shown));
             }
-            if let (true, Some((buffer, n))) = (view.stock, &self.up.stock) {
+            if let Some((_, buffer, n)) = &self.up.outline {
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..6, 0..*n);
             }
@@ -1306,13 +1386,24 @@ mod tests {
                 seg(1.0, MoveRole::Cut, 0),
                 seg(2.0, MoveRole::Plunge, 1),
             ],
-            stock: vec![(DVec3::ZERO, DVec3::X)],
             ..Scene::default()
         };
-        let (moves, stock) = line_instances(&scene);
+        let moves = line_instances(&scene);
         let got: Vec<(f32, u32, u32)> = moves.iter().map(|m| (m.a[0], m.kind, m.op)).collect();
         assert_eq!(got, vec![(0.0, 1, 0), (1.0, 0, 0), (2.0, 2, 1)]);
-        assert_eq!(stock.len(), 1);
-        assert_eq!(stock[0].kind, STOCK);
+        let outline = outline_instances(&[
+            Outline {
+                a: DVec3::ZERO,
+                b: DVec3::X,
+                kind: OutlineKind::Stock,
+            },
+            Outline {
+                a: DVec3::ZERO,
+                b: DVec3::Z,
+                kind: OutlineKind::AxisZ,
+            },
+        ]);
+        let kinds: Vec<u32> = outline.iter().map(|o| o.kind).collect();
+        assert_eq!(kinds, [STOCK, AXIS_Z]);
     }
 }

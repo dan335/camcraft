@@ -9,15 +9,27 @@
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
-use egui_file_dialog::{DialogState, FileDialog, FileDialogStorage, Filter};
+use egui_file_dialog::{FileDialog, FileDialogStorage, Filter};
+
+use crate::worker::DocId;
 
 const JOBS: &str = "Jobs (.camcraft)";
+const MODELS: &str = "Models (STEP, STL)";
+const PROFILES: &str = "Machine profiles (TOML)";
 
 /// What a pick is for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pick {
-    /// A job file.
-    Job,
+    /// Job files to open, each in its own tab.
+    OpenJobs,
+    /// Where to save job `doc`.
+    SaveJob(DocId),
+    /// Model files to add to job `doc`.
+    AddModels(DocId),
+    /// Where model `name` of job `doc` is now.
+    Locate(DocId, String),
+    /// A machine profile file for setup `setup` of job `doc`.
+    Profile(DocId, String),
 }
 
 /// The dialog and whatever it is currently answering.
@@ -36,10 +48,21 @@ fn has_extension(path: &Path, extensions: &[&str]) -> bool {
 impl AppFileDialog {
     /// A dialog, remembering where the last one was.
     pub fn new(storage: Option<FileDialogStorage>) -> Self {
-        let dialog = FileDialog::new().add_file_filter(
-            JOBS,
-            Filter::new(|p: &Path| has_extension(p, &["camcraft"])),
-        );
+        let dialog = FileDialog::new()
+            .add_file_filter(
+                JOBS,
+                Filter::new(|p: &Path| has_extension(p, &["camcraft"])),
+            )
+            .add_file_filter(
+                MODELS,
+                Filter::new(|p: &Path| has_extension(p, &["step", "stp", "stl"])),
+            )
+            .add_file_filter(
+                PROFILES,
+                Filter::new(|p: &Path| has_extension(p, &["toml"])),
+            )
+            .add_save_extension("Job", "camcraft")
+            .default_save_extension("Job");
         let dialog = match storage {
             Some(s) => dialog.storage(s),
             None => dialog,
@@ -47,29 +70,40 @@ impl AppFileDialog {
         Self { dialog }
     }
 
-    /// Start picking a file for `pick`.
-    pub fn open(&mut self, pick: Pick) {
+    /// Start picking for `pick`. `name` is the file name a save starts with.
+    pub fn open(&mut self, pick: Pick, name: &str) {
         let config = self.dialog.config_mut();
-        let (title, filter) = match pick {
-            Pick::Job => ("Open job", JOBS),
+        let (title, filter) = match &pick {
+            Pick::OpenJobs => ("Open jobs", JOBS),
+            Pick::SaveJob(_) => ("Save job as", JOBS),
+            Pick::AddModels(_) => ("Add models", MODELS),
+            Pick::Locate(_, _) => ("Find the model", MODELS),
+            Pick::Profile(_, _) => ("Choose a machine profile", PROFILES),
         };
         config.title = Some(title.to_owned());
         config.default_file_filter = Some(filter.to_owned());
+        config.default_file_name = name.to_owned();
+        let many = matches!(pick, Pick::OpenJobs | Pick::AddModels(_));
+        let save = matches!(pick, Pick::SaveJob(_));
         self.dialog.set_user_data(pick);
-        self.dialog.pick_file();
-    }
-
-    /// Whether the dialog is showing.
-    pub fn is_open(&self) -> bool {
-        matches!(self.dialog.state(), DialogState::Open)
+        if save {
+            self.dialog.save_file();
+        } else if many {
+            self.dialog.pick_multiple();
+        } else {
+            self.dialog.pick_file();
+        }
     }
 
     /// Draw the dialog, and hand back a finished pick with what it was for.
-    pub fn update(&mut self, ctx: &egui::Context) -> Option<(Pick, PathBuf)> {
+    pub fn update(&mut self, ctx: &egui::Context) -> Option<(Pick, Vec<PathBuf>)> {
         self.dialog.update(ctx);
-        let path = self.dialog.take_picked()?;
-        let pick = *self.dialog.user_data::<Pick>()?;
-        Some((pick, path))
+        let pick = self.dialog.user_data::<Pick>()?.clone();
+        let paths = match pick {
+            Pick::OpenJobs | Pick::AddModels(_) => self.dialog.take_picked_multiple()?,
+            _ => vec![self.dialog.take_picked()?],
+        };
+        Some((pick, paths))
     }
 
     /// What to remember between runs of the app.

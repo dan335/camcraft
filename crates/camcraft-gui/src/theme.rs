@@ -39,6 +39,13 @@ pub const ERR: [u8; 3] = [0xFF, 0x5C, 0x5C];
 pub const GRAY_5: [u8; 3] = [0x3A, 0x3E, 0x48];
 /// `--gray-8`: material finished to the part.
 pub const GRAY_8: [u8; 3] = [0xB9, 0xBD, 0xC7];
+/// The work zero's X axis. X red, Y green and Z blue, as CAD draws them, taken from
+/// the path palette so they sit in the same family.
+pub const AXIS_X: [u8; 3] = PATH_RAPID;
+/// The work zero's Y axis.
+pub const AXIS_Y: [u8; 3] = PATH_CUT;
+/// The work zero's Z axis.
+pub const AXIS_Z: [u8; 3] = PATH_LEAD;
 
 /// `--text-xs`, from `tokens/typography.css`: captions on drawings and the view.
 pub const TEXT_XS: f32 = 11.0;

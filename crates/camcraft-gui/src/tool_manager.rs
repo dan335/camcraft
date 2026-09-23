@@ -180,6 +180,11 @@ impl ToolManager {
         }
     }
 
+    /// The library as it stands, edits included: what a tool is picked from.
+    pub fn library(&self) -> &Folder {
+        &self.library.edited
+    }
+
     /// Show `name` selected in the folder showing, after `tool` is put there under
     /// it. Only the snapshot harness asks.
     #[cfg(all(test, feature = "ui-snapshots"))]

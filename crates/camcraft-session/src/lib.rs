@@ -446,6 +446,11 @@ pub fn load_profile(name: &str, job_dir: Option<&Path>) -> Result<Profile, Sessi
     })
 }
 
+/// The machine profiles built in, by name.
+pub fn builtin_posts() -> &'static [&'static str] {
+    Profile::builtin_names()
+}
+
 fn file_safe(name: &str) -> String {
     name.chars()
         .map(|c| {

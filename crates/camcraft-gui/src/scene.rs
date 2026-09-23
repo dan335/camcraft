@@ -75,8 +75,6 @@ pub struct Scene {
     pub segments: Vec<Segment>,
     /// Each operation's range of `segments`.
     pub ops: Vec<OpSpan>,
-    /// The blocks of material, twelve edges each.
-    pub stock: Vec<(DVec3, DVec3)>,
     /// Segments per role, indexed as [`theme::ROLES`].
     pub role_counts: [usize; 7],
     /// Cutting moves steeper than [`PLUNGE_RATIO`] and deeper than their
@@ -152,7 +150,6 @@ impl Scene {
                 cutter,
             });
         }
-        scene.stock = result.stocks.iter().flat_map(box_edges).collect();
         scene
     }
 
@@ -510,10 +507,11 @@ passes = { stepover = 2.0, feed = 2000.0 }
     }
 
     #[test]
-    fn the_stock_box_is_the_block_the_job_ran_against() {
-        let (_, result, scene) = scene();
-        assert_eq!(scene.stock.len(), 12);
-        for (a, b) in &scene.stock {
+    fn a_box_is_twelve_edges_along_the_axes() {
+        let (_, result, _) = scene();
+        let edges = box_edges(&result.stocks[0]);
+        assert_eq!(edges.len(), 12);
+        for (a, b) in &edges {
             // Every edge runs along exactly one axis.
             let d = (*b - *a).abs();
             assert_eq!(
@@ -524,8 +522,7 @@ passes = { stepover = 2.0, feed = 2000.0 }
                 1
             );
         }
-        let top = scene
-            .stock
+        let top = edges
             .iter()
             .map(|(a, b)| a.z.max(b.z))
             .fold(f64::MIN, f64::max);
