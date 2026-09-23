@@ -190,7 +190,7 @@ orientation and work zero, a run is bit-identical to before setups existed.
 
 ## Tool manager
 
-**Tools** in the app's toolbar opens a separate window, after Fusion's Tool Library,
+**Tools** in the app's toolbar opens a window inside the app, after Fusion's Tool Library,
 with the per-user library only
 (`~/Library/Application Support/camcraft/tools.toml`, or `CAMCRAFT_TOOL_LIBRARY`),
 which saves itself as you edit. Tools are grouped in folders that nest (a folder per

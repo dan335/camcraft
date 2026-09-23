@@ -93,7 +93,7 @@ pub struct App {
     /// Picking in the view: what is armed, under the pointer, and looked at.
     picking: Picking,
     dialog: AppFileDialog,
-    /// The tool library, in its own window when open.
+    /// The tool library, in a window inside the app when open.
     tools: ToolManager,
     picker: Option<ToolPicker>,
     settings: Settings,

@@ -1,8 +1,8 @@
 //! The tool manager: the user's tool library, after Fusion's Tool Library.
 //!
-//! It opens in its own OS window and manages only the library. A job's tools are
-//! chosen inside its operations, which copy them into the job, never link them,
-//! so a job still cuts what was verified after the library changes.
+//! It opens in a window inside the app and manages only the library. A job's
+//! tools are chosen inside its operations, which copy them into the job, never
+//! link them, so a job still cuts what was verified after the library changes.
 //!
 //! Tools are grouped in folders that nest: one per machine, say. The folders are
 //! on the left; a tool moves between them by dragging it onto one, or with
@@ -263,26 +263,28 @@ impl ToolManager {
         if !self.open {
             return;
         }
-        ctx.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("camcraft-tool-manager"),
-            egui::ViewportBuilder::default()
-                .with_title("camcraft — tool library")
-                .with_inner_size([1280.0, 720.0])
-                .with_min_inner_size([940.0, 480.0]),
-            |ui, _class| {
-                if ui.ctx().input(|i| i.viewport().close_requested()) {
-                    self.save_library();
-                    if self.dirty() {
-                        ui.ctx()
-                            .send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                        self.closing = true;
-                    } else {
-                        self.open = false;
-                    }
-                }
-                self.ui(ui);
-            },
-        );
+        // A window inside the app's own, as Settings is, rather than an OS window:
+        // a tiling window manager would tile an OS window beside the app.
+        let screen = ctx.content_rect().shrink(16.0);
+        let mut open = true;
+        egui::Window::new("Tool library")
+            .id(egui::Id::new("camcraft-tool-manager"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size(egui::vec2(1280.0, 720.0).min(screen.size()))
+            .min_size(egui::vec2(940.0, 480.0).min(screen.size()))
+            .max_size(screen.size())
+            .constrain_to(screen)
+            .show(ctx, |ui| self.ui(ui));
+        if !open {
+            self.save_library();
+            if self.dirty() {
+                self.closing = true;
+            } else {
+                self.open = false;
+            }
+        }
     }
 
     /// The whole manager, in `ui`.
@@ -615,13 +617,25 @@ impl ToolManager {
                             folder: folder.clone(),
                             name: name.clone(),
                         };
-                        let id = egui::Id::new(("tool-row", &folder, name));
+                        // One widget both clicks and drags. `dnd_drag_source` would lay a
+                        // drag-only widget over the name, which swallows its clicks.
                         let r = ui
-                            .dnd_drag_source(id, drag, |ui| ui.selectable_label(is, name.as_str()));
-                        if r.inner.clicked() {
+                            .selectable_label(is, name.as_str())
+                            .interact(egui::Sense::drag());
+                        r.dnd_set_drag_payload(drag);
+                        if r.dragged()
+                            && let Some(at) = ui.ctx().pointer_interact_pos()
+                        {
+                            egui::Area::new(egui::Id::new(("tool-drag", &folder, name)))
+                                .order(egui::Order::Tooltip)
+                                .fixed_pos(at + egui::vec2(12.0, 0.0))
+                                .interactable(false)
+                                .show(ui.ctx(), |ui| ui.label(name.as_str()));
+                        }
+                        if r.clicked() {
                             clicked = Some((folder.clone(), name.clone()));
                         }
-                        r.inner.context_menu(|ui| {
+                        r.context_menu(|ui| {
                             ui.weak("Move to");
                             for path in &all_folders {
                                 if *path != folder && ui.button(folder_label(path)).clicked() {
