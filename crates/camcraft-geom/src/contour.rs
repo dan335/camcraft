@@ -5,12 +5,14 @@
 //! operation — consumes contours. Collapsing the two would leave the entire 2D half
 //! of a CAM system with nowhere to live.
 //!
-//! # Regions come out of a height field by marching squares
+//! # Grids are only for stock
 //!
-//! "Where is the cutter-location surface above `z`?" is a contouring question. The
-//! grid is exactly what it should be asked of: this is areal reasoning, not a path,
-//! so grid resolution sets the accuracy and that is acceptable. Path points still
-//! come from the exact query.
+//! [`contour_above`] traces a height field by marching squares, and is for the
+//! simulated **stock** only: where material still stands. Its rings are
+//! grid-resolution staircases, so no path may run along them. Every boundary a
+//! toolpath follows comes from the model's own geometry — see
+//! [`crate::shadow`] — and a stock contour may only decide *whether* a path cuts
+//! somewhere, by clipping, never *where* it runs.
 //!
 //! # Offsetting is Clipper2's job
 //!
@@ -19,8 +21,15 @@
 //! it robust; the conversion is hidden here so nothing above deals in ticks.
 
 use crate::heightmap::HeightMap;
-use clipper2::{Centi, EndType, JoinType, Paths, difference, inflate, intersect, union};
+use clipper2_rust::{
+    ClipType, Clipper64, ClipperOffset, EndType, FillRule, JoinType, Path64, Paths64, Point64,
+};
 use glam::{DVec2, dvec2};
+
+/// Integer ticks per millimetre. A tick is 0.1 µm: rounding to it moves a point by
+/// at most 0.07 µm, far inside any machining tolerance, while a 10 m part still
+/// sits many orders of magnitude inside Clipper's coordinate range.
+const TICKS_PER_MM: f64 = 10_000.0;
 
 /// A closed ring of points, in millimetres.
 ///
@@ -37,17 +46,19 @@ pub struct Contour {
 /// correct answer, and that is exactly the silence these rules exist to prevent.
 #[derive(Debug, thiserror::Error)]
 pub enum RegionError {
-    /// The clipping library rejected the operation.
-    #[error("polygon {op} failed: {source}")]
+    /// The clipping library reported that an operation failed.
+    #[error("polygon {op} failed")]
     Clip {
         /// Which operation.
         op: &'static str,
-        /// What the library said.
-        source: clipper2::ClipperError,
     },
 }
 
 /// A set of rings forming one region, outers and holes together.
+///
+/// Outers wind counter-clockwise and holes clockwise, so the net signed area is the
+/// region's area. Every constructor establishes that, because offsetting reads the
+/// winding to tell inside from outside.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Region {
     rings: Vec<Contour>,
@@ -107,9 +118,51 @@ impl Contour {
 }
 
 impl Region {
-    /// A region from rings.
+    /// A region from rings that do not cross one another, in any winding.
+    ///
+    /// Rings are read even-odd, so a ring inside another is a hole whichever way it
+    /// winds, and the result is rewound to the convention the type keeps.
     pub fn new(rings: Vec<Contour>) -> Self {
-        Self { rings }
+        let raw = Self { rings };
+        if raw.rings.is_empty() {
+            return raw;
+        }
+        boolean(
+            ClipType::Union,
+            &raw.to_paths(),
+            &Paths64::new(),
+            FillRule::EvenOdd,
+        )
+        .map_or_else(Self::default, |p| Self::from_paths(&p))
+    }
+
+    /// Everything covered by any of `polygons`, which may overlap one another.
+    ///
+    /// Each polygon counts once however it winds, so a triangle seen from below
+    /// cannot cancel one seen from above.
+    pub fn union_of(polygons: &[Contour]) -> Result<Self, RegionError> {
+        Self::default().with_polygons(polygons)
+    }
+
+    /// This region together with `polygons`, which may overlap it and one another.
+    ///
+    /// The polygons are rewound counter-clockwise; this region's own holes keep
+    /// their winding, so a hole stays a hole unless a polygon covers it.
+    pub fn with_polygons(&self, polygons: &[Contour]) -> Result<Self, RegionError> {
+        let mut paths = self.to_paths();
+        paths.extend(polygons.iter().map(|c| {
+            let mut p = to_path(&c.points);
+            if c.signed_area() < 0.0 {
+                p.reverse();
+            }
+            p
+        }));
+        if paths.is_empty() {
+            return Ok(Self::default());
+        }
+        boolean(ClipType::Union, &paths, &Paths64::new(), FillRule::NonZero)
+            .map(|p| Self::from_paths(&p))
+            .ok_or(RegionError::Clip { op: "union" })
     }
 
     /// The rings.
@@ -122,6 +175,29 @@ impl Region {
         self.rings.is_empty()
     }
 
+    /// Whether `p` lies inside, by the even-odd rule over every ring.
+    ///
+    /// A point exactly on a boundary may go either way.
+    pub fn contains(&self, p: DVec2) -> bool {
+        let mut inside = false;
+        for ring in &self.rings {
+            let pts = ring.points();
+            let n = pts.len();
+            for i in 0..n {
+                let (Some(a), Some(b)) = (pts.get(i), pts.get((i + 1) % n)) else {
+                    continue;
+                };
+                if (a.y > p.y) != (b.y > p.y) {
+                    let x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x);
+                    if p.x < x {
+                        inside = !inside;
+                    }
+                }
+            }
+        }
+        inside
+    }
+
     /// Net enclosed area: outers less holes.
     pub fn area(&self) -> f64 {
         self.rings
@@ -131,21 +207,74 @@ impl Region {
             .abs()
     }
 
-    /// Grow (positive) or shrink (negative) by `delta` millimetres.
+    /// Grow (positive) or shrink (negative) by `delta` millimetres, erring outward
+    /// when growing and inward when shrinking.
     ///
     /// Round joins, because a cutter is round: a mitred corner would describe an
-    /// offset no tool can actually produce.
-    pub fn offset(&self, delta: f64) -> Self {
-        if self.rings.is_empty() || !delta.is_finite() {
+    /// offset no tool can actually produce. A round join is drawn as chords whose
+    /// ends lie on the true arc, so the chords fall short of it by up to
+    /// `arc_tolerance`. Offsetting by that much more than asked makes the error
+    /// one-sided: a grown region always **contains** the exact offset, and a shrunk
+    /// one always lies **within** it, each by at most `arc_tolerance`. That is the
+    /// side a forbidden region and the room left inside it have to err on.
+    pub fn offset(&self, delta: f64, arc_tolerance: f64) -> Self {
+        if self.rings.is_empty() || !delta.is_finite() || !arc_tolerance.is_finite() {
             return Self::default();
         }
-        Self::from_paths(&inflate(
-            self.to_paths(),
-            delta,
-            JoinType::Round,
-            EndType::Polygon,
-            2.0,
-        ))
+        if delta == 0.0 {
+            return self.clone();
+        }
+        let tol = arc_tolerance.max(1.0 / TICKS_PER_MM);
+        let padded = delta + tol.copysign(delta);
+        let mut out = Paths64::new();
+        let mut off = ClipperOffset::new(2.0, tol * TICKS_PER_MM, false, false);
+        off.add_paths(&self.to_paths(), JoinType::Round, EndType::Polygon);
+        off.execute(padded * TICKS_PER_MM, &mut out);
+        Self::from_paths(&out)
+    }
+
+    /// Grown by at least `delta` everywhere, with mitred or squared corners.
+    ///
+    /// Contains the round offset, with far fewer points: for a region that only
+    /// decides coverage, never the shape of a path — such as where stock stands.
+    pub fn grow_covering(&self, delta: f64) -> Self {
+        if self.rings.is_empty() || !(delta.is_finite() && delta > 0.0) {
+            return self.clone();
+        }
+        let mut out = Paths64::new();
+        let mut off = ClipperOffset::new(2.0, 0.0, false, false);
+        off.add_paths(&self.to_paths(), JoinType::Miter, EndType::Polygon);
+        off.execute(delta * TICKS_PER_MM, &mut out);
+        Self::from_paths(&out)
+    }
+
+    /// Everything within `radius` of any of the polylines, with round ends, erring
+    /// outward by at most `arc_tolerance` as [`offset`](Self::offset) does.
+    pub fn around_polylines(lines: &[Vec<DVec2>], radius: f64, arc_tolerance: f64) -> Self {
+        if lines.is_empty() || !(radius.is_finite() && radius > 0.0) {
+            return Self::default();
+        }
+        let tol = arc_tolerance.max(1.0 / TICKS_PER_MM);
+        let paths: Paths64 = lines.iter().map(|l| to_path(l)).collect();
+        let mut out = Paths64::new();
+        let mut off = ClipperOffset::new(2.0, tol * TICKS_PER_MM, false, false);
+        off.add_paths(&paths, JoinType::Round, EndType::Round);
+        off.execute((radius + tol) * TICKS_PER_MM, &mut out);
+        Self::from_paths(&out)
+    }
+
+    /// Everything in any of `regions`, in one pass.
+    ///
+    /// Each region winds to 1 inside and 0 outside, holes included, so their sum is
+    /// non-zero exactly where one of them covers.
+    pub fn union_all(regions: &[Self]) -> Result<Self, RegionError> {
+        let paths: Paths64 = regions.iter().flat_map(Self::to_paths).collect();
+        if paths.is_empty() {
+            return Ok(Self::default());
+        }
+        boolean(ClipType::Union, &paths, &Paths64::new(), FillRule::NonZero)
+            .map(|p| Self::from_paths(&p))
+            .ok_or(RegionError::Clip { op: "union" })
     }
 
     /// Everything in `self` that is not in `other`.
@@ -153,12 +282,7 @@ impl Region {
         if other.is_empty() {
             return Ok(self.clone());
         }
-        difference(self.to_paths(), other.to_paths(), Default::default())
-            .map(|p| Self::from_paths(&p))
-            .map_err(|source| RegionError::Clip {
-                op: "difference",
-                source,
-            })
+        self.op(ClipType::Difference, other, "difference")
     }
 
     /// Everything in both.
@@ -166,12 +290,7 @@ impl Region {
         if self.is_empty() || other.is_empty() {
             return Ok(Self::default());
         }
-        intersect(self.to_paths(), other.to_paths(), Default::default())
-            .map(|p| Self::from_paths(&p))
-            .map_err(|source| RegionError::Clip {
-                op: "intersection",
-                source,
-            })
+        self.op(ClipType::Intersection, other, "intersection")
     }
 
     /// Everything in either, with overlaps merged.
@@ -182,36 +301,105 @@ impl Region {
         if other.is_empty() {
             return Ok(self.clone());
         }
-        union(self.to_paths(), other.to_paths(), Default::default())
-            .map(|p| Self::from_paths(&p))
-            .map_err(|source| RegionError::Clip {
-                op: "union",
-                source,
-            })
+        self.op(ClipType::Union, other, "union")
+    }
+
+    /// The parts of open polylines that lie inside this region.
+    ///
+    /// A closed ring is passed with its first point repeated at the end. Where a
+    /// polyline leaves and re-enters, it comes back as several pieces; the order of
+    /// the pieces is the library's, not the input's.
+    pub fn clip_polylines(&self, lines: &[Vec<DVec2>]) -> Result<Vec<Vec<DVec2>>, RegionError> {
+        if self.is_empty() || lines.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.clip_open(ClipType::Intersection, lines)
+    }
+
+    fn clip_open(
+        &self,
+        kind: ClipType,
+        lines: &[Vec<DVec2>],
+    ) -> Result<Vec<Vec<DVec2>>, RegionError> {
+        let open: Paths64 = lines.iter().map(|l| to_path(l)).collect();
+        let mut c = Clipper64::new();
+        c.add_open_subject(&open);
+        c.add_clip(&self.to_paths());
+        let mut closed = Paths64::new();
+        let mut pieces = Paths64::new();
+        if !c.execute(kind, FillRule::NonZero, &mut closed, Some(&mut pieces)) {
+            return Err(RegionError::Clip {
+                op: "polyline clip",
+            });
+        }
+        Ok(pieces.iter().map(from_path).collect())
+    }
+
+    /// The parts of open polylines that lie outside this region.
+    pub fn polylines_outside(&self, lines: &[Vec<DVec2>]) -> Result<Vec<Vec<DVec2>>, RegionError> {
+        if lines.is_empty() {
+            return Ok(Vec::new());
+        }
+        if self.is_empty() {
+            return Ok(lines.to_vec());
+        }
+        self.clip_open(ClipType::Difference, lines)
     }
 
     /// An axis-aligned rectangle.
     pub fn rectangle(min: DVec2, max: DVec2) -> Self {
         Contour::new(vec![min, dvec2(max.x, min.y), max, dvec2(min.x, max.y)])
-            .map_or_else(Self::default, |c| Self::new(vec![c]))
+            .map_or_else(Self::default, |c| Self { rings: vec![c] })
     }
 
-    fn to_paths(&self) -> Paths<Centi> {
-        let v: Vec<Vec<(f64, f64)>> = self
-            .rings
-            .iter()
-            .map(|c| c.points.iter().map(|p| (p.x, p.y)).collect())
-            .collect();
-        Paths::<Centi>::from(v)
+    fn op(&self, kind: ClipType, other: &Self, name: &'static str) -> Result<Self, RegionError> {
+        boolean(kind, &self.to_paths(), &other.to_paths(), FillRule::NonZero)
+            .map(|p| Self::from_paths(&p))
+            .ok_or(RegionError::Clip { op: name })
     }
 
-    fn from_paths(paths: &Paths<Centi>) -> Self {
+    fn to_paths(&self) -> Paths64 {
+        self.rings.iter().map(|c| to_path(&c.points)).collect()
+    }
+
+    fn from_paths(paths: &Paths64) -> Self {
         let rings = paths
             .iter()
-            .filter_map(|p| Contour::new(p.iter().map(|pt| dvec2(pt.x(), pt.y())).collect()))
+            .filter_map(|p| Contour::new(from_path(p)))
             .collect();
-        Self::new(rings)
+        Self { rings }
     }
+}
+
+fn boolean(kind: ClipType, subject: &Paths64, clip: &Paths64, fill: FillRule) -> Option<Paths64> {
+    let mut c = Clipper64::new();
+    c.add_subject(subject);
+    if !clip.is_empty() {
+        c.add_clip(clip);
+    }
+    let mut out = Paths64::new();
+    c.execute(kind, fill, &mut out, None).then_some(out)
+}
+
+fn to_tick(v: f64) -> i64 {
+    // Clamped into range, so the narrowing is exact.
+    #[allow(clippy::cast_possible_truncation)]
+    let t = (v * TICKS_PER_MM).round().clamp(-4.0e18, 4.0e18) as i64;
+    t
+}
+
+fn to_path(points: &[DVec2]) -> Path64 {
+    points
+        .iter()
+        .map(|p| Point64::new(to_tick(p.x), to_tick(p.y)))
+        .collect()
+}
+
+fn from_path(path: &Path64) -> Vec<DVec2> {
+    #[allow(clippy::cast_precision_loss)]
+    path.iter()
+        .map(|p| dvec2(p.x as f64 / TICKS_PER_MM, p.y as f64 / TICKS_PER_MM))
+        .collect()
 }
 
 /// Trace the region where a height field is at or above `level`.
@@ -219,8 +407,9 @@ impl Region {
 /// Marching squares over the grid. Cells whose value is unset count as *below*: an
 /// unknown height is not somewhere to claim material exists.
 ///
-/// The rings this produces are grid-resolution, which is right for an areal
-/// question. Nothing here should ever become a path point.
+/// For **stock only**. The rings this produces are grid-resolution staircases:
+/// right for "is there material here?", wrong for anything a path follows. See the
+/// module notes.
 pub fn contour_above(field: &HeightMap, level: f64) -> Region {
     let (nx, ny) = (field.nx(), field.ny());
     if nx == 0 || ny == 0 || !level.is_finite() {
@@ -429,8 +618,8 @@ mod tests {
     #[test]
     fn offsetting_grows_and_shrinks() {
         let r = square(5.0);
-        let bigger = r.offset(1.0);
-        let smaller = r.offset(-1.0);
+        let bigger = r.offset(1.0, 0.001);
+        let smaller = r.offset(-1.0, 0.001);
         assert!(bigger.area() > r.area(), "outward offset must grow");
         assert!(smaller.area() < r.area(), "inward offset must shrink");
         // 10x10 grown by 1 with round corners: 144 minus the corner shortfall.
@@ -445,7 +634,7 @@ mod tests {
     /// Shrinking past the middle must vanish, not invert.
     #[test]
     fn over_shrinking_produces_nothing() {
-        let gone = square(2.0).offset(-5.0);
+        let gone = square(2.0).offset(-5.0, 0.001);
         assert!(
             gone.is_empty() || gone.area() < 1e-6,
             "area {}",
@@ -470,7 +659,109 @@ mod tests {
         assert_eq!(a.difference(&e).unwrap().area(), a.area());
         assert!(a.intersection(&e).unwrap().is_empty());
         assert!((a.union(&e).unwrap().area() - a.area()).abs() < 1e-9);
-        assert!(e.offset(1.0).is_empty());
+        assert!(e.offset(1.0, 0.001).is_empty());
+    }
+
+    /// Offsets err to the side a cutter needs: a grown region contains the exact
+    /// offset, a shrunk one lies within it. A square's round-cornered offset has a
+    /// known area, and the error each way is bounded by the arc tolerance.
+    #[test]
+    fn offsets_err_to_the_safe_side() {
+        let r = square(5.0);
+        let tol = 0.01;
+        let exact_grown = 100.0 + 4.0 * 10.0 * 2.0 + std::f64::consts::PI * 4.0;
+        let grown = r.offset(2.0, tol).area();
+        assert!(grown >= exact_grown, "{grown} < {exact_grown}");
+        assert!(grown <= exact_grown + 2.0 * tol * 60.0, "{grown}");
+
+        // A frame shrunk inward: the outer square loses 2 each side and keeps its
+        // corners; the hole grows round-cornered, exactly as `square` did above.
+        // The room left must not exceed the exact room.
+        let frame = Region::rectangle(dvec2(-10.0, -10.0), dvec2(10.0, 10.0))
+            .difference(&r)
+            .unwrap();
+        let room = frame.offset(-2.0, tol).area();
+        let exact = 16.0 * 16.0 - exact_grown;
+        assert!(room <= exact + 1e-6, "{room} > {exact}");
+        assert!(room >= exact - 2.0 * tol * 60.0, "{room}");
+    }
+
+    /// Growing for coverage contains the round offset, however the corners turn.
+    #[test]
+    fn growing_for_coverage_contains_the_round_offset() {
+        // An L: convex corners and one reflex one.
+        let l = Region::rectangle(dvec2(0.0, 0.0), dvec2(10.0, 2.0))
+            .union(&Region::rectangle(dvec2(0.0, 0.0), dvec2(2.0, 10.0)))
+            .unwrap();
+        // Round, and inside the exact offset: offsets are padded by their arc
+        // tolerance, so asking for that much less stays within the exact one.
+        let round = l.offset(3.0 - 0.002, 0.001);
+        let covering = l.grow_covering(3.0);
+        assert!(
+            round.difference(&covering).unwrap().area() < 1e-6,
+            "the covering growth misses part of the round one"
+        );
+    }
+
+    /// Adding polygons to a region keeps its holes, unless a polygon covers them,
+    /// and polygons count once whichever way they wind.
+    #[test]
+    fn adding_polygons_keeps_holes() {
+        let frame = Region::rectangle(dvec2(0.0, 0.0), dvec2(10.0, 10.0))
+            .difference(&square_at(5.0, 5.0, 2.0))
+            .unwrap();
+        assert!((frame.area() - 84.0).abs() < 1e-6);
+
+        let far = Contour::new(vec![dvec2(20.0, 0.0), dvec2(20.0, 1.0), dvec2(21.0, 0.0)]).unwrap();
+        let kept = frame.with_polygons(&[far]).unwrap();
+        assert!((kept.area() - 84.5).abs() < 1e-6, "{}", kept.area());
+
+        // Clockwise, over the hole: fills it.
+        let plug = Contour::new(vec![
+            dvec2(2.0, 2.0),
+            dvec2(2.0, 8.0),
+            dvec2(8.0, 8.0),
+            dvec2(8.0, 2.0),
+        ])
+        .unwrap();
+        let filled = frame.with_polygons(&[plug]).unwrap();
+        assert!((filled.area() - 100.0).abs() < 1e-6, "{}", filled.area());
+    }
+
+    fn square_at(cx: f64, cy: f64, half: f64) -> Region {
+        Region::rectangle(dvec2(cx - half, cy - half), dvec2(cx + half, cy + half))
+    }
+
+    #[test]
+    fn containment_respects_holes() {
+        let frame = Region::rectangle(dvec2(0.0, 0.0), dvec2(10.0, 10.0))
+            .difference(&square_at(5.0, 5.0, 2.0))
+            .unwrap();
+        assert!(frame.contains(dvec2(1.0, 1.0)));
+        assert!(!frame.contains(dvec2(5.0, 5.0)), "inside the hole");
+        assert!(!frame.contains(dvec2(11.0, 5.0)));
+    }
+
+    /// A line crossing a region comes back as the stretches inside it.
+    #[test]
+    fn polylines_are_clipped_to_the_stretches_inside() {
+        let r = square_at(0.0, 0.0, 5.0);
+        let line = vec![dvec2(-10.0, 0.0), dvec2(10.0, 0.0)];
+        let pieces = r.clip_polylines(&[line]).unwrap();
+        assert_eq!(pieces.len(), 1);
+        let len: f64 = pieces[0].windows(2).map(|w| w[0].distance(w[1])).sum();
+        assert!((len - 10.0).abs() < 1e-6, "{len}");
+
+        // In and out twice: two pieces.
+        let frame = r.difference(&square_at(0.0, 0.0, 2.0)).unwrap();
+        let line = vec![dvec2(-10.0, 0.0), dvec2(10.0, 0.0)];
+        assert_eq!(frame.clip_polylines(&[line]).unwrap().len(), 2);
+        assert!(
+            Region::default()
+                .clip_polylines(&[vec![dvec2(0.0, 0.0), dvec2(1.0, 0.0)]])
+                .unwrap()
+                .is_empty()
+        );
     }
 
     /// The question roughing actually asks: where is the surface above this level?

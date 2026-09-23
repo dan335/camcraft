@@ -174,10 +174,6 @@ impl ToolProfile for EffectiveTool {
             ],
         }
     }
-
-    fn min_convex_radius(&self) -> Option<f64> {
-        self.shape.min_convex_radius()
-    }
 }
 
 impl DropTest for EffectiveTool {

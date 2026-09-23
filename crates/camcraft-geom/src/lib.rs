@@ -36,3 +36,5 @@ pub mod bvh;
 pub mod heightmap;
 
 pub mod contour;
+
+pub mod shadow;

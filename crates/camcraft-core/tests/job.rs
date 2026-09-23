@@ -7,11 +7,11 @@
 
 #![allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
 
-use camcraft_core::clmap::ClMap;
 use camcraft_core::dropcutter::DropCutter;
 use camcraft_core::linker::{ClearanceField, LinkParams, link};
 use camcraft_core::ordering::order_passes;
 use camcraft_core::parallel::{ParallelParams, parallel_finish};
+use camcraft_core::reach::LevelReach;
 use camcraft_core::roughing::{RoughingParams, zlevel_rough};
 use camcraft_core::simadapt::sim_moves;
 use camcraft_core::stock::{EffectiveTool, Stock as ToLeave};
@@ -41,10 +41,11 @@ fn rough_then_finish_threading_stock_between_them() {
     // ---- operation 1: rough with a big flat mill, leaving stock ----------------
     let rough_tool =
         EffectiveTool::new(&Flat::new(3.0).unwrap(), ToLeave::isotropic(0.6).unwrap()).unwrap();
-    let rough_cl = ClMap::compute(&cutter, &rough_tool, lo, hi, 0.4).unwrap();
+    let mut rough_reach = LevelReach::new(&mesh, &rough_tool, 0.05).unwrap();
 
     let (rough_raw, rough_report) = zlevel_rough(
-        &rough_cl,
+        &mut rough_reach,
+        (lo, hi),
         stock.field(),
         &RoughingParams {
             stepdown: 2.0,
@@ -173,11 +174,10 @@ fn rough_then_finish_threading_stock_between_them() {
 #[test]
 fn a_second_roughing_pass_only_targets_the_leftovers() {
     let mesh = synthetic::plane(0.0, 24.0);
-    let cutter = DropCutter::new(&mesh);
     let (lo, hi) = (dvec2(-10.0, -10.0), dvec2(10.0, 10.0));
 
     let tool = EffectiveTool::new(&Flat::new(3.0).unwrap(), ToLeave::none()).unwrap();
-    let cl = ClMap::compute(&cutter, &tool, lo, hi, 0.4).unwrap();
+    let mut reach = LevelReach::new(&mesh, &tool, 0.05).unwrap();
     let params = RoughingParams {
         stepdown: 2.0,
         stepover: 2.5,
@@ -188,7 +188,7 @@ fn a_second_roughing_pass_only_targets_the_leftovers() {
     };
 
     let mut stock = Stock::block(lo, hi, 8.0, -2.0, PITCH).unwrap();
-    let (first, first_report) = zlevel_rough(&cl, stock.field(), &params).unwrap();
+    let (first, first_report) = zlevel_rough(&mut reach, (lo, hi), stock.field(), &params).unwrap();
     assert!(first_report.rings > 0, "the first pass must find material");
 
     let clearance = ClearanceField::new(stock.field().clone(), 4.0, 12.0).unwrap();
@@ -204,7 +204,7 @@ fn a_second_roughing_pass_only_targets_the_leftovers() {
     .unwrap();
     stock.apply(&sim_moves(&linked), &tool);
 
-    let (_, second_report) = zlevel_rough(&cl, stock.field(), &params).unwrap();
+    let (_, second_report) = zlevel_rough(&mut reach, (lo, hi), stock.field(), &params).unwrap();
     assert!(
         second_report.rings * 2 < first_report.rings,
         "a second pass should target only the leftovers, not redo the first: \

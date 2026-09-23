@@ -11,7 +11,7 @@ authors.workspace      = true
 [dependencies]
 glam.workspace        = true
 parry3d-f64.workspace = true
-clipper2.workspace    = true
+clipper2-rust.workspace = true
 rayon.workspace       = true
 serde.workspace       = true
 thiserror.workspace   = true

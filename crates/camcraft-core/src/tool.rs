@@ -63,21 +63,6 @@ pub trait ToolProfile {
 
     /// A value identifying this tool's geometry exactly.
     fn geometry_key(&self) -> ToolKey;
-
-    /// Smallest convex radius of curvature this cutter can leave on a CL surface, or
-    /// `None` if it can leave a sharp convex edge.
-    ///
-    /// A rounded tip of radius `r` cannot produce a convex feature sharper than `r`,
-    /// because offsetting any surface by `r` rounds its convex corners to exactly
-    /// that. This bounds how badly a grid can misrepresent the CL surface between
-    /// nodes, which is what makes a sampling pitch derivable rather than guessed.
-    ///
-    /// A flat mill returns `None`: passing over a step it produces a genuine
-    /// discontinuity in slope, so no such bound exists and its grid must be sized
-    /// from region accuracy instead.
-    fn min_convex_radius(&self) -> Option<f64> {
-        None
-    }
 }
 
 /// A flat (square-end) end mill: a plain cylinder.
@@ -179,10 +164,6 @@ impl ToolProfile for Bullnose {
             params: [self.radius.to_bits(), self.corner.to_bits(), 0, 0],
         }
     }
-
-    fn min_convex_radius(&self) -> Option<f64> {
-        (self.corner > 0.0).then_some(self.corner)
-    }
 }
 
 /// Cutters expressible in the bullnose family.
@@ -278,8 +259,6 @@ impl ToolProfile for Flat {
             params: [self.radius.to_bits(), 0, 0, 0],
         }
     }
-
-    // Deliberately no min_convex_radius: a flat mill leaves sharp convex edges.
 }
 
 impl ToolProfile for Ball {
@@ -314,10 +293,6 @@ impl ToolProfile for Ball {
             kind: "ball",
             params: [self.radius.to_bits(), 0, 0, 0],
         }
-    }
-
-    fn min_convex_radius(&self) -> Option<f64> {
-        Some(self.radius)
     }
 }
 

@@ -107,44 +107,63 @@ impl ClearanceField {
             fallback,
         })
     }
-
-    /// Samples taken along a traverse. Fixed, so the answer cannot vary with input.
-    const SAMPLES: u32 = 24;
 }
 
 impl Clearance for ClearanceField {
+    /// The highest material under everything the cutter sweeps: every cell whose
+    /// column the tool's disc can reach anywhere along the traverse, not a handful of
+    /// probes. A rapid running tangent to a terrace passes material on its diagonal,
+    /// and probes on the axis and the four compass points never see it.
     fn safe_z(&self, from: DVec2, to: DVec2, tool_radius: f64) -> f64 {
         let r = if tool_radius.is_finite() && tool_radius > 0.0 {
             tool_radius
         } else {
             0.0
         };
-        let mut worst = f64::MIN;
-        let mut unknown = false;
+        let f = &self.field;
+        let pitch = f.pitch();
+        let origin = f.origin();
+        // A cell's value stands for its whole square, so the disc reaches it if it
+        // reaches its farthest corner.
+        let reach = r + pitch * std::f64::consts::FRAC_1_SQRT_2;
 
-        for i in 0..=Self::SAMPLES {
-            let t = f64::from(i) / f64::from(Self::SAMPLES);
-            let p = from.lerp(to, t);
-            // Sample the tool's footprint, not just its axis: a rapid whose centre
-            // misses a boss can still catch it with the cutter's shoulder.
-            let probes = [
-                p,
-                p + DVec2::new(r, 0.0),
-                p - DVec2::new(r, 0.0),
-                p + DVec2::new(0.0, r),
-                p - DVec2::new(0.0, r),
-            ];
-            for q in probes {
-                match self.field.sample(q.x, q.y) {
-                    Some(h) => worst = worst.max(h),
-                    None => unknown = true,
+        let lo = from.min(to) - DVec2::splat(reach);
+        let hi = from.max(to) + DVec2::splat(reach);
+        let first = ((lo - origin) / pitch).floor();
+        let last = ((hi - origin) / pitch).ceil();
+        let (nx, ny) = (f64::from(f.nx()), f64::from(f.ny()));
+        let finite = first.is_finite() && last.is_finite();
+        // Any of the sweep off the field is unknown ground.
+        let mut unknown = !finite || first.x < 0.0 || first.y < 0.0 || last.x >= nx || last.y >= ny;
+
+        let mut worst = f64::MIN;
+        if finite {
+            // Clamped into the grid, so the narrowing is exact.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let (x0, y0, x1, y1) = (
+                first.x.clamp(0.0, nx - 1.0) as u32,
+                first.y.clamp(0.0, ny - 1.0) as u32,
+                last.x.clamp(0.0, nx - 1.0) as u32,
+                last.y.clamp(0.0, ny - 1.0) as u32,
+            );
+            for iy in y0..=y1 {
+                for ix in x0..=x1 {
+                    let Some(c) = f.position(ix, iy) else {
+                        continue;
+                    };
+                    if distance_to_segment(c, from, to) > reach {
+                        continue;
+                    }
+                    match f.get(ix, iy) {
+                        Some(h) => worst = worst.max(h),
+                        None => unknown = true,
+                    }
                 }
             }
         }
 
-        let base = if worst > f64::MIN { worst } else { f64::MIN };
-        let from_field = if base > f64::MIN {
-            base + self.margin
+        let from_field = if worst > f64::MIN {
+            worst + self.margin
         } else {
             f64::MIN
         };
@@ -156,6 +175,17 @@ impl Clearance for ClearanceField {
             from_field
         }
     }
+}
+
+fn distance_to_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
+    let ab = b - a;
+    let len2 = ab.length_squared();
+    let t = if len2 > 0.0 {
+        ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    p.distance(a + ab * t)
 }
 
 /// How to resolve a link.

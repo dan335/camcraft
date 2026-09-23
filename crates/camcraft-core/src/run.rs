@@ -8,17 +8,17 @@
 //! is worth knowing about before operation two is planned against the material it
 //! left behind.
 
-use camcraft_geom::mesh::Aabb;
+use camcraft_geom::mesh::{Aabb, TriMesh};
 use camcraft_sim::stock::{PartSurface, SimReport, Stock as SimStock, StockError, VerifyReport};
 use glam::{DVec2, dvec2};
 
-use crate::clmap::{ClMap, ClMapError};
 use crate::dropcutter::DropCutter;
 use crate::frame::Frame;
 use crate::job::{HeightContext, Job, JobError, Operation, StrategySpec};
 use crate::linker::{ClearanceField, LinkError, LinkParams, LinkReport, link};
 use crate::ordering::order_passes;
 use crate::parallel::{ParallelParams, StrategyError, StrategyReport, parallel_finish};
+use crate::reach::{LevelReach, ReachError};
 use crate::roughing::{RoughingParams, RoughingReport, zlevel_rough};
 use crate::setup::{Meshes, PrepareError, Prepared, prepare};
 use crate::simadapt::sim_moves;
@@ -68,13 +68,13 @@ pub enum RunError {
         /// Why.
         source: LinkError,
     },
-    /// A cutter-location map could not be built.
+    /// Where the cutter may not go could not be worked out from the model.
     #[error("operation '{op}': {source}")]
-    ClMap {
+    Reach {
         /// Which operation.
         op: String,
         /// Why.
-        source: ClMapError,
+        source: ReachError,
     },
     /// The stock could not be built.
     #[error("cannot build stock: {0}")]
@@ -244,7 +244,7 @@ pub fn run_prepared(job: &Job, index: usize, prepared: &Prepared) -> Result<Setu
     stages.push(stock.clone());
     for op in &setup.operations {
         operations.push(run_operation(
-            job, op, &cutter, &ctx, lo, hi, &mut stock, sim_pitch,
+            job, op, mesh, &cutter, &ctx, lo, hi, &mut stock,
         )?);
         stages.push(stock.clone());
     }
@@ -302,12 +302,12 @@ fn unknown_tool(op: &Operation) -> JobError {
 fn run_operation(
     job: &Job,
     op: &Operation,
+    mesh: &TriMesh,
     cutter: &DropCutter<'_>,
     ctx: &HeightContext,
     lo: DVec2,
     hi: DVec2,
     stock: &mut SimStock,
-    sim_pitch: f64,
 ) -> Result<OperationResult, RunError> {
     let spec = job.tool_for(op).ok_or_else(|| unknown_tool(op))?;
     let tool = cutting_tool(job, op)?;
@@ -348,12 +348,10 @@ fn run_operation(
             stepdown,
             min_ring_length,
         } => {
-            let cl =
-                ClMap::compute(cutter, &tool, sweep_lo, sweep_hi, sim_pitch).map_err(|source| {
-                    RunError::ClMap {
-                        op: op.name.clone(),
-                        source,
-                    }
+            let mut reach =
+                LevelReach::new(mesh, &tool, job.tolerance).map_err(|source| RunError::Reach {
+                    op: op.name.clone(),
+                    source,
                 })?;
             let params = RoughingParams {
                 stepdown,
@@ -367,10 +365,12 @@ fn run_operation(
                 min_ring_length,
             };
             let (path, report) =
-                zlevel_rough(&cl, stock.field(), &params).map_err(|source| RunError::Strategy {
-                    op: op.name.clone(),
-                    source,
-                })?;
+                zlevel_rough(&mut reach, (sweep_lo, sweep_hi), stock.field(), &params).map_err(
+                    |source| RunError::Strategy {
+                        op: op.name.clone(),
+                        source,
+                    },
+                )?;
             if report.rings == 0 {
                 warnings.push(
                     "found nothing to clear: the stock may already be below this \

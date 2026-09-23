@@ -40,14 +40,16 @@ Exit codes: `0` clean, `2` ran with warnings worth reading, `1` refused because 
 simulator objected. `--force` overrides and says loudly that it did.
 
 Last full run on the 237 × 227 × 76 mm router jig, read straight from
-`sled_base.step`. It agrees with the earlier run from an STL export of the same part
-to within 0.1%, and needs 0.2 s to tessellate:
+`sled_base.step`, 17 s on an M-series Mac (26 s before roughing came from the model):
 
 ```
-rough:  1048 passes, removed 3370907 mm3, travel saved 77%, rapid contacts 0
-finish:  556 passes, removed  101714 mm3, travel saved  0%, rapid contacts 0
+rough:  1262 passes, removed 3570370 mm3, travel saved 78%, rapid contacts 0
+finish:  556 passes, removed   55924 mm3, travel saved  0%, rapid contacts 0
 verified: 155326 columns compared, gouges 0, deepest 0.000 mm
 ```
+
+Roughing now removes more and finishing less: walls are left exactly the stock to
+leave, where they used to be left half a stepover more.
 
 Finishing saving 0% travel is correct, not a failure: a parallel zigzag already ends
 each pass next to where the following one starts.
@@ -123,7 +125,8 @@ actually break cutters on the day:
   controller's documented G-code reference. Dry-run it well above the work first.
 - Nothing knows whether the WCS is where the job assumes, whether the tool in the
   spindle matches `diameter`, or whether the stock is the size the job was told.
-- Roughing is conservative contour-parallel clearing. It has never cut anything.
+- Roughing is contour-parallel clearing that plunges into each pass; there is no
+  ramp or helix entry yet. It has never cut anything.
 
 ## Jobs
 
@@ -224,10 +227,47 @@ on. Come back to them once it can.
   warns. Likely fix: check depth before accepting a span, so the pass breaks there
   like at any other wall. Then decide what the gate does with whatever is left.
 
+## Grids are only for stock
+
+A rule, not a preference. Height fields represent material — the simulation, rest
+machining, clearance — and nothing else. Every point a toolpath follows, and every
+boundary it is offset from, comes from the model: exact drop-cutter queries, or
+shadows of the mesh. A stock grid may decide *whether* a path cuts somewhere, never
+*where* it runs. No smoothing is added to hide anything.
+
+Z-level roughing works that way now (`core::reach`, `geom::shadow`):
+
+- Where the cutter may not be at a level is the mesh's shadow from above, grown by
+  the cutter's radius: exact for a flat mill. A ball or bullnose (and stock to leave
+  makes every cutter a bullnose) is cut into height bands across which its radius
+  grows by at most half the tolerance, each grown by its widest radius, so the
+  region is never short of the truth and at most that much over. Vertical walls and
+  flats come out exact. Tested against the drop-cutter as the oracle.
+- The first ring is that boundary itself, then inward by the stepover. Every offset
+  is padded by its arc tolerance so arcs err away from the part.
+- The stock grid only clips away stretches of rings that would cut nothing but air.
+- Exact slicing of the offset surface would remove the band error altogether. It
+  would replace `LevelReach::forbidden` and nothing else, and matters most for
+  Z-level *finishing* with a ball on freeform surfaces.
+
+On the lego fixture, the median turn between successive roughing moves fell from 7.2°
+to 1.1°, and moves turning more than 20° from 15% to 1.3% (the brick's real corners).
+Clipper is now the pure-Rust `clipper2-rust` port, for its arc tolerance control;
+it is slower per call than the C++ one, so levels are worked in parallel.
+
 ## Things that were wrong and are now right
 
 Worth knowing, because each was found by looking rather than by a test passing:
 
+- **Roughing followed a grid.** Its rings were marching-squares contours of a
+  0.4 mm cutter-location grid, their points on cell-edge midpoints, then rounded to
+  Clipper's 0.01 mm: a staircase on every curved wall of a smooth CAD part, and on
+  the jobs tested it also cleared far less than it could (the two-block test job
+  kept almost all its material). See *Grids are only for stock*.
+- **Rapids could clip terraces.** The linker's clearance looked at five points under
+  the cutter, centre and compass, and a rapid running tangent to roughing's
+  terraces passed material on its diagonal. It now takes the highest cell anywhere
+  under the swept disc. Hidden until roughing actually cleared material.
 - **Cut moves that were really plunges.** On the router jig, parallel finishing
   emitted moves descending 48 mm in 0.01 mm of travel — a full-depth plunge at cutting
   feed. Every point was exactly on the CL surface and every existing check passed; only
@@ -280,10 +320,10 @@ Worth knowing, because each was found by looking rather than by a test passing:
 ## Map of the code
 
 ```
-camcraft-geom     BVH, height maps, contours, synthetic fixtures     (leaf)
+camcraft-geom     BVH, height maps, contours, shadows, synthetic     (leaf)
 camcraft-import   STL and STEP (OpenCascade), checked against the file -> geom
 camcraft-sim      material removal: stock updater + gouge oracle     -> geom
-camcraft-core     tools, CL maps, strategies, toolpaths, job, run    -> geom, sim
+camcraft-core     tools, reach, strategies, toolpaths, job, run      -> geom, sim
 camcraft-post     Op IR, TOML dialect renderers                      -> geom, core
 camcraft-session  load, run, gate, post: shared by CLI and app        -> all libraries
 camcraft-cli      inspect / post / job                                -> session

@@ -19,8 +19,12 @@
 //! - Strategies are **pure functions** of `(&Model, &Stock, &Params)`. Stock is
 //!   threaded explicitly rather than mutated in place, which is what later makes
 //!   associativity, caching and undo possible.
-//! - A cutter-location map is a function of `(effective tool profile, grid
-//!   resolution, region)`. There is no global `Zcl`; maps are cached and keyed.
+//! - **Grids are only for stock.** Height fields represent material: the
+//!   simulation, rest machining, clearance. Every point a toolpath follows, and
+//!   every boundary it is offset from, comes from the model's geometry — exact
+//!   drop-cutter queries, or shadows of the mesh ([`reach`]). A stock grid may
+//!   decide *whether* a path cuts somewhere, never *where* it runs. Nothing
+//!   smooths a path to hide a grid.
 //! - The effective tool profile derives from `(tool, radial_stock, axial_stock)`.
 //!   The raw tool is never used directly.
 //! - Output is **deterministic**: identical inputs produce identical results on any
@@ -31,8 +35,6 @@ pub mod tool;
 
 pub mod dropcutter;
 
-pub mod clmap;
-
 pub mod stock;
 
 pub mod parallel;
@@ -41,6 +43,8 @@ pub mod toolpath;
 pub mod linker;
 
 pub mod simadapt;
+
+pub mod reach;
 
 pub mod roughing;
 
