@@ -15,8 +15,8 @@
 //! what happened as data (`notes` and `warnings`), and each front end presents it
 //! in its own way.
 
+pub mod fs;
 pub mod inspection;
-pub mod job_file;
 pub mod library;
 
 use std::collections::BTreeMap;

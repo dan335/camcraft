@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use camcraft_core::job::{ToolFieldError, ToolSpec};
 use serde::{Deserialize, Serialize};
 
-use crate::job_file::write_atomically;
+use crate::fs::write_atomically;
 
 /// Overrides where the library lives.
 pub const LIBRARY_ENV: &str = "CAMCRAFT_TOOL_LIBRARY";

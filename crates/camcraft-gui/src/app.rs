@@ -16,7 +16,7 @@ use crate::scene::{Scene, Steep, clock};
 use crate::settings::Settings;
 use crate::stock_view::{CLASSES, StockImage, class_color, class_name};
 use crate::theme;
-use crate::tool_manager::{Event as ToolEvent, ToolManager};
+use crate::tool_manager::ToolManager;
 use crate::viewport::{Content, View, Viewport};
 use crate::worker::{Outcome, Reply, Request, Worker};
 
@@ -276,7 +276,6 @@ impl App {
                         self.measure().length_trimmed(job.tolerance)
                     ),
                 );
-                self.tools.set_job(&path, &job);
                 self.job = Some(job);
                 self.job_path = Some(path);
                 // The preview was tessellated without a job; look again at the
@@ -857,17 +856,14 @@ impl eframe::App for App {
         self.step_scrub(&ctx);
         self.ensure_stock_image();
         self.tools.measure = self.measure();
-        if let Some(ToolEvent::JobSaved(path)) = self.tools.show(&ctx) {
-            self.note(Level::Info, "tools saved to the job; reading it again");
-            self.open_job(&ctx, path);
-        }
+        self.tools.show(&ctx);
 
         // The setup toolbar: tools and settings now, work offsets later.
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 if ui
                     .selectable_label(self.tools.open, "Tools")
-                    .on_hover_text("set up cutters: this job's, and your library")
+                    .on_hover_text("your tool library")
                     .clicked()
                 {
                     self.tools.open = !self.tools.open;

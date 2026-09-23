@@ -13,6 +13,7 @@ mod settings;
 mod stock_view;
 mod theme;
 mod tool_drawing;
+mod tool_editor;
 mod tool_manager;
 #[cfg(all(test, feature = "ui-snapshots"))]
 mod ui_snapshots;

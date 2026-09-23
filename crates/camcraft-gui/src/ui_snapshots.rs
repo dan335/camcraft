@@ -153,33 +153,25 @@ fn open_model_dialog() {
     shoot(&mut h, "open_model_dialog");
 }
 
-/// The tool manager, rendered from its real UI: the job's tools with one selected
-/// and drawn, the library with a fully described tool, and a validation error.
+/// The tool manager, rendered from its real UI: the library with a fully
+/// described tool, the same in inches, and a validation error.
 #[test]
 #[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
 fn tool_manager() {
-    use crate::tool_manager::{Source, ToolManager};
+    use crate::tool_manager::ToolManager;
     use camcraft_core::job::{
-        CuttingData, Holder, HolderSegment, Job, ToolKind, ToolMaterial, ToolSpec,
+        CuttingData, Holder, HolderSegment, ToolKind, ToolMaterial, ToolSpec,
     };
 
     let library = output_dir().join("snapshot-library.toml");
     let _ = std::fs::remove_file(&library);
     let mut manager = ToolManager::with_library(library);
-    let job: Job = toml::from_str(include_str!("../../../examples/rail-jig.toml")).unwrap();
-    manager.set_job(&repo("examples/rail-jig.toml"), &job);
-    manager.show_for_snapshot(Source::Job, "finish-6-ball", None);
 
     let shoot_manager = |manager: ToolManager, name: &str| {
         let mut h = Harness::builder()
             .with_size(egui::vec2(1180.0, 900.0))
             .wgpu()
-            .build_ui_state(
-                |ui, m: &mut ToolManager| {
-                    m.ui(ui);
-                },
-                manager,
-            );
+            .build_ui_state(|ui, m: &mut ToolManager| m.ui(ui), manager);
         // Before the first frame, as the app does at startup.
         crate::theme::apply(&h.ctx);
         h.run_steps(3);
@@ -193,8 +185,6 @@ fn tool_manager() {
         }
         h.into_state()
     };
-    let mut manager = shoot_manager(manager, "tools_job");
-
     let described = ToolSpec {
         kind: ToolKind::Bullnose,
         diameter: 8.0,
@@ -230,7 +220,7 @@ fn tool_manager() {
             ramp_feed: None,
         }),
     };
-    manager.show_for_snapshot(Source::Library, "bullnose-8", Some(described.clone()));
+    manager.show_for_snapshot("bullnose-8", Some(described.clone()));
     let mut manager = shoot_manager(manager, "tools_library");
 
     // The same tool shown in inches: the fields and labels are wider.
@@ -243,6 +233,6 @@ fn tool_manager() {
         flute_length: Some(40.0),
         ..described
     };
-    manager.show_for_snapshot(Source::Library, "bullnose-8", Some(wrong));
+    manager.show_for_snapshot("bullnose-8", Some(wrong));
     shoot_manager(manager, "tools_error");
 }
