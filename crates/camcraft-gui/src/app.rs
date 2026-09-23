@@ -89,6 +89,25 @@ impl App {
         }
     }
 
+    /// The app, with files already open, as from the command line.
+    ///
+    /// The job is read first, so the model is tessellated once, at the job's own
+    /// tolerance.
+    pub fn with_files(
+        cc: &eframe::CreationContext<'_>,
+        model: Option<PathBuf>,
+        job: Option<PathBuf>,
+    ) -> Self {
+        let mut app = Self::new(cc);
+        if let Some(job) = job {
+            app.open_job(&cc.egui_ctx, job);
+        }
+        if let Some(model) = model {
+            app.open_model(&cc.egui_ctx, model);
+        }
+        app
+    }
+
     fn note(&mut self, level: Level, text: impl Into<String>) {
         self.log.push((level, text.into()));
     }

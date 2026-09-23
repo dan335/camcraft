@@ -69,7 +69,7 @@ each pass next to where the following one starts.
      runs it on a worker thread exactly as `camcraft job` does, and shows the part
      Z-up with the result and a log. The orchestration moved out of the CLI into
      `camcraft-session`, which both use. Run with
-     `cargo run --release -p camcraft-gui`. Headless PNGs of the real UI:
+     `cargo run --release -p camcraft-gui [MODEL] [JOB]`; the files are optional. Headless PNGs of the real UI:
      `cargo test --release -p camcraft-gui --features ui-snapshots -- --ignored`,
      written to `target/ui-snapshots/`. Built and looked at on macOS only.
    - **3D viewport:** everything the web inspector does, ported, then replacing it.
