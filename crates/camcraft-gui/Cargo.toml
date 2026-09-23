@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 camcraft-core.workspace    = true
 camcraft-geom.workspace    = true
+camcraft-sim.workspace     = true
 camcraft-session.workspace = true
 bytemuck.workspace         = true
 eframe = { workspace = true, features = ["persistence"] }
@@ -24,6 +25,9 @@ glam.workspace             = true
 serde.workspace            = true
 egui_kittest = { workspace = true, optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+
+[dev-dependencies]
+toml.workspace = true
 
 [features]
 # Renders real UI headlessly to PNGs under target/ui-snapshots. Off by default:

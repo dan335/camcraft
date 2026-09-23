@@ -23,6 +23,7 @@ use wgpu::util::DeviceExt;
 
 use crate::camera::Camera;
 use crate::scene::Scene;
+use crate::stock_view::StockImage;
 use crate::theme;
 
 /// Offscreen colour format: what egui expects of a native texture.
@@ -148,6 +149,119 @@ fn fs(i: LineOut) -> @location(0) vec4<f32> {
 }
 ";
 
+/// The material: a grid displaced by a height texture and coloured by a colour
+/// texture, one texel per stock cell. No vertex buffer: each vertex finds its cell
+/// from its index, so changing the stock is only ever a texture write, whole now and
+/// the tool's footprint during playback.
+const STOCK_SHADER: &str = r"
+struct Grid {
+    // Cell (0, 0) in X and Y, cell size, floor.
+    origin_pitch_floor: vec4<f32>,
+    // Columns, rows.
+    size: vec4<u32>,
+};
+@group(1) @binding(0) var<uniform> g: Grid;
+@group(1) @binding(1) var heights: texture_2d<f32>;
+@group(1) @binding(2) var colors: texture_2d<f32>;
+
+struct StockOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+    @location(1) color: vec3<f32>,
+};
+
+fn height(ix: i32, iy: i32) -> f32 {
+    let c = vec2<i32>(clamp(ix, 0, i32(g.size.x) - 1), clamp(iy, 0, i32(g.size.y) - 1));
+    return textureLoad(heights, c, 0).r;
+}
+
+fn world(ix: i32, iy: i32, z: f32) -> vec3<f32> {
+    let o = g.origin_pitch_floor;
+    return vec3<f32>(o.x + f32(ix) * o.z, o.y + f32(iy) * o.z, z);
+}
+
+fn to_linear(c: vec3<f32>) -> vec3<f32> {
+    let lo = c / 12.92;
+    let hi = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(hi, lo, c <= vec3<f32>(0.04045));
+}
+
+fn cell_color(ix: i32, iy: i32) -> vec3<f32> {
+    let c = vec2<i32>(clamp(ix, 0, i32(g.size.x) - 1), clamp(iy, 0, i32(g.size.y) - 1));
+    return to_linear(textureLoad(colors, c, 0).rgb);
+}
+
+// Two triangles per quad, as (dx, dy) corners.
+var<private> CORNERS: array<vec2<i32>, 6> = array<vec2<i32>, 6>(
+    vec2<i32>(0, 0), vec2<i32>(1, 0), vec2<i32>(1, 1),
+    vec2<i32>(0, 0), vec2<i32>(1, 1), vec2<i32>(0, 1),
+);
+
+@vertex
+fn vs_top(@builtin(vertex_index) vi: u32) -> StockOut {
+    let quads_x = g.size.x - 1u;
+    let quad = vi / 6u;
+    let corner = CORNERS[vi % 6u];
+    let ix = i32(quad % quads_x) + corner.x;
+    let iy = i32(quad / quads_x) + corner.y;
+    let z = height(ix, iy);
+    // Normal from the neighbouring cells: the surface's own slope.
+    let p = g.origin_pitch_floor.z;
+    let dx = (height(ix + 1, iy) - height(ix - 1, iy)) / (2.0 * p);
+    let dy = (height(ix, iy + 1) - height(ix, iy - 1)) / (2.0 * p);
+    var out: StockOut;
+    out.clip = f.view_proj * vec4<f32>(world(ix, iy, z), 1.0);
+    out.normal = normalize(vec3<f32>(-dx, -dy, 1.0));
+    out.color = cell_color(ix, iy);
+    return out;
+}
+
+// The four sides, down to the floor, so the material reads as a block.
+@vertex
+fn vs_skirt(@builtin(vertex_index) vi: u32) -> StockOut {
+    let nx = i32(g.size.x);
+    let ny = i32(g.size.y);
+    let quad = i32(vi / 6u);
+    let corner = CORNERS[vi % 6u];
+    // Sides in order: y = 0, x = last, y = last, x = 0.
+    let along_x = nx - 1;
+    let along_y = ny - 1;
+    var ix: i32;
+    var iy: i32;
+    var n: vec3<f32>;
+    if (quad < along_x) {
+        ix = quad + corner.x; iy = 0; n = vec3<f32>(0.0, -1.0, 0.0);
+    } else if (quad < along_x + along_y) {
+        ix = nx - 1; iy = quad - along_x + corner.x; n = vec3<f32>(1.0, 0.0, 0.0);
+    } else if (quad < 2 * along_x + along_y) {
+        ix = quad - along_x - along_y + corner.x; iy = ny - 1; n = vec3<f32>(0.0, 1.0, 0.0);
+    } else {
+        ix = 0; iy = quad - 2 * along_x - along_y + corner.x; n = vec3<f32>(-1.0, 0.0, 0.0);
+    }
+    let top = height(ix, iy);
+    let z = select(g.origin_pitch_floor.w, top, corner.y == 1);
+    var out: StockOut;
+    out.clip = f.view_proj * vec4<f32>(world(ix, iy, z), 1.0);
+    out.normal = n;
+    out.color = cell_color(ix, iy);
+    return out;
+}
+
+@fragment
+fn fs(i: StockOut) -> @location(0) vec4<f32> {
+    let n = normalize(i.normal);
+    let diffuse = abs(dot(n, f.light.xyz));
+    return vec4<f32>(to_srgb(i.color * (0.3 + 0.7 * diffuse)), 1.0);
+}
+";
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GridUniforms {
+    origin_pitch_floor: [f32; 4],
+    size: [u32; 4],
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct FrameUniforms {
@@ -272,6 +386,8 @@ pub struct Content<'a> {
     pub framing: u64,
     /// The run's toolpaths, stock and cutters.
     pub scene: Option<(u64, &'a Scene)>,
+    /// The simulated material to draw, with a key that changes whenever it does.
+    pub stock: Option<((u64, usize), &'a StockImage)>,
     /// What is visible.
     pub view: View,
 }
@@ -297,7 +413,21 @@ struct Uploaded {
     cutters: Vec<Option<(wgpu::Buffer, u32)>>,
 }
 
+/// The material's textures and grid, sized to one stock.
+struct StockGpu {
+    key: (u64, usize),
+    size: [u32; 2],
+    heights: wgpu::Texture,
+    colors: wgpu::Texture,
+    grid: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
+
 struct Gpu {
+    stock_top_pipeline: wgpu::RenderPipeline,
+    stock_skirt_pipeline: wgpu::RenderPipeline,
+    stock_layout: wgpu::BindGroupLayout,
+    stock: Option<StockGpu>,
     part_pipeline: wgpu::RenderPipeline,
     cutter_pipeline: wgpu::RenderPipeline,
     cutter_hidden_pipeline: wgpu::RenderPipeline,
@@ -331,6 +461,11 @@ impl Default for Viewport {
 }
 
 impl Viewport {
+    /// Bring the view in on `point`, keeping the angle it is seen from.
+    pub fn focus(&mut self, point: DVec3, radius: f32) {
+        self.camera.focus(Vec3::from(v3(point)), radius);
+    }
+
     /// Draw the viewport into the rest of `ui`.
     pub fn show(
         &mut self,
@@ -378,6 +513,7 @@ impl Viewport {
             pixels: px,
             line_width: LINE_WIDTH * ppp,
             view: content.view,
+            stock: content.stock.is_some(),
         };
         let Some(texture) = gpu.render(rs, size, &frame) else {
             return;
@@ -439,6 +575,8 @@ struct FrameInput {
     pixels: [f32; 2],
     line_width: f32,
     view: View,
+    /// Whether there is material to draw this frame.
+    stock: bool,
 }
 
 impl Gpu {
@@ -615,7 +753,100 @@ impl Gpu {
             cache: None,
         });
 
+        let stock_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("camcraft stock"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let stock_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("camcraft stock"),
+            source: wgpu::ShaderSource::Wgsl(format!("{COMMON}{STOCK_SHADER}").into()),
+        });
+        let stock_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("camcraft stock"),
+                bind_group_layouts: &[Some(&frame_layout), Some(&stock_layout)],
+                immediate_size: 0,
+            });
+        let stock_pipeline = |label, entry| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&stock_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &stock_module,
+                    entry_point: Some(entry),
+                    buffers: &[],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: SAMPLES,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &stock_module,
+                    entry_point: Some("fs"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: COLOR,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let stock_top_pipeline = stock_pipeline("camcraft stock top", "vs_top");
+        let stock_skirt_pipeline = stock_pipeline("camcraft stock sides", "vs_skirt");
+
         Self {
+            stock_top_pipeline,
+            stock_skirt_pipeline,
+            stock_layout,
+            stock: None,
             part_pipeline,
             cutter_pipeline,
             cutter_hidden_pipeline,
@@ -637,8 +868,123 @@ impl Gpu {
         }
     }
 
+    /// Upload the material, when it changed. Textures are made once per grid size;
+    /// after that, a new stage is a texture write.
+    fn upload_stock(&mut self, rs: &RenderState, stock: Option<((u64, usize), &StockImage)>) {
+        let Some((key, image)) = stock else {
+            return;
+        };
+        if self.stock.as_ref().is_some_and(|s| s.key == key) {
+            return;
+        }
+        let size = [image.nx, image.ny];
+        let limit = rs.device.limits().max_texture_dimension_2d;
+        if size[0] < 2 || size[1] < 2 || size[0] > limit || size[1] > limit {
+            self.stock = None;
+            return;
+        }
+        if self.stock.as_ref().is_none_or(|s| s.size != size) {
+            self.stock = Some(self.stock_textures(rs, key, size));
+        }
+        let Some(gpu) = self.stock.as_mut() else {
+            return;
+        };
+        let extent = wgpu::Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        };
+        let write = |texture: &wgpu::Texture, data: &[u8], bytes: u32| {
+            rs.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(size[0] * bytes),
+                    rows_per_image: Some(size[1]),
+                },
+                extent,
+            );
+        };
+        write(&gpu.heights, bytemuck::cast_slice(&image.heights), 4);
+        write(&gpu.colors, bytemuck::cast_slice(&image.colors), 4);
+        let grid = GridUniforms {
+            origin_pitch_floor: [
+                narrow(image.origin.x),
+                narrow(image.origin.y),
+                narrow(image.pitch),
+                narrow(image.floor),
+            ],
+            size: [size[0], size[1], 0, 0],
+        };
+        rs.queue
+            .write_buffer(&gpu.grid, 0, bytemuck::bytes_of(&grid));
+        gpu.key = key;
+    }
+
+    fn stock_textures(&self, rs: &RenderState, key: (u64, usize), size: [u32; 2]) -> StockGpu {
+        let device = &rs.device;
+        let texture = |label, format| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: size[0],
+                    height: size[1],
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+        let heights = texture("camcraft stock heights", wgpu::TextureFormat::R32Float);
+        let colors = texture("camcraft stock colours", wgpu::TextureFormat::Rgba8Unorm);
+        let grid = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("camcraft stock grid"),
+            size: std::mem::size_of::<GridUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("camcraft stock"),
+            layout: &self.stock_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: grid.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view(&heights)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&view(&colors)),
+                },
+            ],
+        });
+        StockGpu {
+            key,
+            size,
+            heights,
+            colors,
+            grid,
+            bind_group,
+        }
+    }
+
     /// Upload whatever changed since the last frame.
     fn upload(&mut self, rs: &RenderState, content: &Content<'_>) {
+        self.upload_stock(rs, content.stock);
         let vertices = |label, data: &[u8], usage| {
             rs.device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -868,6 +1214,19 @@ impl Gpu {
                 pass.draw(0..*n, 0..1);
             }
 
+            if let (true, Some(stock)) = (input.stock, &self.stock) {
+                let quads = |a: u32, b: u32| a.saturating_sub(1) * b.saturating_sub(1);
+                let [nx, ny] = stock.size;
+                pass.set_bind_group(1, &stock.bind_group, &[]);
+                pass.set_pipeline(&self.stock_top_pipeline);
+                pass.draw(0..quads(nx, ny) * 6, 0..1);
+                pass.set_pipeline(&self.stock_skirt_pipeline);
+                pass.draw(
+                    0..2 * (nx.saturating_sub(1) + ny.saturating_sub(1)) * 6,
+                    0..1,
+                );
+            }
+
             pass.set_pipeline(&self.line_pipeline);
             if let Some((buffer, n)) = &self.up.moves {
                 pass.set_vertex_buffer(0, buffer.slice(..));
@@ -939,6 +1298,7 @@ mod tests {
             role,
             op,
             feed: None,
+            ends_at: 0.0,
         };
         let scene = Scene {
             segments: vec![

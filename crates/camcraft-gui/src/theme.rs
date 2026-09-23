@@ -26,8 +26,17 @@ pub const PATH_RAPID: [u8; 3] = [0xFF, 0x5C, 0x5C];
 pub const PATH_PLUNGE: [u8; 3] = [0xF5, 0xA5, 0x24];
 /// `--path-lead`, also used for ramps.
 pub const PATH_LEAD: [u8; 3] = [0x4F, 0xD1, 0xFF];
-/// `--amber-5`, the accent: the spindle-warning colour. The cutter is drawn in it.
+/// `--amber-5`, the accent: the spindle-warning colour. The cutter is drawn in it,
+/// and material left above the part at its thickest.
 pub const AMBER_5: [u8; 3] = [0xF5, 0xA5, 0x24];
+/// `--amber-7`: material only just left above the part.
+pub const AMBER_7: [u8; 3] = [0x8A, 0x58, 0x06];
+/// `--err`: material cut below the part.
+pub const ERR: [u8; 3] = [0xFF, 0x5C, 0x5C];
+/// `--gray-5`: the block where the part is not.
+pub const GRAY_5: [u8; 3] = [0x3A, 0x3E, 0x48];
+/// `--gray-8`: material finished to the part.
+pub const GRAY_8: [u8; 3] = [0xB9, 0xBD, 0xC7];
 
 /// Every role, in the order the controls list them.
 pub const ROLES: [MoveRole; 7] = [
@@ -116,6 +125,10 @@ mod tests {
             ("--path-plunge:", PATH_PLUNGE),
             ("--path-lead:", PATH_LEAD),
             ("--amber-5:", AMBER_5),
+            ("--amber-7:", AMBER_7),
+            ("--err:", ERR),
+            ("--gray-5:", GRAY_5),
+            ("--gray-8:", GRAY_8),
         ] {
             let want = format!("{token}{}", hex(value));
             assert!(css.contains(&want), "tokens.css has no {want}");

@@ -64,7 +64,7 @@ fn shoot(harness: &mut Harness<'_, App>, name: &str) {
 
 fn harness() -> Harness<'static, App> {
     Harness::builder()
-        .with_size(egui::vec2(1400.0, 860.0))
+        .with_size(egui::vec2(1400.0, 1250.0))
         .wgpu()
         .build_eframe(|cc| App::new(cc))
 }
@@ -118,6 +118,22 @@ fn main_window_after_a_run() {
     h.state_mut().set_view_for_snapshot(1, 1.0, 1 << 1);
     h.run_steps(2);
     shoot(&mut h, "rapids_only");
+
+    // The finished material, coloured against the part, with its legend.
+    h.state_mut().set_stock_for_snapshot(Some(passes.len()));
+    h.run_steps(3);
+    shoot(&mut h, "stock_final");
+
+    // The material after roughing: what finishing starts from.
+    h.state_mut().set_stock_for_snapshot(Some(1));
+    h.run_steps(3);
+    shoot(&mut h, "stock_after_rough");
+
+    // Clicking the deepest steep descent: scrub, stock and camera all go there.
+    let deepest = h.state_mut().jump_to_deepest_for_snapshot();
+    println!("deepest steep descent {deepest:?}");
+    h.run_steps(3);
+    shoot(&mut h, "steep_deepest");
 }
 
 /// The file dialog, open on the model filter: drawn inside the app, themed with it.

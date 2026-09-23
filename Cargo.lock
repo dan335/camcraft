@@ -716,6 +716,7 @@ dependencies = [
  "camcraft-core",
  "camcraft-geom",
  "camcraft-session",
+ "camcraft-sim",
  "eframe",
  "egui-file-dialog",
  "egui_extras",
@@ -723,6 +724,7 @@ dependencies = [
  "glam 0.33.8",
  "image",
  "serde",
+ "toml",
 ]
 
 [[package]]

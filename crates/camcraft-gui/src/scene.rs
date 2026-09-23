@@ -11,7 +11,8 @@
 //!   tip at the origin because the tip is the point the engine controls.
 
 use camcraft_core::job::{Job, ToolKind, ToolSpec};
-use camcraft_core::run::JobResult;
+use camcraft_core::replay::Position;
+use camcraft_core::run::{JobResult, PLUNGE_RATIO};
 use camcraft_core::toolpath::MoveRole;
 use camcraft_geom::heightmap::narrow;
 use glam::{DVec3, Vec3};
@@ -31,6 +32,26 @@ pub struct Segment {
     pub op: u32,
     /// Feed, for the readout; `None` for a rapid.
     pub feed: Option<f64>,
+    /// Machining time at the end of this move, in seconds from the start.
+    pub ends_at: f64,
+}
+
+/// Rapid rate assumed for machining time until a machine profile supplies one, in
+/// mm/min. Times are labelled as estimates for this reason.
+pub const ASSUMED_RAPID: f64 = 5000.0;
+
+/// A cutting move that drops further than its operation allows while barely
+/// advancing: a plunge at cutting feed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Steep {
+    /// Its index in [`Scene::segments`].
+    pub index: usize,
+    /// Which operation, from zero.
+    pub op: usize,
+    /// How far it drops, in millimetres.
+    pub drop: f64,
+    /// Where it ends.
+    pub at: DVec3,
 }
 
 /// One operation's share of the program.
@@ -57,6 +78,9 @@ pub struct Scene {
     pub stock: Vec<(DVec3, DVec3)>,
     /// Segments per role, indexed as [`theme::ROLES`].
     pub role_counts: [usize; 7],
+    /// Cutting moves steeper than [`PLUNGE_RATIO`] and deeper than their
+    /// operation's `max_cut_step`, in machine order.
+    pub steep: Vec<Steep>,
 }
 
 /// Where the scrub stands: the last move shown.
@@ -74,17 +98,40 @@ impl Scene {
     /// The scene for a finished run of `job`.
     pub fn build(job: &Job, result: &JobResult) -> Self {
         let mut scene = Self::default();
+        let mut clock = 0.0;
         for (i, run) in result.operations.iter().enumerate() {
             let op = u32::try_from(i).unwrap_or(u32::MAX);
             let first = scene.segments.len();
+            let allowance = job
+                .operations
+                .get(i)
+                .map_or(f64::INFINITY, |o| o.passes.max_cut_step);
             for pair in run.path.moves().windows(2) {
                 let [from, to] = pair else { continue };
+                let (a, b) = (from.to, to.to);
+                clock += duration(a, b, to.feed);
+                let fall = a.z - b.z;
+                let advance = (b.truncate() - a.truncate()).length();
+                // The core's rule, from the core's constant: steep, and too deep.
+                if to.role == MoveRole::Cut
+                    && fall > 0.0
+                    && fall > advance * PLUNGE_RATIO
+                    && fall > allowance
+                {
+                    scene.steep.push(Steep {
+                        index: scene.segments.len(),
+                        op: i,
+                        drop: fall,
+                        at: b,
+                    });
+                }
                 scene.segments.push(Segment {
-                    a: from.to,
-                    b: to.to,
+                    a,
+                    b,
                     role: to.role,
                     op,
                     feed: to.feed,
+                    ends_at: clock,
                 });
                 let r = theme::role_index(to.role) as usize;
                 if let Some(c) = scene.role_counts.get_mut(r) {
@@ -108,6 +155,32 @@ impl Scene {
         scene
     }
 
+    /// Estimated machining time for the whole program, in seconds.
+    pub fn total_time(&self) -> f64 {
+        self.segments.last().map_or(0.0, |s| s.ends_at)
+    }
+
+    /// Where the program stands when `shown` segments are showing, as a replay
+    /// position: an operation, and how many of its moves have been made.
+    ///
+    /// At the end of an operation this is that operation complete, not the next one
+    /// unstarted: the material is the same either way, and the operation the scrub
+    /// is on is the one to name.
+    pub fn position(&self, shown: usize) -> Position {
+        match self.at(shown) {
+            // A segment is a move after the operation's first, so showing k of an
+            // operation's segments means k + 1 of its moves are made.
+            Some(at) => {
+                let first = self.ops.get(at.op).map_or(0, |o| o.first);
+                Position {
+                    op: at.op,
+                    moves: shown - first + 1,
+                }
+            }
+            None => Position { op: 0, moves: 0 },
+        }
+    }
+
     /// The segment the scrub ends on, when `shown` segments are showing.
     pub fn at(&self, shown: usize) -> Option<AtMove<'_>> {
         let index = shown.checked_sub(1)?;
@@ -119,6 +192,25 @@ impl Scene {
             op_name,
             segment,
         })
+    }
+}
+
+/// How long a move takes, in seconds: at its feed, or the assumed rapid rate.
+fn duration(a: DVec3, b: DVec3, feed: Option<f64>) -> f64 {
+    let rate = feed.filter(|f| *f > 0.0).unwrap_or(ASSUMED_RAPID);
+    (b - a).length() / rate * 60.0
+}
+
+/// Seconds as `m:ss`, or `h:mm:ss` past an hour.
+pub fn clock(seconds: f64) -> String {
+    // Whole seconds of a machining program: far inside u64.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let s = seconds.max(0.0).round() as u64;
+    let (h, m, s) = (s / 3600, s / 60 % 60, s % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
     }
 }
 
@@ -216,7 +308,7 @@ fn f32_from(n: u32) -> f32 {
 )]
 mod tests {
     use super::*;
-    use camcraft_session::{load_model, read_job, run};
+    use camcraft_session::{load_model, run};
 
     fn repo(path: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -224,14 +316,7 @@ mod tests {
             .join(path)
     }
 
-    /// A real two-operation run on a real part, shared by the tests below.
-    fn scene() -> (Job, JobResult, Scene) {
-        let dir = std::env::temp_dir().join(format!("camcraft-gui-scene-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let job_path = dir.join("job.toml");
-        std::fs::write(
-            &job_path,
-            r#"
+    const JOB: &str = r#"
 tolerance = 0.1
 [setup]
 stock = { kind = "box", margin = [2.0, 2.0, 2.0] }
@@ -253,14 +338,22 @@ name = "finish"
 strategy = "parallel"
 tool = "ball"
 passes = { stepover = 2.0, feed = 2000.0 }
-"#,
-        )
-        .unwrap();
-        let job = read_job(&job_path).unwrap();
-        let model = load_model(&repo("fixtures/step/hinge_jig.step"), None, job.tolerance).unwrap();
-        let ran = run(&model, &job).unwrap();
-        let scene = Scene::build(&job, &ran.result);
-        (job, ran.result, scene)
+"#;
+
+    /// A real two-operation run on a real part, built once and shared by the tests
+    /// below. Parsed from a string, not a file: tests run in parallel, and a shared
+    /// temporary file is a race between one test writing it and another reading it.
+    fn scene() -> (Job, JobResult, Scene) {
+        static RUN: std::sync::OnceLock<(Job, JobResult, Scene)> = std::sync::OnceLock::new();
+        RUN.get_or_init(|| {
+            let job: Job = toml::from_str(JOB).unwrap();
+            let model =
+                load_model(&repo("fixtures/step/hinge_jig.step"), None, job.tolerance).unwrap();
+            let ran = run(&model, &job).unwrap();
+            let scene = Scene::build(&job, &ran.result);
+            (job, ran.result, scene)
+        })
+        .clone()
     }
 
     /// What the viewport draws for each operation is exactly its toolpath, move for
@@ -315,6 +408,81 @@ passes = { stepover = 2.0, feed = 2000.0 }
                 .any(|s| s.a == end_of_rough && s.b == start_of_finish),
             "a line was drawn across the tool change"
         );
+    }
+
+    /// The steep list is the core's own finding: its deepest drop per operation is
+    /// the one the run reported, and the ratio-steep count matches the core's.
+    #[test]
+    fn steep_descents_are_the_ones_the_core_found() {
+        let (job, result, scene) = scene();
+        for (i, run) in result.operations.iter().enumerate() {
+            let allowance = job.operations[i].passes.max_cut_step;
+            let mine: Vec<&Steep> = scene.steep.iter().filter(|s| s.op == i).collect();
+            if run.deepest_cut_descent_mm > allowance {
+                let deepest = mine.iter().map(|s| s.drop).fold(0.0, f64::max);
+                assert!(
+                    (deepest - run.deepest_cut_descent_mm).abs() < 1e-9,
+                    "{}",
+                    run.name
+                );
+            } else {
+                assert!(
+                    mine.is_empty(),
+                    "{}: listed moves the core did not flag",
+                    run.name
+                );
+            }
+            for s in mine {
+                let seg = &scene.segments[s.index];
+                assert_eq!(seg.role, MoveRole::Cut);
+                assert_eq!(seg.b, s.at);
+                assert!(s.drop > allowance);
+            }
+            // Every ratio-steep cut, whatever its depth, is what the core counted.
+            let span = &scene.ops[i];
+            let steep = scene.segments[span.first..span.first + span.count]
+                .iter()
+                .filter(|g| {
+                    let fall = g.a.z - g.b.z;
+                    g.role == MoveRole::Cut
+                        && fall > 0.0
+                        && fall > (g.b.truncate() - g.a.truncate()).length() * PLUNGE_RATIO
+                })
+                .count();
+            assert_eq!(steep as u64, run.steep_cut_descents, "{}", run.name);
+        }
+    }
+
+    #[test]
+    fn machining_time_is_length_over_feed() {
+        assert!(
+            (duration(DVec3::ZERO, DVec3::new(100.0, 0.0, 0.0), Some(1000.0)) - 6.0).abs() < 1e-12
+        );
+        let rapid = duration(DVec3::ZERO, DVec3::new(0.0, 0.0, 50.0), None);
+        assert!((rapid - 50.0 / ASSUMED_RAPID * 60.0).abs() < 1e-12);
+        let (_, _, scene) = scene();
+        let mut last = 0.0;
+        for s in &scene.segments {
+            assert!(s.ends_at >= last, "time runs forwards");
+            last = s.ends_at;
+        }
+        assert!(scene.total_time() > 0.0);
+        assert_eq!(clock(59.6), "1:00");
+        assert_eq!(clock(3725.0), "1:02:05");
+    }
+
+    /// The scrub, as a replay position, counts the moves made in the operation it is
+    /// on, and lands exactly on each operation's end.
+    #[test]
+    fn scrub_positions_are_replay_positions() {
+        let (_, result, scene) = scene();
+        assert_eq!(scene.position(0), Position { op: 0, moves: 0 });
+        assert_eq!(scene.position(1), Position { op: 0, moves: 2 });
+        for (i, span) in scene.ops.iter().enumerate() {
+            let end = scene.position(span.first + span.count);
+            assert_eq!(end.op, i);
+            assert_eq!(end.moves, result.operations[i].path.moves().len());
+        }
     }
 
     #[test]

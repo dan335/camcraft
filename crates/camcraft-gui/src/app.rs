@@ -11,7 +11,8 @@ use camcraft_session::{Model, SessionError, Units, read_job};
 use eframe::egui;
 
 use crate::file_dialog::{AppFileDialog, Pick};
-use crate::scene::Scene;
+use crate::scene::{Scene, Steep, clock};
+use crate::stock_view::{CLASSES, StockImage, class_color, class_name};
 use crate::theme;
 use crate::viewport::{Content, View, Viewport};
 use crate::worker::{Outcome, Reply, Request, Worker};
@@ -21,6 +22,19 @@ use crate::worker::{Outcome, Reply, Request, Worker};
 const PREVIEW_TOLERANCE: f64 = 0.05;
 
 const STORAGE_DIALOG: &str = "file_dialog";
+
+/// Which material to draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StockMode {
+    /// None.
+    Off,
+    /// As it stood when the scrubbed operation began, or after it once the scrub
+    /// reaches its end.
+    Follow,
+    /// A fixed stage: the block before everything is 0, after operation `n` is
+    /// `n + 1`.
+    Stage(usize),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Level {
@@ -54,6 +68,14 @@ pub struct App {
     /// Segments shown, in machine order: the scrub.
     scrub: usize,
     show_cutter: bool,
+    /// All toolpaths at once, over the per-role choices, so the material can be
+    /// seen without them.
+    show_paths: bool,
+    stock_mode: StockMode,
+    /// The material covers the part, so the part is hidden while it shows.
+    hide_part_with_stock: bool,
+    /// The material at each stage, classified and coloured, built when first shown.
+    stock_images: Vec<Option<StockImage>>,
     log: Vec<(Level, String)>,
 }
 
@@ -132,6 +154,10 @@ impl App {
             view: View::default(),
             scrub: 0,
             show_cutter: true,
+            show_paths: true,
+            stock_mode: StockMode::Off,
+            hide_part_with_stock: true,
+            stock_images: Vec::new(),
             log: Vec::new(),
         }
     }
@@ -140,6 +166,42 @@ impl App {
     fn clear_run(&mut self) {
         self.outcome = None;
         self.scene = None;
+        self.stock_images.clear();
+    }
+
+    /// The stage the stock view shows, if any.
+    fn stage_shown(&self) -> Option<usize> {
+        match self.stock_mode {
+            StockMode::Off => None,
+            StockMode::Stage(i) => Some(i),
+            StockMode::Follow => {
+                let scene = self.scene.as_ref()?;
+                let at = scene.position(self.scrub);
+                let moves = scene.ops.get(at.op).map_or(0, |o| o.count + 1);
+                Some(if at.moves >= moves { at.op + 1 } else { at.op })
+            }
+        }
+    }
+
+    /// Classify the shown stage's material, the first time it is shown.
+    fn ensure_stock_image(&mut self) {
+        let (Some(stage), Some(outcome)) = (self.stage_shown(), &self.outcome) else {
+            return;
+        };
+        let result = &outcome.ran.result;
+        if let (Some(slot @ None), Some(stock)) =
+            (self.stock_images.get_mut(stage), result.stages.get(stage))
+        {
+            *slot = Some(StockImage::build(stock, &result.part, result.verify_budget));
+        }
+    }
+
+    /// Move the scrub to a steep descent and look at it closely, with the material
+    /// as it stood.
+    fn jump_to(&mut self, steep: Steep) {
+        self.scrub = steep.index + 1;
+        self.stock_mode = StockMode::Follow;
+        self.viewport.focus(steep.at, 12.0);
     }
 
     /// The app, with files already open, as from the command line.
@@ -260,6 +322,30 @@ impl App {
         self.view.roles = roles;
     }
 
+    /// Show the stock at a fixed stage, or following the scrub. Only the snapshot
+    /// harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn set_stock_for_snapshot(&mut self, stage: Option<usize>) {
+        self.stock_mode = stage.map_or(StockMode::Follow, StockMode::Stage);
+        self.view.roles = u32::MAX;
+        self.show_paths = false;
+    }
+
+    /// Go to the deepest steep descent, as clicking it would. Only the snapshot
+    /// harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn jump_to_deepest_for_snapshot(&mut self) -> Option<f64> {
+        let deepest = self
+            .scene
+            .as_ref()?
+            .steep
+            .iter()
+            .copied()
+            .max_by(|a, b| a.drop.total_cmp(&b.drop))?;
+        self.jump_to(deepest);
+        Some(deepest.drop)
+    }
+
     fn load(&mut self, ctx: &egui::Context) {
         let Some(path) = self.model_path.clone() else {
             return;
@@ -324,6 +410,7 @@ impl App {
                     // A new run starts fully shown, every operation visible.
                     self.scrub = scene.segments.len();
                     self.view.ops = u32::MAX;
+                    self.stock_images = vec![None; outcome.ran.result.stages.len()];
                     self.scene = Some(scene);
                     self.scene_generation += 1;
                     self.outcome = Some(outcome);
@@ -476,6 +563,7 @@ impl App {
         ui.checkbox(&mut view.part, "part");
         ui.checkbox(&mut view.stock, "stock outline");
         ui.checkbox(&mut self.show_cutter, "cutter at the scrub");
+        ui.checkbox(&mut self.show_paths, "toolpaths");
         ui.add_space(4.0);
         for (i, role) in theme::ROLES.iter().enumerate() {
             let n = scene.role_counts.get(i).copied().unwrap_or(0);
@@ -538,7 +626,113 @@ impl App {
                 s.b.z
             ));
         }
+        if let Some(at) = scene.at(self.scrub) {
+            ui.label(format!(
+                "{} of {}, estimated",
+                clock(at.segment.ends_at),
+                clock(scene.total_time())
+            ));
+        }
         ui.weak("Left and Right arrows step one move; with Shift, a hundred.");
+
+        ui.separator();
+        ui.heading("Stock");
+        let stage_name = |i: usize| match i {
+            0 => "the block, before anything".to_string(),
+            n => scene
+                .ops
+                .get(n - 1)
+                .map_or_else(String::new, |o| format!("after {n}. {}", o.name)),
+        };
+        let selected = match self.stock_mode {
+            StockMode::Off => "off".to_string(),
+            StockMode::Follow => "follow the scrub".to_string(),
+            StockMode::Stage(i) => stage_name(i),
+        };
+        egui::ComboBox::from_id_salt("stock")
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut self.stock_mode, StockMode::Off, "off");
+                ui.selectable_value(&mut self.stock_mode, StockMode::Follow, "follow the scrub");
+                for i in 0..=scene.ops.len() {
+                    ui.selectable_value(&mut self.stock_mode, StockMode::Stage(i), stage_name(i));
+                }
+            });
+        ui.checkbox(
+            &mut self.hide_part_with_stock,
+            "hide the part while showing it",
+        );
+        let image = self
+            .stage_shown()
+            .and_then(|i| self.stock_images.get(i))
+            .and_then(Option::as_ref);
+        if let Some(image) = image {
+            for class in CLASSES {
+                ui.horizontal(|ui| {
+                    let (r, _) =
+                        ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                    ui.painter()
+                        .rect_filled(r, 2.0, theme::egui_color(class_color(class)));
+                    ui.label(class_name(class));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.weak(thousands(image.count(class)));
+                    });
+                });
+            }
+            ui.weak("cells of the simulated material, by the verifier's rule");
+        }
+
+        let mut jump = None;
+        if !scene.steep.is_empty() {
+            ui.separator();
+            ui.heading("Steep descents");
+            ui.weak("cutting moves that drop further than allowed while barely advancing");
+            let job = self.outcome.as_ref().map(|o| &o.job);
+            for (i, op) in scene.ops.iter().enumerate() {
+                let mine: Vec<&Steep> = scene.steep.iter().filter(|s| s.op == i).collect();
+                if mine.is_empty() {
+                    continue;
+                }
+                let deepest = mine.iter().map(|s| s.drop).fold(0.0, f64::max);
+                let allowance = job
+                    .and_then(|j| j.operations.get(i))
+                    .map_or(0.0, |o| o.passes.max_cut_step);
+                ui.label(format!(
+                    "{}. {}: {} move(s), deepest {deepest:.2} mm of {allowance:.2} allowed",
+                    i + 1,
+                    op.name,
+                    mine.len()
+                ));
+            }
+            // Deepest first: the worst is the one to look at.
+            let mut worst: Vec<Steep> = scene.steep.clone();
+            worst.sort_by(|a, b| b.drop.total_cmp(&a.drop));
+            egui::ScrollArea::vertical()
+                .id_salt("steep")
+                .max_height(160.0)
+                .show(ui, |ui| {
+                    for s in worst.iter().take(200) {
+                        let label = format!(
+                            "{:.2} mm  {}. at {:.1}, {:.1}, {:.1}",
+                            s.drop,
+                            s.op + 1,
+                            s.at.x,
+                            s.at.y,
+                            s.at.z
+                        );
+                        if ui
+                            .selectable_label(false, egui::RichText::new(label).monospace())
+                            .on_hover_text("go there: scrub to it and follow the stock")
+                            .clicked()
+                        {
+                            jump = Some(*s);
+                        }
+                    }
+                });
+        }
+        if let Some(s) = jump {
+            self.jump_to(s);
+        }
     }
 
     /// Arrow keys step the scrub, unless a widget has the keyboard.
@@ -574,11 +768,19 @@ impl App {
             .filter(|_| self.show_cutter && self.scrub < total)
             .and_then(|s| s.at(self.scrub))
             .map(|at| (at.op, at.segment.b));
+        let stock = self.stage_shown().and_then(|i| {
+            let image = self.stock_images.get(i)?.as_ref()?;
+            Some(((self.scene_generation, i), image))
+        });
+        let part = self.view.part && !(stock.is_some() && self.hide_part_with_stock);
         Content {
             part: self.model.as_ref().map(|m| (self.generation, &m.mesh)),
             framing: self.opened,
             scene: self.scene.as_ref().map(|s| (self.scene_generation, s)),
+            stock,
             view: View {
+                part,
+                roles: if self.show_paths { self.view.roles } else { 0 },
                 shown: self.scrub,
                 cutter,
                 ..self.view
@@ -610,6 +812,7 @@ impl eframe::App for App {
             self.accept(reply);
         }
         self.step_scrub(&ctx);
+        self.ensure_stock_image();
         if let Some((pick, path)) = self.dialog.update(&ctx) {
             match pick {
                 Pick::Model => self.open_model(&ctx, path),

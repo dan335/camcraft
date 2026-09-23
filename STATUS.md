@@ -80,8 +80,13 @@ each pass next to where the following one starts.
      scrub position, and still shows, fainter, when a pocket hides it. The web
      inspector stays only until its checks panel is ported (item 5), then
      `viewer/` goes.
-   - **Simulated stock view:** the material after each operation, and where it was
-     left standing or gouged. This is the view the steep-descent question waits for.
+   - **Simulated stock view: done.** The material at any stage (the block, after
+     each operation, or following the scrub), coloured by the verifier's own rule:
+     red below the part, amber left above it (deeper amber for more), grey finished,
+     dark where there is no part. The legend's counts are the verifier's counts,
+     and a test holds them equal. **Steep descents** are listed deepest first; clicking one
+     scrubs to it, follows the stock and flies the camera there. The scrub readout
+     gives estimated machining time.
    - **Job editing:** forms that read and write `job.toml`, so file and app stay
      interchangeable.
    - **Run, check, post:** background runs with progress, the checks panel, and the
@@ -104,12 +109,38 @@ actually break cutters on the day:
   spindle matches `diameter`, or whether the stock is the size the job was told.
 - Roughing is conservative contour-parallel clearing. It has never cut anything.
 
+## Playback (after 0.2): how it is set up
+
+The user wants Fusion-style simulation: play, pause, step, seek and speed, with the
+material cut as the tool moves. Item 3 was designed so this is an addition:
+
+- `camcraft_core::replay::Replay` recovers the stock at any move. It starts from the
+  nearest stage (`JobResult::stages`) and sweeps forward with the tools the run
+  used (`run::cutting_tool`). Sweeping in pieces equals sweeping whole, bit for bit,
+  and a test checks it. Removing the one-move overlap makes that test fail. A
+  position part-way along a move is a sweep onto a copy, for display only.
+- The GUI draws the stock from height and colour textures and a grid with no
+  vertex buffer, so a step is a texture write of the tool's footprint.
+- Machining time per move is in the scene (`Segment::ends_at`), which is what play
+  speed means. Rapids assume 5000 mm/min until a machine profile gives a rate.
+- Still to build: the controls, exact per-move seeking with denser keyframes, the
+  playhead as move plus fraction, and `Stock::apply` reporting the rectangle it
+  touched.
+
 ## Open questions
 
 - **Licensing of distributed binaries.** STEP import links OpenCascade statically
   through LGPL-2.1 crates, while camcraft is MIT or Apache-2.0. This doesn't matter
   while the repo is private, but it has to be settled before anyone ships a binary.
   See the decision record.
+
+- **Plunges spend three of the router jig's seven hours in air.** The machining-time
+  estimate, checked independently from the inspection JSON, puts `rail-jig.toml` on
+  `sled_base.step` at about 7 h. Of that, 129 min is rough plunges and 57 min
+  finish plunges. Every link descends from the clearance height to the cut at the
+  plunge feed, including through air roughing already cleared. Fusion rapids to a
+  feed height just above the material first. This is a linker improvement, and
+  worth doing before the first real cut.
 
 Deferred on purpose: these are hard to judge until the GUI can show what is going
 on. Come back to them once it can.

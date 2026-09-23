@@ -56,6 +56,19 @@ impl Camera {
         }
     }
 
+    /// Look at `point` from where the view already is, close enough that a sphere
+    /// of `radius` around it fills the view. The limits stay the part's.
+    pub fn focus(&mut self, point: Vec3, radius: f32) {
+        let radius = if radius.is_finite() && radius > 0.0 {
+            radius
+        } else {
+            self.radius * 0.1
+        };
+        self.target = point;
+        self.distance =
+            (radius / (self.fov_y * 0.5).sin()).clamp(self.radius * 0.05, self.radius * 20.0);
+    }
+
     /// Back to the framing view.
     pub fn reset(&mut self) {
         *self = Self::framing(self.centre, self.radius);
@@ -195,6 +208,19 @@ mod tests {
             }
             assert!(c.target.length() <= radius * 2.0 + 1e-3);
         }
+    }
+
+    /// Focusing keeps the angle and puts the point dead centre.
+    #[test]
+    fn focus_centres_the_point_and_keeps_the_angle() {
+        let mut c = cam();
+        let (yaw, pitch) = (c.yaw, c.pitch);
+        let p = Vec3::new(20.0, 25.0, 0.0);
+        c.focus(p, 5.0);
+        assert_eq!((c.yaw, c.pitch), (yaw, pitch));
+        let clip = c.view_projection(1.5) * p.extend(1.0);
+        let ndc = clip.truncate() / clip.w;
+        assert!(ndc.x.abs() < 1e-4 && ndc.y.abs() < 1e-4, "{ndc:?}");
     }
 
     #[test]
