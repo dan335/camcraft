@@ -674,7 +674,7 @@ dependencies = [
  "camcraft-post",
  "camcraft-session",
  "clap",
- "glam 0.33.8",
+ "glam 0.33.9",
  "tracing",
  "tracing-subscriber",
 ]
@@ -686,7 +686,7 @@ dependencies = [
  "approx",
  "camcraft-geom",
  "camcraft-sim",
- "glam 0.33.8",
+ "glam 0.33.9",
  "proptest",
  "rayon",
  "serde",
@@ -700,7 +700,7 @@ version = "0.1.0"
 dependencies = [
  "approx",
  "clipper2-rust",
- "glam 0.33.8",
+ "glam 0.33.9",
  "parry3d-f64",
  "proptest",
  "rayon",
@@ -721,7 +721,7 @@ dependencies = [
  "egui-file-dialog",
  "egui_extras",
  "egui_kittest",
- "glam 0.33.8",
+ "glam 0.33.9",
  "image",
  "serde",
  "toml",
@@ -732,7 +732,7 @@ name = "camcraft-import"
 version = "0.1.0"
 dependencies = [
  "camcraft-geom",
- "glam 0.33.8",
+ "glam 0.33.9",
  "opencascade",
  "stl_io",
  "thiserror 2.0.20",
@@ -744,7 +744,7 @@ version = "0.1.0"
 dependencies = [
  "camcraft-core",
  "camcraft-geom",
- "glam 0.33.8",
+ "glam 0.33.9",
  "serde",
  "thiserror 2.0.20",
  "toml",
@@ -760,7 +760,7 @@ dependencies = [
  "camcraft-post",
  "camcraft-sim",
  "directories",
- "glam 0.33.8",
+ "glam 0.33.9",
  "rayon",
  "serde",
  "thiserror 2.0.20",
@@ -772,7 +772,7 @@ name = "camcraft-sim"
 version = "0.1.0"
 dependencies = [
  "camcraft-geom",
- "glam 0.33.8",
+ "glam 0.33.9",
  "proptest",
  "rayon",
  "thiserror 2.0.20",
@@ -1747,9 +1747,9 @@ dependencies = [
 
 [[package]]
 name = "glam"
-version = "0.33.8"
+version = "0.33.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0990707078259d76f65619a692e87c82645be66cbee224173cd1af151e54ba2"
+checksum = "35accb17301a4874ea893c685ca86bc1e25f92499382adc17eec9a91f7803cfb"
 dependencies = [
  "approx",
  "libm",
@@ -1763,7 +1763,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d74079318e3a077bd3d15faa90fde24fa37bb9f157f92f853e6019a15fd413"
 dependencies = [
  "approx",
- "glam 0.33.8",
+ "glam 0.33.9",
  "num-traits",
  "simba",
 ]

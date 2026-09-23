@@ -241,7 +241,7 @@ pub fn load_step(path: impl AsRef<Path>, tolerance: f64) -> Result<(Body, StepRe
     let mut weld = Welder::default();
     let mut labels = Vec::new();
     let mut triangles = 0;
-    for (tri, face) in soup.indices.chunks_exact(3).zip(face_of) {
+    for (tri, face) in soup.indices.as_chunks::<3>().0.iter().zip(face_of) {
         triangles += 1;
         let mut corners = [DVec3::NAN; 3];
         for (slot, &i) in corners.iter_mut().zip(tri) {

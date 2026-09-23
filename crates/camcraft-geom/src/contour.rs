@@ -225,11 +225,11 @@ impl Region {
         }
         crossings.sort_by(f64::total_cmp);
         crossings
-            .chunks_exact(2)
-            .filter_map(|pair| match pair {
-                [a, b] if b > a => Some((*a, *b)),
-                _ => None,
-            })
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .filter(|[a, b]| b > a)
+            .map(|&[a, b]| (a, b))
             .collect()
     }
 
