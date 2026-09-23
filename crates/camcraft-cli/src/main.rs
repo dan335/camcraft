@@ -6,7 +6,8 @@
 //!
 //! Every subcommand runs through one engine path. `inspect` and `post` describe a
 //! single finishing operation with flags, and are turned into a one-operation job
-//! before anything is computed; `job` reads the operations from a file. What the
+//! before anything is computed; `job` reads a job file, with its models, stocks and
+//! setups. What the
 //! inspector draws and what the post writes therefore come from the same path, move
 //! for move.
 //!
@@ -16,10 +17,13 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use camcraft_core::job::Job as JobSpec;
+use std::collections::BTreeMap;
+
+use camcraft_core::job::{Job as JobSpec, LengthUnit, ModelDef};
 use camcraft_session::{
-    FinishSpec, FinishTool, Model, Passed, Ran, SessionError, Units, gate, inspection, load_model,
-    load_profile, program, program_name, read_job, run, single_operation,
+    FinishSpec, FinishTool, Model, Models, Passed, Ran, SessionError, Units, gate, inspection,
+    load_job_model, load_model, load_profile, program, program_name, read_job, run_setup,
+    single_operation,
 };
 use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
 
@@ -43,38 +47,38 @@ enum Command {
     /// file that can reach a machine should have been checked against material and
     /// not merely against geometry.
     Post(PostArgs),
-    /// Run a multi-operation job from a TOML file.
+    /// Run a job file: its setups, each with its own models, stock and post.
     ///
-    /// Operations run in order against one block of material, each reading what the
-    /// last one left. Writes one program per operation, and refuses any that did not
-    /// verify. `--inspect` writes what will run as JSON for the inspector, and is
-    /// written even when verification fails, because that is when it is needed.
+    /// A setup's operations run in order against one block of material, each
+    /// reading what the last one left. Writes one program per operation, named
+    /// after its setup, and refuses to write any unless every setup run verified.
+    /// `--inspect` writes what will run as JSON for the inspector, and is written
+    /// even when verification fails, because that is when it is needed.
     Job(JobArgs),
 }
 
 #[derive(Parser, Debug)]
 #[command(group(ArgGroup::new("output").required(true).multiple(true).args(["out", "inspect"])))]
 struct JobArgs {
-    /// Model to machine (`.stl`, `.step` or `.stp`).
-    model: PathBuf,
-
-    /// Job description (`.toml`).
+    /// The job file (`.camcraft`). Its models are found relative to it.
     job: PathBuf,
 
-    /// What the numbers in the model mean. Required for STL, which carries no
-    /// units. A STEP file states its own; given anyway, it must agree.
-    #[arg(long, value_enum)]
-    units: Option<UnitArg>,
+    /// Run only this setup, by name. Give it more than once for several; without
+    /// it, every setup runs.
+    #[arg(long = "setup")]
+    setups: Vec<String>,
 
-    /// Machine profile: a builtin name, or a path to a TOML profile.
-    #[arg(long, default_value = "masso")]
-    profile: String,
+    /// Machine profile for every setup, instead of each setup's own post: a
+    /// builtin name, or a path to a TOML profile.
+    #[arg(long)]
+    profile: Option<String>,
 
     /// Directory to write programs into. One file per operation.
     #[arg(short, long)]
     out: Option<PathBuf>,
 
-    /// Write every operation's path as JSON for the inspector.
+    /// Write every operation's path as JSON for the inspector. With more than one
+    /// setup, one file each, named after the setup.
     #[arg(long)]
     inspect: Option<PathBuf>,
 
@@ -178,6 +182,13 @@ impl UnitArg {
             UnitArg::Inch => Units::Inches,
         }
     }
+
+    fn length(self) -> LengthUnit {
+        match self {
+            UnitArg::Mm => LengthUnit::Mm,
+            UnitArg::Inch => LengthUnit::Inch,
+        }
+    }
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -228,6 +239,16 @@ fn explain(e: SessionError) -> Box<dyn std::error::Error> {
              its own units; drop --units, or check this is the right file."
         )
         .into(),
+        SessionError::InModel { name, source }
+            if matches!(*source, SessionError::StlNeedsUnits) =>
+        {
+            format!(
+                "model '{name}' is an STL, which carries no units: give it \
+                 units = \"mm\" or units = \"inch\" in the job. Guessing would make an \
+                 inch part 25.4 times too small."
+            )
+            .into()
+        }
         other => other.into(),
     }
 }
@@ -240,21 +261,28 @@ fn load(path: &Path, units: Option<UnitArg>, tolerance: f64) -> Fallible<Model> 
     Ok(model)
 }
 
-fn execute(model: &Model, job: &JobSpec) -> Fallible<Ran> {
-    let ran = run(model, job)?;
+fn execute(job: &JobSpec, setup: usize, models: &Models<'_>) -> Fallible<Ran> {
+    let ran = run_setup(job, setup, models)?;
     for n in &ran.notes {
         tracing::info!("{n}");
     }
     Ok(ran)
 }
 
-fn write_inspection(path: &Path, model: &Model, job: &JobSpec, ran: &Ran) -> Fallible<()> {
+fn write_inspection(
+    path: &Path,
+    model: &str,
+    units: &str,
+    job: &JobSpec,
+    setup: usize,
+    ran: &Ran,
+) -> Fallible<()> {
     let doc = inspection::document(
-        &model.path,
-        &model.units,
-        &model.mesh,
-        &model.bounds,
+        model,
+        units,
+        &ran.part,
         job,
+        setup,
         &ran.result,
         &ran.warnings,
     );
@@ -315,54 +343,137 @@ fn write_program(
 }
 
 fn job(args: JobArgs) -> Fallible<usize> {
-    // The job first: its tolerance decides how finely a STEP model is tessellated.
     let job = read_job(&args.job)?;
-    let model = load(&args.model, args.units, job.tolerance)?;
-    let ran = execute(&model, &job)?;
+    let job_dir = args
+        .job
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+
+    let chosen: Vec<usize> = if args.setups.is_empty() {
+        (0..job.setups.len()).collect()
+    } else {
+        args.setups
+            .iter()
+            .map(|name| {
+                job.setups
+                    .iter()
+                    .position(|s| s.name == *name)
+                    .ok_or_else(|| format!("the job has no setup called '{name}'"))
+            })
+            .collect::<Result<_, _>>()?
+    };
+    if chosen.is_empty() {
+        return Err("the job has no setups".into());
+    }
+
+    // Each model once, however many setups use it, at the job's tolerance: it
+    // decides how finely a STEP model is tessellated.
+    let mut loaded: BTreeMap<String, Model> = BTreeMap::new();
+    for &i in &chosen {
+        for m in job.models_for(i) {
+            if loaded.contains_key(&m.name) {
+                continue;
+            }
+            let model = load_job_model(&job_dir, m, job.tolerance).map_err(explain)?;
+            for n in &model.notes {
+                tracing::info!("{}: {n}", m.name);
+            }
+            loaded.insert(m.name.clone(), model);
+        }
+    }
+    let models: Models<'_> = loaded.iter().map(|(n, m)| (n.as_str(), m)).collect();
+
+    let mut runs = Vec::with_capacity(chosen.len());
+    for &i in &chosen {
+        runs.push((i, execute(&job, i, &models)?));
+    }
 
     // Before the gate, not after it: a job that failed to verify is exactly the one
     // that needs looking at.
     if let Some(path) = &args.inspect {
-        write_inspection(path, &model, &job, &ran)?;
-    }
-
-    if let Some(dir) = &args.out {
-        check_gate(
-            &ran,
-            args.force,
-            "camcraft job ... --inspect path.json, then drop it on the inspector",
-        )?;
-        let profile = load_profile(&args.profile)?;
-        std::fs::create_dir_all(dir)?;
-        for (i, op) in ran.result.operations.iter().enumerate() {
-            let name = program_name(i, &op.name);
-            let path = dir.join(format!("{name}.{}", profile.extension));
-            write_program(op, job.setup.wcs, &profile, &name, &path)?;
+        for (i, ran) in &runs {
+            let Some(setup) = job.setups.get(*i) else {
+                continue;
+            };
+            let names: Vec<&str> = setup.models.iter().map(String::as_str).collect();
+            let units: Vec<&str> = setup
+                .models
+                .iter()
+                .filter_map(|n| loaded.get(n))
+                .map(|m| m.units.as_str())
+                .collect();
+            let target = if runs.len() == 1 {
+                path.clone()
+            } else {
+                let stem = path
+                    .file_stem()
+                    .map_or_else(|| "inspect".into(), |s| s.to_string_lossy().to_string());
+                path.with_file_name(format!("{stem}-{}.json", setup.name))
+            };
+            write_inspection(&target, &names.join(", "), &units.join(", "), &job, *i, ran)?;
         }
     }
 
-    for w in &ran.warnings {
-        tracing::warn!("{w}");
+    if let Some(dir) = &args.out {
+        // Every setup passes, or no program is written: half a job's programs are
+        // a trap on the machine.
+        for (_, ran) in &runs {
+            check_gate(
+                ran,
+                args.force,
+                "camcraft job ... --inspect path.json, then drop it on the inspector",
+            )?;
+        }
+        std::fs::create_dir_all(dir)?;
+        for (i, ran) in &runs {
+            let Some(setup) = job.setups.get(*i) else {
+                continue;
+            };
+            let post = args.profile.as_deref().unwrap_or(&setup.post);
+            let profile = load_profile(post, Some(&job_dir))?;
+            for (k, op) in ran.result.operations.iter().enumerate() {
+                let name = program_name(&setup.name, k, &op.name);
+                let path = dir.join(format!("{name}.{}", profile.extension));
+                write_program(op, setup.wcs, &profile, &name, &path)?;
+            }
+        }
     }
-    Ok(ran.warnings.len())
+
+    let mut count = 0;
+    for (_, ran) in &runs {
+        for w in &ran.warnings {
+            tracing::warn!("{w}");
+        }
+        count += ran.warnings.len();
+    }
+    Ok(count)
+}
+
+/// The job `inspect` and `post` describe with flags, and its model, loaded.
+fn flag_job(args: &InspectArgs, wcs: u8, rpm: u32, number: u32) -> Fallible<(JobSpec, Model)> {
+    let model = load(&args.model, args.units, args.tolerance)?;
+    let def = ModelDef {
+        name: "model".into(),
+        path: args.model.display().to_string(),
+        units: args.units.map(UnitArg::length),
+    };
+    let job = single_operation(&finish_spec(args, wcs, rpm, number), def);
+    Ok((job, model))
 }
 
 fn post(args: PostArgs) -> Fallible<usize> {
-    let model = load(&args.job.model, args.job.units, args.job.tolerance)?;
-    let job = single_operation(&finish_spec(
-        &args.job,
-        args.wcs,
-        args.rpm,
-        args.tool_number,
-    ));
-    let ran = execute(&model, &job)?;
+    let (job, model) = flag_job(&args.job, args.wcs, args.rpm, args.tool_number)?;
+    let models: Models<'_> = [("model", &model)].into_iter().collect();
+    let ran = execute(&job, 0, &models)?;
     check_gate(
         &ran,
         args.force,
         "camcraft inspect ... --out path.json, then drop it on the inspector",
     )?;
 
-    let profile = load_profile(&args.profile)?;
+    let profile = load_profile(&args.profile, None)?;
     let op = ran
         .result
         .operations
@@ -372,7 +483,7 @@ fn post(args: PostArgs) -> Fallible<usize> {
     let name = out
         .file_stem()
         .map_or_else(|| "camcraft".into(), |s| s.to_string_lossy().to_string());
-    write_program(op, job.setup.wcs, &profile, &name, out)?;
+    write_program(op, args.wcs, &profile, &name, out)?;
 
     for w in &ran.warnings {
         tracing::warn!("{w}");
@@ -381,10 +492,10 @@ fn post(args: PostArgs) -> Fallible<usize> {
 }
 
 fn inspect(args: InspectArgs) -> Fallible<usize> {
-    let model = load(&args.model, args.units, args.tolerance)?;
-    let job = single_operation(&finish_spec(&args, 54, 18000, 1));
-    let ran = execute(&model, &job)?;
-    write_inspection(&args.out, &model, &job, &ran)?;
+    let (job, model) = flag_job(&args, 54, 18000, 1)?;
+    let models: Models<'_> = [("model", &model)].into_iter().collect();
+    let ran = execute(&job, 0, &models)?;
+    write_inspection(&args.out, &model.path, &model.units, &job, 0, &ran)?;
     for w in &ran.warnings {
         tracing::warn!("{w}");
     }

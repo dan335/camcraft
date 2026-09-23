@@ -168,7 +168,7 @@ mod tests {
         assert_eq!(Library::load(&path).unwrap(), lib);
     }
 
-    /// A library tool drops into a job's tool table unchanged: one schema.
+    /// A library tool drops into a job's tools unchanged: one schema.
     #[test]
     fn a_library_tool_is_a_job_tool() {
         let path = temp("schema");
@@ -182,12 +182,8 @@ mod tests {
         );
         lib.save(&path).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
-        let job = format!(
-            "{text}\n[setup]\nstock = {{ kind = \"box\" }}\n[[operation]]\nname = \"f\"\n\
-             strategy = \"parallel\"\ntool = \"fl\"\n"
-        );
-        let job: Job = toml::from_str(&job).unwrap();
-        job.validate().unwrap();
+        let job: Job = toml::from_str(&format!("version = 1\n{text}")).unwrap();
+        job.check_common().unwrap();
         assert_eq!(job.tools["fl"], lib.tools["fl"]);
     }
 

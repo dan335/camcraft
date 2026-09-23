@@ -1,13 +1,13 @@
 //! The inspection document: the part and every operation's path, as JSON.
 //!
-//! Built from a [`JobResult`] and nothing else. Every subcommand runs through
-//! [`run_job`](camcraft_core::run::run_job), so what the inspector draws is the
+//! Built from a [`SetupResult`] and nothing else. Every subcommand runs through
+//! [`run_setup`](crate::run_setup), so what the inspector draws is the
 //! path the post lowers, move for move. There is no second, approximate path for
 //! the picture to come from, and so no way for a defect to live only in the one
 //! nobody looks at.
 
 use camcraft_core::job::{Job, Operation, ToolKind};
-use camcraft_core::run::{JobResult, OperationResult, StrategyDetail};
+use camcraft_core::run::{OperationResult, SetupResult, StrategyDetail};
 use camcraft_core::toolpath::{MoveRole, Toolpath};
 use camcraft_geom::heightmap::narrow;
 use camcraft_geom::mesh::{Aabb, TriMesh};
@@ -42,6 +42,10 @@ struct JobMeta {
     model: String,
     units: String,
     tolerance: f64,
+    /// Which setup this is, everything in its frame.
+    setup: String,
+    /// Its post processor.
+    post: String,
     wcs: u8,
     /// The block of material, corner to corner.
     stock_min: [f64; 3],
@@ -136,21 +140,29 @@ struct Step {
     feed: Option<f64>,
 }
 
-/// Describe a finished job for the inspector.
+/// Describe a finished setup for the inspector. `part` is the setup's part, in its
+/// frame, as [`Ran::part`](crate::Ran::part) has it.
 ///
 /// `warnings` is passed in rather than re-derived so the document says exactly
 /// what the terminal said.
+#[allow(clippy::too_many_arguments)]
 pub fn document(
     model: &str,
     units: &str,
-    mesh: &TriMesh,
-    bounds: &Aabb,
+    part_mesh: &TriMesh,
     job: &Job,
-    result: &JobResult,
+    setup: usize,
+    result: &SetupResult,
     warnings: &[String],
 ) -> Document {
-    let operations = job
-        .operations
+    let spec = job.setups.get(setup);
+    let bounds = part_mesh.bounds().unwrap_or(Aabb {
+        min: DVec3::ZERO,
+        max: DVec3::ZERO,
+    });
+    let operations = spec
+        .map(|s| s.operations.as_slice())
+        .unwrap_or_default()
         .iter()
         .zip(&result.operations)
         .map(|(spec, run)| operation(job, spec, run))
@@ -158,12 +170,14 @@ pub fn document(
 
     Document {
         format: FORMAT,
-        part: part(mesh, bounds),
+        part: part(part_mesh, &bounds),
         job: JobMeta {
             model: model.to_string(),
             units: units.to_string(),
             tolerance: job.tolerance,
-            wcs: job.setup.wcs,
+            setup: result.setup.clone(),
+            post: spec.map_or_else(String::new, |s| s.post.clone()),
+            wcs: spec.map_or(54, |s| s.wcs),
             stock_min: [
                 result.stock_min.x,
                 result.stock_min.y,
@@ -196,7 +210,7 @@ fn operation(job: &Job, spec: &Operation, run: &OperationResult) -> OperationDoc
         name: run.name.clone(),
         strategy: run.strategy,
         tool: ToolDoc {
-            name: spec.tool.clone(),
+            name: spec.tool.clone().unwrap_or_default(),
             kind: tool.map_or("unknown", |t| match t.kind {
                 ToolKind::Flat => "flat",
                 ToolKind::Ball => "ball",

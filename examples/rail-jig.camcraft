@@ -1,15 +1,14 @@
-# A two-operation job: rough the block down, then finish the surface.
+# A job with one setup: rough the block down, then finish the surface.
+#
+# The app writes this file when you save; comments written by hand do not survive
+# a save from the app.
 #
 # Heights are symbolic on purpose. `ref = "stock-top"` means this job still works
 # against a thicker blank without editing a number, and still reads correctly in six
 # months. Absolute values are available but have to be asked for.
 
+version = 1
 tolerance = 0.05
-
-[setup]
-# The block: the model plus 2 mm around and 3 mm on top.
-stock = { kind = "box", margin = [2.0, 2.0, 3.0] }
-wcs = 54
 
 [tools.rough-6-flat]
 kind = "flat"
@@ -25,7 +24,25 @@ number = 2
 rpm = 18000
 comment = "6mm ball"
 
-[[operation]]
+# Models are found relative to this file.
+[[model]]
+name = "sled_base"
+path = "../fixtures/step/sled_base.step"
+
+# The block: the model plus 2 mm around and 3 mm on top.
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [2.0, 2.0, 3.0]
+
+[[setup]]
+name = "top"
+models = ["sled_base"]
+stocks = ["block"]
+wcs = 54
+post = "masso"
+
+[[setup.operation]]
 name = "rough"
 strategy = "zlevel-rough"
 tool = "rough-6-flat"
@@ -35,7 +52,7 @@ passes = { stepover = 3.0, feed = 2000.0, stock_to_leave = { radial = 0.5, axial
 heights = { clearance = { ref = "stock-top", offset = 8.0 } }
 linking = { retract_feed = 2000.0, plunge_feed = 400.0, reorder = true }
 
-[[operation]]
+[[setup.operation]]
 name = "finish"
 strategy = "parallel"
 tool = "finish-6-ball"

@@ -1,10 +1,21 @@
-//! The job model: setup, tools, and an ordered list of operations sharing one stock.
+//! The job model: models, stocks and setups, each setup an ordered list of
+//! operations sharing one stock.
 //!
 //! This is the contract between a person and the engine, and it is shaped the way
-//! Fusion shapes an operation — **Geometry, Heights, Passes, Linking** — because that
-//! factoring is proven and maps one-to-one onto the provisions this project was
-//! built around. Adopting it means the parameter layer never needs restructuring as
-//! strategies are added.
+//! Fusion shapes a CAM document. A job keeps three groups:
+//!
+//! - **Models**: the design files it machines, referenced by path relative to the
+//!   job file, never copied in.
+//! - **Stocks**: blocks of material, in model coordinates. A block is a physical
+//!   thing, so a top and a bottom setup share one and each sees it from its side.
+//! - **Setups**: how the part sits on the machine and where its work zero is, which
+//!   models and stocks it includes (by name), its post and work offset, and its
+//!   operations.
+//!
+//! An operation is shaped the way Fusion shapes one, **Geometry, Heights, Passes,
+//! Linking**, because that factoring is proven and maps one-to-one onto the
+//! provisions this project was built around. Adopting it means the parameter layer
+//! never needs restructuring as strategies are added.
 //!
 //! # Heights are symbolic
 //!
@@ -13,64 +24,265 @@
 //! meaning survives being read six months later. Absolute numbers are still
 //! available, but they have to be asked for.
 //!
-//! # One stock, threaded
+//! # One stock per setup, threaded
 //!
-//! Operations run in order against a single block. Each reads the material as it
-//! currently stands and writes back what it removed, so a finishing pass never
-//! re-cuts what roughing already cleared. Rest machining is not a feature here; it is
-//! the consequence of that ordering.
+//! A setup's operations run in order against a single block. Each reads the
+//! material as it currently stands and writes back what it removed, so a finishing
+//! pass never re-cuts what roughing already cleared. Rest machining is not a
+//! feature here; it is the consequence of that ordering.
+//!
+//! Each setup starts from its own stock. The material is a height field seen from
+//! above, so what a top setup leaves cannot be turned over for the bottom one to
+//! start from. Carrying stock between setups needs a volumetric model.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::frame::{BadOrientation, Orientation};
 use crate::tool::{Ball, Bullnose, BullnoseFamily, Flat, ToolError};
 
+/// The job file format this build reads and writes.
+pub const JOB_VERSION: u32 = 1;
+
 /// A complete job.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Job {
-    /// Chordal tolerance in millimetres. Drives sampling and grid resolution alike.
+    /// The file format; [`JOB_VERSION`].
+    pub version: u32,
+    /// Chordal tolerance in millimetres. Drives sampling and grid resolution alike,
+    /// and how finely STEP models are tessellated.
     #[serde(default = "default_tolerance")]
     pub tolerance: f64,
-    /// The setup: what the stock is and where the work offset sits.
-    pub setup: Setup,
-    /// Cutters, by name.
-    pub tools: std::collections::BTreeMap<String, ToolSpec>,
-    /// Operations, in the order they run.
-    #[serde(default, rename = "operation")]
-    pub operations: Vec<Operation>,
+    /// The job's own cutters, by name: copies, never links to a library, so the job
+    /// still cuts what was verified after the library changes.
+    #[serde(default)]
+    pub tools: BTreeMap<String, ToolSpec>,
+    /// The design files machined.
+    #[serde(default, rename = "model")]
+    pub models: Vec<ModelDef>,
+    /// Blocks of material.
+    #[serde(default, rename = "stock")]
+    pub stocks: Vec<StockDef>,
+    /// Setups, in the order they are machined.
+    #[serde(default, rename = "setup")]
+    pub setups: Vec<Setup>,
+}
+
+impl Default for Job {
+    /// An empty job at the current format.
+    fn default() -> Self {
+        Self {
+            version: JOB_VERSION,
+            tolerance: 0.05,
+            tools: BTreeMap::new(),
+            models: Vec::new(),
+            stocks: Vec::new(),
+            setups: Vec::new(),
+        }
+    }
 }
 
 fn default_tolerance() -> f64 {
     0.01
 }
 
-/// What the material is and where it sits.
-#[derive(Debug, Clone, Deserialize)]
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
+/// Units for a file that does not say, as an STL does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LengthUnit {
+    /// Millimetres.
+    Mm,
+    /// Inches.
+    Inch,
+}
+
+/// One design file.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct ModelDef {
+    /// Name, unique in the job; setups and stocks refer to it by this.
+    pub name: String,
+    /// The file, relative to the job file's folder, with `/` between folders. An
+    /// absolute path is allowed.
+    pub path: String,
+    /// What an STL's numbers mean. Required for STL, which does not say; never
+    /// guessed. STEP carries its own units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub units: Option<LengthUnit>,
+}
+
+/// One block of material.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct StockDef {
+    /// Name, unique in the job; setups refer to it by this.
+    pub name: String,
+    /// Its shape.
+    #[serde(flatten)]
+    pub spec: StockSpec,
+}
+
+/// The shape of a block, in model coordinates, millimetres.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum StockSpec {
+    /// A box around models, grown by a margin.
+    AroundModels {
+        /// The models it is around, by name. Empty means the models of whichever
+        /// setup uses it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        models: Vec<String>,
+        /// Extra material each side in X and Y, and on top in Z.
+        #[serde(default)]
+        margin: [f64; 3],
+        /// Extra material under the models.
+        ///
+        /// Zero by default: for a part cut from the top only, material below the
+        /// model is the part of the block the cutter never reaches.
+        #[serde(default, skip_serializing_if = "is_default")]
+        below: f64,
+    },
+    /// A box at a fixed place and size.
+    FixedBox {
+        /// Its lowest corner.
+        corner: [f64; 3],
+        /// Its size along X, Y and Z.
+        size: [f64; 3],
+    },
+}
+
+impl Default for StockSpec {
+    /// Around the setup's models, as the block a new job starts with.
+    fn default() -> Self {
+        StockSpec::AroundModels {
+            models: Vec::new(),
+            margin: [2.0, 2.0, 2.0],
+            below: 0.0,
+        }
+    }
+}
+
+/// How a part is held and machined from one side.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Setup {
-    /// The block of material.
-    pub stock: StockSpec,
+    /// Name, unique in the job. Programs are named after it.
+    pub name: String,
+    /// The job's models this setup machines, by name.
+    #[serde(default)]
+    pub models: Vec<String>,
+    /// The job's stocks this setup starts from, by name.
+    #[serde(default)]
+    pub stocks: Vec<String>,
     /// Work offset, 54 for `G54`.
     #[serde(default = "default_wcs")]
     pub wcs: u8,
+    /// The post processor: a built-in name, or a profile file relative to the job.
+    #[serde(default = "default_post")]
+    pub post: String,
+    /// Which model directions become the machine's Z and X.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub orientation: Orientation,
+    /// Where the work zero is.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub origin: Origin,
+    /// Operations, in the order they run.
+    #[serde(default, rename = "operation")]
+    pub operations: Vec<Operation>,
+}
+
+impl Setup {
+    /// An empty setup with the usual defaults.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            models: Vec::new(),
+            stocks: Vec::new(),
+            wcs: default_wcs(),
+            post: default_post(),
+            orientation: Orientation::default(),
+            origin: Origin::default(),
+            operations: Vec::new(),
+        }
+    }
 }
 
 fn default_wcs() -> u8 {
     54
 }
 
-/// How the block relates to the model.
-#[derive(Debug, Clone, Deserialize)]
+fn default_post() -> String {
+    "masso".into()
+}
+
+/// Where a setup's work zero is.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
-pub enum StockSpec {
-    /// A box around the model, grown by a margin on each axis.
-    ///
-    /// The Z margin applies upward only: material below the model is the part of the
-    /// block the cutter never reaches, and growing downward would only make the
-    /// simulation taller without changing anything.
-    Box {
-        /// Extra material on X, Y and Z, in millimetres.
-        #[serde(default)]
-        margin: [f64; 3],
+pub enum Origin {
+    /// The design's own zero, turned with the part, moved by `offset` along the
+    /// setup's axes.
+    ModelOrigin {
+        /// Millimetres along the setup's X, Y and Z.
+        #[serde(default, skip_serializing_if = "is_default")]
+        offset: [f64; 3],
     },
+    /// A point on the box around the setup's stock or models, as the part sits on
+    /// the machine, moved by `offset`.
+    BoxPoint {
+        /// Which box.
+        of: BoxOf,
+        /// Where along X.
+        x: Along,
+        /// Where along Y.
+        y: Along,
+        /// Where along Z.
+        z: Along,
+        /// Millimetres along the setup's X, Y and Z.
+        #[serde(default, skip_serializing_if = "is_default")]
+        offset: [f64; 3],
+    },
+}
+
+impl Default for Origin {
+    /// The design's own zero, as models are drawn.
+    fn default() -> Self {
+        Origin::ModelOrigin { offset: [0.0; 3] }
+    }
+}
+
+/// Which box an origin is placed on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BoxOf {
+    /// The setup's stock.
+    Stock,
+    /// The setup's models.
+    Model,
+}
+
+/// Where along one side of a box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Along {
+    /// The low end: left, front or bottom.
+    Min,
+    /// The middle.
+    Center,
+    /// The high end: right, back or top.
+    Max,
+}
+
+impl Along {
+    /// The point along `lo..hi`.
+    pub fn pick(self, lo: f64, hi: f64) -> f64 {
+        match self {
+            Along::Min => lo,
+            Along::Center => (lo + hi) * 0.5,
+            Along::Max => hi,
+        }
+    }
 }
 
 /// A cutter.
@@ -337,31 +549,33 @@ impl ToolSpec {
 }
 
 /// One operation.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Operation {
     /// Name, for comments and diagnostics.
     pub name: String,
     /// Which strategy, and its own parameters.
     #[serde(flatten)]
     pub strategy: StrategySpec,
-    /// Which cutter, by name from the tool table.
-    pub tool: String,
+    /// Which cutter, by name from the job's tools. A new operation has none yet,
+    /// and cannot run until it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
     /// What to machine.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub geometry: Geometry,
     /// Where the tool travels.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub heights: Heights,
     /// How the passes are laid out.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub passes: Passes,
     /// How the tool moves between cuts.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub linking: Linking,
 }
 
 /// Strategy and the parameters only it has.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "strategy", rename_all = "kebab-case")]
 pub enum StrategySpec {
     /// Raster finishing.
@@ -385,16 +599,16 @@ fn default_min_ring() -> f64 {
 }
 
 /// What to machine.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Geometry {
     /// Extra margin around the model's silhouette, in millimetres.
     #[serde(default)]
     pub margin: f64,
     /// Highest level to cut at.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top: Option<Height>,
     /// Lowest level to cut at.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bottom: Option<Height>,
 }
 
@@ -409,7 +623,7 @@ impl Default for Geometry {
 }
 
 /// Where the tool travels.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Heights {
     /// Traverse height.
     #[serde(default = "default_clearance")]
@@ -432,7 +646,7 @@ fn default_clearance() -> Height {
 }
 
 /// A height, stated relative to something that can be measured.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 pub struct Height {
     /// What the offset is measured from.
     #[serde(rename = "ref", default = "default_ref")]
@@ -447,7 +661,7 @@ fn default_ref() -> HeightRef {
 }
 
 /// What a height is measured from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HeightRef {
     /// Top of the block.
@@ -490,7 +704,7 @@ impl Height {
 }
 
 /// How the passes are laid out.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Passes {
     /// Distance between neighbouring passes, in millimetres.
     #[serde(default = "default_stepover")]
@@ -530,7 +744,7 @@ fn default_max_cut_step() -> f64 {
 }
 
 /// Material to leave, radial and axial.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
 pub struct StockToLeave {
     /// Perpendicular to the tool axis.
     #[serde(default)]
@@ -541,7 +755,7 @@ pub struct StockToLeave {
 }
 
 /// How the tool moves between cuts.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Linking {
     /// Feed for coming up out of a cut.
     #[serde(default = "default_retract_feed")]
@@ -586,10 +800,69 @@ fn yes() -> bool {
 /// A job that cannot be run as written.
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum JobError {
-    /// An operation named a tool the table does not define.
-    #[error("operation '{op}' uses tool '{tool}', which is not in the tool table")]
+    /// The file is a format this build does not read.
+    #[error("job format {0} is not one this version reads (it reads {JOB_VERSION})")]
+    UnsupportedVersion(u32),
+    /// Something was left without a name.
+    #[error("a {what} has no name")]
+    NoName {
+        /// What kind of thing.
+        what: &'static str,
+    },
+    /// Two things of one kind share a name, so a reference to it is ambiguous.
+    #[error("there are two {what}s called '{name}'")]
+    DuplicateName {
+        /// What kind of thing.
+        what: &'static str,
+        /// The name.
+        name: String,
+    },
+    /// A setup or a stock names a model the job does not have.
+    #[error("{owner} uses model '{model}', which is not in the job")]
+    UnknownModel {
+        /// Who asked for it.
+        owner: String,
+        /// Which model.
+        model: String,
+    },
+    /// A setup names a stock the job does not have.
+    #[error("setup '{setup}' uses stock '{stock}', which is not in the job")]
+    UnknownStock {
+        /// Which setup.
+        setup: String,
+        /// Which stock.
+        stock: String,
+    },
+    /// A setup machines no model.
+    #[error("setup '{0}' has no model")]
+    NoModels(String),
+    /// A setup has no stock.
+    #[error("setup '{0}' has no stock")]
+    NoStock(String),
+    /// The job has no setups.
+    #[error("job has no setups")]
+    NoSetups,
+    /// A setup would do nothing.
+    #[error("setup '{0}' has no operations")]
+    NoOperations(String),
+    /// A setup's axes are not square to each other.
+    #[error("setup '{setup}': {source}")]
+    BadOrientation {
+        /// Which setup.
+        setup: String,
+        /// Why.
+        source: BadOrientation,
+    },
+    /// An operation has no tool yet.
+    #[error("operation '{op}' has no tool")]
+    NoTool {
+        /// Which operation, as `setup/operation`.
+        op: String,
+    },
+    /// An operation named a tool the job does not have.
+    #[error("operation '{op}' uses tool '{tool}', which is not in the job's tools")]
     UnknownTool {
-        /// Which operation.
+        /// Which operation, as `setup/operation`.
         op: String,
         /// Which tool it asked for.
         tool: String,
@@ -610,12 +883,14 @@ pub enum JobError {
         /// What it was.
         value: f64,
     },
-    /// The job would do nothing.
-    #[error("job has no operations")]
-    NoOperations,
     /// A work offset outside the usual range.
-    #[error("work offset {0} is not in the range 54..=59")]
-    BadWorkOffset(u8),
+    #[error("setup '{setup}': work offset {wcs} is not in the range 54..=59")]
+    BadWorkOffset {
+        /// Which setup.
+        setup: String,
+        /// The offset.
+        wcs: u8,
+    },
     /// A tool field that is not physically meaningful.
     #[error("tool '{name}', {source}")]
     BadToolField {
@@ -641,16 +916,25 @@ pub enum JobError {
 }
 
 impl Job {
-    /// Check the job is runnable before anything is computed.
+    /// Check the whole job is runnable before anything is computed: everything
+    /// [`check_common`](Self::check_common) checks, and every setup.
     ///
     /// Everything catchable is caught here, so a job fails on its own terms rather
     /// than part-way through an operation with a half-built path in hand.
     pub fn validate(&self) -> Result<(), JobError> {
-        if self.operations.is_empty() {
-            return Err(JobError::NoOperations);
+        self.check_common()?;
+        if self.setups.is_empty() {
+            return Err(JobError::NoSetups);
         }
-        if !(54..=59).contains(&self.setup.wcs) {
-            return Err(JobError::BadWorkOffset(self.setup.wcs));
+        (0..self.setups.len()).try_for_each(|i| self.check_setup(i))
+    }
+
+    /// Check what every setup depends on: the format, the tolerance, the tools,
+    /// the names, and the stocks. A setup still being written does not fail this,
+    /// so another setup can run.
+    pub fn check_common(&self) -> Result<(), JobError> {
+        if self.version != JOB_VERSION {
+            return Err(JobError::UnsupportedVersion(self.version));
         }
         positive("tolerance", self.tolerance)?;
 
@@ -673,51 +957,142 @@ impl Job {
             }
         }
 
-        // Only tools the operations use reach the machine, so only they must not
-        // share a number. A table may keep a spare with any number it likes.
-        let mut used: std::collections::BTreeMap<u32, &str> = std::collections::BTreeMap::new();
-        for op in &self.operations {
-            let Some(spec) = self.tools.get(&op.tool) else {
-                continue;
-            };
-            match used.get(&spec.number) {
-                Some(first) if *first != op.tool => {
-                    return Err(JobError::DuplicateToolNumber {
-                        number: spec.number,
-                        first: (*first).to_string(),
-                        second: op.tool.clone(),
-                    });
+        unique("model", self.models.iter().map(|m| m.name.as_str()))?;
+        unique("stock", self.stocks.iter().map(|s| s.name.as_str()))?;
+        unique("setup", self.setups.iter().map(|s| s.name.as_str()))?;
+
+        for stock in &self.stocks {
+            let field = |f: &str| format!("stock '{}'.{f}", stock.name);
+            match &stock.spec {
+                StockSpec::AroundModels {
+                    models,
+                    margin,
+                    below,
+                } => {
+                    for m in models {
+                        if self.model(m).is_none() {
+                            return Err(JobError::UnknownModel {
+                                owner: format!("stock '{}'", stock.name),
+                                model: m.clone(),
+                            });
+                        }
+                    }
+                    for (i, v) in margin.iter().chain(std::iter::once(below)).enumerate() {
+                        if !v.is_finite() || *v < 0.0 {
+                            return Err(JobError::BadValue {
+                                field: field(if i < 3 { "margin" } else { "below" }),
+                                value: *v,
+                            });
+                        }
+                    }
                 }
-                _ => {
-                    used.insert(spec.number, &op.tool);
+                StockSpec::FixedBox { corner, size } => {
+                    for v in corner {
+                        if !v.is_finite() {
+                            return Err(JobError::BadValue {
+                                field: field("corner"),
+                                value: *v,
+                            });
+                        }
+                    }
+                    for v in size {
+                        positive(&field("size"), *v)?;
+                    }
                 }
             }
         }
 
-        for op in &self.operations {
-            if !self.tools.contains_key(&op.tool) {
-                return Err(JobError::UnknownTool {
-                    op: op.name.clone(),
-                    tool: op.tool.clone(),
+        // Only tools the operations use reach the machine, so only they must not
+        // share a number. A table may keep a spare with any number it likes. The
+        // machine's tool table is one, so this is across every setup.
+        let mut used: BTreeMap<u32, &str> = BTreeMap::new();
+        for op in self.setups.iter().flat_map(|s| &s.operations) {
+            let Some((name, spec)) = op.tool.as_deref().and_then(|t| self.tools.get_key_value(t))
+            else {
+                continue;
+            };
+            match used.get(&spec.number) {
+                Some(first) if *first != name.as_str() => {
+                    return Err(JobError::DuplicateToolNumber {
+                        number: spec.number,
+                        first: (*first).to_string(),
+                        second: name.clone(),
+                    });
+                }
+                _ => {
+                    used.insert(spec.number, name);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Check setup `index` can run, given [`check_common`](Self::check_common)
+    /// passes. An index past the end is [`JobError::NoSetups`].
+    pub fn check_setup(&self, index: usize) -> Result<(), JobError> {
+        let setup = self.setups.get(index).ok_or(JobError::NoSetups)?;
+        let name = &setup.name;
+        setup
+            .orientation
+            .check()
+            .map_err(|source| JobError::BadOrientation {
+                setup: name.clone(),
+                source,
+            })?;
+        if !(54..=59).contains(&setup.wcs) {
+            return Err(JobError::BadWorkOffset {
+                setup: name.clone(),
+                wcs: setup.wcs,
+            });
+        }
+        if setup.models.is_empty() {
+            return Err(JobError::NoModels(name.clone()));
+        }
+        for m in &setup.models {
+            if self.model(m).is_none() {
+                return Err(JobError::UnknownModel {
+                    owner: format!("setup '{name}'"),
+                    model: m.clone(),
                 });
             }
-            positive(&format!("{}.passes.stepover", op.name), op.passes.stepover)?;
-            positive(&format!("{}.passes.feed", op.name), op.passes.feed)?;
+        }
+        if setup.stocks.is_empty() {
+            return Err(JobError::NoStock(name.clone()));
+        }
+        for s in &setup.stocks {
+            if self.stock(s).is_none() {
+                return Err(JobError::UnknownStock {
+                    setup: name.clone(),
+                    stock: s.clone(),
+                });
+            }
+        }
+        if setup.operations.is_empty() {
+            return Err(JobError::NoOperations(name.clone()));
+        }
+
+        for op in &setup.operations {
+            let at = format!("{name}/{}", op.name);
+            let Some(tool) = &op.tool else {
+                return Err(JobError::NoTool { op: at });
+            };
+            if !self.tools.contains_key(tool) {
+                return Err(JobError::UnknownTool {
+                    op: at,
+                    tool: tool.clone(),
+                });
+            }
+            positive(&format!("{at}.passes.stepover"), op.passes.stepover)?;
+            positive(&format!("{at}.passes.feed"), op.passes.feed)?;
+            positive(&format!("{at}.passes.max_cut_step"), op.passes.max_cut_step)?;
             positive(
-                &format!("{}.passes.max_cut_step", op.name),
-                op.passes.max_cut_step,
-            )?;
-            positive(
-                &format!("{}.linking.retract_feed", op.name),
+                &format!("{at}.linking.retract_feed"),
                 op.linking.retract_feed,
             )?;
-            positive(
-                &format!("{}.linking.plunge_feed", op.name),
-                op.linking.plunge_feed,
-            )?;
+            positive(&format!("{at}.linking.plunge_feed"), op.linking.plunge_feed)?;
             if op.passes.stock_to_leave.radial < 0.0 || op.passes.stock_to_leave.axial < 0.0 {
                 return Err(JobError::BadValue {
-                    field: format!("{}.passes.stock_to_leave", op.name),
+                    field: format!("{at}.passes.stock_to_leave"),
                     value: op
                         .passes
                         .stock_to_leave
@@ -726,16 +1101,60 @@ impl Job {
                 });
             }
             if let StrategySpec::ZlevelRough { stepdown, .. } = op.strategy {
-                positive(&format!("{}.stepdown", op.name), stepdown)?;
+                positive(&format!("{at}.stepdown"), stepdown)?;
             }
         }
         Ok(())
     }
 
-    /// The tool an operation names.
+    /// The tool an operation names, if it names one the job has.
     pub fn tool_for(&self, op: &Operation) -> Option<&ToolSpec> {
-        self.tools.get(&op.tool)
+        op.tool.as_deref().and_then(|t| self.tools.get(t))
     }
+
+    /// The model called `name`.
+    pub fn model(&self, name: &str) -> Option<&ModelDef> {
+        self.models.iter().find(|m| m.name == name)
+    }
+
+    /// The stock called `name`.
+    pub fn stock(&self, name: &str) -> Option<&StockDef> {
+        self.stocks.iter().find(|s| s.name == name)
+    }
+
+    /// Every model setup `index` needs loaded: its own, and those its stocks are
+    /// built around. Each once, in the job's order.
+    pub fn models_for(&self, index: usize) -> Vec<&ModelDef> {
+        let Some(setup) = self.setups.get(index) else {
+            return Vec::new();
+        };
+        let mut want: BTreeSet<&str> = setup.models.iter().map(String::as_str).collect();
+        for s in setup.stocks.iter().filter_map(|s| self.stock(s)) {
+            if let StockSpec::AroundModels { models, .. } = &s.spec {
+                want.extend(models.iter().map(String::as_str));
+            }
+        }
+        self.models
+            .iter()
+            .filter(|m| want.contains(m.name.as_str()))
+            .collect()
+    }
+}
+
+fn unique<'a>(what: &'static str, names: impl Iterator<Item = &'a str>) -> Result<(), JobError> {
+    let mut seen = BTreeSet::new();
+    for n in names {
+        if n.trim().is_empty() {
+            return Err(JobError::NoName { what });
+        }
+        if !seen.insert(n) {
+            return Err(JobError::DuplicateName {
+                what,
+                name: n.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn positive(field: &str, value: f64) -> Result<(), JobError> {
@@ -756,14 +1175,12 @@ fn positive(field: &str, value: f64) -> Result<(), JobError> {
 )]
 mod tests {
     use super::*;
+    use crate::frame::Axis;
     use crate::tool::ToolProfile;
 
     const SAMPLE: &str = r#"
+version = 1
 tolerance = 0.02
-
-[setup]
-stock = { kind = "box", margin = [2.0, 2.0, 1.0] }
-wcs = 54
 
 [tools.rough-6-flat]
 kind = "flat"
@@ -777,7 +1194,22 @@ kind = "ball"
 diameter = 4.0
 number = 2
 
-[[operation]]
+[[model]]
+name = "part"
+path = "part.step"
+
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [2.0, 2.0, 1.0]
+
+[[setup]]
+name = "top"
+models = ["part"]
+stocks = ["block"]
+wcs = 54
+
+[[setup.operation]]
 name = "rough"
 strategy = "zlevel-rough"
 tool = "rough-6-flat"
@@ -787,7 +1219,7 @@ heights = { clearance = { ref = "stock-top", offset = 8.0 } }
 passes = { stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.5, axial = 0.2 } }
 linking = { retract_feed = 1800.0, plunge_feed = 400.0 }
 
-[[operation]]
+[[setup.operation]]
 name = "finish"
 strategy = "parallel"
 tool = "finish-4-ball"
@@ -804,19 +1236,29 @@ passes = { stepover = 0.4, feed = 2400.0 }
         let j = sample();
         assert_eq!(j.tolerance, 0.02);
         assert_eq!(j.tools.len(), 2);
-        assert_eq!(j.operations.len(), 2);
+        assert_eq!(j.setups.len(), 1);
+        assert_eq!(j.setups[0].operations.len(), 2);
         j.validate().unwrap();
     }
 
     #[test]
     fn defaults_fill_in_what_is_omitted() {
         let minimal = r#"
-[setup]
-stock = { kind = "box" }
+version = 1
 [tools.t]
 kind = "ball"
 diameter = 6.0
-[[operation]]
+[[model]]
+name = "m"
+path = "m.step"
+[[stock]]
+name = "s"
+kind = "around-models"
+[[setup]]
+name = "top"
+models = ["m"]
+stocks = ["s"]
+[[setup.operation]]
 name = "finish"
 strategy = "parallel"
 tool = "t"
@@ -824,14 +1266,77 @@ tool = "t"
         let j: Job = toml::from_str(minimal).unwrap();
         j.validate().unwrap();
         assert_eq!(j.tolerance, 0.01);
-        assert_eq!(j.setup.wcs, 54);
-        let op = j.operations.first().unwrap();
+        let setup = &j.setups[0];
+        assert_eq!(setup.wcs, 54);
+        assert_eq!(setup.post, "masso");
+        assert_eq!(setup.orientation, Orientation::default());
+        assert_eq!(setup.origin, Origin::default());
+        let op = setup.operations.first().unwrap();
         assert_eq!(op.passes.stepover, 1.0);
         assert!(op.linking.reorder);
         assert!(
             !op.linking.allow_reverse,
             "reversing flips climb for conventional and must be asked for"
         );
+    }
+
+    /// Everything a job can say survives being written and read back, and the
+    /// written file leaves out what is only default.
+    #[test]
+    fn a_job_round_trips() {
+        let mut j = sample();
+        j.stocks.push(StockDef {
+            name: "plate".into(),
+            spec: StockSpec::FixedBox {
+                corner: [-5.0, -5.0, -12.5],
+                size: [110.0, 60.0, 25.0],
+            },
+        });
+        j.models.push(ModelDef {
+            name: "stl".into(),
+            path: "../meshes/other.stl".into(),
+            units: Some(LengthUnit::Inch),
+        });
+        let mut bottom = Setup::new("bottom");
+        bottom.models = vec!["part".into(), "stl".into()];
+        bottom.stocks = vec!["block".into(), "plate".into()];
+        bottom.wcs = 55;
+        bottom.post = "profiles/mine.toml".into();
+        bottom.orientation = Orientation {
+            z: Axis::NegZ,
+            x: Axis::PosY,
+        };
+        bottom.origin = Origin::BoxPoint {
+            of: BoxOf::Stock,
+            x: Along::Min,
+            y: Along::Center,
+            z: Along::Max,
+            offset: [0.0, 0.0, -1.5],
+        };
+        let mut unfinished = j.setups[0].operations[1].clone();
+        unfinished.tool = None;
+        bottom.operations = vec![unfinished];
+        j.setups.push(bottom);
+        j.setups[0].origin = Origin::ModelOrigin {
+            offset: [1.0, 2.0, 3.0],
+        };
+
+        let text = toml::to_string(&j).unwrap();
+        let again: Job = toml::from_str(&text).unwrap();
+        assert_eq!(again, j, "{text}");
+        // Defaults are not written out.
+        let plain = toml::to_string(&sample()).unwrap();
+        assert!(!plain.contains("orientation"), "{plain}");
+        assert!(!plain.contains("below"), "{plain}");
+    }
+
+    /// A file without a version is refused by name, not with a parse error about
+    /// some field.
+    #[test]
+    fn another_format_is_refused() {
+        let mut j = sample();
+        j.version = 7;
+        assert_eq!(j.validate(), Err(JobError::UnsupportedVersion(7)));
     }
 
     /// The reason heights are symbolic: the same job survives a different block.
@@ -894,8 +1399,22 @@ tool = "t"
         assert_eq!(
             j.validate(),
             Err(JobError::UnknownTool {
-                op: "finish".into(),
+                op: "top/finish".into(),
                 tool: "nonesuch".into()
+            })
+        );
+    }
+
+    /// A new operation has no tool; it saves, but it does not run.
+    #[test]
+    fn an_operation_without_a_tool_does_not_run() {
+        let mut j = sample();
+        j.setups[0].operations[1].tool = None;
+        assert!(j.check_common().is_ok());
+        assert_eq!(
+            j.validate(),
+            Err(JobError::NoTool {
+                op: "top/finish".into()
             })
         );
     }
@@ -910,45 +1429,111 @@ tool = "t"
             ("tolerance = 0.02", "tolerance = 0.0"),
             ("wcs = 54", "wcs = 99"),
             ("stepdown = 2.0", "stepdown = 0.0"),
+            ("margin = [2.0, 2.0, 1.0]", "margin = [2.0, -2.0, 1.0]"),
         ] {
             let j: Job = toml::from_str(&SAMPLE.replace(from, to)).unwrap();
             assert!(j.validate().is_err(), "{to} should be rejected");
         }
     }
 
+    /// Setups and stocks name what they use, and a name that is not there, or is
+    /// there twice, stops the job.
     #[test]
-    fn a_job_with_no_operations_is_refused() {
-        let j: Job = toml::from_str(
-            r#"
-[setup]
-stock = { kind = "box" }
-[tools.t]
-kind = "ball"
-diameter = 6.0
-"#,
-        )
-        .unwrap();
-        assert_eq!(j.validate(), Err(JobError::NoOperations));
+    fn references_must_resolve() {
+        let cases = [
+            (r#"models = ["part"]"#, r#"models = ["nope"]"#),
+            (r#"stocks = ["block"]"#, r#"stocks = ["nope"]"#),
+            (r#"models = ["part"]"#, "models = []"),
+            (r#"stocks = ["block"]"#, "stocks = []"),
+        ];
+        for (from, to) in cases {
+            let j: Job = toml::from_str(&SAMPLE.replace(from, to)).unwrap();
+            assert!(j.validate().is_err(), "{to} should be rejected");
+        }
+        let mut j = sample();
+        j.stocks[0].spec = StockSpec::AroundModels {
+            models: vec!["ghost".into()],
+            margin: [0.0; 3],
+            below: 0.0,
+        };
+        assert!(matches!(
+            j.check_common(),
+            Err(JobError::UnknownModel { .. })
+        ));
+        let mut j = sample();
+        j.setups.push(j.setups[0].clone());
+        assert!(matches!(
+            j.check_common(),
+            Err(JobError::DuplicateName { what: "setup", .. })
+        ));
+    }
+
+    /// A setup still being written does not stop another from running.
+    #[test]
+    fn one_setup_is_checked_on_its_own() {
+        let mut j = sample();
+        j.setups.push(Setup::new("bottom"));
+        j.check_common().unwrap();
+        j.check_setup(0).unwrap();
+        assert_eq!(j.check_setup(1), Err(JobError::NoModels("bottom".into())));
+        assert!(j.validate().is_err());
+    }
+
+    #[test]
+    fn a_setup_with_no_operations_is_refused() {
+        let mut j = sample();
+        j.setups[0].operations.clear();
+        assert_eq!(j.validate(), Err(JobError::NoOperations("top".into())));
+        j.setups.clear();
+        assert_eq!(j.validate(), Err(JobError::NoSetups));
+    }
+
+    #[test]
+    fn a_bad_orientation_is_refused() {
+        let mut j = sample();
+        j.setups[0].orientation = Orientation {
+            z: Axis::PosX,
+            x: Axis::NegX,
+        };
+        assert!(matches!(j.validate(), Err(JobError::BadOrientation { .. })));
+    }
+
+    /// A setup needs its own models and those its stocks are around.
+    #[test]
+    fn a_setup_needs_the_models_its_stock_is_around() {
+        let mut j = sample();
+        j.models.push(ModelDef {
+            name: "fixture".into(),
+            path: "fixture.step".into(),
+            units: None,
+        });
+        j.stocks[0].spec = StockSpec::AroundModels {
+            models: vec!["fixture".into()],
+            margin: [0.0; 3],
+            below: 0.0,
+        };
+        let names: Vec<&str> = j.models_for(0).iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["part", "fixture"]);
     }
 
     #[test]
     fn strategy_parameters_belong_to_their_strategy() {
         let j = sample();
-        match j.operations.first().unwrap().strategy {
+        let ops = &j.setups[0].operations;
+        match ops[0].strategy {
             StrategySpec::ZlevelRough { stepdown, .. } => assert_eq!(stepdown, 2.0),
             StrategySpec::Parallel { .. } => panic!("first operation should be roughing"),
         }
-        match j.operations.get(1).unwrap().strategy {
+        match ops[1].strategy {
             StrategySpec::Parallel { angle } => assert_eq!(angle, 90.0),
             StrategySpec::ZlevelRough { .. } => panic!("second operation should be finishing"),
         }
     }
 
-    /// Every shipped example still parses and validates: the new tool fields are
-    /// all optional.
+    /// Every shipped example parses and validates.
     #[test]
-    fn the_examples_still_validate() {
-        let job: Job = toml::from_str(include_str!("../../../examples/rail-jig.toml")).unwrap();
+    fn the_examples_validate() {
+        let job: Job = toml::from_str(include_str!("../../../examples/rail-jig.camcraft")).unwrap();
         job.validate().unwrap();
         sample().validate().unwrap();
     }
@@ -1037,8 +1622,8 @@ cutting = { feed = 2000.0, plunge_feed = 400.0 }
         ));
     }
 
-    /// Two tools the job uses may not share a number; a spare in the table may, and
-    /// one tool used by two operations is one tool.
+    /// Two tools the job uses may not share a number, in any setup; a spare in the
+    /// table may, and one tool used by two operations is one tool.
     #[test]
     fn two_used_tools_may_not_share_a_number() {
         let clash = SAMPLE.replace("number = 2", "number = 1");
@@ -1055,8 +1640,21 @@ cutting = { feed = 2000.0, plunge_feed = 400.0 }
         job.validate().unwrap();
 
         let mut shared = sample();
-        let tool = shared.operations[0].tool.clone();
-        shared.operations[1].tool = tool;
+        let tool = shared.setups[0].operations[0].tool.clone();
+        shared.setups[0].operations[1].tool = tool;
         shared.validate().unwrap();
+
+        // Across setups: the machine has one tool table.
+        let mut two = sample();
+        let mut other = two.setups[0].clone();
+        other.name = "bottom".into();
+        two.setups.push(other);
+        two.tools.get_mut("finish-4-ball").unwrap().number = 1;
+        two.setups[0].operations.truncate(1);
+        two.setups[1].operations.remove(0);
+        assert!(matches!(
+            two.validate(),
+            Err(JobError::DuplicateToolNumber { number: 1, .. })
+        ));
     }
 }

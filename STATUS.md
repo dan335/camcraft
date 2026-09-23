@@ -16,17 +16,18 @@ only the machine can tell us.
 cd D:\rust\camcraft
 
 # Look first: every operation's path as JSON, no G-code written
-cargo run --release -p camcraft-cli -- job `
-  fixtures\step\sled_base.step examples\rail-jig.toml --inspect job.json
+cargo run --release -p camcraft-cli -- job examples\rail-jig.camcraft --inspect job.json
 bash scripts/view.sh     # then drop job.json on the page
 
 # Then write one program per operation (--inspect and --out can go together)
-cargo run --release -p camcraft-cli -- job `
-  fixtures\step\sled_base.step examples\rail-jig.toml --profile masso --out out
+cargo run --release -p camcraft-cli -- job examples\rail-jig.camcraft --out out
 ```
 
-A STEP file states its own units, so `--units` is only needed for STL. Given with
-STEP it must agree with the file, or the run is refused.
+A job file names its own models (relative to itself), stocks and setups; each setup
+has its own post, work offset, orientation and work zero, and programs are named
+`<setup>-NN-<operation>`. `--setup NAME` runs only that setup; `--profile` overrides
+every setup's post. A STEP file states its own units; an STL model needs
+`units = "mm"` or `"inch"` in the job.
 
 `inspect` and `post` still exist for a single finishing pass described with flags.
 They build a one-operation job and go through the same `run_job` as `job`, so there

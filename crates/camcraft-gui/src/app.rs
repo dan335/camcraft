@@ -1,13 +1,17 @@
-//! The window: model and job on the left, the part in the middle, a log beneath.
+//! The window: the job on the left, the part in the middle, a log beneath.
 //!
-//! What runs is exactly what `camcraft job` runs. A run reads the job file afresh,
-//! loads the model at the job's tolerance and goes through `camcraft-session`, so
-//! the app never holds a second opinion about the engine.
+//! What runs is exactly what `camcraft job` runs. A run takes the setup as the app
+//! holds it and goes through `camcraft-session`, so the app never holds a second
+//! opinion about the engine.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use camcraft_core::job::{Job, StrategySpec};
-use camcraft_session::{Model, SessionError, Units, read_job};
+use camcraft_core::setup::{Meshes, Prepared, prepare};
+use camcraft_geom::mesh::TriMesh;
+use camcraft_session::{Model, SessionError};
 use eframe::egui;
 
 use crate::file_dialog::{AppFileDialog, Pick};
@@ -19,10 +23,6 @@ use crate::theme;
 use crate::tool_manager::ToolManager;
 use crate::viewport::{Content, View, Viewport};
 use crate::worker::{Outcome, Reply, Request, Worker};
-
-/// Tessellation tolerance for looking at a model before any job is open. A run
-/// always reloads the model at its job's own tolerance.
-const PREVIEW_TOLERANCE: f64 = 0.05;
 
 const STORAGE_DIALOG: &str = "file_dialog";
 const STORAGE_SETTINGS: &str = "settings";
@@ -52,21 +52,23 @@ pub struct App {
     dialog: AppFileDialog,
     worker: Worker,
     viewport: Viewport,
-    model_path: Option<PathBuf>,
-    /// What an STL's numbers mean. Chosen by the person; never guessed.
-    units: Option<Units>,
     job_path: Option<PathBuf>,
     job: Option<Job>,
-    model: Option<Model>,
-    /// Changes whenever `model` does, so the viewport uploads a new mesh once.
+    /// The job's models, loaded, by name.
+    models: BTreeMap<String, Arc<Model>>,
+    /// Which setup is showing.
+    setup: usize,
+    /// The setup's part and stock, in its frame, from its models as loaded.
+    prepared: Option<Prepared>,
+    /// Changes whenever the part drawn does, so the viewport uploads a new mesh once.
     generation: u64,
     outcome: Option<Outcome>,
     /// What the last run drew: toolpaths, stock and cutters.
     scene: Option<Scene>,
     /// Changes whenever `scene` does, so it is uploaded once.
     scene_generation: u64,
-    /// Changes only when a different model is opened, so the view is framed on it
-    /// once and never snapped back by a re-run.
+    /// Changes only when a different job or setup is opened, so the view is framed
+    /// on it once and never snapped back by a re-run.
     opened: u64,
     view: View,
     /// Segments shown, in machine order: the scrub.
@@ -115,11 +117,6 @@ fn bit(ui: &mut egui::Ui, mask: &mut u32, index: usize, label: impl Into<egui::W
     }
 }
 
-fn is_stl(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("stl"))
-}
-
 fn file_name(path: &Path) -> String {
     path.file_name().map_or_else(
         || path.display().to_string(),
@@ -130,10 +127,14 @@ fn file_name(path: &Path) -> String {
 /// A session error, worded for this app rather than for the command line.
 fn explain(e: &SessionError) -> String {
     match e {
-        SessionError::StlNeedsUnits => {
-            "This STL carries no units. Choose millimetres or inches under Model; \
-             guessing would make an inch part 25.4 times too small."
-                .into()
+        SessionError::InModel { name, source }
+            if matches!(**source, SessionError::StlNeedsUnits) =>
+        {
+            format!(
+                "model '{name}' is an STL, which carries no units. Say whether it is in \
+                 millimetres or inches; guessing would make an inch part 25.4 times too \
+                 small."
+            )
         }
         other => other.to_string(),
     }
@@ -154,11 +155,11 @@ impl App {
             dialog: AppFileDialog::new(storage),
             worker: Worker::default(),
             viewport: Viewport::default(),
-            model_path: None,
-            units: None,
             job_path: None,
             job: None,
-            model: None,
+            models: BTreeMap::new(),
+            setup: 0,
+            prepared: None,
             generation: 0,
             outcome: None,
             scene: None,
@@ -220,21 +221,11 @@ impl App {
         self.viewport.focus(steep.at, 12.0);
     }
 
-    /// The app, with files already open, as from the command line.
-    ///
-    /// The job is read first, so the model is tessellated once, at the job's own
-    /// tolerance.
-    pub fn with_files(
-        cc: &eframe::CreationContext<'_>,
-        model: Option<PathBuf>,
-        job: Option<PathBuf>,
-    ) -> Self {
+    /// The app, with a job already open, as from the command line.
+    pub fn with_job(cc: &eframe::CreationContext<'_>, job: Option<PathBuf>) -> Self {
         let mut app = Self::new(cc);
         if let Some(job) = job {
             app.open_job(&cc.egui_ctx, job);
-        }
-        if let Some(model) = model {
-            app.open_model(&cc.egui_ctx, model);
         }
         app
     }
@@ -247,63 +238,51 @@ impl App {
         self.log.push((level, text.into()));
     }
 
-    /// Open a model file, as if picked.
-    pub fn open_model(&mut self, ctx: &egui::Context, path: PathBuf) {
-        self.note(Level::Info, format!("model: {}", path.display()));
-        self.model = None;
-        self.clear_run();
-        self.opened += 1;
-        if !is_stl(&path) {
-            // STEP states its own units; anything given here would only be a
-            // chance to contradict it.
-            self.units = None;
-        }
-        self.model_path = Some(path);
-        self.load(ctx);
-    }
-
-    /// Open a job file, as if picked.
+    /// Open a job file and its models, as if picked.
     pub fn open_job(&mut self, ctx: &egui::Context, path: PathBuf) {
-        self.clear_run();
-        match read_job(&path) {
-            Ok(job) => {
-                self.note(
-                    Level::Info,
-                    format!(
-                        "job: {} ({} operation(s), tolerance {})",
-                        path.display(),
-                        job.operations.len(),
-                        self.measure().length_trimmed(job.tolerance)
-                    ),
-                );
-                self.job = Some(job);
-                self.job_path = Some(path);
-                // The preview was tessellated without a job; look again at the
-                // job's own tolerance.
-                if self.model_path.is_some() {
-                    self.load(ctx);
-                }
-            }
-            Err(e) => {
-                self.note(Level::Error, explain(&e));
-                self.job = None;
-                self.job_path = None;
-            }
-        }
+        self.note(Level::Info, format!("job: {}", path.display()));
+        self.worker.start(ctx, Request::Open { path });
     }
 
-    /// Run the job, the way `camcraft job` does.
+    /// Lay out the showing setup from the models as loaded, for drawing before any
+    /// run. Says nothing when the setup is not complete yet.
+    fn prepare_setup(&mut self) {
+        self.prepared = self.job.as_ref().and_then(|job| {
+            let meshes: Meshes<'_> = self
+                .models
+                .iter()
+                .map(|(n, m)| (n.as_str(), &m.mesh))
+                .collect();
+            prepare(job, self.setup, &meshes).ok()
+        });
+        self.generation += 1;
+    }
+
+    /// Show setup `index`.
+    fn show_setup(&mut self, index: usize) {
+        self.setup = index;
+        self.clear_run();
+        self.prepare_setup();
+        self.opened += 1;
+    }
+
+    /// Run the showing setup, the way `camcraft job` does.
     pub fn start_run(&mut self, ctx: &egui::Context) {
-        let (Some(model), Some(job)) = (self.model_path.clone(), self.job_path.clone()) else {
+        let Some(job) = self.job.clone() else {
             return;
         };
         self.note(Level::Info, "running…");
+        let models = job
+            .models_for(self.setup)
+            .iter()
+            .filter_map(|m| Some((m.name.clone(), self.models.get(&m.name)?.clone())))
+            .collect();
         self.worker.start(
             ctx,
             Request::Run {
-                model,
-                units: self.units,
-                job,
+                job: Box::new(job),
+                setup: self.setup,
+                models,
             },
         );
     }
@@ -319,10 +298,10 @@ impl App {
         self.outcome.as_ref()
     }
 
-    /// Open the model dialog, as the button would. Only the snapshot harness asks.
+    /// Open the job dialog, as the button would. Only the snapshot harness asks.
     #[cfg(all(test, feature = "ui-snapshots"))]
     pub fn open_dialog_for_snapshot(&mut self) {
-        self.dialog.open(Pick::Model);
+        self.dialog.open(Pick::Job);
     }
 
     /// Put the scrub part-way through operation `op`, and show only `roles`. Only
@@ -374,67 +353,76 @@ impl App {
         self.settings_open = true;
     }
 
-    fn load(&mut self, ctx: &egui::Context) {
-        let Some(path) = self.model_path.clone() else {
-            return;
-        };
-        if is_stl(&path) && self.units.is_none() {
-            self.note(
-                Level::Warn,
-                "choose the units this STL is in before it can be loaded",
-            );
-            return;
-        }
-        let tolerance = self.job.as_ref().map_or(PREVIEW_TOLERANCE, |j| j.tolerance);
-        self.worker.start(
-            ctx,
-            Request::Load {
-                path,
-                units: self.units,
-                tolerance,
-            },
-        );
-    }
-
     fn can_run(&self) -> bool {
-        let units_ok = self
-            .model_path
-            .as_deref()
-            .is_some_and(|p| !is_stl(p) || self.units.is_some());
-        units_ok && self.job_path.is_some() && self.busy().is_none()
+        let ready = self.job.as_ref().is_some_and(|job| {
+            job.check_common().is_ok()
+                && job.check_setup(self.setup).is_ok()
+                && job
+                    .models_for(self.setup)
+                    .iter()
+                    .all(|m| self.models.contains_key(&m.name))
+        });
+        ready && self.busy().is_none()
     }
 
     fn accept(&mut self, reply: Reply) {
         match reply {
-            Reply::Loaded(Ok(model)) => {
-                for n in &model.notes {
-                    self.log.push((Level::Info, n.clone()));
+            Reply::Opened(opened) => match *opened {
+                Ok(opened) => {
+                    self.clear_run();
+                    self.models.clear();
+                    for (name, model) in opened.models {
+                        match model {
+                            Ok(model) => {
+                                for n in &model.notes {
+                                    self.log.push((Level::Info, format!("{name}: {n}")));
+                                }
+                                for w in &model.warnings {
+                                    self.log.push((Level::Warn, format!("{name}: {w}")));
+                                }
+                                self.models.insert(name, model);
+                            }
+                            Err(e) => self.note(Level::Error, explain(&e)),
+                        }
+                    }
+                    let job = opened.job;
+                    self.note(
+                        Level::Info,
+                        format!(
+                            "{} setup(s), {} model(s), tolerance {}",
+                            job.setups.len(),
+                            job.models.len(),
+                            self.measure().length_trimmed(job.tolerance)
+                        ),
+                    );
+                    if let Err(e) = job.check_common() {
+                        self.note(Level::Warn, e.to_string());
+                    }
+                    self.job = Some(job);
+                    self.job_path = Some(opened.path);
+                    self.show_setup(0);
                 }
-                for w in &model.warnings {
-                    self.log.push((Level::Warn, w.clone()));
-                }
-                self.model = Some(model);
-                self.generation += 1;
-            }
-            Reply::Loaded(Err(e)) => self.note(Level::Error, explain(&e)),
+                Err(e) => self.note(Level::Error, explain(&e)),
+            },
             Reply::Ran(outcome) => match *outcome {
                 Ok(outcome) => {
-                    for n in outcome.model.notes.iter().chain(&outcome.ran.notes) {
+                    for n in &outcome.ran.notes {
                         self.log.push((Level::Info, n.clone()));
                     }
                     for w in &outcome.ran.warnings {
                         self.log.push((Level::Warn, w.clone()));
                     }
                     let verdict = if outcome.ran.result.is_clean() {
-                        (Level::Info, "verified: the job may be posted")
+                        (Level::Info, "verified: the setup may be posted")
                     } else {
-                        (Level::Error, "NOT verified: the job would be refused")
+                        (Level::Error, "NOT verified: the setup would be refused")
                     };
                     self.note(verdict.0, verdict.1);
-                    self.model = Some(outcome.model.clone());
-                    self.job = Some(outcome.job.clone());
                     self.generation += 1;
-                    let scene = Scene::build(&outcome.job, &outcome.ran.result);
+                    let Some(setup) = outcome.job.setups.get(outcome.setup) else {
+                        return;
+                    };
+                    let scene = Scene::build(&outcome.job, setup, &outcome.ran.result);
                     // A new run starts fully shown, every operation visible.
                     self.scrub = scene.segments.len();
                     self.view.ops = u32::MAX;
@@ -455,57 +443,19 @@ impl App {
         }
     }
 
+    /// The part drawn: as the last run of this setup machined it, or as laid out.
+    fn part(&self) -> Option<&TriMesh> {
+        match &self.outcome {
+            Some(o) if o.setup == self.setup => Some(&o.ran.part),
+            _ => self.prepared.as_ref().map(|p| &p.part),
+        }
+    }
+
     fn side(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let m = self.measure();
         let idle = self.busy().is_none() && !self.dialog.is_open();
 
-        ui.heading("Model");
-        if ui
-            .add_enabled(idle, egui::Button::new("Open model…"))
-            .clicked()
-        {
-            self.dialog.open(Pick::Model);
-        }
-        if let Some(path) = self.model_path.clone() {
-            ui.monospace(file_name(&path));
-            if is_stl(&path) {
-                let before = self.units;
-                ui.horizontal(|ui| {
-                    ui.label("Units:");
-                    ui.add_enabled_ui(idle, |ui| {
-                        ui.radio_value(&mut self.units, Some(Units::Millimetres), "mm");
-                        ui.radio_value(&mut self.units, Some(Units::Inches), "inch");
-                    });
-                });
-                if self.units != before {
-                    self.model = None;
-                    self.clear_run();
-                    self.load(&ctx);
-                }
-            }
-        }
-        if let Some(model) = &self.model {
-            let e = model.bounds.extent();
-            egui::Grid::new("model").num_columns(2).show(ui, |ui| {
-                ui.label("file units");
-                ui.label(&model.units);
-                ui.end_row();
-                ui.label("size");
-                ui.label(format!(
-                    "{} × {} × {}",
-                    m.number(e.x, 1),
-                    m.number(e.y, 1),
-                    m.length(e.z, 1)
-                ));
-                ui.end_row();
-                ui.label("triangles");
-                ui.label(model.mesh.len().to_string());
-                ui.end_row();
-            });
-        }
-
-        ui.separator();
         ui.heading("Job");
         if ui
             .add_enabled(idle, egui::Button::new("Open job…"))
@@ -513,20 +463,72 @@ impl App {
         {
             self.dialog.open(Pick::Job);
         }
+        let mut pick_setup = None;
         if let (Some(path), Some(job)) = (&self.job_path, &self.job) {
             ui.monospace(file_name(path));
             ui.label(format!("tolerance {}", m.length_trimmed(job.tolerance)));
-            for (i, op) in job.operations.iter().enumerate() {
-                let strategy = match op.strategy {
-                    StrategySpec::Parallel { .. } => "parallel",
-                    StrategySpec::ZlevelRough { .. } => "z-level rough",
-                };
-                let tool = job.tool_for(op).map_or_else(String::new, |t| {
-                    let kind = format!("{:?}", t.kind).to_lowercase();
-                    format!(", {kind} Ø{}", m.length_trimmed(t.diameter))
-                });
-                ui.label(format!("{}. {} — {strategy}{tool}", i + 1, op.name));
+
+            ui.add_space(4.0);
+            ui.strong("Models");
+            for def in &job.models {
+                match self.models.get(&def.name) {
+                    Some(model) => {
+                        let e = model.bounds.extent();
+                        ui.label(format!(
+                            "{}  {} × {} × {}, {} triangles",
+                            def.name,
+                            m.number(e.x, 1),
+                            m.number(e.y, 1),
+                            m.length(e.z, 1),
+                            thousands(model.mesh.len())
+                        ));
+                    }
+                    None => {
+                        ui.colored_label(
+                            ui.visuals().error_fg_color,
+                            format!("{}  not loaded: {}", def.name, def.path),
+                        );
+                    }
+                }
             }
+
+            ui.add_space(4.0);
+            ui.strong("Setup");
+            let current = job
+                .setups
+                .get(self.setup)
+                .map_or_else(String::new, |s| s.name.clone());
+            egui::ComboBox::from_id_salt("setup")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    for (i, s) in job.setups.iter().enumerate() {
+                        if ui.selectable_label(i == self.setup, &s.name).clicked() {
+                            pick_setup = Some(i);
+                        }
+                    }
+                });
+            if let Some(setup) = job.setups.get(self.setup) {
+                ui.label(format!("G{}, post {}", setup.wcs, setup.post));
+                for (i, op) in setup.operations.iter().enumerate() {
+                    let strategy = match op.strategy {
+                        StrategySpec::Parallel { .. } => "parallel",
+                        StrategySpec::ZlevelRough { .. } => "z-level rough",
+                    };
+                    let tool = job.tool_for(op).map_or_else(String::new, |t| {
+                        let kind = format!("{:?}", t.kind).to_lowercase();
+                        format!(", {kind} Ø{}", m.length_trimmed(t.diameter))
+                    });
+                    ui.label(format!("{}. {} — {strategy}{tool}", i + 1, op.name));
+                }
+                if let Err(e) = job.check_setup(self.setup) {
+                    ui.colored_label(ui.visuals().warn_fg_color, e.to_string());
+                }
+            }
+        }
+        if let Some(i) = pick_setup
+            && i != self.setup
+        {
+            self.show_setup(i);
         }
 
         ui.separator();
@@ -726,15 +728,18 @@ impl App {
             ui.separator();
             ui.heading("Steep descents");
             ui.weak("cutting moves that drop further than allowed while barely advancing");
-            let job = self.outcome.as_ref().map(|o| &o.job);
+            let setup = self
+                .outcome
+                .as_ref()
+                .and_then(|o| o.job.setups.get(o.setup));
             for (i, op) in scene.ops.iter().enumerate() {
                 let mine: Vec<&Steep> = scene.steep.iter().filter(|s| s.op == i).collect();
                 if mine.is_empty() {
                     continue;
                 }
                 let deepest = mine.iter().map(|s| s.drop).fold(0.0, f64::max);
-                let allowance = job
-                    .and_then(|j| j.operations.get(i))
+                let allowance = setup
+                    .and_then(|s| s.operations.get(i))
                     .map_or(0.0, |o| o.passes.max_cut_step);
                 ui.label(format!(
                     "{}. {}: {} move(s), deepest {} of {} allowed",
@@ -816,7 +821,7 @@ impl App {
         });
         let part = self.view.part && !(stock.is_some() && self.hide_part_with_stock);
         Content {
-            part: self.model.as_ref().map(|m| (self.generation, &m.mesh)),
+            part: self.part().map(|mesh| (self.generation, mesh)),
             framing: self.opened,
             scene: self.scene.as_ref().map(|s| (self.scene_generation, s)),
             stock,
@@ -880,7 +885,6 @@ impl eframe::App for App {
         self.settings.show(&ctx, &mut self.settings_open);
         if let Some((pick, path)) = self.dialog.update(&ctx) {
             match pick {
-                Pick::Model => self.open_model(&ctx, path),
                 Pick::Job => self.open_job(&ctx, path),
             }
         }

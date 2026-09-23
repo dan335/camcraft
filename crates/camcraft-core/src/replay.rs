@@ -1,4 +1,4 @@
-//! The material at any point in a finished job.
+//! The material at any point in a finished setup.
 //!
 //! A run keeps the stock only at its keyframes: before the first operation and after
 //! each. [`Replay`] recovers it anywhere between, by starting from the nearest
@@ -21,8 +21,8 @@
 
 use camcraft_sim::stock::{SimMove, Stock};
 
-use crate::job::Job;
-use crate::run::{JobResult, RunError, cutting_tool};
+use crate::job::{Job, Setup};
+use crate::run::{RunError, SetupResult, cutting_tool};
 use crate::simadapt::sim_moves;
 use crate::stock::EffectiveTool;
 
@@ -43,7 +43,7 @@ struct Pass {
     moves: Vec<SimMove>,
 }
 
-/// A finished job, ready to have its material recovered at any position.
+/// A finished setup, ready to have its material recovered at any position.
 #[derive(Debug, Clone)]
 pub struct Replay {
     passes: Vec<Pass>,
@@ -52,9 +52,9 @@ pub struct Replay {
 }
 
 impl Replay {
-    /// Everything needed to replay `result`, which must be `job`'s.
-    pub fn new(job: &Job, result: &JobResult) -> Result<Self, RunError> {
-        let passes = job
+    /// Everything needed to replay `result`, which must be `setup`'s, in `job`.
+    pub fn new(job: &Job, setup: &Setup, result: &SetupResult) -> Result<Self, RunError> {
+        let passes = setup
             .operations
             .iter()
             .zip(&result.operations)
@@ -111,14 +111,13 @@ impl Replay {
 )]
 mod tests {
     use super::*;
-    use crate::run::run_job;
+    use crate::run::run_setup;
+    use crate::setup::Meshes;
     use camcraft_geom::synthetic;
 
     const JOB: &str = r#"
+version = 1
 tolerance = 0.05
-
-[setup]
-stock = { kind = "box", margin = [1.0, 1.0, 2.0] }
 
 [tools.rough]
 kind = "flat"
@@ -130,23 +129,40 @@ kind = "ball"
 diameter = 4.0
 number = 2
 
-[[operation]]
+[[model]]
+name = "dome"
+path = "dome.stl"
+units = "mm"
+
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [1.0, 1.0, 2.0]
+
+[[setup]]
+name = "top"
+models = ["dome"]
+stocks = ["block"]
+
+[[setup.operation]]
 name = "rough"
 strategy = "zlevel-rough"
 tool = "rough"
 stepdown = 2.5
 passes = { stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.5, axial = 0.5 } }
 
-[[operation]]
+[[setup.operation]]
 name = "finish"
 strategy = "parallel"
 tool = "finish"
 passes = { stepover = 0.8, feed = 2000.0 }
 "#;
 
-    fn run() -> (Job, JobResult) {
+    fn run() -> (Job, SetupResult) {
         let job: Job = toml::from_str(JOB).unwrap();
-        let result = run_job(&job, &synthetic::uv_sphere(8.0, 60, 84)).unwrap();
+        let dome = synthetic::uv_sphere(8.0, 60, 84);
+        let meshes: Meshes<'_> = [("dome", &dome)].into_iter().collect();
+        let result = run_setup(&job, 0, &meshes).unwrap();
         (job, result)
     }
 
@@ -159,7 +175,7 @@ passes = { stepover = 0.8, feed = 2000.0 }
     #[test]
     fn stages_are_the_keyframes_of_the_run() {
         let (job, result) = run();
-        assert_eq!(result.stages.len(), job.operations.len() + 1);
+        assert_eq!(result.stages.len(), job.setups[0].operations.len() + 1);
         let block = result.stages.first().unwrap();
         let top = result.heights.stock_top;
         assert!(
@@ -182,8 +198,8 @@ passes = { stepover = 0.8, feed = 2000.0 }
     #[test]
     fn replay_reproduces_every_stage() {
         let (job, result) = run();
-        let replay = Replay::new(&job, &result).unwrap();
-        for op in 0..job.operations.len() {
+        let replay = Replay::new(&job, &job.setups[0], &result).unwrap();
+        for op in 0..job.setups[0].operations.len() {
             let n = replay.moves_in(op);
             let got = replay.stock_at(Position { op, moves: n }).unwrap();
             assert_eq!(
@@ -200,7 +216,7 @@ passes = { stepover = 0.8, feed = 2000.0 }
     #[test]
     fn pieces_equal_the_whole() {
         let (job, result) = run();
-        let replay = Replay::new(&job, &result).unwrap();
+        let replay = Replay::new(&job, &job.setups[0], &result).unwrap();
         // A fixed pseudo-random sequence: reproducible, and no dependency.
         let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
         let mut next = |max: usize| {
@@ -209,7 +225,7 @@ passes = { stepover = 0.8, feed = 2000.0 }
             seed ^= seed << 17;
             1 + usize::try_from(seed % max as u64).unwrap()
         };
-        for op in 0..job.operations.len() {
+        for op in 0..job.setups[0].operations.len() {
             let n = replay.moves_in(op);
             assert!(n > 50, "operation {op} is too short to prove anything");
             let whole = replay.stock_at(Position { op, moves: n }).unwrap();
@@ -248,7 +264,7 @@ passes = { stepover = 0.8, feed = 2000.0 }
     #[test]
     fn midway_is_between_the_keyframes() {
         let (job, result) = run();
-        let replay = Replay::new(&job, &result).unwrap();
+        let replay = Replay::new(&job, &job.setups[0], &result).unwrap();
         let n = replay.moves_in(0);
         let mid = replay
             .stock_at(Position {

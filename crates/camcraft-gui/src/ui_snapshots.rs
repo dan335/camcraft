@@ -80,12 +80,10 @@ fn main_window_after_a_run() {
 
     let ctx = h.ctx.clone();
     h.state_mut()
-        .open_model(&ctx, repo("fixtures/step/sled_base.step"));
+        .open_job(&ctx, repo("examples/rail-jig.camcraft"));
     settle(&mut h);
-    shoot(&mut h, "model_loaded");
+    shoot(&mut h, "job_opened");
 
-    h.state_mut().open_job(&ctx, repo("examples/rail-jig.toml"));
-    settle(&mut h);
     h.state_mut().start_run(&ctx);
     settle(&mut h);
 
@@ -145,12 +143,12 @@ fn main_window_after_a_run() {
 /// The file dialog, open on the model filter: drawn inside the app, themed with it.
 #[test]
 #[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
-fn open_model_dialog() {
+fn open_job_dialog() {
     let mut h = harness();
     h.run_steps(2);
     h.state_mut().open_dialog_for_snapshot();
     h.run_steps(4);
-    shoot(&mut h, "open_model_dialog");
+    shoot(&mut h, "open_job_dialog");
 }
 
 /// The tool manager, rendered from its real UI: the library with a fully

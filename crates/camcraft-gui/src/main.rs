@@ -1,6 +1,6 @@
 //! camcraft desktop app.
 //!
-//! Open a part and a job, run it, and see what will be cut. It runs on the same
+//! Open a job, run its setups, and see what will be cut. It runs on the same
 //! engine path as the `camcraft` command line, through `camcraft-session`, so the
 //! two cannot disagree about what a file means, what runs, or what may be posted.
 
@@ -11,6 +11,8 @@ mod measure;
 mod scene;
 mod settings;
 mod stock_view;
+#[cfg(test)]
+mod test_jobs;
 mod theme;
 mod tool_drawing;
 mod tool_editor;
@@ -22,28 +24,13 @@ mod worker;
 
 use eframe::egui;
 
-/// Files named on the command line: `camcraft-gui [MODEL] [JOB]`, in either order.
-/// A `.toml` is the job; anything else is the model, and the app says so if it
-/// cannot read it.
-fn files_from_args() -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
-    let mut model = None;
-    let mut job = None;
-    for arg in std::env::args_os().skip(1) {
-        let path = std::path::PathBuf::from(arg);
-        if path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("toml"))
-        {
-            job = Some(path);
-        } else {
-            model = Some(path);
-        }
-    }
-    (model, job)
+/// The job named on the command line, if any: `camcraft-gui [JOB]`.
+fn job_from_args() -> Option<std::path::PathBuf> {
+    std::env::args_os().nth(1).map(std::path::PathBuf::from)
 }
 
 fn main() -> eframe::Result {
-    let (model, job) = files_from_args();
+    let job = job_from_args();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("camcraft")
@@ -54,6 +41,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "camcraft",
         options,
-        Box::new(|cc| Ok(Box::new(app::App::with_files(cc, model, job)))),
+        Box::new(|cc| Ok(Box::new(app::App::with_job(cc, job)))),
     )
 }

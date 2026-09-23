@@ -4,45 +4,56 @@
 //! window must stay responsive through both, so each runs on its own thread and
 //! reports back over a channel, waking the UI when it is done. One piece of work at
 //! a time: the UI disables what would start another.
+//!
+//! A run takes the job as the app holds it, not as it is on disk, so what runs is
+//! what is on screen, saved or not.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use camcraft_core::job::Job;
-use camcraft_session::{Model, Ran, SessionError, Units, load_model, read_job, run};
+use camcraft_session::{Model, Models, Ran, SessionError, load_job_model, read_job, run_setup};
 use eframe::egui;
 
 /// Work for the worker.
 #[derive(Debug, Clone)]
 pub enum Request {
-    /// Load a model to look at, before any job has run.
-    Load {
-        /// The model file.
+    /// Read a job file and load every model it names, at the job's tolerance.
+    Open {
+        /// The job file.
         path: PathBuf,
-        /// What an STL's numbers mean.
-        units: Option<Units>,
-        /// Tessellation follows from this machining tolerance.
-        tolerance: f64,
     },
-    /// Run a job, the way `camcraft job` does: read the job file, load the model at
-    /// the job's tolerance, run.
+    /// Run one setup of a job as it stands, the way `camcraft job` runs it.
     Run {
-        /// The model file.
-        model: PathBuf,
-        /// What an STL's numbers mean.
-        units: Option<Units>,
-        /// The job file, read afresh so the file on disk is what runs.
-        job: PathBuf,
+        /// The job, as it is in the app, saved or not.
+        job: Box<Job>,
+        /// Which setup.
+        setup: usize,
+        /// Its models, loaded, by name.
+        models: BTreeMap<String, Arc<Model>>,
     },
+}
+
+/// A job file, opened.
+#[derive(Debug)]
+pub struct Opened {
+    /// Where it was.
+    pub path: PathBuf,
+    /// The job.
+    pub job: Job,
+    /// Each model it names, loaded or why not.
+    pub models: BTreeMap<String, Result<Arc<Model>, SessionError>>,
 }
 
 /// What a finished run produced.
 #[derive(Debug, Clone)]
 pub struct Outcome {
-    /// The model as loaded for this job.
-    pub model: Model,
-    /// The job as read.
+    /// The job as it was run.
     pub job: Job,
+    /// Which setup.
+    pub setup: usize,
     /// What running it produced.
     pub ran: Ran,
 }
@@ -50,9 +61,9 @@ pub struct Outcome {
 /// What came back.
 #[derive(Debug)]
 pub enum Reply {
-    /// A model to look at.
-    Loaded(Result<Model, SessionError>),
-    /// A job, run.
+    /// A job file, opened.
+    Opened(Box<Result<Opened, SessionError>>),
+    /// A setup, run.
     Ran(Box<Result<Outcome, SessionError>>),
     /// The thread stopped without replying: it panicked, most likely inside the
     /// geometry kernel. What it was doing.
@@ -78,8 +89,8 @@ impl Worker {
             return;
         }
         let what = match request {
-            Request::Load { .. } => "loading model",
-            Request::Run { .. } => "running job",
+            Request::Open { .. } => "opening job",
+            Request::Run { .. } => "running setup",
         };
         let (tx, rx) = channel();
         let ctx = ctx.clone();
@@ -106,18 +117,36 @@ impl Worker {
     }
 }
 
+/// The folder a job's relative paths start from.
+pub fn job_dir(path: &std::path::Path) -> PathBuf {
+    path.parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf)
+}
+
 fn execute(request: Request) -> Reply {
     match request {
-        Request::Load {
-            path,
-            units,
-            tolerance,
-        } => Reply::Loaded(load_model(&path, units, tolerance)),
-        Request::Run { model, units, job } => {
-            let outcome = read_job(&job).and_then(|job| {
-                let model = load_model(&model, units, job.tolerance)?;
-                let ran = run(&model, &job)?;
-                Ok(Outcome { model, job, ran })
+        Request::Open { path } => {
+            let opened = read_job(&path).map(|job| {
+                let dir = job_dir(&path);
+                let models = job
+                    .models
+                    .iter()
+                    .map(|m| {
+                        let loaded = load_job_model(&dir, m, job.tolerance).map(Arc::new);
+                        (m.name.clone(), loaded)
+                    })
+                    .collect();
+                Opened { path, job, models }
+            });
+            Reply::Opened(Box::new(opened))
+        }
+        Request::Run { job, setup, models } => {
+            let refs: Models<'_> = models.iter().map(|(n, m)| (n.as_str(), &**m)).collect();
+            let outcome = run_setup(&job, setup, &refs).map(|ran| Outcome {
+                job: *job,
+                setup,
+                ran,
             });
             Reply::Ran(Box::new(outcome))
         }
@@ -125,16 +154,10 @@ fn execute(request: Request) -> Reply {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
-
-    fn fixture(name: &str) -> PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/step")
-            .join(name)
-    }
 
     fn wait(worker: &mut Worker) -> Reply {
         let deadline = Instant::now() + Duration::from_secs(120);
@@ -147,48 +170,43 @@ mod tests {
         }
     }
 
-    const JOB: &str = r#"
-tolerance = 0.05
-[setup]
-stock = { kind = "box", margin = [1.0, 1.0, 1.0] }
-[tools.ball]
-kind = "ball"
-diameter = 3.0
-[[operation]]
-name = "finish"
-strategy = "parallel"
-tool = "ball"
-passes = { stepover = 1.5, feed = 1500.0 }
-"#;
-
     /// A run through the worker is the CLI's run: the same result as calling the
-    /// session directly with the same files.
+    /// session directly with the same job and models.
     #[test]
     fn a_run_through_the_worker_matches_the_session_directly() {
-        let dir = std::env::temp_dir().join(format!("camcraft-gui-worker-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let job_path = dir.join("job.toml");
-        std::fs::write(&job_path, JOB).unwrap();
-        let model_path = fixture("hinge_jig.step");
-
+        let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/rail-jig.camcraft");
         let mut worker = Worker::default();
         let ctx = egui::Context::default();
+        worker.start(&ctx, Request::Open { path: example });
+        assert_eq!(worker.busy(), Some("opening job"));
+        let Reply::Opened(opened) = wait(&mut worker) else {
+            panic!("expected an opened job");
+        };
+        let opened = (*opened).unwrap();
+        let models: BTreeMap<String, Arc<Model>> = opened
+            .models
+            .into_iter()
+            .map(|(n, m)| (n, m.unwrap()))
+            .collect();
+
+        // Something quicker than the example's roughing: its finish alone.
+        let mut job = opened.job;
+        job.setups[0].operations.remove(0);
+        job.tolerance = 0.1;
         worker.start(
             &ctx,
             Request::Run {
-                model: model_path.clone(),
-                units: None,
-                job: job_path.clone(),
+                job: Box::new(job.clone()),
+                setup: 0,
+                models: models.clone(),
             },
         );
-        assert_eq!(worker.busy(), Some("running job"));
         // A second request while busy is ignored, not queued.
         worker.start(
             &ctx,
-            Request::Load {
-                path: model_path.clone(),
-                units: None,
-                tolerance: 0.05,
+            Request::Open {
+                path: PathBuf::from("elsewhere.camcraft"),
             },
         );
         let Reply::Ran(outcome) = wait(&mut worker) else {
@@ -197,9 +215,8 @@ passes = { stepover = 1.5, feed = 1500.0 }
         let outcome = (*outcome).unwrap();
         assert!(worker.busy().is_none());
 
-        let job = read_job(&job_path).unwrap();
-        let model = load_model(&model_path, None, job.tolerance).unwrap();
-        let direct = run(&model, &job).unwrap();
+        let refs: Models<'_> = models.iter().map(|(n, m)| (n.as_str(), &**m)).collect();
+        let direct = run_setup(&job, 0, &refs).unwrap();
         let (a, b) = (&outcome.ran.result, &direct.result);
         assert_eq!(a.operations.len(), b.operations.len());
         for (x, y) in a.operations.iter().zip(&b.operations) {
@@ -215,15 +232,13 @@ passes = { stepover = 1.5, feed = 1500.0 }
         let mut worker = Worker::default();
         worker.start(
             &egui::Context::default(),
-            Request::Load {
-                path: PathBuf::from("no-units.stl"),
-                units: None,
-                tolerance: 0.05,
+            Request::Open {
+                path: PathBuf::from("no-such-job.camcraft"),
             },
         );
         match wait(&mut worker) {
-            Reply::Loaded(Err(SessionError::StlNeedsUnits)) => {}
-            other => panic!("expected a units refusal, got {other:?}"),
+            Reply::Opened(r) if matches!(*r, Err(SessionError::JobIo { .. })) => {}
+            other => panic!("expected a read error, got {other:?}"),
         }
     }
 }

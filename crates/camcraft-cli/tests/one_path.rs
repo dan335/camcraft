@@ -22,10 +22,8 @@ use camcraft_geom::synthetic;
 use serde_json::Value;
 
 const JOB: &str = r#"
+version = 1
 tolerance = 0.1
-
-[setup]
-stock = { kind = "box", margin = [1.0, 1.0, 2.0] }
 
 [tools.rough]
 kind = "flat"
@@ -38,7 +36,22 @@ kind = "ball"
 diameter = 3.0
 number = 2
 
-[[operation]]
+[[model]]
+name = "dome"
+path = "dome.stl"
+units = "mm"
+
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [1.0, 1.0, 2.0]
+
+[[setup]]
+name = "top"
+models = ["dome"]
+stocks = ["block"]
+
+[[setup.operation]]
 name = "rough"
 strategy = "zlevel-rough"
 tool = "rough"
@@ -46,7 +59,7 @@ stepdown = 2.0
 passes = { stepover = 2.0, feed = 1800.0, stock_to_leave = { radial = 0.4, axial = 0.4 } }
 heights = { clearance = { ref = "stock-top", offset = 5.0 } }
 
-[[operation]]
+[[setup.operation]]
 name = "finish"
 strategy = "parallel"
 tool = "finish"
@@ -163,18 +176,15 @@ fn expected(path: &Value) -> Vec<(bool, [f64; 3])> {
 #[test]
 fn every_program_is_the_path_the_inspector_shows() {
     let dir = scratch("every_program_is_the_path_the_inspector_shows");
-    let model = dome(&dir);
-    let job = dir.join("job.toml");
+    dome(&dir);
+    let job = dir.join("job.camcraft");
     std::fs::write(&job, JOB).unwrap();
     let json = dir.join("inspect.json");
     let programs = dir.join("out");
 
     camcraft(&[
         "job",
-        model.to_str().unwrap(),
         job.to_str().unwrap(),
-        "--units",
-        "mm",
         "--profile",
         "masso",
         "--inspect",
@@ -191,7 +201,7 @@ fn every_program_is_the_path_the_inspector_shows() {
 
     for (i, op) in ops.iter().enumerate() {
         let name = op["name"].as_str().unwrap();
-        let file = programs.join(format!("{:02}-{name}.nc", i + 1));
+        let file = programs.join(format!("top-{:02}-{name}.nc", i + 1));
         let got = motions(&std::fs::read_to_string(&file).unwrap());
         let want = expected(&op["path"]);
         assert!(want.len() > 50, "{name}: suspiciously short path");
@@ -236,17 +246,27 @@ fn inspect_is_the_same_path_as_the_equivalent_job() {
     ]);
 
     // The same operation, written out as a job file.
-    let job = dir.join("job.toml");
+    let job = dir.join("job.camcraft");
     std::fs::write(
         &job,
         r#"
+version = 1
 tolerance = 0.1
-[setup]
-stock = { kind = "box" }
 [tools.cutter]
 kind = "ball"
 diameter = 3.0
-[[operation]]
+[[model]]
+name = "dome"
+path = "dome.stl"
+units = "mm"
+[[stock]]
+name = "block"
+kind = "around-models"
+[[setup]]
+name = "finish"
+models = ["dome"]
+stocks = ["block"]
+[[setup.operation]]
 name = "finish"
 strategy = "parallel"
 tool = "cutter"
@@ -259,10 +279,7 @@ linking = { retract_feed = 2000.0, plunge_feed = 500.0 }
     let file = dir.join("file.json");
     camcraft(&[
         "job",
-        model.to_str().unwrap(),
         job.to_str().unwrap(),
-        "--units",
-        "mm",
         "--inspect",
         file.to_str().unwrap(),
     ]);
@@ -278,16 +295,13 @@ linking = { retract_feed = 2000.0, plunge_feed = 500.0 }
 #[test]
 fn job_with_only_inspect_writes_no_program() {
     let dir = scratch("job_with_only_inspect_writes_no_program");
-    let model = dome(&dir);
-    let job = dir.join("job.toml");
+    dome(&dir);
+    let job = dir.join("job.camcraft");
     std::fs::write(&job, JOB).unwrap();
     let json = dir.join("inspect.json");
     camcraft(&[
         "job",
-        model.to_str().unwrap(),
         job.to_str().unwrap(),
-        "--units",
-        "mm",
         "--inspect",
         json.to_str().unwrap(),
     ]);
@@ -304,10 +318,38 @@ fn job_with_only_inspect_writes_no_program() {
 #[test]
 fn job_with_no_output_is_refused() {
     let out = Command::new(env!("CARGO_BIN_EXE_camcraft"))
-        .args(["job", "model.stl", "job.toml", "--units", "mm"])
+        .args(["job", "job.camcraft"])
         .output()
         .unwrap();
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("--out") && err.contains("--inspect"), "{err}");
+}
+
+/// A job's models are found beside it, and an STL among them must say its units.
+#[test]
+fn a_job_names_its_own_models() {
+    let dir = scratch("a_job_names_its_own_models");
+    dome(&dir);
+    let job = dir.join("job.camcraft");
+    std::fs::write(&job, JOB.replace("units = \"mm\"\n", "")).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_camcraft"))
+        .args(["job", job.to_str().unwrap(), "--inspect", "x.json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("model 'dome'") && err.contains("units"),
+        "{err}"
+    );
+
+    std::fs::write(&job, JOB.replace("dome.stl", "elsewhere/dome.stl")).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_camcraft"))
+        .args(["job", job.to_str().unwrap(), "--inspect", "x.json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("elsewhere/dome.stl"), "{err}");
 }

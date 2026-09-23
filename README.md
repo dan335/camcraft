@@ -35,7 +35,7 @@ camcraft-sim      material removal: stock updater + gouge oracle  -> geom
 camcraft-core     tools, CL maps, strategies, toolpaths, linking  -> geom, sim
 camcraft-post     Op IR, TOML-driven dialect renderers            -> geom, core
 camcraft-session  load, run, gate, post: shared by both front ends -> all libraries
-camcraft-cli      model + job.toml -> .nc                         -> session
+camcraft-cli      job (.camcraft) -> .nc                           -> session
 camcraft-gui      desktop app (egui, wgpu)                        -> session
 ```
 

@@ -10,11 +10,12 @@
 //! - **The cutter is the job's own tool,** revolved from its real profile, with the
 //!   tip at the origin because the tip is the point the engine controls.
 
-use camcraft_core::job::{Job, ToolKind, ToolSpec};
+use camcraft_core::job::{Job, Setup, ToolKind, ToolSpec};
 use camcraft_core::replay::Position;
-use camcraft_core::run::{JobResult, PLUNGE_RATIO};
+use camcraft_core::run::{PLUNGE_RATIO, SetupResult};
 use camcraft_core::toolpath::MoveRole;
 use camcraft_geom::heightmap::narrow;
+use camcraft_geom::mesh::Aabb;
 use glam::{DVec3, Vec3};
 
 use crate::theme;
@@ -74,7 +75,7 @@ pub struct Scene {
     pub segments: Vec<Segment>,
     /// Each operation's range of `segments`.
     pub ops: Vec<OpSpan>,
-    /// The block of material, as twelve edges.
+    /// The blocks of material, twelve edges each.
     pub stock: Vec<(DVec3, DVec3)>,
     /// Segments per role, indexed as [`theme::ROLES`].
     pub role_counts: [usize; 7],
@@ -95,14 +96,14 @@ pub struct AtMove<'a> {
 }
 
 impl Scene {
-    /// The scene for a finished run of `job`.
-    pub fn build(job: &Job, result: &JobResult) -> Self {
+    /// The scene for a finished run of `setup`, in `job`.
+    pub fn build(job: &Job, setup: &Setup, result: &SetupResult) -> Self {
         let mut scene = Self::default();
         let mut clock = 0.0;
         for (i, run) in result.operations.iter().enumerate() {
             let op = u32::try_from(i).unwrap_or(u32::MAX);
             let first = scene.segments.len();
-            let allowance = job
+            let allowance = setup
                 .operations
                 .get(i)
                 .map_or(f64::INFINITY, |o| o.passes.max_cut_step);
@@ -138,7 +139,7 @@ impl Scene {
                     *c += 1;
                 }
             }
-            let cutter = job
+            let cutter = setup
                 .operations
                 .get(i)
                 .and_then(|spec| job.tool_for(spec))
@@ -151,7 +152,7 @@ impl Scene {
                 cutter,
             });
         }
-        scene.stock = stock_box(result);
+        scene.stock = result.stocks.iter().flat_map(box_edges).collect();
         scene
     }
 
@@ -214,15 +215,14 @@ pub fn clock(seconds: f64) -> String {
     }
 }
 
-/// The twelve edges of the block of material the job ran against.
-pub fn stock_box(result: &JobResult) -> Vec<(DVec3, DVec3)> {
-    let (lo, hi) = (result.stock_min, result.stock_max);
-    let (z0, z1) = (result.heights.stock_bottom, result.heights.stock_top);
+/// The twelve edges of a box.
+pub fn box_edges(b: &Aabb) -> Vec<(DVec3, DVec3)> {
+    let (lo, hi) = (b.min, b.max);
     let corner = |i: u8| {
         DVec3::new(
             if i & 1 == 0 { lo.x } else { hi.x },
             if i & 2 == 0 { lo.y } else { hi.y },
-            if i & 4 == 0 { z0 } else { z1 },
+            if i & 4 == 0 { lo.z } else { hi.z },
         )
     };
     let mut edges = Vec::with_capacity(12);
@@ -308,7 +308,7 @@ fn f32_from(n: u32) -> f32 {
 )]
 mod tests {
     use super::*;
-    use camcraft_session::{load_model, run};
+    use crate::test_jobs::run_setup_zero;
 
     fn repo(path: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -317,9 +317,8 @@ mod tests {
     }
 
     const JOB: &str = r#"
+version = 1
 tolerance = 0.1
-[setup]
-stock = { kind = "box", margin = [2.0, 2.0, 2.0] }
 [tools.flat]
 kind = "flat"
 diameter = 4.0
@@ -327,13 +326,24 @@ diameter = 4.0
 kind = "ball"
 diameter = 3.0
 number = 2
-[[operation]]
+[[model]]
+name = "hinge"
+path = "fixtures/step/hinge_jig.step"
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [2.0, 2.0, 2.0]
+[[setup]]
+name = "top"
+models = ["hinge"]
+stocks = ["block"]
+[[setup.operation]]
 name = "rough"
 strategy = "zlevel-rough"
 tool = "flat"
 stepdown = 4.0
 passes = { stepover = 2.0, feed = 1800.0, stock_to_leave = { radial = 0.3, axial = 0.3 } }
-[[operation]]
+[[setup.operation]]
 name = "finish"
 strategy = "parallel"
 tool = "ball"
@@ -343,14 +353,12 @@ passes = { stepover = 2.0, feed = 2000.0 }
     /// A real two-operation run on a real part, built once and shared by the tests
     /// below. Parsed from a string, not a file: tests run in parallel, and a shared
     /// temporary file is a race between one test writing it and another reading it.
-    fn scene() -> (Job, JobResult, Scene) {
-        static RUN: std::sync::OnceLock<(Job, JobResult, Scene)> = std::sync::OnceLock::new();
+    fn scene() -> (Job, SetupResult, Scene) {
+        static RUN: std::sync::OnceLock<(Job, SetupResult, Scene)> = std::sync::OnceLock::new();
         RUN.get_or_init(|| {
             let job: Job = toml::from_str(JOB).unwrap();
-            let model =
-                load_model(&repo("fixtures/step/hinge_jig.step"), None, job.tolerance).unwrap();
-            let ran = run(&model, &job).unwrap();
-            let scene = Scene::build(&job, &ran.result);
+            let ran = run_setup_zero(&job, &repo(""));
+            let scene = Scene::build(&job, &job.setups[0], &ran.result);
             (job, ran.result, scene)
         })
         .clone()
@@ -416,7 +424,7 @@ passes = { stepover = 2.0, feed = 2000.0 }
     fn steep_descents_are_the_ones_the_core_found() {
         let (job, result, scene) = scene();
         for (i, run) in result.operations.iter().enumerate() {
-            let allowance = job.operations[i].passes.max_cut_step;
+            let allowance = job.setups[0].operations[i].passes.max_cut_step;
             let mine: Vec<&Steep> = scene.steep.iter().filter(|s| s.op == i).collect();
             if run.deepest_cut_descent_mm > allowance {
                 let deepest = mine.iter().map(|s| s.drop).fold(0.0, f64::max);

@@ -1,4 +1,4 @@
-//! Running a job: operations in order, against one block of material.
+//! Running a setup: its operations in order, against one block of material.
 //!
 //! Every operation reads the stock as it currently stands and writes back what it
 //! removed, so the next one never re-cuts cleared air. That ordering is the whole of
@@ -8,17 +8,19 @@
 //! is worth knowing about before operation two is planned against the material it
 //! left behind.
 
-use camcraft_geom::mesh::TriMesh;
+use camcraft_geom::mesh::Aabb;
 use camcraft_sim::stock::{PartSurface, SimReport, Stock as SimStock, StockError, VerifyReport};
 use glam::{DVec2, dvec2};
 
 use crate::clmap::{ClMap, ClMapError};
 use crate::dropcutter::DropCutter;
-use crate::job::{HeightContext, Job, JobError, Operation, StockSpec, StrategySpec};
+use crate::frame::Frame;
+use crate::job::{HeightContext, Job, JobError, Operation, StrategySpec};
 use crate::linker::{ClearanceField, LinkError, LinkParams, LinkReport, link};
 use crate::ordering::order_passes;
 use crate::parallel::{ParallelParams, StrategyError, StrategyReport, parallel_finish};
 use crate::roughing::{RoughingParams, RoughingReport, zlevel_rough};
+use crate::setup::{Meshes, PrepareError, Prepared, prepare};
 use crate::simadapt::sim_moves;
 use crate::stock::{EffectiveTool, Stock as ToLeave, StockError as ToLeaveError};
 use crate::tool::{ToolError, ToolProfile};
@@ -41,12 +43,15 @@ pub const PLUNGE_RATIO: f64 = 10.0;
 /// verifier counts it by.
 pub const LEFTOVER_LIMIT: f64 = 1.0;
 
-/// A job that could not be run.
+/// A setup that could not be run.
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
     /// The job was not valid.
     #[error(transparent)]
     Job(#[from] JobError),
+    /// The setup's models and stock could not be laid out.
+    #[error(transparent)]
+    Prepare(#[from] PrepareError),
     /// A strategy failed.
     #[error("operation '{op}': {source}")]
     Strategy {
@@ -83,9 +88,6 @@ pub enum RunError {
     /// A move could not be added.
     #[error(transparent)]
     Toolpath(#[from] ToolpathError),
-    /// The model had no geometry.
-    #[error("model has no geometry")]
-    EmptyModel,
 }
 
 /// What a strategy reported, in its own terms.
@@ -143,22 +145,28 @@ impl OperationResult {
     }
 }
 
-/// What the whole job produced.
+/// What one setup produced. Everything in it is in the setup's frame.
 #[derive(Debug, Clone)]
-pub struct JobResult {
+pub struct SetupResult {
+    /// Which setup.
+    pub setup: String,
+    /// How model coordinates became the setup's.
+    pub frame: Frame,
     /// Each operation, in order.
     pub operations: Vec<OperationResult>,
     /// The material as it stands at the end.
     pub stock: SimStock,
-    /// The part the job was supposed to produce.
+    /// The part the setup was supposed to produce.
     pub part: PartSurface,
     /// How the finished stock compares with the part.
     pub verify: VerifyReport,
     /// Tolerance the comparison allowed.
     pub verify_budget: f64,
-    /// Footprint of the block in XY, lower corner.
+    /// Each block of stock.
+    pub stocks: Vec<Aabb>,
+    /// Footprint of all the stock in XY, lower corner.
     pub stock_min: DVec2,
-    /// Footprint of the block in XY, upper corner.
+    /// Footprint of all the stock in XY, upper corner.
     pub stock_max: DVec2,
     /// The heights symbolic references resolved against.
     pub heights: HeightContext,
@@ -168,8 +176,8 @@ pub struct JobResult {
     pub stages: Vec<SimStock>,
 }
 
-impl JobResult {
-    /// Whether the whole job verified.
+impl SetupResult {
+    /// Whether the whole setup verified.
     pub fn is_clean(&self) -> bool {
         self.verify.is_clean() && self.operations.iter().all(OperationResult::is_clean)
     }
@@ -192,19 +200,25 @@ impl JobResult {
     }
 }
 
-/// Run every operation of a job against one block of material.
-pub fn run_job(job: &Job, mesh: &TriMesh) -> Result<JobResult, RunError> {
-    job.validate()?;
-    let bounds = mesh.bounds().ok_or(RunError::EmptyModel)?;
+/// Check, lay out and run setup `index` of `job`, with its models by name.
+pub fn run_setup(job: &Job, index: usize, meshes: &Meshes<'_>) -> Result<SetupResult, RunError> {
+    job.check_common()?;
+    job.check_setup(index)?;
+    let prepared = prepare(job, index, meshes)?;
+    run_prepared(job, index, &prepared)
+}
 
-    let StockSpec::Box { margin } = job.setup.stock;
-    // Z margin grows upward only. Material below the model is the part of the block
-    // the cutter never reaches, so growing downward would make the simulation taller
-    // without changing anything.
-    let lo = dvec2(bounds.min.x - margin[0], bounds.min.y - margin[1]);
-    let hi = dvec2(bounds.max.x + margin[0], bounds.max.y + margin[1]);
-    let stock_top = bounds.max.z + margin[2];
-    let stock_bottom = bounds.min.z;
+/// Run every operation of setup `index` against its block of material, already
+/// laid out in its frame. The job must have been checked.
+pub fn run_prepared(job: &Job, index: usize, prepared: &Prepared) -> Result<SetupResult, RunError> {
+    let setup = job.setups.get(index).ok_or(JobError::NoSetups)?;
+    let mesh = &prepared.part;
+    let bounds = prepared.model_bounds;
+    let all = prepared.stock_bounds();
+    let lo = all.min.truncate();
+    let hi = all.max.truncate();
+    let stock_top = all.max.z;
+    let stock_bottom = all.min.z;
 
     let ctx = HeightContext {
         stock_top,
@@ -217,13 +231,18 @@ pub fn run_job(job: &Job, mesh: &TriMesh) -> Result<JobResult, RunError> {
     // guessed, and bounded so a fine tolerance on a large part cannot allocate
     // without limit.
     let sim_pitch = (job.tolerance * 8.0).clamp(0.05, 1.0);
-    let mut stock = SimStock::block(lo, hi, stock_top, stock_bottom - 1.0, sim_pitch)?;
+    let blocks: Vec<(DVec2, DVec2, f64)> = prepared
+        .stocks
+        .iter()
+        .map(|b| (b.min.truncate(), b.max.truncate(), b.max.z))
+        .collect();
+    let mut stock = SimStock::from_boxes(&blocks, stock_bottom - 1.0, sim_pitch)?;
     let cutter = DropCutter::new(mesh);
 
-    let mut operations = Vec::with_capacity(job.operations.len());
-    let mut stages = Vec::with_capacity(job.operations.len() + 1);
+    let mut operations = Vec::with_capacity(setup.operations.len());
+    let mut stages = Vec::with_capacity(setup.operations.len() + 1);
     stages.push(stock.clone());
-    for op in &job.operations {
+    for op in &setup.operations {
         operations.push(run_operation(
             job, op, &cutter, &ctx, lo, hi, &mut stock, sim_pitch,
         )?);
@@ -236,12 +255,15 @@ pub fn run_job(job: &Job, mesh: &TriMesh) -> Result<JobResult, RunError> {
     let budget = job.tolerance + sim_pitch;
     let verify = stock.verify(&part, budget, LEFTOVER_LIMIT);
 
-    Ok(JobResult {
+    Ok(SetupResult {
+        setup: setup.name.clone(),
+        frame: prepared.frame,
         operations,
         stock,
         part,
         verify,
         verify_budget: budget,
+        stocks: prepared.stocks.clone(),
         stock_min: lo,
         stock_max: hi,
         heights: ctx,
@@ -255,16 +277,25 @@ pub fn run_job(job: &Job, mesh: &TriMesh) -> Result<JobResult, RunError> {
 /// The one place this is built, so a replay of the material sweeps exactly the
 /// tool the run did.
 pub fn cutting_tool(job: &Job, op: &Operation) -> Result<EffectiveTool, RunError> {
-    let spec = job.tool_for(op).ok_or_else(|| JobError::UnknownTool {
-        op: op.name.clone(),
-        tool: op.tool.clone(),
-    })?;
+    let spec = job.tool_for(op).ok_or_else(|| unknown_tool(op))?;
     let base = spec.build()?;
     let leave = ToLeave::new(
         op.passes.stock_to_leave.radial,
         op.passes.stock_to_leave.axial,
     )?;
     Ok(EffectiveTool::new(&base, leave)?)
+}
+
+fn unknown_tool(op: &Operation) -> JobError {
+    match &op.tool {
+        Some(tool) => JobError::UnknownTool {
+            op: op.name.clone(),
+            tool: tool.clone(),
+        },
+        None => JobError::NoTool {
+            op: op.name.clone(),
+        },
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -278,10 +309,7 @@ fn run_operation(
     stock: &mut SimStock,
     sim_pitch: f64,
 ) -> Result<OperationResult, RunError> {
-    let spec = job.tool_for(op).ok_or_else(|| JobError::UnknownTool {
-        op: op.name.clone(),
-        tool: op.tool.clone(),
-    })?;
+    let spec = job.tool_for(op).ok_or_else(|| unknown_tool(op))?;
     let tool = cutting_tool(job, op)?;
     let mut warnings = Vec::new();
 
@@ -440,16 +468,19 @@ fn run_operation(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 mod tests {
     use super::*;
     use camcraft_geom::synthetic;
 
     const JOB: &str = r#"
+version = 1
 tolerance = 0.05
-
-[setup]
-stock = { kind = "box", margin = [1.0, 1.0, 2.0] }
 
 [tools.rough]
 kind = "flat"
@@ -461,7 +492,22 @@ kind = "ball"
 diameter = 4.0
 number = 2
 
-[[operation]]
+[[model]]
+name = "dome"
+path = "dome.stl"
+units = "mm"
+
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [1.0, 1.0, 2.0]
+
+[[setup]]
+name = "top"
+models = ["dome"]
+stocks = ["block"]
+
+[[setup.operation]]
 name = "rough"
 strategy = "zlevel-rough"
 tool = "rough"
@@ -469,7 +515,7 @@ stepdown = 2.5
 passes = { stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.5, axial = 0.5 } }
 heights = { clearance = { ref = "stock-top", offset = 6.0 } }
 
-[[operation]]
+[[setup.operation]]
 name = "finish"
 strategy = "parallel"
 tool = "finish"
@@ -479,6 +525,11 @@ heights = { clearance = { ref = "stock-top", offset = 6.0 } }
 
     fn dome() -> camcraft_geom::mesh::TriMesh {
         synthetic::uv_sphere(8.0, 100, 140)
+    }
+
+    fn run_job(job: &Job, mesh: &camcraft_geom::mesh::TriMesh) -> Result<SetupResult, RunError> {
+        let meshes: Meshes<'_> = [("dome", mesh)].into_iter().collect();
+        run_setup(job, 0, &meshes)
     }
 
     #[test]
@@ -579,6 +630,68 @@ heights = { clearance = { ref = "stock-top", offset = 6.0 } }
     fn an_empty_model_is_refused() {
         let job: Job = toml::from_str(JOB).unwrap();
         let empty = camcraft_geom::mesh::TriMesh::default();
-        assert!(matches!(run_job(&job, &empty), Err(RunError::EmptyModel)));
+        assert!(matches!(
+            run_job(&job, &empty),
+            Err(RunError::Prepare(PrepareError::EmptyModel(_)))
+        ));
+    }
+
+    /// Turned over, the setup machines the other side: a dome standing 11 mm up
+    /// and hanging 5 mm down shows its 5 mm side on top, and still verifies.
+    #[test]
+    fn a_flipped_setup_machines_the_underside() {
+        let mut job: Job = toml::from_str(JOB).unwrap();
+        job.setups[0].orientation = crate::frame::Orientation::default().flipped();
+        let dome = dome().mapped(|p| p + glam::dvec3(0.0, 0.0, 3.0)).unwrap();
+        let result = run_job(&job, &dome).unwrap();
+        assert!((result.heights.model_top - 5.0).abs() < 1e-6);
+        assert!((result.heights.model_bottom + 11.0).abs() < 1e-6);
+        assert!(result.is_clean(), "{:?}", result.warnings());
+    }
+
+    /// Two setups start from their own stock: the second's first stage is a whole
+    /// block, not what the first left.
+    #[test]
+    fn each_setup_starts_from_its_own_stock() {
+        let mut job: Job = toml::from_str(JOB).unwrap();
+        let mut second = job.setups[0].clone();
+        second.name = "again".into();
+        job.setups.push(second);
+        let mesh = dome();
+        let meshes: Meshes<'_> = [("dome", &mesh)].into_iter().collect();
+        let first = run_setup(&job, 0, &meshes).unwrap();
+        let again = run_setup(&job, 1, &meshes).unwrap();
+        assert_eq!(first.stages[0], again.stages[0]);
+        assert_eq!(again.setup, "again");
+    }
+
+    /// Two blocks side by side make one stock: the taller one sets stock-top, and
+    /// both are cut.
+    #[test]
+    fn two_blocks_are_one_stock() {
+        let mut job: Job = toml::from_str(JOB).unwrap();
+        job.stocks = vec![
+            crate::job::StockDef {
+                name: "left".into(),
+                spec: crate::job::StockSpec::FixedBox {
+                    corner: [-10.0, -10.0, -8.0],
+                    size: [10.0, 20.0, 17.0],
+                },
+            },
+            crate::job::StockDef {
+                name: "right".into(),
+                spec: crate::job::StockSpec::FixedBox {
+                    corner: [0.0, -10.0, -8.0],
+                    size: [10.0, 20.0, 18.0],
+                },
+            },
+        ];
+        job.setups[0].stocks = vec!["left".into(), "right".into()];
+        let result = run_job(&job, &dome()).unwrap();
+        assert_eq!(result.stocks.len(), 2);
+        assert_eq!(result.heights.stock_top, 10.0);
+        assert_eq!(result.stock_min, dvec2(-10.0, -10.0));
+        assert_eq!(result.stock_max, dvec2(10.0, 10.0));
+        assert!(result.is_clean(), "{:?}", result.warnings());
     }
 }

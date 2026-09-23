@@ -170,7 +170,8 @@ impl StockImage {
 #[allow(clippy::unwrap_used, clippy::panic, clippy::float_cmp)]
 mod tests {
     use super::*;
-    use camcraft_session::{load_model, read_job, run};
+    use crate::test_jobs::run_setup_zero;
+    use camcraft_core::job::Job;
 
     #[test]
     fn thresholds_sit_where_the_verifier_puts_them() {
@@ -205,19 +206,25 @@ mod tests {
     /// amber are exactly the columns the verifier counted as gouged and left over.
     #[test]
     fn the_picture_counts_what_the_verdict_counts() {
-        let dir = std::env::temp_dir().join(format!("camcraft-gui-stock-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let job_path = dir.join("job.toml");
-        std::fs::write(
-            &job_path,
+        let job: Job = toml::from_str(
             r#"
+version = 1
 tolerance = 0.1
-[setup]
-stock = { kind = "box", margin = [2.0, 2.0, 2.0] }
 [tools.flat]
 kind = "flat"
 diameter = 6.0
-[[operation]]
+[[model]]
+name = "hinge"
+path = "fixtures/step/hinge_jig.step"
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [2.0, 2.0, 2.0]
+[[setup]]
+name = "top"
+models = ["hinge"]
+stocks = ["block"]
+[[setup.operation]]
 name = "rough"
 strategy = "zlevel-rough"
 tool = "flat"
@@ -227,14 +234,7 @@ passes = { stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.3, axial
         )
         .unwrap();
         let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let job = read_job(&job_path).unwrap();
-        let model = load_model(
-            &repo.join("fixtures/step/hinge_jig.step"),
-            None,
-            job.tolerance,
-        )
-        .unwrap();
-        let result = run(&model, &job).unwrap().result;
+        let result = run_setup_zero(&job, &repo).result;
 
         let image = StockImage::build(&result.stock, &result.part, result.verify_budget);
         assert_eq!(image.count(Class::Gouge) as u64, result.verify.gouged);

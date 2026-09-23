@@ -123,17 +123,19 @@ fn an_unknown_format_is_refused() {
 #[test]
 fn two_tools_on_one_number_are_refused() {
     let dir = scratch("two_tools_on_one_number_are_refused");
-    let job = dir.join("job.toml");
+    let job = dir.join("job.camcraft");
     let example = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/rail-jig.toml"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/rail-jig.camcraft"),
     )
     .unwrap();
-    let clash = example.replace("number = 2", "number = 1");
+    let clash = example.replace("number = 2", "number = 1").replace(
+        "path = \"../fixtures/step/sled_base.step\"",
+        &format!("path = {:?}", fixture("hinge_jig.step")),
+    );
     assert_ne!(clash, example, "the edit must land");
     std::fs::write(&job, clash).unwrap();
     let out = camcraft(&[
         "job",
-        &fixture("hinge_jig.step"),
         job.to_str().unwrap(),
         "--inspect",
         dir.join("x.json").to_str().unwrap(),

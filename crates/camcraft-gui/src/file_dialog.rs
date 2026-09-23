@@ -11,14 +11,11 @@ use std::path::{Path, PathBuf};
 use eframe::egui;
 use egui_file_dialog::{DialogState, FileDialog, FileDialogStorage, Filter};
 
-const MODELS: &str = "Models (STEP, STL)";
-const JOBS: &str = "Jobs (TOML)";
+const JOBS: &str = "Jobs (.camcraft)";
 
 /// What a pick is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pick {
-    /// A model to machine.
-    Model,
     /// A job file.
     Job,
 }
@@ -39,12 +36,10 @@ fn has_extension(path: &Path, extensions: &[&str]) -> bool {
 impl AppFileDialog {
     /// A dialog, remembering where the last one was.
     pub fn new(storage: Option<FileDialogStorage>) -> Self {
-        let dialog = FileDialog::new()
-            .add_file_filter(
-                MODELS,
-                Filter::new(|p: &Path| has_extension(p, &["step", "stp", "stl"])),
-            )
-            .add_file_filter(JOBS, Filter::new(|p: &Path| has_extension(p, &["toml"])));
+        let dialog = FileDialog::new().add_file_filter(
+            JOBS,
+            Filter::new(|p: &Path| has_extension(p, &["camcraft"])),
+        );
         let dialog = match storage {
             Some(s) => dialog.storage(s),
             None => dialog,
@@ -56,7 +51,6 @@ impl AppFileDialog {
     pub fn open(&mut self, pick: Pick) {
         let config = self.dialog.config_mut();
         let (title, filter) = match pick {
-            Pick::Model => ("Open model", MODELS),
             Pick::Job => ("Open job", JOBS),
         };
         config.title = Some(title.to_owned());
@@ -95,7 +89,7 @@ mod tests {
             &["step", "stp", "stl"]
         ));
         assert!(has_extension(Path::new("jig.stp"), &["step", "stp", "stl"]));
-        assert!(has_extension(Path::new("rail-jig.toml"), &["toml"]));
+        assert!(has_extension(Path::new("rail-jig.camcraft"), &["camcraft"]));
         assert!(!has_extension(Path::new("jig.step.bak"), &["step"]));
         assert!(!has_extension(Path::new("README"), &["step"]));
     }
