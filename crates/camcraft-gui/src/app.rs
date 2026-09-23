@@ -11,7 +11,9 @@ use camcraft_session::{Model, SessionError, Units, read_job};
 use eframe::egui;
 
 use crate::file_dialog::{AppFileDialog, Pick};
-use crate::viewport::Viewport;
+use crate::scene::Scene;
+use crate::theme;
+use crate::viewport::{Content, View, Viewport};
 use crate::worker::{Outcome, Reply, Request, Worker};
 
 /// Tessellation tolerance for looking at a model before any job is open. A run
@@ -41,7 +43,46 @@ pub struct App {
     /// Changes whenever `model` does, so the viewport uploads a new mesh once.
     generation: u64,
     outcome: Option<Outcome>,
+    /// What the last run drew: toolpaths, stock and cutters.
+    scene: Option<Scene>,
+    /// Changes whenever `scene` does, so it is uploaded once.
+    scene_generation: u64,
+    /// Changes only when a different model is opened, so the view is framed on it
+    /// once and never snapped back by a re-run.
+    opened: u64,
+    view: View,
+    /// Segments shown, in machine order: the scrub.
+    scrub: usize,
+    show_cutter: bool,
     log: Vec<(Level, String)>,
+}
+
+/// `12345` as `12,345`, as the inspector printed counts.
+fn thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A checkbox for one bit of a mask.
+fn bit(ui: &mut egui::Ui, mask: &mut u32, index: usize, label: impl Into<egui::WidgetText>) {
+    let Some(flag) = u32::try_from(index).ok().and_then(|i| 1u32.checked_shl(i)) else {
+        return;
+    };
+    let mut on = *mask & flag != 0;
+    if ui.checkbox(&mut on, label).changed() {
+        if on {
+            *mask |= flag;
+        } else {
+            *mask &= !flag;
+        }
+    }
 }
 
 fn is_stl(path: &Path) -> bool {
@@ -85,8 +126,20 @@ impl App {
             model: None,
             generation: 0,
             outcome: None,
+            scene: None,
+            scene_generation: 0,
+            opened: 0,
+            view: View::default(),
+            scrub: 0,
+            show_cutter: true,
             log: Vec::new(),
         }
+    }
+
+    /// Forget the last run: its result and everything drawn from it.
+    fn clear_run(&mut self) {
+        self.outcome = None;
+        self.scene = None;
     }
 
     /// The app, with files already open, as from the command line.
@@ -116,7 +169,8 @@ impl App {
     pub fn open_model(&mut self, ctx: &egui::Context, path: PathBuf) {
         self.note(Level::Info, format!("model: {}", path.display()));
         self.model = None;
-        self.outcome = None;
+        self.clear_run();
+        self.opened += 1;
         if !is_stl(&path) {
             // STEP states its own units; anything given here would only be a
             // chance to contradict it.
@@ -128,7 +182,7 @@ impl App {
 
     /// Open a job file, as if picked.
     pub fn open_job(&mut self, ctx: &egui::Context, path: PathBuf) {
-        self.outcome = None;
+        self.clear_run();
         match read_job(&path) {
             Ok(job) => {
                 self.note(
@@ -187,6 +241,23 @@ impl App {
     #[cfg(all(test, feature = "ui-snapshots"))]
     pub fn open_dialog_for_snapshot(&mut self) {
         self.dialog.open(Pick::Model);
+    }
+
+    /// Put the scrub part-way through operation `op`, and show only `roles`. Only
+    /// the snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn set_view_for_snapshot(&mut self, op: usize, fraction: f64, roles: u32) {
+        if let Some(span) = self.scene.as_ref().and_then(|s| s.ops.get(op)) {
+            // A fraction of a count, for a test's choice of frame.
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss
+            )]
+            let into = (span.count as f64 * fraction) as usize;
+            self.scrub = span.first + into.min(span.count);
+        }
+        self.view.roles = roles;
     }
 
     fn load(&mut self, ctx: &egui::Context) {
@@ -249,6 +320,12 @@ impl App {
                     self.model = Some(outcome.model.clone());
                     self.job = Some(outcome.job.clone());
                     self.generation += 1;
+                    let scene = Scene::build(&outcome.job, &outcome.ran.result);
+                    // A new run starts fully shown, every operation visible.
+                    self.scrub = scene.segments.len();
+                    self.view.ops = u32::MAX;
+                    self.scene = Some(scene);
+                    self.scene_generation += 1;
                     self.outcome = Some(outcome);
                 }
                 Err(e) => self.note(Level::Error, explain(&e)),
@@ -287,7 +364,7 @@ impl App {
                 });
                 if self.units != before {
                     self.model = None;
-                    self.outcome = None;
+                    self.clear_run();
                     self.load(&ctx);
                 }
             }
@@ -384,6 +461,129 @@ impl App {
                 ui.colored_label(ui.visuals().warn_fg_color, w);
             }
         }
+        self.controls(ui);
+    }
+
+    /// What to show, and the scrub through the program in machine order.
+    fn controls(&mut self, ui: &mut egui::Ui) {
+        let Some(scene) = &self.scene else {
+            return;
+        };
+        let view = &mut self.view;
+
+        ui.separator();
+        ui.heading("Show");
+        ui.checkbox(&mut view.part, "part");
+        ui.checkbox(&mut view.stock, "stock outline");
+        ui.checkbox(&mut self.show_cutter, "cutter at the scrub");
+        ui.add_space(4.0);
+        for (i, role) in theme::ROLES.iter().enumerate() {
+            let n = scene.role_counts.get(i).copied().unwrap_or(0);
+            if n == 0 {
+                continue;
+            }
+            ui.horizontal(|ui| {
+                bit(ui, &mut view.roles, i, "");
+                let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                ui.painter()
+                    .rect_filled(r, 2.0, theme::egui_color(theme::role_srgb(*role)));
+                ui.label(theme::role_name(*role));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.weak(thousands(n));
+                });
+            });
+        }
+        let mut jump = None;
+        if scene.ops.len() > 1 {
+            ui.add_space(4.0);
+            for (i, op) in scene.ops.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    bit(ui, &mut view.ops, i, format!("{}. {}", i + 1, op.name));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button("scrub to end")
+                            .on_hover_text("show everything up to the end of this operation")
+                            .clicked()
+                        {
+                            jump = Some(op.first + op.count);
+                        }
+                        ui.weak(thousands(op.count));
+                    });
+                });
+            }
+        }
+        if let Some(end) = jump {
+            self.scrub = end;
+        }
+
+        ui.separator();
+        ui.heading("Move order");
+        let total = scene.segments.len();
+        ui.spacing_mut().slider_width = ui.available_width() - 8.0;
+        ui.add(egui::Slider::new(&mut self.scrub, 0..=total).show_value(false));
+        ui.label(format!(
+            "showing {} / {}",
+            thousands(self.scrub),
+            thousands(total)
+        ));
+        if let Some(at) = scene.at(self.scrub) {
+            let s = at.segment;
+            ui.label(format!("{}. {}", at.op + 1, at.op_name));
+            let feed = s.feed.map_or_else(String::new, |f| format!("  F{f:.0}"));
+            ui.monospace(format!(
+                "{} to {:.2}, {:.2}, {:.2}{feed}",
+                theme::role_name(s.role),
+                s.b.x,
+                s.b.y,
+                s.b.z
+            ));
+        }
+        ui.weak("Left and Right arrows step one move; with Shift, a hundred.");
+    }
+
+    /// Arrow keys step the scrub, unless a widget has the keyboard.
+    fn step_scrub(&mut self, ctx: &egui::Context) {
+        let Some(total) = self.scene.as_ref().map(|s| s.segments.len()) else {
+            return;
+        };
+        if ctx.memory(|m| m.focused().is_some()) {
+            return;
+        }
+        let (left, right, shift) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowLeft),
+                i.key_pressed(egui::Key::ArrowRight),
+                i.modifiers.shift,
+            )
+        });
+        let step = if shift { 100 } else { 1 };
+        if right {
+            self.scrub = (self.scrub + step).min(total);
+        }
+        if left {
+            self.scrub = self.scrub.saturating_sub(step);
+        }
+    }
+
+    /// What the viewport should draw this frame.
+    fn content(&self) -> Content<'_> {
+        let total = self.scene.as_ref().map_or(0, |s| s.segments.len());
+        let cutter = self
+            .scene
+            .as_ref()
+            .filter(|_| self.show_cutter && self.scrub < total)
+            .and_then(|s| s.at(self.scrub))
+            .map(|at| (at.op, at.segment.b));
+        Content {
+            part: self.model.as_ref().map(|m| (self.generation, &m.mesh)),
+            framing: self.opened,
+            scene: self.scene.as_ref().map(|s| (self.scene_generation, s)),
+            view: View {
+                shown: self.scrub,
+                cutter,
+                ..self.view
+            },
+        }
     }
 
     fn log_panel(&self, ui: &mut egui::Ui) {
@@ -409,6 +609,7 @@ impl eframe::App for App {
         if let Some(reply) = self.worker.poll() {
             self.accept(reply);
         }
+        self.step_scrub(&ctx);
         if let Some((pick, path)) = self.dialog.update(&ctx) {
             match pick {
                 Pick::Model => self.open_model(&ctx, path),
@@ -429,8 +630,11 @@ impl eframe::App for App {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
-                let model = self.model.as_ref().map(|m| (self.generation, &m.mesh));
-                self.viewport.show(ui, frame.wgpu_render_state(), model);
+                // The viewport is taken out for the call, because the content it
+                // draws borrows the rest of the app.
+                let mut viewport = std::mem::take(&mut self.viewport);
+                viewport.show(ui, frame.wgpu_render_state(), &self.content());
+                self.viewport = viewport;
             });
 
         // Keep the spinner turning while the worker runs; its reply wakes us anyway.

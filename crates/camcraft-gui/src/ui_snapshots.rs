@@ -101,7 +101,23 @@ fn main_window_after_a_run() {
         "passes {passes:?}, verified {}",
         outcome.ran.result.is_clean()
     );
+    h.run_steps(2);
     shoot(&mut h, "after_run");
+
+    // Part-way through roughing, with the cutter where the scrub stands.
+    h.state_mut().set_view_for_snapshot(0, 0.4, u32::MAX);
+    h.run_steps(2);
+    shoot(&mut h, "scrub_mid_rough");
+
+    // Part-way through finishing: the ball riding the top of the part.
+    h.state_mut().set_view_for_snapshot(1, 0.5, u32::MAX);
+    h.run_steps(2);
+    shoot(&mut h, "scrub_mid_finish");
+
+    // Rapids alone, all the way through: every traverse in the program.
+    h.state_mut().set_view_for_snapshot(1, 1.0, 1 << 1);
+    h.run_steps(2);
+    shoot(&mut h, "rapids_only");
 }
 
 /// The file dialog, open on the model filter: drawn inside the app, themed with it.

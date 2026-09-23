@@ -72,7 +72,14 @@ each pass next to where the following one starts.
      `cargo run --release -p camcraft-gui [MODEL] [JOB]`; the files are optional. Headless PNGs of the real UI:
      `cargo test --release -p camcraft-gui --features ui-snapshots -- --ignored`,
      written to `target/ui-snapshots/`. Built and looked at on macOS only.
-   - **3D viewport:** everything the web inspector does, ported, then replacing it.
+   - **3D viewport: done, bar the checks.** Every operation's toolpath, coloured by
+     move role from the design system's palette, as screen-space lines that stay
+     readable on Retina. A scrub through the whole program in machine order, with
+     arrow-key stepping and a readout of the move. Toggles by role, by operation,
+     for the part and for the stock outline. The job's own cutter is drawn at the
+     scrub position, and still shows, fainter, when a pocket hides it. The web
+     inspector stays only until its checks panel is ported (item 5), then
+     `viewer/` goes.
    - **Simulated stock view:** the material after each operation, and where it was
      left standing or gouged. This is the view the steep-descent question waits for.
    - **Job editing:** forms that read and write `job.toml`, so file and app stay

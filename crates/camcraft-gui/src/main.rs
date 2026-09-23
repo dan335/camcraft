@@ -7,6 +7,8 @@
 mod app;
 mod camera;
 mod file_dialog;
+mod scene;
+mod theme;
 #[cfg(all(test, feature = "ui-snapshots"))]
 mod ui_snapshots;
 mod viewport;
