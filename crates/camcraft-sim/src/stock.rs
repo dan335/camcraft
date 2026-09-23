@@ -81,6 +81,9 @@ pub enum StockError {
     /// The grid was unusable.
     #[error("cannot build the stock grid: {0}")]
     Grid(#[from] HeightMapError),
+    /// There were no blocks to make stock from.
+    #[error("there is no stock")]
+    NoBlocks,
     /// The block had no height.
     #[error("stock top {top} is not above its floor {floor}")]
     Inverted {
@@ -153,6 +156,55 @@ impl Stock {
             field: HeightMap::covering(min, max, pitch, top)?,
             floor,
         })
+    }
+
+    /// Several rectangular blocks as one stock, each `(min, max, top)`.
+    ///
+    /// The field covers all of them. A cell takes the highest top of the blocks
+    /// over it, and a cell no block covers holds `floor`: no material. One block is
+    /// exactly [`Stock::block`]. Blocks stacked at the same XY cannot be told apart,
+    /// since the field holds one height per column.
+    pub fn from_boxes(
+        boxes: &[(DVec2, DVec2, f64)],
+        floor: f64,
+        pitch: f64,
+    ) -> Result<Self, StockError> {
+        let Some(&(min0, max0, _)) = boxes.first() else {
+            return Err(StockError::NoBlocks);
+        };
+        let (mut min, mut max) = (min0, max0);
+        for &(lo, hi, top) in boxes {
+            if top <= floor || !top.is_finite() || !floor.is_finite() {
+                return Err(StockError::Inverted { top, floor });
+            }
+            min = min.min(lo);
+            max = max.max(hi);
+        }
+        let mut field = HeightMap::covering(min, max, pitch, floor)?;
+        let (nx, ny, origin) = (field.nx(), field.ny(), field.origin());
+        // Cells from the one at or below a block's low edge to the one at or
+        // beyond its high edge: a lone block covers the whole grid, as `block`.
+        let span = |lo: f64, hi: f64, o: f64, n: u32| -> (u32, u32) {
+            let last = f64::from(n.saturating_sub(1));
+            let a = ((lo - o) / pitch + 1.0e-9).floor().clamp(0.0, last);
+            let b = ((hi - o) / pitch - 1.0e-9).ceil().clamp(0.0, last);
+            // Clamped into the grid, so the narrowing is exact.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let r = (a as u32, b as u32);
+            r
+        };
+        for &(lo, hi, top) in boxes {
+            let (x0, x1) = span(lo.x, hi.x, origin.x, nx);
+            let (y0, y1) = span(lo.y, hi.y, origin.y, ny);
+            for iy in y0..=y1 {
+                for ix in x0..=x1 {
+                    if field.get(ix, iy).is_none_or(|h| h < top) {
+                        field.set(ix, iy, top);
+                    }
+                }
+            }
+        }
+        Ok(Self { field, floor })
     }
 
     /// The material height field.
@@ -476,6 +528,42 @@ mod tests {
 
     fn block() -> Stock {
         Stock::block(dvec2(-10.0, -10.0), dvec2(10.0, 10.0), 5.0, -5.0, 0.5).unwrap()
+    }
+
+    /// One block through `from_boxes` is the same stock as `block`, cell for cell.
+    #[test]
+    fn one_box_is_a_block() {
+        for (min, max, pitch) in [
+            (dvec2(-10.0, -10.0), dvec2(10.0, 10.0), 0.5),
+            (dvec2(-3.3, 1.7), dvec2(12.1, 9.05), 0.37),
+        ] {
+            let a = Stock::block(min, max, 5.0, -5.0, pitch).unwrap();
+            let b = Stock::from_boxes(&[(min, max, 5.0)], -5.0, pitch).unwrap();
+            assert_eq!(a, b);
+        }
+    }
+
+    /// Two blocks apart: material over each at its own top, none between, and the
+    /// volumes add up.
+    #[test]
+    fn two_boxes_are_their_union() {
+        let a = (dvec2(0.0, 0.0), dvec2(10.0, 10.0), 5.0);
+        let b = (dvec2(20.0, 0.0), dvec2(30.0, 10.0), 8.0);
+        let s = Stock::from_boxes(&[a, b], 0.0, 0.5).unwrap();
+        assert_eq!(s.height_at(5.0, 5.0), Some(5.0));
+        assert_eq!(s.height_at(25.0, 5.0), Some(8.0));
+        assert_eq!(s.height_at(15.0, 5.0), Some(0.0), "the gap is empty");
+        let alone = |(lo, hi, top)| Stock::block(lo, hi, top, 0.0, 0.5).unwrap().volume();
+        assert!((s.volume() - (alone(a) + alone(b))).abs() < 1e-6);
+        // Overlapping, the taller one wins where they meet.
+        let c = (dvec2(5.0, 0.0), dvec2(15.0, 10.0), 9.0);
+        let s = Stock::from_boxes(&[a, c], 0.0, 0.5).unwrap();
+        assert_eq!(s.height_at(7.0, 5.0), Some(9.0));
+        assert_eq!(s.height_at(2.0, 5.0), Some(5.0));
+        assert!(matches!(
+            Stock::from_boxes(&[], 0.0, 0.5),
+            Err(StockError::NoBlocks)
+        ));
     }
 
     #[test]

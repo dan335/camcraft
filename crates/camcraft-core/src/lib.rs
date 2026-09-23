@@ -48,6 +48,8 @@ pub mod ordering;
 
 pub mod job;
 
+pub mod frame;
+
 /// The material at any point in a finished job, for showing and for playback.
 pub mod replay;
 pub mod run;

@@ -39,6 +39,12 @@ pub enum MeshError {
         /// The offending value.
         value: DVec3,
     },
+    /// Merged meshes would have more vertices than a `u32` index can name.
+    #[error("the merged mesh would have {vertices} vertices, more than a mesh can index")]
+    TooLarge {
+        /// How many vertices it would have.
+        vertices: usize,
+    },
 }
 
 /// An axis-aligned bounding box.
@@ -54,6 +60,19 @@ impl Aabb {
     /// Size along each axis.
     pub fn extent(&self) -> DVec3 {
         self.max - self.min
+    }
+
+    /// The smallest box holding both.
+    pub fn union(&self, other: &Aabb) -> Aabb {
+        Aabb {
+            min: self.min.min(other.min),
+            max: self.max.max(other.max),
+        }
+    }
+
+    /// The middle of the box.
+    pub fn center(&self) -> DVec3 {
+        (self.min + self.max) * 0.5
     }
 }
 
@@ -125,6 +144,38 @@ impl TriMesh {
         let (min, max) = iter.fold((first, first), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
         Some(Aabb { min, max })
     }
+
+    /// The mesh with every vertex moved by `f`; the triangles are unchanged.
+    ///
+    /// `f` should be a rigid motion. A reflection would turn every triangle inside
+    /// out, which nothing downstream checks for.
+    pub fn mapped(&self, f: impl Fn(DVec3) -> DVec3) -> Result<TriMesh, MeshError> {
+        TriMesh::new(
+            self.vertices.iter().map(|v| f(*v)).collect(),
+            self.triangles.clone(),
+        )
+    }
+
+    /// Several meshes as one: vertices appended in order, indices offset to match.
+    pub fn merged(parts: &[&TriMesh]) -> Result<TriMesh, MeshError> {
+        let vertices: usize = parts.iter().map(|m| m.vertices.len()).sum();
+        if u32::try_from(vertices).is_err() {
+            return Err(MeshError::TooLarge { vertices });
+        }
+        let mut out = TriMesh {
+            vertices: Vec::with_capacity(vertices),
+            triangles: Vec::with_capacity(parts.iter().map(|m| m.triangles.len()).sum()),
+        };
+        for m in parts {
+            // Fits: the total was checked above.
+            #[allow(clippy::cast_possible_truncation)]
+            let base = out.vertices.len() as u32;
+            out.vertices.extend_from_slice(&m.vertices);
+            out.triangles
+                .extend(m.triangles.iter().map(|t| t.map(|i| i + base)));
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -188,6 +239,20 @@ mod tests {
         assert_eq!(b.min, dvec3(0.0, 0.0, 0.0));
         assert_eq!(b.max, dvec3(1.0, 1.0, 2.0));
         assert_eq!(b.extent(), dvec3(1.0, 1.0, 2.0));
+    }
+
+    #[test]
+    fn merged_meshes_keep_every_triangle_and_both_bounds() {
+        let a = tri();
+        let b = a.mapped(|v| v + dvec3(10.0, 0.0, -1.0)).unwrap();
+        let m = TriMesh::merged(&[&a, &b]).unwrap();
+        assert_eq!(m.len(), 2);
+        assert_eq!(m.triangle(1).unwrap(), b.triangle(0).unwrap());
+        let bounds = m.bounds().unwrap();
+        assert_eq!(bounds, a.bounds().unwrap().union(&b.bounds().unwrap()));
+        assert_eq!(bounds.min, dvec3(0.0, 0.0, -1.0));
+        assert_eq!(bounds.max, dvec3(11.0, 1.0, 2.0));
+        assert_eq!(TriMesh::merged(&[]).unwrap(), TriMesh::default());
     }
 
     #[test]
