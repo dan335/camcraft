@@ -1,32 +1,26 @@
 //! Command-line interface for camcraft.
 //!
-//! Every subcommand runs through one engine path, [`run_job`]. `inspect` and `post`
-//! describe a single finishing operation with flags, and are turned into a
-//! one-operation job before anything is computed; `job` reads the operations from a
-//! file. What the inspector draws and what the post writes therefore come from the
-//! same path, move for move. There used to be a second, single-operation path for
-//! the picture, and a defect could have lived in only the one nobody looked at.
+//! Argument parsing, logging and file writing. Everything else goes through
+//! `camcraft-session`, which the desktop app shares, so the two cannot disagree
+//! about what a file means, what runs or what is allowed to be posted.
+//!
+//! Every subcommand runs through one engine path. `inspect` and `post` describe a
+//! single finishing operation with flags, and are turned into a one-operation job
+//! before anything is computed; `job` reads the operations from a file. What the
+//! inspector draws and what the post writes therefore come from the same path, move
+//! for move.
 //!
 //! `inspect` writes no G-code, which is deliberate: nothing that can reach a
 //! machine comes out of it.
 
-mod inspection;
-
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use camcraft_core::job::{
-    Geometry, Height, HeightRef, Heights, Job as JobSpec, Linking, Operation, Passes, Setup,
-    StockSpec, StockToLeave, StrategySpec, ToolKind, ToolSpec,
+use camcraft_core::job::Job as JobSpec;
+use camcraft_session::{
+    FinishSpec, FinishTool, Model, Passed, Ran, SessionError, Units, gate, inspection, load_model,
+    load_profile, program, program_name, read_job, run, single_operation,
 };
-use camcraft_core::run::{JobResult, OperationResult, run_job};
-use camcraft_geom::mesh::{Aabb, TriMesh};
-use camcraft_import::step::{FileCheck, load_step};
-use camcraft_import::stl::{Units, load_stl};
-use camcraft_post::op::{ProgramSpec, Spin, Units as PostUnits, lower};
-use camcraft_post::profile::Profile;
-use camcraft_post::render::render;
 use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
 
 /// Generate 3-axis CNC toolpaths from a 3D model.
@@ -184,17 +178,6 @@ impl UnitArg {
             UnitArg::Inch => Units::Inches,
         }
     }
-
-    fn label(self) -> &'static str {
-        match self {
-            UnitArg::Mm => "mm",
-            UnitArg::Inch => "inch",
-        }
-    }
-
-    fn mm(self) -> f64 {
-        self.units().to_mm()
-    }
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -233,168 +216,36 @@ fn main() -> ExitCode {
     }
 }
 
-/// A model, loaded and measured.
-struct Model {
-    mesh: TriMesh,
-    bounds: Aabb,
-    path: String,
-    /// What the model's numbers meant, as a person would say it.
-    units: String,
-    /// Anything about the import worth a person's attention.
-    warnings: Vec<String>,
-}
-
-/// Tessellation tolerance for a B-rep, from the machining tolerance.
-///
-/// The simulator verifies against this mesh, so the gap between it and the true
-/// surface is error nothing downstream can see. A quarter keeps it a small part of
-/// the budget without making tessellation the slow step.
-fn tessellation_tolerance(tolerance: f64) -> f64 {
-    tolerance / 4.0
+/// Say a session error the way this command line would, naming its flags.
+fn explain(e: SessionError) -> Box<dyn std::error::Error> {
+    match e {
+        SessionError::StlNeedsUnits => "an STL file carries no units: pass --units mm or \
+                                        --units inch. Guessing would make an inch part \
+                                        25.4 times too small."
+            .into(),
+        SessionError::UnitsDisagree { said, file } => format!(
+            "--units {said} was given, but the file is in {file}. A STEP file states \
+             its own units; drop --units, or check this is the right file."
+        )
+        .into(),
+        other => other.into(),
+    }
 }
 
 fn load(path: &Path, units: Option<UnitArg>, tolerance: f64) -> Fallible<Model> {
-    let ext = path
-        .extension()
-        .map(|e| e.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    let model = match ext.as_str() {
-        "stl" => {
-            let units = units.ok_or(
-                "an STL file carries no units: pass --units mm or --units inch. \
-                 Guessing would make an inch part 25.4 times too small.",
-            )?;
-            let (mesh, import) = load_stl(path, units.units())?;
-            let mut warnings = Vec::new();
-            if import.degenerate > 0 {
-                warnings.push(format!(
-                    "{} degenerate triangle(s) in the model",
-                    import.degenerate
-                ));
-            }
-            tracing::info!(
-                "loaded {} triangles, {} vertices after welding",
-                import.triangles,
-                import.vertices
-            );
-            finish(path, mesh, units.label().to_string(), warnings)?
-        }
-        "step" | "stp" => {
-            let started = std::time::Instant::now();
-            let (mesh, report) = load_step(path, tessellation_tolerance(tolerance))?;
-            if let Some(said) = units
-                && (said.mm() - report.unit.mm).abs() > 1e-9 * said.mm()
-            {
-                return Err(format!(
-                    "--units {} was given, but the file is in {}. A STEP file states \
-                     its own units; drop --units, or check this is the right file.",
-                    said.label(),
-                    report.unit.name
-                )
-                .into());
-            }
-            let mut warnings = Vec::new();
-            if report.degenerate > 0 {
-                warnings.push(format!(
-                    "{} degenerate triangle(s) from tessellation",
-                    report.degenerate
-                ));
-            }
-            if let FileCheck::Skipped(why) = report.check {
-                warnings.push(format!(
-                    "the mesh was not checked against the file's geometry: {why}"
-                ));
-            }
-            tracing::info!(
-                "read STEP in {}: {} face(s) all meshed, {} triangles at {} mm, checked: {}",
-                report.unit.name,
-                report.faces,
-                report.triangles,
-                report.tolerance,
-                match report.check {
-                    FileCheck::Passed => "yes",
-                    FileCheck::Skipped(_) => "NO",
-                },
-            );
-            tracing::info!("tessellated in {:.1} s", started.elapsed().as_secs_f64());
-            finish(
-                path,
-                mesh,
-                format!("{} (from file)", report.unit.name),
-                warnings,
-            )?
-        }
-        _ => {
-            return Err(format!(
-                "{}: not a model this can read; expected .stl, .step or .stp",
-                path.display()
-            )
-            .into());
-        }
-    };
+    let model = load_model(path, units.map(UnitArg::units), tolerance).map_err(explain)?;
+    for n in &model.notes {
+        tracing::info!("{n}");
+    }
     Ok(model)
 }
 
-fn finish(path: &Path, mesh: TriMesh, units: String, warnings: Vec<String>) -> Fallible<Model> {
-    let bounds = mesh.bounds().ok_or("model has no geometry")?;
-    let extent = bounds.extent();
-    tracing::info!(
-        "model is {:.1} x {:.1} x {:.1} mm",
-        extent.x,
-        extent.y,
-        extent.z
-    );
-    Ok(Model {
-        mesh,
-        bounds,
-        path: path.display().to_string(),
-        units,
-        warnings,
-    })
-}
-
-/// A job, run.
-struct Ran {
-    result: JobResult,
-    warnings: Vec<String>,
-}
-
-/// The one engine path every subcommand takes.
-fn run(model: &Model, job: &JobSpec) -> Fallible<Ran> {
-    // Validation happens before anything is computed, so a bad job fails on its own
-    // terms rather than part-way through an operation.
-    job.validate()?;
-    tracing::info!(
-        "job: {} operation(s), tolerance {} mm",
-        job.operations.len(),
-        job.tolerance
-    );
-    let result = run_job(job, &model.mesh)?;
-    report(&result);
-
-    let mut warnings = result.warnings();
-    warnings.extend(model.warnings.iter().cloned());
-    Ok(Ran { result, warnings })
-}
-
-fn report(result: &JobResult) {
-    for op in &result.operations {
-        tracing::info!(
-            "{}: {} passes, removed {:.0} mm3, travel saved {:.0}%, rapid contacts {}",
-            op.name,
-            op.passes,
-            op.sim.removed_mm3,
-            op.travel_saved * 100.0,
-            op.sim.rapid_contacts
-        );
+fn execute(model: &Model, job: &JobSpec) -> Fallible<Ran> {
+    let ran = run(model, job)?;
+    for n in &ran.notes {
+        tracing::info!("{n}");
     }
-    tracing::info!(
-        "verified: {} column(s) compared, gouges {}, deepest {:.3} mm, budget {:.3} mm",
-        result.verify.compared,
-        result.verify.gouged,
-        result.verify.deepest_gouge_mm,
-        result.verify_budget
-    );
+    Ok(ran)
 }
 
 fn write_inspection(path: &Path, model: &Model, job: &JobSpec, ran: &Ran) -> Fallible<()> {
@@ -419,56 +270,38 @@ fn write_inspection(path: &Path, model: &Model, job: &JobSpec, ran: &Ran) -> Fal
     Ok(())
 }
 
-/// Refuse to go further unless the job verified, or the caller insisted.
-fn gate(ran: &Ran, force: bool, look_first: &str) -> Fallible<()> {
-    if ran.result.is_clean() {
-        return Ok(());
-    }
-    if !force {
-        // The caller never reaches its own warning report on this path, so say what
-        // is wrong here, before refusing.
-        for w in &ran.warnings {
-            tracing::warn!("{w}");
+/// The shared verification policy, with this command line's explanation.
+fn check_gate(ran: &Ran, force: bool, look_first: &str) -> Fallible<()> {
+    match gate(ran, force) {
+        Ok(Passed::Verified) => Ok(()),
+        Ok(Passed::Forced) => {
+            tracing::warn!("--force given: writing a program that did NOT verify");
+            Ok(())
         }
-        tracing::error!(
-            "refusing to write a program that did not verify. Look at it first:\n  \
-             {look_first}\n  bash scripts/view.sh\n\
-             If you understand why the simulator objects, re-run with --force."
-        );
-        return Err("verification failed".into());
+        Err(e) => {
+            // The caller never reaches its own warning report on this path, so say
+            // what is wrong here, before refusing.
+            for w in &ran.warnings {
+                tracing::warn!("{w}");
+            }
+            tracing::error!(
+                "refusing to write a program that did not verify. Look at it first:\n  \
+                 {look_first}\n  bash scripts/view.sh\n\
+                 If you understand why the simulator objects, re-run with --force."
+            );
+            Err(e.into())
+        }
     }
-    tracing::warn!("--force given: writing a program that did NOT verify");
-    Ok(())
-}
-
-fn load_profile(name: &str) -> Fallible<Profile> {
-    Ok(match Profile::builtin(name) {
-        Some(p) => p?,
-        None => Profile::load(name)?,
-    })
 }
 
 fn write_program(
-    op: &OperationResult,
+    op: &camcraft_core::run::OperationResult,
     wcs: u8,
-    profile: &Profile,
+    profile: &camcraft_post::profile::Profile,
     name: &str,
     path: &Path,
 ) -> Fallible<()> {
-    let spec = ProgramSpec {
-        name: name.to_string(),
-        op_name: op.name.clone(),
-        strategy: op.strategy.to_string(),
-        tool: op.tool_number,
-        tool_comment: op.tool_comment.clone(),
-        wcs,
-        rpm: op.rpm,
-        spin: Spin::Clockwise,
-        coolant: None,
-        units: PostUnits::Millimetres,
-    };
-    let ops = lower(&op.path, &spec)?;
-    let (text, report) = render(&ops, profile, name);
+    let (text, report) = program(op, wcs, profile, name)?;
     std::fs::write(path, &text)?;
     tracing::info!(
         "{}: {} lines, {} motion blocks for {} -> {}",
@@ -483,9 +316,9 @@ fn write_program(
 
 fn job(args: JobArgs) -> Fallible<usize> {
     // The job first: its tolerance decides how finely a STEP model is tessellated.
-    let job: JobSpec = toml::from_str(&std::fs::read_to_string(&args.job)?)?;
+    let job = read_job(&args.job)?;
     let model = load(&args.model, args.units, job.tolerance)?;
-    let ran = run(&model, &job)?;
+    let ran = execute(&model, &job)?;
 
     // Before the gate, not after it: a job that failed to verify is exactly the one
     // that needs looking at.
@@ -494,7 +327,7 @@ fn job(args: JobArgs) -> Fallible<usize> {
     }
 
     if let Some(dir) = &args.out {
-        gate(
+        check_gate(
             &ran,
             args.force,
             "camcraft job ... --inspect path.json, then drop it on the inspector",
@@ -502,7 +335,7 @@ fn job(args: JobArgs) -> Fallible<usize> {
         let profile = load_profile(&args.profile)?;
         std::fs::create_dir_all(dir)?;
         for (i, op) in ran.result.operations.iter().enumerate() {
-            let name = format!("{:02}-{}", i + 1, sanitise(&op.name));
+            let name = program_name(i, &op.name);
             let path = dir.join(format!("{name}.{}", profile.extension));
             write_program(op, job.setup.wcs, &profile, &name, &path)?;
         }
@@ -516,9 +349,14 @@ fn job(args: JobArgs) -> Fallible<usize> {
 
 fn post(args: PostArgs) -> Fallible<usize> {
     let model = load(&args.job.model, args.job.units, args.job.tolerance)?;
-    let job = single_operation(&args.job, args.wcs, args.rpm, args.tool_number);
-    let ran = run(&model, &job)?;
-    gate(
+    let job = single_operation(&finish_spec(
+        &args.job,
+        args.wcs,
+        args.rpm,
+        args.tool_number,
+    ));
+    let ran = execute(&model, &job)?;
+    check_gate(
         &ran,
         args.force,
         "camcraft inspect ... --out path.json, then drop it on the inspector",
@@ -544,8 +382,8 @@ fn post(args: PostArgs) -> Fallible<usize> {
 
 fn inspect(args: InspectArgs) -> Fallible<usize> {
     let model = load(&args.model, args.units, args.tolerance)?;
-    let job = single_operation(&args, 54, 18000, 1);
-    let ran = run(&model, &job)?;
+    let job = single_operation(&finish_spec(&args, 54, 18000, 1));
+    let ran = execute(&model, &job)?;
     write_inspection(&args.out, &model, &job, &ran)?;
     for w in &ran.warnings {
         tracing::warn!("{w}");
@@ -553,71 +391,25 @@ fn inspect(args: InspectArgs) -> Fallible<usize> {
     Ok(ran.warnings.len())
 }
 
-/// The job that `inspect` and `post` describe with flags.
-///
-/// The block is the model's own bounding box, and traverses clear the material by
-/// `--clearance`. Retracts run at the cutting feed and plunges at a quarter of it.
-fn single_operation(args: &InspectArgs, wcs: u8, rpm: u32, number: u32) -> JobSpec {
-    const TOOL: &str = "cutter";
-    let (kind, shape) = match args.tool {
-        ToolArg::Ball => (ToolKind::Ball, "ball"),
-        ToolArg::Flat => (ToolKind::Flat, "flat"),
-    };
-    let tool = ToolSpec {
-        kind,
-        diameter: args.diameter,
-        corner: 0.0,
-        number,
-        rpm,
-        comment: format!("{}mm {shape}", args.diameter),
-    };
-    JobSpec {
-        tolerance: args.tolerance,
-        setup: Setup {
-            stock: StockSpec::Box { margin: [0.0; 3] },
-            wcs,
+/// The finishing pass that `inspect` and `post` describe with flags.
+fn finish_spec(args: &InspectArgs, wcs: u8, rpm: u32, number: u32) -> FinishSpec {
+    FinishSpec {
+        tool: match args.tool {
+            ToolArg::Ball => FinishTool::Ball,
+            ToolArg::Flat => FinishTool::Flat,
         },
-        tools: BTreeMap::from([(TOOL.to_string(), tool)]),
-        operations: vec![Operation {
-            name: "finish".into(),
-            strategy: StrategySpec::Parallel { angle: 0.0 },
-            tool: TOOL.into(),
-            geometry: Geometry::default(),
-            heights: Heights {
-                clearance: Height {
-                    reference: HeightRef::ModelTop,
-                    offset: args.clearance,
-                },
-            },
-            passes: Passes {
-                stepover: args.stepover,
-                feed: args.feed,
-                stock_to_leave: StockToLeave {
-                    radial: args.stock_radial,
-                    axial: args.stock_axial,
-                },
-                max_cut_step: args.max_cut_step,
-            },
-            linking: Linking {
-                retract_feed: args.feed,
-                plunge_feed: args.feed / 4.0,
-                ..Linking::default()
-            },
-        }],
+        diameter: args.diameter,
+        stepover: args.stepover,
+        tolerance: args.tolerance,
+        stock_radial: args.stock_radial,
+        stock_axial: args.stock_axial,
+        max_cut_step: args.max_cut_step,
+        clearance: args.clearance,
+        feed: args.feed,
+        wcs,
+        rpm,
+        number,
     }
-}
-
-/// Keep an operation name usable as a file name.
-fn sanitise(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect()
 }
 
 fn human_size(bytes: u64) -> String {

@@ -17,6 +17,7 @@ camcraft-import = { path = "crates/camcraft-import", version = "0.1.0" }
 camcraft-sim    = { path = "crates/camcraft-sim",    version = "0.1.0" }
 camcraft-core   = { path = "crates/camcraft-core",   version = "0.1.0" }
 camcraft-post   = { path = "crates/camcraft-post",   version = "0.1.0" }
+camcraft-session = { path = "crates/camcraft-session", version = "0.1.0" }
 
 # external
 clap               = { version = "4.6", features = ["derive"] }

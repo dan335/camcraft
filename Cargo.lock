@@ -127,15 +127,10 @@ version = "0.1.0"
 dependencies = [
  "camcraft-core",
  "camcraft-geom",
- "camcraft-import",
  "camcraft-post",
- "camcraft-sim",
+ "camcraft-session",
  "clap",
- "glam 0.33.8",
- "serde",
  "serde_json",
- "thiserror 2.0.20",
- "toml",
  "tracing",
  "tracing-subscriber",
 ]
@@ -186,6 +181,21 @@ version = "0.1.0"
 dependencies = [
  "camcraft-core",
  "camcraft-geom",
+ "glam 0.33.8",
+ "serde",
+ "thiserror 2.0.20",
+ "toml",
+]
+
+[[package]]
+name = "camcraft-session"
+version = "0.1.0"
+dependencies = [
+ "camcraft-core",
+ "camcraft-geom",
+ "camcraft-import",
+ "camcraft-post",
+ "camcraft-sim",
  "glam 0.33.8",
  "serde",
  "thiserror 2.0.20",

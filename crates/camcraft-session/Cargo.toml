@@ -1,0 +1,23 @@
+[package]
+name        = "camcraft-session"
+description = "One model and one job: loaded, run, checked and posted. Shared by the CLI and the app."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[dependencies]
+camcraft-geom.workspace   = true
+camcraft-import.workspace = true
+camcraft-sim.workspace    = true
+camcraft-core.workspace   = true
+camcraft-post.workspace   = true
+glam.workspace            = true
+serde.workspace           = true
+toml.workspace            = true
+thiserror.workspace       = true
+
+[lints]
+workspace = true
