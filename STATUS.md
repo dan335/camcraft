@@ -211,10 +211,12 @@ since, can be reset to the preset, and can save its own values as a new preset o
 the job's copy. An operation has its own spindle speed, the tool's unless given; a
 job that sets one is written as version 3. A tool's old single `cutting` table
 reads as a preset called "Default". Nothing uses the ramp feed until entries ramp.
+Beside each speed and feed the editor shows the surface speed (m/min or ft/min)
+and chip load (per tooth, needing the tool's flutes), as makers chart them; typing
+either sets the spindle speed or feed. Neither is kept, so neither goes stale.
 
 The work offset manager is to join the toolbar. Not yet: importing Fusion
-libraries, chip load and surface speed, coolant and spindle direction, and more
-cutter types.
+libraries, coolant and spindle direction, and more cutter types.
 
 ## Playback (after 0.2): how it is set up
 

@@ -6,6 +6,8 @@ use camcraft_core::job::{
 };
 use eframe::egui;
 
+use camcraft_core::cutting;
+
 use crate::measure::Measure;
 use crate::theme;
 use crate::tool_drawing::{Part, draw};
@@ -180,6 +182,11 @@ pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure) {
         ui.label("");
         ui.weak("An operation cuts at this speed unless its preset gives one.");
         ui.end_row();
+        let mut rpm = Some(tool.rpm);
+        surface_speed_row(ui, &mut rpm, tool.diameter, m);
+        if let Some(r) = rpm {
+            tool.rpm = r;
+        }
     });
 
     egui::CollapsingHeader::new("Presets")
@@ -216,7 +223,7 @@ fn presets(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFie
     }
     let mut act = None;
     let count = tool.presets.len();
-    let diameter = tool.diameter;
+    let (diameter, flutes) = (tool.diameter, tool.flutes);
     for (i, p) in tool.presets.iter_mut().enumerate() {
         let mine: Vec<ToolFieldError> = errors
             .iter()
@@ -263,7 +270,7 @@ fn presets(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFie
                     egui::Grid::new("preset-fields")
                         .num_columns(2)
                         .spacing([12.0, 6.0])
-                        .show(ui, |ui| preset_fields(ui, p, diameter, m, &mine));
+                        .show(ui, |ui| preset_fields(ui, p, (diameter, flutes), m, &mine));
                 });
         });
     }
@@ -306,7 +313,7 @@ fn free_preset_name(presets: &[Preset], base: &str) -> String {
 fn preset_fields(
     ui: &mut egui::Ui,
     p: &mut Preset,
-    diameter: f64,
+    (diameter, flutes): (f64, Option<u32>),
     m: Measure,
     errors: &[ToolFieldError],
 ) {
@@ -337,7 +344,9 @@ fn preset_fields(
         field_error(ui, errors, "presets.rpm");
     });
     ui.end_row();
+    surface_speed_row(ui, &mut p.rpm, diameter, m);
     opt_feed(ui, m, "Cutting feed", &mut p.feed, errors, "presets.feed");
+    chip_load_row(ui, p, flutes, m);
     opt_feed(
         ui,
         m,
@@ -387,6 +396,73 @@ fn preset_fields(
         field_error(ui, errors, "presets.stock_to_leave");
     });
     ui.end_row();
+}
+
+/// The surface speed at `rpm`, which sets `rpm` when edited. Makers chart
+/// cutters in this, and it holds across diameters.
+fn surface_speed_row(ui: &mut egui::Ui, rpm: &mut Option<u32>, diameter: f64, m: Measure) {
+    ui.label("Surface speed");
+    ui.horizontal(|ui| match *rpm {
+        Some(r) if diameter > 0.0 => {
+            let vc = cutting::surface_speed(diameter, f64::from(r));
+            let mut shown = m.show_surface(vc);
+            let response = ui.add(
+                egui::DragValue::new(&mut shown)
+                    .speed(1.0)
+                    .range(0.0..=m.show_surface(cutting::surface_speed(diameter, 60000.0)))
+                    .max_decimals(1)
+                    .suffix(format!(" {}", m.surface_unit())),
+            );
+            if response.changed() {
+                *rpm = Some(whole_rpm(cutting::rpm_for(diameter, m.read_surface(shown))));
+            }
+            ui.weak("sets the spindle speed");
+        }
+        _ => {
+            ui.weak("needs a spindle speed");
+        }
+    });
+    ui.end_row();
+}
+
+/// The chip load at the preset's feed and speed, which sets the feed when
+/// edited.
+fn chip_load_row(ui: &mut egui::Ui, p: &mut Preset, flutes: Option<u32>, m: Measure) {
+    ui.label("Chip load");
+    ui.horizontal(|ui| match (p.feed, p.rpm, flutes) {
+        (Some(feed), Some(rpm), Some(z)) if rpm > 0 && z > 0 => {
+            let fz = cutting::chip_load(feed, f64::from(rpm), z);
+            let mut shown = m.show(fz);
+            let response = ui.add(
+                egui::DragValue::new(&mut shown)
+                    .speed(m.show(0.001))
+                    .range(0.0..=m.show(2.0))
+                    .min_decimals(m.decimals(3))
+                    .max_decimals(m.decimals(4))
+                    .suffix(format!(" {}/tooth", m.unit())),
+            );
+            if response.changed() {
+                p.feed = Some(cutting::feed_for(m.read(shown), f64::from(rpm), z));
+            }
+            ui.weak("sets the cutting feed");
+        }
+        (_, _, None) | (_, _, Some(0)) => {
+            ui.weak("needs the tool's flutes");
+        }
+        _ => {
+            ui.weak("needs a spindle speed and cutting feed");
+        }
+    });
+    ui.end_row();
+}
+
+/// A spindle speed worked out from a surface speed, to the nearest rev/min and
+/// within what a field takes.
+fn whole_rpm(rpm: f64) -> u32 {
+    // Rounded and clamped to 1..=60000 first, so it fits.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let whole = rpm.round().clamp(1.0, 60000.0) as u32;
+    whole
 }
 
 /// A tool type's name, as the user reads it.

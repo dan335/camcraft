@@ -48,6 +48,33 @@ impl Measure {
         }
     }
 
+    /// The surface speed unit's symbol.
+    pub fn surface_unit(self) -> &'static str {
+        match self {
+            Self::Metric => "m/min",
+            Self::Imperial => "ft/min",
+        }
+    }
+
+    /// Surface speed in metres per minute, in the shown unit.
+    pub fn show_surface(self, m_per_min: f64) -> f64 {
+        m_per_min * 1000.0 / self.scale() / self.surface_per_length()
+    }
+
+    /// A shown surface speed back in metres per minute.
+    pub fn read_surface(self, shown: f64) -> f64 {
+        shown * self.scale() * self.surface_per_length() / 1000.0
+    }
+
+    /// Shown lengths per shown surface-speed length: 1000 mm to the metre, 12
+    /// inches to the foot.
+    fn surface_per_length(self) -> f64 {
+        match self {
+            Self::Metric => 1000.0,
+            Self::Imperial => 12.0,
+        }
+    }
+
     /// Millimetres per shown unit.
     fn scale(self) -> f64 {
         match self {
@@ -224,6 +251,15 @@ mod tests {
         assert_eq!(Measure::Imperial.feed_number(254.0), "10.0");
         assert_eq!(Measure::Metric.volume(12_300.0), "12.3 cm³");
         assert_eq!(Measure::Imperial.volume(MM_PER_INCH.powi(3)), "1.00 in³");
+    }
+
+    #[test]
+    fn surface_speeds_convert() {
+        assert!((Measure::Metric.show_surface(100.0) - 100.0).abs() < 1e-9);
+        assert!((Measure::Imperial.show_surface(0.3048) - 1.0).abs() < 1e-9);
+        for m in Measure::ALL {
+            assert!((m.read_surface(m.show_surface(319.2)) - 319.2).abs() < 1e-9);
+        }
     }
 
     #[test]

@@ -52,6 +52,8 @@ pub mod ordering;
 
 pub mod job;
 
+pub mod cutting;
+
 pub mod frame;
 
 pub mod setup;
