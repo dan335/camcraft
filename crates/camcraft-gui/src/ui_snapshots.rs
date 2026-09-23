@@ -316,6 +316,8 @@ fn tool_manager() {
         kind: ToolKind::Bullnose,
         diameter: 8.0,
         corner: 1.0,
+        angle: None,
+        tip_diameter: 0.0,
         number: 4,
         rpm: 16000,
         comment: "8mm bullnose r1".into(),
@@ -381,6 +383,24 @@ fn tool_manager() {
     };
     manager.show_for_snapshot("bullnose-8", Some(wrong));
     let mut manager = shoot_manager(manager, "tools_error");
+
+    // A 60° V-bit with a small flat tip: the flank drawn to its angle.
+    let vbit = ToolSpec {
+        kind: ToolKind::Cone,
+        diameter: 12.7,
+        angle: Some(60.0),
+        tip_diameter: 0.5,
+        number: 7,
+        comment: "1/2in 60° V-bit".into(),
+        flutes: Some(2),
+        flute_length: Some(14.0),
+        shank_diameter: Some(12.7),
+        stickout: Some(25.0),
+        overall_length: Some(50.0),
+        ..ToolSpec::default()
+    };
+    manager.show_for_snapshot("vbit-60", Some(vbit));
+    let mut manager = shoot_manager(manager, "tools_vbit");
 
     // Folders for two machines, the first open with the tools inside it.
     manager.folders_for_snapshot();

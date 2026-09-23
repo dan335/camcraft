@@ -44,7 +44,7 @@
 //! only raises it, and pure radial widens it without raising it at all.
 
 use crate::dropcutter::DropTest;
-use crate::tool::{Bullnose, BullnoseFamily, ToolError, ToolKey, ToolProfile};
+use crate::tool::{Bullnose, BullnoseFamily, Cutter, ToolError, ToolKey, ToolProfile};
 use glam::DVec3;
 
 /// How much material to leave behind, measured perpendicular to the tool axis
@@ -114,7 +114,7 @@ impl Stock {
 /// *real* tool tip exactly the requested distance clear of the part.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EffectiveTool {
-    shape: Bullnose,
+    shape: Cutter,
     stock: Stock,
 }
 
@@ -127,11 +127,27 @@ impl EffectiveTool {
         let base = tool.as_bullnose();
         let m = stock.radial.min(stock.axial);
         let shape = Bullnose::new(base.max_radius() + stock.radial, base.corner() + m)?;
-        Ok(Self { shape, stock })
+        Ok(Self {
+            shape: Cutter::Bullnose(shape),
+            stock,
+        })
+    }
+
+    /// Dilate any cutter by `stock`. A cone grown by a ball is no longer a cone,
+    /// so a cone is taken only as it is, with no stock to leave.
+    pub fn of(tool: &Cutter, stock: Stock) -> Result<Self, ToolError> {
+        match tool {
+            Cutter::Bullnose(b) => Self::new(b, stock),
+            Cutter::Cone(_) if stock.is_none() => Ok(Self {
+                shape: *tool,
+                stock,
+            }),
+            Cutter::Cone(_) => Err(ToolError::ConeStock),
+        }
     }
 
     /// The dilated shape the drop-cutter actually contacts with.
-    pub fn shape(&self) -> &Bullnose {
+    pub fn shape(&self) -> &Cutter {
         &self.shape
     }
 
@@ -164,6 +180,13 @@ impl ToolProfile for EffectiveTool {
 
     fn geometry_key(&self) -> ToolKey {
         let base = self.shape.geometry_key();
+        if let Cutter::Cone(_) = self.shape {
+            // Always without stock, which leaves the cone's own three slots.
+            return ToolKey {
+                kind: "effective-cone",
+                params: base.params,
+            };
+        }
         ToolKey {
             kind: "effective",
             params: [
@@ -216,7 +239,7 @@ mod tests {
         let e =
             EffectiveTool::new(&Flat::new(5.0).unwrap(), Stock::isotropic(0.5).unwrap()).unwrap();
         assert_eq!(e.shape().max_radius(), 5.5);
-        assert_eq!(e.shape().corner(), 0.5);
+        assert_eq!(e.shape().bullnose().unwrap().corner(), 0.5);
         assert_eq!(e.tip_offset(), 0.5);
     }
 
@@ -226,7 +249,7 @@ mod tests {
             EffectiveTool::new(&Ball::new(3.0).unwrap(), Stock::isotropic(0.5).unwrap()).unwrap();
         // corner == radius is exactly a ball.
         assert_eq!(e.shape().max_radius(), 3.5);
-        assert_eq!(e.shape().corner(), 3.5);
+        assert_eq!(e.shape().bullnose().unwrap().corner(), 3.5);
     }
 
     #[test]
@@ -239,7 +262,11 @@ mod tests {
             4.0,
             "axial stock must not widen"
         );
-        assert_eq!(axial.shape().corner(), 0.0, "axial stock must not round");
+        assert_eq!(
+            axial.shape().bullnose().unwrap().corner(),
+            0.0,
+            "axial stock must not round"
+        );
         assert_eq!(axial.tip_offset(), 0.7);
 
         let radial = EffectiveTool::new(&flat, Stock::new(0.7, 0.0).unwrap()).unwrap();

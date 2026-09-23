@@ -26,7 +26,7 @@ use camcraft_geom::bvh::MeshBvh;
 use camcraft_geom::mesh::TriMesh;
 use glam::{DVec2, DVec3, dvec2, dvec3};
 
-use crate::tool::{Ball, Bullnose, Flat, ToolProfile};
+use crate::tool::{Ball, Bullnose, Cone, Cutter, Flat, ToolProfile};
 
 /// Triangles smaller than this in squared normal length are treated as degenerate
 /// and contribute only through their vertices.
@@ -436,10 +436,28 @@ fn disc_ball_contact(pz: f64, dxy: f64, rho: f64, c: f64) -> Option<f64> {
 /// The feasible domain `D(t) <= rho + c` is itself an interval, found analytically.
 /// Both endpoints are always evaluated, so the linear case `c = 0` lands exactly.
 fn bullnose_edge_contact(p0: DVec3, p1: DVec3, centre: DVec2, rho: f64, c: f64) -> Option<f64> {
+    edge_contact(p0, p1, centre, rho + c, |pz, d| {
+        disc_ball_contact(pz, d, rho, c)
+    })
+}
+
+/// Tip height at which a tool touches the segment `p0 -> p1`, for any tool whose
+/// surface height `h` over horizontal distance is convex and increasing out to
+/// `reach`: `contact(pz, d)` is `pz - h(d)`, the tip height touching one point.
+///
+/// `f(t) = contact(p(t).z, D(t))` is then concave, as for the bullnose, and its
+/// maximum is found the same way: both ends of the feasible interval, and a
+/// fixed-length ternary search between.
+fn edge_contact(
+    p0: DVec3,
+    p1: DVec3,
+    centre: DVec2,
+    reach: f64,
+    contact: impl Fn(f64, f64) -> Option<f64>,
+) -> Option<f64> {
     let e = p1 - p0;
     let a = p0.truncate() - centre;
     let exy = e.truncate();
-    let reach = rho + c;
 
     // Feasible range of t, from |a + t*exy|^2 <= reach^2.
     let (mut lo, mut hi) = (0.0f64, 1.0f64);
@@ -466,7 +484,7 @@ fn bullnose_edge_contact(p0: DVec3, p1: DVec3, centre: DVec2, rho: f64, c: f64) 
 
     let f = |t: f64| -> Option<f64> {
         let d = (a + exy * t).length();
-        disc_ball_contact(p0.z + e.z * t, d, rho, c)
+        contact(p0.z + e.z * t, d)
     };
 
     let mut best: Option<f64> = None;
@@ -493,6 +511,72 @@ fn bullnose_edge_contact(p0: DVec3, p1: DVec3, centre: DVec2, rho: f64, c: f64) 
         raise(&mut best, v);
     }
     best
+}
+
+// ---------------------------------------------------------------------------
+// Cone: V-bit, chamfer mill, drill point
+// ---------------------------------------------------------------------------
+
+impl DropTest for Cone {
+    /// The surface over horizontal distance `d` is `h(d) = max(0, d - tip) * k`,
+    /// with `k = 1 / tan(α)`: flat out to the tip, then a straight flank. A point
+    /// at height `pz` and distance `d` is touched with the tip at `pz - h(d)`.
+    ///
+    /// Vertex: that directly. Edge: `h` is convex, so the shared concave search.
+    /// Facet: over a plane rising at slope `s` along its gradient, the tip height
+    /// touching the point at distance `r` along it is `z0 + s r - h(r)`, which
+    /// peaks at the tip's rim when the plane is shallower than the flank (`s < k`)
+    /// and at the full radius when steeper. Both are tried, each only where it
+    /// lands inside the triangle; anywhere else the peak is on an edge or the rim,
+    /// which the edge test and the other candidate cover.
+    fn drop_triangle(&self, x: f64, y: f64, tri: &[DVec3; 3]) -> Option<f64> {
+        let (tip, k, reach) = (self.tip(), self.rise(), self.max_radius());
+        let centre = dvec2(x, y);
+        let contact = |pz: f64, d: f64| (d <= reach).then(|| pz - (d - tip).max(0.0) * k);
+        let mut best: Option<f64> = None;
+
+        for v in tri {
+            if let Some(z) = contact(v.z, (v.truncate() - centre).length()) {
+                raise(&mut best, z);
+            }
+        }
+
+        if let Some(n) = normal(tri)
+            && n.z.abs() > 0.0
+        {
+            let grad = dvec2(-n.x / n.z, -n.y / n.z);
+            let dir = if grad.length_squared() > DEGENERATE {
+                grad.normalize()
+            } else {
+                DVec2::ZERO // Horizontal: every direction is as high.
+            };
+            for r in [tip, reach] {
+                let at = centre + dir * r;
+                let z = plane_z(n, tri[0], at.x, at.y);
+                if point_in_triangle(dvec3(at.x, at.y, z), tri, n)
+                    && let Some(tz) = contact(z, r)
+                {
+                    raise(&mut best, tz);
+                }
+            }
+        }
+
+        for (p0, p1) in edges(tri) {
+            if let Some(z) = edge_contact(p0, p1, centre, reach, contact) {
+                raise(&mut best, z);
+            }
+        }
+        best
+    }
+}
+
+impl DropTest for Cutter {
+    fn drop_triangle(&self, x: f64, y: f64, tri: &[DVec3; 3]) -> Option<f64> {
+        match self {
+            Cutter::Bullnose(t) => t.drop_triangle(x, y, tri),
+            Cutter::Cone(t) => t.drop_triangle(x, y, tri),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -783,8 +867,101 @@ mod tests {
         );
     }
 
+    fn vbit(angle: f64, tip: f64) -> Cone {
+        Cone::new(R, tip, (angle / 2.0).to_radians()).unwrap()
+    }
+
+    #[test]
+    fn cone_on_a_plane_is_exact() {
+        let mesh = synthetic::plane(1.25, 20.0);
+        let dc = DropCutter::new(&mesh);
+        for tool in [vbit(90.0, 0.0), vbit(60.0, 0.4)] {
+            let z = dc.drop_at(&tool, 3.0, -2.0).unwrap();
+            assert!((z - 1.25).abs() < 1e-12, "got {z}");
+        }
+    }
+
+    /// On a slope `s` a cone rests on its tip's rim when the plane is shallower
+    /// than the flank, at `plane + s * tip`, and on its full radius when steeper,
+    /// at `plane + s * R - (R - tip) * k`.
+    #[test]
+    fn cone_on_an_incline_matches_the_closed_form() {
+        let (x, y) = (1.5, -2.0);
+        for (a, b) in [(0.2, 0.1), (1.6, 0.9)] {
+            let mesh = synthetic::inclined_plane(a, b, 0.5, 40.0);
+            let dc = DropCutter::new(&mesh);
+            let plane = 0.5 + a * x + b * y;
+            let s = f64::hypot(a, b);
+            for tool in [vbit(90.0, 0.5), vbit(60.0, 0.0), vbit(120.0, 1.0)] {
+                let (tip, k) = (tool.tip(), tool.rise());
+                let want = if s < k {
+                    plane + s * tip
+                } else {
+                    plane + s * R - (R - tip) * k
+                };
+                let z = dc.drop_at(&tool, x, y).unwrap();
+                assert!(
+                    (z - want).abs() < 1e-9,
+                    "slope {s}, k {k}: got {z}, want {want}"
+                );
+            }
+        }
+    }
+
+    /// Beside a step, a V-bit's flank meets the edge: the tip hangs `h(d)` below
+    /// the top, `d` out from the wall, and sits on the floor once past its reach.
+    #[test]
+    fn a_vbit_meets_a_step_edge_with_its_flank() {
+        let mesh = synthetic::step(4.0, 12.0);
+        let dc = DropCutter::new(&mesh);
+        let tool = vbit(90.0, 0.0);
+        for d in [0.5, 1.0, 2.5] {
+            let z = dc.drop_at(&tool, d, 0.0).unwrap();
+            assert!((z - (4.0 - d)).abs() < 1e-9, "at {d} got {z}");
+        }
+        let z = dc.drop_at(&tool, R + 0.5, 0.0).unwrap();
+        assert!(z.abs() < 1e-9, "past its reach got {z}");
+    }
+
+    /// A cone whose tip is its whole width is a flat mill, and must answer as one.
+    #[test]
+    fn a_cone_all_tip_is_a_flat_mill() {
+        let near_flat = Cone::new(R, R * (1.0 - 1e-12), 0.7).unwrap();
+        for mesh in [
+            synthetic::step(4.0, 12.0),
+            synthetic::inclined_plane(0.3, -0.2, 1.0, 12.0),
+            synthetic::uv_sphere(9.0, 40, 60),
+        ] {
+            cross_check(&mesh, &near_flat, &Flat::new(R).unwrap(), 1e-6);
+        }
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn cone_never_penetrates_the_sphere(
+            x in -8.0f64..8.0,
+            y in -8.0f64..8.0,
+            angle in 20.0f64..160.0,
+            tip in 0.0f64..2.0,
+        ) {
+            let mesh = synthetic::uv_sphere(10.0, 40, 60);
+            let dc = DropCutter::new(&mesh);
+            assert_no_penetration(&mesh, &dc, &vbit(angle, tip), x, y)?;
+        }
+
+        #[test]
+        fn cone_never_penetrates_the_step(
+            x in -8.0f64..8.0,
+            y in -8.0f64..8.0,
+            angle in 20.0f64..160.0,
+            tip in 0.0f64..2.0,
+        ) {
+            let mesh = synthetic::step(4.0, 10.0);
+            let dc = DropCutter::new(&mesh);
+            assert_no_penetration(&mesh, &dc, &vbit(angle, tip), x, y)?;
+        }
 
         #[test]
         fn never_penetrates_the_sphere(x in -8.0f64..8.0, y in -8.0f64..8.0, br in 0.5f64..4.0) {

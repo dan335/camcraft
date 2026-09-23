@@ -61,7 +61,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::frame::{BadOrientation, Orientation};
-use crate::tool::{Ball, Bullnose, BullnoseFamily, Flat, ToolError};
+use crate::tool::{Ball, Bullnose, Cone, Cutter, Flat, ToolError};
 
 /// The newest job file format this build reads and writes. It reads every version
 /// from 1, and writes the oldest that holds what a job says
@@ -428,6 +428,12 @@ pub struct ToolSpec {
     /// Corner radius, for a bullnose.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub corner: f64,
+    /// Included angle in degrees, for a cone: 90 for a 90° V-bit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<f64>,
+    /// Diameter of a cone's flat tip; zero comes to a point.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tip_diameter: f64,
     /// Tool number in the program.
     #[serde(default = "one_u32")]
     pub number: u32,
@@ -486,6 +492,10 @@ struct ToolSpecFile {
     diameter: f64,
     #[serde(default)]
     corner: f64,
+    #[serde(default)]
+    angle: Option<f64>,
+    #[serde(default)]
+    tip_diameter: f64,
     #[serde(default = "one_u32")]
     number: u32,
     #[serde(default = "default_rpm")]
@@ -552,6 +562,8 @@ impl From<ToolSpecFile> for ToolSpec {
             kind: f.kind,
             diameter: f.diameter,
             corner: f.corner,
+            angle: f.angle,
+            tip_diameter: f.tip_diameter,
             number: f.number,
             rpm: f.rpm,
             comment: f.comment,
@@ -635,6 +647,8 @@ impl Default for ToolSpec {
             kind: ToolKind::Flat,
             diameter: 6.0,
             corner: 0.0,
+            angle: None,
+            tip_diameter: 0.0,
             number: one_u32(),
             rpm: default_rpm(),
             comment: String::new(),
@@ -743,6 +757,8 @@ pub enum ToolKind {
     Ball,
     /// Corner radius.
     Bullnose,
+    /// A cone: a V-bit, or a chamfer mill with a flat tip.
+    Cone,
 }
 
 impl ToolSpec {
@@ -757,11 +773,14 @@ impl ToolSpec {
                 why,
             });
         };
-        if let Err(e) = self.build() {
-            let field = if self.diameter.is_finite() && self.diameter > 0.0 {
-                "corner"
-            } else {
-                "diameter"
+        if self.kind == ToolKind::Cone && self.angle.is_none() {
+            bad("angle", "a V-bit or chamfer mill needs its angle".into());
+        } else if let Err(e) = self.build() {
+            let field = match e {
+                ToolError::BadRadius(_) => "diameter",
+                ToolError::BadAngle(_) => "angle",
+                ToolError::BadTip { .. } => "tip_diameter",
+                ToolError::BadCorner { .. } | ToolError::ConeStock => "corner",
             };
             bad(field, e.to_string());
         }
@@ -879,12 +898,16 @@ impl ToolSpec {
     }
 
     /// The cutter this describes.
-    pub fn build(&self) -> Result<Bullnose, ToolError> {
+    pub fn build(&self) -> Result<Cutter, ToolError> {
         let r = self.diameter / 2.0;
         match self.kind {
-            ToolKind::Flat => Flat::new(r).map(|t| t.as_bullnose()),
-            ToolKind::Ball => Ball::new(r).map(|t| t.as_bullnose()),
-            ToolKind::Bullnose => Bullnose::new(r, self.corner),
+            ToolKind::Flat => Flat::new(r).map(Cutter::from),
+            ToolKind::Ball => Ball::new(r).map(Cutter::from),
+            ToolKind::Bullnose => Bullnose::new(r, self.corner).map(Cutter::from),
+            ToolKind::Cone => {
+                let angle = self.angle.unwrap_or(0.0);
+                Cone::new(r, self.tip_diameter / 2.0, (angle / 2.0).to_radians()).map(Cutter::from)
+            }
         }
     }
 }
@@ -1075,6 +1098,25 @@ impl Height {
 }
 
 impl Operation {
+    /// Why this operation cannot cut with `tool`, if it cannot.
+    ///
+    /// A cone slices badly into Z levels (its reach widens all the way up, so the
+    /// levels need far too many offsets) and cannot leave stock (grown by a ball it
+    /// is not a cone); it finishes, engraves and chamfers.
+    pub fn cannot_use(&self, tool: &ToolSpec) -> Option<&'static str> {
+        if tool.kind != ToolKind::Cone {
+            return None;
+        }
+        if matches!(self.strategy, StrategySpec::ZlevelRough { .. }) {
+            return Some("a V-bit or chamfer mill cannot rough in Z levels; use a parallel pass");
+        }
+        let leave = self.passes.stock_to_leave;
+        if leave.radial != 0.0 || leave.axial != 0.0 {
+            return Some("a V-bit or chamfer mill cuts to size: set stock to leave to zero");
+        }
+        None
+    }
+
     /// Copy the values `preset` has into this operation, leaving the rest, and
     /// record where they came from.
     pub fn apply_preset(&mut self, preset: &Preset) {
@@ -1312,6 +1354,16 @@ pub enum JobError {
         setup: String,
         /// Why.
         source: BadOrientation,
+    },
+    /// An operation's tool cannot do what the operation asks of it.
+    #[error("operation '{op}' cannot use tool '{tool}': {why}")]
+    WrongTool {
+        /// Which operation, as `setup/operation`.
+        op: String,
+        /// The tool.
+        tool: String,
+        /// Why not.
+        why: String,
     },
     /// An operation has no tool yet.
     #[error("operation '{op}' has no tool")]
@@ -1575,10 +1627,17 @@ impl Job {
             let Some(tool) = &op.tool else {
                 return Err(JobError::NoTool { op: at });
             };
-            if !self.tools.contains_key(tool) {
+            let Some(spec) = self.tools.get(tool) else {
                 return Err(JobError::UnknownTool {
                     op: at,
                     tool: tool.clone(),
+                });
+            };
+            if let Some(why) = op.cannot_use(spec) {
+                return Err(JobError::WrongTool {
+                    op: at,
+                    tool: tool.clone(),
+                    why: why.into(),
                 });
             }
             positive(&format!("{at}.passes.stepover"), op.passes.stepover)?;
@@ -1933,10 +1992,58 @@ tool = "t"
         let j = sample();
         let flat = j.tools.get("rough-6-flat").unwrap().build().unwrap();
         assert_eq!(flat.max_radius(), 3.0);
+        let flat = flat.bullnose().unwrap();
         assert_eq!(flat.corner(), 0.0, "a flat mill has no corner");
 
         let ball = j.tools.get("finish-4-ball").unwrap().build().unwrap();
+        let ball = ball.bullnose().unwrap();
         assert_eq!(ball.corner(), 2.0, "a ball mill's corner fills its radius");
+    }
+
+    fn vbit() -> ToolSpec {
+        toml::from_str("kind = \"cone\"\ndiameter = 6.35\nangle = 60.0\nnumber = 3\n").unwrap()
+    }
+
+    /// A V-bit reads with its angle, builds into a cone, and names what is wrong
+    /// with it where it is wrong.
+    #[test]
+    fn a_vbit_is_a_cone() {
+        let v = vbit();
+        assert!(v.check().is_empty(), "{:?}", v.check());
+        let Cutter::Cone(cone) = v.build().unwrap() else {
+            panic!("not a cone");
+        };
+        assert!((cone.rise() - 3f64.sqrt()).abs() < 1e-12);
+        let text = toml::to_string(&v).unwrap();
+        assert!(
+            text.contains("angle = 60.0") && !text.contains("tip_diameter"),
+            "{text}"
+        );
+
+        let field = |edit: fn(&mut ToolSpec)| {
+            let mut t = vbit();
+            edit(&mut t);
+            t.check().into_iter().map(|e| e.field).collect::<Vec<_>>()
+        };
+        assert_eq!(field(|t| t.angle = None), ["angle"]);
+        assert_eq!(field(|t| t.angle = Some(180.0)), ["angle"]);
+        assert_eq!(field(|t| t.tip_diameter = 7.0), ["tip_diameter"]);
+    }
+
+    /// A V-bit finishes, but neither roughs in Z levels nor leaves stock.
+    #[test]
+    fn a_vbit_is_refused_where_it_cannot_cut() {
+        let mut j = sample();
+        j.tools.insert("v".into(), vbit());
+        j.tools.get_mut("v").unwrap().number = 5;
+        j.setups[0].operations[1].tool = Some("v".into());
+        j.validate().unwrap();
+        j.setups[0].operations[1].passes.stock_to_leave.radial = 0.2;
+        assert!(matches!(j.validate(), Err(JobError::WrongTool { .. })));
+        j.setups[0].operations[1].passes.stock_to_leave.radial = 0.0;
+        j.setups[0].operations[0].tool = Some("v".into());
+        j.setups[0].operations[0].passes.stock_to_leave = StockToLeave::default();
+        assert!(matches!(j.validate(), Err(JobError::WrongTool { .. })));
     }
 
     #[test]

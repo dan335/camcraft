@@ -237,6 +237,7 @@ impl Row<'_> {
             "flat end mill" => ToolKind::Flat,
             "ball end mill" => ToolKind::Ball,
             "bull nose end mill" => ToolKind::Bullnose,
+            "chamfer mill" | "spot drill" => ToolKind::Cone,
             "" => return Err("no tool type".into()),
             other => return Err(format!("'{other}' tools are not supported yet")),
         };
@@ -247,6 +248,17 @@ impl Row<'_> {
             diameter,
             corner: match kind {
                 ToolKind::Bullnose => self.scaled("tool_cornerRadius").unwrap_or(0.0),
+                _ => 0.0,
+            },
+            // A chamfer mill's taper is measured from the axis; a spot drill's tip
+            // angle is the whole point.
+            angle: match kind_text.to_ascii_lowercase().as_str() {
+                "chamfer mill" => self.number("tool_taperAngle").map(|a| 2.0 * a),
+                "spot drill" => self.number("tool_tipAngle"),
+                _ => None,
+            },
+            tip_diameter: match kind {
+                ToolKind::Cone => self.scaled("tool_tipDiameter").unwrap_or(0.0),
                 _ => 0.0,
             },
             number: self.whole("tool_number").unwrap_or(1),
@@ -403,11 +415,31 @@ mod tests {
     #[test]
     fn what_cannot_be_cut_with_is_skipped_and_said() {
         let text = "\"Type (tool_type)\"\t\"Diameter (tool_diameter)\"\n\
-                    \"drill\"\t3\n\"flat end mill\"\t0\n\"flat end mill\"\t3\n";
+                    \"reamer\"\t3\n\"flat end mill\"\t0\n\"flat end mill\"\t3\n";
         let got = import(text).unwrap();
         assert_eq!(got.tools.len(), 1);
         assert_eq!(got.skipped.len(), 2, "{:?}", got.skipped);
-        assert!(got.skipped[0].contains("'drill'"), "{:?}", got.skipped);
+        assert!(got.skipped[0].contains("'reamer'"), "{:?}", got.skipped);
+    }
+
+    /// A chamfer mill's taper is half its included angle, and its tip carries over;
+    /// a spot drill's tip angle is its whole angle.
+    #[test]
+    fn chamfer_mills_and_spot_drills_are_cones() {
+        let text = "\"Type (tool_type)\",\"Unit (tool_unit)\",\"Diameter (tool_diameter)\",\
+                    \"Taper Angle (tool_taperAngle)\",\"Tip Diameter (tool_tipDiameter)\",\
+                    \"Tip Angle (tool_tipAngle)\",\"Product ID (tool_productId)\"\n\
+                    \"chamfer mill\",\"millimeters\",12,45,1,,\"C90\"\n\
+                    \"spot drill\",\"millimeters\",6,,,120,\"S120\"\n";
+        let got = import(text).unwrap();
+        assert!(got.skipped.is_empty(), "{:?}", got.skipped);
+        let chamfer = &got.tools[0].1;
+        assert_eq!(chamfer.kind, ToolKind::Cone);
+        assert_eq!(chamfer.angle, Some(90.0));
+        assert!(close(chamfer.tip_diameter, 1.0));
+        let spot = &got.tools[1].1;
+        assert_eq!(spot.angle, Some(120.0));
+        assert_eq!(spot.tip_diameter, 0.0);
     }
 
     #[test]

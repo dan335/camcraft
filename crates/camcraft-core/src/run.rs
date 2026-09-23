@@ -327,7 +327,7 @@ pub fn cutting_tool(job: &Job, op: &Operation) -> Result<EffectiveTool, RunError
         op.passes.stock_to_leave.radial,
         op.passes.stock_to_leave.axial,
     )?;
-    Ok(EffectiveTool::new(&base, leave)?)
+    Ok(EffectiveTool::of(&base, leave)?)
 }
 
 fn unknown_tool(op: &Operation) -> JobError {
@@ -681,6 +681,27 @@ heights = { clearance = { ref = "stock-top", offset = 6.0 } }
         let job: Job = toml::from_str(JOB).unwrap();
         let result = run_job(&job, &dome()).unwrap();
         assert!(result.verify.compared > 500);
+        assert!(
+            result.is_clean(),
+            "job did not verify: {:?}",
+            result.warnings()
+        );
+    }
+
+    /// A V-bit finishes the dome after roughing: its path runs, sweeps through the
+    /// simulator as a cone, and the result verifies against the part.
+    #[test]
+    fn a_vbit_finishes_and_verifies() {
+        let vbit = JOB.replace(
+            "[tools.finish]\nkind = \"ball\"\ndiameter = 4.0\n",
+            "[tools.finish]\nkind = \"cone\"\ndiameter = 6.0\nangle = 90.0\n",
+        );
+        assert_ne!(vbit, JOB, "the edit must land");
+        let job: Job = toml::from_str(&vbit).unwrap();
+        let result = run_job(&job, &dome()).unwrap();
+        let finish = &result.operations[1];
+        assert!(finish.passes > 0);
+        assert!(finish.sim.is_clean(), "{:?}", finish.warnings);
         assert!(
             result.is_clean(),
             "job did not verify: {:?}",

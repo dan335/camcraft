@@ -202,6 +202,166 @@ impl BullnoseFamily for Ball {
     }
 }
 
+/// A cone: a V-bit, chamfer mill or drill point. A flat tip of radius `tip`
+/// widening at half-angle `α` to the full radius `R`, then a shank of radius `R`.
+///
+/// ```text
+/// h(d) = 0                     for d <= tip
+///        (d - tip) / tan(α)    for tip < d <= R
+/// ```
+///
+/// `h` is convex, which is what makes its drop-cutter contacts exact or bounded
+/// solves, as the bullnose's are. A cone is not closed under stock to leave: grown
+/// by a ball, its tip rounds, so a cone cuts to size only.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cone {
+    radius: f64,
+    tip: f64,
+    /// `1 / tan(α)`: how far the flank rises for each unit out.
+    rise: f64,
+}
+
+impl Cone {
+    /// A cone of overall radius `radius`, tip radius `tip` and half-angle
+    /// `half_angle` radians from the axis: 45° for a 90° V-bit.
+    pub fn new(radius: f64, tip: f64, half_angle: f64) -> Result<Self, ToolError> {
+        let radius = check_radius(radius)?;
+        if !(half_angle.is_finite() && half_angle > 0.0 && half_angle < std::f64::consts::FRAC_PI_2)
+        {
+            return Err(ToolError::BadAngle(half_angle.to_degrees() * 2.0));
+        }
+        if !(tip.is_finite() && tip >= 0.0 && tip < radius) {
+            return Err(ToolError::BadTip { tip, radius });
+        }
+        Ok(Self {
+            radius,
+            tip,
+            rise: 1.0 / half_angle.tan(),
+        })
+    }
+
+    /// The flat tip's radius.
+    pub fn tip(&self) -> f64 {
+        self.tip
+    }
+
+    /// Height of the flank per unit of radius: `1 / tan(α)`.
+    pub fn rise(&self) -> f64 {
+        self.rise
+    }
+
+    /// Height above the tip where the flank reaches full radius.
+    pub fn flank_height(&self) -> f64 {
+        (self.radius - self.tip) * self.rise
+    }
+}
+
+impl ToolProfile for Cone {
+    fn radius_at(&self, z: f64) -> f64 {
+        if z < 0.0 {
+            0.0
+        } else {
+            (self.tip + z / self.rise).min(self.radius)
+        }
+    }
+
+    fn max_radius(&self) -> f64 {
+        self.radius
+    }
+
+    fn height_at(&self, d: f64) -> Option<f64> {
+        if d > self.radius {
+            return None;
+        }
+        Some((d - self.tip).max(0.0) * self.rise)
+    }
+
+    fn geometry_key(&self) -> ToolKey {
+        ToolKey {
+            kind: "cone",
+            params: [
+                self.radius.to_bits(),
+                self.tip.to_bits(),
+                self.rise.to_bits(),
+                0,
+            ],
+        }
+    }
+}
+
+/// Any cutter the engine cuts with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Cutter {
+    /// Flat, ball and corner-radius end mills.
+    Bullnose(Bullnose),
+    /// V-bits, chamfer mills and drill points.
+    Cone(Cone),
+}
+
+impl Cutter {
+    /// The cutter as a bullnose, when it is one.
+    pub fn bullnose(&self) -> Option<&Bullnose> {
+        match self {
+            Cutter::Bullnose(b) => Some(b),
+            Cutter::Cone(_) => None,
+        }
+    }
+}
+
+impl From<Bullnose> for Cutter {
+    fn from(b: Bullnose) -> Self {
+        Cutter::Bullnose(b)
+    }
+}
+
+impl From<Flat> for Cutter {
+    fn from(f: Flat) -> Self {
+        Cutter::Bullnose(f.as_bullnose())
+    }
+}
+
+impl From<Ball> for Cutter {
+    fn from(b: Ball) -> Self {
+        Cutter::Bullnose(b.as_bullnose())
+    }
+}
+
+impl From<Cone> for Cutter {
+    fn from(c: Cone) -> Self {
+        Cutter::Cone(c)
+    }
+}
+
+impl ToolProfile for Cutter {
+    fn radius_at(&self, z: f64) -> f64 {
+        match self {
+            Cutter::Bullnose(t) => t.radius_at(z),
+            Cutter::Cone(t) => t.radius_at(z),
+        }
+    }
+
+    fn max_radius(&self) -> f64 {
+        match self {
+            Cutter::Bullnose(t) => t.max_radius(),
+            Cutter::Cone(t) => t.max_radius(),
+        }
+    }
+
+    fn height_at(&self, d: f64) -> Option<f64> {
+        match self {
+            Cutter::Bullnose(t) => t.height_at(d),
+            Cutter::Cone(t) => t.height_at(d),
+        }
+    }
+
+    fn geometry_key(&self) -> ToolKey {
+        match self {
+            Cutter::Bullnose(t) => t.geometry_key(),
+            Cutter::Cone(t) => t.geometry_key(),
+        }
+    }
+}
+
 /// A tool dimension that was not physically meaningful.
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ToolError {
@@ -216,6 +376,22 @@ pub enum ToolError {
         /// The tool radius it had to fit inside.
         radius: f64,
     },
+    /// A cone's included angle was not between 0° and 180°.
+    #[error("the angle must be between 0 and 180 degrees, got {0}")]
+    BadAngle(f64),
+    /// A cone's tip did not fit within the tool.
+    #[error(
+        "the tip must be at least zero and narrower than the tool ({radius} radius), got {tip}"
+    )]
+    BadTip {
+        /// The offending tip radius.
+        tip: f64,
+        /// The tool radius it had to fit inside.
+        radius: f64,
+    },
+    /// Stock to leave was asked of a cone, which cannot be grown and stay a cone.
+    #[error("a V-bit, chamfer mill or drill cuts to size: it cannot leave stock")]
+    ConeStock,
 }
 
 fn check_radius(radius: f64) -> Result<f64, ToolError> {
@@ -403,5 +579,64 @@ mod tests {
             prop_assert!(ball.radius_at(z) <= ball.max_radius() + 1e-12);
             prop_assert!(flat.radius_at(z) <= flat.max_radius() + 1e-12);
         }
+
+        #[test]
+        fn cone_inverse_holds(
+            r in 0.1f64..25.0,
+            tip in 0.0f64..0.9,
+            half in 0.05f64..1.5,
+            frac in 0.0f64..=1.0,
+        ) {
+            let t = Cone::new(r, tip * r, half).unwrap();
+            check_inverse(&t, frac * r)?;
+        }
+
+        #[test]
+        fn cone_is_monotonic_and_bounded(
+            r in 0.1f64..25.0,
+            tip in 0.0f64..0.9,
+            half in 0.05f64..1.5,
+            a in -5.0f64..100.0,
+            b in -5.0f64..100.0,
+        ) {
+            let t = Cone::new(r, tip * r, half).unwrap();
+            let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+            prop_assert!(t.radius_at(lo) <= t.radius_at(hi) + 1e-12);
+            prop_assert!(t.radius_at(hi) <= t.max_radius() + 1e-12);
+        }
+    }
+
+    /// A 90° V-bit rises one unit for each unit out; a 60° one, √3.
+    #[test]
+    fn a_cone_matches_its_angle() {
+        let v90 = Cone::new(3.0, 0.0, 45f64.to_radians()).unwrap();
+        assert_abs_diff_eq!(v90.height_at(2.0).unwrap(), 2.0, epsilon = EPS);
+        assert_abs_diff_eq!(v90.flank_height(), 3.0, epsilon = EPS);
+        assert_abs_diff_eq!(v90.radius_at(1.5), 1.5, epsilon = EPS);
+        assert_abs_diff_eq!(v90.radius_at(10.0), 3.0, epsilon = EPS);
+        let v60 = Cone::new(3.0, 0.5, 30f64.to_radians()).unwrap();
+        assert_eq!(v60.height_at(0.5), Some(0.0));
+        assert_abs_diff_eq!(v60.height_at(1.5).unwrap(), 3f64.sqrt(), epsilon = EPS);
+        assert_eq!(v60.height_at(3.01), None);
+    }
+
+    #[test]
+    fn a_cone_must_be_a_cone() {
+        assert!(matches!(
+            Cone::new(3.0, 0.0, 0.0),
+            Err(ToolError::BadAngle(_))
+        ));
+        assert!(matches!(
+            Cone::new(3.0, 0.0, std::f64::consts::FRAC_PI_2),
+            Err(ToolError::BadAngle(_))
+        ));
+        assert!(matches!(
+            Cone::new(3.0, 3.0, 0.5),
+            Err(ToolError::BadTip { .. })
+        ));
+        assert!(matches!(
+            Cone::new(0.0, 0.0, 0.5),
+            Err(ToolError::BadRadius(_))
+        ));
     }
 }

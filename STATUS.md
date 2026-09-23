@@ -226,11 +226,20 @@ Bits publish theirs (`fixtures/tools/` holds two), into the folder showing. Each
 tool's rows become one tool with a preset per row, named as Fusion named it, in
 millimetres; columns are found by their key, not their place. A tool the folder
 already has (same product and diameter) gets the file's presets beside its own
-instead of a twin. Types this build cannot cut with (drills, chamfer mills) are
-skipped, and the manager says which and why.
+instead of a twin. Chamfer mills and spot drills come in as cones; types this build
+cannot cut with (drills, face mills, taps and the like) are skipped, and the manager
+says which and why.
+
+**V-bits and chamfer mills** are a fourth cutter, a cone: an included angle and an
+optional flat tip. The drop-cutter contacts it exactly (vertex and facet in closed
+form, edges by the same bounded search as the bullnose), the simulator sweeps it,
+and the tool drawing and 3D cutter show its flank. A cone finishes; it is refused
+for Z-level roughing, whose reach offsets a widening flank would multiply, and for
+stock to leave, since a cone grown by a ball is no longer a cone.
 
 The work offset manager is to join the toolbar. Not yet: Fusion's own `.json`
-libraries, which carry holders, and more cutter types.
+libraries, which carry holders; drills and a drilling operation; tapered ball
+mills.
 
 ## Playback (after 0.2): how it is set up
 

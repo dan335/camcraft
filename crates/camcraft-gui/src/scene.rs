@@ -10,7 +10,7 @@
 //! - **The cutter is the job's own tool,** revolved from its real profile, with the
 //!   tip at the origin because the tip is the point the engine controls.
 
-use camcraft_core::job::{Job, Setup, ToolKind, ToolSpec};
+use camcraft_core::job::{Job, Setup, ToolSpec};
 use camcraft_core::replay::Position;
 use camcraft_core::run::{PLUNGE_RATIO, SetupResult};
 use camcraft_core::toolpath::MoveRole;
@@ -19,6 +19,7 @@ use camcraft_geom::mesh::Aabb;
 use glam::{DVec3, Vec3};
 
 use crate::theme;
+use crate::tool_drawing::tip_profile;
 
 /// One move, drawn as a line from where the tool was to where it went.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -237,34 +238,15 @@ pub fn box_edges(b: &Aabb) -> Vec<(DVec3, DVec3)> {
 
 /// Segments around the cutter's axis.
 const AROUND: u32 = 36;
-/// Steps along a rounded corner.
-const ARC_STEPS: u32 = 8;
-
-/// The cutter as triangles: its profile revolved about +Z, tip at the origin.
-///
-/// Flat, ball and bullnose are all one profile: a flat bottom out to
-/// `radius - corner`, a quarter-circle corner, then the side up to a shank three
-/// diameters long.
+/// The cutter as triangles: its profile revolved about +Z, tip at the origin, with
+/// a shank three diameters long, or longer for a V-bit's long flank.
 pub fn cutter_mesh(tool: &ToolSpec) -> Vec<[Vec3; 3]> {
-    let radius = narrow(tool.diameter * 0.5).max(1e-3);
-    let corner = match tool.kind {
-        ToolKind::Flat => 0.0,
-        ToolKind::Ball => radius,
-        ToolKind::Bullnose => narrow(tool.corner).clamp(0.0, radius),
-    };
-    let height = radius * 6.0;
-
-    // (distance from axis, height), from the tip up and round the top.
-    let mut profile = vec![(0.0_f32, 0.0_f32)];
-    if corner < radius {
-        profile.push((radius - corner, 0.0));
-    }
-    if corner > 0.0 {
-        for s in 1..=ARC_STEPS {
-            let t = std::f32::consts::FRAC_PI_2 * f32_from(s) / f32_from(ARC_STEPS);
-            profile.push((radius - corner + corner * t.sin(), corner * (1.0 - t.cos())));
-        }
-    }
+    let mut profile: Vec<(f32, f32)> = tip_profile(tool)
+        .into_iter()
+        .map(|(r, z)| (narrow(r), narrow(z)))
+        .collect();
+    let (radius, end) = profile.last().copied().unwrap_or((0.5, 0.0));
+    let height = (radius * 6.0).max(end + radius * 2.0);
     profile.push((radius, height));
     profile.push((0.0, height));
 
@@ -308,6 +290,7 @@ fn f32_from(n: u32) -> f32 {
 mod tests {
     use super::*;
     use crate::test_jobs::run_setup_zero;
+    use camcraft_core::job::ToolKind;
 
     fn repo(path: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -552,6 +535,11 @@ passes = { stepover = 2.0, feed = 2000.0 }
             tool(ToolKind::Flat, 6.0, 0.0),
             tool(ToolKind::Ball, 6.0, 0.0),
             tool(ToolKind::Bullnose, 6.0, 1.0),
+            ToolSpec {
+                angle: Some(90.0),
+                tip_diameter: 1.0,
+                ..tool(ToolKind::Cone, 6.0, 0.0)
+            },
         ] {
             let mesh = cutter_mesh(&t);
             let points = || mesh.iter().flatten();
@@ -569,6 +557,7 @@ passes = { stepover = 2.0, feed = 2000.0 }
                 ToolKind::Flat => assert!((floor - 3.0).abs() < 1e-4),
                 ToolKind::Ball => assert!(floor < 1e-4),
                 ToolKind::Bullnose => assert!((floor - 2.0).abs() < 1e-4),
+                ToolKind::Cone => assert!((floor - 0.5).abs() < 1e-4, "{floor}"),
             }
         }
     }

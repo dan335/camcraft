@@ -138,7 +138,7 @@ pub fn check(
                 .and_then(|o| o.get(i))
                 .and_then(|spec| job.tool_for(spec))
                 .and_then(|t| t.build().ok())
-                .and_then(|t| EffectiveTool::new(&t, ToLeave::none()).ok());
+                .and_then(|t| EffectiveTool::of(&t, ToLeave::none()).ok());
             Group {
                 op: Some(i),
                 title: format!("{}. {}", i + 1, op.name),

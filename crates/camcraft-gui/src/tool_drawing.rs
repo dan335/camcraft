@@ -42,6 +42,48 @@ pub struct Drawing {
     pub assumed: Vec<&'static str>,
 }
 
+/// Steps along a rounded corner.
+const ARC_STEPS: u32 = 8;
+
+/// The cutting end of `tool`, as (radius, z) points from the tip on the axis out
+/// to where it reaches full width: a flat bottom and a quarter-round corner for
+/// the end mills, a flat tip and a straight flank for a cone. Both the side
+/// drawing and the 3D cutter are made from it.
+pub fn tip_profile(tool: &ToolSpec) -> Vec<(f64, f64)> {
+    let r = if tool.diameter.is_finite() && tool.diameter > 0.0 {
+        tool.diameter / 2.0
+    } else {
+        0.5
+    };
+    let mut out = vec![(0.0, 0.0)];
+    if tool.kind == ToolKind::Cone {
+        let tip = (tool.tip_diameter / 2.0).clamp(0.0, r);
+        let half = (tool.angle.unwrap_or(90.0) / 2.0)
+            .clamp(1.0, 89.0)
+            .to_radians();
+        if tip > 0.0 {
+            out.push((tip, 0.0));
+        }
+        out.push((r, (r - tip) / half.tan()));
+        return out;
+    }
+    let corner = match tool.kind {
+        ToolKind::Ball => r,
+        ToolKind::Bullnose => tool.corner.clamp(0.0, r),
+        ToolKind::Flat | ToolKind::Cone => 0.0,
+    };
+    if corner < r {
+        out.push((r - corner, 0.0));
+    }
+    if corner > 0.0 {
+        for i in 1..=ARC_STEPS {
+            let t = std::f64::consts::FRAC_PI_2 * f64::from(i) / f64::from(ARC_STEPS);
+            out.push((r - corner + corner * t.sin(), corner * (1.0 - t.cos())));
+        }
+    }
+    out
+}
+
 /// Draw `tool`.
 pub fn draw(tool: &ToolSpec) -> Drawing {
     let d = if tool.diameter.is_finite() && tool.diameter > 0.0 {
@@ -63,23 +105,11 @@ pub fn draw(tool: &ToolSpec) -> Drawing {
     let shank_r = or_assume(tool.shank_diameter, "shank diameter", d) / 2.0;
     let overall = or_assume(tool.overall_length, "overall length", stickout + 2.0 * d);
 
-    let corner = match tool.kind {
-        ToolKind::Flat => 0.0,
-        ToolKind::Ball => r,
-        ToolKind::Bullnose => tool.corner.clamp(0.0, r),
-    };
-    // The cutting end: a flat bottom, a quarter-round corner, the side up to the
-    // end of the flutes.
-    let mut cutter = vec![(0.0, 0.0)];
-    if corner < r {
-        cutter.push((r - corner, 0.0));
-    }
-    if corner > 0.0 {
-        for i in 1..=8 {
-            let t = std::f64::consts::FRAC_PI_2 * f64::from(i) / 8.0;
-            cutter.push((r - corner + corner * t.sin(), corner * (1.0 - t.cos())));
-        }
-    }
+    // The cutting end, then the side up to the end of the flutes; a long V-bit's
+    // flank can outrun them.
+    let mut cutter = tip_profile(tool);
+    let end = cutter.last().map_or(0.0, |p| p.1);
+    let flutes = flutes.max(end);
     cutter.push((r, flutes));
     cutter.push((0.0, flutes));
 
