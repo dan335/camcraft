@@ -206,7 +206,8 @@ fn two_setups_in_tabs() {
 
     // Choosing its tool, from a folder of the library.
     h.state_mut().pick_tool_for_snapshot(Some(("top", 1)));
-    h.run_steps(3);
+    // Many frames: a window that grows a little each frame only shows after a while.
+    h.run_steps(60);
     shoot(&mut h, "tool_picker");
     h.state_mut().pick_tool_for_snapshot(None);
 

@@ -75,24 +75,35 @@ impl ToolPicker {
     ) -> Option<Option<Picked>> {
         let mut outcome = None;
         let modal = egui::Modal::new(egui::Id::new("tool-picker")).show(ctx, |ui| {
+            // A fixed size throughout. The tool's picture fills the width it is
+            // given and a divider the height, and a window sizes itself to what it
+            // holds, so anything left free would grow the window every frame.
             ui.set_width(860.0);
             ui.heading("Select tool");
             ui.separator();
-            ui.horizontal_top(|ui| {
+            let body = egui::vec2(860.0, 420.0);
+            let row = egui::Layout::left_to_right(egui::Align::Min);
+            ui.allocate_ui_with_layout(body, row, |ui| {
+                ui.set_min_size(body);
                 ui.vertical(|ui| {
                     ui.set_width(200.0);
-                    self.sources(ui, job, library);
+                    egui::ScrollArea::vertical()
+                        .id_salt("picker-sources")
+                        .max_height(body.y)
+                        .show(ui, |ui| self.sources(ui, job, library));
                 });
                 ui.separator();
                 ui.vertical(|ui| {
                     ui.set_width(380.0);
                     ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("filter"));
                     egui::ScrollArea::vertical()
-                        .max_height(380.0)
+                        .id_salt("picker-tools")
+                        .max_height(body.y - 30.0)
                         .show(ui, |ui| self.table(ui, job, library, m));
                 });
                 ui.separator();
                 ui.vertical(|ui| {
+                    ui.set_width(240.0);
                     if let Some(tool) = self.chosen_tool(job, library) {
                         paint_tool(ui, tool, m);
                         ui.label(&tool.comment);
