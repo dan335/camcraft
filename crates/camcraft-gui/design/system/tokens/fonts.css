@@ -1,0 +1,2 @@
+/* SUBSTITUTION: no webfont files exist in the camcraft repo. IBM Plex Sans + Fira Code are loaded from Google Fonts. Replace with @font-face + local files when the brand has real fonts. */
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Fira+Code:wght@400;500&display=swap");

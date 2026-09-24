@@ -22,12 +22,16 @@ eframe = { workspace = true, features = ["persistence"] }
 egui_extras.workspace      = true
 egui-file-dialog.workspace = true
 glam.workspace             = true
+rayon.workspace            = true
 serde.workspace            = true
 egui_kittest = { workspace = true, optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 [dev-dependencies]
 toml.workspace = true
+# wgpu's own shader compiler, the version wgpu builds with: the shaders are
+# parsed and validated by the ordinary tests, not first by a GPU at run time.
+naga = { version = "30.0.1", features = ["wgsl-in"] }
 
 [features]
 # Renders real UI headlessly to PNGs under target/ui-snapshots. Off by default:

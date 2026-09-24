@@ -9,26 +9,32 @@ mod browser;
 mod camera;
 mod document;
 mod file_dialog;
+mod live;
 mod measure;
 mod pick;
 mod picking;
 mod playback;
 mod posting;
 mod properties;
+mod pyramid;
 mod scene;
 mod settings;
 mod slots;
+mod stock_tiles;
 mod stock_view;
 #[cfg(test)]
 mod test_jobs;
 mod theme;
+mod tiles;
 mod tool_drawing;
 mod tool_editor;
 mod tool_manager;
 mod tool_picker;
+mod transport;
 #[cfg(all(test, feature = "ui-snapshots"))]
 mod ui_snapshots;
 mod viewport;
+mod widgets;
 mod worker;
 
 use eframe::egui;

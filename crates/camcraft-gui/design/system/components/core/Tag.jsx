@@ -1,0 +1,4 @@
+import React from 'react';
+export function Tag({children,onRemove,mono=true}){
+  return <span style={{display:'inline-flex',alignItems:'center',gap:4,height:20,padding:'0 6px',border:'1px solid var(--border-strong)',color:'var(--text-2)',borderRadius:'var(--radius-sm)',fontSize:12,fontFamily:mono?'var(--font-mono)':'var(--font-sans)',lineHeight:1}}>{children}{onRemove&&<button onClick={onRemove} aria-label="Remove" style={{background:'none',border:0,color:'var(--text-3)',cursor:'pointer',padding:0,marginLeft:2,display:'inline-flex'}}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>}</span>;
+}

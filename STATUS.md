@@ -96,12 +96,12 @@ each pass next to where the following one starts.
      written to `target/ui-snapshots/`. Built and looked at on macOS only.
    - **3D viewport: done, bar the checks.** Every operation's toolpath, coloured by
      move role from the design system's palette, as screen-space lines that stay
-     readable on Retina. A scrub through the whole program in machine order, with
-     arrow-key stepping and a readout of the move. Toggles by role, by operation,
+     readable on Retina. Playback through the whole program in machine order (see
+     *Playback*), with a readout of the move. Toggles by role, by operation,
      for the part and for the stock outline. The job's own cutter is drawn at the
-     scrub position, and still shows, fainter, when a pocket hides it.
+     playhead, and still shows, fainter, when a pocket hides it.
    - **Simulated stock view: done.** The material at any stage (the block, after
-     each operation, or following the scrub), coloured by the verifier's own rule:
+     each operation, or cut as the program plays), coloured by the verifier's own rule:
      red below the part, amber left above it (deeper amber for more), grey finished,
      dark where there is no part. The legend's counts are the verifier's counts,
      and a test holds them equal. **Steep descents** are listed deepest first; clicking one
@@ -139,12 +139,24 @@ each pass next to where the following one starts.
      none, from results that are up to date; they ask before replacing files, and
      a setup that failed a check is posted only after ticking "I know why" and
      pressing Post anyway. The web inspector, `scripts/view.sh` and `--inspect`
-     are gone; the design tokens moved to `crates/camcraft-gui/design/tokens.css`.
+     are gone.
    - **Steep descents: done.** A plunge is a *continuous* descent steeper than
      `PLUNGE_RATIO` (10:1) that falls further than `max_cut_step`, measured over
      the whole run of moves, not move by move. Finishing breaks its passes there,
      and the gate refuses any that remains; the checks and the app measure it the
      same way.
+   - **Design system: in.** The claude.ai/design project "CamCraft Design System"
+     is copied whole into `crates/camcraft-gui/design/system/` (tokens, components,
+     guidelines, readme); `theme.rs` mirrors its tokens and tests hold them to the
+     CSS. `theme::apply` gives every window its graphite surfaces, hairlines, 2 px
+     corners, amber selection, and IBM Plex Sans and Fira Code, bundled with a cut
+     of Lucide for icons (`assets/fonts/`). `widgets.rs` has the components egui
+     lacks: buttons by role, tabs, cards, tags, diagnostics, status dots, empty
+     states. The tool library is rebuilt on them: one toolbar, a status line, a
+     folder tree with counts, a sortable table, and an editor on tabs (General,
+     Cutter, Holder, Presets, Post) where a value left out reads "not given" rather
+     than an unticked box. The rest of the app has the theme but not yet the
+     components.
 
    Also carried along: item 1 above, and the OpenCascade licensing decision.
    Not in 0.2: new strategies (2D profile, pocket, drilling, waterline, adaptive),
@@ -253,23 +265,98 @@ import as drills.
 The work offset manager is to join the toolbar. Not yet: Fusion's own `.json`
 libraries, which carry holders; tapered ball mills.
 
-## Playback (after 0.2): how it is set up
+## Playback
 
-The user wants Fusion-style simulation: play, pause, step, seek and speed, with the
-material cut as the tool moves. Item 3 was designed so this is an addition:
+**Done: press play and watch the cutter cut the stock.** A bar under the view has
+the timeline (one span per operation, as long as it takes to run, with failed
+checks marked red and warnings and steep descents amber; click or drag to go
+anywhere), start, previous operation, step back, play backwards, play, step on,
+next operation and end, the estimated machining clock, the speed (¼× to 10,000×;
+the router jig's 8 h program plays in under a minute at 1,000×) and where playing
+stops by itself (at problems, on by default; at the end of each operation). Under
+it, the operation and the move under way. The old scrub slider and its readout
+are gone from the side panel.
 
-- `camcraft_core::replay::Replay` recovers the stock at any move. It starts from the
-  nearest stage (`JobResult::stages`) and sweeps forward with the tools the run
-  used (`run::cutting_tool`). Sweeping in pieces equals sweeping whole, bit for bit,
-  and a test checks it. Removing the one-move overlap makes that test fail. A
-  position part-way along a move is a sweep onto a copy, for display only.
-- The GUI draws the stock from height and colour textures and a grid with no
-  vertex buffer, so a step is a texture write of the tool's footprint.
-- Machining time per move is in the scene (`Segment::ends_at`), which is what play
-  speed means. Rapids assume 5000 mm/min until a machine profile gives a rate.
-- Still to build: the controls, exact per-move seeking with denser keyframes, the
-  playhead as move plus fraction, and `Stock::apply` reporting the rectangle it
-  touched.
+Keys, when no field has the keyboard: Space plays and pauses; J, K and L shuttle
+backwards, pause and forwards, and J or L again goes faster; Left and Right step a
+move (Shift: a hundred); Up and Down go to the previous and next operation; Home
+and End; `[` and `]` change the speed.
+
+While it plays the stock is one shaded material colour with anything below the
+part red the moment it is cut; *compare* in the Stock section gives the verifier's
+colours instead, during playback too. How it is built:
+
+- **One position.** `scene::Playhead` is whole segments made plus a fraction of
+  the next. The clock, the paths drawn, the cutter (part-way along its move) and
+  the material all come from it; `Scene::target` turns it into a replay position.
+- **The UI thread never sweeps.** `live.rs` gives each setup being played a thread
+  that owns a `camcraft_core::replay::Live` stock. The UI sends the playhead when
+  it moves; the thread works only on the newest, 12 ms at a time, and sends back
+  the cells that changed, recoloured. The viewport uploads only that rectangle
+  (`Stock::sweep` reports it). "cutting…" beside the clock means the material is
+  still catching up.
+- **Exact.** `Live` advances by whole moves and sweeps a part-way move onto the
+  stock, putting those cells back before the next step. Tests hold any walk,
+  forward, back and part-way, to `Replay::stock_at` bit for bit, and every changed
+  cell inside the rectangle reported.
+- **Rewind is bounded.** `Live` drops a checkpoint every 1/64th of the program,
+  packed (`sim::PackedStock`: runs of equal heights, and machined material is
+  mostly flat), within 256 MB a setup. The thread's idle sweep drops them all;
+  the stock that seeks does not pack any, so a seek someone waits on never pauses
+  to. A restore unpacks in place and redraws only the cells that differ.
+- **Only what the cutter touched moves.** Changes are kept in 32 × 32-cell tiles
+  (`tiles.rs`): only those are classified (in parallel, and only cells whose
+  height changed), and a frame uploads at most 4 million cells of them, the rest
+  following over the next frames, so a long seek never stalls the window.
+- **One image, shared.** The playback thread and the UI share one image of the
+  material behind a lock, taken only to classify a batch or upload one.
+- Measured (`cargo test --release -p camcraft-gui -- --ignored keeps_up
+  --nocapture`, with `CAMCRAFT_SHEET_JOB` naming a sheet job for the third), the
+  thread's work a frame at 1,000×, and the worst rewind after the idle sweep:
+  router jig 2 ms, 60 ms; lego brick 8.5 ms, 15 ms; full sheet 9 ms, 0.3 s.
+- Machining time is length over feed, rapids at an assumed 5000 mm/min until a
+  machine profile gives a rate.
+
+### Resolution, big stock and vertical walls
+
+- **The grid follows the job** (`run::sim_pitch`): fine enough that the setup's
+  narrowest tool cuts a slot 8 cells wide, never coarser than tolerance × 8,
+  finer still to spend 2 million cells on a small stock, and never more than 64
+  million cells (`MAX_SIM_CELLS`), never finer than 0.02 mm. So: the lego brick at
+  0.053 mm; a 300 mm stock with a 1/32" cutter at 0.1 mm; a full 5' × 12' × 8"
+  sheet at 0.4 mm with a 1/4" cutter and at 0.3 mm (the cap) with a 1/16". The
+  verifier runs on the same grid, its budget tolerance + pitch.
+- **Sweeps are exact where they can be.** A level move is swept in closed form
+  (every cell to the tool's underside at its distance from the move's line, in
+  parallel rows for a long pass), a move straight up or down is the tool at its
+  lowest end, and only climbing moves are sampled every half cell. The part
+  surface is rasterised triangle by triangle, over the part's own footprint only.
+- **Walls are judged across as well as down.** Beside a vertical wall a column's
+  height cannot tell a hair past the wall from a gouge the wall's height deep.
+  `PartSurface::reaching` judges material against the lowest the part comes
+  within the budget across (none beside no part, or past the grid), looked for
+  only where the material is already that far below its own column.
+- **Walls are drawn vertical.** The stock shader traces each pixel's ray down a
+  pyramid of maxima (`pyramid.rs`, the height texture's mips) to the first column
+  it meets: a column's top, or its side as a vertical wall, lit by which way the
+  material around it falls away so round walls read round. Rays start where they
+  enter the box, so a sheet seen from metres off draws as cleanly as a brick up
+  close. Colour is one byte a cell (`stock_view::code`), mapped on the GPU, so
+  switching material and compare colours redraws nothing.
+- **Big stock is drawn as tiles** (`stock_tiles.rs`): 2040 cells square, each its
+  own box, textures and pyramid, with a 4-cell apron of its neighbours so seams do
+  not show; eframe gives textures 8192 across at most, a sheet at 0.3 mm is 12,000.
+  The view frames the part and its stock together and can always zoom and see out
+  to all the stock.
+- **Memory.** The stock after each operation is kept packed and shared by the run
+  and its playback; the part surface is shared too. A full sheet at the 64
+  million cell cap: the run peaks at 1.1 GB, the app at about 2.4 GB with the
+  sheet playing (`sheet_playback` snapshot, measured with `/usr/bin/time -l`).
+- **Shaders are checked by the tests** (naga, as wgpu builds it), not first by a
+  GPU when the app draws.
+- The heightfield is complete for 3-axis work from above: every column has one top.
+  It cannot hold an undercut, which 3-axis cutting from the top cannot make, and
+  what a top setup leaves is not carried to a flipped bottom one (as before).
 
 ## Open questions
 

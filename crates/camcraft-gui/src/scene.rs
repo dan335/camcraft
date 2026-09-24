@@ -83,6 +83,27 @@ pub struct Scene {
     pub steep: Vec<Steep>,
 }
 
+/// Where the program stands: `shown` whole segments made, and `fraction` of the
+/// next one. The one position everything is drawn from: the paths up to it, the
+/// cutter on it, the material as it stands there, and the clock.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Playhead {
+    /// Segments made, in machine order.
+    pub shown: usize,
+    /// How far along segment `shown` the tool is, from 0 up to but not 1.
+    pub fraction: f64,
+}
+
+impl Playhead {
+    /// After `shown` whole segments.
+    pub fn at(shown: usize) -> Self {
+        Self {
+            shown,
+            fraction: 0.0,
+        }
+    }
+}
+
 /// Where the scrub stands: the last move shown.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AtMove<'a> {
@@ -180,6 +201,80 @@ impl Scene {
             }
             None => Position { op: 0, moves: 0 },
         }
+    }
+
+    /// Machining time at `p`, in seconds from the start.
+    pub fn time_of(&self, p: Playhead) -> f64 {
+        let start = p
+            .shown
+            .checked_sub(1)
+            .and_then(|i| self.segments.get(i))
+            .map_or(0.0, |s| s.ends_at);
+        match self.segments.get(p.shown) {
+            Some(s) => start + (s.ends_at - start) * p.fraction,
+            None => start,
+        }
+    }
+
+    /// Where the program stands after `seconds` of machining.
+    pub fn locate(&self, seconds: f64) -> Playhead {
+        let shown = self.segments.partition_point(|s| s.ends_at <= seconds);
+        let Some(s) = self.segments.get(shown) else {
+            return Playhead::at(self.segments.len());
+        };
+        let start = shown
+            .checked_sub(1)
+            .and_then(|i| self.segments.get(i))
+            .map_or(0.0, |s| s.ends_at);
+        let span = s.ends_at - start;
+        let fraction = if span > 0.0 {
+            ((seconds - start) / span).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        // Numerically at the end is the end: the next segment, not all of this one.
+        if fraction >= 1.0 {
+            return Playhead::at(shown + 1);
+        }
+        Playhead { shown, fraction }
+    }
+
+    /// `seconds` of machining on from `p`, or back for a negative number, held to
+    /// the program.
+    pub fn advance(&self, p: Playhead, seconds: f64) -> Playhead {
+        let t = (self.time_of(p) + seconds).clamp(0.0, self.total_time());
+        if seconds > 0.0 && t >= self.total_time() {
+            return Playhead::at(self.segments.len());
+        }
+        self.locate(t)
+    }
+
+    /// The cutter at `p`: its operation and where its tip is.
+    pub fn cutter_at(&self, p: Playhead) -> Option<(usize, DVec3)> {
+        match self.segments.get(p.shown) {
+            Some(s) => Some((s.op as usize, s.a.lerp(s.b, p.fraction))),
+            None => self.segments.last().map(|s| (s.op as usize, s.b)),
+        }
+    }
+
+    /// `p` as a replay position, and how far along the move after it.
+    pub fn target(&self, p: Playhead) -> (Position, f64) {
+        if p.fraction > 0.0
+            && let Some(s) = self.segments.get(p.shown)
+        {
+            let op = s.op as usize;
+            let first = self.ops.get(op).map_or(0, |o| o.first);
+            // Segment `k` of an operation joins its moves `k` and `k + 1`: part-way
+            // along it, `k + 1` moves are made.
+            return (
+                Position {
+                    op,
+                    moves: p.shown - first + 1,
+                },
+                p.fraction,
+            );
+        }
+        (self.position(p.shown), 0.0)
     }
 
     /// The segment the scrub ends on, when `shown` segments are showing.
@@ -476,6 +571,77 @@ passes = { stepover = 2.0, feed = 2000.0 }
             let end = scene.position(span.first + span.count);
             assert_eq!(end.op, i);
             assert_eq!(end.moves, result.operations[i].path.moves().len());
+        }
+    }
+
+    /// Time and position are one: every playhead survives the round trip, and time
+    /// runs on across operations.
+    #[test]
+    fn a_playhead_is_a_time() {
+        let (_, _, scene) = scene();
+        let total = scene.segments.len();
+        for shown in [
+            0,
+            1,
+            7,
+            scene.ops[1].first,
+            scene.ops[1].first + 3,
+            total - 1,
+        ] {
+            for fraction in [0.0, 0.25, 0.9] {
+                let p = Playhead { shown, fraction };
+                let back = scene.locate(scene.time_of(p));
+                // A zero-length move has no time of its own to find again.
+                let dur =
+                    scene.time_of(Playhead::at(shown + 1)) - scene.time_of(Playhead::at(shown));
+                if dur > 1e-9 {
+                    assert_eq!(back.shown, shown, "{p:?}");
+                    assert!((back.fraction - fraction).abs() < 1e-6, "{p:?} -> {back:?}");
+                }
+            }
+        }
+        assert_eq!(scene.locate(-1.0), Playhead::at(0));
+        assert_eq!(scene.locate(scene.total_time() + 1.0), Playhead::at(total));
+        assert_eq!(
+            scene.advance(Playhead::at(0), scene.total_time() * 2.0),
+            Playhead::at(total)
+        );
+        assert_eq!(scene.advance(Playhead::at(total), -1e9), Playhead::at(0));
+        // Across the tool change: from the end of roughing into finishing.
+        let end = Playhead::at(scene.ops[1].first);
+        let on = scene.advance(end, 1.0);
+        assert!(scene.segments[on.shown].op == 1, "{on:?}");
+        let back = scene.advance(on, -1.0);
+        assert!((scene.time_of(back) - scene.time_of(end)).abs() < 1e-6);
+    }
+
+    /// Part-way along a segment is one more move made than the segment starts at,
+    /// in the operation the segment belongs to, and the cutter is on the segment.
+    #[test]
+    fn a_playhead_part_way_is_a_replay_position() {
+        let (_, _, scene) = scene();
+        for shown in [0, 5, scene.ops[1].first] {
+            assert_eq!(
+                scene.target(Playhead::at(shown)),
+                (scene.position(shown), 0.0)
+            );
+            let (at, f) = scene.target(Playhead {
+                shown,
+                fraction: 0.5,
+            });
+            assert_eq!(f, 0.5);
+            // Finishing that segment makes the move it is heading for.
+            let done = scene.position(shown + 1);
+            assert_eq!((at.op, at.moves + 1), (done.op, done.moves));
+            let (op, tip) = scene
+                .cutter_at(Playhead {
+                    shown,
+                    fraction: 0.5,
+                })
+                .unwrap();
+            let s = &scene.segments[shown];
+            assert_eq!(op, s.op as usize);
+            assert!((tip - (s.a + s.b) * 0.5).length() < 1e-9);
         }
     }
 

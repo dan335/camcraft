@@ -723,6 +723,8 @@ dependencies = [
  "egui_kittest",
  "glam 0.33.9",
  "image",
+ "naga",
+ "rayon",
  "serde",
  "toml",
 ]

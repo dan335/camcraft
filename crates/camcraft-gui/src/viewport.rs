@@ -21,6 +21,7 @@
 //! [`crate::pick`] answers.
 
 use camcraft_geom::heightmap::narrow;
+use camcraft_geom::mesh::Aabb;
 use camcraft_geom::mesh::TriMesh;
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
@@ -30,9 +31,12 @@ use wgpu::util::DeviceExt;
 
 use crate::camera::Camera;
 use crate::pick::Projector;
+use crate::pyramid::Pyramid;
 use crate::scene::Scene;
-use crate::stock_view::StockImage;
+use crate::stock_tiles::{self, Tile};
+use crate::stock_view::{CLASSES, Class, ColorMode, NO_CELL, StockImage, cell_color};
 use crate::theme;
+use camcraft_sim::stock::CellRect;
 
 /// Offscreen colour format: what egui expects of a native texture.
 const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -64,6 +68,8 @@ struct Frame {
     // Visible kinds (roles, then stock and axes), visible operations, segments shown.
     masks: vec4<u32>,
     colors: array<vec4<f32>, 16>,
+    // Where the eye is.
+    eye: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> f: Frame;
 
@@ -174,117 +180,264 @@ fn fs(i: LineOut) -> @location(0) vec4<f32> {
 }
 ";
 
-/// The material: a grid displaced by a height texture and coloured by a colour
-/// texture, one texel per stock cell. No vertex buffer: each vertex finds its cell
-/// from its index, so changing the stock is only ever a texture write, whole now and
-/// the tool's footprint during playback.
+/// The material, drawn by tracing each pixel's ray through its heights.
+///
+/// The stock is a height per cell: from above, a column of material with a flat
+/// top, which is exactly what 3-axis cutting leaves. So each column is drawn as
+/// one: a ray that meets the side of a taller column meets a vertical wall, and
+/// one that comes down onto a column meets its top. Nothing joins neighbouring
+/// cells with a slope, so a wall the cutter left is drawn vertical, at any
+/// resolution.
+///
+/// Only the stock's box is rasterised. Its far faces trace the ray from the eye
+/// down [`crate::pyramid`]'s levels of maxima (the height texture's mips),
+/// skipping every square the ray passes over in one step, to the cell it first
+/// meets; the near faces stand aside. The hit writes its own depth, so paths and
+/// the cutter sit in front of it or behind it as they are. Tops are lit by the
+/// surface's slope, found from the neighbouring cells that are not across a
+/// wall, so a curved surface reads as smooth; the side of a column is lit as a
+/// wall only where it stands more than [`WALL_CELLS`] cells tall.
 const STOCK_SHADER: &str = r"
+// One tile of the material: see `stock_tiles.rs`.
 struct Grid {
-    // Cell (0, 0) in X and Y, cell size, floor.
+    // The texture's cell (0, 0) in X and Y, cell size, floor.
     origin_pitch_floor: vec4<f32>,
-    // Columns, rows.
+    // Cells the textures hold across and down, levels in the height pyramid.
     size: vec4<u32>,
+    // Top of the material, the step that makes a wall.
+    top_wall: vec4<f32>,
+    // The tile's own cells across and down, the apron around them, the colours:
+    // 0 the material's, 1 the verifier's.
+    core: vec4<u32>,
+    // Linear colours: below the part, leftover faint and strong, on the part,
+    // off the part, and the material.
+    palette: array<vec4<f32>, 6>,
 };
 @group(1) @binding(0) var<uniform> g: Grid;
 @group(1) @binding(1) var heights: texture_2d<f32>;
-@group(1) @binding(2) var colors: texture_2d<f32>;
+@group(1) @binding(2) var codes: texture_2d<u32>;
 
-struct StockOut {
+struct BoxOut {
     @builtin(position) clip: vec4<f32>,
-    @location(0) normal: vec3<f32>,
-    @location(1) color: vec3<f32>,
+    @location(0) world: vec3<f32>,
 };
 
-fn height(ix: i32, iy: i32) -> f32 {
-    let c = vec2<i32>(clamp(ix, 0, i32(g.size.x) - 1), clamp(iy, 0, i32(g.size.y) - 1));
-    return textureLoad(heights, c, 0).r;
-}
+struct Hit {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+};
 
-fn world(ix: i32, iy: i32, z: f32) -> vec3<f32> {
-    let o = g.origin_pitch_floor;
-    return vec3<f32>(o.x + f32(ix) * o.z, o.y + f32(iy) * o.z, z);
-}
-
-fn to_linear(c: vec3<f32>) -> vec3<f32> {
-    let lo = c / 12.92;
-    let hi = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
-    return select(hi, lo, c <= vec3<f32>(0.04045));
-}
-
-fn cell_color(ix: i32, iy: i32) -> vec3<f32> {
-    let c = vec2<i32>(clamp(ix, 0, i32(g.size.x) - 1), clamp(iy, 0, i32(g.size.y) - 1));
-    return to_linear(textureLoad(colors, c, 0).rgb);
-}
-
-// Two triangles per quad, as (dx, dy) corners.
-var<private> CORNERS: array<vec2<i32>, 6> = array<vec2<i32>, 6>(
-    vec2<i32>(0, 0), vec2<i32>(1, 0), vec2<i32>(1, 1),
-    vec2<i32>(0, 0), vec2<i32>(1, 1), vec2<i32>(0, 1),
+// The box's twelve triangles, as corners: bit 0 is X, bit 1 Y, bit 2 Z.
+var<private> BOX: array<u32, 36> = array<u32, 36>(
+    0u, 2u, 1u, 1u, 2u, 3u,  4u, 5u, 6u, 5u, 7u, 6u,
+    0u, 1u, 4u, 1u, 5u, 4u,  2u, 6u, 3u, 3u, 6u, 7u,
+    0u, 4u, 2u, 2u, 4u, 6u,  1u, 3u, 5u, 3u, 7u, 5u,
 );
 
 @vertex
-fn vs_top(@builtin(vertex_index) vi: u32) -> StockOut {
-    let quads_x = g.size.x - 1u;
-    let quad = vi / 6u;
-    let corner = CORNERS[vi % 6u];
-    let ix = i32(quad % quads_x) + corner.x;
-    let iy = i32(quad / quads_x) + corner.y;
-    let z = height(ix, iy);
-    // Normal from the neighbouring cells: the surface's own slope.
-    let p = g.origin_pitch_floor.z;
-    let dx = (height(ix + 1, iy) - height(ix - 1, iy)) / (2.0 * p);
-    let dy = (height(ix, iy + 1) - height(ix, iy - 1)) / (2.0 * p);
-    var out: StockOut;
-    out.clip = f.view_proj * vec4<f32>(world(ix, iy, z), 1.0);
-    out.normal = normalize(vec3<f32>(-dx, -dy, 1.0));
-    out.color = cell_color(ix, iy);
+fn vs(@builtin(vertex_index) vi: u32) -> BoxOut {
+    let c = BOX[vi];
+    let o = g.origin_pitch_floor;
+    let a = f32(g.core.z);
+    let lo = vec3<f32>(o.x + (a - 0.5) * o.z, o.y + (a - 0.5) * o.z, o.w);
+    let hi = vec3<f32>(
+        o.x + (a + f32(g.core.x) - 0.5) * o.z,
+        o.y + (a + f32(g.core.y) - 0.5) * o.z,
+        g.top_wall.x,
+    );
+    let p = select(lo, hi, vec3<bool>((c & 1u) != 0u, (c & 2u) != 0u, (c & 4u) != 0u));
+    var out: BoxOut;
+    out.clip = f.view_proj * vec4<f32>(p, 1.0);
+    out.world = p;
     return out;
 }
 
-// The four sides, down to the floor, so the material reads as a block.
-@vertex
-fn vs_skirt(@builtin(vertex_index) vi: u32) -> StockOut {
-    let nx = i32(g.size.x);
-    let ny = i32(g.size.y);
-    let quad = i32(vi / 6u);
-    let corner = CORNERS[vi % 6u];
-    // Sides in order: y = 0, x = last, y = last, x = 0.
-    let along_x = nx - 1;
-    let along_y = ny - 1;
-    var ix: i32;
-    var iy: i32;
-    var n: vec3<f32>;
-    if (quad < along_x) {
-        ix = quad + corner.x; iy = 0; n = vec3<f32>(0.0, -1.0, 0.0);
-    } else if (quad < along_x + along_y) {
-        ix = nx - 1; iy = quad - along_x + corner.x; n = vec3<f32>(1.0, 0.0, 0.0);
-    } else if (quad < 2 * along_x + along_y) {
-        ix = quad - along_x - along_y + corner.x; iy = ny - 1; n = vec3<f32>(0.0, 1.0, 0.0);
-    } else {
-        ix = 0; iy = quad - 2 * along_x - along_y + corner.x; n = vec3<f32>(-1.0, 0.0, 0.0);
+// A cell's colour from its code: its class times 64, plus a leftover's shade.
+fn code_color(c: vec2<i32>) -> vec3<f32> {
+    let code = textureLoad(codes, c, 0).r;
+    let kind = min(code / 64u, 3u);
+    if (g.core.w == 0u) {
+        return select(g.palette[5].rgb, g.palette[0].rgb, kind == 0u && code != 255u);
     }
-    let top = height(ix, iy);
-    let z = select(g.origin_pitch_floor.w, top, corner.y == 1);
-    var out: StockOut;
-    out.clip = f.view_proj * vec4<f32>(world(ix, iy, z), 1.0);
-    out.normal = n;
-    out.color = cell_color(ix, iy);
-    return out;
+    if (code == 255u) { return g.palette[4].rgb; }
+    if (kind == 1u) {
+        return mix(g.palette[1].rgb, g.palette[2].rgb, f32(code % 64u) / 63.0);
+    }
+    return g.palette[array<u32, 4>(0u, 1u, 3u, 4u)[kind]].rgb;
+}
+
+// A cell's height; the floor outside the stock.
+fn height(c: vec2<i32>) -> f32 {
+    if (c.x < 0 || c.y < 0 || c.x >= i32(g.size.x) || c.y >= i32(g.size.y)) {
+        return g.origin_pitch_floor.w;
+    }
+    return textureLoad(heights, c, 0).r;
+}
+
+// A neighbour's height for the slope, or this cell's own across a wall.
+fn joined(own: f32, c: vec2<i32>) -> f32 {
+    let h = height(c);
+    return select(own, h, abs(h - own) < g.top_wall.y);
+}
+
+// The surface's slope at a cell, as a normal.
+fn smooth_normal(c: vec2<i32>) -> vec3<f32> {
+    let own = height(c);
+    let p = g.origin_pitch_floor.z;
+    let dx = (joined(own, c + vec2<i32>(1, 0)) - joined(own, c - vec2<i32>(1, 0))) / (2.0 * p);
+    let dy = (joined(own, c + vec2<i32>(0, 1)) - joined(own, c - vec2<i32>(0, 1))) / (2.0 * p);
+    return normalize(vec3<f32>(-dx, -dy, 1.0));
+}
+
+// A wall's facing at height `z` of cell `c`: away from the neighbours that are
+// lower than that, the nearer counting more. The side of one cell faces along an
+// axis, but a round wall is a staircase of cells, and lit by their faces it
+// would stripe; the cells around it know which way the wall really faces.
+fn wall_normal(c: vec2<i32>, z: f32, fallback: vec3<f32>) -> vec3<f32> {
+    var away = vec2<f32>(0.0);
+    for (var dy = -3; dy <= 3; dy++) {
+        for (var dx = -3; dx <= 3; dx++) {
+            let d = vec2<f32>(f32(dx), f32(dy));
+            let r2 = dot(d, d);
+            if (r2 == 0.0 || r2 > 10.0) { continue; }
+            if (height(c + vec2<i32>(dx, dy)) < z) {
+                away += d / r2;
+            }
+        }
+    }
+    if (dot(away, away) < 1e-6) { return fallback; }
+    return vec3<f32>(normalize(away), 0.0);
 }
 
 @fragment
-fn fs(i: StockOut) -> @location(0) vec4<f32> {
-    let n = normalize(i.normal);
-    let diffuse = abs(dot(n, f.light.xyz));
-    return vec4<f32>(to_srgb(i.color * (0.3 + 0.7 * diffuse)), 1.0);
+fn fs(i: BoxOut) -> Hit {
+    let o = g.origin_pitch_floor;
+    let eye = f.eye.xyz;
+    let dir = normalize(i.world - eye);
+    // In cells across, millimetres up: cell (i, j) spans [i, i + 1) x [j, j + 1).
+    let ro = vec3<f32>((eye.x - o.x) / o.z + 0.5, (eye.y - o.y) / o.z + 0.5, eye.z);
+    let rd = vec3<f32>(dir.x / o.z, dir.y / o.z, dir.z);
+    let a = f32(g.core.z);
+
+    // Where the ray is inside the box, and which face it comes in by.
+    var t0 = 0.0;
+    var t1 = 1e30;
+    var n = vec3<f32>(0.0, 0.0, 1.0);
+    let box_lo = vec3<f32>(a, a, o.w);
+    let box_hi = vec3<f32>(a + f32(g.core.x), a + f32(g.core.y), g.top_wall.x);
+    for (var a = 0; a < 3; a++) {
+        if (abs(rd[a]) < 1e-12) {
+            if (ro[a] < box_lo[a] || ro[a] > box_hi[a]) { discard; }
+            continue;
+        }
+        let ta = (box_lo[a] - ro[a]) / rd[a];
+        let tb = (box_hi[a] - ro[a]) / rd[a];
+        let near = min(ta, tb);
+        if (near > t0) {
+            t0 = near;
+            n = vec3<f32>(0.0);
+            n[a] = -sign(rd[a]);
+        }
+        t1 = min(t1, max(ta, tb));
+    }
+    // The near faces leave the work to the far ones, which every ray has.
+    if (t0 > t1 || distance(i.world, eye) < t1 - max(1e-3, t1 * 1e-5)) { discard; }
+
+    // From where the ray comes into the box, so its distances stay small and
+    // exact however far off the eye is; and which side of a cell boundary a point
+    // on one is taken to be, leaning a hair the way the ray goes.
+    let start = max(t0, 0.0);
+    let o2 = ro + rd * start;
+    let span = t1 - start;
+    let lean = sign(rd.xy) * 1e-3;
+    let top = i32(g.size.z) - 1;
+    var level = top;
+    var t = 0.0;
+    var dipped = false;
+    var found = false;
+    var up = false;
+    var cell = vec2<i32>(0);
+    for (var step = 0; step < 1024; step++) {
+        if (t > span) { break; }
+        let p = o2 + rd * t;
+        let s = f32(1 << u32(level));
+        let c = vec2<i32>(floor((p.xy + lean) / s));
+        let dims = vec2<i32>(textureDimensions(heights, level));
+        let h = textureLoad(heights, clamp(c, vec2<i32>(0), dims - 1), level).r;
+        // Where the ray leaves this square, and across which side.
+        let lo = vec2<f32>(c) * s;
+        var tx = 1e30;
+        var ty = 1e30;
+        if (rd.x > 0.0) { tx = (lo.x + s - o2.x) / rd.x; } else if (rd.x < 0.0) { tx = (lo.x - o2.x) / rd.x; }
+        if (rd.y > 0.0) { ty = (lo.y + s - o2.y) / rd.y; } else if (rd.y < 0.0) { ty = (lo.y - o2.y) / rd.y; }
+        if (p.z <= h) {
+            // In among material: a wall if it came in sideways.
+            if (level == 0) { found = true; up = dipped; cell = c; break; }
+            level -= 1;
+            continue;
+        }
+        var th = 1e30;
+        if (rd.z < 0.0) { th = t + (h - p.z) / rd.z; }
+        if (th < min(tx, ty)) {
+            // Comes down to this square's highest before leaving it: look closer.
+            t = th;
+            if (level == 0) { found = true; up = true; cell = c; break; }
+            dipped = true;
+            level -= 1;
+            continue;
+        }
+        // Over it all: on to the next square, and wider.
+        if (tx < ty) {
+            t = tx;
+            n = vec3<f32>(-sign(rd.x), 0.0, 0.0);
+        } else {
+            t = ty;
+            n = vec3<f32>(0.0, -sign(rd.y), 0.0);
+        }
+        dipped = false;
+        level = min(level + 1, top);
+    }
+    if (!found) { discard; }
+    // The tile's own cells only: its apron is its neighbours' to draw.
+    let first = vec2<i32>(i32(g.core.z));
+    cell = clamp(cell, first, first + vec2<i32>(g.core.xy) - 1);
+
+    var normal = n;
+    if (up || n.z > 0.5) {
+        normal = smooth_normal(cell);
+    }
+    let at = eye + dir * (start + t);
+    if (!up && n.z == 0.0) {
+        // A step too small to be a wall is the surface's slope, seen edge on.
+        let behind = cell + vec2<i32>(i32(n.x), i32(n.y));
+        if (height(cell) - height(behind) < g.top_wall.y) {
+            normal = smooth_normal(cell);
+        } else {
+            normal = wall_normal(cell, at.z, n);
+        }
+    }
+    let color = code_color(cell);
+    let diffuse = abs(dot(normal, f.light.xyz));
+    var out: Hit;
+    out.color = vec4<f32>(to_srgb(color * (0.3 + 0.7 * diffuse)), 1.0);
+    let clip = f.view_proj * vec4<f32>(at, 1.0);
+    out.depth = clip.z / clip.w;
+    return out;
 }
 ";
+
+/// How many cells tall a step between neighbouring columns must be to be lit as
+/// a wall rather than as the surface's slope: about 72 degrees.
+const WALL_CELLS: f32 = 3.0;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GridUniforms {
     origin_pitch_floor: [f32; 4],
     size: [u32; 4],
+    top_wall: [f32; 4],
+    core: [u32; 4],
+    palette: [[f32; 4]; 6],
 }
 
 #[repr(C)]
@@ -295,6 +448,7 @@ struct FrameUniforms {
     viewport: [f32; 4],
     masks: [u32; 4],
     colors: [[f32; 4]; KINDS],
+    eye: [f32; 4],
 }
 
 #[repr(C)]
@@ -481,8 +635,11 @@ pub struct Content<'a> {
     pub scene: Option<(u64, &'a Scene)>,
     /// The stock's edges and the work zero's axes.
     pub outline: Option<(u64, &'a [Outline])>,
-    /// The simulated material to draw, with a key that changes whenever it does.
-    pub stock: Option<((u64, usize), &'a StockImage)>,
+    /// The box around all the stock: the view frames it with the part, and its
+    /// zoom and clipping reach it, however small the part is on it.
+    pub stock_box: Option<Aabb>,
+    /// The simulated material to draw.
+    pub stock: Option<StockShow<'a>>,
     /// What is visible.
     pub view: View,
     /// What is picked.
@@ -493,6 +650,208 @@ pub struct Content<'a> {
     pub hint: Option<&'a str>,
 }
 
+/// What changed in the material since it was last uploaded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StockChange {
+    /// Nothing.
+    Nothing,
+    /// Any of it.
+    All,
+    /// These cells.
+    Cells(Vec<CellRect>),
+}
+
+/// The material's image: one of a stage's, or playback's, shared with its thread
+/// and locked only while it is read.
+pub enum StockRef<'a> {
+    /// Held by the view.
+    Plain(&'a StockImage),
+    /// Shared with the playback thread.
+    Shared(&'a std::sync::Mutex<StockImage>),
+}
+
+impl StockRef<'_> {
+    /// Look at the image, locked for no longer than `f` takes.
+    pub fn with<R>(&self, f: impl FnOnce(&StockImage) -> R) -> R {
+        match self {
+            StockRef::Plain(image) => f(image),
+            StockRef::Shared(m) => f(&m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)),
+        }
+    }
+}
+
+/// Material to draw, and how much of it to upload.
+pub struct StockShow<'a> {
+    /// Changes whenever the image is a different one.
+    pub key: (u64, usize),
+    /// The material.
+    pub image: StockRef<'a>,
+    /// What changed in it since it was last uploaded under the same key.
+    pub changed: StockChange,
+    /// How to colour it.
+    pub mode: ColorMode,
+}
+
+/// Where the cells of `rect` start in an image `nx` cells wide with `bytes` per
+/// cell, and how many bytes one of its rows spans.
+fn rect_layout(rect: CellRect, nx: u32, bytes: u32) -> (u64, u32) {
+    let offset = (u64::from(rect.y0) * u64::from(nx) + u64::from(rect.x0)) * u64::from(bytes);
+    (offset, nx * bytes)
+}
+
+/// Write `rect` of mip `level` of `texture` from `data`, a grid `w` cells wide
+/// with `bytes` per cell whose `from` rectangle holds it.
+#[allow(clippy::too_many_arguments)]
+fn write_texture(
+    rs: &RenderState,
+    texture: &wgpu::Texture,
+    level: u32,
+    data: &[u8],
+    bytes: u32,
+    w: u32,
+    from: CellRect,
+    rect: CellRect,
+) {
+    let (offset, bytes_per_row) = rect_layout(from, w, bytes);
+    rs.queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: level,
+            origin: wgpu::Origin3d {
+                x: rect.x0,
+                y: rect.y0,
+                z: 0,
+            },
+            aspect: wgpu::TextureAspect::All,
+        },
+        data,
+        wgpu::TexelCopyBufferLayout {
+            offset,
+            bytes_per_row: Some(bytes_per_row),
+            rows_per_image: Some(rect.height()),
+        },
+        wgpu::Extent3d {
+            width: rect.width(),
+            height: rect.height(),
+            depth_or_array_layers: 1,
+        },
+    );
+}
+
+/// What to write of a tile: its cells (its own coordinates) and, for a whole
+/// tile, their heights and codes; and the changed cells of each pyramid level.
+struct TilePlan {
+    cells: CellRect,
+    whole: Option<(Vec<f32>, Vec<u8>)>,
+    levels: Vec<CellRect>,
+}
+
+/// Bring a tile's pyramid up to date with `rects` of `image` (every cell, when
+/// there are none), and say what to write. `None` when nothing of it changed.
+fn plan_tile(
+    tile: &mut TileGpu,
+    rects: Option<&[CellRect]>,
+    image: &StockImage,
+    floor: f32,
+) -> Option<TilePlan> {
+    let t = tile.tile;
+    let base = |x: u32, y: u32| {
+        t.global(x, y, image.nx, image.ny)
+            .and_then(|(gx, gy)| {
+                image
+                    .heights
+                    .get(gy as usize * image.nx as usize + gx as usize)
+                    .copied()
+            })
+            .unwrap_or(floor)
+    };
+    let Some(rects) = rects else {
+        tile.pyramid = Pyramid::new(t.tex_w, t.tex_h, base);
+        let cells = CellRect {
+            x0: 0,
+            y0: 0,
+            x1: t.w - 1,
+            y1: t.h - 1,
+        };
+        return Some(TilePlan {
+            cells,
+            whole: Some((
+                rows(t, cells, image, &image.heights, floor),
+                rows(t, cells, image, &image.codes, NO_CELL),
+            )),
+            levels: tile
+                .pyramid
+                .levels
+                .iter()
+                .map(crate::pyramid::Level::all)
+                .collect(),
+        });
+    };
+    let local: Vec<CellRect> = rects.iter().filter_map(|r| t.local(*r)).collect();
+    let cells = local.iter().copied().reduce(CellRect::union)?;
+    // Each level's changed cells, as one rectangle: one write a level, however
+    // many pieces changed, since each write has its own cost.
+    let mut union: Vec<Option<CellRect>> = vec![None; tile.pyramid.levels.len()];
+    for r in &local {
+        for (u, c) in union.iter_mut().zip(tile.pyramid.update(*r, base)) {
+            *u = CellRect::join(*u, Some(c));
+        }
+    }
+    Some(TilePlan {
+        cells,
+        whole: None,
+        levels: union.into_iter().flatten().collect(),
+    })
+}
+
+/// Tile `t`'s cells `r` of `cells` (the image's, `nx` a row), row by row, with
+/// `outside` where they are off the stock: whole rows copied at a time.
+fn rows<T: Copy>(t: Tile, r: CellRect, image: &StockImage, cells: &[T], outside: T) -> Vec<T> {
+    let (w, h) = (r.width() as usize, r.height() as usize);
+    let mut out = vec![outside; w * h];
+    // The stock columns this rectangle covers, and where they start in it.
+    let gx0 = t.x0 + i64::from(r.x0);
+    let lo = gx0.max(0);
+    let hi = (gx0 + i64::from(r.width())).min(i64::from(image.nx));
+    if lo >= hi {
+        return out;
+    }
+    let (Ok(skip), Ok(lo), Ok(hi)) = (
+        usize::try_from(lo - gx0),
+        usize::try_from(lo),
+        usize::try_from(hi),
+    ) else {
+        return out;
+    };
+    let nx = image.nx as usize;
+    for (y, row) in (r.y0..=r.y1).zip(out.chunks_exact_mut(w)) {
+        let Ok(gy) = usize::try_from(t.y0 + i64::from(y)) else {
+            continue;
+        };
+        if gy >= image.ny as usize {
+            continue;
+        }
+        if let (Some(src), Some(dst)) = (
+            cells.get(gy * nx + lo..gy * nx + hi),
+            row.get_mut(skip..skip + (hi - lo)),
+        ) {
+            dst.copy_from_slice(src);
+        }
+    }
+    out
+}
+
+/// The stock shader's colours, linear: below the part, leftover faint and
+/// strong, on the part, off the part, and the material. The same colours the
+/// legend shows, from the same functions.
+fn palette() -> [[f32; 4]; 6] {
+    let faint = cell_color(ColorMode::Compare, Class::Leftover, 0.0);
+    let strong = cell_color(ColorMode::Compare, Class::Leftover, f64::INFINITY);
+    let [gouge, _, on, off] = CLASSES.map(|c| cell_color(ColorMode::Compare, c, 0.0));
+    let material = cell_color(ColorMode::Material, Class::OnPart, 0.0);
+    [gouge, faint, strong, on, off, material].map(|c| theme::linear(c).into_rgba())
+}
+
 impl Content<'_> {
     /// Nothing to draw.
     pub fn empty() -> Self {
@@ -501,6 +860,7 @@ impl Content<'_> {
             framing: 0,
             scene: None,
             outline: None,
+            stock_box: None,
             stock: None,
             view: View::default(),
             selection: None,
@@ -540,19 +900,26 @@ struct Uploaded {
     cutters: Vec<Option<(wgpu::Buffer, u32)>>,
 }
 
-/// The material's textures and grid, sized to one stock.
-struct StockGpu {
-    key: (u64, usize),
-    size: [u32; 2],
+/// One tile of the material on the GPU.
+struct TileGpu {
+    tile: Tile,
+    /// Its levels of maxima above level 0, as uploaded.
+    pyramid: Pyramid,
     heights: wgpu::Texture,
-    colors: wgpu::Texture,
+    codes: wgpu::Texture,
     grid: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
 }
 
+/// The material on the GPU, as tiles, sized to one stock.
+struct StockGpu {
+    key: (u64, usize),
+    size: [u32; 2],
+    tiles: Vec<TileGpu>,
+}
+
 struct Gpu {
-    stock_top_pipeline: wgpu::RenderPipeline,
-    stock_skirt_pipeline: wgpu::RenderPipeline,
+    stock_pipeline: wgpu::RenderPipeline,
     stock_layout: wgpu::BindGroupLayout,
     stock: Option<StockGpu>,
     part_pipeline: wgpu::RenderPipeline,
@@ -657,13 +1024,23 @@ impl Viewport {
         let gpu = self.gpu.get_or_insert_with(|| Gpu::new(rs));
         gpu.upload(rs, content);
 
-        // Frame each newly opened model once; after that the view is the person's.
-        if self.framed != Some(content.framing)
-            && let Some(b) = content.part.and_then(|(_, m)| m.bounds())
-        {
+        // Frame each newly opened model once, with its stock; after that the view
+        // is the person's, though it can always reach all the stock.
+        let scene_box = match (
+            content.part.and_then(|(_, m)| m.bounds()),
+            content.stock_box,
+        ) {
+            (Some(a), Some(b)) => Some(a.union(&b)),
+            (a, b) => a.or(b),
+        };
+        if let Some(b) = scene_box {
             let centre = Vec3::from(v3((b.min + b.max) * 0.5));
-            self.camera = Camera::framing(centre, narrow(b.extent().length() * 0.5));
-            self.framed = Some(content.framing);
+            let radius = narrow(b.extent().length() * 0.5);
+            if self.framed != Some(content.framing) && content.part.is_some() {
+                self.camera = Camera::framing(centre, radius);
+                self.framed = Some(content.framing);
+            }
+            self.camera.cover(radius);
         }
 
         let ppp = ui.ctx().pixels_per_point();
@@ -676,6 +1053,7 @@ impl Viewport {
         let size = [px[0] as u32, px[1] as u32];
         let frame = FrameInput {
             view_proj: self.camera.view_projection(aspect),
+            eye: self.camera.eye(),
             pixels: px,
             line_width: LINE_WIDTH * ppp,
             view: content.view,
@@ -775,6 +1153,7 @@ impl Viewport {
 
 struct FrameInput {
     view_proj: Mat4,
+    eye: Vec3,
     pixels: [f32; 2],
     line_width: f32,
     view: View,
@@ -969,7 +1348,7 @@ impl Gpu {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -979,7 +1358,7 @@ impl Gpu {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -989,9 +1368,9 @@ impl Gpu {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        sample_type: wgpu::TextureSampleType::Uint,
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -1050,12 +1429,10 @@ impl Gpu {
                 cache: None,
             })
         };
-        let stock_top_pipeline = stock_pipeline("camcraft stock top", "vs_top");
-        let stock_skirt_pipeline = stock_pipeline("camcraft stock sides", "vs_skirt");
+        let stock_pipeline = stock_pipeline("camcraft stock", "vs");
 
         Self {
-            stock_top_pipeline,
-            stock_skirt_pipeline,
+            stock_pipeline,
             stock_layout,
             stock: None,
             part_pipeline,
@@ -1085,75 +1462,157 @@ impl Gpu {
     }
 
     /// Upload the material, when it changed. Textures are made once per grid size;
-    /// after that, a new stage is a texture write.
-    fn upload_stock(&mut self, rs: &RenderState, stock: Option<((u64, usize), &StockImage)>) {
-        let Some((key, image)) = stock else {
+    /// after that, a new stage is a texture write, and a step of playback writes
+    /// only the cells it changed, in the tiles that hold them, and the cells of
+    /// their pyramids above.
+    fn upload_stock(&mut self, rs: &RenderState, stock: Option<&StockShow<'_>>) {
+        let Some(show) = stock else {
             return;
         };
-        if self.stock.as_ref().is_some_and(|s| s.key == key) {
-            return;
-        }
+        show.image.with(|image| self.upload_image(rs, show, image));
+    }
+
+    fn upload_image(&mut self, rs: &RenderState, show: &StockShow<'_>, image: &StockImage) {
+        let key = show.key;
         let size = [image.nx, image.ny];
-        let limit = rs.device.limits().max_texture_dimension_2d;
-        if size[0] < 2 || size[1] < 2 || size[0] > limit || size[1] > limit {
+        if size[0] == 0 || size[1] == 0 {
             self.stock = None;
             return;
         }
+        let same = self
+            .stock
+            .as_ref()
+            .is_some_and(|s| s.key == key && s.size == size);
+        let rects = match &show.changed {
+            _ if !same => None,
+            StockChange::Nothing => None,
+            StockChange::Cells(cells) if cells.iter().all(|r| r.x1 < size[0] && r.y1 < size[1]) => {
+                Some(cells.clone())
+            }
+            StockChange::Cells(_) | StockChange::All => None,
+        };
+        if same && show.changed == StockChange::Nothing {
+            self.write_grids(rs, image, show.mode);
+            return;
+        }
         if self.stock.as_ref().is_none_or(|s| s.size != size) {
-            self.stock = Some(self.stock_textures(rs, key, size));
+            let tiles = stock_tiles::tiles(size[0], size[1])
+                .into_iter()
+                .map(|t| self.tile_textures(rs, t, image))
+                .collect();
+            self.stock = Some(StockGpu { key, size, tiles });
         }
         let Some(gpu) = self.stock.as_mut() else {
             return;
         };
-        let extent = wgpu::Extent3d {
-            width: size[0],
-            height: size[1],
-            depth_or_array_layers: 1,
+        let floor = narrow(image.floor);
+        // First, in parallel, each tile's pyramid brought up to date and what to
+        // write of it; then the writes, which the queue takes one at a time.
+        let plans: Vec<Option<TilePlan>> = {
+            use rayon::prelude::*;
+            gpu.tiles
+                .par_iter_mut()
+                .map(|tile| plan_tile(tile, rects.as_deref(), image, floor))
+                .collect()
         };
-        let write = |texture: &wgpu::Texture, data: &[u8], bytes: u32| {
-            rs.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                data,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(size[0] * bytes),
-                    rows_per_image: Some(size[1]),
-                },
-                extent,
-            );
-        };
-        write(&gpu.heights, bytemuck::cast_slice(&image.heights), 4);
-        write(&gpu.colors, bytemuck::cast_slice(&image.colors), 4);
-        let grid = GridUniforms {
-            origin_pitch_floor: [
-                narrow(image.origin.x),
-                narrow(image.origin.y),
-                narrow(image.pitch),
-                narrow(image.floor),
-            ],
-            size: [size[0], size[1], 0, 0],
-        };
-        rs.queue
-            .write_buffer(&gpu.grid, 0, bytemuck::bytes_of(&grid));
+        for (tile, plan) in gpu.tiles.iter().zip(plans) {
+            let Some(plan) = plan else { continue };
+            let r = plan.cells;
+            match &plan.whole {
+                // A step's cells are all on the stock: written straight from the
+                // image, which holds them row by row at the stock's width.
+                None => {
+                    if let Some(from) = tile.tile.stock_rect(r, image.nx, image.ny) {
+                        let heights: &[u8] = bytemuck::cast_slice(&image.heights);
+                        write_texture(rs, &tile.heights, 0, heights, 4, image.nx, from, r);
+                        write_texture(rs, &tile.codes, 0, &image.codes, 1, image.nx, from, r);
+                    }
+                }
+                // The whole tile, apron past the stock's edge and all.
+                Some((heights, codes)) => {
+                    let whole = CellRect {
+                        x0: 0,
+                        y0: 0,
+                        x1: r.width() - 1,
+                        y1: r.height() - 1,
+                    };
+                    let hs: &[u8] = bytemuck::cast_slice(heights);
+                    write_texture(rs, &tile.heights, 0, hs, 4, r.width(), whole, r);
+                    write_texture(rs, &tile.codes, 0, codes, 1, r.width(), whole, r);
+                }
+            }
+            for ((level, r), l) in (1u32..).zip(&plan.levels).zip(&tile.pyramid.levels) {
+                write_texture(
+                    rs,
+                    &tile.heights,
+                    level,
+                    bytemuck::cast_slice(&l.data),
+                    4,
+                    l.w,
+                    *r,
+                    *r,
+                );
+            }
+        }
         gpu.key = key;
+        self.write_grids(rs, image, show.mode);
     }
 
-    fn stock_textures(&self, rs: &RenderState, key: (u64, usize), size: [u32; 2]) -> StockGpu {
+    /// Each tile's grid: where it is, how high its material stands, the colours.
+    fn write_grids(&self, rs: &RenderState, image: &StockImage, mode: ColorMode) {
+        let Some(gpu) = &self.stock else {
+            return;
+        };
+        let palette = palette();
+        let floor = narrow(image.floor);
+        for tile in &gpu.tiles {
+            let t = tile.tile;
+            #[allow(clippy::cast_precision_loss)]
+            let (ox, oy) = (t.x0 as f64, t.y0 as f64);
+            let grid = GridUniforms {
+                origin_pitch_floor: [
+                    narrow(image.origin.x + ox * image.pitch),
+                    narrow(image.origin.y + oy * image.pitch),
+                    narrow(image.pitch),
+                    floor,
+                ],
+                size: [
+                    t.w,
+                    t.h,
+                    u32::try_from(tile.pyramid.levels.len() + 1).unwrap_or(1),
+                    0,
+                ],
+                top_wall: [
+                    tile.pyramid.top().max(floor),
+                    WALL_CELLS * narrow(image.pitch),
+                    0.0,
+                    0.0,
+                ],
+                core: [
+                    t.core.width(),
+                    t.core.height(),
+                    stock_tiles::APRON,
+                    u32::from(mode == ColorMode::Compare),
+                ],
+                palette,
+            };
+            rs.queue
+                .write_buffer(&tile.grid, 0, bytemuck::bytes_of(&grid));
+        }
+    }
+
+    /// A tile's textures and grid.
+    fn tile_textures(&self, rs: &RenderState, tile: Tile, image: &StockImage) -> TileGpu {
         let device = &rs.device;
-        let texture = |label, format| {
+        let texture = |label, format, [w, h]: [u32; 2], mips: u32| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d {
-                    width: size[0],
-                    height: size[1],
+                    width: w,
+                    height: h,
                     depth_or_array_layers: 1,
                 },
-                mip_level_count: 1,
+                mip_level_count: mips,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
@@ -1161,8 +1620,21 @@ impl Gpu {
                 view_formats: &[],
             })
         };
-        let heights = texture("camcraft stock heights", wgpu::TextureFormat::R32Float);
-        let colors = texture("camcraft stock colours", wgpu::TextureFormat::Rgba8Unorm);
+        let floor = narrow(image.floor);
+        let pyramid = Pyramid::new(tile.tex_w, tile.tex_h, |_, _| floor);
+        let mips = u32::try_from(pyramid.levels.len() + 1).unwrap_or(1);
+        let heights = texture(
+            "camcraft stock heights",
+            wgpu::TextureFormat::R32Float,
+            [tile.tex_w, tile.tex_h],
+            mips,
+        );
+        let codes = texture(
+            "camcraft stock codes",
+            wgpu::TextureFormat::R8Uint,
+            [tile.w, tile.h],
+            1,
+        );
         let grid = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camcraft stock grid"),
             size: std::mem::size_of::<GridUniforms>() as u64,
@@ -1184,15 +1656,15 @@ impl Gpu {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&view(&colors)),
+                    resource: wgpu::BindingResource::TextureView(&view(&codes)),
                 },
             ],
         });
-        StockGpu {
-            key,
-            size,
+        TileGpu {
+            tile,
+            pyramid,
             heights,
-            colors,
+            codes,
             grid,
             bind_group,
         }
@@ -1200,7 +1672,7 @@ impl Gpu {
 
     /// Upload whatever changed since the last frame.
     fn upload(&mut self, rs: &RenderState, content: &Content<'_>) {
-        self.upload_stock(rs, content.stock);
+        self.upload_stock(rs, content.stock.as_ref());
         let vertices = |label, data: &[u8], usage| {
             rs.device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1420,6 +1892,7 @@ impl Gpu {
             viewport: [input.pixels[0], input.pixels[1], input.line_width, 2e-4],
             masks: [kinds, view.ops, shown, 0],
             colors,
+            eye: input.eye.extend(1.0).to_array(),
         };
         rs.queue
             .write_buffer(&self.frame, 0, bytemuck::bytes_of(&frame));
@@ -1522,16 +1995,11 @@ impl Gpu {
             }
 
             if let (true, Some(stock)) = (input.stock, &self.stock) {
-                let quads = |a: u32, b: u32| a.saturating_sub(1) * b.saturating_sub(1);
-                let [nx, ny] = stock.size;
-                pass.set_bind_group(1, &stock.bind_group, &[]);
-                pass.set_pipeline(&self.stock_top_pipeline);
-                pass.draw(0..quads(nx, ny) * 6, 0..1);
-                pass.set_pipeline(&self.stock_skirt_pipeline);
-                pass.draw(
-                    0..2 * (nx.saturating_sub(1) + ny.saturating_sub(1)) * 6,
-                    0..1,
-                );
+                pass.set_pipeline(&self.stock_pipeline);
+                for tile in &stock.tiles {
+                    pass.set_bind_group(1, &tile.bind_group, &[]);
+                    pass.draw(0..36, 0..1);
+                }
             }
 
             pass.set_pipeline(&self.line_pipeline);
@@ -1583,10 +2051,55 @@ impl IntoRgba for [f32; 3] {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::float_cmp, clippy::indexing_slicing)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
 mod tests {
     use super::*;
     use camcraft_geom::synthetic;
+
+    /// Every shader parses and validates as the GPU will be given it, so a slip in
+    /// one fails here rather than when the app first draws.
+    #[test]
+    fn every_shader_is_valid_wgsl() {
+        for (name, body) in [
+            ("mesh", MESH_SHADER),
+            ("line", LINE_SHADER),
+            ("stock", STOCK_SHADER),
+        ] {
+            let source = format!("{COMMON}{body}");
+            let module = naga::front::wgsl::parse_str(&source)
+                .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(&source)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        }
+    }
+
+    /// A rectangle's copy starts at its first cell and strides whole image rows.
+    #[test]
+    fn a_rect_is_copied_from_its_place_in_the_whole_image() {
+        let r = CellRect {
+            x0: 3,
+            y0: 2,
+            x1: 5,
+            y1: 4,
+        };
+        assert_eq!(rect_layout(r, 10, 4), ((2 * 10 + 3) * 4, 40));
+        let whole = CellRect {
+            x0: 0,
+            y0: 0,
+            x1: 9,
+            y1: 6,
+        };
+        assert_eq!(rect_layout(whole, 10, 4), (0, 40));
+    }
 
     #[test]
     fn every_triangle_becomes_three_flat_shaded_vertices() {

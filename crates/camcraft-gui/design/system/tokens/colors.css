@@ -1,0 +1,19 @@
+:root{
+/* base — dark-first, near-black graphite like a machine enclosure */
+--gray-0:#0B0C0E;--gray-1:#111216;--gray-2:#17181D;--gray-3:#1F2127;--gray-4:#2A2D35;--gray-5:#3A3E48;--gray-6:#585D6A;--gray-7:#8B909D;--gray-8:#B9BDC7;--gray-9:#E6E8EE;--gray-10:#F7F8FA;
+/* brand accent — amber, the spindle-warning colour */
+--amber-3:#FFE1A3;--amber-5:#F5A524;--amber-6:#D98A0F;--amber-7:#8A5806;
+/* toolpath semantics (match common G-code viewers) */
+--path-cut:#5BE37A;--path-rapid:#FF5C5C;--path-plunge:#F5A524;--path-lead:#4FD1FF;
+/* status */
+--ok:#5BE37A;--warn:#F5A524;--err:#FF5C5C;--info:#4FD1FF;
+/* semantic surfaces */
+--bg:var(--gray-0);--surface-1:var(--gray-1);--surface-2:var(--gray-2);--surface-3:var(--gray-3);--surface-raised:var(--gray-4);
+--border:var(--gray-4);--border-strong:var(--gray-5);--border-focus:var(--amber-5);
+/* semantic text */
+--text-1:var(--gray-9);--text-2:var(--gray-8);--text-3:var(--gray-7);--text-4:var(--gray-6);--text-on-accent:var(--gray-0);--text-accent:var(--amber-5);
+/* interactive */
+--accent:var(--amber-5);--accent-hover:var(--amber-3);--accent-press:var(--amber-6);--accent-subtle:rgba(245,165,36,.12);
+--hover-overlay:rgba(255,255,255,.05);--press-overlay:rgba(255,255,255,.09);--selection:rgba(245,165,36,.25);
+--ok-subtle:rgba(91,227,122,.12);--warn-subtle:rgba(245,165,36,.12);--err-subtle:rgba(255,92,92,.12);--info-subtle:rgba(79,209,255,.12);
+}

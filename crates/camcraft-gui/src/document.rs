@@ -25,8 +25,10 @@ use camcraft_session::{Model, Ran, SessionError, write_job};
 use glam::DVec3;
 
 use crate::camera::Camera;
+use crate::live::LiveStock;
+use crate::scene::Playhead;
 use crate::scene::{Scene, box_edges};
-use crate::stock_view::StockImage;
+use crate::stock_view::{ColorMode, StockImage};
 use crate::viewport::{Outline, OutlineKind, View};
 use crate::worker::DocId;
 
@@ -52,8 +54,7 @@ pub enum Level {
 pub enum StockMode {
     /// None.
     Off,
-    /// As it stood when the scrubbed operation began, or after it once the scrub
-    /// reaches its end.
+    /// As it stands at the playhead, cut as the program plays.
     Follow,
     /// A fixed stage: the block before everything is 0, after operation `n` is
     /// `n + 1`.
@@ -237,8 +238,10 @@ pub struct SetupView {
     pub camera: Option<Camera>,
     /// Frames the camera once, on the first layout that has a part.
     pub framing: u64,
-    /// Segments shown, in machine order: the scrub.
-    pub scrub: usize,
+    /// Where the program stands: the scrub, and what playback moves.
+    pub at: Playhead,
+    /// Playing, and how.
+    pub transport: Transport,
     /// The cutter at the scrub.
     pub show_cutter: bool,
     /// All toolpaths at once, over the per-role choices.
@@ -249,8 +252,39 @@ pub struct SetupView {
     pub hide_part_with_stock: bool,
     /// What to draw.
     pub view: View,
-    /// The material at each stage, classified and coloured, built when first shown.
-    pub stock_images: Vec<Option<StockImage>>,
+    /// The material at each stage, classified and coloured, built when first shown,
+    /// each with a key for its upload.
+    pub stock_images: Vec<Option<(u64, StockImage)>>,
+}
+
+/// Playback: whether it plays, which way, how fast, and where it stops by itself.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Transport {
+    /// Playing.
+    pub playing: bool,
+    /// Playing backwards.
+    pub reverse: bool,
+    /// Machining seconds per second.
+    pub speed: f64,
+    /// Pause on reaching a failed check or a steep descent.
+    pub stop_at_problems: bool,
+    /// Pause at the end of each operation.
+    pub stop_at_op_end: bool,
+    /// How the material is coloured.
+    pub color: ColorMode,
+}
+
+impl Default for Transport {
+    fn default() -> Self {
+        Self {
+            playing: false,
+            reverse: false,
+            speed: 10.0,
+            stop_at_problems: true,
+            stop_at_op_end: false,
+            color: ColorMode::Material,
+        }
+    }
 }
 
 impl Default for SetupView {
@@ -258,7 +292,8 @@ impl Default for SetupView {
         Self {
             camera: None,
             framing: next_key(),
-            scrub: 0,
+            at: Playhead::default(),
+            transport: Transport::default(),
             show_cutter: true,
             show_paths: true,
             stock_mode: StockMode::Off,
@@ -273,7 +308,7 @@ impl Default for SetupView {
 }
 
 /// Everything about one setup that is not in the job.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct SetupState {
     /// Its last run.
     pub ran: Option<RanSetup>,
@@ -283,6 +318,8 @@ pub struct SetupState {
     pub layout: Option<Layout>,
     /// How it is being looked at.
     pub view: SetupView,
+    /// Its material during playback, once it has been followed.
+    pub live: Option<LiveStock>,
 }
 
 /// Where a setup stands, for the tree.
@@ -1038,7 +1075,8 @@ impl Document {
                 let scene = Scene::build(&job, setup, &ran.result);
                 let view = &mut state.view;
                 // A new run starts fully shown, every operation visible.
-                view.scrub = scene.segments.len();
+                view.at = Playhead::at(scene.segments.len());
+                view.transport.playing = false;
                 view.view.ops = u32::MAX;
                 view.stock_images = vec![None; ran.result.stages.len()];
                 if let Some(inputs) = inputs {

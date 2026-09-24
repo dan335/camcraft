@@ -69,6 +69,14 @@ impl Camera {
             (radius / (self.fov_y * 0.5).sin()).clamp(self.radius * 0.05, self.radius * 20.0);
     }
 
+    /// Let the view reach a scene of `radius`: zoom out, pan and see that far,
+    /// without moving it.
+    pub fn cover(&mut self, radius: f32) {
+        if radius.is_finite() && radius > self.radius {
+            self.radius = radius;
+        }
+    }
+
     /// Move the camera, and what it frames, by `by`: for when everything drawn has
     /// moved by that much, so the view stays on the same part of it.
     pub fn shift(&mut self, by: Vec3) {
@@ -220,6 +228,20 @@ mod tests {
 
     /// Limits scale with the part, so a 25 mm part and a 400 mm part both zoom and
     /// pan sensibly.
+    /// Covering a larger scene lets the view zoom out to it and see all of it,
+    /// and never shrinks what it can reach.
+    #[test]
+    fn covering_a_sheet_reaches_all_of_it() {
+        let mut c = Camera::framing(Vec3::ZERO, 60.0);
+        c.cover(2000.0);
+        c.cover(10.0);
+        for _ in 0..200 {
+            c.zoom(-1000.0);
+        }
+        assert!((c.distance - 2000.0 * 20.0).abs() < 1.0, "{}", c.distance);
+        assert_eq!(c.radius, 2000.0);
+    }
+
     #[test]
     fn zoom_and_pan_limits_scale_with_the_part() {
         for radius in [12.5_f32, 200.0] {

@@ -130,6 +130,41 @@ fn main_window_after_a_run() {
     h.run_steps(3);
     shoot(&mut h, "stock_after_rough");
 
+    // Playing: the material cut as far as the playhead, part-way through
+    // roughing and then finishing, in the material's colour, with the transport.
+    for (op, fraction, name) in [
+        (0, 0.3, "playback_mid_rough"),
+        (1, 0.5, "playback_mid_finish"),
+    ] {
+        h.state_mut().set_stock_for_snapshot(None);
+        h.state_mut().set_view_for_snapshot(op, fraction, u32::MAX);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        h.run_steps(2);
+        while !h.state_mut().live_caught_up_for_snapshot() {
+            assert!(Instant::now() < deadline, "the material never caught up");
+            std::thread::sleep(Duration::from_millis(20));
+            h.step();
+        }
+        h.run_steps(3);
+        shoot(&mut h, name);
+    }
+
+    // Space plays: the playhead moves on in machining time, and Space again stops
+    // it where it is.
+    let (before, _) = h.state_mut().playhead_for_snapshot().unwrap();
+    h.key_press(egui::Key::Space);
+    h.run_steps(20);
+    let (playing, is_playing) = h.state_mut().playhead_for_snapshot().unwrap();
+    assert!(is_playing, "Space should start playback");
+    assert!(playing.shown > before.shown, "{before:?} -> {playing:?}");
+    h.key_press(egui::Key::Space);
+    h.run_steps(2);
+    let (stopped, is_playing) = h.state_mut().playhead_for_snapshot().unwrap();
+    assert!(!is_playing, "Space again should pause");
+    h.run_steps(5);
+    assert_eq!(h.state_mut().playhead_for_snapshot().unwrap().0, stopped);
+    println!("played from {before:?} to {stopped:?}");
+
     // Clicking the deepest steep descent: scrub, stock and camera all go there.
     let deepest = h.state_mut().jump_to_deepest_for_snapshot();
     println!("deepest steep descent {deepest:?}");
@@ -294,24 +329,45 @@ fn tool_manager() {
     let _ = std::fs::remove_file(&library);
     let mut manager = ToolManager::with_library(library);
 
-    let shoot_manager = |manager: ToolManager, name: &str| {
+    // Each shot names the editor's tab to show, or none for the one it opens on.
+    let shoot_tabs = |manager: ToolManager, shots: &[(&str, Option<&str>)]| {
+        use egui_kittest::kittest::Queryable;
         let mut h = Harness::builder()
-            .with_size(egui::vec2(1180.0, 900.0))
+            .with_size(egui::vec2(1280.0, 860.0))
             .wgpu()
-            .build_ui_state(|ui, m: &mut ToolManager| m.ui(ui), manager);
-        // Before the first frame, as the app does at startup.
+            .build_ui_state(
+                |ui, m: &mut ToolManager| {
+                    // The harness draws a frame before the theme can be applied,
+                    // and the app never does: skip it, since the fonts the
+                    // manager names are not loaded yet.
+                    if ui
+                        .ctx()
+                        .fonts(|f| f.definitions().font_data.contains_key("plex"))
+                    {
+                        m.ui(ui);
+                    }
+                },
+                manager,
+            );
         crate::theme::apply(&h.ctx);
         h.run_steps(3);
-        match h.render() {
-            Ok(image) => {
-                let path = output_dir().join(format!("{name}.png"));
-                image.save(&path).unwrap();
-                println!("wrote {}", path.display());
+        for (name, tab) in shots {
+            if let Some(tab) = tab {
+                h.get_by_label(tab).click();
+                h.run_steps(3);
             }
-            Err(err) => println!("skipped {name}: could not render ({err})"),
+            match h.render() {
+                Ok(image) => {
+                    let path = output_dir().join(format!("{name}.png"));
+                    image.save(&path).unwrap();
+                    println!("wrote {}", path.display());
+                }
+                Err(err) => println!("skipped {name}: could not render ({err})"),
+            }
         }
         h.into_state()
     };
+    let shoot_manager = |manager: ToolManager, name: &str| shoot_tabs(manager, &[(name, None)]);
     let described = ToolSpec {
         kind: ToolKind::Bullnose,
         diameter: 8.0,
@@ -369,7 +425,16 @@ fn tool_manager() {
         ],
     };
     manager.show_for_snapshot("bullnose-8", Some(described.clone()));
-    let mut manager = shoot_manager(manager, "tools_library");
+    let mut manager = shoot_tabs(
+        manager,
+        &[
+            ("tools_library", None),
+            ("tools_library_general", Some("General")),
+            ("tools_library_holder", Some("Holder")),
+            ("tools_library_presets", Some("Presets")),
+            ("tools_library_post", Some("Post")),
+        ],
+    );
 
     // The same tool shown in inches: the fields and labels are wider.
     manager.measure = crate::measure::Measure::Imperial;
@@ -404,5 +469,208 @@ fn tool_manager() {
 
     // Folders for two machines, the first open with the tools inside it.
     manager.folders_for_snapshot();
-    shoot_manager(manager, "tools_library_folders");
+    let mut manager = shoot_manager(manager, "tools_library_folders");
+
+    // A folder with nothing in it: what to do instead of a blank table.
+    manager.empty_folder_for_snapshot();
+    shoot_manager(manager, "tools_empty_folder");
+}
+
+/// The lego brick roughed from a block, as it plays: the material at the
+/// simulator's fine pitch, with the walls the cutter leaves standing vertical.
+#[test]
+#[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
+fn lego_playback() {
+    let dir = output_dir().join("lego");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = repo("fixtures/step/lego_4x2_01.step");
+    let job = format!(
+        r#"version = 1
+tolerance = 0.05
+
+[tools.rough-6-flat]
+kind = "flat"
+diameter = 6.35
+number = 1
+rpm = 16000
+
+[[model]]
+name = "lego"
+path = "{}"
+
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [2.0, 2.0, 2.0]
+
+[[setup]]
+name = "top"
+models = ["lego"]
+stocks = ["block"]
+
+[[setup.operation]]
+name = "rough"
+strategy = "zlevel-rough"
+stepdown = 2.0
+min_ring_length = 3.0
+tool = "rough-6-flat"
+"#,
+        model.display()
+    );
+    let path = dir.join("lego.camcraft");
+    std::fs::write(&path, job).unwrap();
+
+    let mut h = harness();
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    h.state_mut().open_job(&ctx, path);
+    settle(&mut h);
+    h.state_mut().start_run(&ctx);
+    settle(&mut h);
+
+    for (fraction, name) in [(0.5, "lego_half_roughed"), (1.0, "lego_roughed")] {
+        h.state_mut().set_stock_for_snapshot(None);
+        h.state_mut().set_view_for_snapshot(0, fraction, u32::MAX);
+        let deadline = Instant::now() + Duration::from_secs(120);
+        h.run_steps(2);
+        while !h.state_mut().live_caught_up_for_snapshot() {
+            assert!(Instant::now() < deadline, "the material never caught up");
+            std::thread::sleep(Duration::from_millis(20));
+            h.step();
+        }
+        h.run_steps(3);
+        shoot(&mut h, name);
+    }
+    // How long a frame of the whole brick takes to draw and read back: an upper
+    // bound on what drawing the material costs.
+    let frame_ms = |h: &mut Harness<'_, App>| {
+        let started = Instant::now();
+        for _ in 0..20 {
+            h.step();
+            let _ = h.render();
+        }
+        started.elapsed().as_secs_f64() * 1e3 / 20.0
+    };
+    let with = frame_ms(&mut h);
+    h.state_mut().stock_off_for_snapshot();
+    let without = frame_ms(&mut h);
+    h.state_mut().set_stock_for_snapshot(None);
+    h.run_steps(3);
+    println!(
+        "lego frame, drawn and read back: {with:.1} ms with the material, {without:.1} ms without"
+    );
+
+    // Close in on a stud, to see the walls and the cells.
+    h.state_mut()
+        .focus_for_snapshot(glam::DVec3::new(20.0, 12.0, 30.0), 18.0);
+    h.run_steps(3);
+    shoot(&mut h, "lego_close");
+}
+
+/// A full 5 by 12 foot sheet, 8 inches thick, with a sixteenth-inch cutter in the
+/// setup: the largest stock a router here takes, at the finest pitch memory allows
+/// for it, drawn as tiles. Surfaced down to the lego brick with a half-inch end
+/// mill; the sixteenth has nothing to clear and only sets the pitch.
+#[test]
+#[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
+fn sheet_playback() {
+    let dir = output_dir().join("sheet");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = repo("fixtures/step/lego_4x2_01.step");
+    let job = format!(
+        r#"version = 1
+tolerance = 0.05
+
+[tools.half-inch]
+kind = "flat"
+diameter = 12.7
+number = 1
+
+[tools.sixteenth]
+kind = "flat"
+diameter = 1.5875
+number = 2
+
+[[model]]
+name = "lego"
+path = "{}"
+
+[[stock]]
+name = "sheet"
+kind = "fixed-box"
+corner = [-700.0, -1800.0, -163.0]
+size = [1524.0, 3658.0, 203.2]
+
+[[setup]]
+name = "top"
+models = ["lego"]
+stocks = ["sheet"]
+
+[[setup.operation]]
+name = "surface"
+strategy = "zlevel-rough"
+stepdown = 20.0
+tool = "half-inch"
+passes = {{ stepover = 6.0, feed = 5000.0 }}
+
+[[setup.operation]]
+name = "detail"
+strategy = "zlevel-rough"
+stepdown = 1.0
+tool = "sixteenth"
+geometry = {{ top = {{ ref = "stock-top", offset = 3.0 }}, bottom = {{ ref = "stock-top", offset = 1.0 }} }}
+passes = {{ stepover = 0.8, feed = 1500.0 }}
+"#,
+        model.display()
+    );
+    let path = dir.join("sheet.camcraft");
+    std::fs::write(&path, job).unwrap();
+
+    let mut h = harness();
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    h.state_mut().open_job(&ctx, path);
+    settle(&mut h);
+    let started = Instant::now();
+    h.state_mut().start_run(&ctx);
+    settle(&mut h);
+    println!("sheet run: {:.1} s", started.elapsed().as_secs_f64());
+
+    for (fraction, name) in [(0.4, "sheet_part_surfaced"), (1.0, "sheet_surfaced")] {
+        h.state_mut().set_stock_for_snapshot(None);
+        h.state_mut().set_view_for_snapshot(0, fraction, u32::MAX);
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(300);
+        h.run_steps(2);
+        while !h.state_mut().live_caught_up_for_snapshot() {
+            assert!(Instant::now() < deadline, "the material never caught up");
+            std::thread::sleep(Duration::from_millis(20));
+            h.step();
+        }
+        println!(
+            "{name}: caught up in {:.1} s",
+            started.elapsed().as_secs_f64()
+        );
+        h.run_steps(3);
+        shoot(&mut h, name);
+    }
+    let frame = |h: &mut Harness<'_, App>| {
+        let started = Instant::now();
+        for _ in 0..10 {
+            h.step();
+            let _ = h.render();
+        }
+        started.elapsed().as_secs_f64() * 1e3 / 10.0
+    };
+    println!("sheet frame, drawn and read back: {:.1} ms", frame(&mut h));
+    // In close on the brick, where the tiles meet nothing but material.
+    h.state_mut()
+        .focus_for_snapshot(glam::DVec3::new(0.0, 0.0, 40.0), 120.0);
+    h.run_steps(3);
+    shoot(&mut h, "sheet_close");
+    // The whole sheet: eighteen tiles, and no seams between them.
+    h.state_mut()
+        .focus_for_snapshot(glam::DVec3::new(62.0, 29.0, 0.0), 2600.0);
+    h.run_steps(3);
+    shoot(&mut h, "sheet_whole");
 }

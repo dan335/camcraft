@@ -1,0 +1,34 @@
+/* Local deviations from the CamCraft Design System, deliberate and scoped.
+ *
+ * Everything under system/ is copied from the design system as published and
+ * is not edited here; see README.md. This file is ours.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Local deviation from the design system, deliberate and scoped.
+ *
+ * The system doubles the toolpath palette as the status palette: cut is ok,
+ * rapid is err, plunge is warn, lead is info. That is elegant for a general CAM
+ * GUI and it matches what G-code viewers do.
+ *
+ * It does not work for *this* screen. The inspector draws hundreds of rapids in
+ * "error red" as a matter of course, and its entire job is to make a genuine
+ * failure — a 48 mm plunge at cutting feed — impossible to miss. Reusing the
+ * same hue at the same weight for "normal traverse" and "this will break a
+ * cutter" puts the two in direct competition, and the failure loses.
+ *
+ * So the 3D path keeps the system's toolpath colours, because matching other
+ * viewers is genuinely valuable. Verdicts instead borrow the Diagnostic
+ * component's treatment — a weighted left border against a surface — which
+ * reads as status without shouting in the same voice as the geometry.
+ * ------------------------------------------------------------------------- */
+:root {
+  --verdict-fail-edge:var(--err);
+  --verdict-fail-bg:var(--err-subtle);
+  --verdict-warn-edge:var(--warn);
+  --verdict-warn-bg:var(--warn-subtle);
+  --verdict-pass-edge:var(--gray-5);
+  --verdict-pass-bg:transparent;
+  --verdict-note-edge:var(--info);
+  --verdict-note-bg:transparent;
+}

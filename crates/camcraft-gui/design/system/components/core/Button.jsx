@@ -1,0 +1,9 @@
+import React from 'react';
+const H={sm:24,md:28,lg:36};const FS={sm:12,md:13,lg:14};
+const V={primary:{background:'var(--accent)',color:'var(--text-on-accent)',border:'1px solid transparent'},secondary:{background:'var(--surface-3)',color:'var(--text-1)',border:'1px solid var(--border-strong)'},ghost:{background:'transparent',color:'var(--text-2)',border:'1px solid transparent'},danger:{background:'var(--err-subtle)',color:'var(--err)',border:'1px solid rgba(255,92,92,.3)'}};
+export function Button({variant='secondary',size='md',icon,children,disabled,style,...rest}){
+  const [h,setH]=React.useState(false);const [p,setP]=React.useState(false);
+  const ov=p?'var(--press-overlay)':h?'var(--hover-overlay)':'transparent';
+  const v=V[variant];const bg=variant==='primary'?(p?'var(--accent-press)':h?'var(--accent-hover)':'var(--accent)'):v.background;
+  return <button disabled={disabled} onMouseEnter={()=>setH(true)} onMouseLeave={()=>{setH(false);setP(false)}} onMouseDown={()=>setP(true)} onMouseUp={()=>setP(false)} style={{...v,background:bg,backgroundImage:variant==='primary'?'none':`linear-gradient(${ov},${ov})`,height:H[size],padding:icon&&!children?0:'0 '+(size==='sm'?8:12)+'px',width:icon&&!children?H[size]:undefined,display:'inline-flex',alignItems:'center',justifyContent:'center',gap:6,fontFamily:'var(--font-sans)',fontSize:FS[size],fontWeight:500,lineHeight:1,borderRadius:'var(--radius-sm)',cursor:disabled?'default':'pointer',opacity:disabled?.4:1,transition:'background var(--dur-fast) var(--ease-out)',outline:'none',whiteSpace:'nowrap',...style}} {...rest}>{icon}{children}</button>;
+}

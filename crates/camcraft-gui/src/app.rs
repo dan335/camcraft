@@ -26,6 +26,7 @@ use crate::settings::Settings;
 use crate::theme;
 use crate::tool_manager::ToolManager;
 use crate::tool_picker::{Picked, ToolPicker};
+use crate::transport;
 use crate::viewport::{Content, Viewport};
 use crate::worker::{DocId, Reply, Request, Task, Worker};
 
@@ -1123,6 +1124,13 @@ impl App {
         }
     }
 
+    /// The showing setup's state, if there is one.
+    fn active_state_mut(&mut self) -> Option<&mut crate::document::SetupState> {
+        let d = self.docs.get_mut(self.active)?;
+        let name = d.active.clone()?;
+        d.setups.get_mut(&name)
+    }
+
     /// What the viewport should draw this frame.
     fn content(&self) -> Content<'_> {
         let state = self.doc().and_then(|d| d.setups.get(d.active.as_ref()?));
@@ -1148,9 +1156,7 @@ impl App {
     /// The showing setup's state. Only the snapshot harness asks.
     #[cfg(all(test, feature = "ui-snapshots"))]
     fn state_for_snapshot(&mut self) -> Option<&mut crate::document::SetupState> {
-        let d = self.docs.get_mut(self.active)?;
-        let name = d.active.clone()?;
-        d.setups.get_mut(&name)
+        self.active_state_mut()
     }
 
     /// The showing job. Only the snapshot harness asks.
@@ -1308,7 +1314,7 @@ impl App {
                 clippy::cast_precision_loss
             )]
             let into = (span.count as f64 * fraction) as usize;
-            state.view.scrub = span.first + into.min(span.count);
+            state.view.at = crate::scene::Playhead::at(span.first + into.min(span.count));
         }
         state.view.view.roles = roles;
     }
@@ -1323,6 +1329,37 @@ impl App {
             state.view.view.roles = u32::MAX;
             state.view.show_paths = false;
         }
+    }
+
+    /// Hide the material. Only the snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn stock_off_for_snapshot(&mut self) {
+        if let Some(state) = self.state_for_snapshot() {
+            state.view.stock_mode = crate::document::StockMode::Off;
+        }
+    }
+
+    /// Bring the camera in on `at`. Only the snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn focus_for_snapshot(&mut self, at: glam::DVec3, radius: f32) {
+        self.viewport.focus(at, radius);
+    }
+
+    /// The showing setup's playhead, and whether it is playing. Only the snapshot
+    /// harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn playhead_for_snapshot(&mut self) -> Option<(crate::scene::Playhead, bool)> {
+        let view = &self.state_for_snapshot()?.view;
+        Some((view.at, view.transport.playing))
+    }
+
+    /// Whether the playback material stands at the playhead. Only the snapshot
+    /// harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn live_caught_up_for_snapshot(&mut self) -> bool {
+        self.state_for_snapshot()
+            .and_then(|s| s.live.as_ref())
+            .is_some_and(crate::live::LiveStock::caught_up)
     }
 
     /// Go to the deepest steep descent, as clicking it would. Only the snapshot
@@ -1426,8 +1463,10 @@ impl eframe::App for App {
                     }
                 }
                 let state = doc.setups.entry(name).or_default();
-                playback::step_scrub(&ctx, state);
+                transport::keys(&ctx, state);
+                transport::tick(&ctx, state);
                 playback::ensure_stock_image(state);
+                playback::follow_stock(&ctx, state);
             }
         }
         self.swap_camera();
@@ -1464,12 +1503,31 @@ impl eframe::App for App {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| {
+                    if let Some(state) = self.active_state_mut().filter(|s| s.ran.is_some()) {
+                        egui::Panel::bottom("transport")
+                            .frame(
+                                egui::Frame::new()
+                                    .fill(theme::egui_color(theme::SURFACE_1))
+                                    .inner_margin(egui::Margin::symmetric(8, 6)),
+                            )
+                            .show(ui, |ui| transport::bar(ui, state, m));
+                    }
                     let rect = ui.available_rect_before_wrap();
                     // The viewport is taken out for the call, because the content it
                     // draws borrows the rest of the app.
                     let mut viewport = std::mem::take(&mut self.viewport);
                     let event = viewport.show(ui, frame.wgpu_render_state(), &self.content());
                     self.viewport = viewport;
+                    // A frame with a GPU uploads whatever of the material changed.
+                    if frame.wgpu_render_state().is_some()
+                        && let Some(live) = self.active_state_mut().and_then(|s| s.live.as_mut())
+                    {
+                        live.uploaded();
+                        // What one frame did not take, the next does.
+                        if live.uploading() {
+                            ctx.request_repaint();
+                        }
+                    }
                     if let Some(doc) = self.docs.get_mut(self.active) {
                         let id = doc.id;
                         if self.picking.pointer(doc, event) {

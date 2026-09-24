@@ -14,7 +14,11 @@
 use camcraft_geom::contour::Region;
 use camcraft_geom::mesh::{Aabb, TriMesh};
 use camcraft_geom::topology::EdgeKind;
-use camcraft_sim::stock::{PartSurface, SimReport, Stock as SimStock, StockError, VerifyReport};
+use camcraft_sim::stock::{
+    PackedStock, PartSurface, SimReport, Stock as SimStock, StockError, VerifyReport,
+};
+use std::sync::Arc;
+
 use glam::{DVec2, dvec2};
 
 use crate::drilling::{DrillParams, DrillReport, Hole, HoleError, drill, holes, nearest_first};
@@ -185,10 +189,9 @@ pub struct SetupResult {
     pub frame: Frame,
     /// Each operation, in order.
     pub operations: Vec<OperationResult>,
-    /// The material as it stands at the end.
-    pub stock: SimStock,
-    /// The part the setup was supposed to produce.
-    pub part: PartSurface,
+    /// The part the setup was supposed to produce, shared with whatever replays
+    /// the run.
+    pub part: Arc<PartSurface>,
     /// How the finished stock compares with the part.
     pub verify: VerifyReport,
     /// Tolerance the comparison allowed.
@@ -202,9 +205,10 @@ pub struct SetupResult {
     /// The heights symbolic references resolved against.
     pub heights: HeightContext,
     /// The material before the first operation, then after each: one more than
-    /// there are operations, the last equal to `stock`. The keyframes a replay
-    /// starts from.
-    pub stages: Vec<SimStock>,
+    /// there are operations, the last being the finished material. The keyframes a replay
+    /// starts from, packed (a full sheet's raw heights are hundreds of megabytes,
+    /// and machined material packs small) and shared with it rather than copied.
+    pub stages: Vec<Arc<PackedStock>>,
 }
 
 impl SetupResult {
@@ -264,10 +268,13 @@ pub fn run_prepared(
         model_bottom: bounds.min.z,
     };
 
-    // One grid pitch for the material, derived from the tolerance rather than
-    // guessed, and bounded so a fine tolerance on a large part cannot allocate
-    // without limit.
-    let sim_pitch = (job.tolerance * 8.0).clamp(0.05, 1.0);
+    let narrowest = setup
+        .operations
+        .iter()
+        .filter_map(|op| job.tool_for(op))
+        .map(|t| t.diameter)
+        .fold(None, |n: Option<f64>, d| Some(n.map_or(d, |n| n.min(d))));
+    let sim_pitch = sim_pitch(job.tolerance, hi - lo, narrowest);
     let blocks: Vec<(DVec2, DVec2, f64)> = prepared
         .stocks
         .iter()
@@ -278,7 +285,7 @@ pub fn run_prepared(
 
     let mut operations = Vec::with_capacity(setup.operations.len());
     let mut stages = Vec::with_capacity(setup.operations.len() + 1);
-    stages.push(stock.clone());
+    stages.push(Arc::new(PackedStock::pack(&stock)));
     for op in &setup.operations {
         let tool = cutting_tool(job, op)?;
         let feature = |source| RunError::Feature {
@@ -310,20 +317,20 @@ pub fn run_prepared(
             &holes,
             &mut stock,
         )?);
-        stages.push(stock.clone());
+        stages.push(Arc::new(PackedStock::pack(&stock)));
     }
 
-    let part = PartSurface::from_mesh(mesh, lo, hi, sim_pitch)?;
     // The simulator resolves the surface on a grid, so it cannot be held finer than
-    // one cell plus the chordal tolerance the paths were built to.
+    // one cell plus the chordal tolerance the paths were built to; and that holds
+    // across as well as down, or every vertical wall is a gouge beside it.
     let budget = job.tolerance + sim_pitch;
+    let part = Arc::new(PartSurface::from_mesh(mesh, lo, hi, sim_pitch)?.reaching(budget));
     let verify = stock.verify(&part, budget, LEFTOVER_LIMIT);
 
     Ok(SetupResult {
         setup: setup.name.clone(),
         frame: prepared.frame,
         operations,
-        stock,
         part,
         verify,
         verify_budget: budget,
@@ -348,6 +355,42 @@ pub fn cutting_tool(job: &Job, op: &Operation) -> Result<EffectiveTool, RunError
         op.passes.stock_to_leave.axial,
     )?;
     Ok(EffectiveTool::of(&base, leave)?)
+}
+
+/// Cells a small stock is given, at least: as fine as that allows, so a small
+/// part is simulated, verified and shown in fine detail whatever its tools.
+pub const SIM_CELLS: f64 = 2.0e6;
+
+/// Most cells any stock is given, to bound memory: each copy of the material is
+/// four bytes a cell, and a run and its playback keep several. A full 5 by 12
+/// foot sheet reaches this at about 0.3 mm.
+pub const MAX_SIM_CELLS: f64 = 64.0e6;
+
+/// Finest simulation pitch, in millimetres, however small the stock.
+pub const FINEST_PITCH: f64 = 0.02;
+
+/// Cells across the smallest tool: its slot is this many cells wide.
+pub const CELLS_PER_TOOL: f64 = 8.0;
+
+/// The grid pitch for the material over a stock `size` across, at `tolerance`,
+/// for a setup whose narrowest tool is `narrowest` across.
+///
+/// Fine enough for that tool to cut a slot [`CELLS_PER_TOOL`] cells wide, and
+/// never coarser than eight times the tolerance (at most 1 mm); finer still when
+/// the stock is small enough to spend [`SIM_CELLS`] on it; but never so fine that
+/// it takes more than [`MAX_SIM_CELLS`], and never finer than [`FINEST_PITCH`].
+pub fn sim_pitch(tolerance: f64, size: DVec2, narrowest: Option<f64>) -> f64 {
+    let mut wanted = (tolerance * 8.0).clamp(0.05, 1.0);
+    if let Some(d) = narrowest.filter(|d| d.is_finite() && *d > 0.0) {
+        wanted = wanted.min(d / CELLS_PER_TOOL);
+    }
+    let area = (size.x * size.y).abs();
+    if !area.is_finite() {
+        return wanted.max(FINEST_PITCH);
+    }
+    let small = (area / SIM_CELLS).sqrt();
+    let most = (area / MAX_SIM_CELLS).sqrt();
+    wanted.min(small).max(most).max(FINEST_PITCH)
 }
 
 /// The holes a drilling operation's picked rims make, in the setup's frame, in the
@@ -625,6 +668,37 @@ mod tests {
     use super::*;
     use camcraft_geom::synthetic;
     use camcraft_geom::topology::Body;
+
+    /// A small stock is simulated finely, a large one fine enough for its
+    /// narrowest tool, and nothing beyond the memory cap.
+    #[test]
+    fn the_pitch_follows_the_stock_and_its_tools() {
+        let inch = 25.4;
+        let sheet = dvec2(5.0 * 12.0 * inch, 12.0 * 12.0 * inch);
+        // The lego brick's block: about 0.053 mm, two million cells, whatever the tool.
+        let lego = sim_pitch(0.05, dvec2(104.6, 53.8), Some(inch / 4.0));
+        assert!((lego - 0.053).abs() < 0.001, "{lego}");
+        // A tiny part stops at the finest pitch.
+        assert_eq!(sim_pitch(0.05, dvec2(10.0, 10.0), None), FINEST_PITCH);
+        // A full sheet with a quarter-inch cutter: eight tolerances.
+        assert_eq!(sim_pitch(0.05, sheet, Some(inch / 4.0)), 0.4);
+        // With a sixteenth, as fine as memory allows.
+        let fine = sim_pitch(0.05, sheet, Some(inch / 16.0));
+        assert!(fine < 0.4 && fine > inch / 16.0 / CELLS_PER_TOOL, "{fine}");
+        assert!(((sheet.x * sheet.y) / (fine * fine) - MAX_SIM_CELLS).abs() < 1.0);
+        // A thirty-second on a smaller stock gets its eight cells across.
+        let small = sim_pitch(0.05, dvec2(300.0, 300.0), Some(inch / 32.0));
+        assert!(
+            (small - inch / 32.0 / CELLS_PER_TOOL).abs() < 1e-12,
+            "{small}"
+        );
+        // Nothing sensible to go on: eight tolerances.
+        assert_eq!(sim_pitch(0.05, dvec2(f64::NAN, 1.0), None), 0.4);
+        for (size, tool) in [(sheet, Some(1.0)), (dvec2(900.0, 900.0), Some(0.5))] {
+            let p = sim_pitch(0.05, size, tool);
+            assert!(size.x * size.y / (p * p) <= MAX_SIM_CELLS * 1.0001);
+        }
+    }
 
     const JOB: &str = r#"
 version = 1
