@@ -421,8 +421,7 @@ impl App {
         {
             self.close(id);
         }
-        // Esc stops picking, or closes what was picked to look at, unless a window
-        // over everything wants it.
+        // Esc stops picking, unless a window over everything wants it.
         let modal = self.prompt.is_some() || self.picker.is_some();
         if !typing && !modal && ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.picking.escape();
@@ -1168,8 +1167,7 @@ impl App {
     }
 
     /// Select operation `op` of the showing setup and pick faces for it in the
-    /// view: the two largest that face up, with the third clicked to look at.
-    /// Only the snapshot harness asks. How many faces the model has.
+    /// view: the two largest that face up. Only the snapshot harness asks. How many faces the model has.
     #[cfg(all(test, feature = "ui-snapshots"))]
     pub fn pick_faces_for_snapshot(&mut self, op: usize) -> usize {
         use camcraft_core::job::FeatureRef;
@@ -1237,17 +1235,6 @@ impl App {
                 op,
             },
         );
-        if let Some((i, _, at)) = up.get(2) {
-            self.picking.inspect_for_snapshot(
-                id,
-                setup,
-                crate::pick::Target::Face {
-                    model,
-                    face: *i,
-                    at: *at,
-                },
-            );
-        }
         faces
     }
 
@@ -1278,11 +1265,9 @@ impl App {
         }
     }
 
-    /// Press Esc twice: stop picking, and stop looking. Only the snapshot harness
-    /// asks.
+    /// Press Esc: stop picking. Only the snapshot harness asks.
     #[cfg(all(test, feature = "ui-snapshots"))]
     pub fn escape_for_snapshot(&mut self) {
-        self.picking.escape();
         self.picking.escape();
     }
 
@@ -1523,6 +1508,7 @@ impl eframe::App for App {
                             )
                             .show(ui, |ui| transport::bar(ui, state, m));
                     }
+                    #[cfg(all(test, feature = "ui-snapshots"))]
                     let rect = ui.available_rect_before_wrap();
                     // The viewport is taken out for the call, because the content it
                     // draws borrows the rest of the app.
@@ -1539,13 +1525,13 @@ impl eframe::App for App {
                             ctx.request_repaint();
                         }
                     }
-                    if let Some(doc) = self.docs.get_mut(self.active) {
-                        let id = doc.id;
-                        if self.picking.pointer(doc, event) {
-                            ctx.request_repaint();
-                        }
-                        self.picking.card(&ctx, id, rect, m);
+                    if let Some(doc) = self.docs.get_mut(self.active)
+                        && self.picking.pointer(doc, event)
+                    {
+                        ctx.request_repaint();
                     }
+                    #[cfg(all(test, feature = "ui-snapshots"))]
+                    self.picking.view_for_snapshot(rect);
                 });
         }
 

@@ -95,15 +95,6 @@ pub struct Accept {
 }
 
 impl Accept {
-    /// Anything: for looking at what is there.
-    pub const ALL: Self = Self {
-        faces: true,
-        edges: true,
-        points: true,
-        stock: true,
-        models: false,
-        stocks: false,
-    };
     /// Faces only.
     pub const FACES: Self = Self {
         faces: true,
@@ -886,7 +877,7 @@ mod tests {
         assert!(pick_at(&scene, face, Accept::EDGES).is_none());
         assert!(pick_at(&scene, face, Accept::POINTS).is_none());
         assert!(matches!(
-            pick_at(&scene, face, Accept::ALL),
+            pick_at(&scene, face, Accept::FACES),
             Some(Target::Face { .. })
         ));
     }

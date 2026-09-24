@@ -24,7 +24,7 @@ use glam::{DVec3, Vec3};
 
 use crate::document::{Document, Selection};
 use crate::measure::Measure;
-use crate::pick::{Accept, PickScene, Target, describe_box_point, describe_circle};
+use crate::pick::{Accept, PickScene, Target, describe_circle};
 use crate::scene::box_edges;
 use crate::viewport::{Highlight, Outline, OutlineKind};
 
@@ -431,64 +431,6 @@ pub fn ghosts(scene: &PickScene, slot: &Slot) -> Highlight {
         Slot::WorkZero { .. } | Slot::Faces { .. } | Slot::Edges { .. } => {}
     }
     h
-}
-
-/// What `target` is, as rows of a card: name and value.
-pub fn describe(target: &Target, scene: &PickScene, m: Measure) -> Vec<(String, String)> {
-    let at = |p: DVec3| {
-        format!(
-            "{}, {}, {}",
-            m.number(p.x, 3),
-            m.number(p.y, 3),
-            m.length(p.z, 3)
-        )
-    };
-    match target {
-        Target::Face { model, face, .. } => {
-            let Some(pm) = scene.model(model) else {
-                return Vec::new();
-            };
-            let mut rows = vec![("Face".into(), describe_face(pm.body(), model, *face, m))];
-            if let Some(f) = pm.body().topology().face(*face) {
-                if let FaceKind::Plane { normal, .. } = f.kind {
-                    let n = scene.frame.orientation.apply(normal);
-                    rows.push((
-                        "Facing".into(),
-                        format!("{:.3}, {:.3}, {:.3}", n.x, n.y, n.z),
-                    ));
-                }
-                if let Some(b) = f.bounds {
-                    // A square turn keeps a box a box: its ends' heights are its range.
-                    let (lo, hi) = (scene.frame.to_setup(b.min).z, scene.frame.to_setup(b.max).z);
-                    rows.push((
-                        "Height".into(),
-                        format!("{} to {}", m.length(lo.min(hi), 3), m.length(lo.max(hi), 3)),
-                    ));
-                }
-            }
-            rows
-        }
-        Target::Edge { model, edge, .. } => match scene.model(model) {
-            Some(pm) => vec![("Edge".into(), describe_edge(pm.body(), model, *edge, m))],
-            None => Vec::new(),
-        },
-        Target::Point { point, setup } => {
-            let what = scene.model(&point.model).map_or_else(String::new, |pm| {
-                describe_point(pm.body(), &point.model, point.snap, point.index, m)
-            });
-            vec![
-                ("Point".into(), what),
-                ("In the setup".into(), at(*setup)),
-                ("In the model".into(), at(DVec3::from_array(point.at))),
-            ]
-        }
-        &Target::StockPoint { x, y, z, setup } => vec![
-            ("Stock".into(), describe_box_point(x, y, z)),
-            ("In the setup".into(), at(setup)),
-        ],
-        Target::Model { model } => vec![("Model".into(), model.clone())],
-        Target::Stock { stock } => vec![("Stock".into(), stock.clone())],
-    }
 }
 
 /// Every triangle of `body`, in the setup's frame.

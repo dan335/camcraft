@@ -1,6 +1,9 @@
-//! Picking in the window: which slot is armed, what is under the pointer, what was
-//! clicked to look at, and the work that is kept between frames so the pointer can
-//! move freely over a large part.
+//! Picking in the window: which slot is armed, what is under the pointer, and the
+//! work that is kept between frames so the pointer can move freely over a large
+//! part.
+//!
+//! As in Fusion, the view picks only while a slot is armed, by its button in the
+//! panel: otherwise the pointer moves over the part and a click does nothing.
 //!
 //! Three things are worked out once and kept until what they depend on changes:
 //! the setup made ready for picking (its models' edges and points in the setup's
@@ -12,13 +15,13 @@
 
 use camcraft_core::features;
 use camcraft_core::job::{FeatureRef, Geometry, Origin, ToolSpec};
+#[cfg(all(test, feature = "ui-snapshots"))]
 use eframe::egui;
 
 use crate::document::{Document, Selection, next_key};
 use crate::measure::Measure;
-use crate::pick::{Accept, PickScene, PickStock, Target};
+use crate::pick::{PickScene, PickStock, Target};
 use crate::slots::{self, Kind, Shown, Slot};
-use crate::theme;
 use crate::viewport::{Content, Highlight, PointerEvent};
 use crate::worker::DocId;
 
@@ -48,8 +51,6 @@ pub struct Picking {
     /// the one last shown.
     row: Option<(Kind, usize)>,
     shown_row: Option<(Kind, usize)>,
-    /// What was clicked, to look at, in which job and setup.
-    inspect: Option<(DocId, String, Target)>,
     /// The showing setup, ready to pick from: for which job and layout.
     scene: Option<(DocId, u64, PickScene)>,
     /// What the selection's picks show, with the key its upload goes by.
@@ -59,7 +60,9 @@ pub struct Picking {
     /// What could be picked into the armed slot, drawn faintly: for which job,
     /// layout and slot, with its upload key.
     ghost: Option<(DocId, u64, Slot, Highlight, u64)>,
-    /// Where the view is in the window, as of the last frame.
+    /// Where the view is in the window, as of the last frame. Only the snapshot
+    /// harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
     view: Option<egui::Rect>,
 }
 
@@ -67,7 +70,6 @@ impl Picking {
     /// Start filling `slot` of job `doc`.
     pub fn arm(&mut self, doc: DocId, slot: Slot) {
         self.armed = Some((doc, slot));
-        self.inspect = None;
     }
 
     /// Stop filling whatever is being filled.
@@ -91,10 +93,10 @@ impl Picking {
             .map(|(_, s, _)| s)
     }
 
-    /// Look at `target`, as if it had been clicked. Only the snapshot harness asks.
+    /// Where the view is in the window: the snapshot harness keeps it up to date.
     #[cfg(all(test, feature = "ui-snapshots"))]
-    pub fn inspect_for_snapshot(&mut self, doc: DocId, setup: String, target: Target) {
-        self.inspect = Some((doc, setup, target));
+    pub fn view_for_snapshot(&mut self, rect: egui::Rect) {
+        self.view = Some(rect);
     }
 
     /// The highest round rim in the showing setup, as the point of it nearest
@@ -143,13 +145,9 @@ impl Picking {
         self.shown_row != self.row
     }
 
-    /// Esc: stop picking, or else stop looking at what was clicked. Whether it did
-    /// either.
+    /// Esc: stop picking. Whether anything was being picked.
     pub fn escape(&mut self) -> bool {
-        if self.armed.take().is_some() {
-            return true;
-        }
-        self.inspect.take().is_some()
+        self.armed.take().is_some()
     }
 
     /// Bring everything up to date with `doc`, the job showing, before the frame
@@ -163,13 +161,6 @@ impl Picking {
             && (*d != doc.id || !slot.still_valid(doc))
         {
             self.armed = None;
-        }
-        if self
-            .inspect
-            .as_ref()
-            .is_some_and(|(d, s, _)| *d != doc.id || doc.active.as_ref() != Some(s))
-        {
-            self.inspect = None;
         }
 
         // The showing setup, laid out, ready to pick from.
@@ -298,96 +289,40 @@ impl Picking {
     }
 
     /// Where the pointer is over the view this frame, for job `doc`: what is under
-    /// it, and what a click there does. Whether anything changed that needs the
-    /// view drawn again.
+    /// it, and what a click there does. Only an armed slot picks. Whether anything
+    /// changed that needs the view drawn again.
     pub fn pointer(&mut self, doc: &mut Document, event: Option<PointerEvent>) -> bool {
-        let Some((_, _, scene)) = self.scene.as_ref().filter(|(d, ..)| *d == doc.id) else {
+        let scene = self
+            .scene
+            .as_ref()
+            .filter(|(d, ..)| *d == doc.id)
+            .map(|(.., s)| s);
+        let (Some(scene), Some(slot)) = (scene, self.armed(doc.id).cloned()) else {
             let changed = self.hover.is_some();
             self.hover = None;
             return changed;
         };
-        let armed = self.armed(doc.id).cloned();
-        let accept = armed.as_ref().map_or(Accept::ALL, Slot::accept);
-        let target = event.and_then(|e| scene.pick(e.ray, &e.projector, e.pos, accept));
-        let mut changed = target != self.hover;
+        let target = event.and_then(|e| scene.pick(e.ray, &e.projector, e.pos, slot.accept()));
+        let changed = target != self.hover;
         self.hover.clone_from(&target);
 
-        if !event.is_some_and(|e| e.clicked) {
+        let Some(t) = target.filter(|_| event.is_some_and(|e| e.clicked)) else {
             return changed;
-        }
-        changed = true;
-        match (armed, target) {
-            (Some(slot), Some(t)) => {
-                let tolerance = doc.job.tolerance;
-                let current = |r: &FeatureRef, kind: Kind| {
-                    let body = scene.model(&r.model)?.body();
-                    let tol = features::tolerance(tolerance, body);
-                    let found = match kind {
-                        Kind::Face => features::find_face(body, r, tol),
-                        Kind::Edge => features::find_edge(body, r, tol),
-                    };
-                    found.ok().map(|f| f.index)
-                };
-                if slots::apply(doc, &slot, &t, current) && slot.single() {
-                    self.armed = None;
-                }
-            }
-            (Some(_), None) => {}
-            (None, t) => {
-                self.inspect = t
-                    .zip(doc.active.clone())
-                    .map(|(t, setup)| (doc.id, setup, t));
-            }
-        }
-        changed
-    }
-
-    /// The card describing what was clicked, over the top left of the view `rect`.
-    pub fn card(&mut self, ctx: &egui::Context, doc: DocId, rect: egui::Rect, m: Measure) {
-        self.view = Some(rect);
-        let Some((d, _, target)) = &self.inspect else {
-            return;
         };
-        let Some((_, _, scene)) = self.scene.as_ref().filter(|(s, ..)| s == d) else {
-            return;
+        let tolerance = doc.job.tolerance;
+        let current = |r: &FeatureRef, kind: Kind| {
+            let body = scene.model(&r.model)?.body();
+            let tol = features::tolerance(tolerance, body);
+            let found = match kind {
+                Kind::Face => features::find_face(body, r, tol),
+                Kind::Edge => features::find_edge(body, r, tol),
+            };
+            found.ok().map(|f| f.index)
         };
-        if *d != doc {
-            return;
+        if slots::apply(doc, &slot, &t, current) && slot.single() {
+            self.armed = None;
         }
-        let rows = slots::describe(target, scene, m);
-        let mut close = false;
-        egui::Area::new(egui::Id::new("inspect-card"))
-            .fixed_pos(rect.left_top() + egui::vec2(12.0, 12.0))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_max_width(rect.width() * 0.5);
-                    ui.horizontal(|ui| {
-                        ui.strong("Picked");
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("×").on_hover_text("Esc").clicked() {
-                                close = true;
-                            }
-                        });
-                    });
-                    egui::Grid::new("inspect-rows")
-                        .num_columns(2)
-                        .spacing([10.0, 4.0])
-                        .show(ui, |ui| {
-                            for (name, value) in rows {
-                                ui.label(
-                                    egui::RichText::new(name)
-                                        .color(theme::egui_color(theme::GRAY_7)),
-                                );
-                                ui.label(value);
-                                ui.end_row();
-                            }
-                        });
-                });
-            });
-        if close {
-            self.inspect = None;
-        }
+        true
     }
 }
 

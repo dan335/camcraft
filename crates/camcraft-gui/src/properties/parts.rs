@@ -150,7 +150,7 @@ fn add_list(
     picked
 }
 
-/// One included name, with a way to take it out on hover: whether it was.
+/// One included name, with a way to take it out at its right: whether it was.
 fn row(ui: &mut egui::Ui, name: &str, missing: bool) -> bool {
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), theme::CONTROL_SM),
@@ -174,7 +174,7 @@ fn row(ui: &mut egui::Ui, name: &str, missing: bool) -> bool {
     }
     let mut out = false;
     child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if hovered && widgets::icon_button(ui, Icon::X, "take it out").clicked() {
+        if widgets::icon_button(ui, Icon::X, "Remove").clicked() {
             out = true;
         }
     });

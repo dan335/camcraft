@@ -173,7 +173,7 @@ fn main_window_after_a_run() {
     shoot(&mut h, "steep_deepest");
 
     // Faces picked for finishing: lit in the view, listed in the panel, the
-    // boundary they make drawn at the stock's top, and a third face looked at.
+    // boundary they make drawn at the stock's top.
     let faces = h.state_mut().pick_faces_for_snapshot(1);
     println!("{faces} faces on the model");
     h.run_steps(4);
