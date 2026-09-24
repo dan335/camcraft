@@ -15,7 +15,7 @@ use eframe::egui;
 use crate::measure::Measure;
 use crate::theme;
 use crate::tool_drawing::{Part, draw};
-use crate::widgets::{self, Icon, Size, Tab, Variant};
+use crate::widgets::{self, Icon, Size, Tab, Variant, form};
 
 /// The fields each tab edits, as the checks name them, to flag a tab with an
 /// error on it.
@@ -82,15 +82,6 @@ pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure) {
         Page::Presets => speeds(ui, tool, m, &errors, &preset_errors),
         Page::Post => form(ui, "post", |ui| post(ui, tool)),
     }
-}
-
-/// A form: labels in a column on the left, their fields lined up on the right.
-fn form(ui: &mut egui::Ui, id: &str, body: impl FnOnce(&mut egui::Ui)) {
-    egui::Grid::new(id)
-        .num_columns(2)
-        .spacing([theme::SPACE_4, 6.0])
-        .min_col_width(96.0)
-        .show(ui, body);
 }
 
 fn general(ui: &mut egui::Ui, tool: &mut ToolSpec) {

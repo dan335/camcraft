@@ -25,8 +25,8 @@ pub enum Pick {
     OpenJobs,
     /// Where to save job `doc`.
     SaveJob(DocId),
-    /// Model files to add to job `doc`.
-    AddModels(DocId),
+    /// Model files to add to job `doc`, and to setup `setup` when one is named.
+    AddModels(DocId, Option<String>),
     /// Where model `name` of job `doc` is now.
     Locate(DocId, String),
     /// A machine profile file for setup `setup` of job `doc`.
@@ -82,7 +82,7 @@ impl AppFileDialog {
         let (title, filter) = match &pick {
             Pick::OpenJobs => ("Open jobs", JOBS),
             Pick::SaveJob(_) => ("Save job as", JOBS),
-            Pick::AddModels(_) => ("Add models", MODELS),
+            Pick::AddModels(..) => ("Add models", MODELS),
             Pick::Locate(_, _) => ("Find the model", MODELS),
             Pick::Profile(_, _) => ("Choose a machine profile", PROFILES),
             Pick::PostTo(_, _) => ("Post programs into", PROFILES),
@@ -93,7 +93,7 @@ impl AppFileDialog {
         config.default_file_name = name.to_owned();
         let many = matches!(
             pick,
-            Pick::OpenJobs | Pick::AddModels(_) | Pick::ImportTools
+            Pick::OpenJobs | Pick::AddModels(..) | Pick::ImportTools
         );
         let save = matches!(pick, Pick::SaveJob(_));
         let folder = matches!(pick, Pick::PostTo(_, _));
@@ -114,7 +114,7 @@ impl AppFileDialog {
         self.dialog.update(ctx);
         let pick = self.dialog.user_data::<Pick>()?.clone();
         let paths = match pick {
-            Pick::OpenJobs | Pick::AddModels(_) | Pick::ImportTools => {
+            Pick::OpenJobs | Pick::AddModels(..) | Pick::ImportTools => {
                 self.dialog.take_picked_multiple()?
             }
             _ => vec![self.dialog.take_picked()?],

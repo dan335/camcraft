@@ -16,5 +16,5 @@ its codepoint up in `font/codepoints.json` of the same package, add it to `Icon`
 
 ```text
 pip install fonttools
-pyftsubset lucide.ttf --output-file=lucide-subset.ttf --unicodes="U+E13D,U+E1B2,U+E070,U+E06D,U+E06F,U+E09E,U+E18E,U+E151,U+E19E,U+E0D9,U+E0D7,U+E334,U+E042,U+E13C,U+E12E,U+E15F,U+E160,U+E3E9,U+E3EA,U+E147,U+E243,U+E244"
+pyftsubset lucide.ttf --output-file=lucide-subset.ttf --unicodes="U+E13D,U+E1B2,U+E070,U+E06D,U+E06F,U+E09E,U+E18E,U+E151,U+E19E,U+E0D9,U+E0D7,U+E334,U+E042,U+E13C,U+E12E,U+E15F,U+E160,U+E3E9,U+E3EA,U+E147,U+E243,U+E244,U+E120"
 ```

@@ -51,6 +51,7 @@ pub enum Icon {
     Rewind,
     ChevronFirst,
     ChevronLast,
+    MousePointerClick,
 }
 
 impl Icon {
@@ -79,6 +80,7 @@ impl Icon {
             Icon::Rewind => '\u{e147}',
             Icon::ChevronFirst => '\u{e243}',
             Icon::ChevronLast => '\u{e244}',
+            Icon::MousePointerClick => '\u{e120}',
         }
     }
 
@@ -182,6 +184,15 @@ pub fn section_label(text: &str) -> egui::RichText {
 /// A field's label in a form: `--text-3`, as `KeyValue.jsx` sets its keys.
 pub fn field_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.label(egui::RichText::new(text).color(theme::egui_color(theme::TEXT_3)))
+}
+
+/// A form: labels in a column on the left, their fields lined up on the right.
+pub fn form(ui: &mut egui::Ui, id: impl egui::AsIdSalt, body: impl FnOnce(&mut egui::Ui)) {
+    egui::Grid::new(id)
+        .num_columns(2)
+        .spacing([theme::SPACE_4, 6.0])
+        .min_col_width(96.0)
+        .show(ui, body);
 }
 
 /// A button, as `Button.jsx`: sharp, flat, and shaded by state rather than

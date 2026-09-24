@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable as _;
 
 use crate::app::App;
 
@@ -301,6 +302,111 @@ fn two_setups_in_tabs() {
     h.state_mut().close_for_snapshot();
     h.run_steps(3);
     shoot(&mut h, "close_unsaved_prompt");
+}
+
+/// The setup's panel on each of its tabs, the list of models to add from, and
+/// models picked in the view with the job's others shown faintly beside the part.
+#[test]
+#[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
+fn setup_panel() {
+    use crate::document::Selection;
+    use crate::slots::Slot;
+    use camcraft_core::job::{ModelDef, StockDef, StockSpec};
+
+    // The example, with two more models and a second stock the setup does not use.
+    let dir = output_dir().join("setup-panel");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut job = camcraft_session::read_job(&repo("examples/rail-jig.camcraft")).unwrap();
+    job.models[0].path = repo("fixtures/step/sled_base.step").display().to_string();
+    for (name, file) in [
+        ("rail_guide", "rail_guide.step"),
+        ("hinge_jig", "hinge_jig.step"),
+    ] {
+        job.models.push(ModelDef {
+            name: name.into(),
+            path: repo(&format!("fixtures/step/{file}")).display().to_string(),
+            units: None,
+        });
+    }
+    job.stocks.push(StockDef {
+        name: "offcut".into(),
+        spec: StockSpec::FixedBox {
+            corner: [120.0, 0.0, 0.0],
+            size: [80.0, 60.0, 20.0],
+        },
+    });
+    let path = dir.join("setup-panel.camcraft");
+    camcraft_session::write_job(&path, &job).unwrap();
+
+    let mut h = harness();
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    h.state_mut().open_job(&ctx, path);
+    settle(&mut h);
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.selection = Selection::Setup("top".into());
+        doc.active = Some("top".into());
+    }
+    for (tab, name) in [
+        (0_usize, "setup_parts"),
+        (1, "setup_position"),
+        (2, "setup_post"),
+    ] {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("setup-tab"), tab));
+        h.run_steps(3);
+        shoot(&mut h, name);
+    }
+
+    // The work zero on the stock's top back-left corner, chosen from the grid.
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.job.setups[0].origin = camcraft_core::job::Origin::BoxPoint {
+            of: camcraft_core::job::BoxOf::Stock,
+            x: camcraft_core::job::Along::Min,
+            y: camcraft_core::job::Along::Max,
+            z: camcraft_core::job::Along::Max,
+            offset: [0.0, 0.0, 1.5],
+        };
+    }
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("setup-tab"), 1_usize));
+    h.run_steps(4);
+    shoot(&mut h, "setup_work_zero_grid");
+
+    // The list of models to add from.
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("setup-tab"), 0_usize));
+    h.run_steps(2);
+    h.get_all_by_label("Add").next().unwrap().click();
+    h.run_steps(3);
+    shoot(&mut h, "setup_add_models");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+
+    // Picking models in the view: the job's others drawn faintly where the setup
+    // would put them.
+    h.state_mut().arm_for_snapshot(Slot::Models {
+        setup: "top".into(),
+    });
+    h.run_steps(4);
+    shoot(&mut h, "setup_pick_models");
+    h.state_mut().arm_for_snapshot(Slot::Stocks {
+        setup: "top".into(),
+    });
+    h.run_steps(4);
+    shoot(&mut h, "setup_pick_stocks");
+    h.state_mut().escape_for_snapshot();
+
+    // An operation's panel, on its tabs.
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.selection = Selection::Operation("top".into(), 1);
+    }
+    for (tab, name) in [
+        (0_usize, "operation_tool"),
+        (1, "operation_geometry"),
+        (3, "operation_passes"),
+    ] {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), tab));
+        h.run_steps(3);
+        shoot(&mut h, name);
+    }
 }
 
 /// The file dialog, open on the job filter: drawn inside the app, themed with it.

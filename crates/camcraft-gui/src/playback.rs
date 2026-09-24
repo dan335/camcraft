@@ -516,6 +516,7 @@ pub fn content(state: &SetupState) -> Content<'_> {
         },
         selection: None,
         hover: None,
+        ghost: None,
         hint: None,
     }
 }

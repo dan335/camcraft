@@ -11,6 +11,10 @@
 //! one within a few points of the pointer that is not hidden behind the part. The
 //! order of preference is a point, then a point on the stock, then an edge, then the
 //! face under the pointer, each only if the slot being filled takes it.
+//!
+//! Choosing what a setup machines picks whole models and whole stocks instead, and
+//! among them the job's others, placed where the setup would put them, so one not
+//! in the setup can be clicked into it.
 
 use std::sync::Arc;
 
@@ -84,6 +88,10 @@ pub struct Accept {
     pub points: bool,
     /// Points on the stock's box.
     pub stock: bool,
+    /// Whole models, the setup's and the job's others.
+    pub models: bool,
+    /// Whole stocks, likewise.
+    pub stocks: bool,
 }
 
 impl Accept {
@@ -93,6 +101,8 @@ impl Accept {
         edges: true,
         points: true,
         stock: true,
+        models: false,
+        stocks: false,
     };
     /// Faces only.
     pub const FACES: Self = Self {
@@ -100,6 +110,8 @@ impl Accept {
         edges: false,
         points: false,
         stock: false,
+        models: false,
+        stocks: false,
     };
     /// Edges only.
     pub const EDGES: Self = Self {
@@ -107,6 +119,8 @@ impl Accept {
         edges: true,
         points: false,
         stock: false,
+        models: false,
+        stocks: false,
     };
     /// Points, on the models or the stock.
     pub const POINTS: Self = Self {
@@ -114,6 +128,26 @@ impl Accept {
         edges: false,
         points: true,
         stock: true,
+        models: false,
+        stocks: false,
+    };
+    /// Whole models.
+    pub const MODELS: Self = Self {
+        faces: false,
+        edges: false,
+        points: false,
+        stock: false,
+        models: true,
+        stocks: false,
+    };
+    /// Whole stocks.
+    pub const STOCKS: Self = Self {
+        faces: false,
+        edges: false,
+        points: false,
+        stock: false,
+        models: false,
+        stocks: true,
     };
 }
 
@@ -156,12 +190,36 @@ pub enum Target {
         /// Where it is in the setup's frame.
         setup: DVec3,
     },
+    /// A whole model, in the setup or not.
+    Model {
+        /// The model.
+        model: String,
+    },
+    /// A whole stock, in the setup or not.
+    Stock {
+        /// The stock.
+        stock: String,
+    },
+}
+
+/// One stock block, as picking needs it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PickStock {
+    /// The stock's name.
+    pub name: String,
+    /// Where it is, in the setup's frame.
+    pub bounds: Aabb,
+    /// Whether the setup starts from it.
+    pub in_setup: bool,
 }
 
 /// One model, as picking needs it: its faces and edges, its index, and where its
 /// edges and points sit in the setup's frame, worked out once per layout.
 pub struct PickModel {
     name: String,
+    /// Whether the setup machines it. One that does not is picked only whole, so
+    /// its edges and points are not worked out.
+    pub in_setup: bool,
     model: Arc<Model>,
     bvh: Arc<MeshBvh>,
     /// Each edge's points, in the setup's frame.
@@ -190,28 +248,28 @@ impl PickModel {
 
 /// A laid-out setup, ready to pick from.
 pub struct PickScene {
-    /// The setup's models, in its order.
+    /// The setup's models, in its order, then the job's others.
     pub models: Vec<PickModel>,
     /// How model coordinates became the setup's.
     pub frame: Frame,
-    /// The box around the stock, in the setup's frame.
+    /// The box around the setup's stock, in the setup's frame.
     pub stock: Option<Aabb>,
+    /// Every stock block of the job, the setup's and the others.
+    pub stocks: Vec<PickStock>,
     /// How far behind a surface a point may be and still count as on it.
     eps: f64,
 }
 
 impl PickScene {
-    /// Ready `prepared` for picking, with its models as loaded and their indexes.
-    /// Models it does not machine are left out.
+    /// Ready `prepared` for picking, with the job's models as loaded and their
+    /// indexes, and its stocks. Models it does not machine come after its own.
     pub fn new(
         prepared: &Prepared,
         loaded: impl IntoIterator<Item = (String, Arc<Model>, Arc<MeshBvh>)>,
+        stocks: Vec<PickStock>,
     ) -> Self {
         let frame = prepared.frame;
-        let mut loaded: Vec<_> = loaded
-            .into_iter()
-            .filter(|(n, ..)| prepared.piece(n).is_some())
-            .collect();
+        let mut loaded: Vec<_> = loaded.into_iter().collect();
         loaded.sort_by_key(|(n, ..)| {
             prepared
                 .pieces
@@ -222,6 +280,19 @@ impl PickScene {
         let models = loaded
             .into_iter()
             .map(|(name, model, bvh)| {
+                if prepared.piece(&name).is_none() {
+                    return PickModel {
+                        name,
+                        in_setup: false,
+                        model,
+                        bvh,
+                        edges: Vec::new(),
+                        closed: Vec::new(),
+                        vertices: Vec::new(),
+                        centres: Vec::new(),
+                        middles: Vec::new(),
+                    };
+                }
                 let body = &model.body;
                 let (mesh, t) = (body.mesh(), body.topology());
                 let to = |p: DVec3| frame.to_setup(p);
@@ -241,6 +312,7 @@ impl PickScene {
                     .collect();
                 PickModel {
                     name,
+                    in_setup: true,
                     model,
                     bvh,
                     edges,
@@ -256,6 +328,7 @@ impl PickScene {
             models,
             frame,
             stock: Some(prepared.stock_bounds()),
+            stocks,
             eps: (1e-3 * size).max(1e-3),
         }
     }
@@ -265,14 +338,25 @@ impl PickScene {
         self.models.iter().find(|m| m.name == name)
     }
 
-    /// The first surface the ray from `o` along unit `d` meets within `max`: which
-    /// model, which of its triangles, and how far.
+    /// The setup's models, in its order.
+    pub fn setup_models(&self) -> impl Iterator<Item = &PickModel> {
+        self.models.iter().filter(|m| m.in_setup)
+    }
+
+    /// The first surface of the setup's models the ray from `o` along unit `d`
+    /// meets within `max`: which model, which of its triangles, and how far.
     pub fn cast(&self, o: DVec3, d: DVec3, max: f64) -> Option<(usize, u32, f64)> {
+        self.cast_among(o, d, max, false)
+    }
+
+    /// The same, among the job's other models too when `all`.
+    fn cast_among(&self, o: DVec3, d: DVec3, max: f64, all: bool) -> Option<(usize, u32, f64)> {
         let om = self.frame.to_model(o);
         let dm = self.frame.to_model(o + d) - om;
         self.models
             .iter()
             .enumerate()
+            .filter(|(_, m)| all || m.in_setup)
             .filter_map(|(i, m)| {
                 let hit = m.bvh.cast_ray(m.body().mesh(), om, dm, max)?;
                 Some((i, hit.triangle, hit.t))
@@ -305,6 +389,28 @@ impl PickScene {
                 .map(|s| s.distance(cursor))
                 .filter(|d| *d <= reach)
         };
+
+        if accept.models
+            && let Some((mi, _, _)) = self.cast_among(eye, dir, f64::INFINITY, true)
+            && let Some(m) = self.models.get(mi)
+        {
+            return Some(Target::Model {
+                model: m.name.clone(),
+            });
+        }
+
+        if accept.stocks
+            && let Some(s) = self
+                .stocks
+                .iter()
+                .filter_map(|s| Some((ray_box(eye, dir, &s.bounds)?, s)))
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, s)| s)
+        {
+            return Some(Target::Stock {
+                stock: s.name.clone(),
+            });
+        }
 
         if accept.points {
             // The nearest point within reach that can be seen: vertices first on
@@ -455,6 +561,28 @@ impl PickScene {
     }
 }
 
+/// How far along the ray from `o` along `d` it first meets `b`, if it does:
+/// nothing when it starts inside, since then the box is all around.
+fn ray_box(o: DVec3, d: DVec3, b: &Aabb) -> Option<f64> {
+    let (mut near, mut far) = (0.0_f64, f64::INFINITY);
+    for axis in 0..3 {
+        let (o, d, lo, hi) = (o[axis], d[axis], b.min[axis], b.max[axis]);
+        if d.abs() < 1e-12 {
+            if o < lo || o > hi {
+                return None;
+            }
+            continue;
+        }
+        let (a, c) = ((lo - o) / d, (hi - o) / d);
+        near = near.max(a.min(c));
+        far = far.min(a.max(c));
+        if near > far {
+            return None;
+        }
+    }
+    Some(near)
+}
+
 /// The 26 points of a box a work zero goes on: corners, the middles of edges and
 /// the centres of faces. Its centre is inside it, where nothing can be clicked.
 pub fn box_points() -> impl Iterator<Item = (Along, Along, Along)> {
@@ -542,7 +670,11 @@ mod tests {
         j.setups.push(s);
         let bodies: Bodies<'_> = [("p", &model.body)].into_iter().collect();
         let prepared = prepare(&j, 0, &bodies).unwrap();
-        let scene = PickScene::new(&prepared, [("p".to_string(), model.clone(), bvh)]);
+        let scene = PickScene::new(
+            &prepared,
+            [("p".to_string(), model.clone(), bvh)],
+            Vec::new(),
+        );
         (scene, model)
     }
 
@@ -652,6 +784,97 @@ mod tests {
         assert_eq!((x, y, z), (Along::Min, Along::Min, Along::Max));
         assert_eq!(describe_box_point(x, y, z), "top, front-left corner");
         assert_eq!(box_points().count(), 26);
+    }
+
+    /// A model the setup does not machine is picked only whole, and only when
+    /// whole models are wanted; a stock box, likewise.
+    #[test]
+    fn others_are_picked_only_whole() {
+        let body =
+            camcraft_geom::topology::Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 32));
+        let mesh = body.mesh();
+        let model = |path: &str| {
+            Arc::new(Model {
+                bounds: mesh.bounds().unwrap(),
+                body: body.clone(),
+                path: path.into(),
+                units: "mm".into(),
+                notes: Vec::new(),
+                warnings: Vec::new(),
+            })
+        };
+        let (p, q) = (model("p.stl"), model("q.stl"));
+        let bvh = Arc::new(MeshBvh::new(p.mesh()));
+        let mut j = Job::default();
+        for n in ["p", "q"] {
+            j.models.push(ModelDef {
+                name: n.into(),
+                path: format!("{n}.stl"),
+                units: None,
+            });
+        }
+        j.stocks.push(StockDef {
+            name: "s".into(),
+            spec: StockSpec::default(),
+        });
+        let mut s = Setup::new("top");
+        s.models = vec!["p".into()];
+        s.stocks = vec!["s".into()];
+        j.setups.push(s);
+        let bodies: Bodies<'_> = [("p", &p.body)].into_iter().collect();
+        let prepared = prepare(&j, 0, &bodies).unwrap();
+        // "q" lies exactly on "p", but only "p" is the setup's, so only its faces
+        // are picked. The job's other stock is off to one side.
+        let far = Aabb {
+            min: dvec3(100.0, 100.0, 0.0),
+            max: dvec3(110.0, 110.0, 5.0),
+        };
+        let scene = PickScene::new(
+            &prepared,
+            [("q".to_string(), q, bvh.clone()), ("p".to_string(), p, bvh)],
+            vec![PickStock {
+                name: "other".into(),
+                bounds: far,
+                in_setup: false,
+            }],
+        );
+        assert_eq!(scene.models[0].name(), "p", "the setup's own come first");
+        assert!(!scene.models[1].in_setup);
+        assert!(scene.models[1].edges.is_empty());
+        assert_eq!(scene.setup_models().count(), 1);
+
+        let (_, proj, _) = looking_down();
+        let face = proj.screen(dvec3(12.0, 12.0, 5.0)).unwrap();
+        assert!(matches!(
+            pick_at(&scene, face, Accept::FACES),
+            Some(Target::Face { model, .. }) if model == "p"
+        ));
+        assert!(matches!(
+            pick_at(&scene, face, Accept::MODELS),
+            Some(Target::Model { .. })
+        ));
+        assert!(pick_at(&scene, face, Accept::STOCKS).is_none());
+        let off = proj.screen(dvec3(105.0, 105.0, 5.0)).unwrap();
+        assert_eq!(
+            pick_at(&scene, off, Accept::STOCKS),
+            Some(Target::Stock {
+                stock: "other".into()
+            })
+        );
+        assert!(pick_at(&scene, off, Accept::MODELS).is_none());
+    }
+
+    #[test]
+    fn a_ray_meets_a_box_where_it_enters() {
+        let b = Aabb {
+            min: dvec3(0.0, 0.0, 0.0),
+            max: dvec3(1.0, 1.0, 1.0),
+        };
+        let down = dvec3(0.0, 0.0, -1.0);
+        assert_eq!(ray_box(dvec3(0.5, 0.5, 5.0), down, &b), Some(4.0));
+        assert_eq!(ray_box(dvec3(2.0, 0.5, 5.0), down, &b), None);
+        assert_eq!(ray_box(dvec3(0.5, 0.5, 0.5), down, &b), Some(0.0));
+        assert_eq!(ray_box(dvec3(0.5, 0.5, -1.0), down, &b), None);
     }
 
     /// What a slot does not take is not picked, even right under the pointer.

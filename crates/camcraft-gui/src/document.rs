@@ -551,6 +551,20 @@ impl Document {
         names
     }
 
+    /// Have setup `setup` machine `names` too, and show it: models added from its
+    /// panel are added to it.
+    pub fn include_models(&mut self, setup: &str, names: &[String]) {
+        let Some(s) = self.job.setups.iter_mut().find(|s| s.name == setup) else {
+            return;
+        };
+        for n in names {
+            if !s.models.contains(n) {
+                s.models.push(n.clone());
+            }
+        }
+        self.selection = Selection::Setup(setup.to_string());
+    }
+
     /// Point model `name` at `file`, as when it has been found elsewhere.
     pub fn locate_model(&mut self, name: &str, file: &Path) {
         let path = self.job_path_for(file);

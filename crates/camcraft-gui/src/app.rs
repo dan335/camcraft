@@ -734,7 +734,7 @@ impl App {
         }
         for a in actions {
             match a {
-                BrowserAction::AddModels => self.dialog.open(Pick::AddModels(id), ""),
+                BrowserAction::AddModels => self.dialog.open(Pick::AddModels(id, None), ""),
                 BrowserAction::Locate(name) => self.dialog.open(Pick::Locate(id, name), ""),
                 BrowserAction::Generate(name) => self.generate(&ctx, &name),
             }
@@ -765,10 +765,9 @@ impl App {
                         ctx.request_repaint();
                     }
                 }
-                PropAction::AddModels => self.dialog.open(Pick::AddModels(id), ""),
+                PropAction::AddModels(setup) => self.dialog.open(Pick::AddModels(id, setup), ""),
                 PropAction::Locate(name) => self.dialog.open(Pick::Locate(id, name), ""),
                 PropAction::ProfileFile(setup) => self.dialog.open(Pick::Profile(id, setup), ""),
-                PropAction::Generate(name) => self.generate(&ctx, &name),
                 PropAction::PickTool(setup, op) => {
                     if let Some(doc) = self.find(id) {
                         let picker = ToolPicker::new(id, setup, op, &doc.job);
@@ -837,9 +836,12 @@ impl App {
                     self.save_job(id, Some(path));
                 }
             }
-            Pick::AddModels(id) => {
+            Pick::AddModels(id, setup) => {
                 if let Some(doc) = self.find(id) {
                     let names = doc.add_models(&paths);
+                    if let Some(setup) = setup {
+                        doc.include_models(&setup, &names);
+                    }
                     doc.note(Level::Info, format!("added {}", names.join(", ")));
                 }
             }
@@ -1265,6 +1267,15 @@ impl App {
         let proj =
             crate::pick::Projector::new(self.viewport.camera().view_projection(aspect), rect);
         Some((proj.screen(rim)?, centre))
+    }
+
+    /// Arm `slot` for picking in the showing job. Only the snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn arm_for_snapshot(&mut self, slot: crate::slots::Slot) {
+        if let Some(doc) = self.docs.get(self.active) {
+            let id = doc.id;
+            self.picking.arm(id, slot);
+        }
     }
 
     /// Press Esc twice: stop picking, and stop looking. Only the snapshot harness

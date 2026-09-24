@@ -54,6 +54,9 @@ const AXIS_Z: u32 = 10;
 const SELECTED: u32 = 11;
 const HOVER: u32 = 12;
 const BOUNDARY: u32 = 13;
+/// Line kind for a stock that could be picked into the setup: faint, and drawn
+/// only while it is being picked.
+const GHOST: u32 = 14;
 /// Line kinds in all, and so colours.
 const KINDS: usize = 16;
 /// Toolpath width, in points.
@@ -163,7 +166,7 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32, l: LineI
     let t = ends[vi];
     var clip = mix(ca, cb, t);
     // Picks and the boundary are drawn twice as wide, to read over the part.
-    let width = select(f.viewport.z, f.viewport.z * 2.0, l.kind >= 11u);
+    let width = select(f.viewport.z, f.viewport.z * 2.0, l.kind >= 11u && l.kind <= 13u);
     let offset = normal * sides[vi] * width * 0.5 + dir * (t * 2.0 - 1.0) * width * 0.5;
     clip = vec4<f32>(clip.xy + offset / half * clip.w, clip.z, clip.w);
     // A cut runs exactly on the surface it follows; pull it towards the eye so the
@@ -528,6 +531,7 @@ fn outline_instances(outline: &[Outline]) -> Vec<LineInstance> {
                 OutlineKind::Selected => SELECTED,
                 OutlineKind::Hover => HOVER,
                 OutlineKind::Boundary => BOUNDARY,
+                OutlineKind::Ghost => GHOST,
             },
             op: 0,
         })
@@ -551,6 +555,8 @@ pub enum OutlineKind {
     Hover,
     /// The boundary an operation is kept to.
     Boundary,
+    /// A stock that could be picked into the setup.
+    Ghost,
 }
 
 /// A line that is not a move: the stock's edges and the work zero's axes.
@@ -646,6 +652,8 @@ pub struct Content<'a> {
     pub selection: Option<(u64, &'a Highlight)>,
     /// What is under the pointer.
     pub hover: Option<(u64, &'a Highlight)>,
+    /// What could be picked into the setup but is not in it, drawn faintly.
+    pub ghost: Option<(u64, &'a Highlight)>,
     /// What to tell the person, over the view: what a click does now.
     pub hint: Option<&'a str>,
 }
@@ -865,6 +873,7 @@ impl Content<'_> {
             view: View::default(),
             selection: None,
             hover: None,
+            ghost: None,
             hint: None,
         }
     }
@@ -893,6 +902,7 @@ struct Uploaded {
     part: Option<(u64, wgpu::Buffer, u32)>,
     selection: Option<HighlightGpu>,
     hover: Option<HighlightGpu>,
+    ghost: Option<HighlightGpu>,
     scene: Option<u64>,
     moves: Option<(wgpu::Buffer, u32)>,
     outline: Option<(u64, wgpu::Buffer, u32)>,
@@ -932,6 +942,8 @@ struct Gpu {
     part_object: Object,
     selection_object: Object,
     hover_object: Object,
+    ghost_object: Object,
+    ghost_hidden_object: Object,
     cutter_object: Object,
     cutter_hidden_object: Object,
     targets: Option<Targets>,
@@ -1445,6 +1457,8 @@ impl Gpu {
             part_object: object("camcraft part"),
             selection_object: object("camcraft selection"),
             hover_object: object("camcraft hover"),
+            ghost_object: object("camcraft ghost"),
+            ghost_hidden_object: object("camcraft ghost, hidden"),
             cutter_object: object("camcraft cutter"),
             cutter_hidden_object: object("camcraft cutter, hidden"),
             targets: None,
@@ -1453,6 +1467,7 @@ impl Gpu {
                 part: None,
                 selection: None,
                 hover: None,
+                ghost: None,
                 scene: None,
                 moves: None,
                 outline: None,
@@ -1700,6 +1715,7 @@ impl Gpu {
         for (slot, wanted) in [
             (&mut self.up.selection, content.selection),
             (&mut self.up.hover, content.hover),
+            (&mut self.up.ghost, content.ghost),
         ] {
             match wanted {
                 Some((key, h)) if slot.as_ref().map(|s| s.key) != Some(key) => {
@@ -1872,6 +1888,7 @@ impl Gpu {
             (SELECTED, theme::SELECTED),
             (HOVER, theme::HOVER),
             (BOUNDARY, theme::BOUNDARY),
+            (GHOST, theme::GRAY_5),
         ] {
             if let Some(slot) = colors.get_mut(kind as usize) {
                 *slot = theme::linear(color).into_rgba();
@@ -1883,7 +1900,8 @@ impl Gpu {
             | if view.origin { axes } else { 0 }
             | (1 << SELECTED)
             | (1 << HOVER)
-            | (1 << BOUNDARY);
+            | (1 << BOUNDARY)
+            | (1 << GHOST);
         let shown = u32::try_from(view.shown).unwrap_or(u32::MAX);
         let frame = FrameUniforms {
             view_proj: input.view_proj.to_cols_array_2d(),
@@ -1905,6 +1923,8 @@ impl Gpu {
         for (object, color, alpha) in [
             (&self.selection_object, theme::SELECTED, 0.55),
             (&self.hover_object, theme::HOVER, 0.4),
+            (&self.ghost_object, theme::GHOST, 0.22),
+            (&self.ghost_hidden_object, theme::GHOST, 0.1),
         ] {
             let mut color = theme::linear(color).into_rgba();
             color[3] = alpha;
@@ -1976,6 +1996,22 @@ impl Gpu {
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..*n, 0..1);
 
+                // What could be picked in, faintly, and fainter still where the
+                // part hides it: it may lie inside the part, and must still show.
+                if let Some(HighlightGpu {
+                    faces: Some((buffer, n)),
+                    ..
+                }) = &self.up.ghost
+                {
+                    pass.set_vertex_buffer(0, buffer.slice(..));
+                    pass.set_pipeline(&self.cutter_hidden_pipeline);
+                    pass.set_bind_group(1, &self.ghost_hidden_object.bind_group, &[]);
+                    pass.draw(0..*n, 0..1);
+                    pass.set_pipeline(&self.cutter_pipeline);
+                    pass.set_bind_group(1, &self.ghost_object.bind_group, &[]);
+                    pass.draw(0..*n, 0..1);
+                }
+
                 // Picked faces over the part, then the one under the pointer.
                 pass.set_pipeline(&self.highlight_pipeline);
                 for (up, object) in [
@@ -2011,7 +2047,7 @@ impl Gpu {
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..6, 0..*n);
             }
-            for up in [&self.up.selection, &self.up.hover] {
+            for up in [&self.up.ghost, &self.up.selection, &self.up.hover] {
                 if let Some(HighlightGpu {
                     lines: Some((buffer, n)),
                     ..

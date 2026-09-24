@@ -16,7 +16,7 @@ use eframe::egui;
 
 use crate::document::{Document, Selection, next_key};
 use crate::measure::Measure;
-use crate::pick::{Accept, PickScene, Target};
+use crate::pick::{Accept, PickScene, PickStock, Target};
 use crate::slots::{self, Kind, Shown, Slot};
 use crate::theme;
 use crate::viewport::{Content, Highlight, PointerEvent};
@@ -56,6 +56,9 @@ pub struct Picking {
     shown: Option<(ShownFrom, Shown, u64)>,
     /// What the thing under the pointer shows, with its upload key.
     hovered: Option<(Target, Highlight, u64)>,
+    /// What could be picked into the armed slot, drawn faintly: for which job,
+    /// layout and slot, with its upload key.
+    ghost: Option<(DocId, u64, Slot, Highlight, u64)>,
     /// Where the view is in the window, as of the last frame.
     view: Option<egui::Rect>,
 }
@@ -190,13 +193,32 @@ impl Picking {
                 let (model, bvh) = slot.loaded()?;
                 Some((name.clone(), model.clone(), bvh.clone()))
             });
-            self.scene = Some((doc.id, layout, PickScene::new(prepared, loaded)));
+            let stocks = stocks(doc, setup, prepared);
+            self.scene = Some((doc.id, layout, PickScene::new(prepared, loaded, stocks)));
             self.hovered = None;
             self.hover = None;
         }
         let Some((_, _, scene)) = &self.scene else {
             return;
         };
+
+        // What could be picked in, while models or stocks are being picked.
+        match self
+            .armed(doc.id)
+            .filter(|s| matches!(s, Slot::Models { .. } | Slot::Stocks { .. }))
+        {
+            None => self.ghost = None,
+            Some(slot)
+                if self
+                    .ghost
+                    .as_ref()
+                    .is_none_or(|(d, k, s, ..)| (*d, *k, s) != (doc.id, layout, slot)) =>
+            {
+                let h = slots::ghosts(scene, slot);
+                self.ghost = Some((doc.id, layout, slot.clone(), h, next_key()));
+            }
+            Some(_) => {}
+        }
 
         // The selection's picks: the setup's work zero, or an operation's faces and
         // edges, when they belong to the setup showing.
@@ -262,6 +284,11 @@ impl Picking {
             .filter(|(f, ..)| f.doc == doc)
             .map(|(_, s, key)| (*key, &s.highlight));
         content.hover = self.hovered.as_ref().map(|(_, h, key)| (*key, h));
+        content.ghost = self
+            .ghost
+            .as_ref()
+            .filter(|(d, ..)| *d == doc)
+            .map(|(.., h, key)| (*key, h));
         if let Some(slot) = self.armed(doc) {
             content.hint = Some(slot.hint());
             // What is picked is the part: show it, and not the material over it.
@@ -362,6 +389,51 @@ impl Picking {
             self.inspect = None;
         }
     }
+}
+
+/// Every stock of the job where setup `setup`, laid out as `prepared`, has it or
+/// would have it: its own first, then the others, which can be picked into it.
+fn stocks(
+    doc: &Document,
+    setup: &str,
+    prepared: &camcraft_core::setup::Prepared,
+) -> Vec<PickStock> {
+    let Some(s) = doc.setup_index(setup).and_then(|i| doc.job.setups.get(i)) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PickStock> = s
+        .stocks
+        .iter()
+        .zip(&prepared.stocks)
+        .map(|(name, b)| PickStock {
+            name: name.clone(),
+            bounds: *b,
+            in_setup: true,
+        })
+        .collect();
+    let bodies: camcraft_core::setup::Bodies<'_> = doc
+        .models
+        .iter()
+        .filter_map(|(n, slot)| Some((n.as_str(), &slot.model()?.body)))
+        .collect();
+    for def in doc
+        .job
+        .stocks
+        .iter()
+        .filter(|d| !s.stocks.contains(&d.name))
+    {
+        // One that cannot be placed, around a model not loaded, is left out.
+        if let Ok(bounds) =
+            camcraft_core::setup::stock_in_frame(&def.spec, &s.models, &prepared.frame, &bodies)
+        {
+            out.push(PickStock {
+                name: def.name.clone(),
+                bounds,
+                in_setup: false,
+            });
+        }
+    }
+    out
 }
 
 /// Where a saved pick is now, as if it were under the pointer.

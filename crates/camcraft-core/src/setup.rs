@@ -15,7 +15,7 @@ use camcraft_geom::topology::Body;
 use glam::DVec3;
 
 use crate::features::{self, FeatureError};
-use crate::frame::{BadOrientation, Frame};
+use crate::frame::{BadOrientation, Frame, Orientation};
 use crate::job::{BoxOf, Job, JobError, Origin, Setup, StockSpec};
 
 /// A setup's models, by name, in model coordinates, with their topology.
@@ -111,6 +111,72 @@ fn bounds_of(names: &[String], bodies: &Bodies<'_>) -> Result<Aabb, PrepareError
     out.ok_or_else(|| PrepareError::Job(JobError::NoModels(String::new())))
 }
 
+/// A stock block in model coordinates. One around no named models is around
+/// `model_box`, the box of the models of the setup using it.
+fn block(spec: &StockSpec, model_box: Aabb, bodies: &Bodies<'_>) -> Result<Aabb, PrepareError> {
+    Ok(match spec {
+        StockSpec::AroundModels {
+            models,
+            margin,
+            below,
+        } => {
+            let around = if models.is_empty() {
+                model_box
+            } else {
+                bounds_of(models, bodies)?
+            };
+            Aabb {
+                min: DVec3::new(
+                    around.min.x - margin[0],
+                    around.min.y - margin[1],
+                    around.min.z - below,
+                ),
+                max: DVec3::new(
+                    around.max.x + margin[0],
+                    around.max.y + margin[1],
+                    around.max.z + margin[2],
+                ),
+            }
+        }
+        StockSpec::FixedBox { corner, size } => {
+            let min = DVec3::from_array(*corner);
+            Aabb {
+                min,
+                max: min + DVec3::from_array(*size),
+            }
+        }
+    })
+}
+
+/// `b` turned the way the part sits. The turn only swaps and negates, so a box
+/// stays a box: its corners' low and high ends are the new box.
+fn turn(o: Orientation, b: &Aabb) -> Aabb {
+    let (a, c) = (o.apply(b.min), o.apply(b.max));
+    Aabb {
+        min: a.min(c),
+        max: a.max(c),
+    }
+}
+
+/// Where a stock block would be in a setup's `frame`, were the setup to use it:
+/// for showing a stock the setup does not use, to be picked into it. `models` are
+/// the setup's, which a block around no named models is around.
+pub fn stock_in_frame(
+    spec: &StockSpec,
+    models: &[String],
+    frame: &Frame,
+    bodies: &Bodies<'_>,
+) -> Result<Aabb, PrepareError> {
+    let b = turn(
+        frame.orientation,
+        &block(spec, bounds_of(models, bodies)?, bodies)?,
+    );
+    Ok(Aabb {
+        min: b.min - frame.origin,
+        max: b.max - frame.origin,
+    })
+}
+
 /// Where setup `index`'s part and stock are, in its own frame.
 pub fn prepare(job: &Job, index: usize, bodies: &Bodies<'_>) -> Result<Prepared, PrepareError> {
     let setup: &Setup = job.setups.get(index).ok_or(JobError::NoSetups)?;
@@ -139,55 +205,15 @@ pub fn prepare(job: &Job, index: usize, bodies: &Bodies<'_>) -> Result<Prepared,
             setup: setup.name.clone(),
             stock: name.clone(),
         })?;
-        blocks.push(match &def.spec {
-            StockSpec::AroundModels {
-                models,
-                margin,
-                below,
-            } => {
-                let around = if models.is_empty() {
-                    model_box
-                } else {
-                    bounds_of(models, bodies)?
-                };
-                Aabb {
-                    min: DVec3::new(
-                        around.min.x - margin[0],
-                        around.min.y - margin[1],
-                        around.min.z - below,
-                    ),
-                    max: DVec3::new(
-                        around.max.x + margin[0],
-                        around.max.y + margin[1],
-                        around.max.z + margin[2],
-                    ),
-                }
-            }
-            StockSpec::FixedBox { corner, size } => {
-                let min = DVec3::from_array(*corner);
-                Aabb {
-                    min,
-                    max: min + DVec3::from_array(*size),
-                }
-            }
-        });
+        blocks.push(block(&def.spec, model_box, bodies)?);
     }
     if blocks.is_empty() {
         return Err(JobError::NoStock(setup.name.clone()).into());
     }
 
-    // Turned the way the part sits. The turn only swaps and negates, so a box
-    // stays a box: its corners' low and high ends are the new box.
     let o = setup.orientation;
-    let turn = |b: &Aabb| {
-        let (a, c) = (o.apply(b.min), o.apply(b.max));
-        Aabb {
-            min: a.min(c),
-            max: a.max(c),
-        }
-    };
-    let turned_blocks: Vec<Aabb> = blocks.iter().map(turn).collect();
-    let turned_model = turn(&model_box);
+    let turned_blocks: Vec<Aabb> = blocks.iter().map(|b| turn(o, b)).collect();
+    let turned_model = turn(o, &model_box);
 
     let origin = match &setup.origin {
         Origin::ModelOrigin { offset } => DVec3::from_array(*offset),
@@ -383,6 +409,42 @@ mod tests {
         // bottom's 2.
         assert_eq!(a.max.z, 6.0);
         assert_eq!(b.max.z, 2.0);
+    }
+
+    /// A stock placed in a setup's frame from outside it lands where the setup
+    /// would put it, were it the setup's own.
+    #[test]
+    fn a_stock_in_frame_is_where_prepare_puts_it() {
+        let mesh = brick();
+        let body = Body::derived(mesh.clone());
+        let meshes: Bodies<'_> = [("m", &body)].into_iter().collect();
+        for spec in [
+            StockSpec::AroundModels {
+                models: vec![],
+                margin: [1.0, 2.0, 3.0],
+                below: 4.0,
+            },
+            StockSpec::FixedBox {
+                corner: [-5.0, -5.0, -1.0],
+                size: [30.0, 40.0, 9.0],
+            },
+        ] {
+            let mut j = job(spec.clone());
+            j.setups[0].orientation = Orientation {
+                z: Axis::NegZ,
+                x: Axis::PosX,
+            };
+            j.setups[0].origin = Origin::BoxPoint {
+                of: BoxOf::Stock,
+                x: Along::Max,
+                y: Along::Center,
+                z: Along::Min,
+                offset: [1.0, 0.0, 0.5],
+            };
+            let p = prepare(&j, 0, &meshes).unwrap();
+            let placed = stock_in_frame(&spec, &j.setups[0].models, &p.frame, &meshes).unwrap();
+            assert_eq!(placed, p.stocks[0]);
+        }
     }
 
     #[test]

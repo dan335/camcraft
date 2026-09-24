@@ -2,8 +2,8 @@
 //! what a click does to the job, and what the view and the panel show of the picks
 //! already made.
 //!
-//! A property that takes picks is a *slot*: a setup's work zero, an operation's
-//! faces or its edges. Its Select button arms the view for it, so the view offers
+//! A property that takes picks is a *slot*: a setup's work zero, its models or its
+//! stocks, an operation's faces or its edges. Its Select button arms the view for it, so the view offers
 //! only what the slot takes; a click then writes straight into the job, where it is
 //! one step to undo like any other edit. A work zero takes one point and is done; a
 //! list of faces or edges takes any number, a second click on one taking it out, and
@@ -14,16 +14,18 @@
 //! cut, and a pick that can no longer be found says so here before it stops a run.
 
 use camcraft_core::features::{self, FeatureError};
-use camcraft_core::job::{BoxOf, FeatureRef, Geometry, Origin, Snap};
+use camcraft_core::job::{BoxOf, FeatureRef, Geometry, Origin, Setup, Snap};
 use camcraft_core::run::cutting_tool;
 use camcraft_core::setup::{Bodies, Prepared};
 use camcraft_core::tool::ToolProfile;
+use camcraft_geom::mesh::Aabb;
 use camcraft_geom::topology::{Body, EdgeKind, FaceKind};
 use glam::{DVec3, Vec3};
 
 use crate::document::{Document, Selection};
 use crate::measure::Measure;
 use crate::pick::{Accept, PickScene, Target, describe_box_point, describe_circle};
+use crate::scene::box_edges;
 use crate::viewport::{Highlight, Outline, OutlineKind};
 
 /// A property a click in the view can fill.
@@ -31,6 +33,17 @@ use crate::viewport::{Highlight, Outline, OutlineKind};
 pub enum Slot {
     /// Setup `setup`'s work zero: a point on a model or on the stock's box.
     WorkZero {
+        /// The setup, by name.
+        setup: String,
+    },
+    /// The models setup `setup` machines. The job's others are shown faintly, to
+    /// be clicked in.
+    Models {
+        /// The setup, by name.
+        setup: String,
+    },
+    /// The stocks setup `setup` starts from, likewise.
+    Stocks {
         /// The setup, by name.
         setup: String,
     },
@@ -55,6 +68,8 @@ impl Slot {
     pub fn accept(&self) -> Accept {
         match self {
             Slot::WorkZero { .. } => Accept::POINTS,
+            Slot::Models { .. } => Accept::MODELS,
+            Slot::Stocks { .. } => Accept::STOCKS,
             Slot::Faces { .. } => Accept::FACES,
             Slot::Edges { .. } => Accept::EDGES,
         }
@@ -68,9 +83,11 @@ impl Slot {
     /// The setup it belongs to.
     pub fn setup(&self) -> &str {
         match self {
-            Slot::WorkZero { setup } | Slot::Faces { setup, .. } | Slot::Edges { setup, .. } => {
-                setup
-            }
+            Slot::WorkZero { setup }
+            | Slot::Models { setup }
+            | Slot::Stocks { setup }
+            | Slot::Faces { setup, .. }
+            | Slot::Edges { setup, .. } => setup,
         }
     }
 
@@ -79,6 +96,12 @@ impl Slot {
         match self {
             Slot::WorkZero { .. } => {
                 "Click a corner, a round edge for its centre, or a point on the stock · Esc to stop"
+            }
+            Slot::Models { .. } => {
+                "Click models to add them to the setup or take them out · Esc or Done to finish"
+            }
+            Slot::Stocks { .. } => {
+                "Click stocks to add them to the setup or take them out · Esc or Done to finish"
             }
             Slot::Faces { .. } => "Click faces to add or remove them · Esc or Done to finish",
             Slot::Edges { .. } => {
@@ -95,7 +118,9 @@ impl Slot {
             return false;
         };
         match self {
-            Slot::WorkZero { setup } => doc.selection == Selection::Setup(setup.clone()),
+            Slot::WorkZero { setup } | Slot::Models { setup } | Slot::Stocks { setup } => {
+                doc.selection == Selection::Setup(setup.clone())
+            }
             Slot::Faces { setup, op } | Slot::Edges { setup, op } => {
                 doc.job
                     .setups
@@ -141,6 +166,12 @@ pub fn apply(
                 offset,
             })
         }
+        (Slot::Models { setup }, Target::Model { model }) => {
+            names_mut(doc, setup, |s| &mut s.models).is_some_and(|names| toggle_name(names, model))
+        }
+        (Slot::Stocks { setup }, Target::Stock { stock }) => {
+            names_mut(doc, setup, |s| &mut s.stocks).is_some_and(|names| toggle_name(names, stock))
+        }
         (Slot::Faces { setup, op }, Target::Face { model, face, at }) => {
             let Some(g) = geometry_mut(doc, setup, *op) else {
                 return false;
@@ -155,6 +186,26 @@ pub fn apply(
         }
         _ => false,
     }
+}
+
+/// One of setup `setup`'s lists of names.
+fn names_mut<'a>(
+    doc: &'a mut Document,
+    setup: &str,
+    list: impl FnOnce(&mut Setup) -> &mut Vec<String>,
+) -> Option<&'a mut Vec<String>> {
+    let i = doc.setup_index(setup)?;
+    Some(list(doc.job.setups.get_mut(i)?))
+}
+
+/// Take `name` out of `names` if it is there, or else add it.
+fn toggle_name(names: &mut Vec<String>, name: &str) -> bool {
+    if names.iter().any(|n| n == name) {
+        names.retain(|n| n != name);
+    } else {
+        names.push(name.to_string());
+    }
+    true
 }
 
 /// Whether a saved pick is a face or an edge, for finding it.
@@ -231,7 +282,7 @@ pub fn shown(
     let Some(s) = doc.setup_index(setup).and_then(|i| doc.job.setups.get(i)) else {
         return out;
     };
-    let bodies: Bodies<'_> = scene.models.iter().map(|m| (m.name(), m.body())).collect();
+    let bodies: Bodies<'_> = scene.setup_models().map(|m| (m.name(), m.body())).collect();
     let tol = |body: &Body| features::tolerance(doc.job.tolerance, body);
     let to_setup = |p: DVec3| scene.frame.to_setup(p);
 
@@ -346,6 +397,38 @@ pub fn hovered(scene: &PickScene, target: &Target) -> Highlight {
             }
         }
         Target::StockPoint { setup, .. } => h.markers.push(*setup),
+        Target::Model { model } => {
+            if let Some(pm) = scene.model(model) {
+                h.faces = model_triangles(pm.body(), &to_setup).collect();
+            }
+        }
+        Target::Stock { stock } => {
+            if let Some(s) = scene.stocks.iter().find(|s| &s.name == stock) {
+                h.lines = box_lines(&s.bounds, OutlineKind::Hover);
+            }
+        }
+    }
+    h
+}
+
+/// What could be picked into the setup for `slot` but is not in it: the job's
+/// other models, or its other stocks, drawn faintly where the setup would put
+/// them.
+pub fn ghosts(scene: &PickScene, slot: &Slot) -> Highlight {
+    let mut h = Highlight::default();
+    let to_setup = |p: DVec3| scene.frame.to_setup(p);
+    match slot {
+        Slot::Models { .. } => {
+            for m in scene.models.iter().filter(|m| !m.in_setup) {
+                h.faces.extend(model_triangles(m.body(), &to_setup));
+            }
+        }
+        Slot::Stocks { .. } => {
+            for s in scene.stocks.iter().filter(|s| !s.in_setup) {
+                h.lines.extend(box_lines(&s.bounds, OutlineKind::Ghost));
+            }
+        }
+        Slot::WorkZero { .. } | Slot::Faces { .. } | Slot::Edges { .. } => {}
     }
     h
 }
@@ -403,7 +486,28 @@ pub fn describe(target: &Target, scene: &PickScene, m: Measure) -> Vec<(String, 
             ("Stock".into(), describe_box_point(x, y, z)),
             ("In the setup".into(), at(setup)),
         ],
+        Target::Model { model } => vec![("Model".into(), model.clone())],
+        Target::Stock { stock } => vec![("Stock".into(), stock.clone())],
     }
+}
+
+/// Every triangle of `body`, in the setup's frame.
+fn model_triangles<'a>(
+    body: &'a Body,
+    to_setup: &'a impl Fn(DVec3) -> DVec3,
+) -> impl Iterator<Item = [Vec3; 3]> + 'a {
+    let mesh = body.mesh();
+    (0..mesh.len())
+        .filter_map(|t| mesh.triangle(t))
+        .map(move |t| t.map(|p| to_setup(p).as_vec3()))
+}
+
+/// A box's twelve edges.
+fn box_lines(b: &Aabb, kind: OutlineKind) -> Vec<Outline> {
+    box_edges(b)
+        .into_iter()
+        .map(|(a, b)| Outline { a, b, kind })
+        .collect()
 }
 
 fn face_triangles<'a>(
@@ -612,6 +716,46 @@ mod tests {
         // The same again changes nothing.
         assert!(!apply(&mut doc, &slot, &corner, never));
         assert!(!apply(&mut doc, &slot, &face(1), never));
+    }
+
+    /// A model or stock clicked is added to the setup; clicked again, taken out.
+    /// A face means nothing to them.
+    #[test]
+    fn models_and_stocks_toggle() {
+        let mut doc = doc_with_op();
+        let setup = doc.job.setups[0].name.clone();
+        let never = |_: &FeatureRef, _| None;
+        let models = Slot::Models {
+            setup: setup.clone(),
+        };
+        assert!(!models.single());
+        let q = Target::Model { model: "q".into() };
+        assert!(apply(&mut doc, &models, &q, never));
+        assert_eq!(doc.job.setups[0].models, ["p", "q"]);
+        assert!(apply(&mut doc, &models, &q, never));
+        assert_eq!(doc.job.setups[0].models, ["p"]);
+        assert!(!apply(&mut doc, &models, &face(1), never));
+
+        let stocks = Slot::Stocks {
+            setup: setup.clone(),
+        };
+        let before = doc.job.setups[0].stocks.clone();
+        let other = Target::Stock {
+            stock: "Other".into(),
+        };
+        assert!(apply(&mut doc, &stocks, &other, never));
+        assert_eq!(
+            doc.job.setups[0].stocks.last().map(String::as_str),
+            Some("Other")
+        );
+        assert!(apply(&mut doc, &stocks, &other, never));
+        assert_eq!(doc.job.setups[0].stocks, before);
+        assert!(!apply(&mut doc, &stocks, &q, never));
+
+        doc.selection = Selection::Setup(setup);
+        assert!(models.still_valid(&doc));
+        doc.selection = Selection::Job;
+        assert!(!models.still_valid(&doc));
     }
 
     /// Picking stops making sense when what it fills is no longer shown.

@@ -68,6 +68,9 @@ pub const HOVER: [u8; 3] = AMBER_3;
 /// The boundary an operation is kept to: `--accent-press`, a step darker than
 /// what is picked, so the outline reads as derived from the picks.
 pub const BOUNDARY: [u8; 3] = AMBER_6;
+/// What could be picked into a setup but is not in it: its models and stock,
+/// drawn faintly while they are being picked.
+pub const GHOST: [u8; 3] = GRAY_8;
 /// The work zero's X axis. X red, Y green and Z blue, as CAD draws them, taken from
 /// the path palette so they sit in the same family.
 pub const AXIS_X: [u8; 3] = PATH_RAPID;
