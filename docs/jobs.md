@@ -10,7 +10,11 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
   units; an STL needs `units = "mm"` or `"inch"`.
 - **Stocks**: blocks of material in model coordinates, either around models (by
   name, or the setup's own when none are named) with margins, or a fixed box. A
-  top and a bottom setup share one block and see it from each side.
+  fixed box has a size and, on each axis, a place against the same models, as
+  Fusion's fixed size box does: centred, offset from the low or high side, or at
+  a coordinate. So it follows the models when they move. A box placed any way
+  but at a corner is a version 5 job. A top and a bottom setup share one block
+  and see it from each side.
 - **Setups**, in the order they are machined: which models and stocks each
   includes (by name), its work offset, post, orientation (the 24 square ways a part
   sits) and work zero (the model's, a point on the stock or model box, or a point

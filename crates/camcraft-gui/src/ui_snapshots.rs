@@ -311,7 +311,7 @@ fn two_setups_in_tabs() {
 fn setup_panel() {
     use crate::document::Selection;
     use crate::picking::slots::Slot;
-    use camcraft_core::job::{ModelDef, StockDef, StockSpec};
+    use camcraft_core::job::{FixedBox, ModelDef, StockDef, StockSpec};
 
     // The example, with two more models and a second stock the setup does not use.
     let dir = output_dir().join("setup-panel");
@@ -330,10 +330,7 @@ fn setup_panel() {
     }
     job.stocks.push(StockDef {
         name: "offcut".into(),
-        spec: StockSpec::FixedBox {
-            corner: [120.0, 0.0, 0.0],
-            size: [80.0, 60.0, 20.0],
-        },
+        spec: StockSpec::FixedBox(FixedBox::at([120.0, 0.0, 0.0], [80.0, 60.0, 20.0])),
     });
     let path = dir.join("setup-panel.camcraft");
     camcraft_session::write_job(&path, &job).unwrap();
@@ -421,6 +418,29 @@ fn setup_panel() {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 2_usize));
     h.run_steps(3);
     shoot(&mut h, "operation_heights_rough");
+
+    // A fixed box at a corner, as an old job has it; then one placed against the
+    // setup's models the way Fusion places one, with the block it comes to.
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.selection = Selection::Stock("offcut".into());
+    }
+    h.run_steps(3);
+    shoot(&mut h, "stock_fixed_at_corner");
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        if let Some(s) = doc.job.stocks.iter_mut().find(|s| s.name == "offcut") {
+            s.spec = StockSpec::FixedBox(FixedBox {
+                place: [
+                    camcraft_core::job::Place::Center,
+                    camcraft_core::job::Place::Min { offset: 5.0 },
+                    camcraft_core::job::Place::Max { offset: 1.5 },
+                ],
+                ..FixedBox::centred([200.0, 120.0, 30.0])
+            });
+        }
+        doc.job.setups[0].stocks = vec!["offcut".into()];
+    }
+    h.run_steps(4);
+    shoot(&mut h, "stock_fixed_placed");
 }
 
 /// The file dialog, open on the job filter: drawn inside the app, themed with it.

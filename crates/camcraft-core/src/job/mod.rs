@@ -54,7 +54,8 @@
 //! refuses by name, and every other job is still written as version 1, which it
 //! reads as before ([`Job::required_version`]). An operation's own spindle speed,
 //! and a tool's spindle direction and coolant, are the same kind of field, so a
-//! job with any of them is version 3.
+//! job with any of them is version 3. Leaving an operation out is version 4, and
+//! a fixed box placed against the models, rather than at a corner, is version 5.
 
 mod error;
 mod model;
@@ -78,7 +79,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 pub use error::JobError;
-pub use model::{LengthUnit, ModelDef, StockDef, StockSpec};
+pub use model::{FixedBox, LengthUnit, ModelDef, Place, StockDef, StockSpec};
 pub use operation::{
     Containment, Geometry, Height, HeightContext, HeightRef, Heights, Linking, Operation, Passes,
     StockToLeave, StrategySpec,
@@ -93,7 +94,7 @@ pub use tool::{
 /// The newest job file format this build reads and writes. It reads every version
 /// from 1, and writes the oldest that holds what a job says
 /// ([`Job::required_version`]).
-pub const JOB_VERSION: u32 = 4;
+pub const JOB_VERSION: u32 = 5;
 
 /// A complete job.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -191,9 +192,9 @@ impl Job {
         };
         let mut want: BTreeSet<&str> = setup.models.iter().map(String::as_str).collect();
         for s in setup.stocks.iter().filter_map(|s| self.stock(s)) {
-            if let StockSpec::AroundModels { models, .. } = &s.spec {
-                want.extend(models.iter().map(String::as_str));
-            }
+            let (StockSpec::AroundModels { models, .. }
+            | StockSpec::FixedBox(FixedBox { models, .. })) = &s.spec;
+            want.extend(models.iter().map(String::as_str));
         }
         self.models
             .iter()

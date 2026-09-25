@@ -221,17 +221,17 @@ fn two_blocks_are_one_stock() {
     job.stocks = vec![
         crate::job::StockDef {
             name: "left".into(),
-            spec: crate::job::StockSpec::FixedBox {
-                corner: [-10.0, -10.0, -8.0],
-                size: [10.0, 20.0, 17.0],
-            },
+            spec: crate::job::StockSpec::FixedBox(crate::job::FixedBox::at(
+                [-10.0, -10.0, -8.0],
+                [10.0, 20.0, 17.0],
+            )),
         },
         crate::job::StockDef {
             name: "right".into(),
-            spec: crate::job::StockSpec::FixedBox {
-                corner: [0.0, -10.0, -8.0],
-                size: [10.0, 20.0, 18.0],
-            },
+            spec: crate::job::StockSpec::FixedBox(crate::job::FixedBox::at(
+                [0.0, -10.0, -8.0],
+                [10.0, 20.0, 18.0],
+            )),
         },
     ];
     job.setups[0].stocks = vec!["left".into(), "right".into()];

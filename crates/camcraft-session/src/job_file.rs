@@ -130,5 +130,17 @@ mod tests {
             "{text}"
         );
         assert_eq!(parse_job(&text, "two").unwrap(), job);
+
+        // A fixed box placed against the models is one an older build would
+        // misread as missing its corner.
+        job.stocks.push(camcraft_core::job::StockDef {
+            name: "board".into(),
+            spec: camcraft_core::job::StockSpec::FixedBox(camcraft_core::job::FixedBox::centred([
+                100.0, 50.0, 19.0,
+            ])),
+        });
+        let text = job_text(&job).unwrap();
+        assert!(text.contains("version = 5\n"), "{text}");
+        assert_eq!(parse_job(&text, "five").unwrap(), job);
     }
 }

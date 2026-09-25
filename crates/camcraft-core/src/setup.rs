@@ -136,14 +136,35 @@ fn block(spec: &StockSpec, model_box: Aabb, bodies: &Bodies<'_>) -> Result<Aabb,
                 ),
             }
         }
-        StockSpec::FixedBox { corner, size } => {
-            let min = DVec3::from_array(*corner);
+        StockSpec::FixedBox(b) => {
+            let against = if b.models.is_empty() {
+                model_box
+            } else {
+                bounds_of(&b.models, bodies)?
+            };
+            let ([px, py, pz], [sx, sy, sz]) = (b.place, b.size);
+            let (lo, hi) = (against.min, against.max);
+            let min = DVec3::new(
+                px.low(lo.x, hi.x, sx),
+                py.low(lo.y, hi.y, sy),
+                pz.low(lo.z, hi.z, sz),
+            );
             Aabb {
                 min,
-                max: min + DVec3::from_array(*size),
+                max: min + DVec3::from_array(b.size),
             }
         }
     })
+}
+
+/// A stock block in model coordinates, for a setup machining `models`: where it
+/// is, whichever setup it is shown for.
+pub fn stock_block(
+    spec: &StockSpec,
+    models: &[String],
+    bodies: &Bodies<'_>,
+) -> Result<Aabb, PrepareError> {
+    block(spec, bounds_of(models, bodies)?, bodies)
 }
 
 /// `b` turned the way the part sits. The turn only swaps and negates, so a box
@@ -165,10 +186,7 @@ pub fn stock_in_frame(
     frame: &Frame,
     bodies: &Bodies<'_>,
 ) -> Result<Aabb, PrepareError> {
-    let b = turn(
-        frame.orientation,
-        &block(spec, bounds_of(models, bodies)?, bodies)?,
-    );
+    let b = turn(frame.orientation, &stock_block(spec, models, bodies)?);
     Ok(b.translated(-frame.origin))
 }
 
@@ -316,7 +334,7 @@ fn pieces_of(names: &[String], parts: &[&TriMesh]) -> Result<Vec<Piece>, MeshErr
 mod tests {
     use super::*;
     use crate::frame::{Axis, Orientation};
-    use crate::job::{Along, ModelDef, StockDef};
+    use crate::job::{Along, FixedBox, ModelDef, Place, StockDef};
     use glam::dvec3;
 
     fn job(stock: StockSpec) -> Job {
@@ -368,6 +386,65 @@ mod tests {
         assert_eq!(p.stocks[0].max, dvec3(12.0, 22.0, 8.0));
     }
 
+    /// A fixed box sits against the models' box on each axis, as Fusion's does:
+    /// centred, beyond a low or high side, or at a coordinate.
+    #[test]
+    fn a_fixed_box_is_placed_against_the_models() {
+        let mesh = brick();
+        let body = Body::derived(mesh.clone());
+        let meshes: Bodies<'_> = [("m", &body)].into_iter().collect();
+        let block = |place: [Place; 3]| {
+            let spec = StockSpec::FixedBox(FixedBox {
+                size: [14.0, 30.0, 8.0],
+                models: vec![],
+                place,
+            });
+            prepare(&job(spec), 0, &meshes).unwrap().stocks[0]
+        };
+        // The brick is (0, 0, 0) to (10, 20, 5).
+        let b = block([Place::Center, Place::Center, Place::Max { offset: 0.0 }]);
+        assert_eq!(b.min, dvec3(-2.0, -5.0, -3.0));
+        assert_eq!(b.max, dvec3(12.0, 25.0, 5.0));
+        let b = block([
+            Place::Min { offset: 1.0 },
+            Place::Max { offset: 2.0 },
+            Place::Min { offset: 0.5 },
+        ]);
+        assert_eq!(b.min, dvec3(-1.0, -8.0, -0.5));
+        assert_eq!(b.max, dvec3(13.0, 22.0, 7.5));
+        let b = block([
+            Place::At { coordinate: 7.0 },
+            Place::Min { offset: -1.0 },
+            Place::Center,
+        ]);
+        assert_eq!(b.min, dvec3(7.0, 1.0, -1.5));
+        assert_eq!(b.max, dvec3(21.0, 31.0, 6.5));
+    }
+
+    /// One placed against named models is placed against them, not the setup's.
+    #[test]
+    fn a_fixed_box_can_be_placed_against_named_models() {
+        let body = Body::derived(brick());
+        let other = Body::derived(brick().mapped(|p| p + dvec3(100.0, 0.0, 0.0)).unwrap());
+        let meshes: Bodies<'_> = [("m", &body), ("n", &other)].into_iter().collect();
+        let mut j = job(StockSpec::FixedBox(FixedBox {
+            models: vec!["n".into()],
+            ..FixedBox::centred([10.0, 20.0, 6.0])
+        }));
+        j.models.push(ModelDef {
+            name: "n".into(),
+            path: "n.stl".into(),
+            units: None,
+        });
+        let b = prepare(&j, 0, &meshes).unwrap().stocks[0];
+        assert_eq!(b.min, dvec3(100.0, 0.0, -1.0));
+        assert_eq!(b.max, dvec3(110.0, 20.0, 5.0));
+        assert_eq!(
+            stock_block(&j.stocks[0].spec, &["m".into()], &meshes).unwrap(),
+            b
+        );
+    }
+
     /// Turned over, the underside is on top, and a work zero at the stock's top
     /// centre puts the top of the block at Z = 0.
     #[test]
@@ -375,10 +452,10 @@ mod tests {
         let mesh = brick();
         let body = Body::derived(mesh.clone());
         let meshes: Bodies<'_> = [("m", &body)].into_iter().collect();
-        let mut j = job(StockSpec::FixedBox {
-            corner: [-1.0, -1.0, -1.0],
-            size: [12.0, 22.0, 7.0],
-        });
+        let mut j = job(StockSpec::FixedBox(FixedBox::at(
+            [-1.0, -1.0, -1.0],
+            [12.0, 22.0, 7.0],
+        )));
         j.setups[0].orientation = Orientation::default().flipped();
         j.setups[0].origin = Origin::BoxPoint {
             of: BoxOf::Stock,
@@ -441,10 +518,7 @@ mod tests {
                 margin: [1.0, 2.0, 3.0],
                 below: 4.0,
             },
-            StockSpec::FixedBox {
-                corner: [-5.0, -5.0, -1.0],
-                size: [30.0, 40.0, 9.0],
-            },
+            StockSpec::FixedBox(FixedBox::at([-5.0, -5.0, -1.0], [30.0, 40.0, 9.0])),
         ] {
             let mut j = job(spec.clone());
             j.setups[0].orientation = Orientation {

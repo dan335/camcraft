@@ -2,7 +2,8 @@
 //! setup (or a stock around models) includes, with a way to add more from a
 //! filtered list or by clicking them in the view.
 
-use camcraft_core::job::{LengthUnit, Setup, StockSpec};
+use camcraft_core::job::{FixedBox, LengthUnit, Place, Setup, StockSpec};
+use camcraft_geom::mesh::Aabb;
 use eframe::egui;
 
 use super::{Picks, PropAction, header, renamed};
@@ -290,10 +291,8 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
                     *spec = StockSpec::default();
                 }
                 if ui.selectable_label(!around, "fixed box").clicked() && around {
-                    let (corner, size) = fit.map_or(([0.0; 3], [100.0, 100.0, 25.0]), |b| {
-                        (b.min.to_array(), b.extent().to_array())
-                    });
-                    *spec = StockSpec::FixedBox { corner, size };
+                    let size = fit.map_or([100.0, 100.0, 25.0], |b| b.extent().to_array());
+                    *spec = StockSpec::FixedBox(FixedBox::centred(size));
                 }
             });
         ui.end_row();
@@ -335,22 +334,40 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
                 ui.end_row();
             });
         }
-        StockSpec::FixedBox { corner, size } => {
+        StockSpec::FixedBox(b) => {
+            names(
+                ui,
+                &Names {
+                    id: id.with("against"),
+                    title: "Against",
+                    all: &model_names,
+                    empty: "The models of the setup using it.",
+                    pick: None,
+                    more: None,
+                },
+                &mut b.models,
+                Picks::default(),
+                &mut Vec::new(),
+            );
+            ui.add_space(theme::SPACE_4);
             form(ui, "stock-box", |ui| {
-                widgets::field_label(ui, "Corner");
-                ui.horizontal(|ui| {
-                    for (axis, v) in ["X ", "Y ", "Z "].into_iter().zip(corner.iter_mut()) {
-                        m.signed_length_field(ui, v, 0.1, 10_000.0, axis);
+                for (i, label) in ["Width (X)", "Depth (Y)", "Height (Z)"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    widgets::field_label(ui, label);
+                    if let Some(v) = b.size.get_mut(i) {
+                        m.length_field(ui, v, 0.1, 10_000.0, "");
                     }
-                });
-                ui.end_row();
-                widgets::field_label(ui, "Size");
-                ui.horizontal(|ui| {
-                    for (axis, v) in ["X ", "Y ", "Z "].into_iter().zip(size.iter_mut()) {
-                        m.length_field(ui, v, 0.1, 10_000.0, axis);
+                    ui.end_row();
+                }
+                for (i, axis) in AXES.iter().enumerate() {
+                    widgets::field_label(ui, axis.label);
+                    if let Some(p) = b.place.get_mut(i) {
+                        place_row(ui, m, axis, p);
                     }
-                });
-                ui.end_row();
+                    ui.end_row();
+                }
                 ui.label("");
                 if ui
                     .add_enabled_ui(fit.is_some(), |ui| {
@@ -358,14 +375,20 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
                     })
                     .inner
                     .clicked()
-                    && let Some(b) = fit
+                    && let Some(f) = fit
                 {
-                    *corner = b.min.to_array();
-                    *size = b.extent().to_array();
+                    *b = FixedBox {
+                        models: std::mem::take(&mut b.models),
+                        ..FixedBox::centred(f.extent().to_array())
+                    };
                 }
                 ui.end_row();
             });
         }
+    }
+    if let Some(spec) = doc.job.stocks.get(i).map(|s| s.spec.clone()) {
+        ui.add_space(theme::SPACE_4);
+        dimensions(ui, doc, m, name, &spec);
     }
     ui.add_space(theme::SPACE_3);
     used_by(
@@ -406,4 +429,139 @@ fn all_model_bounds(doc: &Document) -> Option<camcraft_geom::mesh::Aabb> {
         .values()
         .filter_map(|s| s.model().map(|m| m.bounds))
         .reduce(|a, b| a.union(&b))
+}
+
+/// One axis of a fixed box, as a person names its sides.
+struct AxisNames {
+    label: &'static str,
+    letter: &'static str,
+    low: &'static str,
+    high: &'static str,
+}
+
+const AXES: [AxisNames; 3] = [
+    AxisNames {
+        label: "Position X",
+        letter: "X",
+        low: "offset from left (−X)",
+        high: "offset from right (+X)",
+    },
+    AxisNames {
+        label: "Position Y",
+        letter: "Y",
+        low: "offset from front (−Y)",
+        high: "offset from back (+Y)",
+    },
+    AxisNames {
+        label: "Position Z",
+        letter: "Z",
+        low: "offset from bottom",
+        high: "offset from top",
+    },
+];
+
+/// Where a fixed box sits on one axis: a chooser, and its offset or coordinate.
+fn place_row(ui: &mut egui::Ui, m: Measure, axis: &AxisNames, p: &mut Place) {
+    let at = format!("at {} =", axis.letter);
+    let text = |p: &Place| match p {
+        Place::Center => "centre",
+        Place::Min { .. } => axis.low,
+        Place::Max { .. } => axis.high,
+        Place::At { .. } => at.as_str(),
+    };
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt(("stock-place", axis.letter))
+            .selected_text(text(p))
+            .show_ui(ui, |ui| {
+                // A new choice keeps the number already there, so a person
+                // switching sides does not lose it.
+                let keep = p.value().unwrap_or(0.0);
+                for choice in [
+                    Place::Center,
+                    Place::Min { offset: keep },
+                    Place::Max { offset: keep },
+                    Place::At { coordinate: keep },
+                ] {
+                    let on = std::mem::discriminant(p) == std::mem::discriminant(&choice);
+                    if ui.selectable_label(on, text(&choice)).clicked() && !on {
+                        *p = choice;
+                    }
+                }
+            });
+        match p {
+            Place::Center => {}
+            Place::Min { offset: v } | Place::Max { offset: v } | Place::At { coordinate: v } => {
+                m.signed_length_field(ui, v, 0.1, 10_000.0, "");
+            }
+        }
+    });
+}
+
+/// What stock `name`, shaped `spec`, comes to: its size and where it is, in
+/// model coordinates, for each setup using it. Setups that give the same block
+/// share one reading; a stock no setup uses is shown only when it names its
+/// own models.
+fn dimensions(ui: &mut egui::Ui, doc: &Document, m: Measure, name: &str, spec: &StockSpec) {
+    let bodies: camcraft_core::setup::Bodies<'_> = doc
+        .models
+        .iter()
+        .filter_map(|(n, slot)| Some((n.as_str(), &slot.model()?.body)))
+        .collect();
+    let block = |models: &[String]| camcraft_core::setup::stock_block(spec, models, &bodies).ok();
+    let mut blocks: Vec<(&str, Aabb)> = doc
+        .job
+        .setups
+        .iter()
+        .filter(|s| s.stocks.iter().any(|x| x == name))
+        .filter_map(|s| Some((s.name.as_str(), block(&s.models)?)))
+        .collect();
+    let own = match spec {
+        StockSpec::AroundModels { models, .. } | StockSpec::FixedBox(FixedBox { models, .. }) => {
+            models
+        }
+    };
+    if blocks.is_empty() && !own.is_empty() {
+        blocks.extend(block(own).map(|b| ("", b)));
+    }
+    if blocks.is_empty() {
+        hint(ui, "Its size shows once a setup uses it.");
+        return;
+    }
+    let same = blocks.windows(2).all(|w| matches!(w, [a, b] if a.1 == b.1));
+    if same {
+        blocks.truncate(1);
+    }
+    let point = |p: glam::DVec3| {
+        format!(
+            "{}, {}, {}",
+            m.number(p.x, 2),
+            m.number(p.y, 2),
+            m.number(p.z, 2)
+        )
+    };
+    form(ui, "stock-dimensions", |ui| {
+        for (setup, b) in &blocks {
+            if !same {
+                widgets::field_label(ui, "In");
+                ui.label(*setup);
+                ui.end_row();
+            }
+            let e = b.extent();
+            widgets::field_label(ui, "Block");
+            ui.label(format!(
+                "{} × {} × {} {}",
+                m.number(e.x, 2),
+                m.number(e.y, 2),
+                m.number(e.z, 2),
+                m.unit()
+            ));
+            ui.end_row();
+            widgets::field_label(ui, "From");
+            ui.label(point(b.min));
+            ui.end_row();
+            widgets::field_label(ui, "To");
+            ui.label(point(b.max));
+            ui.end_row();
+        }
+    });
 }

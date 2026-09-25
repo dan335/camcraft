@@ -111,10 +111,7 @@ fn a_job_round_trips() {
     let mut j = sample();
     j.stocks.push(StockDef {
         name: "plate".into(),
-        spec: StockSpec::FixedBox {
-            corner: [-5.0, -5.0, -12.5],
-            size: [110.0, 60.0, 25.0],
-        },
+        spec: StockSpec::FixedBox(FixedBox::at([-5.0, -5.0, -12.5], [110.0, 60.0, 25.0])),
     });
     j.models.push(ModelDef {
         name: "stl".into(),
@@ -137,6 +134,18 @@ fn a_job_round_trips() {
         z: Along::Max,
         offset: [0.0, 0.0, -1.5],
     };
+    j.stocks.push(StockDef {
+        name: "board".into(),
+        spec: StockSpec::FixedBox(FixedBox {
+            size: [300.0, 200.0, 19.0],
+            models: vec!["part".into()],
+            place: [
+                Place::Center,
+                Place::Min { offset: 5.0 },
+                Place::At { coordinate: -1.0 },
+            ],
+        }),
+    });
     let mut unfinished = j.setups[0].operations[1].clone();
     unfinished.tool = None;
     bottom.operations = vec![unfinished];
@@ -152,6 +161,76 @@ fn a_job_round_trips() {
     let plain = toml::to_string(&sample()).unwrap();
     assert!(!plain.contains("orientation"), "{plain}");
     assert!(!plain.contains("below"), "{plain}");
+}
+
+/// A fixed box from before placing, at a corner, reads as placed at that corner
+/// on each axis and is written back as it was, so an older build still reads it.
+#[test]
+fn a_fixed_box_at_a_corner_keeps_its_old_form() {
+    let text = "kind = \"fixed-box\"\nname = \"plate\"\ncorner = [1.0, 2.0, 3.0]\nsize = [4.0, 5.0, 6.0]\n";
+    let old: StockDef = toml::from_str(text).unwrap();
+    assert_eq!(
+        old.spec,
+        StockSpec::FixedBox(FixedBox::at([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]))
+    );
+    let again = toml::to_string(&old).unwrap();
+    assert!(again.contains("corner"), "{again}");
+    assert!(!again.contains("from"), "{again}");
+    let mut j = sample();
+    j.stocks.push(old);
+    assert_eq!(j.required_version(), sample().required_version());
+}
+
+/// One placed against the models is written with a place on each axis, as
+/// version 5, which an older build refuses by name.
+#[test]
+fn a_placed_fixed_box_is_version_5() {
+    let mut j = sample();
+    j.stocks.push(StockDef {
+        name: "board".into(),
+        spec: StockSpec::FixedBox(FixedBox::centred([10.0, 10.0, 10.0])),
+    });
+    assert_eq!(j.required_version(), 5);
+    let text = toml::to_string(&j.stocks[1]).unwrap();
+    assert!(text.contains("from = \"center\""), "{text}");
+    assert!(!text.contains("corner"), "{text}");
+}
+
+/// A corner and a place on an axis say two things; neither is taken.
+#[test]
+fn a_fixed_box_with_a_corner_and_a_place_is_refused() {
+    let text = "kind = \"fixed-box\"\nname = \"p\"\ncorner = [0.0, 0.0, 0.0]\nsize = [1.0, 1.0, 1.0]\nx = { from = \"center\" }\n";
+    assert!(toml::from_str::<StockDef>(text).is_err());
+    let text =
+        "kind = \"fixed-box\"\nname = \"p\"\nsize = [1.0, 1.0, 1.0]\nx = { from = \"center\" }\n";
+    assert!(
+        toml::from_str::<StockDef>(text).is_err(),
+        "y and z are missing"
+    );
+}
+
+/// A fixed box's place must be a number, and the models it is placed against
+/// must be the job's.
+#[test]
+fn a_fixed_box_is_checked() {
+    let mut j = sample();
+    j.stocks.push(StockDef {
+        name: "board".into(),
+        spec: StockSpec::FixedBox(FixedBox {
+            place: [
+                Place::Min { offset: f64::NAN },
+                Place::Center,
+                Place::Center,
+            ],
+            ..FixedBox::centred([10.0, 10.0, 10.0])
+        }),
+    });
+    assert!(matches!(j.validate(), Err(JobError::BadValue { .. })));
+    j.stocks[1].spec = StockSpec::FixedBox(FixedBox {
+        models: vec!["nothing".into()],
+        ..FixedBox::centred([10.0, 10.0, 10.0])
+    });
+    assert!(matches!(j.validate(), Err(JobError::UnknownModel { .. })));
 }
 
 /// A file without a version is refused by name, not with a parse error about
@@ -659,7 +738,10 @@ fn only_a_job_with_picks_needs_version_2() {
     two.validate().unwrap();
     let mut five = sample();
     five.version = 5;
-    assert_eq!(five.validate(), Err(JobError::UnsupportedVersion(5)));
+    five.validate().unwrap();
+    let mut six = sample();
+    six.version = 6;
+    assert_eq!(six.validate(), Err(JobError::UnsupportedVersion(6)));
 }
 
 /// An older reader would skip an operation's own spindle speed and cut at the

@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{Coolant, JOB_VERSION, Job, JobError, Origin, SpindleDirection, StockSpec};
+use super::{Coolant, FixedBox, JOB_VERSION, Job, JobError, Origin, SpindleDirection, StockSpec};
 use crate::is_positive;
 
 impl Job {
@@ -76,12 +76,24 @@ impl Job {
                         }
                     }
                 }
-                StockSpec::FixedBox { corner, size } => {
-                    for v in corner {
+                StockSpec::FixedBox(FixedBox {
+                    size,
+                    models,
+                    place,
+                }) => {
+                    for m in models {
+                        if self.model(m).is_none() {
+                            return Err(JobError::UnknownModel {
+                                owner: format!("stock '{}'", stock.name),
+                                model: m.clone(),
+                            });
+                        }
+                    }
+                    for v in place.iter().filter_map(|p| p.value()) {
                         if !v.is_finite() {
                             return Err(JobError::BadValue {
-                                field: field("corner"),
-                                value: *v,
+                                field: field("place"),
+                                value: v,
                             });
                         }
                     }
@@ -212,6 +224,13 @@ impl Job {
     /// and 1 otherwise.
     pub fn required_version(&self) -> u32 {
         let ops = || self.setups.iter().flat_map(|s| &s.operations);
+        let placed = self
+            .stocks
+            .iter()
+            .any(|s| matches!(&s.spec, StockSpec::FixedBox(b) if b.placed()));
+        if placed {
+            return 5;
+        }
         if ops().any(|op| !op.enabled) {
             return 4;
         }
