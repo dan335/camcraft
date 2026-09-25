@@ -1,6 +1,6 @@
 [package]
 name        = "camcraft-cli"
-description = "Command-line interface for camcraft: model + job.toml to G-code."
+description = "Command-line interface for camcraft: job files (.camcraft) and models to G-code."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -14,7 +14,6 @@ path = "src/main.rs"
 
 [dependencies]
 camcraft-core.workspace    = true
-camcraft-post.workspace    = true
 camcraft-session.workspace = true
 clap.workspace             = true
 tracing.workspace          = true

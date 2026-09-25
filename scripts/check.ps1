@@ -8,6 +8,8 @@
   and reported in a summary, rather than chained in a way that can report success
   without having checked anything.
 
+  Unlike scripts/check.sh, this always checks every crate.
+
 .EXAMPLE
   .\scripts\check.ps1
   .\scripts\check.ps1 -Full
@@ -33,17 +35,15 @@ Invoke-Gate 'clippy' { cargo clippy --workspace --all-targets -- -D warnings }
 Invoke-Gate 'test'   { cargo test --workspace --all-targets }
 Invoke-Gate 'doc'    { cargo doc --workspace --no-deps }
 
-# Identical inputs must produce identical results on any core count. Without this,
-# golden-file comparisons are flaky and real regressions become invisible.
-Write-Host ""
-Write-Host "== determinism ==" -ForegroundColor White
-$env:RAYON_NUM_THREADS = '1'; cargo test --workspace --quiet *> $null; $one = $LASTEXITCODE
-$env:RAYON_NUM_THREADS = '8'; cargo test --workspace --quiet *> $null; $eight = $LASTEXITCODE
-Remove-Item Env:\RAYON_NUM_THREADS -ErrorAction SilentlyContinue
-if ($one -eq 0 -and $eight -eq 0) {
-    $pass += 'determinism'; Write-Host 'tests agree at 1 and 8 threads'
-} else {
-    $fail += 'determinism'; Write-Host 'tests differ across thread counts'
+# Identical inputs must produce identical results on any core count. The evidence
+# is in tests that compare output against itself (see check.sh for why running the
+# suite at two thread counts proved nothing). `--exact` passes on a name that
+# matches nothing: check the count it reports after renaming one.
+Invoke-Gate 'determinism' {
+    cargo test -p camcraft-core --quiet -- --exact `
+        run::tests::bounded_runs_are_deterministic `
+        dropcutter::tests::is_deterministic `
+        ordering::tests::ordering_is_deterministic
 }
 
 if ($Full) { Invoke-Gate 'bench' { cargo bench --workspace --no-fail-fast } }

@@ -33,19 +33,18 @@ csv                = "1.4"
 directories        = "6"
 glam               = { version = "0.33", features = ["serde"] }
 # STEP backend, see docs/decisions/0001-step-backend.md. Builds OpenCascade from
-# source: cmake and a C++ toolchain are prerequisites, and only camcraft-import
-# (and so only the CLI) pays for it.
+# source: cmake and a C++ toolchain are prerequisites. Only camcraft-import pays
+# for it, and through camcraft-session the two binaries; the engine crates never.
 opencascade        = "0.3"
 parry3d-f64        = "0.31"
 proptest           = "1.11"
 rayon              = "1.12"
 serde              = { version = "1.0", features = ["derive"] }
-serde_json         = "1.0"
 stl_io             = "0.11"
 thiserror          = "2.0"
 toml               = "1.1"
 tracing            = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = "0.3"
 
 # Correctness rules from the plan, enforced by the compiler rather than by memory.
 [workspace.lints.rust]

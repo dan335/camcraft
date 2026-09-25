@@ -1,6 +1,6 @@
 [package]
 name        = "camcraft-session"
-description = "One model and one job: loaded, run, checked and posted. Shared by the CLI and the app."
+description = "A job's models loaded, and its setups run, checked and posted. Shared by the CLI and the app."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
