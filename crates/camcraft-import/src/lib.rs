@@ -1,7 +1,7 @@
 //! Model import for camcraft: STL and STEP to triangle meshes.
 //!
 //! Position in the dependency DAG: **leaf consumer**. Depends on `camcraft-geom`;
-//! only `camcraft-cli` depends on this crate.
+//! only `camcraft-session` depends on this crate, and through it the two binaries.
 //!
 //! That isolation is deliberate and load-bearing. Whatever the STEP backend turns
 //! out to cost to build, the inner development loop on `geom` / `sim` / `core` /

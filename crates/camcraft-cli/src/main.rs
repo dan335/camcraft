@@ -18,11 +18,11 @@ use std::process::ExitCode;
 
 use camcraft_core::job::{Job as JobSpec, LengthUnit, ModelDef, Setup};
 use camcraft_session::checks::{Checks, Level};
-use camcraft_session::fs::write_atomically;
+use camcraft_session::fs::{job_dir, write_atomically};
 use camcraft_session::{
-    FinishSpec, FinishTool, Model, Models, Passed, Program, Ran, SessionError, Units, gate,
-    load_model, load_models, load_profile, models_of, plan_posting, program, read_job, run_setup,
-    single_operation, write_posting,
+    FinishSpec, FinishTool, Model, Models, Passed, Program, Ran, SessionError, gate, load_model,
+    load_models, load_profile, models_of, plan_posting, program, read_job, run_setup,
+    single_operation, units_of, write_posting,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -166,13 +166,8 @@ enum UnitArg {
 }
 
 impl UnitArg {
-    fn units(self) -> Units {
-        match self {
-            UnitArg::Mm => Units::Millimetres,
-            UnitArg::Inch => Units::Inches,
-        }
-    }
-
+    /// As a job states it; what that means to the reader is the session's to say
+    /// ([`units_of`]).
     fn length(self) -> LengthUnit {
         match self {
             UnitArg::Mm => LengthUnit::Mm,
@@ -243,11 +238,20 @@ fn explain(e: SessionError) -> Box<dyn std::error::Error> {
 }
 
 fn load(path: &Path, units: Option<UnitArg>, tolerance: f64) -> Fallible<Model> {
-    let model = load_model(path, units.map(UnitArg::units), tolerance).map_err(explain)?;
-    for n in &model.notes {
-        tracing::info!("{n}");
-    }
+    let units = units_of(units.map(UnitArg::length));
+    let model = load_model(path, units, tolerance).map_err(explain)?;
+    log_notes(None, &model);
     Ok(model)
+}
+
+/// Log what loading `model` did, each line after `name` when there are several.
+fn log_notes(name: Option<&str>, model: &Model) {
+    for n in &model.notes {
+        match name {
+            Some(name) => tracing::info!("{name}: {n}"),
+            None => tracing::info!("{n}"),
+        }
+    }
 }
 
 fn execute(job: &JobSpec, setup: usize, models: &Models<'_>) -> Fallible<Ran> {
@@ -321,12 +325,7 @@ fn report_program(p: &Program) {
 
 fn job(args: JobArgs) -> Fallible<usize> {
     let job = read_job(&args.job)?;
-    let job_dir = args
-        .job
-        .parent()
-        .filter(|d| !d.as_os_str().is_empty())
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
+    let job_dir = job_dir(&args.job);
 
     let chosen: Vec<usize> = if args.setups.is_empty() {
         (0..job.setups.len()).collect()
@@ -349,9 +348,7 @@ fn job(args: JobArgs) -> Fallible<usize> {
     // decides how finely a STEP model is tessellated.
     let loaded = load_models(&job, &job_dir, &chosen).map_err(explain)?;
     for (name, model) in &loaded {
-        for n in &model.notes {
-            tracing::info!("{name}: {n}");
-        }
+        log_notes(Some(name), model);
     }
     let models = models_of(&loaded);
 

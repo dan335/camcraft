@@ -9,11 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
-use camcraft_core::job::{Coolant, Setup, SpindleDirection};
+use camcraft_core::job::Setup;
 use camcraft_core::run::{OperationResult, StrategyDetail};
-use camcraft_post::op::{
-    Coolant as PostCoolant, DrillCycles, ProgramSpec, Spin, Units as PostUnits, lower,
-};
+use camcraft_post::op::{DrillCycles, ProgramSpec, Units as PostUnits, lower};
 use camcraft_post::profile::Profile;
 use camcraft_post::render::{RenderReport, render};
 
@@ -76,15 +74,8 @@ pub fn program(
         tool_comment: op.tool_comment.clone(),
         wcs,
         rpm: op.rpm,
-        spin: match op.spindle {
-            SpindleDirection::Clockwise => Spin::Clockwise,
-            SpindleDirection::CounterClockwise => Spin::CounterClockwise,
-        },
-        coolant: match op.coolant {
-            Coolant::Off => None,
-            Coolant::Flood => Some(PostCoolant::Flood),
-            Coolant::Mist => Some(PostCoolant::Mist),
-        },
+        spin: op.spindle,
+        coolant: op.coolant,
         units: PostUnits::Millimetres,
         drill: match &op.detail {
             StrategyDetail::Drill(r) if profile.drill_cycles => Some(DrillCycles {
@@ -206,8 +197,9 @@ pub fn write_posting(posting: &Posting) -> Result<usize, SessionError> {
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use crate::tests::run_small;
+    use crate::test_support::run_small;
     use crate::{load_models, parse_job, run_setup};
+    use camcraft_core::job::{Coolant, SpindleDirection};
 
     #[test]
     fn program_names_are_numbered_and_file_safe() {

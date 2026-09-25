@@ -15,13 +15,15 @@
     clippy::float_cmp
 )]
 
+mod common;
+
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use camcraft_core::toolpath::{MoveRole, Toolpath};
 use camcraft_geom::mesh::TriMesh;
 use camcraft_geom::synthetic;
 use camcraft_session::{Models, load_job_model, read_job, run_setup};
+use common::scratch;
 
 const JOB: &str = r#"
 version = 1
@@ -69,14 +71,6 @@ passes = { stepover = 1.2, feed = 2000.0 }
 heights = { clearance = { ref = "stock-top", offset = 5.0 } }
 "#;
 
-/// A fresh directory per test, under the target directory Cargo provides.
-fn scratch(name: &str) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
 /// Write a mesh as binary STL: an 80-byte header, a count, then 50 bytes a facet.
 fn write_stl(mesh: &TriMesh, path: &Path) {
     let mut bytes = vec![0u8; 80];
@@ -102,10 +96,7 @@ fn dome(dir: &Path) -> PathBuf {
 }
 
 fn camcraft(args: &[&str]) -> std::process::Output {
-    let out = Command::new(env!("CARGO_BIN_EXE_camcraft"))
-        .args(args)
-        .output()
-        .unwrap();
+    let out = common::camcraft(args);
     // 0 is clean and 2 is warnings worth reading; either way output was written.
     // 1 is a refusal, which these jobs must not provoke.
     assert!(
@@ -330,10 +321,8 @@ fn a_job_names_its_own_models() {
     dome(&dir);
     let job = dir.join("job.camcraft");
     std::fs::write(&job, JOB.replace("units = \"mm\"\n", "")).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_camcraft"))
-        .args(["job", job.to_str().unwrap()])
-        .output()
-        .unwrap();
+    // Refused, so not through `camcraft`, which insists on success.
+    let out = common::camcraft(&["job", job.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(1));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -342,10 +331,7 @@ fn a_job_names_its_own_models() {
     );
 
     std::fs::write(&job, JOB.replace("dome.stl", "elsewhere/dome.stl")).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_camcraft"))
-        .args(["job", job.to_str().unwrap()])
-        .output()
-        .unwrap();
+    let out = common::camcraft(&["job", job.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(1));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("elsewhere/dome.stl"), "{err}");

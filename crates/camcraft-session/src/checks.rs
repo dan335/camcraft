@@ -17,8 +17,8 @@
 //! # Codes
 //!
 //! `CC1xx` are failures: the program must not be run. `CC2xx` are advisories: look,
-//! then decide. The codes are the web inspector's, kept so that anything written
-//! about them still reads right.
+//! then decide. The codes are kept stable, so that anything written about them
+//! still reads right.
 
 use camcraft_core::allowance::{Allowance, EffectiveTool};
 use camcraft_core::dropcutter::{DropCutter, DropTest};
@@ -534,4 +534,84 @@ fn thousands(n: u64) -> String {
         out.push(c);
     }
     out
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+    use crate::test_support::{recheck, run_small};
+
+    fn failed(checks: &Checks) -> Vec<&'static str> {
+        checks.failures().map(|(_, f)| f.code).collect()
+    }
+
+    /// A clean run passes every failure check, and says so check by check.
+    #[test]
+    fn a_clean_run_passes_its_checks() {
+        let ran = run_small();
+        assert!(ran.checks.passed(), "{:?}", ran.checks.failure_lines());
+        let passed: Vec<&str> = ran
+            .checks
+            .groups
+            .iter()
+            .flat_map(|g| &g.findings)
+            .filter(|f| f.level == Level::Pass)
+            .map(|f| f.code)
+            .collect();
+        for code in [
+            "CC101", "CC102", "CC103", "CC104", "CC105", "CC106", "CC107",
+        ] {
+            assert!(passed.contains(&code), "{code} not reported as passed");
+        }
+    }
+
+    /// Each failure the checks exist for is found, and found at its move, from the
+    /// path alone: the engine's own reports still say all is well.
+    #[test]
+    fn the_checks_find_what_is_wrong_with_a_path() {
+        use camcraft_core::toolpath::MoveRole;
+        use glam::dvec3;
+        let ran = run_small();
+        let b = ran.part.bounds().unwrap();
+        let mid = b.center();
+
+        // A rapid straight through the middle of the part.
+        let c = recheck(&ran, |p| {
+            p.rapid_to(dvec3(b.min.x - 10.0, mid.y, mid.z)).unwrap();
+            p.rapid_to(dvec3(b.max.x + 10.0, mid.y, mid.z)).unwrap();
+        });
+        assert_eq!(failed(&c), ["CC102"]);
+        // At one of the two added rapids: the first also cuts through the part on
+        // its way down.
+        let at = c.failures().next().unwrap().1.at_move.unwrap();
+        assert!(at >= ran.result.operations[0].path.len(), "{at}");
+
+        // A plunge that travels sideways.
+        let c = recheck(&ran, |p| {
+            let at = p.moves().last().unwrap().to;
+            p.feed_to(at + dvec3(3.0, 0.0, -1.0), MoveRole::Plunge, 300.0)
+                .unwrap();
+        });
+        assert_eq!(failed(&c), ["CC103"]);
+
+        // A hole the linker never filled.
+        let c = recheck(&ran, |p| {
+            let at = p.moves().last().unwrap().to;
+            p.feed_to(at + dvec3(1.0, 0.0, 0.0), MoveRole::Link, 300.0)
+                .unwrap();
+        });
+        assert_eq!(failed(&c), ["CC101"]);
+
+        // A plunge at cutting feed, in short moves.
+        let c = recheck(&ran, |p| {
+            let at = p.moves().last().unwrap().to;
+            for k in 1..=5 {
+                let k = f64::from(k);
+                p.feed_to(at + dvec3(0.001 * k, 0.0, -0.3 * k), MoveRole::Cut, 300.0)
+                    .unwrap();
+            }
+        });
+        assert_eq!(failed(&c), ["CC105"]);
+    }
 }

@@ -164,13 +164,6 @@ impl Worker {
     }
 }
 
-/// The folder a job's relative paths start from.
-pub fn job_dir(path: &std::path::Path) -> PathBuf {
-    path.parent()
-        .filter(|d| !d.as_os_str().is_empty())
-        .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf)
-}
-
 fn execute(request: Request, progress: &mut dyn FnMut(Stage)) -> Reply {
     match request {
         Request::Open { path } => Reply::Opened(Box::new(read_job(&path).map(|job| (path, job)))),
@@ -200,6 +193,7 @@ fn execute(request: Request, progress: &mut dyn FnMut(Stage)) -> Reply {
 #[allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+    use camcraft_session::fs::job_dir;
     use std::time::{Duration, Instant};
 
     fn wait(worker: &mut Worker) -> (DocId, Task, Reply) {

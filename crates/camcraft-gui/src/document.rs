@@ -22,8 +22,8 @@ use camcraft_core::job::{
 use camcraft_core::run::{Made, Plan, Stage};
 use camcraft_core::setup::{Bodies, PrepareError, Prepared, prepare};
 use camcraft_geom::bvh::MeshBvh;
-use camcraft_session::fs::{relative_path, resolve};
-use camcraft_session::{Model, Ran, SessionError, write_job};
+use camcraft_session::fs::{job_dir, relative_path, resolve, with_job_extension};
+use camcraft_session::{Model, Ran, SessionError, check_runnable, write_job};
 use glam::DVec3;
 
 use crate::camera::Camera;
@@ -450,10 +450,9 @@ impl Document {
 
     /// The folder its relative paths start from.
     pub fn dir(&self) -> PathBuf {
-        self.path.as_deref().map_or_else(
-            || std::env::current_dir().unwrap_or_default(),
-            crate::worker::job_dir,
-        )
+        self.path
+            .as_deref()
+            .map_or_else(|| std::env::current_dir().unwrap_or_default(), job_dir)
     }
 
     /// Say something in the log.
@@ -1004,8 +1003,8 @@ impl Document {
     /// Save to `path`: model paths made relative to it, tools no operation uses
     /// dropped, written whole or not at all.
     pub fn save_to(&mut self, path: &Path) -> Result<(), SessionError> {
-        let path = with_extension(path);
-        let new_dir = crate::worker::job_dir(&path);
+        let path = with_job_extension(path);
+        let new_dir = job_dir(&path);
         let old_dir = self.dir();
         let mut job = self.job.clone();
         for m in &mut job.models {
@@ -1147,14 +1146,7 @@ impl Document {
         {
             return Some("it is turned off".into());
         }
-        if let Err(e) = self.job.check_common() {
-            return Some(e.to_string());
-        }
-        let plans = self.plans(index, only);
-        if let Err(e) = self
-            .job
-            .check_setup_where(index, &|i| !matches!(plans.get(i), Some(Plan::Skip)))
-        {
+        if let Err(e) = check_runnable(&self.job, index, &self.plans(index, only)) {
             return Some(e.to_string());
         }
         for m in self.job.models_for(index) {
@@ -1486,20 +1478,6 @@ fn outline(p: &Prepared) -> Vec<Outline> {
         });
     }
     out
-}
-
-/// `path` with the job extension, if it has none.
-pub fn with_extension(path: &Path) -> PathBuf {
-    if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("camcraft"))
-    {
-        path.to_path_buf()
-    } else {
-        let mut p = path.as_os_str().to_owned();
-        p.push(".camcraft");
-        PathBuf::from(p)
-    }
 }
 
 /// A name not in `taken`. Setups and stocks count from one ("Setup 1", "Setup

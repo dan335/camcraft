@@ -20,8 +20,9 @@
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 use camcraft_core::drilling::Hole;
+use camcraft_core::job::{Coolant, SpindleDirection};
 use camcraft_core::toolpath::{MoveRole, Toolpath};
-use camcraft_post::op::{Coolant, DrillCycles, ProgramSpec, Spin, Units, lower};
+use camcraft_post::op::{DrillCycles, ProgramSpec, Units, lower};
 use camcraft_post::profile::Profile;
 use camcraft_post::render::render;
 use glam::{dvec2, dvec3};
@@ -57,8 +58,8 @@ fn spec() -> ProgramSpec {
         tool_comment: "6mm ball (carbide)".into(),
         wcs: 54,
         rpm: 18000,
-        spin: Spin::Clockwise,
-        coolant: Some(Coolant::Flood),
+        spin: SpindleDirection::Clockwise,
+        coolant: Coolant::Flood,
         units: Units::Millimetres,
         drill: None,
     }
@@ -143,7 +144,7 @@ fn drilling(peck: Option<f64>, dwell: Option<f64>) -> ProgramSpec {
         strategy: "drill".into(),
         tool: 4,
         tool_comment: "6mm drill".into(),
-        coolant: None,
+        coolant: Coolant::Off,
         drill: Some(DrillCycles {
             holes: vec![hole(10.0, 10.0), hole(30.0, 10.0), hole(-12.345, 40.0)],
             peck,

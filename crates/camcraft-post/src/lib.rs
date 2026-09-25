@@ -1,6 +1,6 @@
 //! Post processors for camcraft.
 //!
-//! Position in the dependency DAG: depends on `camcraft-geom` and `camcraft-core`.
+//! Position in the dependency DAG: depends on `camcraft-core` alone.
 //!
 //! The engine never emits text. This crate converts a `Toolpath` into a
 //! machine-independent instruction stream, and a **profile** renders that stream

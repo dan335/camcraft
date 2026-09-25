@@ -7,10 +7,10 @@
 
 use std::fmt::Write as _;
 
-use camcraft_core::toolpath::MoveRole;
+use camcraft_core::job::{Coolant, SpindleDirection};
 use glam::{DVec2, DVec3};
 
-use crate::op::{CompSide, Coolant, CycleKind, Op, Spin, Units};
+use crate::op::{CompSide, CycleKind, Op, Units};
 use crate::profile::{ArcStyle, Profile, ToolChangeStyle};
 
 /// What rendering produced besides the text.
@@ -22,10 +22,10 @@ pub struct RenderReport {
     pub motion_blocks: u64,
     /// Axis words omitted because the machine already had the value.
     pub suppressed_words: u64,
-    /// Reserved instructions encountered.
+    /// Reserved instructions encountered: arcs and cutter compensation.
     ///
-    /// Non-zero means the stream used something 0.1 does not emit, so the output
-    /// should be read before it is trusted.
+    /// Non-zero means the stream used something the engine does not emit yet, so
+    /// the output should be read before it is trusted.
     pub reserved_used: u64,
 }
 
@@ -133,8 +133,8 @@ impl<'a> Writer<'a> {
             },
             Op::SpindleOn { rpm, dir } => {
                 let m = match dir {
-                    Spin::Clockwise => "M3",
-                    Spin::CounterClockwise => "M4",
+                    SpindleDirection::Clockwise => "M3",
+                    SpindleDirection::CounterClockwise => "M4",
                 };
                 let s = format!("S{rpm} {m}");
                 self.raw(&s);
@@ -143,6 +143,8 @@ impl<'a> Writer<'a> {
             Op::CoolantOn(c) => self.raw(match c {
                 Coolant::Flood => "M8",
                 Coolant::Mist => "M7",
+                // Not emitted; asked for anyway, off is off.
+                Coolant::Off => "M9",
             }),
             Op::CoolantOff => self.raw("M9"),
             Op::Rapid { to } => self.motion_block("G0", *to, None),
@@ -338,15 +340,6 @@ impl<'a> Writer<'a> {
     }
 }
 
-/// Whether a role is one a profile might want to treat specially later.
-///
-/// Unused in 0.1 — every role renders the same way — but the role reaches the
-/// renderer so per-role feeds and lead handling can be added without changing the
-/// IR or the engine.
-pub fn role_is_cutting(role: MoveRole) -> bool {
-    role.cuts()
-}
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -357,7 +350,7 @@ pub fn role_is_cutting(role: MoveRole) -> bool {
 mod tests {
     use super::*;
     use crate::op::ProgramSpec;
-    use camcraft_core::toolpath::Toolpath;
+    use camcraft_core::toolpath::{MoveRole, Toolpath};
     use glam::dvec3;
 
     fn masso() -> Profile {

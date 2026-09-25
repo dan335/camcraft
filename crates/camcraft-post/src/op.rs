@@ -20,6 +20,7 @@
 //! operation posted for a profile that takes canned cycles is one per hole.
 
 use camcraft_core::drilling::Hole;
+use camcraft_core::job::{Coolant, SpindleDirection};
 use camcraft_core::toolpath::{MoveKind, MoveRole, Toolpath};
 use glam::{DVec2, DVec3, dvec3};
 
@@ -30,24 +31,6 @@ pub enum Units {
     Millimetres,
     /// Inches (`G20`).
     Inches,
-}
-
-/// Spindle direction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Spin {
-    /// Clockwise (`M3`).
-    Clockwise,
-    /// Counter-clockwise (`M4`).
-    CounterClockwise,
-}
-
-/// Coolant selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Coolant {
-    /// Flood (`M8`).
-    Flood,
-    /// Mist (`M7`).
-    Mist,
 }
 
 /// A canned drilling cycle.
@@ -65,7 +48,7 @@ pub enum CycleKind {
     Bore,
 }
 
-/// Cutter compensation side. Reserved; nothing emits these in 0.1.
+/// Cutter compensation side. Reserved; nothing emits these yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompSide {
     /// Left of the path (`G41`).
@@ -109,12 +92,13 @@ pub enum Op {
     SpindleOn {
         /// Speed in rev/min.
         rpm: u32,
-        /// Direction.
-        dir: Spin,
+        /// Direction: `M3` clockwise, `M4` counter-clockwise.
+        dir: SpindleDirection,
     },
     /// Stop the spindle.
     SpindleOff,
-    /// Turn coolant on.
+    /// Turn coolant on: `M8` flood, `M7` mist. [`lower`] never emits it with
+    /// [`Coolant::Off`].
     CoolantOn(Coolant),
     /// Turn coolant off.
     CoolantOff,
@@ -195,9 +179,9 @@ pub struct ProgramSpec {
     /// Spindle speed.
     pub rpm: u32,
     /// Spindle direction.
-    pub spin: Spin,
-    /// Coolant, or `None` to leave it off.
-    pub coolant: Option<Coolant>,
+    pub spin: SpindleDirection,
+    /// Coolant; [`Coolant::Off`] leaves it off.
+    pub coolant: Coolant,
     /// Program units.
     pub units: Units,
     /// The holes of a drilling operation, to write as canned cycles instead of
@@ -230,8 +214,8 @@ impl Default for ProgramSpec {
             tool_comment: String::new(),
             wcs: 54,
             rpm: 18000,
-            spin: Spin::Clockwise,
-            coolant: None,
+            spin: SpindleDirection::Clockwise,
+            coolant: Coolant::Off,
             units: Units::Millimetres,
             drill: None,
         }
@@ -289,8 +273,9 @@ pub fn lower(path: &Toolpath, spec: &ProgramSpec) -> Result<Vec<Op>, LowerError>
         rpm: spec.rpm,
         dir: spec.spin,
     });
-    if let Some(c) = spec.coolant {
-        out.push(Op::CoolantOn(c));
+    let coolant = spec.coolant != Coolant::Off;
+    if coolant {
+        out.push(Op::CoolantOn(spec.coolant));
     }
 
     if let Some(d) = &spec.drill {
@@ -299,7 +284,7 @@ pub fn lower(path: &Toolpath, spec: &ProgramSpec) -> Result<Vec<Op>, LowerError>
         moves(path, &mut out);
     }
 
-    if spec.coolant.is_some() {
+    if coolant {
         out.push(Op::CoolantOff);
     }
     out.push(Op::SpindleOff);
@@ -450,7 +435,7 @@ mod tests {
     #[test]
     fn coolant_is_paired() {
         let spec = ProgramSpec {
-            coolant: Some(Coolant::Flood),
+            coolant: Coolant::Flood,
             ..Default::default()
         };
         let ops = lower(&linked_path(), &spec).unwrap();

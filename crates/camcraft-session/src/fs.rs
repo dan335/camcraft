@@ -1,5 +1,5 @@
-//! Files: where a job's models are, and writing so that a crash or a full disk
-//! never leaves half a file.
+//! Files: where a job is and what it is called, where its models are, and
+//! writing so that a crash or a full disk never leaves half a file.
 //!
 //! A job names its models by paths relative to its own folder, with `/` between
 //! folders on every system, so a job and its models can move together.
@@ -25,6 +25,28 @@ pub fn resolve(job_dir: &Path, path: &str) -> PathBuf {
         p.to_path_buf()
     } else {
         job_dir.join(p)
+    }
+}
+
+/// The folder a job's relative paths start from: the job file's own, or the
+/// current folder for a bare file name.
+pub fn job_dir(path: &Path) -> PathBuf {
+    path.parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+}
+
+/// `path` with the job extension, if it has none.
+pub fn with_job_extension(path: &Path) -> PathBuf {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("camcraft"))
+    {
+        path.to_path_buf()
+    } else {
+        let mut p = path.as_os_str().to_owned();
+        p.push(".camcraft");
+        PathBuf::from(p)
     }
 }
 
@@ -109,6 +131,20 @@ mod tests {
                 .canonicalize()
                 .unwrap(),
             root.join("models/m.step").canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn a_job_names_its_folder_and_extension() {
+        assert_eq!(job_dir(Path::new("part.camcraft")), Path::new("."));
+        assert_eq!(job_dir(Path::new("jobs/part.camcraft")), Path::new("jobs"));
+        assert_eq!(
+            with_job_extension(Path::new("part")),
+            Path::new("part.camcraft")
+        );
+        assert_eq!(
+            with_job_extension(Path::new("part.CAMCRAFT")),
+            Path::new("part.CAMCRAFT")
         );
     }
 
