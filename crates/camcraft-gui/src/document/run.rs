@@ -271,6 +271,26 @@ impl Document {
         a == b && tool_then == tool_now && then.layout_is_now(&self.job, &self.models, index)
     }
 
+    /// Forget a setup's last run once the setup has fewer operations than it
+    /// ran: one was deleted, moved to another setup, or undone since. The run's
+    /// toolpaths, material and checks were the whole program's, and drawing them
+    /// would still show the operation that is gone.
+    pub fn forget_runs_of_removed_operations(&mut self) {
+        for setup in &self.job.setups {
+            let Some(state) = self.setups.get_mut(&setup.name) else {
+                continue;
+            };
+            if state
+                .ran
+                .as_ref()
+                .is_some_and(|r| r.inputs.setup.operations.len() > setup.operations.len())
+            {
+                state.forget_run();
+                self.followed = None;
+            }
+        }
+    }
+
     /// Turn operation `index` of `setup` on or off.
     pub fn set_enabled(&mut self, setup: &str, index: usize, on: bool) {
         if let Some(op) = self.operation_mut(setup, index) {

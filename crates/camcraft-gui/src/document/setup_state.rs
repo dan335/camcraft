@@ -149,3 +149,17 @@ pub struct SetupState {
     /// Its material during playback, once it has been followed.
     pub live: Option<LiveStock>,
 }
+
+impl SetupState {
+    /// Forget its last run and everything drawn from it, the playhead and the
+    /// material among them, as before it ever ran. The camera and what is ticked
+    /// under Show are kept.
+    pub fn forget_run(&mut self) {
+        self.ran = None;
+        self.live = None;
+        let view = &mut self.view;
+        view.at = Playhead::default();
+        view.transport.playing = false;
+        view.stock_images.clear();
+    }
+}

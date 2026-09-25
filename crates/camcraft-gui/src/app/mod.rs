@@ -799,6 +799,7 @@ impl eframe::App for App {
         }
         if let Some(doc) = self.docs.get_mut(self.active) {
             doc.tidy_selection();
+            doc.forget_runs_of_removed_operations();
             doc.follow_selection();
             if let Some(name) = doc.active.clone() {
                 // The work zero moved: keep the view on the part, which moved with

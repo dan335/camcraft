@@ -7,6 +7,7 @@ use camcraft_core::job::{Preset, StrategySpec, ToolSpec};
 use camcraft_core::run::{Plan, Stage};
 use glam::DVec3;
 
+use crate::view::scene::Playhead;
 use crate::view::viewport::OutlineKind;
 
 fn example() -> Document {
@@ -292,6 +293,53 @@ fn an_operation_moves_to_another_setup() {
     assert!(names(&doc, 0).is_empty());
     doc.move_operation_to(&other, 0, &other, 99);
     assert_eq!(names(&doc, 1), ["rough 2", "finish", "finish 2", "rough"]);
+}
+
+/// A deleted operation leaves nothing behind: its setup's last run, paused
+/// part way through, is forgotten with its playhead and material. An edit that
+/// leaves every operation in place keeps the run, shown out of date; an undo
+/// that takes an operation away forgets it too.
+#[test]
+fn a_deleted_operation_takes_its_run_with_it() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let text = std::fs::read_to_string(dir.join("rail-jig.camcraft")).unwrap();
+    let text = text.replace("sled_base.step", "hinge_jig.step");
+    let job = camcraft_session::parse_job(&text, "rail-jig").unwrap();
+    let mut doc = Document::opened(1, Some(dir.join("rail-jig.camcraft")), job);
+    let run = |doc: &mut Document| {
+        let seq = doc.started("top");
+        let ran = crate::test_jobs::run_setup_zero(&doc.job, &dir);
+        doc.finished("top", seq, Ok(ran));
+    };
+    run(&mut doc);
+    let state = doc.setups.get_mut("top").unwrap();
+    state.view.at = Playhead::at(3);
+    state.view.transport.playing = true;
+
+    doc.job.setups[0].operations[0].passes.feed += 100.0;
+    doc.forget_runs_of_removed_operations();
+    assert!(doc.setups["top"].ran.is_some(), "an edit keeps the run");
+    assert_eq!(doc.status("top"), Status::Stale);
+
+    doc.remove_operation("top", 1);
+    doc.forget_runs_of_removed_operations();
+    let state = &doc.setups["top"];
+    assert!(state.ran.is_none() && state.live.is_none());
+    assert_eq!(state.view.at, Playhead::default());
+    assert!(!state.view.transport.playing);
+    assert_eq!(doc.status("top"), Status::NotRun);
+    assert_eq!(doc.op_status("top", 0), OpStatus::NotRun);
+
+    doc.checkpoint();
+    doc.duplicate_operation("top", 0);
+    doc.checkpoint();
+    run(&mut doc);
+    doc.undo();
+    doc.forget_runs_of_removed_operations();
+    assert!(
+        doc.setups["top"].ran.is_none(),
+        "undoing an add forgets too"
+    );
 }
 
 /// After a run, generating one operation keeps the others that have not
