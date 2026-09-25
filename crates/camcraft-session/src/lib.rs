@@ -30,7 +30,9 @@ use camcraft_core::job::{
     ModelDef, Operation, Passes, Setup, SpindleDirection, StockDef, StockSpec, StockToLeave,
     StrategySpec, ToolKind, ToolSpec,
 };
-use camcraft_core::run::{OperationResult, RunError, SetupResult, StrategyDetail, run_prepared};
+use camcraft_core::run::{
+    Made, OperationResult, Plan, RunError, SetupResult, Stage, StrategyDetail, run_prepared_planned,
+};
 use camcraft_core::setup::{Bodies, PrepareError, prepare};
 use camcraft_geom::mesh::{Aabb, TriMesh};
 use camcraft_geom::topology::{Body, FaceSource};
@@ -394,10 +396,33 @@ pub struct Ran {
 
 /// The one engine path: setup `index` of `job`, with its models.
 pub fn run_setup(job: &Job, index: usize, models: &Models<'_>) -> Result<Ran, SessionError> {
+    run_setup_watched(job, index, models, &mut |_| {})
+}
+
+/// As [`run_setup`], telling `progress` each [`Stage`] as it starts.
+pub fn run_setup_watched(
+    job: &Job,
+    index: usize,
+    models: &Models<'_>,
+    progress: &mut dyn FnMut(Stage),
+) -> Result<Ran, SessionError> {
+    run_setup_planned(job, index, models, &[], progress)
+}
+
+/// As [`run_setup_watched`], doing with each operation what `plans` says, by
+/// its place: see [`run_prepared_planned`]. Only the operations that will run
+/// are checked beforehand.
+pub fn run_setup_planned(
+    job: &Job,
+    index: usize,
+    models: &Models<'_>,
+    plans: &[Plan],
+    progress: &mut dyn FnMut(Stage),
+) -> Result<Ran, SessionError> {
     // Validation happens before anything is computed, so a bad job fails on its own
     // terms rather than part-way through an operation.
     job.check_common()?;
-    job.check_setup(index)?;
+    job.check_setup_where(index, &|i| !matches!(plans.get(i), Some(Plan::Skip)))?;
     let setup = job.setups.get(index).ok_or(JobError::NoSetups)?;
     let mut notes = vec![format!(
         "setup '{}': {} operation(s), tolerance {} mm",
@@ -406,8 +431,9 @@ pub fn run_setup(job: &Job, index: usize, models: &Models<'_>) -> Result<Ran, Se
         job.tolerance
     )];
     let bodies: Bodies<'_> = models.iter().map(|(n, m)| (*n, &m.body)).collect();
+    progress(Stage::Preparing);
     let prepared = prepare(job, index, &bodies)?;
-    let result = run_prepared(job, index, &prepared, &bodies)?;
+    let result = run_prepared_planned(job, index, &prepared, &bodies, plans, progress)?;
     notes.extend(summary(&result));
 
     let mut model_warnings = Vec::new();
@@ -416,6 +442,7 @@ pub fn run_setup(job: &Job, index: usize, models: &Models<'_>) -> Result<Ran, Se
             model_warnings.extend(model.warnings.iter().map(|w| format!("{}: {w}", m.name)));
         }
     }
+    progress(Stage::Checking);
     let checks = checks::check(
         job,
         index,
@@ -441,15 +468,22 @@ pub fn summary(result: &SetupResult) -> Vec<String> {
     let mut out: Vec<String> = result
         .operations
         .iter()
-        .map(|op| {
-            format!(
-                "{}: {} passes, removed {:.0} mm3, travel saved {:.0}%, rapid contacts {}",
+        .map(|op| match op.made {
+            Made::Skipped => format!("{}: not generated", op.name),
+            Made::Disabled => format!("{}: turned off", op.name),
+            Made::Generated | Made::Kept => format!(
+                "{}: {} passes, removed {:.0} mm3, travel saved {:.0}%, rapid contacts {}{}",
                 op.name,
                 op.passes,
                 op.sim.removed_mm3,
                 op.travel_saved * 100.0,
-                op.sim.rapid_contacts
-            )
+                op.sim.rapid_contacts,
+                if op.made == Made::Kept {
+                    ", kept from before"
+                } else {
+                    ""
+                }
+            ),
         })
         .collect();
     out.push(format!(
@@ -661,6 +695,7 @@ pub fn single_operation(spec: &FinishSpec, model: ModelDef) -> Job {
             plunge_feed: spec.feed / 4.0,
             ..Linking::default()
         },
+        enabled: true,
     }];
     Job {
         tolerance: spec.tolerance,
@@ -771,6 +806,64 @@ mod tests {
         let model = load_job_model(Path::new("."), &job.models[0], job.tolerance).unwrap();
         let models: Models<'_> = [("hinge", &model)].into_iter().collect();
         run_setup(&job, 0, &models).unwrap()
+    }
+
+    /// One operation generated alone, the other kept: the kept one is cut into
+    /// the material again, so the result is what generating both gives. One
+    /// skipped or turned off has no paths and cuts nothing, and only what runs
+    /// is checked, so a skipped operation may be unfinished.
+    #[test]
+    fn operations_are_kept_skipped_and_turned_off() {
+        let mut job = small_job();
+        let mut second = job.setups[0].operations[0].clone();
+        second.name = "across".into();
+        second.strategy = StrategySpec::Parallel { angle: 90.0 };
+        job.setups[0].operations.push(second);
+        let model = load_job_model(Path::new("."), &job.models[0], job.tolerance).unwrap();
+        let models: Models<'_> = [("hinge", &model)].into_iter().collect();
+        let final_heights = |ran: &Ran| {
+            let last = ran.result.stages.last().unwrap().unpack().unwrap();
+            last.field().data().to_vec()
+        };
+
+        let both = run_setup(&job, 0, &models).unwrap();
+        assert!(
+            both.result
+                .operations
+                .iter()
+                .all(|o| o.made == Made::Generated)
+        );
+
+        let first = Box::new(both.result.operations[0].clone());
+        let plans = [Plan::Keep(first), Plan::Generate];
+        let kept = run_setup_planned(&job, 0, &models, &plans, &mut |_| {}).unwrap();
+        assert_eq!(kept.result.operations[0].made, Made::Kept);
+        assert_eq!(kept.result.operations[1].made, Made::Generated);
+        assert_eq!(
+            kept.result.operations[1].path.moves(),
+            both.result.operations[1].path.moves()
+        );
+        assert_eq!(final_heights(&kept), final_heights(&both));
+
+        // Skipped: nothing of it, and it need not be finished to run the other.
+        job.setups[0].operations[0].tool = None;
+        let plans = [Plan::Skip, Plan::Generate];
+        let skipped = run_setup_planned(&job, 0, &models, &plans, &mut |_| {}).unwrap();
+        assert_eq!(skipped.result.operations[0].made, Made::Skipped);
+        assert!(skipped.result.operations[0].path.is_empty());
+        assert_eq!(skipped.result.operations[0].sim.removed_mm3, 0.0);
+        assert!(skipped.checks.groups.iter().all(|g| g.op != Some(0)));
+        assert!(
+            run_setup(&job, 0, &models).is_err(),
+            "unfinished, it cannot run"
+        );
+
+        // Turned off: left out of any run, whatever the plan.
+        job.setups[0].operations[0].enabled = false;
+        let off = run_setup(&job, 0, &models).unwrap();
+        assert_eq!(off.result.operations[0].made, Made::Disabled);
+        assert!(off.result.operations[0].path.is_empty());
+        assert_eq!(off.result.operations[1].made, Made::Generated);
     }
 
     /// A real part, finished only on its highest flat face, with its work zero on

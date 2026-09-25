@@ -26,13 +26,15 @@ use camcraft_geom::mesh::TriMesh;
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use eframe::wgpu;
-use glam::{DVec3, Mat4, Vec2, Vec3};
+use glam::{DVec2, DVec3, Mat4, Vec2, Vec3};
 use wgpu::util::DeviceExt;
 
 use crate::camera::Camera;
+use crate::part_ao::PartAo;
 use crate::pick::Projector;
 use crate::pyramid::Pyramid;
 use crate::scene::Scene;
+use crate::stock_ao;
 use crate::stock_tiles::{self, Tile};
 use crate::stock_view::{CLASSES, Class, ColorMode, NO_CELL, StockImage, cell_color};
 use crate::theme;
@@ -57,8 +59,13 @@ const BOUNDARY: u32 = 13;
 /// Line kind for a stock that could be picked into the setup: faint, and drawn
 /// only while it is being picked.
 const GHOST: u32 = 14;
+/// Line kinds for the edges of an operation's height planes: clearance, top and
+/// bottom.
+const CLEARANCE: u32 = 15;
+const TOP: u32 = 16;
+const BOTTOM: u32 = 17;
 /// Line kinds in all, and so colours.
-const KINDS: usize = 16;
+const KINDS: usize = 18;
 /// Toolpath width, in points.
 const LINE_WIDTH: f32 = 1.25;
 
@@ -70,7 +77,7 @@ struct Frame {
     viewport: vec4<f32>,
     // Visible kinds (roles, then stock and axes), visible operations, segments shown.
     masks: vec4<u32>,
-    colors: array<vec4<f32>, 16>,
+    colors: array<vec4<f32>, 18>,
     // Where the eye is.
     eye: vec4<f32>,
 };
@@ -219,6 +226,12 @@ struct Grid {
 @group(1) @binding(0) var<uniform> g: Grid;
 @group(1) @binding(1) var heights: texture_2d<f32>;
 @group(1) @binding(2) var codes: texture_2d<u32>;
+// How much sky each cell sees: see `stock_ao.rs`.
+@group(1) @binding(3) var sky: texture_2d<f32>;
+
+// How much a cell's occlusion darkens it: some light still comes in from the
+// side a pocket's walls do not block, and a wall-to-wall black reads as a hole.
+const SKY_STRENGTH: f32 = 0.8;
 
 struct BoxOut {
     @builtin(position) clip: vec4<f32>,
@@ -275,6 +288,38 @@ fn height(c: vec2<i32>) -> f32 {
         return g.origin_pitch_floor.w;
     }
     return textureLoad(heights, c, 0).r;
+}
+
+// How much sky a cell sees; all of it past the tile.
+fn open_at(c: vec2<i32>) -> f32 {
+    if (c.x < 0 || c.y < 0 || c.x >= i32(g.size.x) || c.y >= i32(g.size.y)) {
+        return 1.0;
+    }
+    return textureLoad(sky, c, 0).r;
+}
+
+// How much sky is seen at `p` (in cells) on top of cell `own`: between the four
+// cells round it, leaving out any across a wall, so a pocket's shade does not
+// creep up onto the top beside it.
+fn open_between(p: vec2<f32>, own: vec2<i32>) -> f32 {
+    let q = p - 0.5;
+    let c0 = vec2<i32>(floor(q));
+    let t = q - floor(q);
+    let h = height(own);
+    var sum = 0.0;
+    var weight = 0.0;
+    for (var j = 0; j < 2; j++) {
+        for (var i = 0; i < 2; i++) {
+            let c = c0 + vec2<i32>(i, j);
+            let w = select(1.0 - t.x, t.x, i == 1) * select(1.0 - t.y, t.y, j == 1);
+            if (abs(height(c) - h) < g.top_wall.y) {
+                sum += w * open_at(c);
+                weight += w;
+            }
+        }
+    }
+    if (weight < 1e-4) { return open_at(own); }
+    return sum / weight;
 }
 
 // A neighbour's height for the slope, or this cell's own across a wall.
@@ -410,19 +455,39 @@ fn fs(i: BoxOut) -> Hit {
         normal = smooth_normal(cell);
     }
     let at = eye + dir * (start + t);
+    let on_grid = vec2<f32>((at.x - o.x) / o.z + 0.5, (at.y - o.y) / o.z + 0.5);
+    var seen = open_between(on_grid, cell);
     if (!up && n.z == 0.0) {
         // A step too small to be a wall is the surface's slope, seen edge on.
         let behind = cell + vec2<i32>(i32(n.x), i32(n.y));
-        if (height(cell) - height(behind) < g.top_wall.y) {
+        let foot = height(behind);
+        if (height(cell) - foot < g.top_wall.y) {
             normal = smooth_normal(cell);
         } else {
             normal = wall_normal(cell, at.z, n);
+            // A wall sees what the floor at its foot sees, at its foot, and what
+            // the top sees at its top. Both are read a little way out from the
+            // wall along the way it faces, and blended with their neighbours as
+            // a top is: a round wall is a staircase of cells, often with
+            // leftover material of all heights at its foot, and read cell by
+            // cell at the wall itself they would stripe it.
+            let out_from = normal.xy * 2.0;
+            let foot_at = on_grid + out_from;
+            let foot_cell = vec2<i32>(floor(foot_at));
+            let low = min(height(foot_cell), foot);
+            let up_it = clamp((at.z - low) / max(height(cell) - low, 1e-6), 0.0, 1.0);
+            seen = mix(
+                open_between(foot_at, foot_cell),
+                open_between(on_grid - out_from * 0.5, cell),
+                up_it,
+            );
         }
     }
     let color = code_color(cell);
     let diffuse = abs(dot(normal, f.light.xyz));
+    let shade = mix(1.0, seen, SKY_STRENGTH);
     var out: Hit;
-    out.color = vec4<f32>(to_srgb(color * (0.3 + 0.7 * diffuse)), 1.0);
+    out.color = vec4<f32>(to_srgb(color * (0.3 + 0.7 * diffuse) * shade), 1.0);
     let clip = f.view_proj * vec4<f32>(at, 1.0);
     out.depth = clip.z / clip.w;
     return out;
@@ -431,7 +496,7 @@ fn fs(i: BoxOut) -> Hit {
 
 /// How many cells tall a step between neighbouring columns must be to be lit as
 /// a wall rather than as the surface's slope: about 72 degrees.
-const WALL_CELLS: f32 = 3.0;
+pub(crate) const WALL_CELLS: f32 = 3.0;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -517,6 +582,49 @@ fn line_instances(scene: &Scene) -> Vec<LineInstance> {
         .collect()
 }
 
+/// Each height plane's name and height, beside its corner furthest right on the
+/// screen, where it is clearest of the part. Labels that would overlap are moved
+/// apart, keeping their order down the screen.
+fn plane_labels(ui: &egui::Ui, painter: &egui::Painter, projector: &Projector, planes: &[Plane]) {
+    let font = theme::caption(ui.style());
+    let mut labels: Vec<(egui::Pos2, &Plane)> = planes
+        .iter()
+        .filter_map(|p| {
+            let at = p
+                .corners()
+                .into_iter()
+                .filter_map(|c| projector.screen(c))
+                .max_by(|a, b| a.x.total_cmp(&b.x))?;
+            Some((at, p))
+        })
+        .collect();
+    labels.sort_by(|a, b| a.0.y.total_cmp(&b.0.y));
+    let rect = painter.clip_rect();
+    let mut below = f32::NEG_INFINITY;
+    for (at, plane) in labels {
+        let galley = painter.layout_no_wrap(
+            plane.label.clone(),
+            font.clone(),
+            theme::egui_color(plane.kind.color()),
+        );
+        let size = galley.size() + egui::vec2(12.0, 4.0);
+        let x = (at.x + 8.0).min(rect.right() - size.x - 4.0);
+        let y = (at.y - size.y / 2.0).max(below + 2.0);
+        let bubble = egui::Rect::from_min_size(egui::pos2(x, y), size);
+        below = bubble.bottom();
+        painter.rect_filled(
+            bubble,
+            theme::RADIUS_SM,
+            theme::egui_color(theme::SURFACE_2),
+        );
+        painter.galley(
+            bubble.min + egui::vec2(6.0, 2.0),
+            galley,
+            egui::Color32::WHITE,
+        );
+    }
+}
+
 fn outline_instances(outline: &[Outline]) -> Vec<LineInstance> {
     outline
         .iter()
@@ -532,6 +640,7 @@ fn outline_instances(outline: &[Outline]) -> Vec<LineInstance> {
                 OutlineKind::Hover => HOVER,
                 OutlineKind::Boundary => BOUNDARY,
                 OutlineKind::Ghost => GHOST,
+                OutlineKind::Plane(k) => k.line_kind(),
             },
             op: 0,
         })
@@ -557,6 +666,78 @@ pub enum OutlineKind {
     Boundary,
     /// A stock that could be picked into the setup.
     Ghost,
+    /// The edge of one of an operation's height planes.
+    Plane(PlaneKind),
+}
+
+/// Which of an operation's heights a plane shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaneKind {
+    /// Where it moves between cuts.
+    Clearance,
+    /// Where cutting starts.
+    Top,
+    /// How deep it cuts.
+    Bottom,
+}
+
+impl PlaneKind {
+    /// All of them, in the order their colours are kept.
+    const ALL: [PlaneKind; 3] = [PlaneKind::Clearance, PlaneKind::Top, PlaneKind::Bottom];
+
+    /// Its colour, from the toolpath palette: rapids fly at the clearance, leads
+    /// come in at the top, and cuts reach the bottom.
+    pub fn color(self) -> [u8; 3] {
+        match self {
+            PlaneKind::Clearance => theme::PATH_RAPID,
+            PlaneKind::Top => theme::PATH_LEAD,
+            PlaneKind::Bottom => theme::PATH_CUT,
+        }
+    }
+
+    fn line_kind(self) -> u32 {
+        match self {
+            PlaneKind::Clearance => CLEARANCE,
+            PlaneKind::Top => TOP,
+            PlaneKind::Bottom => BOTTOM,
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            PlaneKind::Clearance => 0,
+            PlaneKind::Top => 1,
+            PlaneKind::Bottom => 2,
+        }
+    }
+}
+
+/// A level plane across the stock, in the setup's frame, showing one of an
+/// operation's heights.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Plane {
+    /// Which height.
+    pub kind: PlaneKind,
+    /// Its height.
+    pub z: f64,
+    /// Its corners, seen from above.
+    pub lo: DVec2,
+    pub hi: DVec2,
+    /// What it is called in the view, beside its corner.
+    pub label: String,
+}
+
+impl Plane {
+    /// Its corners, round the rectangle.
+    fn corners(&self) -> [DVec3; 4] {
+        let (lo, hi, z) = (self.lo, self.hi, self.z);
+        [
+            DVec3::new(lo.x, lo.y, z),
+            DVec3::new(hi.x, lo.y, z),
+            DVec3::new(hi.x, hi.y, z),
+            DVec3::new(lo.x, hi.y, z),
+        ]
+    }
 }
 
 /// A line that is not a move: the stock's edges and the work zero's axes.
@@ -656,6 +837,8 @@ pub struct Content<'a> {
     pub ghost: Option<(u64, &'a Highlight)>,
     /// What to tell the person, over the view: what a click does now.
     pub hint: Option<&'a str>,
+    /// An operation's heights, as planes across the stock.
+    pub planes: &'a [Plane],
 }
 
 /// What changed in the material since it was last uploaded.
@@ -747,10 +930,11 @@ fn write_texture(
 }
 
 /// What to write of a tile: its cells (its own coordinates) and, for a whole
-/// tile, their heights and codes; and the changed cells of each pyramid level.
+/// tile, their heights, codes and sky; and the changed cells of each pyramid
+/// level.
 struct TilePlan {
     cells: CellRect,
-    whole: Option<(Vec<f32>, Vec<u8>)>,
+    whole: Option<(Vec<f32>, Vec<u8>, Vec<u8>)>,
     levels: Vec<CellRect>,
 }
 
@@ -786,6 +970,7 @@ fn plan_tile(
             whole: Some((
                 rows(t, cells, image, &image.heights, floor),
                 rows(t, cells, image, &image.codes, NO_CELL),
+                rows(t, cells, image, &image.ao, stock_ao::OPEN),
             )),
             levels: tile
                 .pyramid
@@ -875,6 +1060,7 @@ impl Content<'_> {
             hover: None,
             ghost: None,
             hint: None,
+            planes: &[],
         }
     }
 }
@@ -908,6 +1094,15 @@ struct Uploaded {
     outline: Option<(u64, wgpu::Buffer, u32)>,
     /// One per operation; `None` where the job named no tool that could be drawn.
     cutters: Vec<Option<(wgpu::Buffer, u32)>>,
+    /// The height planes as uploaded: each one's fill, and all their edges.
+    planes: Option<PlanesGpu>,
+}
+
+/// Height planes on the GPU, with the planes they were made from.
+struct PlanesGpu {
+    from: Vec<Plane>,
+    fills: Vec<(PlaneKind, wgpu::Buffer)>,
+    lines: (wgpu::Buffer, u32),
 }
 
 /// One tile of the material on the GPU.
@@ -917,6 +1112,8 @@ struct TileGpu {
     pyramid: Pyramid,
     heights: wgpu::Texture,
     codes: wgpu::Texture,
+    /// How much sky each cell sees.
+    sky: wgpu::Texture,
     grid: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
 }
@@ -936,6 +1133,8 @@ struct Gpu {
     highlight_pipeline: wgpu::RenderPipeline,
     cutter_pipeline: wgpu::RenderPipeline,
     cutter_hidden_pipeline: wgpu::RenderPipeline,
+    plane_pipeline: wgpu::RenderPipeline,
+    plane_hidden_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
     frame: wgpu::Buffer,
     frame_group: wgpu::BindGroup,
@@ -945,7 +1144,10 @@ struct Gpu {
     ghost_object: Object,
     ghost_hidden_object: Object,
     cutter_object: Object,
-    cutter_hidden_object: Object,
+    /// The part's occlusion, worked out on the screen.
+    part_ao: PartAo,
+    /// A tint per kind of height plane: where it is in sight, and where it is not.
+    plane_objects: [(Object, Object); 3],
     targets: Option<Targets>,
     texture: Option<egui::TextureId>,
     up: Uploaded,
@@ -1063,8 +1265,18 @@ impl Viewport {
         // Sizes in pixels are small, positive integers; the float came from egui.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let size = [px[0] as u32, px[1] as u32];
+        let reach =
+            content
+                .part
+                .and_then(|(_, m)| m.bounds())
+                .map_or(stock_ao::reach_mm(0.0), |b| {
+                    let e = b.extent();
+                    stock_ao::reach_mm(e.x.max(e.y))
+                });
         let frame = FrameInput {
             view_proj: self.camera.view_projection(aspect),
+            projection: self.camera.projection(aspect),
+            reach: narrow(reach),
             eye: self.camera.eye(),
             pixels: px,
             line_width: LINE_WIDTH * ppp,
@@ -1081,8 +1293,10 @@ impl Viewport {
             egui::Color32::WHITE,
         );
 
-        // Picked points, then the one under the pointer, over the picture.
         let painter = ui.painter_at(rect);
+        plane_labels(ui, &painter, &projector, content.planes);
+
+        // Picked points, then the one under the pointer, over the picture.
         let edge = egui::Stroke::new(1.5, theme::egui_color(theme::BG));
         for at in content.selection.iter().flat_map(|(_, h)| &h.markers) {
             if let Some(p) = projector.screen(*at) {
@@ -1165,6 +1379,10 @@ impl Viewport {
 
 struct FrameInput {
     view_proj: Mat4,
+    /// The projection alone, for the part's occlusion.
+    projection: Mat4,
+    /// How far, in millimetres, the part's occlusion reaches.
+    reach: f32,
     eye: Vec3,
     pixels: [f32; 2],
     line_width: f32,
@@ -1246,7 +1464,7 @@ impl Gpu {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
         };
-        let mesh_pipeline = |label, blend, depth_write, compare| {
+        let mesh_pipeline_biased = |label, blend, depth_write, compare, bias| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&mesh_layout),
@@ -1266,7 +1484,7 @@ impl Gpu {
                     depth_write_enabled: Some(depth_write),
                     depth_compare: Some(compare),
                     stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
+                    bias,
                 }),
                 multisample: wgpu::MultisampleState {
                     count: SAMPLES,
@@ -1287,6 +1505,15 @@ impl Gpu {
                 cache: None,
             })
         };
+        let mesh_pipeline = |label, blend, depth_write, compare| {
+            mesh_pipeline_biased(
+                label,
+                blend,
+                depth_write,
+                compare,
+                wgpu::DepthBiasState::default(),
+            )
+        };
         let part_pipeline = mesh_pipeline("camcraft part", None, true, wgpu::CompareFunction::Less);
         // Translucent, drawn last, and not hiding what is behind it.
         let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
@@ -1300,13 +1527,34 @@ impl Gpu {
         );
         let cutter_pipeline =
             mesh_pipeline("camcraft cutter", blend, false, wgpu::CompareFunction::Less);
-        // The same cutter where something hides it, fainter. The marker's job is to
-        // show where the tool is, so it must never simply vanish into a pocket.
+        // What is drawn again, fainter, where something hides it: a stock or model
+        // that could be picked in may lie inside the part, and must still show.
         let cutter_hidden_pipeline = mesh_pipeline(
             "camcraft cutter, hidden",
             blend,
             false,
             wgpu::CompareFunction::Greater,
+        );
+        // A height plane often lies on the stock's top or a flat of the part: pulled
+        // towards the eye, it wins there rather than flickering with the face.
+        let pull = wgpu::DepthBiasState {
+            constant: -4,
+            slope_scale: -2.0,
+            clamp: 0.0,
+        };
+        let plane_pipeline = mesh_pipeline_biased(
+            "camcraft plane",
+            blend,
+            false,
+            wgpu::CompareFunction::Less,
+            pull,
+        );
+        let plane_hidden_pipeline = mesh_pipeline_biased(
+            "camcraft plane, hidden",
+            blend,
+            false,
+            wgpu::CompareFunction::Greater,
+            pull,
         );
 
         let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1388,6 +1636,16 @@ impl Gpu {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let stock_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1451,6 +1709,8 @@ impl Gpu {
             highlight_pipeline,
             cutter_pipeline,
             cutter_hidden_pipeline,
+            plane_pipeline,
+            plane_hidden_pipeline,
             line_pipeline,
             frame,
             frame_group,
@@ -1460,7 +1720,9 @@ impl Gpu {
             ghost_object: object("camcraft ghost"),
             ghost_hidden_object: object("camcraft ghost, hidden"),
             cutter_object: object("camcraft cutter"),
-            cutter_hidden_object: object("camcraft cutter, hidden"),
+            part_ao: PartAo::new(device, COLOR, SAMPLES),
+            plane_objects: PlaneKind::ALL
+                .map(|_| (object("camcraft plane"), object("camcraft plane, hidden"))),
             targets: None,
             texture: None,
             up: Uploaded {
@@ -1472,6 +1734,7 @@ impl Gpu {
                 moves: None,
                 outline: None,
                 cutters: Vec::new(),
+                planes: None,
             },
         }
     }
@@ -1541,10 +1804,11 @@ impl Gpu {
                         let heights: &[u8] = bytemuck::cast_slice(&image.heights);
                         write_texture(rs, &tile.heights, 0, heights, 4, image.nx, from, r);
                         write_texture(rs, &tile.codes, 0, &image.codes, 1, image.nx, from, r);
+                        write_texture(rs, &tile.sky, 0, &image.ao, 1, image.nx, from, r);
                     }
                 }
                 // The whole tile, apron past the stock's edge and all.
-                Some((heights, codes)) => {
+                Some((heights, codes, sky)) => {
                     let whole = CellRect {
                         x0: 0,
                         y0: 0,
@@ -1554,6 +1818,7 @@ impl Gpu {
                     let hs: &[u8] = bytemuck::cast_slice(heights);
                     write_texture(rs, &tile.heights, 0, hs, 4, r.width(), whole, r);
                     write_texture(rs, &tile.codes, 0, codes, 1, r.width(), whole, r);
+                    write_texture(rs, &tile.sky, 0, sky, 1, r.width(), whole, r);
                 }
             }
             for ((level, r), l) in (1u32..).zip(&plan.levels).zip(&tile.pyramid.levels) {
@@ -1650,6 +1915,12 @@ impl Gpu {
             [tile.w, tile.h],
             1,
         );
+        let sky = texture(
+            "camcraft stock sky",
+            wgpu::TextureFormat::R8Unorm,
+            [tile.w, tile.h],
+            1,
+        );
         let grid = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camcraft stock grid"),
             size: std::mem::size_of::<GridUniforms>() as u64,
@@ -1673,6 +1944,10 @@ impl Gpu {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(&view(&codes)),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&view(&sky)),
+                },
             ],
         });
         TileGpu {
@@ -1680,6 +1955,7 @@ impl Gpu {
             pyramid,
             heights,
             codes,
+            sky,
             grid,
             bind_group,
         }
@@ -1746,6 +2022,51 @@ impl Gpu {
                 None => *slot = None,
                 _ => {}
             }
+        }
+
+        if content.planes.is_empty() {
+            self.up.planes = None;
+        } else if self
+            .up
+            .planes
+            .as_ref()
+            .is_none_or(|p| p.from != content.planes)
+        {
+            let usage = wgpu::BufferUsages::VERTEX;
+            let fills = content
+                .planes
+                .iter()
+                .map(|p| {
+                    let [a, b, c, d] = p.corners().map(|c| Vec3::from(v3(c)));
+                    let v = flat_vertices([[a, b, c], [a, c, d]].into_iter());
+                    (
+                        p.kind,
+                        vertices("camcraft plane", bytemuck::cast_slice(&v), usage),
+                    )
+                })
+                .collect();
+            let edges: Vec<Outline> = content
+                .planes
+                .iter()
+                .flat_map(|p| {
+                    let c = p.corners();
+                    let next = c.into_iter().cycle().skip(1);
+                    c.into_iter().zip(next).map(move |(a, b)| Outline {
+                        a,
+                        b,
+                        kind: OutlineKind::Plane(p.kind),
+                    })
+                })
+                .collect();
+            let lines = outline_instances(&edges);
+            self.up.planes = Some(PlanesGpu {
+                from: content.planes.to_vec(),
+                fills,
+                lines: (
+                    vertices("camcraft plane edges", bytemuck::cast_slice(&lines), usage),
+                    count(lines.len()),
+                ),
+            });
         }
 
         match content.outline {
@@ -1831,11 +2152,12 @@ impl Gpu {
                 SAMPLES,
                 wgpu::TextureUsages::RENDER_ATTACHMENT,
             ),
+            // Read by the part's occlusion, between drawing the part and the rest.
             depth: make(
                 "camcraft viewport depth",
                 DEPTH,
                 SAMPLES,
-                wgpu::TextureUsages::RENDER_ATTACHMENT,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             ),
             resolved: make(
                 "camcraft viewport",
@@ -1844,6 +2166,7 @@ impl Gpu {
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             ),
         };
+        self.part_ao.resize(device, size, &targets.depth);
         let mut renderer = rs.renderer.write();
         let id = match self.texture {
             Some(id) => {
@@ -1889,6 +2212,9 @@ impl Gpu {
             (HOVER, theme::HOVER),
             (BOUNDARY, theme::BOUNDARY),
             (GHOST, theme::GRAY_5),
+            (CLEARANCE, PlaneKind::Clearance.color()),
+            (TOP, PlaneKind::Top.color()),
+            (BOTTOM, PlaneKind::Bottom.color()),
         ] {
             if let Some(slot) = colors.get_mut(kind as usize) {
                 *slot = theme::linear(color).into_rgba();
@@ -1901,7 +2227,10 @@ impl Gpu {
             | (1 << SELECTED)
             | (1 << HOVER)
             | (1 << BOUNDARY)
-            | (1 << GHOST);
+            | (1 << GHOST)
+            | (1 << CLEARANCE)
+            | (1 << TOP)
+            | (1 << BOTTOM);
         let shown = u32::try_from(view.shown).unwrap_or(u32::MAX);
         let frame = FrameUniforms {
             view_proj: input.view_proj.to_cols_array_2d(),
@@ -1935,6 +2264,19 @@ impl Gpu {
             rs.queue
                 .write_buffer(&object.uniforms, 0, bytemuck::bytes_of(&tint));
         }
+        for (kind, (seen, hidden)) in PlaneKind::ALL.iter().zip(&self.plane_objects) {
+            // Faint: the part must still be read through them.
+            for (object, alpha) in [(seen, 0.16), (hidden, 0.06)] {
+                let mut color = theme::linear(kind.color()).into_rgba();
+                color[3] = alpha;
+                let tint = ObjectUniforms {
+                    model: Mat4::IDENTITY.to_cols_array_2d(),
+                    color,
+                };
+                rs.queue
+                    .write_buffer(&object.uniforms, 0, bytemuck::bytes_of(&tint));
+            }
+        }
         if let Some((_, tip)) = view.cutter {
             let mut color = theme::linear(theme::AMBER_5).into_rgba();
             // Opaque enough to find at a glance on a large part, and still
@@ -1944,13 +2286,6 @@ impl Gpu {
             let cutter = ObjectUniforms { model, color };
             rs.queue
                 .write_buffer(&self.cutter_object.uniforms, 0, bytemuck::bytes_of(&cutter));
-            color[3] = 0.35;
-            let hidden = ObjectUniforms { model, color };
-            rs.queue.write_buffer(
-                &self.cutter_hidden_object.uniforms,
-                0,
-                bytemuck::bytes_of(&hidden),
-            );
         }
 
         let bg = theme::linear(theme::BG);
@@ -1959,12 +2294,15 @@ impl Gpu {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("camcraft viewport"),
             });
+        let part = self.up.part.as_ref().filter(|_| view.part);
+        // The part alone first, kept, so its occlusion can be worked out from the
+        // depth it leaves and darken it before anything else is drawn over it.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("camcraft viewport"),
+                label: Some("camcraft viewport part"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &targets.msaa,
-                    resolve_target: Some(&targets.resolved),
+                    resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: f64::from(bg[0]),
@@ -1972,7 +2310,7 @@ impl Gpu {
                             b: f64::from(bg[2]),
                             a: 1.0,
                         }),
-                        store: wgpu::StoreOp::Discard,
+                        store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
                 })],
@@ -1980,6 +2318,42 @@ impl Gpu {
                     view: &targets.depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_bind_group(0, &self.frame_group, &[]);
+            if let Some((_, buffer, n)) = part {
+                pass.set_pipeline(&self.part_pipeline);
+                pass.set_bind_group(1, &self.part_object.bind_group, &[]);
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(0..*n, 0..1);
+            }
+        }
+        if part.is_some() {
+            self.part_ao.frame(&rs.queue, input.projection, input.reach);
+            self.part_ao.draw(&mut encoder, &targets.msaa);
+        }
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("camcraft viewport"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &targets.msaa,
+                    resolve_target: Some(&targets.resolved),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Discard,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &targets.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Discard,
                     }),
                     stencil_ops: None,
@@ -1990,12 +2364,7 @@ impl Gpu {
             });
             pass.set_bind_group(0, &self.frame_group, &[]);
 
-            if let (true, Some((_, buffer, n))) = (view.part, &self.up.part) {
-                pass.set_pipeline(&self.part_pipeline);
-                pass.set_bind_group(1, &self.part_object.bind_group, &[]);
-                pass.set_vertex_buffer(0, buffer.slice(..));
-                pass.draw(0..*n, 0..1);
-
+            if part.is_some() {
                 // What could be picked in, faintly, and fainter still where the
                 // part hides it: it may lie inside the part, and must still show.
                 if let Some(HighlightGpu {
@@ -2038,12 +2407,37 @@ impl Gpu {
                 }
             }
 
+            // Height planes, over everything solid: fainter where the part hides
+            // them, as the bottom often lies under it.
+            if let Some(planes) = &self.up.planes {
+                for (pipeline, hidden) in [
+                    (&self.plane_hidden_pipeline, true),
+                    (&self.plane_pipeline, false),
+                ] {
+                    pass.set_pipeline(pipeline);
+                    for (kind, buffer) in &planes.fills {
+                        let Some((seen, behind)) = self.plane_objects.get(kind.index()) else {
+                            continue;
+                        };
+                        let object = if hidden { behind } else { seen };
+                        pass.set_bind_group(1, &object.bind_group, &[]);
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                        pass.draw(0..6, 0..1);
+                    }
+                }
+            }
+
             pass.set_pipeline(&self.line_pipeline);
             if let Some((buffer, n)) = &self.up.moves {
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..6, 0..(*n).min(shown));
             }
             if let Some((_, buffer, n)) = &self.up.outline {
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(0..6, 0..*n);
+            }
+            if let Some(planes) = &self.up.planes {
+                let (buffer, n) = &planes.lines;
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..6, 0..*n);
             }
@@ -2058,13 +2452,12 @@ impl Gpu {
                 }
             }
 
+            // Only where it is in sight: the material and the part hide it as they
+            // would the real tool.
             if let Some((op, _)) = view.cutter
                 && let Some(Some((buffer, n))) = self.up.cutters.get(op)
             {
                 pass.set_vertex_buffer(0, buffer.slice(..));
-                pass.set_pipeline(&self.cutter_hidden_pipeline);
-                pass.set_bind_group(1, &self.cutter_hidden_object.bind_group, &[]);
-                pass.draw(0..*n, 0..1);
                 pass.set_pipeline(&self.cutter_pipeline);
                 pass.set_bind_group(1, &self.cutter_object.bind_group, &[]);
                 pass.draw(0..*n, 0..1);

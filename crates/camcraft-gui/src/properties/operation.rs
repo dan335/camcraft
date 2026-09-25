@@ -1,20 +1,26 @@
 //! An operation's panel, on Fusion's tabs: the tool it cuts with, the geometry
 //! it is kept to, its heights, its passes, and how its passes are linked.
 
-use camcraft_core::job::{Containment, FeatureRef, Height, HeightRef, Operation, StrategySpec};
+use camcraft_core::job::{
+    Containment, FeatureRef, Height, HeightContext, HeightRef, Operation, StrategySpec,
+};
 use eframe::egui;
+use glam::DVec2;
 
 use super::{Picks, PropAction, cannot_run, error, header, quiet, tab_bar};
 use crate::document::{Document, Level, Selection};
 use crate::measure::Measure;
 use crate::slots::{Kind, Slot};
 use crate::theme;
-use crate::tool_editor::{list_row_background, paint_tool, tool_fields};
+use crate::tool_editor::{chip_load_row, list_row_background, paint_tool, surface_speed_row};
+use crate::viewport::{Plane, PlaneKind};
 use crate::widgets::{self, Icon, Size, Tab, Variant, form};
 
 /// Which tab an operation shows: the same for every operation, so moving between
 /// them keeps the place.
 const TAB: &str = "operation-tab";
+/// The Heights tab: while it shows, the view draws the heights as planes.
+const HEIGHTS: usize = 2;
 
 pub(super) fn show(
     ui: &mut egui::Ui,
@@ -54,7 +60,7 @@ pub(super) fn show(
     };
     form(ui, id.with("strategy"), |ui| {
         widgets::field_label(ui, "Strategy");
-        strategy_combo(ui, op);
+        ui.label(strategy_name(&op.strategy));
         ui.end_row();
     });
     ui.add_space(theme::SPACE_3);
@@ -82,18 +88,14 @@ pub(super) fn show(
                 geometry(ui, m, setup, index, op, picks, actions);
             }
         }
-        2 => {
+        HEIGHTS => {
             if let Some(op) = operation_mut(doc, si, index) {
                 heights(ui, m, op);
             }
         }
         3 => {
-            let tool_rpm = tool_name
-                .as_ref()
-                .and_then(|t| doc.job.tools.get(t))
-                .map(|t| t.rpm);
             if let Some(op) = operation_mut(doc, si, index) {
-                passes(ui, m, op, tool_rpm);
+                passes(ui, m, op);
             }
         }
         _ => {
@@ -122,35 +124,18 @@ fn rename(doc: &mut Document, si: usize, index: usize, to: &str, taken: &[String
     }
 }
 
-fn strategy_combo(ui: &mut egui::Ui, op: &mut Operation) {
-    let name = |s: &StrategySpec| match s {
+/// A strategy's name, as the person reads it. It is chosen when the operation
+/// is made, from the setup's menu in the tree, and not changed after.
+fn strategy_name(s: &StrategySpec) -> &'static str {
+    match s {
         StrategySpec::Parallel { .. } => "parallel",
         StrategySpec::ZlevelRough { .. } => "z-level rough",
         StrategySpec::Drill { .. } => "drilling",
-    };
-    egui::ComboBox::from_id_salt("strategy")
-        .selected_text(name(&op.strategy))
-        .show_ui(ui, |ui| {
-            for s in [
-                StrategySpec::Parallel { angle: 0.0 },
-                StrategySpec::ZlevelRough {
-                    stepdown: 2.0,
-                    min_ring_length: 3.0,
-                },
-                StrategySpec::Drill {
-                    peck: None,
-                    dwell: None,
-                },
-            ] {
-                let on = std::mem::discriminant(&op.strategy) == std::mem::discriminant(&s);
-                if ui.selectable_label(on, name(&s)).clicked() {
-                    Document::set_strategy(op, s);
-                }
-            }
-        });
+    }
 }
 
-/// The tool, its preset, then the job's copy of it to adjust.
+/// The tool and its preset, then the speeds and feeds it cuts at. The tool itself
+/// is edited in the tool library.
 #[allow(clippy::too_many_arguments)]
 fn tool(
     ui: &mut egui::Ui,
@@ -181,7 +166,6 @@ fn tool(
     let Some(t) = tool_name else {
         return;
     };
-    preset_notes(ui, doc, si, index, t);
     if let Some(clash) = doc.number_clash(t) {
         let number = doc.job.tools.get(t).map_or(0, |x| x.number);
         let mut renumber = false;
@@ -201,38 +185,70 @@ fn tool(
             }
         }
     }
-    let users = doc
-        .job
-        .setups
-        .iter()
-        .flat_map(|s| &s.operations)
-        .filter(|o| o.tool.as_deref() == Some(t))
-        .count();
     ui.add_space(theme::SPACE_3);
-    match doc.job.tools.get_mut(t) {
-        Some(spec) => {
-            paint_tool(ui, spec, m);
-            ui.add_space(theme::SPACE_2);
-            quiet(
-                ui,
-                &if users > 1 {
-                    format!(
-                        "This job's copy, used by {users} operations: a change here is a change to all of them."
-                    )
-                } else {
-                    "This job's copy: the library is not changed.".to_string()
-                },
-            );
-            egui::CollapsingHeader::new("Adjust this job's copy")
-                .default_open(false)
-                .show(ui, |ui| {
-                    ui.push_id(("job-tool", t), |ui| tool_fields(ui, spec, m));
-                });
+    let Some(spec) = doc.job.tools.get(t) else {
+        error(ui, &format!("'{t}' is not among the job's tools"));
+        return;
+    };
+    paint_tool(ui, spec, m);
+    let cutter = (spec.rpm, spec.diameter, spec.flutes);
+    ui.add_space(theme::SPACE_4);
+    ui.label(widgets::section_label("Feed and speed"));
+    ui.add_space(theme::SPACE_2);
+    if let Some(op) = operation_mut(doc, si, index) {
+        form(ui, "feed-speed", |ui| feed_speed(ui, m, op, cutter));
+    }
+}
+
+/// The spindle speed and the feeds the operation cuts at, with the surface speed
+/// and chip load they come to, which set them when edited.
+fn feed_speed(
+    ui: &mut egui::Ui,
+    m: Measure,
+    op: &mut Operation,
+    (tool_rpm, diameter, flutes): (u32, f64, Option<u32>),
+) {
+    widgets::field_label(ui, "Spindle");
+    ui.horizontal(|ui| {
+        let mut own = op.passes.rpm.is_some();
+        if ui.checkbox(&mut own, "").changed() {
+            op.passes.rpm = own.then_some(tool_rpm);
         }
-        None => {
-            error(ui, &format!("'{t}' is not among the job's tools"));
+        match op.passes.rpm.as_mut() {
+            Some(rpm) => {
+                ui.add(
+                    egui::DragValue::new(rpm)
+                        .range(1..=60000)
+                        .suffix(" rev/min"),
+                );
+            }
+            None => {
+                quiet(ui, &format!("the tool's, {tool_rpm} rev/min"));
+            }
+        }
+    });
+    ui.end_row();
+    // What the spindle turns at, the operation's own or the tool's.
+    let turning = op.passes.rpm.or(Some(tool_rpm));
+    let mut rpm = turning;
+    surface_speed_row(ui, &mut rpm, diameter, m);
+    if rpm != turning {
+        op.passes.rpm = rpm;
+    }
+    // Drilling feeds its holes at the plunge feed: it has no cutting feed.
+    if !matches!(op.strategy, StrategySpec::Drill { .. }) {
+        widgets::field_label(ui, "Cutting feed");
+        m.feed_field(ui, &mut op.passes.feed, 50_000.0);
+        ui.end_row();
+        let mut feed = Some(op.passes.feed);
+        chip_load_row(ui, &mut feed, op.passes.rpm.or(Some(tool_rpm)), flutes, m);
+        if let Some(f) = feed {
+            op.passes.feed = f;
         }
     }
+    widgets::field_label(ui, "Plunge feed");
+    m.feed_field(ui, &mut op.linking.plunge_feed, 50_000.0);
+    ui.end_row();
 }
 
 /// Which of the tool's presets the operation's values came from: a row of the
@@ -265,108 +281,6 @@ fn preset_row(ui: &mut egui::Ui, doc: &mut Document, si: usize, index: usize, to
             }
         });
     ui.end_row();
-}
-
-/// What has been changed since the preset was applied, and a way to keep the
-/// operation's values as a new preset of the job's copy of the tool.
-fn preset_notes(ui: &mut egui::Ui, doc: &mut Document, si: usize, index: usize, tool: &str) {
-    let presets = doc
-        .job
-        .tools
-        .get(tool)
-        .map(|t| t.presets.clone())
-        .unwrap_or_default();
-    let Some(op) = operation_mut(doc, si, index) else {
-        return;
-    };
-    if presets.is_empty() {
-        quiet(
-            ui,
-            "The tool has no presets. Save this operation's values as one.",
-        );
-    }
-    if let Some(name) = op.preset.clone() {
-        match presets.iter().find(|p| p.name == name) {
-            Some(p) => {
-                let changed = op.differs_from(p);
-                if !changed.is_empty() {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.colored_label(
-                            widgets::Level::Warn.color(),
-                            format!("Changed from '{name}': {}", changed.join(", ")),
-                        );
-                        if widgets::button(ui, Variant::Ghost, Size::Sm, None, "Reset to preset")
-                            .clicked()
-                        {
-                            op.apply_preset(p);
-                        }
-                    });
-                }
-            }
-            None => {
-                quiet(
-                    ui,
-                    &format!("The tool no longer has a preset called '{name}'."),
-                );
-            }
-        }
-    }
-
-    let id = ui.id().with(("save-preset", si, index));
-    let mut draft: Option<String> = ui.data(|d| d.get_temp(id));
-    let mut saved = None;
-    match draft.as_mut() {
-        None => {
-            if widgets::button(
-                ui,
-                Variant::Ghost,
-                Size::Sm,
-                Some(Icon::Plus),
-                "Save as preset",
-            )
-            .clicked()
-            {
-                draft = Some(String::new());
-            }
-        }
-        Some(text) => {
-            let mut done = false;
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(text).hint_text("preset name, e.g. Finishing"));
-                let name = text.trim().to_string();
-                let taken = presets.iter().any(|p| p.name == name);
-                if ui
-                    .add_enabled_ui(!name.is_empty() && !taken, |ui| {
-                        widgets::button(ui, Variant::Primary, Size::Sm, None, "Save")
-                    })
-                    .inner
-                    .clicked()
-                {
-                    saved = Some(op.as_preset(&name));
-                    op.preset = Some(name);
-                    done = true;
-                }
-                if widgets::button(ui, Variant::Ghost, Size::Sm, None, "Cancel").clicked() {
-                    done = true;
-                }
-                if taken {
-                    ui.colored_label(widgets::Level::Warn.color(), "that name is taken");
-                }
-            });
-            if done {
-                draft = None;
-            }
-        }
-    }
-    if let (Some(preset), Some(spec)) = (saved, doc.job.tools.get_mut(tool)) {
-        spec.presets.push(preset);
-    }
-    ui.data_mut(|d| match draft {
-        Some(text) => {
-            d.insert_temp(id, text);
-        }
-        None => d.remove::<String>(id),
-    });
 }
 
 fn geometry(
@@ -527,27 +441,127 @@ fn pick_list(
     }
 }
 
+/// Which of Top and Bottom the strategy cuts to: the others are not asked for.
+fn uses_top_bottom(strategy: &StrategySpec) -> (bool, bool) {
+    match strategy {
+        StrategySpec::ZlevelRough { .. } => (true, true),
+        StrategySpec::Drill { .. } => (false, true),
+        StrategySpec::Parallel { .. } => (false, false),
+    }
+}
+
 fn heights(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
+    let (top, bottom) = uses_top_bottom(&op.strategy);
     form(ui, "heights", |ui| {
         widgets::field_label(ui, "Clearance");
         height_field(ui, m, "clearance", &mut op.heights.clearance);
         ui.end_row();
-        widgets::field_label(ui, "Top");
-        optional_height(ui, m, "geo-top", &mut op.geometry.top, HeightRef::StockTop);
-        ui.end_row();
-        widgets::field_label(ui, "Bottom");
-        optional_height(
-            ui,
-            m,
-            "geo-bottom",
-            &mut op.geometry.bottom,
-            HeightRef::ModelBottom,
-        );
-        ui.end_row();
+        if top {
+            widgets::field_label(ui, "Top");
+            optional_height(ui, m, "geo-top", &mut op.geometry.top, HeightRef::StockTop);
+            ui.end_row();
+        }
+        if bottom {
+            widgets::field_label(ui, "Bottom");
+            optional_height(
+                ui,
+                m,
+                "geo-bottom",
+                &mut op.geometry.bottom,
+                HeightRef::ModelBottom,
+            );
+            ui.end_row();
+        }
     });
+    ui.add_space(theme::SPACE_3);
+    match op.strategy {
+        StrategySpec::Parallel { .. } => {
+            quiet(
+                ui,
+                "Parallel follows the part all the way down, so it has no Top or Bottom.",
+            );
+        }
+        StrategySpec::Drill { .. } => {
+            quiet(
+                ui,
+                "Each hole starts at its picked rim. Bottom is how deep a hole goes when \
+                 its bottom edge is not picked.",
+            );
+        }
+        StrategySpec::ZlevelRough { .. } => {}
+    }
+    quiet(
+        ui,
+        "The view shows each height as a plane across the stock.",
+    );
 }
 
-fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, tool_rpm: Option<u32>) {
+/// The selected operation's heights as planes across the stock, while its Heights
+/// tab shows, as the run will resolve them. None otherwise.
+pub fn height_planes(ctx: &egui::Context, doc: &Document, m: Measure) -> Vec<Plane> {
+    let showing = ctx.data(|d| d.get_temp::<usize>(egui::Id::new(TAB))) == Some(HEIGHTS);
+    let Selection::Operation(setup, index) = &doc.selection else {
+        return Vec::new();
+    };
+    let op = doc
+        .setup_index(setup)
+        .and_then(|i| doc.job.setups.get(i)?.operations.get(*index));
+    let prepared = doc
+        .setups
+        .get(setup)
+        .and_then(|s| s.layout.as_ref()?.prepared.as_ref().ok());
+    let (true, Some(op), Some(prepared), true) =
+        (showing, op, prepared, doc.active.as_ref() == Some(setup))
+    else {
+        return Vec::new();
+    };
+    let stock = prepared.stock_bounds();
+    let ctx = HeightContext {
+        stock_top: stock.max.z,
+        stock_bottom: stock.min.z,
+        model_top: prepared.model_bounds.max.z,
+        model_bottom: prepared.model_bounds.min.z,
+    };
+    // A little past the stock, so a plane on its top does not hide its edges.
+    let grow = 0.04 * (stock.max.x - stock.min.x).max(stock.max.y - stock.min.y);
+    let (lo, hi) = (
+        stock.min.truncate() - DVec2::splat(grow),
+        stock.max.truncate() + DVec2::splat(grow),
+    );
+    let (top, bottom) = uses_top_bottom(&op.strategy);
+    let g = &op.geometry;
+    [
+        (
+            PlaneKind::Clearance,
+            "Clearance",
+            Some(op.heights.clearance.resolve(&ctx)),
+        ),
+        (
+            PlaneKind::Top,
+            "Top",
+            top.then(|| g.top.map_or(ctx.stock_top, |h| h.resolve(&ctx))),
+        ),
+        (
+            PlaneKind::Bottom,
+            "Bottom",
+            bottom.then(|| g.bottom.map_or(ctx.model_bottom, |h| h.resolve(&ctx))),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(kind, name, z)| {
+        let z = z?;
+        Some(Plane {
+            kind,
+            z,
+            lo,
+            hi,
+            label: format!("{name}  Z {}", m.length(z, 2)),
+        })
+    })
+    .collect()
+}
+
+fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
     form(ui, "passes", |ui| {
         match &mut op.strategy {
             StrategySpec::Parallel { angle } => {
@@ -614,35 +628,6 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, tool_rpm: Option<u3
         widgets::field_label(ui, "Stepover");
         m.length_field(ui, &mut op.passes.stepover, 0.05, 100.0, "");
         ui.end_row();
-        widgets::field_label(ui, "Feed");
-        m.feed_field(ui, &mut op.passes.feed, 50_000.0);
-        ui.end_row();
-        widgets::field_label(ui, "Spindle");
-        ui.horizontal(|ui| {
-            let mut own = op.passes.rpm.is_some();
-            if ui.checkbox(&mut own, "").changed() {
-                op.passes.rpm = own.then(|| tool_rpm.unwrap_or(18000));
-            }
-            match op.passes.rpm.as_mut() {
-                Some(rpm) => {
-                    ui.add(
-                        egui::DragValue::new(rpm)
-                            .range(1..=60000)
-                            .suffix(" rev/min"),
-                    );
-                }
-                None => {
-                    quiet(
-                        ui,
-                        &match tool_rpm {
-                            Some(r) => format!("the tool's, {r} rev/min"),
-                            None => "the tool's".to_string(),
-                        },
-                    );
-                }
-            }
-        });
-        ui.end_row();
         widgets::field_label(ui, "Leave, sideways");
         m.length_field(ui, &mut op.passes.stock_to_leave.radial, 0.05, 50.0, "");
         ui.end_row();
@@ -659,9 +644,6 @@ fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
     form(ui, "linking", |ui| {
         widgets::field_label(ui, "Retract feed");
         m.feed_field(ui, &mut op.linking.retract_feed, 50_000.0);
-        ui.end_row();
-        widgets::field_label(ui, "Plunge feed");
-        m.feed_field(ui, &mut op.linking.plunge_feed, 50_000.0);
         ui.end_row();
         widgets::field_label(ui, "Reorder passes");
         ui.checkbox(&mut op.linking.reorder, "to shorten travel");
@@ -720,7 +702,13 @@ fn optional_height(
         match h {
             Some(h) => height_field(ui, m, id, h),
             None => {
-                quiet(ui, "the whole stock");
+                quiet(
+                    ui,
+                    match default {
+                        HeightRef::StockTop => "the stock's top",
+                        _ => "the part's bottom",
+                    },
+                );
             }
         }
     });

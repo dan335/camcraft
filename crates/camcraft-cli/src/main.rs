@@ -397,7 +397,9 @@ fn job(args: JobArgs) -> Fallible<usize> {
             };
             let post = args.profile.as_deref().unwrap_or(&setup.post);
             let profile = load_profile(post, Some(&job_dir))?;
-            for (k, op) in ran.result.operations.iter().enumerate() {
+            // An operation turned off or left out of the run has no program.
+            let made = ran.result.operations.iter().enumerate();
+            for (k, op) in made.filter(|(_, op)| op.made.has_paths()) {
                 let name = program_name(&setup.name, k, &op.name);
                 let path = dir.join(format!("{name}.{}", profile.extension));
                 write_program(op, setup.wcs, &profile, &name, &path)?;

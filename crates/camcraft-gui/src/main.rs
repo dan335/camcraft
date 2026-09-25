@@ -11,6 +11,7 @@ mod document;
 mod file_dialog;
 mod live;
 mod measure;
+mod part_ao;
 mod pick;
 mod picking;
 mod playback;
@@ -20,6 +21,7 @@ mod pyramid;
 mod scene;
 mod settings;
 mod slots;
+mod stock_ao;
 mod stock_tiles;
 mod stock_view;
 #[cfg(test)]

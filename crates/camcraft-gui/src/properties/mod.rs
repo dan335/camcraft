@@ -20,6 +20,8 @@ mod parts;
 mod setup;
 mod work_zero;
 
+pub use operation::height_planes;
+
 use eframe::egui;
 
 use crate::document::{Document, Level, Selection};

@@ -564,7 +564,7 @@ fn preset_fields(
     });
     surface_speed_row(ui, &mut p.rpm, diameter, m);
     opt_feed(ui, m, "Cutting feed", &mut p.feed, errors, "presets.feed");
-    chip_load_row(ui, p, flutes, m);
+    chip_load_row(ui, &mut p.feed, p.rpm, flutes, m);
     opt_feed(
         ui,
         m,
@@ -620,7 +620,7 @@ fn preset_fields(
 
 /// The surface speed at `rpm`, which sets `rpm` when edited. Makers chart
 /// cutters in this, and it holds across diameters.
-fn surface_speed_row(ui: &mut egui::Ui, rpm: &mut Option<u32>, diameter: f64, m: Measure) {
+pub fn surface_speed_row(ui: &mut egui::Ui, rpm: &mut Option<u32>, diameter: f64, m: Measure) {
     widgets::field_label(ui, "Surface speed").on_hover_text("Setting it sets the spindle speed.");
     ui.horizontal(|ui| match *rpm {
         Some(r) if diameter > 0.0 => {
@@ -644,13 +644,18 @@ fn surface_speed_row(ui: &mut egui::Ui, rpm: &mut Option<u32>, diameter: f64, m:
     ui.end_row();
 }
 
-/// The chip load at the preset's feed and speed, which sets the feed when
-/// edited.
-fn chip_load_row(ui: &mut egui::Ui, p: &mut Preset, flutes: Option<u32>, m: Measure) {
+/// The chip load at `feed` and `rpm`, which sets the feed when edited.
+pub fn chip_load_row(
+    ui: &mut egui::Ui,
+    feed: &mut Option<f64>,
+    rpm: Option<u32>,
+    flutes: Option<u32>,
+    m: Measure,
+) {
     widgets::field_label(ui, "Chip load").on_hover_text("Setting it sets the cutting feed.");
-    ui.horizontal(|ui| match (p.feed, p.rpm, flutes) {
-        (Some(feed), Some(rpm), Some(z)) if rpm > 0 && z > 0 => {
-            let fz = cutting::chip_load(feed, f64::from(rpm), z);
+    ui.horizontal(|ui| match (*feed, rpm, flutes) {
+        (Some(now), Some(rpm), Some(z)) if rpm > 0 && z > 0 => {
+            let fz = cutting::chip_load(now, f64::from(rpm), z);
             let mut shown = m.show(fz);
             let response = ui.add(
                 egui::DragValue::new(&mut shown)
@@ -661,7 +666,7 @@ fn chip_load_row(ui: &mut egui::Ui, p: &mut Preset, flutes: Option<u32>, m: Meas
                     .suffix(format!(" {}/tooth", m.unit())),
             );
             if response.changed() {
-                p.feed = Some(cutting::feed_for(m.read(shown), f64::from(rpm), z));
+                *feed = Some(cutting::feed_for(m.read(shown), f64::from(rpm), z));
             }
         }
         (_, _, None) | (_, _, Some(0)) => {

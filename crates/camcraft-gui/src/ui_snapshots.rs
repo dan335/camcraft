@@ -374,7 +374,11 @@ fn setup_panel() {
     // The list of models to add from.
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("setup-tab"), 0_usize));
     h.run_steps(2);
-    h.get_all_by_label("Add").next().unwrap().click();
+    // The models card's button, not the Add menu in the menu bar above.
+    h.get_all_by_label("Add")
+        .find(|n| n.rect().top() > 40.0)
+        .unwrap()
+        .click();
     h.run_steps(3);
     shoot(&mut h, "setup_add_models");
     h.key_press(egui::Key::Escape);
@@ -401,12 +405,21 @@ fn setup_panel() {
     for (tab, name) in [
         (0_usize, "operation_tool"),
         (1, "operation_geometry"),
+        (2, "operation_heights"),
         (3, "operation_passes"),
     ] {
         ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), tab));
         h.run_steps(3);
         shoot(&mut h, name);
     }
+
+    // A roughing operation's heights: clearance, top and bottom, as planes.
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.selection = Selection::Operation("top".into(), 0);
+    }
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 2_usize));
+    h.run_steps(3);
+    shoot(&mut h, "operation_heights_rough");
 }
 
 /// The file dialog, open on the job filter: drawn inside the app, themed with it.

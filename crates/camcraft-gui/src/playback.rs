@@ -348,7 +348,6 @@ pub fn checks(ui: &mut egui::Ui, state: &mut SetupState) -> Option<DVec3> {
     let ran = state.ran.as_ref()?;
     let checks = &ran.ran.checks;
     let scene = &ran.scene;
-    ui.heading("Checks");
     let failed = checks.failures().count();
     if failed > 0 {
         egui::Frame::new()
@@ -518,5 +517,6 @@ pub fn content(state: &SetupState) -> Content<'_> {
         hover: None,
         ghost: None,
         hint: None,
+        planes: &[],
     }
 }

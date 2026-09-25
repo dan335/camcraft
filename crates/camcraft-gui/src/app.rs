@@ -15,7 +15,7 @@ use camcraft_session::SessionError;
 use eframe::egui;
 
 use crate::browser::{self, BrowserAction};
-use crate::document::{Document, Level, ModelSlot, Status, next_key};
+use crate::document::{Document, Level, ModelSlot, Selection, Status, next_key};
 use crate::file_dialog::{AppFileDialog, Pick};
 use crate::measure::Measure;
 use crate::picking::Picking;
@@ -27,7 +27,8 @@ use crate::theme;
 use crate::tool_manager::ToolManager;
 use crate::tool_picker::{Picked, ToolPicker};
 use crate::transport;
-use crate::viewport::{Content, Viewport};
+use crate::viewport::{Content, Plane, Viewport};
+use crate::widgets;
 use crate::worker::{DocId, Reply, Request, Task, Worker};
 
 const STORAGE_DIALOG: &str = "file_dialog";
@@ -93,12 +94,18 @@ pub struct App {
     viewport: Viewport,
     /// Picking in the view: what is armed, under the pointer, and looked at.
     picking: Picking,
+    /// The selected operation's heights, drawn while its Heights tab shows.
+    planes: Vec<Plane>,
     dialog: AppFileDialog,
     /// The tool library, in a window inside the app when open.
     tools: ToolManager,
     picker: Option<ToolPicker>,
     settings: Settings,
     settings_open: bool,
+    /// Whether the log window is open.
+    log_open: bool,
+    /// Whether the checks window is open.
+    checks_open: bool,
     recent: Vec<PathBuf>,
     prompt: Option<Prompt>,
     /// Close this job once it has been saved.
@@ -133,11 +140,14 @@ impl App {
             worker: Worker::default(),
             viewport: Viewport::default(),
             picking: Picking::default(),
+            planes: Vec::new(),
             dialog: AppFileDialog::new(dialog),
             tools: ToolManager::new(),
             picker: None,
             settings,
             settings_open: false,
+            log_open: false,
+            checks_open: false,
             recent,
             prompt: None,
             close_after_save: None,
@@ -258,26 +268,36 @@ impl App {
     // ---- work -----------------------------------------------------------------
 
     /// Run setup `setup` of the showing job.
-    fn generate(&mut self, ctx: &egui::Context, setup: &str) {
+    /// Generate setup `setup`: all its operations, or its operation `only`
+    /// alone, keeping the others as they were made.
+    fn generate(&mut self, ctx: &egui::Context, setup: &str, only: Option<usize>) {
         let Some(doc) = self.docs.get_mut(self.active) else {
             return;
         };
         let Some(index) = doc.setup_index(setup) else {
             return;
         };
-        if let Some(why) = doc.cannot_run(index) {
+        if let Some(why) = doc.cannot_generate(index, only) {
             doc.note(Level::Warn, format!("'{setup}' cannot run: {why}"));
             return;
         }
         let Some(models) = doc.models_for_run(index) else {
             return;
         };
+        let plans = doc.plans(index, only);
+        let what = only
+            .and_then(|k| doc.job.setups.get(index)?.operations.get(k))
+            .map_or_else(
+                || format!("'{setup}'"),
+                |op| format!("'{setup}/{}'", op.name),
+            );
         let seq = doc.started(setup);
-        doc.note(Level::Info, format!("generating '{setup}'…"));
+        doc.note(Level::Info, format!("generating {what}…"));
         let request = Request::Run {
             job: Box::new(doc.job.clone()),
             setup: index,
             models,
+            plans,
         };
         let task = Task::Run {
             setup: setup.to_string(),
@@ -293,7 +313,7 @@ impl App {
             .map(|d| d.job.setups.iter().map(|s| s.name.clone()).collect())
             .unwrap_or_default();
         for name in names {
-            self.generate(ctx, &name);
+            self.generate(ctx, &name, None);
         }
     }
 
@@ -301,7 +321,7 @@ impl App {
     #[cfg(all(test, feature = "ui-snapshots"))]
     pub fn start_run(&mut self, ctx: &egui::Context) {
         if let Some(name) = self.doc().and_then(|d| d.active.clone()) {
-            self.generate(ctx, &name);
+            self.generate(ctx, &name, None);
         }
     }
 
@@ -335,6 +355,11 @@ impl App {
             (Task::Load { name, key }, Reply::Loaded(result)) => {
                 if let Some(doc) = self.find(id) {
                     doc.loaded(&name, &key, result);
+                }
+            }
+            (Task::Run { setup, seq }, Reply::Progress(stage)) => {
+                if let Some(doc) = self.find(id) {
+                    doc.progressed(&setup, seq, stage);
                 }
             }
             (Task::Run { setup, seq }, Reply::Ran(ran)) => {
@@ -517,7 +542,7 @@ impl App {
                     .clicked()
                     && let Some(name) = active
                 {
-                    self.generate(&ctx, &name);
+                    self.generate(&ctx, &name, None);
                     ui.close();
                 }
                 if ui
@@ -527,9 +552,46 @@ impl App {
                     self.generate_all(&ctx);
                     ui.close();
                 }
+                ui.separator();
+                let Some(doc) = self.docs.get(self.active) else {
+                    return;
+                };
+                let mut post = None;
+                if let Some(name) = doc.active.clone() {
+                    let why = post_blocker(doc, std::slice::from_ref(&name));
+                    if ui
+                        .add_enabled(why.is_none(), egui::Button::new("Post…"))
+                        .on_hover_text("write its programs, one per operation, into a folder")
+                        .on_disabled_hover_text(why.unwrap_or_default())
+                        .clicked()
+                    {
+                        post = Some((doc.id, Some(name)));
+                    }
+                }
+                let names: Vec<String> = doc.job.setups.iter().map(|s| s.name.clone()).collect();
+                let why = post_blocker(doc, &names);
+                if ui
+                    .add_enabled(why.is_none(), egui::Button::new("Post all…"))
+                    .on_hover_text("every setup's programs, or none")
+                    .on_disabled_hover_text(why.unwrap_or_default())
+                    .clicked()
+                {
+                    post = Some((doc.id, None));
+                }
+                if let Some((id, scope)) = post {
+                    self.dialog.open(Pick::PostTo(id, scope), "");
+                    ui.close();
+                }
             });
+            ui.menu_button("Add", |ui| self.add_menu(ui));
             ui.menu_button("View", |ui| {
                 if ui.checkbox(&mut self.tools.open, "Tool library").clicked() {
+                    ui.close();
+                }
+                if ui.checkbox(&mut self.checks_open, "Checks").clicked() {
+                    ui.close();
+                }
+                if ui.checkbox(&mut self.log_open, "Log").clicked() {
                     ui.close();
                 }
                 if ui.checkbox(&mut self.settings_open, "Settings").clicked() {
@@ -539,12 +601,51 @@ impl App {
         });
     }
 
+    /// Add to the showing job: models, a stock, a setup, or an operation to the
+    /// selected setup (or the one showing).
+    fn add_menu(&mut self, ui: &mut egui::Ui) {
+        let Some(doc) = self.docs.get_mut(self.active) else {
+            ui.weak("Open or start a job first.");
+            return;
+        };
+        let id = doc.id;
+        if ui.button("Model…").clicked() {
+            self.dialog.open(Pick::AddModels(id, None), "");
+            ui.close();
+            return;
+        }
+        if ui.button("Stock").clicked() {
+            doc.add_stock();
+            ui.close();
+        }
+        if ui.button("Setup").clicked() {
+            doc.add_setup();
+            ui.close();
+        }
+        let target = match &doc.selection {
+            Selection::Setup(s) | Selection::Operation(s, _) => Some(s.clone()),
+            _ => doc.active.clone(),
+        };
+        let menu = ui.add_enabled_ui(target.is_some(), |ui| {
+            ui.menu_button("Operation", |ui| {
+                for (label, strategy) in browser::new_operations() {
+                    if ui.button(label).clicked()
+                        && let Some(setup) = &target
+                    {
+                        doc.add_operation(setup, strategy);
+                        ui.close();
+                    }
+                }
+            })
+        });
+        match &target {
+            Some(setup) => menu.response.on_hover_text(format!("to setup '{setup}'")),
+            None => menu.response.on_disabled_hover_text("the job has no setup"),
+        };
+    }
+
     fn tabs(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
         let mut close = None;
-        let mut generate = None;
-        let mut all = false;
-        let mut post: Option<(DocId, Option<String>)> = None;
         ui.horizontal(|ui| {
             for (i, doc) in self.docs.iter().enumerate() {
                 let mut title = doc.title();
@@ -571,73 +672,9 @@ impl App {
             if ui.small_button("+").on_hover_text("new job").clicked() {
                 self.new_job();
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .selectable_label(self.tools.open, "Tool library")
-                    .on_hover_text("your tools, in folders")
-                    .clicked()
-                {
-                    self.tools.open = !self.tools.open;
-                }
-                if ui
-                    .selectable_label(self.settings_open, "Settings")
-                    .on_hover_text("units, and how the app shows things")
-                    .clicked()
-                {
-                    self.settings_open = !self.settings_open;
-                }
-                ui.separator();
-                let Some(doc) = self.docs.get(self.active) else {
-                    return;
-                };
-                if ui.button("Generate all").clicked() {
-                    all = true;
-                }
-                if let Some(name) = doc.active.clone() {
-                    let why = doc.setup_index(&name).and_then(|i| doc.cannot_run(i));
-                    if ui
-                        .add_enabled(why.is_none(), egui::Button::new(format!("Generate {name}")))
-                        .on_disabled_hover_text(why.unwrap_or_default())
-                        .clicked()
-                    {
-                        generate = Some(name.clone());
-                    }
-                    let why = post_blocker(doc, std::slice::from_ref(&name));
-                    if ui
-                        .add_enabled(why.is_none(), egui::Button::new(format!("Post {name}…")))
-                        .on_hover_text("write its programs, one per operation, into a folder")
-                        .on_disabled_hover_text(why.unwrap_or_default())
-                        .clicked()
-                    {
-                        post = Some((doc.id, Some(name)));
-                    }
-                }
-                let names: Vec<String> = doc.job.setups.iter().map(|s| s.name.clone()).collect();
-                let why = post_blocker(doc, &names);
-                if ui
-                    .add_enabled(why.is_none(), egui::Button::new("Post all…"))
-                    .on_hover_text("every setup's programs, or none")
-                    .on_disabled_hover_text(why.unwrap_or_default())
-                    .clicked()
-                {
-                    post = Some((doc.id, None));
-                }
-                if let Some(what) = self.worker.busy(doc.id) {
-                    ui.label(what);
-                    ui.spinner();
-                }
-            });
         });
         if let Some(id) = close {
             self.close(id);
-        }
-        if let Some((id, scope)) = post {
-            self.dialog.open(Pick::PostTo(id, scope), "");
-        }
-        if all {
-            self.generate_all(&ctx);
-        } else if let Some(name) = generate {
-            self.generate(&ctx, &name);
         }
     }
 
@@ -720,8 +757,6 @@ impl App {
                     }
                     playback::result(ui, state, m);
                     ui.separator();
-                    focus = playback::checks(ui, state);
-                    ui.separator();
                 } else if state.running.is_none() {
                     ui.weak("Not generated yet.");
                 }
@@ -735,7 +770,10 @@ impl App {
             match a {
                 BrowserAction::AddModels => self.dialog.open(Pick::AddModels(id, None), ""),
                 BrowserAction::Locate(name) => self.dialog.open(Pick::Locate(id, name), ""),
-                BrowserAction::Generate(name) => self.generate(&ctx, &name),
+                BrowserAction::Generate(name) => self.generate(&ctx, &name, None),
+                BrowserAction::GenerateOperation(name, i) => {
+                    self.generate(&ctx, &name, Some(i));
+                }
             }
         }
     }
@@ -752,9 +790,52 @@ impl App {
             armed: self.picking.armed(id),
             shown: self.picking.shown(id),
         };
+        // An operation's panel ends with a way to generate it, kept in sight
+        // below its fields however far they scroll.
+        let mut generate = None;
+        if let Selection::Operation(setup, index) = &doc.selection {
+            egui::Panel::bottom("operation-generate")
+                .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 8)))
+                .show(ui, |ui| {
+                    let why = doc
+                        .setup_index(setup)
+                        .and_then(|i| doc.cannot_generate(i, Some(*index)));
+                    let running = doc.status(setup) == Status::Running;
+                    ui.horizontal(|ui| {
+                        let label = if running { "Generating…" } else { "Generate" };
+                        let clicked = ui
+                            .add_enabled_ui(why.is_none() && !running, |ui| {
+                                widgets::button(
+                                    ui,
+                                    widgets::Variant::Primary,
+                                    widgets::Size::Md,
+                                    Some(widgets::Icon::Play),
+                                    label,
+                                )
+                            })
+                            .inner
+                            .on_hover_text(
+                                "Generate this operation alone: the others keep what they \
+                                 have, and are cut again into the material, so it cuts what \
+                                 they leave",
+                            )
+                            .on_disabled_hover_text(why.unwrap_or_default())
+                            .clicked();
+                        if running {
+                            ui.spinner();
+                        }
+                        if clicked {
+                            generate = Some((setup.clone(), *index));
+                        }
+                    });
+                });
+        }
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| actions = properties::show(ui, doc, m, picks));
+        if let Some((setup, index)) = generate {
+            self.generate(&ctx, &setup, Some(index));
+        }
         for a in actions {
             match a {
                 PropAction::Arm(slot) => self.picking.arm(id, slot),
@@ -775,6 +856,51 @@ impl App {
                 }
             }
         }
+    }
+
+    /// What the checks found for the setup showing, in its own window, opened
+    /// from the View menu. A finding at a move, clicked, brings the view to it.
+    fn checks_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.checks_open;
+        let mut focus = None;
+        egui::Window::new("Checks")
+            .open(&mut open)
+            .default_size([420.0, 360.0])
+            .resizable(true)
+            .show(ctx, |ui| {
+                let Some(doc) = self.docs.get_mut(self.active) else {
+                    ui.weak("No job is open.");
+                    return;
+                };
+                let Some(name) = doc.active.clone() else {
+                    ui.weak("No setup is showing.");
+                    return;
+                };
+                let state = doc.setups.entry(name.clone()).or_default();
+                if state.ran.is_none() {
+                    ui.weak(format!("'{name}' has not been generated yet."));
+                    return;
+                }
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    focus = playback::checks(ui, state);
+                });
+            });
+        self.checks_open = open;
+        if let Some(at) = focus {
+            self.viewport.focus(at, 12.0);
+        }
+    }
+
+    /// What happened, in its own window, opened from the View menu: the tree,
+    /// the panels and the view already say what matters as it happens.
+    fn log_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.log_open;
+        egui::Window::new("Log")
+            .open(&mut open)
+            .default_size([640.0, 280.0])
+            .resizable(true)
+            .show(ctx, |ui| self.log_panel(ui));
+        self.log_open = open;
     }
 
     fn log_panel(&self, ui: &mut egui::Ui) {
@@ -1142,6 +1268,7 @@ impl App {
         if let Some(doc) = self.doc() {
             self.picking.decorate(doc.id, &mut content);
         }
+        content.planes = &self.planes;
         content
     }
 
@@ -1355,7 +1482,7 @@ impl App {
     pub fn live_caught_up_for_snapshot(&mut self) -> bool {
         self.state_for_snapshot()
             .and_then(|s| s.live.as_ref())
-            .is_some_and(crate::live::LiveStock::caught_up)
+            .is_some_and(crate::live::LiveStock::settled)
     }
 
     /// Go to the deepest steep descent, as clicking it would. Only the snapshot
@@ -1443,6 +1570,7 @@ impl eframe::App for App {
         }
         if let Some(doc) = self.docs.get_mut(self.active) {
             doc.tidy_selection();
+            doc.follow_selection();
             if let Some(name) = doc.active.clone() {
                 // The work zero moved: keep the view on the part, which moved with
                 // it. The camera is the viewport's if this setup is showing, else
@@ -1477,6 +1605,8 @@ impl eframe::App for App {
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::top("tabs").show(ui, |ui| self.tabs(ui));
         self.settings.show(&ctx, &mut self.settings_open);
+        self.log_window(&ctx);
+        self.checks_window(&ctx);
         self.picks(&ctx);
         self.tool_picker(&ctx);
         self.prompts(&ctx);
@@ -1492,10 +1622,6 @@ impl eframe::App for App {
                 .resizable(true)
                 .default_size(380.0)
                 .show(ui, |ui| self.right(ui));
-            egui::Panel::bottom("log")
-                .resizable(true)
-                .default_size(130.0)
-                .show(ui, |ui| self.log_panel(ui));
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| {
@@ -1510,6 +1636,11 @@ impl eframe::App for App {
                     }
                     #[cfg(all(test, feature = "ui-snapshots"))]
                     let rect = ui.available_rect_before_wrap();
+                    // After the panel, so the heights drawn are the ones just edited.
+                    self.planes = self
+                        .doc()
+                        .map(|d| properties::height_planes(&ctx, d, m))
+                        .unwrap_or_default();
                     // The viewport is taken out for the call, because the content it
                     // draws borrows the rest of the app.
                     let mut viewport = std::mem::take(&mut self.viewport);

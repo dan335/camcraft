@@ -130,9 +130,11 @@ pub fn check(
     });
     let ops = job.setups.get(setup).map(|s| &s.operations);
     let cutter = DropCutter::new(part);
+    // Only what has paths: an operation left out of the run has nothing to check.
     let per_op: Vec<Group> = operations
         .par_iter()
         .enumerate()
+        .filter(|(_, op)| op.made.has_paths())
         .map(|(i, op)| {
             let tool = ops
                 .and_then(|o| o.get(i))

@@ -18,6 +18,7 @@ use camcraft_geom::heightmap::narrow;
 use camcraft_sim::stock::{CellRect, PartSurface, Stock};
 use glam::DVec2;
 
+use crate::stock_ao::{self, Occluder};
 use crate::theme;
 
 /// How a column of material compares with the part.
@@ -246,6 +247,8 @@ pub struct StockImage {
     pub heights: Vec<f32>,
     /// Class and shade per cell, row by row: see [`code`].
     pub codes: Vec<u8>,
+    /// How much sky each cell sees, row by row: see [`crate::stock_ao`].
+    pub ao: Vec<u8>,
     /// Cells per class, in [`CLASSES`] order.
     pub counts: [usize; 4],
 }
@@ -261,12 +264,20 @@ impl StockImage {
             floor: 0.0,
             heights: Vec::new(),
             codes: Vec::new(),
+            ao: Vec::new(),
             counts: [0; 4],
         }
     }
 
-    /// Classify `stock` against `part`, with the job's gouge `budget`.
+    /// Classify `stock` against `part`, with the job's gouge `budget`, and
+    /// shade it.
     pub fn build(stock: &Stock, part: &PartSurface, budget: f64) -> Self {
+        Self::build_shaded(stock, part, budget).0
+    }
+
+    /// As [`StockImage::build`], with what shaded it, to keep it shaded as it
+    /// changes.
+    pub fn build_shaded(stock: &Stock, part: &PartSurface, budget: f64) -> (Self, Occluder) {
         let field = stock.field();
         let (nx, ny) = (field.nx(), field.ny());
         let cells = nx as usize * ny as usize;
@@ -278,6 +289,7 @@ impl StockImage {
             floor: stock.floor(),
             heights: vec![0.0; cells],
             codes: vec![NO_CELL; cells],
+            ao: vec![stock_ao::OPEN; cells],
             counts: [0; 4],
         };
         if nx > 0 && ny > 0 {
@@ -313,8 +325,18 @@ impl StockImage {
             for (count, g) in image.counts.iter_mut().zip(gained) {
                 *count = count.wrapping_add_signed(g);
             }
+            let all = CellRect {
+                x0: 0,
+                y0: 0,
+                x1: nx - 1,
+                y1: ny - 1,
+            };
+            let occluder = Occluder::new(&image);
+            image.ao = occluder.shade(&image, all);
+            return (image, occluder);
         }
-        image
+        let occluder = Occluder::new(&image);
+        (image, occluder)
     }
 
     /// Classify again the cells of `rect`, which is all that changed in `stock`
@@ -404,6 +426,7 @@ impl StockImage {
             ny: rect.height(),
             heights,
             codes,
+            ao: Vec::new(),
             counts: [0; 4],
             ..*self
         }

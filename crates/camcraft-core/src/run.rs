@@ -125,6 +125,38 @@ pub enum StrategyDetail {
     Drill(DrillReport),
 }
 
+/// How an operation's paths came to be in a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Made {
+    /// Worked out in this run.
+    Generated,
+    /// Kept from an earlier run, as it was, and cut again into this run's
+    /// material.
+    Kept,
+    /// Not worked out: no paths, and it cuts nothing.
+    Skipped,
+    /// Turned off in the job: no paths, cuts nothing, and is not posted.
+    Disabled,
+}
+
+impl Made {
+    /// Whether it has paths: worked out now or kept from before.
+    pub fn has_paths(self) -> bool {
+        matches!(self, Made::Generated | Made::Kept)
+    }
+}
+
+/// What a run is to do with one operation.
+#[derive(Debug, Clone)]
+pub enum Plan {
+    /// Work it out.
+    Generate,
+    /// Keep what an earlier run made of it, unchanged since.
+    Keep(Box<OperationResult>),
+    /// Leave it out.
+    Skip,
+}
+
 /// What one operation produced.
 #[derive(Debug, Clone)]
 pub struct OperationResult {
@@ -166,6 +198,8 @@ pub struct OperationResult {
     pub max_cut_step: f64,
     /// Anything the caller should look at.
     pub warnings: Vec<String>,
+    /// How its paths came to be in this run.
+    pub made: Made,
 }
 
 impl OperationResult {
@@ -235,6 +269,19 @@ impl SetupResult {
     }
 }
 
+/// Where a run has got to, as it goes: what it is doing now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// Laying the models and stock out in the setup's frame.
+    Preparing,
+    /// Running operation `i`, from 0: its paths, then cutting them.
+    Operation(usize),
+    /// Measuring the finished material against the part.
+    Verifying,
+    /// Running the setup's checks on what it made.
+    Checking,
+}
+
 /// Check, lay out and run setup `index` of `job`, with its models by name.
 pub fn run_setup(job: &Job, index: usize, bodies: &Bodies<'_>) -> Result<SetupResult, RunError> {
     job.check_common()?;
@@ -251,6 +298,32 @@ pub fn run_prepared(
     index: usize,
     prepared: &Prepared,
     bodies: &Bodies<'_>,
+) -> Result<SetupResult, RunError> {
+    run_prepared_watched(job, index, prepared, bodies, &mut |_| {})
+}
+
+/// As [`run_prepared`], telling `progress` each [`Stage`] as it starts.
+pub fn run_prepared_watched(
+    job: &Job,
+    index: usize,
+    prepared: &Prepared,
+    bodies: &Bodies<'_>,
+    progress: &mut dyn FnMut(Stage),
+) -> Result<SetupResult, RunError> {
+    run_prepared_planned(job, index, prepared, bodies, &[], progress)
+}
+
+/// As [`run_prepared_watched`], doing with each operation what `plans` says, by
+/// its place: an operation with no plan is worked out, and one turned off is
+/// left out whatever its plan. Kept operations are cut into the material again,
+/// so what comes after them is planned against what they leave.
+pub fn run_prepared_planned(
+    job: &Job,
+    index: usize,
+    prepared: &Prepared,
+    bodies: &Bodies<'_>,
+    plans: &[Plan],
+    progress: &mut dyn FnMut(Stage),
 ) -> Result<SetupResult, RunError> {
     let setup = job.setups.get(index).ok_or(JobError::NoSetups)?;
     let mesh = &prepared.part;
@@ -286,7 +359,28 @@ pub fn run_prepared(
     let mut operations = Vec::with_capacity(setup.operations.len());
     let mut stages = Vec::with_capacity(setup.operations.len() + 1);
     stages.push(Arc::new(PackedStock::pack(&stock)));
-    for op in &setup.operations {
+    for (i, op) in setup.operations.iter().enumerate() {
+        let plan = plans.get(i).unwrap_or(&Plan::Generate);
+        if !op.enabled || matches!(plan, Plan::Skip) {
+            let made = if op.enabled {
+                Made::Skipped
+            } else {
+                Made::Disabled
+            };
+            operations.push(not_made(job, op, made));
+            stages.push(Arc::new(PackedStock::pack(&stock)));
+            continue;
+        }
+        progress(Stage::Operation(i));
+        if let Plan::Keep(before) = plan {
+            let tool = cutting_tool(job, op)?;
+            let mut kept = (**before).clone();
+            kept.sim = stock.apply(&sim_moves(&kept.path), &tool);
+            kept.made = Made::Kept;
+            operations.push(kept);
+            stages.push(Arc::new(PackedStock::pack(&stock)));
+            continue;
+        }
         let tool = cutting_tool(job, op)?;
         let feature = |source| RunError::Feature {
             op: op.name.clone(),
@@ -323,6 +417,7 @@ pub fn run_prepared(
     // The simulator resolves the surface on a grid, so it cannot be held finer than
     // one cell plus the chordal tolerance the paths were built to; and that holds
     // across as well as down, or every vertical wall is a gouge beside it.
+    progress(Stage::Verifying);
     let budget = job.tolerance + sim_pitch;
     let part = Arc::new(PartSurface::from_mesh(mesh, lo, hi, sim_pitch)?.reaching(budget));
     let verify = stock.verify(&part, budget, LEFTOVER_LIMIT);
@@ -654,7 +749,50 @@ fn run_operation(
         deepest_cut_descent_mm: deepest,
         max_cut_step: op.passes.max_cut_step,
         warnings,
+        made: Made::Generated,
     })
+}
+
+/// What stands for an operation left out of a run: no paths, nothing cut.
+fn not_made(job: &Job, op: &Operation, made: Made) -> OperationResult {
+    let spec = job.tool_for(op);
+    let (strategy, detail) = match op.strategy {
+        StrategySpec::Parallel { .. } => ("parallel", StrategyDetail::Parallel(Default::default())),
+        StrategySpec::ZlevelRough { .. } => (
+            "zlevel-rough",
+            StrategyDetail::ZlevelRough(Default::default()),
+        ),
+        StrategySpec::Drill { peck, dwell } => (
+            "drill",
+            StrategyDetail::Drill(DrillReport {
+                holes: Vec::new(),
+                peck,
+                dwell,
+                feed: op.linking.plunge_feed,
+            }),
+        ),
+    };
+    OperationResult {
+        name: op.name.clone(),
+        strategy,
+        path: Toolpath::new(),
+        tool_number: spec.map_or(0, |t| t.number),
+        rpm: op.passes.rpm.or(spec.map(|t| t.rpm)).unwrap_or(0),
+        tool_comment: spec.map(|t| t.comment.clone()).unwrap_or_default(),
+        spindle: spec.map(|t| t.spindle).unwrap_or_default(),
+        coolant: spec.map(|t| t.coolant).unwrap_or_default(),
+        sim: SimReport::default(),
+        passes: 0,
+        travel_saved: 0.0,
+        detail,
+        links: LinkReport::default(),
+        clearance_z: 0.0,
+        steep_cut_descents: 0,
+        deepest_cut_descent_mm: 0.0,
+        max_cut_step: op.passes.max_cut_step,
+        warnings: Vec::new(),
+        made,
+    }
 }
 
 #[cfg(test)]

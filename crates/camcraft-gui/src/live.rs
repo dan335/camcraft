@@ -17,6 +17,7 @@ use camcraft_sim::stock::{CellRect, PartSurface};
 use eframe::egui;
 
 use crate::document::{RanSetup, next_key};
+use crate::stock_ao::{self, Occluder};
 use crate::stock_view::StockImage;
 use crate::tiles::Tiles;
 use crate::viewport::StockChange;
@@ -37,6 +38,13 @@ const MOVES_PER_LOOK: usize = 4;
 /// over the next frames, so no frame waits for a whole sheet.
 const UPLOAD_CELLS: u64 = 4_000_000;
 
+/// How long the thread shades between sweeps, catching up on the cells round
+/// what was cut; all of it once it has nothing else to do.
+const SHADE_STEP: Duration = Duration::from_millis(4);
+
+/// Cells shaded at a time while catching up, so it looks at the clock often.
+const SHADE_CELLS: u64 = 65_536;
+
 /// Where the program stands.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Target {
@@ -53,6 +61,8 @@ struct Update {
     target: Target,
     reached: bool,
     change: Option<Change>,
+    /// Whether every cell is shaded for its heights, as of this update.
+    shaded: bool,
 }
 
 /// What changed in the shared image.
@@ -92,6 +102,8 @@ pub struct LiveStock {
     pending: Option<Tiles>,
     /// The last target the thread reached.
     reached: Option<Target>,
+    /// Whether the thread had shaded every cell, as of its last word.
+    shaded: bool,
 }
 
 impl LiveStock {
@@ -121,6 +133,7 @@ impl LiveStock {
             pending_all: false,
             pending: None,
             reached: None,
+            shaded: false,
         })
     }
 
@@ -156,12 +169,20 @@ impl LiveStock {
             if update.reached {
                 self.reached = Some(update.target);
             }
+            self.shaded = update.shaded;
         }
     }
 
     /// Whether the material stands where it was last asked to.
     pub fn caught_up(&self) -> bool {
         self.sent.is_some() && self.reached == self.sent
+    }
+
+    /// Whether it stands there shaded too: the shade round a cut follows it by
+    /// a frame or two.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn settled(&self) -> bool {
+        self.caught_up() && self.shaded
     }
 
     /// The material to draw: its key, the image (shared with the thread, to be
@@ -199,14 +220,66 @@ impl LiveStock {
     }
 }
 
+/// Keeping the material's occlusion up to date as it is cut.
+///
+/// A cut changes what the cells round it see, out to the occluder's reach, and
+/// shading a cell costs many times classifying it. So cutting never waits on
+/// shading: the cells a cut reaches are kept to shade once there is time, a few
+/// milliseconds between sweeps and all of them before sweeping ahead. At playing
+/// speed the shade is a frame or two behind the cut; during a fast scrub it
+/// follows the cutter. A new image is shaded whole before it is shown, so a
+/// jump never shows the shade of somewhere else in the program.
+#[derive(Default)]
+struct Shading {
+    occluder: Option<Occluder>,
+    /// Cells whose occlusion a cut has changed and that are not shaded yet.
+    pending: Option<Tiles>,
+}
+
+impl Shading {
+    /// Shade pending cells until `until`, or they are all shaded: which.
+    fn catch_up(&mut self, shared: &Shared, until: Instant) -> Option<Change> {
+        let (Some(occluder), Some(pending)) = (&mut self.occluder, &mut self.pending) else {
+            return None;
+        };
+        let mut done = Vec::new();
+        while !pending.is_empty() && Instant::now() < until {
+            let rects = pending.first(SHADE_CELLS);
+            occluder.shade_into(&mut lock(shared), &rects);
+            for r in &rects {
+                pending.unmark(*r);
+            }
+            done.extend(rects);
+        }
+        (!done.is_empty()).then_some(Change::Cells(done))
+    }
+
+    fn behind(&self) -> bool {
+        self.pending.as_ref().is_some_and(|p| !p.is_empty())
+    }
+}
+
+/// Two changes to the image as one.
+fn merge(a: Option<Change>, b: Option<Change>) -> Option<Change> {
+    match (a, b) {
+        (Some(Change::Full), _) | (_, Some(Change::Full)) => Some(Change::Full),
+        (Some(Change::Cells(mut x)), Some(Change::Cells(y))) => {
+            x.extend(y);
+            Some(Change::Cells(x))
+        }
+        (a, b) => a.or(b),
+    }
+}
+
 /// One stretch of the thread's work: sweep toward `t` until `until` or it is
-/// there, and classify again the tiles that changed, into the shared image.
-/// Returns what changed, and whether it got there.
+/// there, and classify again the tiles that changed, into the shared image,
+/// noting the cells whose shade that changes. Returns what changed, and whether
+/// it got there.
 fn work(
     live: &mut Live,
     replay: &Replay,
     (part, budget): (&PartSurface, f64),
-    shared: &Shared,
+    (shared, shading): (&Shared, &mut Shading),
     t: Target,
     until: Instant,
 ) -> (Option<Change>, bool) {
@@ -227,17 +300,33 @@ fn work(
         let image = lock(shared);
         image.nx != nx || image.ny != ny
     };
-    if all || fresh {
+    if all || fresh || shading.occluder.is_none() {
         // Built unlocked, so the UI can draw the old one meanwhile.
-        let image = StockImage::build(live.stock(), part, budget);
+        let (image, occluder) = StockImage::build_shaded(live.stock(), part, budget);
+        *shading = Shading {
+            occluder: Some(occluder),
+            pending: Some(Tiles::new(nx, ny)),
+        };
         *lock(shared) = image;
         return (Some(Change::Full), reached);
     }
+    let (Some(occluder), Some(pending)) = (&mut shading.occluder, &mut shading.pending) else {
+        return (None, reached);
+    };
     if tiles.is_empty() {
         return (None, reached);
     }
     let rects = tiles.rects();
-    lock(shared).patch_many(live.stock(), part, budget, &rects);
+    {
+        let mut image = lock(shared);
+        image.patch_many(live.stock(), part, budget, &rects);
+        occluder.update(&image, &rects);
+    }
+    // What the change of height reaches: its own tiles, and the tiles round them
+    // whose cells see it on their horizon.
+    for r in &rects {
+        pending.mark(stock_ao::grow(*r, occluder.reach(), nx, ny));
+    }
     (Some(Change::Cells(rects)), reached)
 }
 
@@ -261,9 +350,32 @@ fn run(
     // most one spacing of sweeping, even to where playback has never been.
     let mut ahead = Live::new(replay, CHECKPOINT_BYTES);
     let mut target: Option<Target> = None;
+    let mut last: Option<Target> = None;
+    let mut shading = Shading::default();
     loop {
-        // Idle: sweep ahead, or wait once that is done. Otherwise only look for a
-        // newer target.
+        // Idle: shade what is behind, then sweep ahead, or wait once that is
+        // done. Otherwise only look for a newer target.
+        while target.is_none() && shading.behind() {
+            match rx.try_recv() {
+                Ok(t) => target = Some(t),
+                Err(TryRecvError::Disconnected) => return,
+                Err(TryRecvError::Empty) => {
+                    let change = shading.catch_up(shared, Instant::now() + STEP);
+                    if let (Some(change), Some(t)) = (change, last) {
+                        let update = Update {
+                            target: t,
+                            reached: false,
+                            change: Some(change),
+                            shaded: !shading.behind(),
+                        };
+                        if tx.send(update).is_err() {
+                            return;
+                        }
+                        ctx.request_repaint();
+                    }
+                }
+            }
+        }
         while target.is_none() {
             if let Some(a) = &mut ahead {
                 match rx.try_recv() {
@@ -298,12 +410,25 @@ fn run(
         let Some(t) = target else { continue };
 
         let until = Instant::now() + STEP;
-        let (change, reached) = work(&mut live, replay, (part, budget), shared, t, until);
+        let (change, reached) = work(
+            &mut live,
+            replay,
+            (part, budget),
+            (shared, &mut shading),
+            t,
+            until,
+        );
+        let change = merge(
+            change,
+            shading.catch_up(shared, Instant::now() + SHADE_STEP),
+        );
+        last = Some(t);
         if change.is_some() || reached {
             let update = Update {
                 target: t,
                 reached,
                 change,
+                shaded: !shading.behind(),
             };
             if tx.send(update).is_err() {
                 return;
@@ -395,13 +520,25 @@ tool = "rough-6-flat"
             live.stock().field().ny()
         );
 
-        let frame = |live: &mut Live, to: Playhead| {
+        let mut shading = Shading::default();
+        let mut frame = |live: &mut Live, to: Playhead| {
             let started = Instant::now();
             let (at, fraction) = scene.target(to);
             let target = Target { at, fraction };
-            // As the thread does, but to the end rather than for a while.
+            // As the thread does, but to the end rather than for a while, with
+            // its few milliseconds of catching up on the shading.
             let far = started + Duration::from_secs(3600);
-            while !work(live, &replay, (part, budget), &image, target, far).1 {}
+            while !work(
+                live,
+                &replay,
+                (part, budget),
+                (&image, &mut shading),
+                target,
+                far,
+            )
+            .1
+            {}
+            shading.catch_up(&image, Instant::now() + SHADE_STEP);
             started.elapsed()
         };
 

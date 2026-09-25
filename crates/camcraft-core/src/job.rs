@@ -949,6 +949,10 @@ pub struct Operation {
     /// How the tool moves between cuts.
     #[serde(default, skip_serializing_if = "is_default")]
     pub linking: Linking,
+    /// Whether it runs. One turned off stays in the job, but is not worked out,
+    /// cut, checked or posted.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub enabled: bool,
 }
 
 /// Strategy and the parameters only it has.
@@ -1328,6 +1332,12 @@ fn default_plunge_feed() -> f64 {
     300.0
 }
 
+// Serde's `skip_serializing_if` hands the field by reference.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_yes(b: &bool) -> bool {
+    *b
+}
+
 fn yes() -> bool {
     true
 }
@@ -1593,7 +1603,26 @@ impl Job {
     /// Check setup `index` can run, given [`check_common`](Self::check_common)
     /// passes. An index past the end is [`JobError::NoSetups`].
     pub fn check_setup(&self, index: usize) -> Result<(), JobError> {
+        self.check_setup_where(index, &|_| true)
+    }
+
+    /// As [`check_setup`](Self::check_setup), checking only the operations that
+    /// will run: those turned on for which `runs` holds, by their place. The
+    /// rest are left out of the run, and may be unfinished.
+    pub fn check_setup_where(
+        &self,
+        index: usize,
+        runs: &dyn Fn(usize) -> bool,
+    ) -> Result<(), JobError> {
         let setup = self.setups.get(index).ok_or(JobError::NoSetups)?;
+        let running = || {
+            setup
+                .operations
+                .iter()
+                .enumerate()
+                .filter(|(i, op)| op.enabled && runs(*i))
+                .map(|(_, op)| op)
+        };
         let name = &setup.name;
         setup
             .orientation
@@ -1649,13 +1678,13 @@ impl Job {
         if let Origin::Point { point, .. } = &setup.origin {
             pick(format!("setup '{name}' work zero"), &point.model, &point.at)?;
         }
-        for op in &setup.operations {
+        for op in running() {
             for r in op.geometry.faces.iter().chain(&op.geometry.edges) {
                 pick(format!("operation '{name}/{}'", op.name), &r.model, &r.at)?;
             }
         }
 
-        for op in &setup.operations {
+        for op in running() {
             let at = format!("{name}/{}", op.name);
             let Some(tool) = &op.tool else {
                 return Err(JobError::NoTool { op: at });

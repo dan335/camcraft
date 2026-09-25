@@ -18,8 +18,11 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use camcraft_core::job::{Job, ModelDef};
+use camcraft_core::run::{Plan, Stage};
 use camcraft_geom::bvh::MeshBvh;
-use camcraft_session::{Model, Models, Ran, SessionError, load_job_model, read_job, run_setup};
+use camcraft_session::{
+    Model, Models, Ran, SessionError, load_job_model, read_job, run_setup_planned,
+};
 use eframe::egui;
 
 /// Which open job a piece of work is for.
@@ -71,6 +74,8 @@ pub enum Request {
         setup: usize,
         /// Its models, loaded, by name.
         models: BTreeMap<String, Arc<Model>>,
+        /// What to do with each operation; none, to work them all out.
+        plans: Vec<Plan>,
     },
 }
 
@@ -84,6 +89,8 @@ pub enum Reply {
     Loaded(Result<(Arc<Model>, Arc<MeshBvh>), SessionError>),
     /// A setup, run.
     Ran(Box<Result<Ran, SessionError>>),
+    /// Where a run has got to: sent as it goes, before [`Reply::Ran`].
+    Progress(Stage),
     /// The thread stopped without replying: it panicked, most likely inside the
     /// geometry kernel. What it was doing.
     Died(&'static str),
@@ -103,11 +110,6 @@ pub struct Worker {
 }
 
 impl Worker {
-    /// What is running for job `doc`, if anything: the first piece started.
-    pub fn busy(&self, doc: DocId) -> Option<&'static str> {
-        self.pending.iter().find(|p| p.doc == doc).map(|p| p.what)
-    }
-
     /// Whether nothing at all is running.
     pub fn idle(&self) -> bool {
         self.pending.is_empty()
@@ -123,8 +125,11 @@ impl Worker {
         let (tx, rx) = channel();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let reply = execute(request);
-            // The receiver is gone only if the app is closing; nothing to tell.
+            let reply = execute(request, &mut |stage| {
+                // The receiver is gone only if the app is closing; nothing to tell.
+                let _ = tx.send(Reply::Progress(stage));
+                ctx.request_repaint();
+            });
             let _ = tx.send(reply);
             ctx.request_repaint();
         });
@@ -136,18 +141,24 @@ impl Worker {
         });
     }
 
-    /// Every reply that has come in, with its job and task.
+    /// Every reply that has come in, with its job and task: any progress, then
+    /// the answer, which ends the piece of work.
     pub fn poll(&mut self) -> Vec<(DocId, Task, Reply)> {
         let mut out = Vec::new();
         self.pending.retain(|p| {
-            let reply = match p.rx.try_recv() {
-                Ok(reply) => reply,
-                Err(TryRecvError::Empty) => return true,
-                // Say so rather than wait forever for a reply that cannot come.
-                Err(TryRecvError::Disconnected) => Reply::Died(p.what),
-            };
-            out.push((p.doc, p.task.clone(), reply));
-            false
+            loop {
+                let reply = match p.rx.try_recv() {
+                    Ok(reply) => reply,
+                    Err(TryRecvError::Empty) => return true,
+                    // Say so rather than wait forever for a reply that cannot come.
+                    Err(TryRecvError::Disconnected) => Reply::Died(p.what),
+                };
+                let done = !matches!(reply, Reply::Progress(_));
+                out.push((p.doc, p.task.clone(), reply));
+                if done {
+                    return false;
+                }
+            }
         });
         out
     }
@@ -160,7 +171,7 @@ pub fn job_dir(path: &std::path::Path) -> PathBuf {
         .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf)
 }
 
-fn execute(request: Request) -> Reply {
+fn execute(request: Request, progress: &mut dyn FnMut(Stage)) -> Reply {
     match request {
         Request::Open { path } => Reply::Opened(Box::new(read_job(&path).map(|job| (path, job)))),
         Request::Load {
@@ -171,9 +182,16 @@ fn execute(request: Request) -> Reply {
             let bvh = Arc::new(MeshBvh::new(m.mesh()));
             (Arc::new(m), bvh)
         })),
-        Request::Run { job, setup, models } => {
+        Request::Run {
+            job,
+            setup,
+            models,
+            plans,
+        } => {
             let refs: Models<'_> = models.iter().map(|(n, m)| (n.as_str(), &**m)).collect();
-            Reply::Ran(Box::new(run_setup(&job, setup, &refs)))
+            Reply::Ran(Box::new(run_setup_planned(
+                &job, setup, &refs, &plans, progress,
+            )))
         }
     }
 }
@@ -187,7 +205,12 @@ mod tests {
     fn wait(worker: &mut Worker) -> (DocId, Task, Reply) {
         let deadline = Instant::now() + Duration::from_secs(120);
         loop {
-            if let Some(reply) = worker.poll().pop() {
+            // Progress on the way is not the answer.
+            if let Some(reply) = worker
+                .poll()
+                .into_iter()
+                .find(|(_, _, r)| !matches!(r, Reply::Progress(_)))
+            {
                 return reply;
             }
             assert!(Instant::now() < deadline, "the worker never replied");
@@ -204,8 +227,7 @@ mod tests {
         let mut worker = Worker::default();
         let ctx = egui::Context::default();
         worker.start(&ctx, 7, Task::Open, Request::Open { path: example });
-        assert_eq!(worker.busy(7), Some("opening job"));
-        assert_eq!(worker.busy(8), None);
+        assert!(!worker.idle());
         let (doc, task, Reply::Opened(opened)) = wait(&mut worker) else {
             panic!("expected an opened job");
         };
@@ -247,9 +269,10 @@ mod tests {
                 job: Box::new(job.clone()),
                 setup: 0,
                 models: models.clone(),
+                plans: Vec::new(),
             },
         );
-        assert_eq!(worker.busy(7), Some("running setup"));
+        assert!(!worker.idle());
         let (_, _, Reply::Ran(ran)) = wait(&mut worker) else {
             panic!("expected a run");
         };
@@ -257,7 +280,7 @@ mod tests {
         assert!(worker.idle());
 
         let refs: Models<'_> = models.iter().map(|(n, m)| (n.as_str(), &**m)).collect();
-        let direct = run_setup(&job, 0, &refs).unwrap();
+        let direct = camcraft_session::run_setup(&job, 0, &refs).unwrap();
         let (a, b) = (&ran.result, &direct.result);
         assert_eq!(a.operations.len(), b.operations.len());
         for (x, y) in a.operations.iter().zip(&b.operations) {

@@ -8,9 +8,10 @@
 use std::cell::RefCell;
 
 use camcraft_core::job::StrategySpec;
+use camcraft_core::run::Stage;
 use eframe::egui;
 
-use crate::document::{Document, Level, ModelSlot, Selection, Status};
+use crate::document::{Document, Level, ModelSlot, OpStatus, Selection, Status};
 use crate::theme;
 
 /// Something the tree asks the app to do.
@@ -20,8 +21,10 @@ pub enum BrowserAction {
     AddModels,
     /// Find model `name`'s file.
     Locate(String),
-    /// Run setup `name`.
+    /// Run setup `name`: all its operations.
     Generate(String),
+    /// Run operation `.1` of setup `.0` alone.
+    GenerateOperation(String, usize),
 }
 
 /// A change to the job, applied once the tree is drawn.
@@ -36,7 +39,12 @@ enum Edit {
     DuplicateOperation(String, usize),
     RemoveOperation(String, usize),
     MoveOperation(String, usize, isize),
+    /// An operation, by setup and place, to a setup and place.
+    MoveOperationTo(String, usize, String, usize),
+    /// Turn an operation on or off.
+    SetEnabled(String, usize, bool),
     RemoveModel(String),
+    DuplicateStock(String),
     RemoveStock(String),
 }
 
@@ -80,6 +88,64 @@ fn status_dot(ui: &mut egui::Ui, status: Status) {
     response.on_hover_text(status_text(status));
 }
 
+/// Where an operation stands: a spinner while it runs, a ring while it waits or
+/// has not been made, a dot once made (amber with warnings), and an amber ring
+/// once its setup has changed since.
+fn op_marker(ui: &mut egui::Ui, status: OpStatus) {
+    if let OpStatus::Running(_) = status {
+        ui.add(egui::Spinner::new().size(10.0))
+            .on_hover_text("generating");
+        return;
+    }
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    let (color, filled, text) = match status {
+        OpStatus::NotRun => (theme::GRAY_5, false, "not generated"),
+        OpStatus::Waiting => (theme::GRAY_7, false, "waiting its turn"),
+        OpStatus::Done => (theme::PATH_CUT, true, "generated"),
+        OpStatus::Warnings => (theme::AMBER_5, true, "generated, with warnings"),
+        OpStatus::Stale | OpStatus::Running(_) => (theme::AMBER_5, false, "out of date"),
+        OpStatus::Disabled => {
+            // A dash: turned off, left out of every run.
+            ui.painter().hline(
+                rect.center().x - 3.0..=rect.center().x + 3.0,
+                rect.center().y,
+                egui::Stroke::new(1.5, theme::egui_color(theme::GRAY_5)),
+            );
+            response.on_hover_text("turned off");
+            return;
+        }
+    };
+    let color = theme::egui_color(color);
+    let centre = rect.center();
+    if filled {
+        ui.painter().circle_filled(centre, 3.0, color);
+    } else {
+        ui.painter()
+            .circle_stroke(centre, 2.5, egui::Stroke::new(1.25, color));
+    }
+    response.on_hover_text(text);
+}
+
+/// What a running setup is doing, in a few words: which operation of how many,
+/// or the steps either side.
+fn stage_text(stage: Stage, operations: usize) -> String {
+    match stage {
+        Stage::Preparing => "laying out".into(),
+        Stage::Operation(i) => format!("{} of {operations}", i + 1),
+        Stage::Verifying => "verifying".into(),
+        Stage::Checking => "checking".into(),
+    }
+}
+
+/// Text quieter than a row's, beside it.
+fn quiet(ui: &mut egui::Ui, text: impl Into<String>) {
+    ui.label(
+        egui::RichText::new(text.into())
+            .size(theme::TEXT_SM)
+            .color(theme::egui_color(theme::TEXT_3)),
+    );
+}
+
 /// A row that selects `selection`, with `extra` beside it.
 fn row(
     ui: &mut egui::Ui,
@@ -108,12 +174,124 @@ fn branch(
         .body(body);
 }
 
-/// A row without children, lined up with those that have them.
-fn leaf(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
-    ui.horizontal(|ui| {
-        ui.add_space(ui.spacing().indent);
-        body(ui);
-    });
+/// A row without children, lined up with those that have them. Returns where
+/// it is, across the whole width of the tree.
+fn leaf(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) -> egui::Rect {
+    let line = ui
+        .horizontal(|ui| {
+            ui.add_space(ui.spacing().indent);
+            body(ui);
+        })
+        .response
+        .rect;
+    egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), line.y_range())
+}
+
+/// An operation being dragged to a new place, in its setup or another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DraggedOp {
+    setup: String,
+    index: usize,
+    /// What it is called, shown by the pointer.
+    label: String,
+}
+
+/// Operation `index` of `setup`, whose row is `line`, as somewhere to drop one:
+/// over its top half before it, its bottom half after it, with a line where it
+/// would go. Returns the move, once let go.
+fn drop_target(ui: &egui::Ui, setup: &str, index: usize, line: egui::Rect) -> Option<Edit> {
+    let ctx = ui.ctx();
+    egui::DragAndDrop::payload::<DraggedOp>(ctx)?;
+    let pointer = ctx.pointer_interact_pos()?;
+    if !line.contains(pointer) {
+        return None;
+    }
+    let after = pointer.y > line.center().y;
+    let y = if after { line.bottom() } else { line.top() };
+    ui.painter().hline(
+        line.x_range(),
+        y,
+        egui::Stroke::new(2.0, theme::egui_color(theme::ACCENT)),
+    );
+    let dragged = dropped(ui)?;
+    // The gap it goes into, counted, in its own setup, before it is taken out.
+    let gap = index + usize::from(after);
+    let to = if dragged.setup == setup && gap > dragged.index {
+        gap - 1
+    } else {
+        gap
+    };
+    (dragged.setup != setup || to != dragged.index)
+        .then(|| Edit::MoveOperationTo(dragged.setup.clone(), dragged.index, setup.to_string(), to))
+}
+
+/// Setup `setup`, whose row is `line` and which has `count` operations, as
+/// somewhere to drop one: at its end, outlined while held over it.
+fn setup_drop(ui: &egui::Ui, setup: &str, count: usize, line: egui::Rect) -> Option<Edit> {
+    let ctx = ui.ctx();
+    egui::DragAndDrop::payload::<DraggedOp>(ctx)?;
+    if !ctx.pointer_interact_pos().is_some_and(|p| line.contains(p)) {
+        return None;
+    }
+    ui.painter().rect_stroke(
+        line,
+        theme::RADIUS_SM,
+        egui::Stroke::new(1.5, theme::egui_color(theme::ACCENT)),
+        egui::StrokeKind::Inside,
+    );
+    let dragged = dropped(ui)?;
+    Some(Edit::MoveOperationTo(
+        dragged.setup.clone(),
+        dragged.index,
+        setup.to_string(),
+        count,
+    ))
+}
+
+/// What was let go this frame, if an operation was being dragged.
+fn dropped(ui: &egui::Ui) -> Option<std::sync::Arc<DraggedOp>> {
+    let ctx = ui.ctx();
+    if !ctx.input(|i| i.pointer.any_released()) {
+        return None;
+    }
+    egui::DragAndDrop::take_payload::<DraggedOp>(ctx)
+}
+
+/// What is being dragged, by the pointer, over everything.
+fn drag_label(ui: &egui::Ui) {
+    let ctx = ui.ctx();
+    let (Some(dragged), Some(at)) = (
+        egui::DragAndDrop::payload::<DraggedOp>(ctx),
+        ctx.pointer_interact_pos(),
+    ) else {
+        return;
+    };
+    ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("dragged operation"),
+    ));
+    let galley = painter.layout_no_wrap(
+        dragged.label.clone(),
+        theme::font(ui.style(), egui::TextStyle::Body),
+        theme::egui_color(theme::TEXT_1),
+    );
+    let rect = egui::Rect::from_min_size(
+        at + egui::vec2(12.0, 4.0),
+        galley.size() + egui::vec2(12.0, 6.0),
+    );
+    painter.rect(
+        rect,
+        theme::RADIUS_SM,
+        theme::egui_color(theme::SURFACE_RAISED),
+        egui::Stroke::new(1.0, theme::egui_color(theme::BORDER_STRONG)),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(
+        rect.min + egui::vec2(6.0, 3.0),
+        galley,
+        egui::Color32::WHITE,
+    );
 }
 
 /// The tree for `doc`.
@@ -141,13 +319,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) -> Vec<BrowserAction> {
                 ui,
                 ("models", d.id),
                 |ui| {
-                    let r = row(
-                        ui,
-                        d,
-                        Selection::Models,
-                        format!("Models ({})", d.job.models.len()),
-                        &edits,
-                    );
+                    let r = row(ui, d, Selection::Models, "Models", &edits);
                     r.context_menu(|ui| {
                         if ui.button("Add models…").clicked() {
                             actions.borrow_mut().push(BrowserAction::AddModels);
@@ -195,13 +367,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) -> Vec<BrowserAction> {
                 ui,
                 ("stocks", d.id),
                 |ui| {
-                    let r = row(
-                        ui,
-                        d,
-                        Selection::Stocks,
-                        format!("Stocks ({})", d.job.stocks.len()),
-                        &edits,
-                    );
+                    let r = row(ui, d, Selection::Stocks, "Stocks", &edits);
                     r.context_menu(|ui| {
                         if ui.button("New stock").clicked() {
                             edits.borrow_mut().push(Edit::AddStock);
@@ -214,6 +380,12 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) -> Vec<BrowserAction> {
                         leaf(ui, |ui| {
                             let r = row(ui, d, Selection::Stock(s.name.clone()), &s.name, &edits);
                             r.context_menu(|ui| {
+                                if ui.button("Duplicate").clicked() {
+                                    edits
+                                        .borrow_mut()
+                                        .push(Edit::DuplicateStock(s.name.clone()));
+                                    ui.close();
+                                }
                                 if ui.button("Remove").clicked() {
                                     edits.borrow_mut().push(Edit::RemoveStock(s.name.clone()));
                                     ui.close();
@@ -229,13 +401,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) -> Vec<BrowserAction> {
                 ui,
                 ("setups", d.id),
                 |ui| {
-                    let r = row(
-                        ui,
-                        d,
-                        Selection::Setups,
-                        format!("Setups ({})", d.job.setups.len()),
-                        &edits,
-                    );
+                    let r = row(ui, d, Selection::Setups, "Setups", &edits);
                     r.context_menu(|ui| {
                         if ui.button("New setup").clicked() {
                             edits.borrow_mut().push(Edit::AddSetup);
@@ -258,24 +424,72 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) -> Vec<BrowserAction> {
                                 }
                                 let r = row(ui, d, Selection::Setup(name.clone()), text, &edits);
                                 r.context_menu(|ui| setup_menu(ui, d, &name, &edits, &actions));
+                                let line = egui::Rect::from_x_y_ranges(
+                                    ui.max_rect().x_range(),
+                                    r.rect.y_range(),
+                                );
+                                if let Some(edit) = setup_drop(ui, &name, s.operations.len(), line)
+                                {
+                                    edits.borrow_mut().push(edit);
+                                }
+                                let progress = d.setups.get(&name).and_then(|st| st.progress);
+                                if let Some((stage, _)) = progress {
+                                    quiet(ui, stage_text(stage, s.operations.len()));
+                                }
                             },
                             |ui| {
                                 for (i, op) in s.operations.iter().enumerate() {
-                                    leaf(ui, |ui| {
+                                    let line = leaf(ui, |ui| {
+                                        let status = d.op_status(&name, i);
+                                        op_marker(ui, status);
                                         let tool = op.tool.as_deref().unwrap_or("no tool");
                                         let text = format!("{}. {}", i + 1, op.name);
+                                        // Turned off: dim and struck through.
+                                        let shown = if op.enabled {
+                                            egui::RichText::new(&text)
+                                        } else {
+                                            egui::RichText::new(&text).weak().strikethrough()
+                                        };
                                         let r = row(
                                             ui,
                                             d,
                                             Selection::Operation(name.clone(), i),
-                                            text,
+                                            shown,
                                             &edits,
                                         )
-                                        .on_hover_text(tool);
+                                        .interact(egui::Sense::drag())
+                                        .on_hover_text(format!("{tool} · drag to reorder"));
+                                        r.dnd_set_drag_payload(DraggedOp {
+                                            setup: name.clone(),
+                                            index: i,
+                                            label: text,
+                                        });
                                         if op.tool.is_none() {
                                             ui.colored_label(ui.visuals().warn_fg_color, "no tool");
                                         }
+                                        if let OpStatus::Running(since) = status {
+                                            quiet(ui, format!("{} s", since.elapsed().as_secs()));
+                                        }
                                         r.context_menu(|ui| {
+                                            generate_op_item(ui, d, &name, i, &actions);
+                                            let label =
+                                                if op.enabled { "Turn off" } else { "Turn on" };
+                                            if ui
+                                                .button(label)
+                                                .on_hover_text(
+                                                    "a turned-off operation stays in the job, \
+                                                     but is not generated, cut or posted",
+                                                )
+                                                .clicked()
+                                            {
+                                                edits.borrow_mut().push(Edit::SetEnabled(
+                                                    name.clone(),
+                                                    i,
+                                                    !op.enabled,
+                                                ));
+                                                ui.close();
+                                            }
+                                            ui.separator();
                                             if ui.button("Duplicate").clicked() {
                                                 edits.borrow_mut().push(Edit::DuplicateOperation(
                                                     name.clone(),
@@ -307,6 +521,9 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) -> Vec<BrowserAction> {
                                             }
                                         });
                                     });
+                                    if let Some(edit) = drop_target(ui, &name, i, line) {
+                                        edits.borrow_mut().push(edit);
+                                    }
                                 }
                                 if s.operations.is_empty() {
                                     leaf(ui, |ui| {
@@ -321,10 +538,79 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) -> Vec<BrowserAction> {
         },
     );
 
+    drag_label(ui);
     for edit in edits.into_inner() {
         apply(doc, edit);
     }
     actions.into_inner()
+}
+
+/// Generate operation `index` of setup `name` alone: the others keep what they
+/// have.
+fn generate_op_item(
+    ui: &mut egui::Ui,
+    doc: &Document,
+    name: &str,
+    index: usize,
+    actions: &RefCell<Vec<BrowserAction>>,
+) {
+    let why_not = doc
+        .setup_index(name)
+        .and_then(|i| doc.cannot_generate(i, Some(index)));
+    if ui
+        .add_enabled(why_not.is_none(), egui::Button::new("Generate"))
+        .on_hover_text("generates this operation alone: the others keep what they have")
+        .on_disabled_hover_text(why_not.unwrap_or_default())
+        .clicked()
+    {
+        actions
+            .borrow_mut()
+            .push(BrowserAction::GenerateOperation(name.to_string(), index));
+        ui.close();
+    }
+}
+
+/// Generate setup `name`, from its menu: all its operations.
+fn generate_item(
+    ui: &mut egui::Ui,
+    doc: &Document,
+    name: &str,
+    actions: &RefCell<Vec<BrowserAction>>,
+) {
+    let why_not = doc.setup_index(name).and_then(|i| doc.cannot_run(i));
+    if ui
+        .add_enabled(why_not.is_none(), egui::Button::new("Generate"))
+        .on_hover_text(format!("generates setup '{name}', all its operations"))
+        .on_disabled_hover_text(why_not.unwrap_or_default())
+        .clicked()
+    {
+        actions
+            .borrow_mut()
+            .push(BrowserAction::Generate(name.to_string()));
+        ui.close();
+    }
+}
+
+/// The kinds of operation there are to add, each with what a new one starts
+/// from.
+pub fn new_operations() -> [(&'static str, StrategySpec); 3] {
+    [
+        ("parallel finish", StrategySpec::Parallel { angle: 0.0 }),
+        (
+            "z-level rough",
+            StrategySpec::ZlevelRough {
+                stepdown: 2.0,
+                min_ring_length: 3.0,
+            },
+        ),
+        (
+            "drilling",
+            StrategySpec::Drill {
+                peck: None,
+                dwell: None,
+            },
+        ),
+    ]
 }
 
 fn setup_menu(
@@ -334,44 +620,15 @@ fn setup_menu(
     edits: &RefCell<Vec<Edit>>,
     actions: &RefCell<Vec<BrowserAction>>,
 ) {
-    let why_not = doc.setup_index(name).and_then(|i| doc.cannot_run(i));
-    if ui
-        .add_enabled(why_not.is_none(), egui::Button::new("Generate"))
-        .on_disabled_hover_text(why_not.unwrap_or_default())
-        .clicked()
-    {
-        actions
-            .borrow_mut()
-            .push(BrowserAction::Generate(name.to_string()));
-        ui.close();
-    }
+    generate_item(ui, doc, name, actions);
     ui.separator();
-    if ui.button("New parallel finish").clicked() {
-        edits.borrow_mut().push(Edit::AddOperation(
-            name.to_string(),
-            StrategySpec::Parallel { angle: 0.0 },
-        ));
-        ui.close();
-    }
-    if ui.button("New z-level rough").clicked() {
-        edits.borrow_mut().push(Edit::AddOperation(
-            name.to_string(),
-            StrategySpec::ZlevelRough {
-                stepdown: 2.0,
-                min_ring_length: 3.0,
-            },
-        ));
-        ui.close();
-    }
-    if ui.button("New drilling").clicked() {
-        edits.borrow_mut().push(Edit::AddOperation(
-            name.to_string(),
-            StrategySpec::Drill {
-                peck: None,
-                dwell: None,
-            },
-        ));
-        ui.close();
+    for (label, strategy) in new_operations() {
+        if ui.button(format!("New {label}")).clicked() {
+            edits
+                .borrow_mut()
+                .push(Edit::AddOperation(name.to_string(), strategy));
+            ui.close();
+        }
     }
     ui.separator();
     if ui.button("Duplicate").clicked() {
@@ -412,6 +669,10 @@ fn apply(doc: &mut Document, edit: Edit) {
             doc.add_stock();
             Ok(())
         }
+        Edit::DuplicateStock(n) => {
+            doc.duplicate_stock(&n);
+            Ok(())
+        }
         Edit::AddSetup => {
             doc.add_setup();
             Ok(())
@@ -444,10 +705,105 @@ fn apply(doc: &mut Document, edit: Edit) {
             doc.move_operation(&s, i, by);
             Ok(())
         }
+        Edit::SetEnabled(s, i, on) => {
+            doc.set_enabled(&s, i, on);
+            Ok(())
+        }
+        Edit::MoveOperationTo(from_setup, from, to_setup, to) => {
+            doc.move_operation_to(&from_setup, from, &to_setup, to);
+            Ok(())
+        }
         Edit::RemoveModel(n) => doc.remove_model(&n),
         Edit::RemoveStock(n) => doc.remove_stock(&n),
     };
     if let Err(e) = result {
         doc.note(Level::Warn, e);
+    }
+}
+
+#[cfg(all(test, feature = "ui-snapshots"))]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::cast_precision_loss
+)]
+mod tests {
+    use super::*;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable as _;
+
+    fn names(doc: &Document) -> Vec<String> {
+        doc.job.setups[0]
+            .operations
+            .iter()
+            .map(|o| o.name.clone())
+            .collect()
+    }
+
+    /// Dragging an operation's row onto the top half of another's puts it
+    /// before that one, and letting go anywhere else leaves the order alone.
+    #[test]
+    fn an_operation_is_dragged_to_a_new_place() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/rail-jig.camcraft");
+        let job = camcraft_session::read_job(&path).unwrap();
+        let mut doc = Document::opened(1, Some(path), job);
+        doc.duplicate_operation("top", 1);
+        assert_eq!(names(&doc), ["rough", "finish", "finish copy"]);
+        let mut h = Harness::new_ui_state(
+            |ui, doc: &mut Document| {
+                show(ui, doc);
+            },
+            doc,
+        );
+        h.run();
+
+        let drag = |h: &mut Harness<'_, Document>, from: egui::Pos2, to: egui::Pos2| {
+            h.hover_at(from);
+            h.run();
+            h.drag_at(from);
+            h.run();
+            for step in 1..=6 {
+                h.hover_at(from.lerp(to, step as f32 / 6.0));
+                h.run();
+            }
+            // Let go where it is, without the pointer leaving.
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos: to,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.run();
+        };
+
+        let from = h.get_by_label("3. finish copy").rect().center();
+        let onto = h.get_by_label("1. rough").rect();
+        drag(&mut h, from, egui::pos2(onto.center().x, onto.top() + 2.0));
+        assert_eq!(names(h.state()), ["finish copy", "rough", "finish"]);
+
+        // Dropped on the models, nothing moves.
+        let from = h.get_by_label("1. finish copy").rect().center();
+        let away = h.get_by_label("sled_base").rect().center();
+        drag(&mut h, from, away);
+        assert_eq!(names(h.state()), ["finish copy", "rough", "finish"]);
+        // Onto another setup's row: to the end of that setup.
+        h.state_mut().duplicate_setup("top").unwrap();
+        h.run();
+        let from = h
+            .get_all_by_label("2. rough")
+            .next()
+            .unwrap()
+            .rect()
+            .center();
+        let onto = h.get_by_label("top copy").rect().center();
+        drag(&mut h, from, onto);
+        let other: Vec<&str> = h.state().job.setups[1]
+            .operations
+            .iter()
+            .map(|o| o.name.as_str())
+            .collect();
+        assert_eq!(names(h.state()), ["finish copy", "finish"]);
+        assert_eq!(other, ["finish copy", "rough", "finish", "rough 2"]);
     }
 }

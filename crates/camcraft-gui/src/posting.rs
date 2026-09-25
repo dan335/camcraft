@@ -61,7 +61,9 @@ pub fn plan(setups: &[(&Setup, &Ran)], job_dir: &Path, dir: &Path) -> Result<Pla
             }
             out.refused.push((setup.name.clone(), why));
         }
-        for (k, op) in ran.result.operations.iter().enumerate() {
+        // An operation turned off or left out of the run has no program.
+        let made = ran.result.operations.iter().enumerate();
+        for (k, op) in made.filter(|(_, op)| op.made.has_paths()) {
             let name = program_name(&setup.name, k, &op.name);
             let (text, _) =
                 program(op, setup.wcs, &profile, &name).map_err(|e| format!("{name}: {e}"))?;

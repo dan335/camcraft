@@ -13,11 +13,13 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 use camcraft_core::job::{
     Job, LengthUnit, ModelDef, Operation, Origin, Setup, StockDef, StockSpec, StrategySpec,
     ToolSpec,
 };
+use camcraft_core::run::{Made, Plan, Stage};
 use camcraft_core::setup::{Bodies, PrepareError, Prepared, prepare};
 use camcraft_geom::bvh::MeshBvh;
 use camcraft_session::fs::{relative_path, resolve};
@@ -314,12 +316,33 @@ pub struct SetupState {
     pub ran: Option<RanSetup>,
     /// The run in flight, if any, and the job as it was sent.
     pub running: Option<(u64, Job)>,
+    /// Where the run in flight has got to, and since when.
+    pub progress: Option<(Stage, Instant)>,
     /// How it is laid out now.
     pub layout: Option<Layout>,
     /// How it is being looked at.
     pub view: SetupView,
     /// Its material during playback, once it has been followed.
     pub live: Option<LiveStock>,
+}
+
+/// Where an operation stands, for the tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpStatus {
+    /// Its setup has never run, or ran before it was added.
+    NotRun,
+    /// Its setup is running, and has not reached it yet.
+    Waiting,
+    /// Running now, since then.
+    Running(Instant),
+    /// Made, in this run or the last.
+    Done,
+    /// Made, with warnings worth reading.
+    Warnings,
+    /// Made, but it, its tool or its setup's layout has changed since.
+    Stale,
+    /// Turned off: left out of every run.
+    Disabled,
 }
 
 /// Where a setup stands, for the tree.
@@ -367,6 +390,8 @@ pub struct Document {
     pub asked_missing: bool,
     /// Runs asked for so far, to tell the latest.
     seq: u64,
+    /// The selection the view last followed.
+    followed: Option<Selection>,
 }
 
 impl Document {
@@ -406,6 +431,7 @@ impl Document {
             log: Vec::new(),
             asked_missing: false,
             seq: 0,
+            followed: None,
         }
     }
 
@@ -642,6 +668,20 @@ impl Document {
         name
     }
 
+    /// A copy of stock `name`, after it, and shown. No setup uses it yet.
+    pub fn duplicate_stock(&mut self, name: &str) -> Option<String> {
+        let i = self.job.stocks.iter().position(|s| s.name == name)?;
+        let mut copy = self.job.stocks.get(i)?.clone();
+        copy.name = free(
+            &format!("{name} copy"),
+            self.job.stocks.iter().map(|s| s.name.as_str()),
+        );
+        let new = copy.name.clone();
+        self.job.stocks.insert(i + 1, copy);
+        self.selection = Selection::Stock(new.clone());
+        Some(new)
+    }
+
     /// Rename a stock, and every setup's reference to it.
     pub fn rename_stock(&mut self, from: &str, to: &str) -> Result<(), String> {
         let to = checked_name(to, "stock", self.job.stocks.iter().map(|s| &*s.name), from)?;
@@ -792,6 +832,7 @@ impl Document {
             heights: Default::default(),
             passes: Default::default(),
             linking: Default::default(),
+            enabled: true,
         };
         if let Some(p) = preset {
             op.apply_preset(p);
@@ -829,19 +870,66 @@ impl Document {
         self.selection = Selection::Setup(setup.to_string());
     }
 
+    /// Move operation `from` of `setup` so it is at `to`, the others closing up
+    /// behind it and making room; the selection stays on the operation it was on.
+    pub fn reorder_operation(&mut self, setup: &str, from: usize, to: usize) {
+        let Some(s) = self.job.setups.iter_mut().find(|s| s.name == setup) else {
+            return;
+        };
+        let n = s.operations.len();
+        if from >= n || to >= n || from == to {
+            return;
+        }
+        let op = s.operations.remove(from);
+        s.operations.insert(to, op);
+        if let Selection::Operation(sel, k) = &mut self.selection
+            && sel == setup
+        {
+            *k = moved_index(*k, from, to);
+        }
+    }
+
+    /// Move operation `from` of setup `from_setup` to place `to` of setup
+    /// `to_setup`: within one setup, as [`Document::reorder_operation`]; into
+    /// another, under a name free there, and shown there. It keeps its tool, its
+    /// heights and its picks, which find what they can among the new setup's
+    /// models.
+    pub fn move_operation_to(&mut self, from_setup: &str, from: usize, to_setup: &str, to: usize) {
+        if from_setup == to_setup {
+            let last = self
+                .setup_index(from_setup)
+                .and_then(|i| self.job.setups.get(i))
+                .map_or(0, |s| s.operations.len().saturating_sub(1));
+            self.reorder_operation(from_setup, from, to.min(last));
+            return;
+        }
+        let (Some(si), Some(ti)) = (self.setup_index(from_setup), self.setup_index(to_setup))
+        else {
+            return;
+        };
+        let Some(source) = self.job.setups.get_mut(si) else {
+            return;
+        };
+        if from >= source.operations.len() {
+            return;
+        }
+        let mut op = source.operations.remove(from);
+        let Some(target) = self.job.setups.get_mut(ti) else {
+            return;
+        };
+        op.name = free(&op.name, target.operations.iter().map(|o| o.name.as_str()));
+        let to = to.min(target.operations.len());
+        target.operations.insert(to, op);
+        self.show(to_setup);
+        self.selection = Selection::Operation(to_setup.to_string(), to);
+    }
+
     /// Move an operation up (`-1`) or down (`1`) within its setup.
     pub fn move_operation(&mut self, setup: &str, index: usize, by: isize) {
         if let Some(s) = self.job.setups.iter_mut().find(|s| s.name == setup)
             && let Some(to) = shift(&mut s.operations, index, by)
         {
             self.selection = Selection::Operation(setup.to_string(), to);
-        }
-    }
-
-    /// Change an operation's strategy, keeping what the two share.
-    pub fn set_strategy(op: &mut Operation, strategy: StrategySpec) {
-        if std::mem::discriminant(&op.strategy) != std::mem::discriminant(&strategy) {
-            op.strategy = strategy;
         }
     }
 
@@ -977,6 +1065,30 @@ impl Document {
         }
     }
 
+    /// Show the toolpaths of what is selected: all of a setup's, or an
+    /// operation's alone. Only when the selection changes, or a run finishes,
+    /// so what is ticked under Show in between is left as it is.
+    pub fn follow_selection(&mut self) {
+        if self.followed.as_ref() == Some(&self.selection) {
+            return;
+        }
+        self.followed = Some(self.selection.clone());
+        let (setup, only) = match &self.selection {
+            Selection::Setup(s) => (s, None),
+            Selection::Operation(s, i) => (s, Some(*i)),
+            _ => return,
+        };
+        let view = &mut self.setups.entry(setup.clone()).or_default().view;
+        view.show_paths = true;
+        view.view.ops = match only {
+            None => u32::MAX,
+            Some(i) => u32::try_from(i)
+                .ok()
+                .and_then(|i| 1u32.checked_shl(i))
+                .unwrap_or(0),
+        };
+    }
+
     /// Keep the selection and the view on things that still exist.
     pub fn tidy_selection(&mut self) {
         let setups: Vec<&str> = self.job.setups.iter().map(|s| s.name.as_str()).collect();
@@ -1018,10 +1130,31 @@ impl Document {
 
     /// Why setup `index` cannot run now, if it cannot.
     pub fn cannot_run(&self, index: usize) -> Option<String> {
+        self.cannot_generate(index, None)
+    }
+
+    /// Why setup `index`, or its operation `only` alone, cannot be generated
+    /// now, if it cannot. Only the operations the run would work out or keep
+    /// are checked: the rest are left out, and may be unfinished.
+    pub fn cannot_generate(&self, index: usize, only: Option<usize>) -> Option<String> {
+        if let Some(k) = only
+            && self
+                .job
+                .setups
+                .get(index)
+                .and_then(|s| s.operations.get(k))
+                .is_some_and(|o| !o.enabled)
+        {
+            return Some("it is turned off".into());
+        }
         if let Err(e) = self.job.check_common() {
             return Some(e.to_string());
         }
-        if let Err(e) = self.job.check_setup(index) {
+        let plans = self.plans(index, only);
+        if let Err(e) = self
+            .job
+            .check_setup_where(index, &|i| !matches!(plans.get(i), Some(Plan::Skip)))
+        {
             return Some(e.to_string());
         }
         for m in self.job.models_for(index) {
@@ -1035,14 +1168,118 @@ impl Document {
         None
     }
 
+    /// What a run of setup `index` does with each operation: works them all out;
+    /// or, for operation `only`, works it out alone, keeps every other one made
+    /// before and unchanged since, and leaves out the rest.
+    pub fn plans(&self, index: usize, only: Option<usize>) -> Vec<Plan> {
+        let (Some(k), Some(setup)) = (only, self.job.setups.get(index)) else {
+            return Vec::new();
+        };
+        let ran = self.setups.get(&setup.name).and_then(|s| s.ran.as_ref());
+        (0..setup.operations.len())
+            .map(|i| {
+                if i == k {
+                    return Plan::Generate;
+                }
+                match ran.and_then(|r| r.ran.result.operations.get(i)) {
+                    Some(op) if op.made.has_paths() && self.op_unchanged(&setup.name, i) => {
+                        Plan::Keep(Box::new(op.clone()))
+                    }
+                    _ => Plan::Skip,
+                }
+            })
+            .collect()
+    }
+
+    /// Whether operation `i` of setup `name` is as it was when the setup last
+    /// ran: the operation, its tool, and where the part and stock sit.
+    fn op_unchanged(&self, name: &str, i: usize) -> bool {
+        let then = self
+            .setups
+            .get(name)
+            .and_then(|s| s.ran.as_ref())
+            .map(|r| &r.inputs);
+        let now = self
+            .setup_index(name)
+            .and_then(|x| SetupInputs::of(&self.job, &self.models, x));
+        let (Some(then), Some(now)) = (then, now) else {
+            return false;
+        };
+        let (Some(a), Some(b)) = (then.setup.operations.get(i), now.setup.operations.get(i)) else {
+            return false;
+        };
+        let tool = |inputs: &SetupInputs, op: &Operation| {
+            op.tool.as_ref().map(|t| inputs.tools.get(t).cloned())
+        };
+        a == b && tool(then, a) == tool(&now, b) && then.layout() == now.layout()
+    }
+
+    /// Turn operation `index` of `setup` on or off.
+    pub fn set_enabled(&mut self, setup: &str, index: usize, on: bool) {
+        if let Some(op) = self
+            .job
+            .setups
+            .iter_mut()
+            .find(|s| s.name == setup)
+            .and_then(|s| s.operations.get_mut(index))
+        {
+            op.enabled = on;
+        }
+    }
+
     /// Note that setup `name` has started running from the job as it is now, and
     /// say which run it is.
     pub fn started(&mut self, name: &str) -> u64 {
         self.seq += 1;
         let seq = self.seq;
         let job = self.job.clone();
-        self.setups.entry(name.to_string()).or_default().running = Some((seq, job));
+        let state = self.setups.entry(name.to_string()).or_default();
+        state.running = Some((seq, job));
+        state.progress = Some((Stage::Preparing, Instant::now()));
         seq
+    }
+
+    /// Setup `name`'s run `seq` has got to `stage`. Word from a run since
+    /// superseded is dropped.
+    pub fn progressed(&mut self, name: &str, seq: u64, stage: Stage) {
+        if let Some(state) = self.setups.get_mut(name)
+            && state.running.as_ref().is_some_and(|(s, _)| *s == seq)
+        {
+            state.progress = Some((stage, Instant::now()));
+        }
+    }
+
+    /// Where operation `index` of setup `name` stands.
+    pub fn op_status(&self, name: &str, index: usize) -> OpStatus {
+        let off = self
+            .setup_index(name)
+            .and_then(|i| self.job.setups.get(i)?.operations.get(index))
+            .is_some_and(|o| !o.enabled);
+        if off {
+            return OpStatus::Disabled;
+        }
+        let Some(state) = self.setups.get(name) else {
+            return OpStatus::NotRun;
+        };
+        if state.running.is_some() {
+            return match state.progress {
+                Some((Stage::Operation(at), since)) if at == index => OpStatus::Running(since),
+                Some((Stage::Operation(at), _)) if at > index => OpStatus::Done,
+                Some((Stage::Verifying | Stage::Checking, _)) => OpStatus::Done,
+                _ => OpStatus::Waiting,
+            };
+        }
+        let made = state
+            .ran
+            .as_ref()
+            .and_then(|r| r.ran.result.operations.get(index));
+        match made {
+            None => OpStatus::NotRun,
+            Some(op) if !op.made.has_paths() => OpStatus::NotRun,
+            Some(_) if !self.op_unchanged(name, index) => OpStatus::Stale,
+            Some(op) if !op.warnings.is_empty() => OpStatus::Warnings,
+            Some(_) => OpStatus::Done,
+        }
     }
 
     /// Setup `name`'s run `seq` has finished. A reply for a run since superseded,
@@ -1058,6 +1295,7 @@ impl Document {
                 return;
             }
         };
+        state.progress = None;
         // What the run was made from: the job as sent, with the models as they
         // were loaded then.
         let Some(index) = job.setups.iter().position(|s| s.name == name) else {
@@ -1093,6 +1331,8 @@ impl Document {
                 view.transport.playing = false;
                 view.view.ops = u32::MAX;
                 view.stock_images = vec![None; ran.result.stages.len()];
+                // Then shown as the selection has it.
+                self.followed = None;
                 if let Some(inputs) = inputs {
                     state.ran = Some(RanSetup {
                         inputs,
@@ -1125,7 +1365,14 @@ impl Document {
         let now = self
             .setup_index(name)
             .and_then(|i| SetupInputs::of(&self.job, &self.models, i));
-        if now.as_ref() != Some(&ran.inputs) {
+        // Anything changed, or an operation that should run left out of it.
+        let partial = ran
+            .ran
+            .result
+            .operations
+            .iter()
+            .any(|o| o.made == Made::Skipped);
+        if now.as_ref() != Some(&ran.inputs) || partial {
             Status::Stale
         } else if !ran.ran.passed() {
             Status::Refused
@@ -1296,6 +1543,19 @@ fn rename_in(names: &mut [String], from: &str, to: &str) {
 }
 
 /// Move item `i` by `by` places, within the list; where it ended up.
+/// Where the item at `k` ends up when the one at `from` is moved to `to`.
+fn moved_index(k: usize, from: usize, to: usize) -> usize {
+    if k == from {
+        to
+    } else if from < k && k <= to {
+        k - 1
+    } else if to <= k && k < from {
+        k + 1
+    } else {
+        k
+    }
+}
+
 fn shift<T>(items: &mut [T], i: usize, by: isize) -> Option<usize> {
     let to = i.checked_add_signed(by)?;
     if to >= items.len() || i >= items.len() {
@@ -1479,6 +1739,174 @@ mod tests {
         assert!(doc.rename_setup("front", " ").is_err());
         doc.job.check_common().unwrap();
         doc.job.check_setup(0).unwrap();
+    }
+
+    /// A stock's copy is the same block under a free name, after it, shown, and
+    /// used by nothing, so it can be changed or removed on its own.
+    #[test]
+    fn a_stock_is_duplicated() {
+        let mut doc = example();
+        let copy = doc.duplicate_stock("block").unwrap();
+        assert_eq!(copy, "block copy");
+        assert_eq!(doc.job.stocks[1].name, "block copy");
+        assert_eq!(doc.job.stocks[1].spec, doc.job.stocks[0].spec);
+        assert_eq!(doc.selection, Selection::Stock(copy.clone()));
+        assert_eq!(doc.duplicate_stock("block").unwrap(), "block copy 2");
+        doc.remove_stock(&copy).unwrap();
+        assert!(doc.duplicate_stock("nothing").is_none());
+    }
+
+    /// While a setup runs, its operations wait, run and are done in turn as
+    /// word comes in; word from a run since superseded is dropped.
+    #[test]
+    fn operations_follow_their_run() {
+        let mut doc = example();
+        assert_eq!(doc.op_status("top", 0), OpStatus::NotRun);
+        let seq = doc.started("top");
+        assert_eq!(doc.op_status("top", 0), OpStatus::Waiting);
+        doc.progressed("top", seq, Stage::Operation(0));
+        assert!(matches!(doc.op_status("top", 0), OpStatus::Running(_)));
+        assert_eq!(doc.op_status("top", 1), OpStatus::Waiting);
+        doc.progressed("top", seq + 1, Stage::Operation(1));
+        assert!(matches!(doc.op_status("top", 0), OpStatus::Running(_)));
+        doc.progressed("top", seq, Stage::Operation(1));
+        assert_eq!(doc.op_status("top", 0), OpStatus::Done);
+        assert!(matches!(doc.op_status("top", 1), OpStatus::Running(_)));
+        doc.progressed("top", seq, Stage::Checking);
+        assert_eq!(doc.op_status("top", 1), OpStatus::Done);
+        doc.finished("top", seq, Err(SessionError::Refused));
+        assert_eq!(doc.op_status("top", 0), OpStatus::NotRun);
+        assert!(doc.setups["top"].progress.is_none());
+    }
+
+    /// An operation dragged to a new place takes it, the others close up, and
+    /// the selection stays on the operation it was on.
+    #[test]
+    fn operations_are_reordered() {
+        let mut doc = example();
+        let names = |d: &Document| -> Vec<String> {
+            d.job.setups[0]
+                .operations
+                .iter()
+                .map(|o| o.name.clone())
+                .collect()
+        };
+        doc.duplicate_operation("top", 1);
+        assert_eq!(names(&doc), ["rough", "finish", "finish copy"]);
+        doc.selection = Selection::Operation("top".into(), 1);
+        doc.reorder_operation("top", 2, 0);
+        assert_eq!(names(&doc), ["finish copy", "rough", "finish"]);
+        assert_eq!(doc.selection, Selection::Operation("top".into(), 2));
+        doc.reorder_operation("top", 0, 2);
+        assert_eq!(names(&doc), ["rough", "finish", "finish copy"]);
+        assert_eq!(doc.selection, Selection::Operation("top".into(), 1));
+        doc.reorder_operation("top", 1, 1);
+        doc.reorder_operation("top", 0, 9);
+        assert_eq!(names(&doc), ["rough", "finish", "finish copy"]);
+    }
+
+    /// Selecting a setup shows all its toolpaths; selecting an operation, its
+    /// alone; and the choice is made once, not held against what Show says after.
+    #[test]
+    fn the_view_follows_the_selection() {
+        let mut doc = example();
+        let ops = |d: &Document| {
+            let v = &d.setups["top"].view;
+            (v.show_paths, v.view.ops)
+        };
+        doc.selection = Selection::Operation("top".into(), 1);
+        doc.follow_selection();
+        assert_eq!(ops(&doc), (true, 0b10));
+        doc.setups.get_mut("top").unwrap().view.view.ops = 0b11;
+        doc.follow_selection();
+        assert_eq!(
+            ops(&doc),
+            (true, 0b11),
+            "left alone until the selection changes"
+        );
+        doc.selection = Selection::Setup("top".into());
+        doc.follow_selection();
+        assert_eq!(ops(&doc), (true, u32::MAX));
+        doc.selection = Selection::Operation("top".into(), 0);
+        doc.follow_selection();
+        assert_eq!(ops(&doc), (true, 0b01));
+        doc.selection = Selection::Models;
+        doc.follow_selection();
+        assert_eq!(ops(&doc), (true, 0b01), "anything else leaves the view be");
+    }
+
+    /// An operation dragged into another setup leaves its own, takes its place
+    /// in the other under a name free there, and is shown there.
+    #[test]
+    fn an_operation_moves_to_another_setup() {
+        let mut doc = example();
+        let other = doc.duplicate_setup("top").unwrap();
+        let names = |d: &Document, s: usize| -> Vec<String> {
+            d.job.setups[s]
+                .operations
+                .iter()
+                .map(|o| o.name.clone())
+                .collect()
+        };
+        doc.move_operation_to("top", 0, &other, 1);
+        assert_eq!(names(&doc, 0), ["finish"]);
+        assert_eq!(names(&doc, 1), ["rough", "rough 2", "finish"]);
+        assert_eq!(doc.selection, Selection::Operation(other.clone(), 1));
+        assert_eq!(doc.active.as_deref(), Some(other.as_str()));
+        // Past the end is the end; within a setup it is a reorder.
+        doc.move_operation_to("top", 0, &other, 99);
+        assert_eq!(names(&doc, 1), ["rough", "rough 2", "finish", "finish 2"]);
+        assert!(names(&doc, 0).is_empty());
+        doc.move_operation_to(&other, 0, &other, 99);
+        assert_eq!(names(&doc, 1), ["rough 2", "finish", "finish 2", "rough"]);
+    }
+
+    /// After a run, generating one operation keeps the others that have not
+    /// changed and leaves out the ones that have; an operation turned off is
+    /// shown so and cannot be generated.
+    #[test]
+    fn one_operation_is_generated_alone() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let text = std::fs::read_to_string(dir.join("rail-jig.camcraft")).unwrap();
+        // The small fixture, so the test runs quickly.
+        let text = text.replace("sled_base.step", "hinge_jig.step");
+        let job = camcraft_session::parse_job(&text, "rail-jig").unwrap();
+        let mut doc = Document::opened(1, Some(dir.join("rail-jig.camcraft")), job);
+        let seq = doc.started("top");
+        let ran = crate::test_jobs::run_setup_zero(&doc.job, &dir);
+        doc.finished("top", seq, Ok(ran));
+        let kinds = |plans: &[Plan]| -> Vec<&'static str> {
+            plans
+                .iter()
+                .map(|p| match p {
+                    Plan::Generate => "generate",
+                    Plan::Keep(_) => "keep",
+                    Plan::Skip => "skip",
+                })
+                .collect()
+        };
+        assert!(matches!(
+            doc.op_status("top", 0),
+            OpStatus::Done | OpStatus::Warnings
+        ));
+        assert_eq!(kinds(&doc.plans(0, Some(1))), ["keep", "generate"]);
+        assert!(
+            doc.plans(0, None).is_empty(),
+            "the setup generates everything"
+        );
+
+        doc.job.setups[0].operations[0].passes.feed += 100.0;
+        assert_eq!(doc.op_status("top", 0), OpStatus::Stale);
+        assert!(matches!(
+            doc.op_status("top", 1),
+            OpStatus::Done | OpStatus::Warnings
+        ));
+        assert_eq!(kinds(&doc.plans(0, Some(1))), ["skip", "generate"]);
+        assert_eq!(doc.status("top"), Status::Stale);
+
+        doc.set_enabled("top", 0, false);
+        assert_eq!(doc.op_status("top", 0), OpStatus::Disabled);
+        assert!(doc.cannot_generate(0, Some(0)).is_some());
     }
 
     #[test]
