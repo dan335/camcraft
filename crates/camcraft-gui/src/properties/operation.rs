@@ -98,6 +98,10 @@ pub(super) fn show(
         .filter(|_| matches!(picks.armed, Some(Slot::Faces { .. } | Slot::Edges { .. })));
     let page = widgets::remembered_tabs(ui, egui::Id::new(TAB), &tabs, 0, picking);
     let page = TABS.get(page).copied().unwrap_or(OperationTab::Linking);
+    let diameter = tool_name
+        .as_ref()
+        .and_then(|t| doc.job.tools.get(t))
+        .map(|t| t.diameter);
     if page == OperationTab::Tool {
         tool(ui, doc, m, setup, index, tool_name.as_deref(), actions);
     } else if let Some(op) = doc.operation_mut(setup, index) {
@@ -106,7 +110,7 @@ pub(super) fn show(
             OperationTab::Geometry => geometry(ui, m, setup, index, op, picks, actions),
             OperationTab::Heights => heights(ui, m, op),
             OperationTab::Passes => passes(ui, m, op),
-            OperationTab::Linking => linking(ui, m, op),
+            OperationTab::Linking => linking(ui, m, op, diameter),
         }
     }
     Some(page)
@@ -617,11 +621,87 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
     });
 }
 
-fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
+/// How the operation moves between cuts. A value left out is the strategy's own,
+/// as Fusion's, and says what that comes to for the tool chosen.
+fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f64>) {
+    let (parallel, zlevel) = (
+        matches!(op.strategy, StrategySpec::Parallel { .. }),
+        matches!(op.strategy, StrategySpec::ZlevelRough { .. }),
+    );
+    let of_tool = |part: f64, what: &str| match diameter {
+        Some(d) => format!("{what}: {}", m.length(part * d, 2)),
+        None => what.to_string(),
+    };
     form(ui, "linking", |ui| {
         widgets::field_label(ui, "Retract feed");
         m.feed_field(ui, &mut op.linking.retract_feed, 50_000.0);
         ui.end_row();
+        widgets::field_label(ui, "Safe distance");
+        m.length_field(ui, &mut op.linking.safe_distance, 0.1, 1_000.0, "")
+            .on_hover_text(
+                "How far above the material the tool stops rapiding down and feeds, \
+                 and feeds up to on the way out",
+            );
+        ui.end_row();
+        if parallel || zlevel {
+            widgets::field_label(ui, "Stay down");
+            let absent = if parallel {
+                format!("up to {}", m.length(50.0, 0))
+            } else {
+                of_tool(5.0, "up to 5 × the tool")
+            };
+            let start = if parallel {
+                50.0
+            } else {
+                5.0 * diameter.unwrap_or(6.0)
+            };
+            ui.horizontal(|ui| {
+                widgets::optional(ui, &mut op.linking.stay_down, start, &absent, |ui, v| {
+                    m.length_field(ui, v, 0.5, 10_000.0, "up to ")
+                        .on_hover_text(
+                            "Links this long or shorter are made without lifting; 0 always lifts",
+                        );
+                });
+            });
+            ui.end_row();
+        }
+        if parallel {
+            widgets::field_label(ui, "Lead radius");
+            let absent = of_tool(0.1, "a tenth of the tool");
+            let start = 0.1 * diameter.unwrap_or(6.0);
+            ui.horizontal(|ui| {
+                widgets::optional(ui, &mut op.linking.lead_radius, start, &absent, |ui, v| {
+                    m.length_field(ui, v, 0.05, 100.0, "").on_hover_text(
+                        "The vertical arcs each pass is entered and left along; 0 for none",
+                    );
+                });
+            });
+            ui.end_row();
+        }
+        if zlevel {
+            widgets::field_label(ui, "Ramp angle");
+            ui.add(
+                egui::DragValue::new(&mut op.linking.ramp_angle)
+                    .speed(0.1)
+                    .range(0.1..=45.0)
+                    .suffix("°"),
+            )
+            .on_hover_text("How steeply the tool ramps down into material, along the pass");
+            ui.end_row();
+            widgets::field_label(ui, "Ramp feed");
+            let absent = format!(
+                "a third of cutting: {} {}",
+                m.feed_number(op.passes.feed / 3.0),
+                m.feed_unit()
+            );
+            let start = op.passes.feed / 3.0;
+            ui.horizontal(|ui| {
+                widgets::optional(ui, &mut op.linking.ramp_feed, start, &absent, |ui, v| {
+                    m.feed_field(ui, v, 50_000.0);
+                });
+            });
+            ui.end_row();
+        }
         widgets::field_label(ui, "Reorder passes");
         ui.checkbox(&mut op.linking.reorder, "to shorten travel");
         ui.end_row();

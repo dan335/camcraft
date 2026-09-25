@@ -9,7 +9,7 @@
 
 use camcraft_core::allowance::{Allowance, EffectiveTool};
 use camcraft_core::dropcutter::DropCutter;
-use camcraft_core::linker::{ClearanceField, LinkParams, link};
+use camcraft_core::linker::{ClearanceField, LinkParams, NoPart, Unchanging, link};
 use camcraft_core::ordering::order_passes;
 use camcraft_core::parallel::{ParallelParams, parallel_finish};
 use camcraft_core::reach::LevelReach;
@@ -71,12 +71,9 @@ fn rough_then_finish_threading_stock_between_them() {
 
     // Clearance from the material itself rather than a fixed plane.
     let clearance = ClearanceField::new(stock.field().clone(), 4.0, block_top + 4.0).unwrap();
-    let linking = LinkParams {
-        retract_feed: 1500.0,
-        plunge_feed: 300.0,
-        tool_radius: rough_tool.max_radius(),
-    };
-    let (rough_path, _) = link(&rough_ordered, &clearance, &linking).unwrap();
+    let linking = LinkParams::plain(1500.0, 300.0, rough_tool.max_radius());
+    let mut before = Unchanging(stock.field().clone());
+    let (rough_path, _) = link(&rough_ordered, &clearance, &mut before, &NoPart, &linking).unwrap();
     assert!(!rough_path.has_unplanned_links());
 
     let rough_sim = stock.apply(&sim_moves(&rough_path), &rough_tool);
@@ -125,11 +122,9 @@ fn rough_then_finish_threading_stock_between_them() {
     let (finish_path, _) = link(
         &finish_ordered,
         &finish_clearance,
-        &LinkParams {
-            retract_feed: 1800.0,
-            plunge_feed: 300.0,
-            tool_radius: finish_tool.max_radius(),
-        },
+        &mut Unchanging(stock.field().clone()),
+        &NoPart,
+        &LinkParams::plain(1800.0, 300.0, finish_tool.max_radius()),
     )
     .unwrap();
 
@@ -202,11 +197,9 @@ fn a_second_roughing_pass_only_targets_the_leftovers() {
     let (linked, _) = link(
         &first,
         &clearance,
-        &LinkParams {
-            retract_feed: 1500.0,
-            plunge_feed: 300.0,
-            tool_radius: tool.max_radius(),
-        },
+        &mut Unchanging(stock.field().clone()),
+        &NoPart,
+        &LinkParams::plain(1500.0, 300.0, tool.max_radius()),
     )
     .unwrap();
     stock.apply(&sim_moves(&linked), &tool);

@@ -744,14 +744,22 @@ mod tests {
         let (job, result) = run();
         let replay = Replay::new(&job, &job.setups[0], &result).unwrap();
         let mut live = Live::new(&replay, usize::MAX).unwrap();
-        let to = Position { op: 0, moves: 300 };
+        // Somewhere mid-cut, so a part-way move cuts something.
+        let moves = result.operations[0].path.moves();
+        let made = (300..moves.len())
+            .find(|&k| {
+                moves[k].role == crate::toolpath::MoveRole::Cut
+                    && moves[k - 1].role == crate::toolpath::MoveRole::Cut
+            })
+            .unwrap();
+        let to = Position { op: 0, moves: made };
         let mut steps = 0;
         while !live.seek(&replay, to, 0.0, 50).1 {
             steps += 1;
         }
         assert!(
             steps >= 5,
-            "300 moves in steps of 50 took {steps} extra steps"
+            "{made} moves in steps of 50 took {steps} extra steps"
         );
         let whole = live.stock().clone();
         seek(&mut live, &replay, to, 0.6);

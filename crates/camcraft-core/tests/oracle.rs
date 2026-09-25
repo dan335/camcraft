@@ -9,7 +9,7 @@
 
 use camcraft_core::allowance::{Allowance, EffectiveTool};
 use camcraft_core::dropcutter::DropCutter;
-use camcraft_core::linker::{ClearancePlane, LinkParams, link};
+use camcraft_core::linker::{ClearancePlane, LinkParams, NoPart, Unchanging, link};
 use camcraft_core::parallel::{ParallelParams, parallel_finish};
 use camcraft_core::simadapt::sim_moves;
 use camcraft_core::tool::{Ball, ToolProfile};
@@ -17,6 +17,16 @@ use camcraft_core::toolpath::{MoveRole, Toolpath};
 use camcraft_geom::synthetic;
 use camcraft_sim::stock::{MoveClass, PartSurface, SimMove, Stock};
 use glam::{dvec2, dvec3};
+
+/// The block the path is cut from, as material to link over: level at `top`.
+fn block(lo: glam::DVec2, hi: glam::DVec2, top: f64) -> Unchanging {
+    let pitch = 0.5;
+    let n = |a: f64, b: f64| camcraft_geom::steps::bounded_count(((b - a) / pitch).ceil()) + 1;
+    Unchanging(
+        camcraft_geom::heightmap::HeightMap::filled(lo, pitch, n(lo.x, hi.x), n(lo.y, hi.y), top)
+            .unwrap(),
+    )
+}
 
 const PITCH: f64 = 0.25;
 
@@ -47,11 +57,9 @@ fn a_finished_dome_matches_the_part() {
     let (path, _) = link(
         &raw,
         &ClearancePlane::new(top).unwrap(),
-        &LinkParams {
-            retract_feed: 900.0,
-            plunge_feed: 250.0,
-            tool_radius: tool.max_radius(),
-        },
+        &mut block(lo, hi, top),
+        &NoPart,
+        &LinkParams::plain(900.0, 250.0, tool.max_radius()),
     )
     .unwrap();
 
@@ -170,11 +178,9 @@ fn stock_to_leave_shows_up_in_the_material() {
     let (path, _) = link(
         &raw,
         &ClearancePlane::new(10.0).unwrap(),
-        &LinkParams {
-            retract_feed: 900.0,
-            plunge_feed: 250.0,
-            tool_radius: tool.max_radius(),
-        },
+        &mut block(lo, hi, 5.0),
+        &NoPart,
+        &LinkParams::plain(900.0, 250.0, tool.max_radius()),
     )
     .unwrap();
 

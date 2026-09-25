@@ -407,6 +407,7 @@ fn setup_panel() {
         (1, "operation_geometry"),
         (2, "operation_heights"),
         (3, "operation_passes"),
+        (4, "operation_linking"),
     ] {
         ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), tab));
         h.run_steps(3);

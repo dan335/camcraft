@@ -20,28 +20,28 @@ use crate::view::scene::Scene;
 const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const SAMPLES: u32 = 4;
-/// Line kind for the stock outline, after the seven move roles; the work zero's
+/// Line kind for the stock outline, after the eight move roles; the work zero's
 /// axes follow it.
-const STOCK: u32 = 7;
+const STOCK: u32 = 8;
 /// Line kinds for the work zero's X, Y and Z axes.
-const AXIS_X: u32 = 8;
-const AXIS_Y: u32 = 9;
-const AXIS_Z: u32 = 10;
+const AXIS_X: u32 = 9;
+const AXIS_Y: u32 = 10;
+const AXIS_Z: u32 = 11;
 /// Line kinds for picked edges, the edge under the pointer, and the boundary an
 /// operation is kept to. Always shown, and drawn wider.
-const SELECTED: u32 = 11;
-const HOVER: u32 = 12;
-const BOUNDARY: u32 = 13;
+const SELECTED: u32 = 12;
+const HOVER: u32 = 13;
+const BOUNDARY: u32 = 14;
 /// Line kind for a stock that could be picked into the setup: faint, and drawn
 /// only while it is being picked.
-const GHOST: u32 = 14;
+const GHOST: u32 = 15;
 /// Line kinds for the edges of an operation's height planes: clearance, top and
 /// bottom.
-pub(super) const CLEARANCE: u32 = 15;
-pub(super) const TOP: u32 = 16;
-pub(super) const BOTTOM: u32 = 17;
+pub(super) const CLEARANCE: u32 = 16;
+pub(super) const TOP: u32 = 17;
+pub(super) const BOTTOM: u32 = 18;
 /// Line kinds in all, and so colours.
-const KINDS: usize = 18;
+const KINDS: usize = 19;
 
 pub(super) const COMMON: &str = include_str!("shaders/common.wgsl");
 
@@ -819,7 +819,7 @@ impl Gpu {
             }
         }
         let axes = (1 << AXIS_X) | (1 << AXIS_Y) | (1 << AXIS_Z);
-        let kinds = (view.roles & 0x7f)
+        let kinds = (view.roles & 0xff)
             | if view.stock { 1 << STOCK } else { 0 }
             | if view.origin { axes } else { 0 }
             | (1 << SELECTED)

@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use camcraft_core::job::{
-    LengthUnit, ModelDef, Operation, Origin, Setup, StockDef, StockSpec, StrategySpec, ToolSpec,
+    LengthUnit, ModelDef, Operation, Origin, Preset, Setup, StockDef, StockSpec, StrategySpec,
+    ToolSpec,
 };
 use camcraft_geom::bvh::MeshBvh;
 use camcraft_session::fs::relative_path;
@@ -413,6 +414,9 @@ impl Document {
         if let Some(p) = preset {
             op.apply_preset(p);
         }
+        let spec = op.tool.as_ref().and_then(|t| self.job.tools.get(t));
+        fit_stepover(&mut op, spec, preset, self.job.tolerance);
+        let s = self.setup_mut(setup)?;
         s.operations.push(op);
         let i = s.operations.len() - 1;
         self.active = Some(setup.to_string());
@@ -526,15 +530,18 @@ impl Document {
     /// of its preset `preset`. Without one, the operation keeps its own values and
     /// no longer names a preset.
     pub fn use_tool(&mut self, setup: &str, op: usize, tool: String, preset: Option<&str>) {
-        let preset = preset.and_then(|p| self.job.tools.get(&tool)?.preset(p).cloned());
+        let spec = self.job.tools.get(&tool).cloned();
+        let preset = preset.and_then(|p| spec.as_ref()?.preset(p).cloned());
+        let tolerance = self.job.tolerance;
         let Some(o) = self.operation_mut(setup, op) else {
             return;
         };
         o.tool = Some(tool);
-        match preset {
-            Some(p) => o.apply_preset(&p),
+        match &preset {
+            Some(p) => o.apply_preset(p),
             None => o.preset = None,
         }
+        fit_stepover(o, spec.as_ref(), preset.as_ref(), tolerance);
     }
 
     /// Another tool the job's operations use with the same number as tool `name`,
@@ -566,5 +573,21 @@ impl Document {
         used.sort();
         used.dedup();
         used
+    }
+}
+
+/// Give `op` the stepover Fusion gives its strategy with `tool`, unless `preset`
+/// set one: a fixed millimetre suits a 1/32" cutter and starves a 1/4" one.
+fn fit_stepover(
+    op: &mut Operation,
+    tool: Option<&ToolSpec>,
+    preset: Option<&Preset>,
+    tolerance: f64,
+) {
+    if preset.is_some_and(|p| p.stepover.is_some()) {
+        return;
+    }
+    if let Some(over) = tool.and_then(|t| op.default_stepover(t, tolerance)) {
+        op.passes.stepover = over;
     }
 }

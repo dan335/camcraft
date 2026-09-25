@@ -63,6 +63,9 @@ pub enum MoveRole {
     Cut,
     /// Approach to or departure from a cut, tangential or radial.
     Lead,
+    /// A connection between two cuts made without lifting clear: at the cutting
+    /// feed, over the part, never into it.
+    Transition,
     /// Angled descent into material.
     Ramp,
     /// Straight-down descent into material.
@@ -79,7 +82,10 @@ impl MoveRole {
     ///
     /// Used by the simulator to decide which moves may legitimately remove stock.
     pub fn cuts(&self) -> bool {
-        matches!(self, Self::Cut | Self::Ramp | Self::Plunge | Self::Lead)
+        matches!(
+            self,
+            Self::Cut | Self::Ramp | Self::Plunge | Self::Lead | Self::Transition
+        )
     }
 
     /// Whether the linker still has to resolve this move.
@@ -251,7 +257,10 @@ impl Toolpath {
         for (i, m) in self.moves.iter().enumerate() {
             let drop = at.z - m.to.z;
             let flat = (m.to.truncate() - at.truncate()).length();
-            if m.role == MoveRole::Cut && drop > 0.0 && drop > flat * max_ratio {
+            // A transition runs at the cutting feed too, so a steep one is the
+            // same plunge.
+            let cutting = matches!(m.role, MoveRole::Cut | MoveRole::Transition);
+            if cutting && drop > 0.0 && drop > flat * max_ratio {
                 let d = current.get_or_insert(Descent {
                     first: i,
                     last: i,

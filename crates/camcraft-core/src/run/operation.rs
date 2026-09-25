@@ -5,7 +5,7 @@ use camcraft_geom::contour::Region;
 use camcraft_geom::mesh::TriMesh;
 use camcraft_geom::topology::EdgeKind;
 use camcraft_sim::stock::{SimReport, Stock};
-use glam::{DVec2, dvec2};
+use glam::{DVec2, DVec3, dvec2};
 
 use super::error::{OperationError, in_op};
 use super::{Made, OperationResult, PLUNGE_RATIO, RunError, StrategyDetail};
@@ -14,16 +14,18 @@ use crate::drilling::{DrillParams, DrillReport, Hole, drill, holes, nearest_firs
 use crate::dropcutter::DropCutter;
 use crate::features::{Chain, picked_chains};
 use crate::job::{HeightContext, Job, Operation, StrategySpec, ToolSpec};
-use crate::linker::{ClearanceField, LinkParams, LinkReport, link};
+use crate::linker::{
+    ClearanceField, LinkParams, LinkReport, Material, Ramp, StayDown, Surface, highest_under, link,
+};
 use crate::ordering::order_passes;
-use crate::parallel::{ParallelParams, parallel_finish_within};
+use crate::parallel::{ParallelParams, follow, parallel_finish_within};
 use crate::reach::LevelReach;
 use crate::roughing::{RoughingParams, zlevel_rough};
 use crate::setup::{Bodies, Prepared};
-use crate::simadapt::sim_moves;
+use crate::simadapt::sim_moves_of;
 use crate::strategy::StrategyError;
 use crate::tool::ToolProfile;
-use crate::toolpath::Toolpath;
+use crate::toolpath::{Move, Toolpath};
 
 /// One operation, and everything its strategy works from.
 pub(super) struct Work<'a> {
@@ -96,8 +98,8 @@ pub(super) fn run_operation(
         (raw, Default::default())
     };
 
-    // Clearance comes from the material as it currently stands, so the tool stays
-    // low where roughing has already been.
+    // Traverses clear the material as it stood before the operation: never lower
+    // than it will stand, so they are safe whatever the operation cuts first.
     let clearance_z = op.heights.clearance.resolve(ctx);
     let clearance = ClearanceField::new(
         stock.field().clone(),
@@ -106,16 +108,32 @@ pub(super) fn run_operation(
     )
     .map_err(in_op(op))?;
 
+    // Linked over the material as each pass leaves it, and cut into it as linked.
+    let before = stock.volume();
+    let surface = OnPart {
+        cutter: work.cutter,
+        tool: work.tool,
+        tolerance: work.job.tolerance,
+    };
+    let mut cutting = Cutting {
+        stock,
+        tool: work.tool,
+        rapid_contacts: 0,
+        deepest: 0.0,
+    };
     let (path, links) = link(
         &ordered,
         &clearance,
-        &LinkParams {
-            retract_feed: op.linking.retract_feed,
-            plunge_feed: op.linking.plunge_feed,
-            tool_radius: work.tool.max_radius(),
-        },
+        &mut cutting,
+        &surface,
+        &link_params(work, clearance_z),
     )
     .map_err(in_op(op))?;
+    let sim = SimReport {
+        removed_mm3: (before - cutting.stock.volume()).max(0.0),
+        rapid_contacts: cutting.rapid_contacts,
+        deepest_rapid_contact_mm: cutting.deepest,
+    };
     if links.suspicious_plunges > 0 {
         warnings.push(format!(
             "{} plunge(s) do not start above the surface",
@@ -125,10 +143,6 @@ pub(super) fn run_operation(
     if path.has_unplanned_links() {
         warnings.push("path still contains unresolved links and is NOT machinable".into());
     }
-
-    // Simulate now, not at the end: a gouge here is worth knowing before the next
-    // operation is planned against the material this one left.
-    let sim = stock.apply(&sim_moves(&path), work.tool);
     if sim.rapid_contacts > 0 {
         warnings.push(format!(
             "{} rapid move(s) pass through material, deepest {:.2} mm",
@@ -159,6 +173,89 @@ pub(super) fn run_operation(
         // The rest is the operation's own: its name, strategy and tool.
         ..not_made(op, Some(work.spec), Made::Generated)
     })
+}
+
+/// How `work`'s operation links: its own settings, with the strategy's defaults
+/// where it gives none, as Fusion's.
+fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
+    let (op, linking) = (work.op, &work.op.linking);
+    let diameter = work.spec.diameter;
+    let (stay_down, lead_radius, ramp) = match op.strategy {
+        StrategySpec::Parallel { .. } => (
+            StayDown::OverPart {
+                max: linking.stay_down.unwrap_or(50.0),
+            },
+            linking.lead_radius.unwrap_or(0.1 * diameter),
+            None,
+        ),
+        StrategySpec::ZlevelRough { .. } => (
+            StayDown::Level {
+                max: linking.stay_down.unwrap_or(5.0 * diameter),
+            },
+            0.0,
+            Some(Ramp {
+                angle: linking.ramp_angle.to_radians(),
+                // Fusion's: a ramp moves mostly sideways, so it goes at a third
+                // of the cutting feed rather than a straight plunge's.
+                feed: linking.ramp_feed.unwrap_or(op.passes.feed / 3.0),
+            }),
+        ),
+        StrategySpec::Drill { .. } => (StayDown::Never, 0.0, None),
+    };
+    LinkParams {
+        retract_feed: linking.retract_feed,
+        plunge_feed: linking.plunge_feed,
+        tool_radius: work.tool.max_radius(),
+        safe_distance: linking.safe_distance,
+        stay_down,
+        lead_radius,
+        ramp,
+        max_cut_step: op.passes.max_cut_step,
+        tolerance: work.job.tolerance,
+        end_z: Some(clearance_z),
+    }
+}
+
+/// The operation's stock, cut as its moves are linked: what every link decision
+/// is measured against.
+struct Cutting<'a> {
+    stock: &'a mut Stock,
+    tool: &'a EffectiveTool,
+    rapid_contacts: u64,
+    deepest: f64,
+}
+
+impl Material for Cutting<'_> {
+    fn highest(&self, from: DVec2, to: DVec2, radius: f64) -> Option<f64> {
+        // The simulator's own disc, down to its margin, so a rapid stopped above
+        // this is one the simulator agrees touches nothing.
+        highest_under(self.stock.field(), from, to, radius * (1.0 + 1e-9)).top
+    }
+
+    fn cut(&mut self, moves: &[Move]) {
+        let swept = self.stock.sweep(&sim_moves_of(moves), self.tool);
+        self.rapid_contacts += swept.rapid_contacts;
+        self.deepest = self.deepest.max(swept.deepest_rapid_contact_mm);
+    }
+}
+
+/// The part, as the operation's tool meets it.
+struct OnPart<'a> {
+    cutter: &'a DropCutter<'a>,
+    tool: &'a EffectiveTool,
+    tolerance: f64,
+}
+
+impl Surface for OnPart<'_> {
+    fn at(&self, p: DVec2) -> Option<f64> {
+        self.cutter.drop_at(self.tool, p.x, p.y)
+    }
+
+    fn along(&self, from: DVec2, to: DVec2) -> Vec<DVec3> {
+        // Seeded at a quarter of the tool's width: nothing that narrow is passed over.
+        let seed = (self.tool.max_radius() * 0.5).max(self.tolerance);
+        follow(self.cutter, self.tool, from, to, self.tolerance, seed)
+    }
 }
 
 /// Raster finishing, with the tool's centre kept to `limit` as well as the sweep.

@@ -421,13 +421,14 @@ pub fn caption(style: &eframe::egui::Style) -> eframe::egui::FontId {
 }
 
 /// Every role, in the order the controls list them.
-pub const ROLES: [MoveRole; 7] = [
+pub const ROLES: [MoveRole; 8] = [
     MoveRole::Cut,
     MoveRole::Rapid,
     MoveRole::Plunge,
     MoveRole::Retract,
     MoveRole::Lead,
     MoveRole::Ramp,
+    MoveRole::Transition,
     MoveRole::Link,
 ];
 
@@ -437,7 +438,8 @@ pub fn role_srgb(role: MoveRole) -> [u8; 3] {
         MoveRole::Cut => PATH_CUT,
         MoveRole::Rapid => PATH_RAPID,
         MoveRole::Plunge => PATH_PLUNGE,
-        MoveRole::Lead | MoveRole::Ramp => PATH_LEAD,
+        // Fusion draws leads and transitions alike; the system has one colour.
+        MoveRole::Lead | MoveRole::Ramp | MoveRole::Transition => PATH_LEAD,
         MoveRole::Retract => GRAY_7,
         MoveRole::Link => GRAY_10,
     }
@@ -452,6 +454,7 @@ pub fn role_name(role: MoveRole) -> &'static str {
         MoveRole::Retract => "retract",
         MoveRole::Lead => "lead",
         MoveRole::Ramp => "ramp",
+        MoveRole::Transition => "transition",
         MoveRole::Link => "link",
     }
 }
@@ -465,7 +468,8 @@ pub fn role_index(role: MoveRole) -> u32 {
         MoveRole::Retract => 3,
         MoveRole::Lead => 4,
         MoveRole::Ramp => 5,
-        MoveRole::Link => 6,
+        MoveRole::Transition => 6,
+        MoveRole::Link => 7,
     }
 }
 

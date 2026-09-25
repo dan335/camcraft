@@ -259,6 +259,49 @@ pub fn parallel_finish_within<T: DropTest>(
     Ok((path, report))
 }
 
+/// The tool's tip on the part along the line from `from` to `to`, as a pass
+/// would sample it: seeded every `seed` millimetres and refined until the path
+/// between samples is within `tolerance` of the part. Only points with part under
+/// the tool; walls are kept, not broken at.
+///
+/// For the linker, to take a link over the part without reaching into it.
+pub(crate) fn follow<T: DropTest>(
+    cutter: &DropCutter<'_>,
+    tool: &T,
+    from: DVec2,
+    to: DVec2,
+    tolerance: f64,
+    seed: f64,
+) -> Vec<DVec3> {
+    let length = from.distance(to);
+    if length < 1e-9 {
+        return cutter
+            .drop_at(tool, from.x, from.y)
+            .map(|z| vec![dvec3(from.x, from.y, z)])
+            .unwrap_or_default();
+    }
+    let along = (to - from) / length;
+    let params = ParallelParams {
+        stepover: seed,
+        tolerance,
+        max_cut_step: f64::INFINITY,
+        ..Default::default()
+    };
+    let mut samples = Vec::new();
+    let mut report = ParallelReport::default();
+    Line {
+        probe: |u: f64| {
+            let p = from + along * u;
+            cutter.drop_at(tool, p.x, p.y).map(|z| dvec3(p.x, p.y, z))
+        },
+        params: &params,
+        out: &mut samples,
+        report: &mut report,
+    }
+    .sweep(0.0, length);
+    samples.into_iter().flatten().collect()
+}
+
 /// Break a run wherever it falls, or climbs, further than `max_cut_step` while
 /// steeper than [`PLUNGE_RATIO`].
 ///

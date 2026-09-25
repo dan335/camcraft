@@ -53,7 +53,12 @@ it.
   - *Post*: work offset and machine profile.
 - **Operation**, on tabs: *Tool* (the tool and its feeds and speeds), *Geometry*
   (picked faces and edges, containment), *Heights* (clearance, top and bottom,
-  drawn in the view as planes), *Passes* and *Linking*. A Generate button sits at
+  drawn in the view as planes), *Passes* and *Linking* (retract feed, safe
+  distance, stay-down distance, and the lead radius or the ramp angle and feed;
+  one left out says what the strategy's default comes to for the tool). Choosing a
+  tool whose preset gives no stepover sets Fusion's: a quarter of the diameter for
+  parallel with a square end, the tolerance's cusp with a round one, and 0.6 of
+  the diameter for Z-level. A Generate button sits at
   the panel's foot. The strategy is fixed once the operation is made.
 
 ## Picking in the view

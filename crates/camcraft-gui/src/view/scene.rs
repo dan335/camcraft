@@ -77,7 +77,7 @@ pub struct Scene {
     /// Each operation's range of `segments`.
     pub ops: Vec<OpSpan>,
     /// Segments per role, indexed as [`theme::ROLES`].
-    pub role_counts: [usize; 7],
+    pub role_counts: [usize; 8],
     /// Continuous cutting descents steeper than [`PLUNGE_RATIO`] and deeper than
     /// their operation's `max_cut_step`, each at its last move: deepest first, the
     /// order they are listed in, and in machine order among equals.

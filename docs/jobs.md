@@ -24,6 +24,19 @@ tool, heights, passes and linking. It may be kept to faces and edges picked on a
 model, and it may be turned off, which leaves it in the job but out of every run,
 check and post.
 
+**Linking** is how the tool moves between cuts, after Fusion's
+([decision 0004](decisions/0004-linking-and-entries.md)). It rapids down to the
+*safe distance* (2 mm) above the material under it and feeds from there, and feeds
+out of a cut only that far before rapiding. A link no longer than the *stay-down*
+distance is made without lifting, at the cutting feed: 50 mm for parallel, riding
+over the part; five times the tool's diameter for Z-level, straight and level.
+Parallel enters and leaves each pass along a vertical arc (the *lead radius*, a
+tenth of the tool); Z-level ramps into material along the pass it is about to cut
+(the *ramp angle*, 2°, at the *ramp feed*, a third of the cutting feed). After the
+last cut the tool goes up to the clearance height before the spindle stops. The
+settings are written only when changed, and need no newer version: a build that
+reads the file without them links the old, slower way, and cuts the same.
+
 A job's **tools** are its own copies, by name, never links to a library, so the
 job still cuts what was verified after the library changes. A job whose used tools
 share a T number is refused.

@@ -36,12 +36,13 @@ Day to day the work is on macOS; the lego brick (`lego_4x2_01.step`) is the part
 the app is usually tried on.
 
 Last full run on the 237 × 227 × 76 mm router jig, read straight from
-`sled_base.step`, 17 s on an M-series Mac:
+`sled_base.step`, 20 s on an M-series Mac; about 4.6 hours of machining at the
+estimate (`docs/decisions/0004-linking-and-entries.md` has the breakdown):
 
 ```
-rough:  1262 passes, removed 3570370 mm3, travel saved 78%, rapid contacts 0
-finish:  556 passes, removed   55924 mm3, travel saved  0%, rapid contacts 0
-verified: 155326 columns compared, gouges 0, deepest 0.000 mm
+rough:  1262 passes, 1057 links stayed down, 169 ramped, removed 3558704 mm3, travel saved 78%, rapid contacts 0
+finish:  556 passes,  323 links stayed down,   0 ramped, removed   55737 mm3, travel saved  0%, rapid contacts 0
+verified: 920799 column(s) compared, gouges 0, deepest 0.000 mm, budget 0.217 mm
 ```
 
 Finishing saving 0% travel is correct: a parallel zigzag already ends each pass
@@ -51,13 +52,16 @@ next to where the following one starts.
 
 Not yet built, roughly in the order they matter:
 
-1. **Feed height in the linker.** Every link descends from the clearance height to
-   the cut at the plunge feed, including through air roughing already cleared; on
-   the router jig that is about three of its seven hours (129 min of rough plunges,
-   57 of finish). Fusion rapids to a feed height just above the material first.
-   Worth doing before the first real cut.
-2. **Ramp and helix entry.** Roughing plunges into each pass. The ramp feed is kept
-   on presets but nothing uses it yet.
+Linking and entries are done, after Fusion: safe distance, staying down, leads,
+ramps, a retract before the spindle stops, and stepovers that follow the tool
+([decision 0004](docs/decisions/0004-linking-and-entries.md)). The router jig's
+program went from about 8 h to 4.6 h.
+
+1. **Helical ramps and smooth transitions.** Z-level ramps along its own ring and
+   parallel's stay-down links are straight lines lifted over the part; Fusion's
+   are helices and tangent arcs.
+2. **Start rapids split XY then Z.** The first move is one G0 in all three axes
+   from wherever the tool change left the spindle.
 3. **More strategies**: 2D profile, pocket, waterline, adaptive clearing.
 4. **Arc fitting**, as a `Toolpath -> Toolpath` transform.
 5. **A volumetric stock**, so what a top setup leaves carries to a flipped bottom
@@ -78,8 +82,8 @@ actually break cutters on the day:
   dry-run.
 - Nothing knows whether the WCS is where the job assumes, whether the tool in the
   spindle matches its `diameter`, or whether the stock is the size the job was told.
-- Roughing is contour-parallel clearing that plunges into each pass; there is no
-  ramp or helix entry yet. It has never cut anything.
+- Roughing is contour-parallel clearing that ramps into material at 2°. It has
+  never cut anything.
 
 ## Open questions
 

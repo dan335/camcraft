@@ -11,7 +11,7 @@ use crate::allowance::EffectiveTool;
 use crate::tool::ToolProfile;
 #[cfg(test)]
 use crate::tool::{Ball, Bullnose, Flat};
-use crate::toolpath::{MoveRole, Toolpath};
+use crate::toolpath::{Move, MoveRole, Toolpath};
 
 /// Reduce a toolpath to what the simulator needs.
 ///
@@ -20,7 +20,12 @@ use crate::toolpath::{MoveRole, Toolpath};
 /// an unresolved link is treated as a rapid so that simulating an unlinked path
 /// reports the traverses nobody planned rather than quietly cutting them.
 pub fn sim_moves(path: &Toolpath) -> Vec<SimMove> {
-    path.moves()
+    sim_moves_of(path.moves())
+}
+
+/// [`sim_moves`], for some of a path's moves.
+pub fn sim_moves_of(moves: &[Move]) -> Vec<SimMove> {
+    moves
         .iter()
         .map(|m| SimMove {
             to: m.to,

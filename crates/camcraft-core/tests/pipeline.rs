@@ -8,7 +8,7 @@
 
 use camcraft_core::allowance::{Allowance, EffectiveTool};
 use camcraft_core::dropcutter::DropCutter;
-use camcraft_core::linker::{ClearancePlane, LinkParams, link};
+use camcraft_core::linker::{Air, ClearancePlane, LinkParams, NoPart, link};
 use camcraft_core::parallel::{ParallelParams, parallel_finish};
 use camcraft_core::tool::{Ball, ToolProfile};
 use camcraft_core::toolpath::MoveRole;
@@ -47,12 +47,8 @@ fn a_sphere_becomes_a_machinable_path() {
     );
 
     let plane = ClearancePlane::new(CLEARANCE).unwrap();
-    let linking = LinkParams {
-        retract_feed: 900.0,
-        plunge_feed: 250.0,
-        tool_radius: tool.max_radius(),
-    };
-    let (path, links) = link(&raw, &plane, &linking).unwrap();
+    let linking = LinkParams::plain(900.0, 250.0, tool.max_radius());
+    let (path, links) = link(&raw, &plane, &mut Air, &NoPart, &linking).unwrap();
 
     // The property that makes it machinable at all.
     assert!(!path.has_unplanned_links());
@@ -111,22 +107,29 @@ fn no_traverse_passes_below_clearance() {
     let (path, _) = link(
         &raw,
         &plane,
-        &LinkParams {
-            retract_feed: 900.0,
-            plunge_feed: 250.0,
-            tool_radius: tool.max_radius(),
-        },
+        &mut Air,
+        &NoPart,
+        &LinkParams::plain(900.0, 250.0, tool.max_radius()),
     )
     .unwrap();
 
+    // Across only at clearance; below it, a rapid only goes straight down to the
+    // safe distance above the next cut.
     let mut rapids = 0;
-    for m in path.moves().iter().filter(|m| m.role == MoveRole::Rapid) {
-        assert!(
-            m.to.z >= CLEARANCE - 1e-9,
-            "rapid to {:?} is below clearance {CLEARANCE}",
-            m.to
-        );
-        rapids += 1;
+    let mut at = path.moves().first().map_or(glam::DVec3::ZERO, |m| m.to);
+    for m in path.moves() {
+        if m.role == MoveRole::Rapid {
+            let across = (m.to.truncate() - at.truncate()).length() > 1e-9;
+            if across {
+                assert!(
+                    m.to.z >= CLEARANCE - 1e-9 && (rapids == 0 || at.z >= CLEARANCE - 1e-9),
+                    "rapid across from {at:?} to {:?} is below clearance {CLEARANCE}",
+                    m.to
+                );
+            }
+            rapids += 1;
+        }
+        at = m.to;
     }
     assert!(rapids > 0, "expected traverses between passes");
 
@@ -164,11 +167,9 @@ fn a_flat_plate_gives_a_flat_path() {
     let (path, _) = link(
         &raw,
         &plane,
-        &LinkParams {
-            retract_feed: 900.0,
-            plunge_feed: 250.0,
-            tool_radius: tool.max_radius(),
-        },
+        &mut Air,
+        &NoPart,
+        &LinkParams::plain(900.0, 250.0, tool.max_radius()),
     )
     .unwrap();
 

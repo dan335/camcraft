@@ -683,6 +683,46 @@ fn only_a_job_with_an_operation_speed_needs_version_3() {
     assert!(matches!(j.validate(), Err(JobError::BadValue { .. })));
 }
 
+/// Fusion's stepovers: a quarter of a square end's width for parallel, the
+/// tolerance's cusp for a round one, and 0.6 of the tool for clearing.
+#[test]
+fn stepovers_default_as_fusions() {
+    let j = sample();
+    let mut op = j.setups[0].operations[1].clone();
+    let tool = |kind, diameter, corner| ToolSpec {
+        kind,
+        diameter,
+        corner,
+        ..j.tools["rough-6-flat"].clone()
+    };
+    op.strategy = StrategySpec::Parallel { angle: 0.0 };
+    assert_eq!(
+        op.default_stepover(&tool(ToolKind::Flat, 6.35, 0.0), 0.05),
+        Some(1.588)
+    );
+    // r = 3.175: 2·√(3.175² − 3.125²) / √2.
+    assert_eq!(
+        op.default_stepover(&tool(ToolKind::Ball, 6.35, 0.0), 0.05),
+        Some(0.794)
+    );
+    op.strategy = StrategySpec::ZlevelRough {
+        stepdown: 3.0,
+        min_ring_length: 3.0,
+    };
+    let clearing = op
+        .default_stepover(&tool(ToolKind::Flat, 6.35, 0.0), 0.05)
+        .unwrap();
+    assert!((clearing - 3.81).abs() < 1e-12);
+    op.strategy = StrategySpec::Drill {
+        peck: None,
+        dwell: None,
+    };
+    assert_eq!(
+        op.default_stepover(&tool(ToolKind::Drill, 6.0, 0.0), 0.05),
+        None
+    );
+}
+
 /// An older reader would cut an operation turned off, so a job with one is
 /// version 4, whatever else it has.
 #[test]

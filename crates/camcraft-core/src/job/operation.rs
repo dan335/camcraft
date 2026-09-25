@@ -335,6 +335,33 @@ impl Operation {
         Ok(())
     }
 
+    /// The stepover Fusion gives this operation with `tool`, at `tolerance`: for
+    /// parallel finishing, a quarter of the tool's diameter with a square end, and
+    /// with a round one the spacing that leaves a cusp no taller than the
+    /// tolerance, `2·√(r² − (r − tol)²) / √2`; for Z-level clearing, 0.6 of the
+    /// diameter, its 3D pocket's. `None` for drilling, which has none.
+    pub fn default_stepover(&self, tool: &ToolSpec, tolerance: f64) -> Option<f64> {
+        let d = tool.diameter;
+        match self.strategy {
+            StrategySpec::Parallel { .. } => {
+                let r = match tool.kind {
+                    ToolKind::Ball => d / 2.0,
+                    ToolKind::Bullnose => tool.corner,
+                    ToolKind::Flat | ToolKind::Cone | ToolKind::Drill => 0.0,
+                };
+                let over = if r > tolerance && r > 0.0 {
+                    2.0 * (r * r - (r - tolerance).powi(2)).sqrt() / 2f64.sqrt()
+                } else {
+                    d / 4.0
+                };
+                // To the micron, as Fusion rounds it.
+                Some((over * 1000.0).round() / 1000.0)
+            }
+            StrategySpec::ZlevelRough { .. } => Some(0.6 * d),
+            StrategySpec::Drill { .. } => None,
+        }
+    }
+
     /// Copy the values `preset` has into this operation, leaving the rest, and
     /// record where they came from.
     pub fn apply_preset(&mut self, preset: &Preset) {
@@ -481,6 +508,9 @@ pub struct StockToLeave {
 }
 
 /// How the tool moves between cuts.
+///
+/// What each setting does, and why its default is Fusion's, is in
+/// `docs/decisions/0004-linking-and-entries.md`.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Linking {
     /// Feed for coming up out of a cut.
@@ -498,6 +528,33 @@ pub struct Linking {
     /// decision rather than a travel one.
     #[serde(default)]
     pub allow_reverse: bool,
+    /// How far above the material the tool stops rapiding down and feeds, and up to
+    /// which it feeds on the way out, in millimetres.
+    #[serde(
+        default = "default_safe_distance",
+        skip_serializing_if = "is_default_safe_distance"
+    )]
+    pub safe_distance: f64,
+    /// The longest link made without lifting clear, in millimetres: the
+    /// strategy's own when not given (50 mm for parallel, 5 × the tool's diameter
+    /// for Z-level), zero to always lift.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stay_down: Option<f64>,
+    /// The radius of the vertical arcs a parallel pass is entered and left along,
+    /// in millimetres: a tenth of the tool's diameter when not given, zero for
+    /// none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_radius: Option<f64>,
+    /// How steeply Z-level roughing ramps into material, in degrees from level.
+    #[serde(
+        default = "default_ramp_angle",
+        skip_serializing_if = "is_default_ramp_angle"
+    )]
+    pub ramp_angle: f64,
+    /// Feed along a ramp, in mm/min: a third of the cutting feed when not given,
+    /// as Fusion's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ramp_feed: Option<f64>,
 }
 
 impl Default for Linking {
@@ -507,8 +564,32 @@ impl Default for Linking {
             plunge_feed: default_plunge_feed(),
             reorder: true,
             allow_reverse: false,
+            safe_distance: default_safe_distance(),
+            stay_down: None,
+            lead_radius: None,
+            ramp_angle: default_ramp_angle(),
+            ramp_feed: None,
         }
     }
+}
+
+fn default_safe_distance() -> f64 {
+    2.0
+}
+
+// Serde's `skip_serializing_if` hands the field by reference.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_safe_distance(v: &f64) -> bool {
+    v.to_bits() == default_safe_distance().to_bits()
+}
+
+fn default_ramp_angle() -> f64 {
+    2.0
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_ramp_angle(v: &f64) -> bool {
+    v.to_bits() == default_ramp_angle().to_bits()
 }
 
 fn default_retract_feed() -> f64 {
