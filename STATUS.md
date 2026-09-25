@@ -4,7 +4,7 @@ Last updated 2026-09-24. Read this before picking the work back up.
 
 **0.2 is done: the desktop app runs, checks, plays back and posts jobs**, and some
 of 0.3 came in with it (drilling, V-bits and chamfer mills, speed and feed presets,
-Fusion CSV tool import). All gates are green. The engine takes STEP or STL models
+Fusion CSV tool import, a built-in System library of twenty common bits). All gates are green. The engine takes STEP or STL models
 and a job file and writes G-code, and refuses to write a program that fails a
 check, the simulator's against material among them.
 

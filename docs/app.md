@@ -141,6 +141,19 @@ Move to. Tools carry Fusion-style detail: flutes, lengths, shank, stickout,
 holder, material and vendor, with a scale drawing and per-field checks. A value
 left out reads "not given".
 
+The **System library** is always there, above the person's own folders: twenty
+common inch router bits (up-cut, down-cut and compression spirals, O-flutes, ball
+noses, V-bits and surfacing bits, T1 to T20), built into the app
+(`camcraft_session::library::system`). It is read-only and never written to
+`tools.toml`. **Copy to my library**, or dragging a bit onto a folder, copies it
+into the person's last folder under their next tool number, to change there.
+Up-cut, down-cut and compression are flat end mills, as Fusion has them; the flute
+direction is in the name and description. Each bit has a preset for each material
+it suits (softwood, hardwood, MDF / plywood, and acrylic, HDPE, aluminum or sign
+foam where they fit), its feed from a conservative chip load at 18,000 rev/min
+(16,000 for 1/2" shanks and surfacing): a start for a hobby router, not a maker's
+chart.
+
 Cutters: flat, ball and bullnose end mills; **V-bits and chamfer mills** (a cone:
 an included angle and an optional flat tip), which finish but are refused for
 Z-level roughing and for stock to leave; and **drills** (a cone point, 118° unless

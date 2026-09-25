@@ -591,6 +591,16 @@ fn tool_manager() {
     manager.folders_for_snapshot();
     let mut manager = shoot_manager(manager, "tools_library_folders");
 
+    // The System library: its bits, read-only, one with its presets.
+    manager.system_for_snapshot();
+    let mut manager = shoot_tabs(
+        manager,
+        &[
+            ("tools_system", None),
+            ("tools_system_presets", Some("Presets")),
+        ],
+    );
+
     // A folder with nothing in it: what to do instead of a blank table.
     manager.empty_folder_for_snapshot();
     shoot_manager(manager, "tools_empty_folder");

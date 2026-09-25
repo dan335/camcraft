@@ -55,8 +55,9 @@ const PAGES: [Page; 5] = [
 /// in `m` and kept in millimetres. The tab showing is remembered per `ui` id, so
 /// call inside `ui.push_id` when more than one tool may be edited in the same
 /// window. The tool's picture is [`crate::tools::drawing::paint_tool`], drawn by the
-/// caller.
-pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure) {
+/// caller. A tool that is not `editable` shows its fields greyed, and its tabs and
+/// presets can still be looked through.
+pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, editable: bool) {
     let (errors, preset_errors): (Vec<_>, Vec<_>) =
         tool.check().into_iter().partition(|e| e.preset.is_none());
     let flagged = |fields: &[&str]| errors.iter().any(|e| fields.contains(&e.field));
@@ -72,13 +73,19 @@ pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure) {
     ];
     let page = widgets::remembered_tabs(ui, ui.id().with("tool-page"), &tabs, 1, None);
 
-    match PAGES.get(page).copied().unwrap_or(Page::Cutter) {
+    let page = PAGES.get(page).copied().unwrap_or(Page::Cutter);
+    if page == Page::Presets {
+        // Its list of presets is picked from even when nothing can be changed.
+        speeds(ui, tool, m, &errors, &preset_errors, editable);
+        return;
+    }
+    ui.add_enabled_ui(editable, |ui| match page {
         Page::General => form(ui, "general", |ui| general(ui, tool)),
         Page::Cutter => form(ui, "cutter", |ui| cutter(ui, tool, m, &errors)),
         Page::Holder => holder(ui, tool, m, &errors),
-        Page::Presets => speeds(ui, tool, m, &errors, &preset_errors),
+        Page::Presets => {}
         Page::Post => form(ui, "post", |ui| post(ui, tool)),
-    }
+    });
 }
 
 fn general(ui: &mut egui::Ui, tool: &mut ToolSpec) {
@@ -287,24 +294,27 @@ fn speeds(
     m: Measure,
     errors: &[ToolFieldError],
     preset_errors: &[ToolFieldError],
+    editable: bool,
 ) {
-    form(ui, "spindle", |ui| {
-        row(ui, "Spindle", errors, "rpm", |ui| {
-            ui.add(
-                egui::DragValue::new(&mut tool.rpm)
-                    .range(0..=60000)
-                    .suffix(" rev/min"),
-            )
-            .on_hover_text("An operation cuts at this speed unless its preset gives one.");
-        });
-        let mut rpm = Some(tool.rpm);
-        surface_speed_row(ui, &mut rpm, tool.diameter, m);
-        if let Some(r) = rpm {
-            tool.rpm = r;
-        }
+    ui.add_enabled_ui(editable, |ui| {
+        form(ui, "spindle", |ui| {
+            row(ui, "Spindle", errors, "rpm", |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut tool.rpm)
+                        .range(0..=60000)
+                        .suffix(" rev/min"),
+                )
+                .on_hover_text("An operation cuts at this speed unless its preset gives one.");
+            });
+            let mut rpm = Some(tool.rpm);
+            surface_speed_row(ui, &mut rpm, tool.diameter, m);
+            if let Some(r) = rpm {
+                tool.rpm = r;
+            }
+        })
     });
     ui.add_space(theme::SPACE_5);
-    presets(ui, tool, m, preset_errors);
+    presets(ui, tool, m, preset_errors, editable);
 }
 
 fn post(ui: &mut egui::Ui, tool: &mut ToolSpec) {
@@ -352,13 +362,20 @@ fn post(ui: &mut egui::Ui, tool: &mut ToolSpec) {
 /// The tool's presets: a list with a way to add, copy, reorder and remove them,
 /// and the one picked shown in full below. The first is the one a new operation
 /// gets.
-fn presets(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFieldError]) {
+fn presets(
+    ui: &mut egui::Ui,
+    tool: &mut ToolSpec,
+    m: Measure,
+    errors: &[ToolFieldError],
+    editable: bool,
+) {
     let mut act = None;
     ui.horizontal(|ui| {
         ui.label(widgets::section_label("Presets"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if widgets::button(ui, Variant::Ghost, Size::Sm, Some(Icon::Plus), "Add preset")
-                .clicked()
+            if editable
+                && widgets::button(ui, Variant::Ghost, Size::Sm, Some(Icon::Plus), "Add preset")
+                    .clicked()
             {
                 act = Some(PresetAction::Add);
             }
@@ -411,7 +428,7 @@ fn presets(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFie
                 .on_hover_text("A new operation with this tool gets this preset.");
         }
         row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if on {
+            if on && editable {
                 if widgets::icon_button(ui, Icon::Trash, "remove this preset").clicked() {
                     act = Some(PresetAction::Remove(i));
                 }
@@ -437,7 +454,7 @@ fn presets(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFie
         });
     }
 
-    preset_card(ui, tool, picked, m, errors);
+    ui.add_enabled_ui(editable, |ui| preset_card(ui, tool, picked, m, errors));
 
     if let Some(act) = act {
         apply_preset_action(tool, act, &mut picked);

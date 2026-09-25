@@ -12,6 +12,9 @@
 //!
 //! It lives in the user's app-data folder (`~/Library/Application Support/camcraft/
 //! tools.toml` on macOS), or wherever `CAMCRAFT_TOOL_LIBRARY` points.
+//!
+//! Beside the user's own tools the library shows the [`system`] library, a folder
+//! of common bits that is built in, cannot be changed, and is never saved.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -22,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use crate::fs::write_atomically;
 
 pub mod fusion_csv;
+pub mod system;
 
 /// Overrides where the library lives.
 pub const LIBRARY_ENV: &str = "CAMCRAFT_TOOL_LIBRARY";
@@ -304,7 +308,14 @@ impl Library {
 
     /// Write the library to `path`, making its folder if need be. Refuses a tool
     /// that does not check clean, so the library never holds one a job would refuse.
+    /// The System library, being built in, is left out.
     pub fn save(&self, path: &Path) -> Result<(), LibraryError> {
+        let mut own = self.clone();
+        own.root.folders.remove(system::SYSTEM);
+        own.write(path)
+    }
+
+    fn write(&self, path: &Path) -> Result<(), LibraryError> {
         for (folder, name, tool) in self.root.walk() {
             if let Some(source) = tool.check().into_iter().next() {
                 let mut at = folder;
@@ -430,6 +441,21 @@ mod tests {
             matches!(lib.save(&path), Err(LibraryError::BadTool { ref name, .. }) if name == "m/bad")
         );
         assert!(!path.exists());
+    }
+
+    /// The System library is shown, never saved: what comes back is only the
+    /// person's own.
+    #[test]
+    fn the_system_library_is_not_saved() {
+        let path = temp("system");
+        let mut lib = Library::default();
+        lib.root.tools.insert("mine".into(), ToolSpec::default());
+        let own = lib.clone();
+        system::add_system(&mut lib.root);
+        lib.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains(system::SYSTEM), "{text}");
+        assert_eq!(Library::load(&path).unwrap(), own);
     }
 
     #[test]

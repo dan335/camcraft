@@ -9,10 +9,15 @@
 //! "Move to". Tools are edited in place, and the library saves itself whenever an
 //! edit is finished and every tool checks clean, to the user's app-data folder
 //! (`camcraft_session::library`).
+//!
+//! The System library, a folder of common bits built in, shows among them. Nothing
+//! in it can be changed; a bit is copied out of it into the person's own folders,
+//! with a button or by dragging it onto one.
 
 use std::path::{Path, PathBuf};
 
 use camcraft_core::job::ToolSpec;
+use camcraft_session::library::system::{SYSTEM, add_system, is_system};
 use camcraft_session::library::{
     Folder, FolderPath, Library, folder_label, free_name, fusion_csv, library_path,
 };
@@ -76,16 +81,30 @@ impl Set {
         Ok(())
     }
 
-    /// A tool number no tool in the library uses yet.
+    /// A tool number none of the person's own tools uses yet. The System
+    /// library's numbers are its own, and do not push theirs up.
     fn next_number(&self) -> u32 {
         self.edited
             .walk()
             .iter()
+            .filter(|(f, _, _)| !is_system(f))
             .map(|(_, _, t)| t.number)
             .max()
             .unwrap_or(0)
             + 1
     }
+}
+
+/// Why nothing in the System library can be changed, and what to do instead.
+const LOCKED: &str = "The System library can't be changed; pick one of your own folders, \
+                      or copy a bit into one";
+
+/// What copying a System library bit out is called.
+const COPY_OUT: &str = "Copy to my library";
+
+/// Where a System library bit's copy goes, said on the button.
+fn copy_out_hint(to: &[String]) -> String {
+    format!("A copy to change, in {}", folder_label(to))
 }
 
 /// How the table is ordered.
@@ -136,6 +155,9 @@ pub struct ToolManager {
     library_unsaved: Option<(String, Folder)>,
     /// The folder showing.
     folder: FolderPath,
+    /// The last of the person's own folders shown: where a System library bit is
+    /// copied to.
+    own_folder: FolderPath,
     /// Tools in the folders inside it show too.
     include_subfolders: bool,
     /// The tool being edited: its folder and name.
@@ -168,20 +190,23 @@ impl ToolManager {
         }
     }
 
-    /// A manager for the library at `path`.
+    /// A manager for the library at `path`, with the System library in it.
     pub fn with_library(path: PathBuf) -> Self {
         let (library, library_error) = match Library::load(&path) {
             Ok(lib) => (lib, None),
             Err(e) => (Library::default(), Some(e.to_string())),
         };
+        let mut root = library.root;
+        add_system(&mut root);
         Self {
             open: false,
             measure: Measure::default(),
             library_path: Some(path),
-            library: Set::new(library.root),
+            library: Set::new(root),
             library_error,
             library_unsaved: None,
             folder: Vec::new(),
+            own_folder: Vec::new(),
             include_subfolders: true,
             selected: None,
             name_buffer: String::new(),
@@ -220,6 +245,17 @@ impl ToolManager {
         self.select(Some((
             vec!["machine_01".into(), "flat".into()],
             "flat-6".into(),
+        )));
+    }
+
+    /// Show the System library with one of its bits selected. Only the snapshot
+    /// harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn system_for_snapshot(&mut self) {
+        self.folder = vec![SYSTEM.into()];
+        self.select(Some((
+            vec![SYSTEM.into(), "End mills".into()],
+            "1/4 upcut".into(),
         )));
     }
 
@@ -276,6 +312,10 @@ impl ToolManager {
     /// Bring the tools in the Fusion tool library CSV at `path` into the folder
     /// showing. A tool already there gets the file's presets beside its own.
     pub fn import_fusion(&mut self, path: &Path) {
+        if is_system(&self.folder) {
+            self.message = Some((false, LOCKED.into()));
+            return;
+        }
         let text = match std::fs::read_to_string(path) {
             Ok(t) => t,
             Err(e) => {
@@ -480,28 +520,33 @@ impl ToolManager {
             {
                 self.filter.clear();
             }
+            let locked = is_system(&self.folder);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::button(ui, Variant::Primary, Size::Md, Some(Icon::Plus), "New tool")
-                    .on_hover_text("a new tool in the folder showing")
+                ui.add_enabled_ui(!locked, |ui| {
+                    if widgets::button(ui, Variant::Primary, Size::Md, Some(Icon::Plus), "New tool")
+                        .on_hover_text("a new tool in the folder showing")
+                        .on_disabled_hover_text(LOCKED)
+                        .clicked()
+                    {
+                        self.new_tool();
+                    }
+                    if widgets::button(
+                        ui,
+                        Variant::Secondary,
+                        Size::Md,
+                        Some(Icon::Upload),
+                        "Import…",
+                    )
+                    .on_hover_text(
+                        "Import a Fusion tool library exported as CSV, as makers publish them, \
+                             into the folder showing",
+                    )
+                    .on_disabled_hover_text(LOCKED)
                     .clicked()
-                {
-                    self.new_tool();
-                }
-                if widgets::button(
-                    ui,
-                    Variant::Secondary,
-                    Size::Md,
-                    Some(Icon::Upload),
-                    "Import…",
-                )
-                .on_hover_text(
-                    "Import a Fusion tool library exported as CSV, as makers publish them, \
-                         into the folder showing",
-                )
-                .clicked()
-                {
-                    self.import_requested = true;
-                }
+                    {
+                        self.import_requested = true;
+                    }
+                });
             });
         });
     }
@@ -551,14 +596,17 @@ impl ToolManager {
             ui.label(widgets::section_label("Folders")).on_hover_text(
                 "Drag a tool onto a folder to move it there. Right-click a folder for more.",
             );
+            let locked = is_system(&self.folder);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::icon_button(
-                    ui,
-                    Icon::FolderPlus,
-                    "a new folder inside the one selected",
-                )
-                .clicked()
-                {
+                let r = ui.add_enabled_ui(!locked, |ui| {
+                    widgets::icon_button(
+                        ui,
+                        Icon::FolderPlus,
+                        "a new folder inside the one selected",
+                    )
+                    .on_disabled_hover_text(LOCKED)
+                });
+                if r.inner.clicked() {
                     let parent = self.folder.clone();
                     self.new_folder(&parent);
                 }
@@ -581,8 +629,23 @@ impl ToolManager {
     }
 
     fn apply(&mut self, action: TreeAction) {
+        match &action {
+            TreeAction::NewIn(p)
+            | TreeAction::StartRename(p)
+            | TreeAction::Rename(p, _)
+            | TreeAction::Delete(p)
+                if is_system(p) =>
+            {
+                self.message = Some((false, LOCKED.into()));
+                return;
+            }
+            _ => {}
+        }
         match action {
             TreeAction::Select(path) => {
+                if !is_system(&path) {
+                    self.own_folder.clone_from(&path);
+                }
                 if self.folder != path {
                     self.folder = path;
                     self.select(None);
@@ -603,6 +666,7 @@ impl ToolManager {
                             }
                         };
                         moved(&mut self.folder);
+                        moved(&mut self.own_folder);
                         if let Some((f, _)) = self.selected.as_mut() {
                             moved(f);
                         }
@@ -642,6 +706,7 @@ impl ToolManager {
         match self.library.edited.create(parent, &name) {
             Ok(path) => {
                 self.folder = path.clone();
+                self.own_folder = path.clone();
                 self.select(None);
                 self.renaming = Some((path, name));
             }
@@ -670,8 +735,17 @@ impl ToolManager {
         }
     }
 
+    /// Move a tool to folder `to`; a System library bit is copied there instead.
     fn move_tool(&mut self, from: &[String], name: &str, to: &[String]) {
         if from == to {
+            return;
+        }
+        if is_system(to) {
+            self.message = Some((false, LOCKED.into()));
+            return;
+        }
+        if is_system(from) {
+            self.copy_tool(from, name, to);
             return;
         }
         match self.library.edited.move_tool(from, name, to) {
@@ -752,6 +826,15 @@ impl ToolManager {
                     .color(theme::egui_color(theme::TEXT_1)),
             );
             ui.add_space(theme::SPACE_3);
+            if is_system(folder) {
+                if widgets::button(ui, Variant::Ghost, Size::Sm, Some(Icon::Copy), COPY_OUT)
+                    .on_hover_text(copy_out_hint(&self.own_folder()))
+                    .clicked()
+                {
+                    self.duplicate(folder, name);
+                }
+                return;
+            }
             if widgets::button(ui, Variant::Ghost, Size::Sm, Some(Icon::Copy), "Duplicate")
                 .clicked()
             {
@@ -766,7 +849,8 @@ impl ToolManager {
             );
             egui::Popup::menu(&moving).show(|ui| {
                 for path in all_folders {
-                    if path != folder && ui.button(folder_label(path)).clicked() {
+                    if path != folder && !is_system(path) && ui.button(folder_label(path)).clicked()
+                    {
                         self.move_tool(folder, name, path);
                         ui.close();
                     }
@@ -796,7 +880,11 @@ impl ToolManager {
         };
         let mut new = false;
         let mut import = false;
+        let locked = is_system(&self.folder);
         widgets::empty_state(ui, Icon::Folder, title, detail, |ui| {
+            if locked {
+                return;
+            }
             new = widgets::button(
                 ui,
                 Variant::Secondary,
@@ -955,13 +1043,23 @@ impl ToolManager {
                 actions.push(RowAction::Select(folder.clone(), name.to_string()));
             }
             r.context_menu(|ui| {
+                if is_system(&folder) {
+                    if ui.button(COPY_OUT).clicked() {
+                        actions.push(RowAction::Duplicate(folder.clone(), name.to_string()));
+                        ui.close();
+                    }
+                    return;
+                }
                 if ui.button("Duplicate").clicked() {
                     actions.push(RowAction::Duplicate(folder.clone(), name.to_string()));
                     ui.close();
                 }
                 ui.menu_button("Move to", |ui| {
                     for path in all_folders {
-                        if *path != folder && ui.button(folder_label(path)).clicked() {
+                        if *path != folder
+                            && !is_system(path)
+                            && ui.button(folder_label(path)).clicked()
+                        {
                             actions.push(RowAction::Move(
                                 folder.clone(),
                                 name.to_string(),
@@ -990,6 +1088,10 @@ impl ToolManager {
     }
 
     fn new_tool(&mut self) {
+        if is_system(&self.folder) {
+            self.message = Some((false, LOCKED.into()));
+            return;
+        }
         let number = self.library.next_number();
         let Some(here) = self.library.edited.at_mut(&self.folder) else {
             return;
@@ -1005,7 +1107,14 @@ impl ToolManager {
         self.select(Some((self.folder.clone(), name)));
     }
 
+    /// A copy of a tool beside it; a System library bit's copy goes to the
+    /// person's own folder instead.
     fn duplicate(&mut self, folder: &[String], name: &str) {
+        if is_system(folder) {
+            let to = self.own_folder();
+            self.copy_tool(folder, name, &to);
+            return;
+        }
         let number = self.library.next_number();
         let Some(here) = self.library.edited.at_mut(folder) else {
             return;
@@ -1018,7 +1127,55 @@ impl ToolManager {
         self.select(Some((folder.to_vec(), copy)));
     }
 
+    /// The folder a System library bit is copied to: the last of the person's own
+    /// shown, while it is still there, or else the top of the library.
+    fn own_folder(&self) -> FolderPath {
+        if !is_system(&self.own_folder) && self.library.edited.at(&self.own_folder).is_some() {
+            self.own_folder.clone()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Copy tool `name` of `from` into folder `to` under a free name and the next
+    /// tool number, and show it there.
+    fn copy_tool(&mut self, from: &[String], name: &str, to: &[String]) {
+        let Some(tool) = self
+            .library
+            .edited
+            .at(from)
+            .and_then(|f| f.tools.get(name))
+            .cloned()
+        else {
+            return;
+        };
+        let number = self.library.next_number();
+        let Some(there) = self.library.edited.at_mut(to) else {
+            return;
+        };
+        let as_name = free_name(name, &there.tools);
+        there
+            .tools
+            .insert(as_name.clone(), ToolSpec { number, ..tool });
+        let said = if as_name == name {
+            format!("copied '{name}' to {} as T{number}", folder_label(to))
+        } else {
+            format!(
+                "copied '{name}' to {} as '{as_name}', T{number}",
+                folder_label(to)
+            )
+        };
+        self.message = Some((true, said));
+        self.folder = to.to_vec();
+        self.own_folder = to.to_vec();
+        self.select(Some((to.to_vec(), as_name)));
+    }
+
     fn delete(&mut self, folder: &[String], name: &str) {
+        if is_system(folder) {
+            self.message = Some((false, LOCKED.into()));
+            return;
+        }
         if let Some(here) = self.library.edited.at_mut(folder) {
             here.tools.remove(name);
         }
@@ -1043,9 +1200,11 @@ impl ToolManager {
 
         // Which tool this is: its folder, then its name, edited in place and
         // applied when editing finishes, beside its number.
+        let locked = is_system(&folder);
         breadcrumb(ui, &folder);
         ui.horizontal(|ui| {
-            let r = ui.add(
+            let r = ui.add_enabled(
+                !locked,
                 egui::TextEdit::singleline(&mut self.name_buffer)
                     .font(egui::FontId::new(
                         theme::TEXT_MD,
@@ -1068,14 +1227,29 @@ impl ToolManager {
             }
             widgets::tag(ui, &format!("T{}", original.number)).on_hover_text("its tool number");
         });
+        if locked {
+            ui.add_space(theme::SPACE_2);
+            ui.horizontal(|ui| {
+                ui.label(widgets::hint_text(
+                    "Part of the System library, which can't be changed.",
+                ));
+                if widgets::button(ui, Variant::Secondary, Size::Sm, Some(Icon::Copy), COPY_OUT)
+                    .on_hover_text(copy_out_hint(&self.own_folder()))
+                    .clicked()
+                {
+                    self.duplicate(&folder, &name);
+                }
+            });
+        }
         ui.add_space(theme::SPACE_3);
         paint_tool(ui, &original, self.measure);
         ui.add_space(theme::SPACE_3);
 
         let mut tool = original.clone();
-        tool_fields(ui, &mut tool, self.measure);
+        tool_fields(ui, &mut tool, self.measure, !locked);
         // The edit lands under whatever name the tool has now.
         if tool != original
+            && !locked
             && let Some((folder, key)) = self.selected.clone()
             && let Some(slot) = self
                 .library
@@ -1144,7 +1318,7 @@ fn folder_row(
         egui::Sense::click(),
     );
     let is = *selected == *path;
-    let dropping = response.dnd_hover_payload::<ToolDrag>().is_some();
+    let dropping = !is_system(path) && response.dnd_hover_payload::<ToolDrag>().is_some();
     list_row_background(ui, rect, is, response.hovered());
     if dropping {
         ui.painter().rect_stroke(
@@ -1188,7 +1362,12 @@ fn folder_row(
     folder_actions(&response, path, actions);
 
     if open {
-        for (name, sub) in &folder.folders {
+        // The System library first, above the person's own folders.
+        let mut subs: Vec<_> = folder.folders.iter().collect();
+        if path.is_empty() {
+            subs.sort_by_key(|(name, _)| name.as_str() != SYSTEM);
+        }
+        for (name, sub) in subs {
             path.push(name.clone());
             folder_row(ui, sub, path, selected, renaming, actions);
             path.pop();
@@ -1240,11 +1419,20 @@ fn folder_name(
 
 /// What dropping a tool on a folder's row, clicking it, and its menu do.
 fn folder_actions(response: &egui::Response, path: &FolderPath, actions: &mut Vec<TreeAction>) {
-    if let Some(drag) = response.dnd_release_payload::<ToolDrag>() {
-        actions.push(TreeAction::Drop((*drag).clone(), path.clone()));
-    }
     if response.clicked() {
         actions.push(TreeAction::Select(path.clone()));
+    }
+    // The System library takes no tools, and has no names or folders to change.
+    if is_system(path) {
+        if path.len() == 1 {
+            response.clone().on_hover_text(
+                "Common bits, built in and read-only. Copy one into your own folders                  to change it.",
+            );
+        }
+        return;
+    }
+    if let Some(drag) = response.dnd_release_payload::<ToolDrag>() {
+        actions.push(TreeAction::Drop((*drag).clone(), path.clone()));
     }
     if response.double_clicked() && !path.is_empty() {
         actions.push(TreeAction::StartRename(path.clone()));
@@ -1424,6 +1612,11 @@ mod tests {
             .insert("flat-6".into(), ToolSpec::default());
         m.save_library();
         assert!(!m.library.dirty());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains(SYSTEM),
+            "the System library is not saved: {text}"
+        );
         let again = ToolManager::with_library(path);
         assert!(
             again
@@ -1468,6 +1661,11 @@ mod tests {
         std::fs::write(&path, "this is not toml [").unwrap();
         let mut m = ToolManager::with_library(path.clone());
         assert!(m.library_error.is_some());
+        assert_eq!(
+            m.library.edited.at(&[SYSTEM.into()]).map(Folder::count),
+            Some(20),
+            "the System library is there all the same"
+        );
         m.library
             .edited
             .tools
@@ -1478,5 +1676,93 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             "this is not toml ["
         );
+    }
+
+    fn system(sub: &str) -> FolderPath {
+        vec![SYSTEM.to_string(), sub.to_string()]
+    }
+
+    /// A library with nothing in it yet has the System library, and nothing to
+    /// save.
+    #[test]
+    fn a_new_library_has_the_system_bits() {
+        let m = manager("fresh");
+        assert_eq!(m.library.edited.count(), 20);
+        assert!(!m.dirty());
+        assert_eq!(
+            m.library.next_number(),
+            1,
+            "its numbers are not the person's"
+        );
+    }
+
+    /// Nothing in the System library can be deleted, renamed, moved or added to;
+    /// a bit moved out of it is copied.
+    #[test]
+    fn the_system_library_cannot_be_changed() {
+        let mut m = manager("locked");
+        let mine = m.library.edited.create(&[], "machine_01").unwrap();
+        let ends = system("End mills");
+        let before = m.library.edited.at(&[SYSTEM.into()]).unwrap().clone();
+
+        m.delete(&ends, "1/4 upcut");
+        m.apply(TreeAction::Delete(ends.clone()));
+        m.apply(TreeAction::Rename(ends.clone(), "mine".into()));
+        m.apply(TreeAction::NewIn(ends.clone()));
+        m.folder = ends.clone();
+        m.new_tool();
+        m.move_tool(&mine, "nothing", &ends);
+        m.move_tool(&ends, "1/4 upcut", &mine);
+        assert!(
+            matches!(&m.message, Some((true, t)) if t.contains("copied")),
+            "{:?}",
+            m.message
+        );
+
+        assert_eq!(m.library.edited.at(&[SYSTEM.into()]).unwrap(), &before);
+        assert!(
+            m.library
+                .edited
+                .at(&mine)
+                .unwrap()
+                .tools
+                .contains_key("1/4 upcut")
+        );
+    }
+
+    /// Copying a bit out puts it, numbered as the person's next, in the folder of
+    /// theirs last shown, and shows it there to be changed; and it is saved.
+    #[test]
+    fn a_system_bit_is_copied_to_the_folder_last_shown() {
+        let dir = std::env::temp_dir().join(format!("camcraft-tm-copy-{}", std::process::id()));
+        let path = dir.join("library.toml");
+        let _ = std::fs::remove_file(&path);
+        let mut m = ToolManager::with_library(path.clone());
+        m.library.edited.tools.insert(
+            "mine".into(),
+            ToolSpec {
+                number: 4,
+                ..ToolSpec::default()
+            },
+        );
+        let folder = m.library.edited.create(&[], "machine_01").unwrap();
+        m.apply(TreeAction::Select(folder.clone()));
+        let balls = system("Ball");
+        m.apply(TreeAction::Select(balls.clone()));
+        m.duplicate(&balls, "1/8 ball");
+        m.duplicate(&balls, "1/8 ball");
+
+        let here = &m.library.edited.at(&folder).unwrap().tools;
+        assert_eq!(here["1/8 ball"].number, 5);
+        assert_eq!(here["1/8 ball-2"].number, 6);
+        assert_eq!(here["1/8 ball"].presets.len(), 4);
+        assert_eq!(m.folder, folder);
+        assert_eq!(m.selected, Some((folder.clone(), "1/8 ball-2".into())));
+
+        m.save_library();
+        assert!(!m.dirty());
+        let saved = Library::load(&path).unwrap();
+        assert_eq!(saved.root.at(&folder).unwrap().tools.len(), 2);
+        assert!(saved.root.at(&[SYSTEM.into()]).is_none());
     }
 }
