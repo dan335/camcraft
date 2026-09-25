@@ -325,12 +325,7 @@ impl StockImage {
             for (count, g) in image.counts.iter_mut().zip(gained) {
                 *count = count.wrapping_add_signed(g);
             }
-            let all = CellRect {
-                x0: 0,
-                y0: 0,
-                x1: nx - 1,
-                y1: ny - 1,
-            };
+            let all = CellRect::all(nx, ny);
             let occluder = Occluder::new(&image);
             image.ao = occluder.shade(&image, all);
             return (image, occluder);
@@ -393,12 +388,7 @@ impl StockImage {
             .par_iter()
             .map(|&r| {
                 let mut piece = self.piece(r);
-                let local = CellRect {
-                    x0: 0,
-                    y0: 0,
-                    x1: r.width() - 1,
-                    y1: r.height() - 1,
-                };
+                let local = CellRect::all(r.width(), r.height());
                 piece.classify_at(stock, part, budget, local, (r.x0, r.y0), false);
                 (r, piece)
             })
@@ -553,7 +543,7 @@ passes = { stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.3, axial
         let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let result = run_setup_zero(&job, &repo).result;
 
-        let finished = result.stages.last().unwrap().unpack().unwrap();
+        let finished = result.keyframes.last().unwrap().unpack().unwrap();
         let image = StockImage::build(&finished, &result.part, result.verify_budget);
         assert_eq!(image.count(Class::Gouge) as u64, result.verify.gouged);
         assert_eq!(image.count(Class::Leftover) as u64, result.verify.leftover);

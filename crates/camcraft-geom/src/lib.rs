@@ -23,7 +23,8 @@
 //! camcraft carries two distinct geometry channels, and this crate owns both:
 //!
 //! - **Height maps**, consumed by the 3D strategies.
-//! - **Contours**, consumed by the 2D operations that arrive after 0.1.
+//! - **Contours**, consumed by roughing, by boundaries picked on a model, and by the
+//!   2D operations still to come.
 //!
 //! Collapsing these into one would leave the entire 2D half of a CAM system with
 //! nowhere to live.
@@ -38,5 +39,7 @@ pub mod heightmap;
 pub mod contour;
 
 pub mod shadow;
+
+pub mod steps;
 
 pub mod topology;

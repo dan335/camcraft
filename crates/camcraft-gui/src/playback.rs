@@ -76,7 +76,7 @@ pub fn ensure_stock_image(state: &mut SetupState) {
     let result = &ran.ran.result;
     if let (Some(slot @ None), Some(Ok(stock))) = (
         state.view.stock_images.get_mut(stage),
-        result.stages.get(stage).map(|s| s.unpack()),
+        result.keyframes.get(stage).map(|s| s.unpack()),
     ) {
         let image = StockImage::build(&stock, &result.part, result.verify_budget);
         *slot = Some((next_key(), image));

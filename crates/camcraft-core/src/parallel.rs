@@ -30,11 +30,12 @@
 //! short of the boundary, and count each as a coverage break.
 
 use camcraft_geom::contour::Region;
-use camcraft_geom::mesh::Aabb;
+use camcraft_geom::steps::bounded_count;
 use glam::{DVec2, DVec3, dvec2, dvec3};
 
 use crate::dropcutter::{DropCutter, DropTest};
-use crate::toolpath::{MoveRole, PLUNGE_RATIO, Toolpath, ToolpathError};
+use crate::strategy::{StrategyError, check};
+use crate::toolpath::{MoveRole, PLUNGE_RATIO, Toolpath};
 
 /// How to lay out the passes.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -72,42 +73,12 @@ impl Default for ParallelParams {
     }
 }
 
-/// A strategy that could not produce a path.
-#[derive(Debug, thiserror::Error, PartialEq)]
-pub enum StrategyError {
-    /// A parameter was outside its usable range.
-    #[error("{name} must be finite and greater than zero, got {value}")]
-    BadParameter {
-        /// Which parameter.
-        name: &'static str,
-        /// What it was.
-        value: f64,
-    },
-    /// The region was empty or inverted.
-    #[error("region is empty or inverted: {min:?} to {max:?}")]
-    EmptyRegion {
-        /// Lower corner.
-        min: DVec2,
-        /// Upper corner.
-        max: DVec2,
-    },
-    /// A move could not be added.
-    #[error(transparent)]
-    Toolpath(#[from] ToolpathError),
-    /// A polygon operation failed.
-    ///
-    /// Propagated rather than swallowed: an empty region reads as "nothing to cut",
-    /// which is indistinguishable from a correct answer.
-    #[error("region operation failed: {0}")]
-    Region(String),
-}
-
 /// What happened while building a path, beyond the path itself.
 ///
 /// Returned rather than logged, because silently emitting a path that hit its
 /// refinement limit is exactly the failure this project refuses to have.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct StrategyReport {
+pub struct ParallelReport {
     /// Spans that exhausted [`ParallelParams::max_depth`] while still out of
     /// tolerance. Non-zero means the path is coarser than requested.
     pub refinement_limited: u64,
@@ -135,7 +106,7 @@ pub struct StrategyReport {
     pub wall_breaks: u64,
 }
 
-impl StrategyReport {
+impl ParallelReport {
     /// Whether anything needs the caller's attention.
     ///
     /// Discontinuities do not count: they are a property of the part, not a
@@ -156,7 +127,7 @@ pub fn parallel_finish<T: DropTest>(
     min: DVec2,
     max: DVec2,
     params: &ParallelParams,
-) -> Result<(Toolpath, StrategyReport), StrategyError> {
+) -> Result<(Toolpath, ParallelReport), StrategyError> {
     parallel_finish_within(cutter, tool, min, max, None, params)
 }
 
@@ -173,7 +144,7 @@ pub fn parallel_finish_within<T: DropTest>(
     max: DVec2,
     boundary: Option<&Region>,
     params: &ParallelParams,
-) -> Result<(Toolpath, StrategyReport), StrategyError> {
+) -> Result<(Toolpath, ParallelReport), StrategyError> {
     check("stepover", params.stepover)?;
     check("tolerance", params.tolerance)?;
     check("feed", params.feed)?;
@@ -215,16 +186,16 @@ pub fn parallel_finish_within<T: DropTest>(
                 });
         (v0, v1) = (v0.max(lo), v1.min(hi));
         if v0.is_nan() || v1.is_nan() || v0 >= v1 {
-            return Ok((Toolpath::new(), StrategyReport::default()));
+            return Ok((Toolpath::new(), ParallelReport::default()));
         }
         let n = ((v1 - v0) / params.stepover).floor();
         start = v0 + (v1 - v0 - n * params.stepover) / 2.0;
     }
 
-    let lines = clamp_count(((v1 - start) / params.stepover).floor() + 1.0);
+    let lines = bounded_count(((v1 - start) / params.stepover).floor() + 1.0);
 
     let mut path = Toolpath::new();
-    let mut report = StrategyReport::default();
+    let mut report = ParallelReport::default();
     let mut samples = Vec::new();
 
     for i in 0..lines {
@@ -247,18 +218,17 @@ pub fn parallel_finish_within<T: DropTest>(
         for (p0, p1) in pieces {
             let (a, b) = if reversed { (p1, p0) } else { (p0, p1) };
             samples.clear();
-            sweep_line(
-                cutter,
-                tool,
-                along,
-                across,
-                v,
-                a,
-                b,
+            let probe = |u: f64| -> Option<DVec3> {
+                let p = along * u + across * v;
+                cutter.drop_at(tool, p.x, p.y).map(|z| dvec3(p.x, p.y, z))
+            };
+            Line {
+                probe,
                 params,
-                &mut samples,
-                &mut report,
-            );
+                out: &mut samples,
+                report: &mut report,
+            }
+            .sweep(a, b);
 
             let runs: Vec<Vec<DVec3>> = samples
                 .split(|p| p.is_none())
@@ -301,7 +271,7 @@ pub fn parallel_finish_within<T: DropTest>(
 ///
 /// The stretch is left out: the linker retracts from its top and plunges, at the
 /// plunge feed, to its foot.
-fn break_steep(run: Vec<DVec3>, max_cut_step: f64, report: &mut StrategyReport) -> Vec<Vec<DVec3>> {
+fn break_steep(run: Vec<DVec3>, max_cut_step: f64, report: &mut ParallelReport) -> Vec<Vec<DVec3>> {
     // How far a segment falls (negative: climbs), when it is steeper than the ratio.
     let steep = |a: DVec3, b: DVec3| -> Option<f64> {
         let fall = a.z - b.z;
@@ -336,133 +306,87 @@ fn break_steep(run: Vec<DVec3>, max_cut_step: f64, report: &mut StrategyReport) 
     out
 }
 
-/// Convenience: sweep the whole XY extent of a mesh's bounds.
-pub fn region_from_bounds(bounds: &Aabb, margin: f64) -> (DVec2, DVec2) {
-    (
-        dvec2(bounds.min.x - margin, bounds.min.y - margin),
-        dvec2(bounds.max.x + margin, bounds.max.y + margin),
-    )
-}
-
-/// Upper bound on passes or samples along one line.
-///
-/// A bound rather than a hope: a tiny stepover against a large region would
-/// otherwise try to allocate an unbounded path. Staying inside `u32` also keeps
-/// every later conversion to `f64` exact.
-const MAX_STEPS: u32 = 1_000_000;
-
 /// Refinement stops once a span is this many tolerances wide.
 ///
 /// Below it, the surface is discontinuous rather than merely curved, and further
 /// splitting cannot help.
 const GEOMETRIC_LIMIT: f64 = 0.5;
 
-/// Clamp a computed count into `[1, MAX_STEPS]`.
-fn clamp_count(n: f64) -> u32 {
-    if !n.is_finite() || n < 1.0 {
-        return 1;
-    }
-    // Clamped and finite, so the narrowing is exact.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let n = n.min(f64::from(MAX_STEPS)) as u32;
-    n
+/// One line of a sweep being sampled: how a point along it is probed, the limits
+/// it is refined to, and where its samples and counts go.
+struct Line<'s, F> {
+    /// The tool's tip on the surface at a distance along the line, if anything is
+    /// under it there.
+    probe: F,
+    params: &'s ParallelParams,
+    out: &'s mut Vec<Option<DVec3>>,
+    report: &'s mut ParallelReport,
 }
 
-fn check(name: &'static str, value: f64) -> Result<(), StrategyError> {
-    (value.is_finite() && value > 0.0)
-        .then_some(())
-        .ok_or(StrategyError::BadParameter { name, value })
-}
+impl<F: Fn(f64) -> Option<DVec3>> Line<'_, F> {
+    /// Sample the line from `a` to `b`.
+    fn sweep(&mut self, a: f64, b: f64) {
+        // Coarse seeding at the stepover, then adaptive refinement between seeds. The
+        // seed spacing bounds how small a feature can be missed entirely.
+        let steps = bounded_count(((b - a).abs() / self.params.stepover).ceil());
+        let mut prev = (self.probe)(a);
+        self.out.push(prev);
 
-#[allow(clippy::too_many_arguments)]
-fn sweep_line<T: DropTest>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
-    along: DVec2,
-    across: DVec2,
-    v: f64,
-    a: f64,
-    b: f64,
-    params: &ParallelParams,
-    out: &mut Vec<Option<DVec3>>,
-    report: &mut StrategyReport,
-) {
-    let at = |u: f64| along * u + across * v;
-    let probe = |u: f64| -> Option<DVec3> {
-        let p = at(u);
-        cutter.drop_at(tool, p.x, p.y).map(|z| dvec3(p.x, p.y, z))
-    };
-
-    // Coarse seeding at the stepover, then adaptive refinement between seeds. The
-    // seed spacing bounds how small a feature can be missed entirely.
-    let steps = clamp_count(((b - a).abs() / params.stepover).ceil());
-    let mut prev = probe(a);
-    out.push(prev);
-
-    for k in 1..=steps {
-        let t = f64::from(k) / f64::from(steps);
-        let u = a + (b - a) * t;
-        let next = probe(u);
-        if let (Some(p0), Some(p1)) = (prev, next) {
-            let u0 = a + (b - a) * (f64::from(k - 1) / f64::from(steps));
-            refine(&probe, u0, p0, u, p1, params, 0, out, report);
+        for k in 1..=steps {
+            let t = f64::from(k) / f64::from(steps);
+            let u = a + (b - a) * t;
+            let next = (self.probe)(u);
+            if let (Some(p0), Some(p1)) = (prev, next) {
+                let u0 = a + (b - a) * (f64::from(k - 1) / f64::from(steps));
+                self.refine(u0, p0, u, p1, 0);
+            }
+            self.out.push(next);
+            prev = next;
         }
-        out.push(next);
-        prev = next;
     }
-}
 
-/// Split a span while its midpoint deviates from the chord by more than tolerance.
-///
-/// Emits interior points only; the caller supplies both endpoints.
-#[allow(clippy::too_many_arguments)]
-fn refine<F: Fn(f64) -> Option<DVec3>>(
-    probe: &F,
-    u0: f64,
-    p0: DVec3,
-    u1: f64,
-    p1: DVec3,
-    params: &ParallelParams,
-    depth: u32,
-    out: &mut Vec<Option<DVec3>>,
-    report: &mut StrategyReport,
-) {
-    let um = (u0 + u1) / 2.0;
-    let Some(pm) = probe(um) else {
-        // Coverage ends *inside* this span. Returning quietly would leave the two
-        // endpoints adjacent in the output and joined by a cut, across a region
-        // where the surface was never established -- which is how a 17 mm step got
-        // traversed at cutting feed on a scanline grazing the part edge. Break the
-        // run instead; the linker turns it into a retract and a re-entry.
-        report.coverage_breaks += 1;
-        out.push(None);
-        return;
-    };
-    let chord = (p0 + p1) * 0.5;
-    if (pm.z - chord.z).abs() <= params.tolerance {
-        return;
-    }
-    // A span narrower than this cannot be meaningfully split further; continuing
-    // would just burn depth against a step the chord can never follow.
-    if (u1 - u0).abs() <= params.tolerance * GEOMETRIC_LIMIT {
-        report.discontinuities += 1;
-        // If the surface drops far enough here that joining the two sides would
-        // mean plunging at cutting feed, break the pass. `None` is the same
-        // marker a coverage gap uses, so the split and the linker's retract come
-        // out of machinery that already exists.
-        if (p0.z - p1.z).abs() > params.max_cut_step {
-            report.wall_breaks += 1;
-            out.push(None);
+    /// Split a span while its midpoint deviates from the chord by more than tolerance.
+    ///
+    /// Emits interior points only; the caller supplies both endpoints.
+    fn refine(&mut self, u0: f64, p0: DVec3, u1: f64, p1: DVec3, depth: u32) {
+        let params = self.params;
+        let um = (u0 + u1) / 2.0;
+        let Some(pm) = (self.probe)(um) else {
+            // Coverage ends *inside* this span. Returning quietly would leave the two
+            // endpoints adjacent in the output and joined by a cut, across a region
+            // where the surface was never established -- which is how a 17 mm step got
+            // traversed at cutting feed on a scanline grazing the part edge. Break the
+            // run instead; the linker turns it into a retract and a re-entry.
+            self.report.coverage_breaks += 1;
+            self.out.push(None);
+            return;
+        };
+        let chord = (p0 + p1) * 0.5;
+        if (pm.z - chord.z).abs() <= params.tolerance {
+            return;
         }
-        return;
+        // A span narrower than this cannot be meaningfully split further; continuing
+        // would just burn depth against a step the chord can never follow.
+        if (u1 - u0).abs() <= params.tolerance * GEOMETRIC_LIMIT {
+            self.report.discontinuities += 1;
+            // If the surface drops far enough here that joining the two sides would
+            // mean plunging at cutting feed, break the pass. `None` is the same
+            // marker a coverage gap uses, so the split and the linker's retract come
+            // out of machinery that already exists.
+            if (p0.z - p1.z).abs() > params.max_cut_step {
+                self.report.wall_breaks += 1;
+                self.out.push(None);
+            }
+            return;
+        }
+        if depth >= params.max_depth {
+            self.report.refinement_limited += 1;
+            return;
+        }
+        self.refine(u0, p0, um, pm, depth + 1);
+        self.out.push(Some(pm));
+        self.refine(um, pm, u1, p1, depth + 1);
     }
-    if depth >= params.max_depth {
-        report.refinement_limited += 1;
-        return;
-    }
-    refine(probe, u0, p0, um, pm, params, depth + 1, out, report);
-    out.push(Some(pm));
-    refine(probe, um, pm, u1, p1, params, depth + 1, out, report);
 }
 
 #[cfg(test)]

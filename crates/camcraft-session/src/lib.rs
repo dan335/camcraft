@@ -772,7 +772,7 @@ mod tests {
         let model = load_job_model(Path::new("."), &job.models[0], job.tolerance).unwrap();
         let models: Models<'_> = [("hinge", &model)].into_iter().collect();
         let final_heights = |ran: &Ran| {
-            let last = ran.result.stages.last().unwrap().unpack().unwrap();
+            let last = ran.result.keyframes.last().unwrap().unpack().unwrap();
             last.field().data().to_vec()
         };
 

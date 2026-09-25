@@ -42,7 +42,8 @@ use camcraft_geom::shadow::Shadows;
 
 use rayon::prelude::*;
 
-use crate::stock::EffectiveTool;
+use crate::allowance::EffectiveTool;
+use crate::is_positive;
 use crate::tool::ToolProfile;
 
 /// A band limit so that a pathological tool cannot allocate without bound.
@@ -111,7 +112,7 @@ impl<'m> LevelReach<'m> {
         lift: f64,
         tolerance: f64,
     ) -> Result<Self, ReachError> {
-        if !(tolerance.is_finite() && tolerance > 0.0) {
+        if !is_positive(tolerance) {
             return Err(ReachError::Tolerance(tolerance));
         }
         if !profile.is_monotonic() {
@@ -174,11 +175,6 @@ impl<'m> LevelReach<'m> {
     pub fn arc_tolerance(&self) -> f64 {
         self.arc_tolerance
     }
-
-    /// How many bands the cutter was divided into.
-    pub fn band_count(&self) -> usize {
-        self.bands.len()
-    }
 }
 
 /// Divide a profile into bands across which the radius grows by at most `step`.
@@ -219,8 +215,8 @@ fn bands(profile: &(impl ToolProfile + ?Sized), step: f64) -> Result<Vec<Band>, 
 #[allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
 mod tests {
     use super::*;
+    use crate::allowance::Allowance;
     use crate::dropcutter::DropCutter;
-    use crate::stock::Stock;
     use crate::tool::{Ball, Bullnose, Flat};
     use camcraft_geom::synthetic;
     use glam::dvec2;
@@ -315,14 +311,14 @@ mod tests {
     #[test]
     fn a_flat_mill_on_a_sphere_agrees_with_the_drop_cutter() {
         let mesh = synthetic::uv_sphere(8.0, 60, 90);
-        let tool = EffectiveTool::new(&Flat::new(2.0).unwrap(), Stock::none()).unwrap();
+        let tool = EffectiveTool::new(&Flat::new(2.0).unwrap(), Allowance::none()).unwrap();
         agrees_with_drop_cutter(&mesh, &tool, &[6.0, 2.0, -1.0], 12.0);
     }
 
     #[test]
     fn a_ball_on_a_sphere_agrees_with_the_drop_cutter() {
         let mesh = synthetic::uv_sphere(8.0, 60, 90);
-        let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Stock::none()).unwrap();
+        let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
         agrees_with_drop_cutter(&mesh, &tool, &[6.0, 2.0, -3.0], 12.0);
     }
 
@@ -331,8 +327,8 @@ mod tests {
     #[test]
     fn stock_to_leave_agrees_with_the_drop_cutter() {
         let mesh = synthetic::uv_sphere(8.0, 60, 90);
-        let tool =
-            EffectiveTool::new(&Flat::new(2.0).unwrap(), Stock::new(0.6, 0.3).unwrap()).unwrap();
+        let tool = EffectiveTool::new(&Flat::new(2.0).unwrap(), Allowance::new(0.6, 0.3).unwrap())
+            .unwrap();
         agrees_with_drop_cutter(&mesh, &tool, &[6.0, 2.0, -3.0], 12.0);
     }
 
@@ -340,10 +336,10 @@ mod tests {
     fn a_step_agrees_with_the_drop_cutter() {
         let mesh = synthetic::step(8.0, 10.0);
         for tool in [
-            EffectiveTool::new(&Flat::new(2.0).unwrap(), Stock::none()).unwrap(),
+            EffectiveTool::new(&Flat::new(2.0).unwrap(), Allowance::none()).unwrap(),
             EffectiveTool::new(
                 &Bullnose::new(2.0, 0.5).unwrap(),
-                Stock::isotropic(0.5).unwrap(),
+                Allowance::isotropic(0.5).unwrap(),
             )
             .unwrap(),
         ] {
@@ -354,7 +350,7 @@ mod tests {
     #[test]
     fn nonsense_tolerances_are_refused() {
         let mesh = synthetic::plane(0.0, 5.0);
-        let tool = EffectiveTool::new(&Flat::new(2.0).unwrap(), Stock::none()).unwrap();
+        let tool = EffectiveTool::new(&Flat::new(2.0).unwrap(), Allowance::none()).unwrap();
         for bad in [0.0, -1.0, f64::NAN] {
             assert!(LevelReach::new(&mesh, &tool, bad).is_err());
         }

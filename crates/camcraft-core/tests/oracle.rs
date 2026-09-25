@@ -7,11 +7,11 @@
 
 #![allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
 
+use camcraft_core::allowance::{Allowance, EffectiveTool};
 use camcraft_core::dropcutter::DropCutter;
 use camcraft_core::linker::{ClearancePlane, LinkParams, link};
 use camcraft_core::parallel::{ParallelParams, parallel_finish};
 use camcraft_core::simadapt::sim_moves;
-use camcraft_core::stock::{EffectiveTool, Stock as ToLeave};
 use camcraft_core::tool::{Ball, ToolProfile};
 use camcraft_core::toolpath::{MoveRole, Toolpath};
 use camcraft_geom::synthetic;
@@ -26,7 +26,7 @@ fn a_finished_dome_matches_the_part() {
     let sphere_r = 12.0;
     let mesh = synthetic::uv_sphere(sphere_r, 160, 220);
     let cutter = DropCutter::new(&mesh);
-    let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), ToLeave::none()).unwrap();
+    let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
 
     let (lo, hi) = (dvec2(-7.0, -7.0), dvec2(7.0, 7.0));
     let (raw, strategy) = parallel_finish(
@@ -94,7 +94,7 @@ fn a_deliberate_gouge_is_detected() {
     let mesh = synthetic::plane(0.0, 14.0);
     let (lo, hi) = (dvec2(-6.0, -6.0), dvec2(6.0, 6.0));
     let part = PartSurface::from_mesh(&mesh, lo, hi, PITCH).unwrap();
-    let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), ToLeave::none()).unwrap();
+    let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
 
     let mut stock = Stock::block(lo, hi, 5.0, -5.0, PITCH).unwrap();
     let mut moves = Vec::new();
@@ -126,7 +126,7 @@ fn a_deliberate_gouge_is_detected() {
 #[test]
 fn a_rapid_through_the_part_is_detected() {
     let (lo, hi) = (dvec2(-6.0, -6.0), dvec2(6.0, 6.0));
-    let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), ToLeave::none()).unwrap();
+    let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
     let mut stock = Stock::block(lo, hi, 5.0, -5.0, PITCH).unwrap();
 
     let mut t = Toolpath::new();
@@ -151,8 +151,11 @@ fn stock_to_leave_shows_up_in_the_material() {
     let cutter = DropCutter::new(&mesh);
 
     let leave = 0.4;
-    let tool =
-        EffectiveTool::new(&Ball::new(2.0).unwrap(), ToLeave::isotropic(leave).unwrap()).unwrap();
+    let tool = EffectiveTool::new(
+        &Ball::new(2.0).unwrap(),
+        Allowance::isotropic(leave).unwrap(),
+    )
+    .unwrap();
     let (raw, _) = parallel_finish(
         &cutter,
         &tool,
@@ -198,7 +201,7 @@ fn stock_to_leave_shows_up_in_the_material() {
 fn an_unlinked_path_reports_its_unplanned_traverses() {
     let mesh = synthetic::uv_sphere(10.0, 80, 120);
     let cutter = DropCutter::new(&mesh);
-    let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), ToLeave::none()).unwrap();
+    let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
     let (lo, hi) = (dvec2(-6.0, -6.0), dvec2(6.0, 6.0));
 
     let (raw, _) = parallel_finish(

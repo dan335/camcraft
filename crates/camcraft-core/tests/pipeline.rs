@@ -6,10 +6,10 @@
 
 #![allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
 
+use camcraft_core::allowance::{Allowance, EffectiveTool};
 use camcraft_core::dropcutter::DropCutter;
 use camcraft_core::linker::{ClearancePlane, LinkParams, link};
 use camcraft_core::parallel::{ParallelParams, parallel_finish};
-use camcraft_core::stock::{EffectiveTool, Stock};
 use camcraft_core::tool::{Ball, ToolProfile};
 use camcraft_core::toolpath::MoveRole;
 use camcraft_geom::synthetic;
@@ -27,7 +27,7 @@ fn a_sphere_becomes_a_machinable_path() {
 
     // A finishing pass that still leaves a little stock, so the effective-tool seam
     // is exercised rather than bypassed.
-    let stock = Stock::isotropic(0.2).unwrap();
+    let stock = Allowance::isotropic(0.2).unwrap();
     let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), stock).unwrap();
 
     let sweep = ParallelParams {
@@ -93,7 +93,7 @@ fn a_sphere_becomes_a_machinable_path() {
 fn no_traverse_passes_below_clearance() {
     let mesh = synthetic::uv_sphere(SPHERE_R, 80, 120);
     let cutter = DropCutter::new(&mesh);
-    let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Stock::none()).unwrap();
+    let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
 
     let (raw, _) = parallel_finish(
         &cutter,
@@ -144,7 +144,8 @@ fn no_traverse_passes_below_clearance() {
 fn a_flat_plate_gives_a_flat_path() {
     let mesh = synthetic::plane(3.0, 30.0);
     let cutter = DropCutter::new(&mesh);
-    let tool = EffectiveTool::new(&Ball::new(3.0).unwrap(), Stock::new(0.0, 0.5).unwrap()).unwrap();
+    let tool =
+        EffectiveTool::new(&Ball::new(3.0).unwrap(), Allowance::new(0.0, 0.5).unwrap()).unwrap();
 
     let (raw, report) = parallel_finish(
         &cutter,

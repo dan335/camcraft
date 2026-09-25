@@ -20,17 +20,7 @@
 //! path does not apply. Encoding that in the type is deliberate: it is what lets
 //! undercutting tools arrive later without revisiting this trait.
 
-/// Identifies a cutter's geometry exactly, for cache keying.
-///
-/// Parameters are stored as raw bit patterns so that two tools which are equal are
-/// keyed equally, without the pitfalls of hashing floats by value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ToolKey {
-    /// Discriminates the cutter shape.
-    pub kind: &'static str,
-    /// Shape parameters as exact bit patterns; unused slots are zero.
-    pub params: [u64; 4],
-}
+use crate::is_positive;
 
 /// A cutter's geometry, as a solid of revolution about the tool axis.
 ///
@@ -60,9 +50,6 @@ pub trait ToolProfile {
     fn is_monotonic(&self) -> bool {
         true
     }
-
-    /// A value identifying this tool's geometry exactly.
-    fn geometry_key(&self) -> ToolKey;
 }
 
 /// A flat (square-end) end mill: a plain cylinder.
@@ -157,21 +144,14 @@ impl ToolProfile for Bullnose {
         let k = d - flat;
         Some(c - (c * c - k * k).max(0.0).sqrt())
     }
-
-    fn geometry_key(&self) -> ToolKey {
-        ToolKey {
-            kind: "bullnose",
-            params: [self.radius.to_bits(), self.corner.to_bits(), 0, 0],
-        }
-    }
 }
 
 /// Cutters expressible in the bullnose family.
 ///
-/// Every cutter this engine has is a flat face of radius `R - c` surrounded by a
-/// corner of radius `c`. Stating that as a trait is what lets stock-to-leave be
-/// computed once, for all of them, instead of per shape — the family is closed under
-/// dilation by the stock solid.
+/// Flat, ball and corner-radius mills are each a flat face of radius `R - c`
+/// surrounded by a corner of radius `c`. Stating that as a trait is what lets
+/// stock-to-leave be computed once, for all of them, instead of per shape — the
+/// family is closed under dilation by the stock solid. A [`Cone`] is not in it.
 pub trait BullnoseFamily {
     /// This cutter as a bullnose. Infallible: the dimensions were validated when the
     /// cutter was built.
@@ -251,7 +231,8 @@ impl Cone {
     }
 
     /// Height above the tip where the flank reaches full radius.
-    pub fn flank_height(&self) -> f64 {
+    #[cfg(test)]
+    pub(crate) fn flank_height(&self) -> f64 {
         (self.radius - self.tip) * self.rise
     }
 }
@@ -274,18 +255,6 @@ impl ToolProfile for Cone {
             return None;
         }
         Some((d - self.tip).max(0.0) * self.rise)
-    }
-
-    fn geometry_key(&self) -> ToolKey {
-        ToolKey {
-            kind: "cone",
-            params: [
-                self.radius.to_bits(),
-                self.tip.to_bits(),
-                self.rise.to_bits(),
-                0,
-            ],
-        }
     }
 }
 
@@ -353,13 +322,6 @@ impl ToolProfile for Cutter {
             Cutter::Cone(t) => t.height_at(d),
         }
     }
-
-    fn geometry_key(&self) -> ToolKey {
-        match self {
-            Cutter::Bullnose(t) => t.geometry_key(),
-            Cutter::Cone(t) => t.geometry_key(),
-        }
-    }
 }
 
 /// A tool dimension that was not physically meaningful.
@@ -395,7 +357,7 @@ pub enum ToolError {
 }
 
 fn check_radius(radius: f64) -> Result<f64, ToolError> {
-    if radius.is_finite() && radius > 0.0 {
+    if is_positive(radius) {
         Ok(radius)
     } else {
         Err(ToolError::BadRadius(radius))
@@ -428,13 +390,6 @@ impl ToolProfile for Flat {
     fn height_at(&self, d: f64) -> Option<f64> {
         (d <= self.radius).then_some(0.0)
     }
-
-    fn geometry_key(&self) -> ToolKey {
-        ToolKey {
-            kind: "flat",
-            params: [self.radius.to_bits(), 0, 0, 0],
-        }
-    }
 }
 
 impl ToolProfile for Ball {
@@ -462,13 +417,6 @@ impl ToolProfile for Ball {
         // The ball centre sits at z = R, so the surface at radius d is at
         // R - sqrt(R^2 - d^2).
         Some(r - (r * r - d * d).max(0.0).sqrt())
-    }
-
-    fn geometry_key(&self) -> ToolKey {
-        ToolKey {
-            kind: "ball",
-            params: [self.radius.to_bits(), 0, 0, 0],
-        }
     }
 }
 
@@ -557,7 +505,7 @@ mod tests {
             check_inverse(&t, frac * r)?;
         }
 
-        /// `r(z)` must be monotonically non-decreasing for both 0.1 tools. That is
+        /// `r(z)` must be monotonically non-decreasing for flat and ball mills. That is
         /// what makes `height_at` well defined, and it is exactly the assumption an
         /// undercutting tool will later break.
         #[test]

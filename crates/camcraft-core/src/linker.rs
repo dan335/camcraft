@@ -8,21 +8,24 @@
 //! # Clearance is a field, not a plane
 //!
 //! [`Clearance`] asks for the safe height *over a given traverse*, not for a single
-//! number. In 0.1 the only implementation is a constant plane, which is all a flat
-//! spoilboard needs. But fixture and clamp avoidance, "keep tool down", and
-//! stay-down distance all require the answer to vary with position, and retrofitting
-//! that would mean touching every call site. The seam costs nothing now.
+//! number. [`ClearancePlane`] is a constant plane, which is all a flat spoilboard
+//! needs; [`ClearanceField`] follows the material, so the tool stays low where it
+//! can. Fixture and clamp avoidance, "keep tool down", and stay-down distance all
+//! need the answer to vary with position too, and each is one more implementation
+//! rather than a change at every call site.
 //!
 //! # Retract, traverse, plunge
 //!
-//! Deliberately conservative for 0.1. The tool comes straight up out of the cut at
+//! Deliberately conservative. The tool comes straight up out of the cut at
 //! feed rate, crosses at the safe height, and descends straight down. Rapid retract
 //! from inside material is how tools get snapped, and "keep tool down" optimisation
 //! is a later `Toolpath -> Toolpath` transform, not something to improvise here.
 
-use camcraft_geom::heightmap::HeightMap;
+use camcraft_geom::heightmap::{HeightMap, cell_index};
+use camcraft_geom::mesh::distance_to_segment;
 use glam::{DVec2, DVec3, dvec3};
 
+use crate::is_positive;
 use crate::toolpath::{MoveRole, Toolpath, ToolpathError};
 
 /// How high the tool must be to cross safely.
@@ -115,7 +118,7 @@ impl Clearance for ClearanceField {
     /// probes. A rapid running tangent to a terrace passes material on its diagonal,
     /// and probes on the axis and the four compass points never see it.
     fn safe_z(&self, from: DVec2, to: DVec2, tool_radius: f64) -> f64 {
-        let r = if tool_radius.is_finite() && tool_radius > 0.0 {
+        let r = if is_positive(tool_radius) {
             tool_radius
         } else {
             0.0
@@ -138,13 +141,11 @@ impl Clearance for ClearanceField {
 
         let mut worst = f64::MIN;
         if finite {
-            // Clamped into the grid, so the narrowing is exact.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let (x0, y0, x1, y1) = (
-                first.x.clamp(0.0, nx - 1.0) as u32,
-                first.y.clamp(0.0, ny - 1.0) as u32,
-                last.x.clamp(0.0, nx - 1.0) as u32,
-                last.y.clamp(0.0, ny - 1.0) as u32,
+                cell_index(first.x, f.nx()),
+                cell_index(first.y, f.ny()),
+                cell_index(last.x, f.nx()),
+                cell_index(last.y, f.ny()),
             );
             for iy in y0..=y1 {
                 for ix in x0..=x1 {
@@ -175,17 +176,6 @@ impl Clearance for ClearanceField {
             from_field
         }
     }
-}
-
-fn distance_to_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
-    let ab = b - a;
-    let len2 = ab.length_squared();
-    let t = if len2 > 0.0 {
-        ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    p.distance(a + ab * t)
 }
 
 /// How to resolve a link.
@@ -293,7 +283,7 @@ pub fn link<C: Clearance>(
 }
 
 fn check(name: &'static str, value: f64) -> Result<(), LinkError> {
-    (value.is_finite() && value > 0.0)
+    is_positive(value)
         .then_some(())
         .ok_or(LinkError::BadParameter { name, value })
 }

@@ -20,10 +20,10 @@
 //! then decide. The codes are the web inspector's, kept so that anything written
 //! about them still reads right.
 
+use camcraft_core::allowance::{Allowance, EffectiveTool};
 use camcraft_core::dropcutter::{DropCutter, DropTest};
 use camcraft_core::job::Job;
 use camcraft_core::run::{OperationResult, StrategyDetail};
-use camcraft_core::stock::{EffectiveTool, Stock as ToLeave};
 use camcraft_core::tool::ToolProfile;
 use camcraft_core::toolpath::{MoveRole, PLUNGE_RATIO, Toolpath};
 use camcraft_geom::mesh::TriMesh;
@@ -140,7 +140,7 @@ pub fn check(
                 .and_then(|o| o.get(i))
                 .and_then(|spec| job.tool_for(spec))
                 .and_then(|t| t.build().ok())
-                .and_then(|t| EffectiveTool::of(&t, ToLeave::none()).ok());
+                .and_then(|t| EffectiveTool::of(&t, Allowance::none()).ok());
             Group {
                 op: Some(i),
                 title: format!("{}. {}", i + 1, op.name),

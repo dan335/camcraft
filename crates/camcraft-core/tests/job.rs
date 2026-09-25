@@ -7,6 +7,7 @@
 
 #![allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
 
+use camcraft_core::allowance::{Allowance, EffectiveTool};
 use camcraft_core::dropcutter::DropCutter;
 use camcraft_core::linker::{ClearanceField, LinkParams, link};
 use camcraft_core::ordering::order_passes;
@@ -14,7 +15,6 @@ use camcraft_core::parallel::{ParallelParams, parallel_finish};
 use camcraft_core::reach::LevelReach;
 use camcraft_core::roughing::{RoughingParams, zlevel_rough};
 use camcraft_core::simadapt::sim_moves;
-use camcraft_core::stock::{EffectiveTool, Stock as ToLeave};
 use camcraft_core::tool::{Ball, Flat, ToolProfile};
 use camcraft_geom::contour::Region;
 use camcraft_geom::synthetic;
@@ -41,7 +41,7 @@ fn rough_then_finish_threading_stock_between_them() {
 
     // ---- operation 1: rough with a big flat mill, leaving stock ----------------
     let rough_tool =
-        EffectiveTool::new(&Flat::new(3.0).unwrap(), ToLeave::isotropic(0.6).unwrap()).unwrap();
+        EffectiveTool::new(&Flat::new(3.0).unwrap(), Allowance::isotropic(0.6).unwrap()).unwrap();
     let mut rough_reach = LevelReach::new(&mesh, &rough_tool, 0.05).unwrap();
 
     let (rough_raw, rough_report) = zlevel_rough(
@@ -103,7 +103,7 @@ fn rough_then_finish_threading_stock_between_them() {
     );
 
     // ---- operation 2: finish, reading the stock roughing left ------------------
-    let finish_tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), ToLeave::none()).unwrap();
+    let finish_tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
     let (finish_raw, finish_report) = parallel_finish(
         &cutter,
         &finish_tool,
@@ -177,7 +177,7 @@ fn a_second_roughing_pass_only_targets_the_leftovers() {
     let mesh = synthetic::plane(0.0, 24.0);
     let (lo, hi) = (dvec2(-10.0, -10.0), dvec2(10.0, 10.0));
 
-    let tool = EffectiveTool::new(&Flat::new(3.0).unwrap(), ToLeave::none()).unwrap();
+    let tool = EffectiveTool::new(&Flat::new(3.0).unwrap(), Allowance::none()).unwrap();
     let mut reach = LevelReach::new(&mesh, &tool, 0.05).unwrap();
     let params = RoughingParams {
         stepdown: 2.0,

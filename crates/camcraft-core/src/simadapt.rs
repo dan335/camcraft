@@ -7,8 +7,10 @@
 
 use camcraft_sim::stock::{MoveClass, SimMove, SweptTool};
 
-use crate::stock::EffectiveTool;
-use crate::tool::{Ball, Bullnose, Flat, ToolProfile};
+use crate::allowance::EffectiveTool;
+use crate::tool::ToolProfile;
+#[cfg(test)]
+use crate::tool::{Ball, Bullnose, Flat};
 use crate::toolpath::{MoveRole, Toolpath};
 
 /// Reduce a toolpath to what the simulator needs.
@@ -43,10 +45,15 @@ macro_rules! swept {
     };
 }
 
-swept!(Flat);
-swept!(Ball);
-swept!(Bullnose);
 swept!(EffectiveTool);
+
+// A run only ever sweeps the effective tool; the bare cutters sweep in tests.
+#[cfg(test)]
+swept!(Flat);
+#[cfg(test)]
+swept!(Ball);
+#[cfg(test)]
+swept!(Bullnose);
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
@@ -91,9 +98,9 @@ mod tests {
     /// included, or it would verify against a different tool than was machined.
     #[test]
     fn the_effective_tool_carries_its_stock_into_the_simulator() {
-        use crate::stock::Stock;
+        use crate::allowance::Allowance;
         let bare = Ball::new(3.0).unwrap();
-        let with_stock = EffectiveTool::new(&bare, Stock::isotropic(0.5).unwrap()).unwrap();
+        let with_stock = EffectiveTool::new(&bare, Allowance::isotropic(0.5).unwrap()).unwrap();
         assert_eq!(SweptTool::max_radius(&with_stock), 3.5);
         assert_eq!(SweptTool::max_radius(&bare), 3.0);
     }

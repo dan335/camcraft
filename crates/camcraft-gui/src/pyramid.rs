@@ -40,12 +40,7 @@ impl Level {
 
     /// The whole level, as a rectangle.
     pub fn all(&self) -> CellRect {
-        CellRect {
-            x0: 0,
-            y0: 0,
-            x1: self.w - 1,
-            y1: self.h - 1,
-        }
+        CellRect::all(self.w, self.h)
     }
 }
 

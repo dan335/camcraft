@@ -1,8 +1,8 @@
 //! The drop-cutter: the exact, authoritative cutter-location query.
 //!
 //! Drop a tool straight down at `(x, y)` until it first touches the mesh, and report
-//! the tool-tip Z. Every emitted path point is sampled this way. The cached grid is
-//! an optimisation layered on top; *this* is the ground truth.
+//! the tool-tip Z. Every emitted path point is sampled this way: *this* is the
+//! ground truth, and no grid stands in for it.
 //!
 //! # Why not grid dilation
 //!
@@ -68,22 +68,8 @@ impl<'a> DropCutter<'a> {
     /// contact — so it is `None` rather than an error.
     pub fn drop_at<T: DropTest>(&self, tool: &T, x: f64, y: f64) -> Option<f64> {
         let mut scratch = Vec::new();
-        self.drop_at_with(tool, x, y, &mut scratch)
-    }
-
-    /// As [`drop_at`](DropCutter::drop_at), reusing a caller-owned candidate buffer.
-    ///
-    /// A dense CL map makes millions of these calls; give each thread its own buffer
-    /// so the hot loop does not allocate.
-    pub fn drop_at_with<T: DropTest>(
-        &self,
-        tool: &T,
-        x: f64,
-        y: f64,
-        scratch: &mut Vec<u32>,
-    ) -> Option<f64> {
         self.bvh
-            .candidates_in_column(x, y, tool.max_radius(), scratch);
+            .candidates_in_column(x, y, tool.max_radius(), &mut scratch);
 
         let mut best: Option<f64> = None;
         for index in scratch.iter() {

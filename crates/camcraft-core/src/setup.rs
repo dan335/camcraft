@@ -89,9 +89,7 @@ impl Prepared {
 
     /// The box around every stock block.
     pub fn stock_bounds(&self) -> Aabb {
-        let mut it = self.stocks.iter();
-        let first = it.next().copied().unwrap_or(self.model_bounds);
-        it.fold(first, |a, b| a.union(b))
+        Aabb::union_all(&self.stocks).unwrap_or(self.model_bounds)
     }
 }
 
@@ -171,10 +169,7 @@ pub fn stock_in_frame(
         frame.orientation,
         &block(spec, bounds_of(models, bodies)?, bodies)?,
     );
-    Ok(Aabb {
-        min: b.min - frame.origin,
-        max: b.max - frame.origin,
-    })
+    Ok(b.translated(-frame.origin))
 }
 
 /// Where setup `index`'s part and stock are, in its own frame.
@@ -197,8 +192,49 @@ pub fn prepare(job: &Job, index: usize, bodies: &Bodies<'_>) -> Result<Prepared,
         })
         .collect::<Result<Vec<_>, _>>()?;
     let model_box = bounds_of(&setup.models, bodies)?;
+    let blocks = blocks_of(job, setup, model_box, bodies)?;
 
-    // Each block, in model coordinates.
+    let o = setup.orientation;
+    let turned_blocks: Vec<Aabb> = blocks.iter().map(|b| turn(o, b)).collect();
+    let turned_model = turn(o, &model_box);
+    let origin = work_zero(job, setup, bodies, &turned_blocks, turned_model)?;
+    let frame = Frame {
+        orientation: o,
+        origin,
+    };
+
+    let merged;
+    let part_in_model = if let [one] = parts.as_slice() {
+        *one
+    } else {
+        merged = TriMesh::merged(&parts)?;
+        &merged
+    };
+    let pieces = pieces_of(&setup.models, &parts)?;
+    let part = part_in_model.mapped(|p| frame.to_setup(p))?;
+    let model_bounds = part
+        .bounds()
+        .ok_or_else(|| PrepareError::EmptyModel(setup.name.clone()))?;
+    Ok(Prepared {
+        part,
+        pieces,
+        model_bounds,
+        stocks: turned_blocks
+            .iter()
+            .map(|b| b.translated(-origin))
+            .collect(),
+        frame,
+    })
+}
+
+/// Each of `setup`'s stock blocks, in model coordinates. A block around no named
+/// models is around `model_box`, the setup's.
+fn blocks_of(
+    job: &Job,
+    setup: &Setup,
+    model_box: Aabb,
+    bodies: &Bodies<'_>,
+) -> Result<Vec<Aabb>, PrepareError> {
     let mut blocks = Vec::with_capacity(setup.stocks.len());
     for name in &setup.stocks {
         let def = job.stock(name).ok_or_else(|| JobError::UnknownStock {
@@ -210,12 +246,20 @@ pub fn prepare(job: &Job, index: usize, bodies: &Bodies<'_>) -> Result<Prepared,
     if blocks.is_empty() {
         return Err(JobError::NoStock(setup.name.clone()).into());
     }
+    Ok(blocks)
+}
 
+/// Where `setup`'s work zero is, with the part turned the way it sits: its blocks
+/// are `turned_blocks` and its models' box `turned_model`, both turned.
+fn work_zero(
+    job: &Job,
+    setup: &Setup,
+    bodies: &Bodies<'_>,
+    turned_blocks: &[Aabb],
+    turned_model: Aabb,
+) -> Result<DVec3, PrepareError> {
     let o = setup.orientation;
-    let turned_blocks: Vec<Aabb> = blocks.iter().map(|b| turn(o, b)).collect();
-    let turned_model = turn(o, &model_box);
-
-    let origin = match &setup.origin {
+    Ok(match &setup.origin {
         Origin::ModelOrigin { offset } => DVec3::from_array(*offset),
         Origin::Point { point, offset } => {
             let body = bodies
@@ -233,12 +277,7 @@ pub fn prepare(job: &Job, index: usize, bodies: &Bodies<'_>) -> Result<Prepared,
             offset,
         } => {
             let b = match of {
-                BoxOf::Stock => turned_blocks
-                    .iter()
-                    .fold(None, |a: Option<Aabb>, b| {
-                        Some(a.map_or(*b, |a| a.union(b)))
-                    })
-                    .unwrap_or(turned_model),
+                BoxOf::Stock => Aabb::union_all(turned_blocks).unwrap_or(turned_model),
                 BoxOf::Model => turned_model,
             };
             DVec3::new(
@@ -247,27 +286,15 @@ pub fn prepare(job: &Job, index: usize, bodies: &Bodies<'_>) -> Result<Prepared,
                 z.pick(b.min.z, b.max.z),
             ) + DVec3::from_array(offset)
         }
-    };
-    let frame = Frame {
-        orientation: o,
-        origin,
-    };
-    let shift = |b: &Aabb| Aabb {
-        min: b.min - origin,
-        max: b.max - origin,
-    };
+    })
+}
 
-    let merged;
-    let part_in_model = if let [one] = parts.as_slice() {
-        *one
-    } else {
-        merged = TriMesh::merged(&parts)?;
-        &merged
-    };
-    // Where each model landed in the merge, which appends them in this order.
+/// Where each of the models `names`, whose meshes are `parts`, lands in the part
+/// merged from them, which appends them in this order.
+fn pieces_of(names: &[String], parts: &[&TriMesh]) -> Result<Vec<Piece>, MeshError> {
     let mut pieces = Vec::with_capacity(parts.len());
     let (mut t, mut v) = (0u32, 0u32);
-    for (name, mesh) in setup.models.iter().zip(&parts) {
+    for (name, mesh) in names.iter().zip(parts) {
         let too_large = || MeshError::TooLarge {
             vertices: mesh.vertices().len(),
         };
@@ -281,17 +308,7 @@ pub fn prepare(job: &Job, index: usize, bodies: &Bodies<'_>) -> Result<Prepared,
         t = t.saturating_add(nt);
         v = v.saturating_add(nv);
     }
-    let part = part_in_model.mapped(|p| frame.to_setup(p))?;
-    let model_bounds = part
-        .bounds()
-        .ok_or_else(|| PrepareError::EmptyModel(setup.name.clone()))?;
-    Ok(Prepared {
-        part,
-        pieces,
-        model_bounds,
-        stocks: turned_blocks.iter().map(shift).collect(),
-        frame,
-    })
+    Ok(pieces)
 }
 
 #[cfg(test)]

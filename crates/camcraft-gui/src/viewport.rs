@@ -959,12 +959,7 @@ fn plan_tile(
     };
     let Some(rects) = rects else {
         tile.pyramid = Pyramid::new(t.tex_w, t.tex_h, base);
-        let cells = CellRect {
-            x0: 0,
-            y0: 0,
-            x1: t.w - 1,
-            y1: t.h - 1,
-        };
+        let cells = CellRect::all(t.w, t.h);
         return Some(TilePlan {
             cells,
             whole: Some((
@@ -1809,12 +1804,7 @@ impl Gpu {
                 }
                 // The whole tile, apron past the stock's edge and all.
                 Some((heights, codes, sky)) => {
-                    let whole = CellRect {
-                        x0: 0,
-                        y0: 0,
-                        x1: r.width() - 1,
-                        y1: r.height() - 1,
-                    };
+                    let whole = CellRect::all(r.width(), r.height());
                     let hs: &[u8] = bytemuck::cast_slice(heights);
                     write_texture(rs, &tile.heights, 0, hs, 4, r.width(), whole, r);
                     write_texture(rs, &tile.codes, 0, codes, 1, r.width(), whole, r);

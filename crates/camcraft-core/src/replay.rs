@@ -33,10 +33,10 @@ use std::sync::Arc;
 
 use camcraft_sim::stock::{CellRect, PackedStock, SimMove, Stock, SweptTool};
 
+use crate::allowance::EffectiveTool;
 use crate::job::{Job, Setup};
 use crate::run::{RunError, SetupResult, cutting_tool};
 use crate::simadapt::sim_moves;
-use crate::stock::EffectiveTool;
 
 /// A place in the program: the moves of one operation applied so far.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -50,7 +50,7 @@ pub struct Position {
 
 /// What a replay needs to sweep one operation again.
 #[derive(Debug, Clone)]
-struct Pass {
+struct OpSweep {
     /// None for an operation the run did not make (turned off, or left out),
     /// which has no moves and may have no tool.
     tool: Option<EffectiveTool>,
@@ -60,7 +60,7 @@ struct Pass {
 /// A finished setup, ready to have its material recovered at any position.
 #[derive(Debug, Clone)]
 pub struct Replay {
-    passes: Vec<Pass>,
+    sweeps: Vec<OpSweep>,
     /// The stock before each operation, packed; one more than there are
     /// operations. Shared with the run's result, not copied.
     keyframes: Vec<Arc<PackedStock>>,
@@ -69,12 +69,12 @@ pub struct Replay {
 impl Replay {
     /// Everything needed to replay `result`, which must be `setup`'s, in `job`.
     pub fn new(job: &Job, setup: &Setup, result: &SetupResult) -> Result<Self, RunError> {
-        let passes = setup
+        let sweeps = setup
             .operations
             .iter()
             .zip(&result.operations)
             .map(|(op, ran)| {
-                Ok(Pass {
+                Ok(OpSweep {
                     tool: if ran.made.has_paths() {
                         Some(cutting_tool(job, op)?)
                     } else {
@@ -85,14 +85,14 @@ impl Replay {
             })
             .collect::<Result<Vec<_>, RunError>>()?;
         Ok(Self {
-            passes,
-            keyframes: result.stages.clone(),
+            sweeps,
+            keyframes: result.keyframes.clone(),
         })
     }
 
     /// How many moves operation `op` has.
     pub fn moves_in(&self, op: usize) -> usize {
-        self.passes.get(op).map_or(0, |p| p.moves.len())
+        self.sweeps.get(op).map_or(0, |p| p.moves.len())
     }
 
     /// The stock as it stood at `position`, or `None` past the end of the job.
@@ -116,18 +116,18 @@ impl Replay {
         from: usize,
         to: usize,
     ) -> Option<CellRect> {
-        let pass = self.passes.get(op)?;
-        let to = to.min(pass.moves.len());
+        let sweep = self.sweeps.get(op)?;
+        let to = to.min(sweep.moves.len());
         if to <= from {
             return None;
         }
-        let slice = pass.moves.get(from.saturating_sub(1)..to)?;
-        stock.sweep(slice, pass.tool.as_ref()?).touched
+        let slice = sweep.moves.get(from.saturating_sub(1)..to)?;
+        stock.sweep(slice, sweep.tool.as_ref()?).touched
     }
 
     /// How many operations there are.
     pub fn ops(&self) -> usize {
-        self.passes.len()
+        self.sweeps.len()
     }
 
     /// Sweep a `fraction` of operation `op`'s move after its first `made` into
@@ -140,12 +140,12 @@ impl Replay {
         made: usize,
         fraction: f64,
     ) -> Option<(CellRect, Vec<f32>)> {
-        let pass = self.passes.get(op)?;
+        let sweep = self.sweeps.get(op)?;
         // The first move is where the tool starts, so there is nothing before it
         // to sweep from.
-        let from = pass.moves.get(made.checked_sub(1)?)?;
-        let next = pass.moves.get(made)?;
-        let tool = pass.tool.as_ref()?;
+        let from = sweep.moves.get(made.checked_sub(1)?)?;
+        let next = sweep.moves.get(made)?;
+        let tool = sweep.tool.as_ref()?;
         let r = tool.max_radius();
         let rect = CellRect::join(stock.footprint(from.to, r), stock.footprint(next.to, r))?;
         let saved = stock.read_cells(rect);
@@ -303,15 +303,43 @@ impl Live {
         fraction: f64,
         budget: usize,
     ) -> (Changed, bool) {
-        let mut changed = Changed::Nothing;
-        if let Some((rect, saved)) = self.overlay.take() {
-            self.stock.write_cells(rect, &saved);
-            changed = Changed::Cells(rect);
-        }
+        let mut changed = self.lift_overlay();
         let Some(target) = clamp(replay, target) else {
             return (changed, true);
         };
+        match self.restore_near(replay, target) {
+            Some(restored) => changed = changed.and(restored),
+            None => return (changed, true),
+        }
+        changed = changed.and(self.sweep_toward(replay, target, budget));
+        let reached = self.at == target;
+        if reached
+            && fraction > 0.0
+            && let Some((rect, saved)) =
+                replay.partial(&mut self.stock, target.op, target.moves, fraction)
+        {
+            changed = changed.and(Changed::Cells(rect));
+            self.overlay = Some((rect, saved));
+        }
+        (changed, reached)
+    }
 
+    /// Put back the cells a part-way sweep covered, and say which.
+    fn lift_overlay(&mut self) -> Changed {
+        match self.overlay.take() {
+            Some((rect, saved)) => {
+                self.stock.write_cells(rect, &saved);
+                Changed::Cells(rect)
+            }
+            None => Changed::Nothing,
+        }
+    }
+
+    /// Restore the nearest stock at or before `target` that is not behind where
+    /// this is, when that is worth it: to go back, or to save a whole spacing of
+    /// sweeping forward. Returns what changed, or `None` when the stock could not
+    /// be restored.
+    fn restore_near(&mut self, replay: &Replay, target: Position) -> Option<Changed> {
         // The nearest stock at or before the target that is not behind where we
         // are: the operation's keyframe, or a checkpoint in it.
         let start = self
@@ -334,30 +362,37 @@ impl Live {
         // Worth restoring ahead only when it saves a whole spacing of sweeping.
         let ahead = start > self.at
             && (start.op > self.at.op || start.moves >= self.at.moves + self.spacing);
-        if behind || ahead {
-            let from = self
-                .checkpoints
-                .get(&start)
-                .or_else(|| replay.keyframes.get(start.op).map(|k| &**k));
-            if let Some(from) = from {
-                // Unpacked into the stock in place, and only what differs needs
-                // drawing again, which after a short step back is a small part
-                // of a fine stock.
-                changed = changed.and(match from.restore(&mut self.stock) {
-                    Some(Some(rect)) => Changed::Cells(rect),
-                    Some(None) => Changed::Nothing,
-                    None => match from.unpack() {
-                        Ok(stock) => {
-                            self.stock = stock;
-                            Changed::All
-                        }
-                        Err(_) => return (changed, true),
-                    },
-                });
-                self.at = start;
-            }
+        if !(behind || ahead) {
+            return Some(Changed::Nothing);
         }
+        let from = self
+            .checkpoints
+            .get(&start)
+            .or_else(|| replay.keyframes.get(start.op).map(|k| &**k));
+        let Some(from) = from else {
+            return Some(Changed::Nothing);
+        };
+        // Unpacked into the stock in place, and only what differs needs drawing
+        // again, which after a short step back is a small part of a fine stock.
+        let changed = match from.restore(&mut self.stock) {
+            Some(Some(rect)) => Changed::Cells(rect),
+            Some(None) => Changed::Nothing,
+            None => match from.unpack() {
+                Ok(stock) => {
+                    self.stock = stock;
+                    Changed::All
+                }
+                Err(_) => return None,
+            },
+        };
+        self.at = start;
+        Some(changed)
+    }
 
+    /// Sweep whole moves toward `target`, at most about `budget` of them,
+    /// dropping checkpoints on the way. Returns what changed.
+    fn sweep_toward(&mut self, replay: &Replay, target: Position, budget: usize) -> Changed {
+        let mut changed = Changed::Nothing;
         let mut left = budget.max(1);
         while self.at < target && left > 0 {
             let op = self.at.op;
@@ -390,16 +425,7 @@ impl Live {
                 };
             }
         }
-        let reached = self.at == target;
-        if reached
-            && fraction > 0.0
-            && let Some((rect, saved)) =
-                replay.partial(&mut self.stock, target.op, target.moves, fraction)
-        {
-            changed = changed.and(Changed::Cells(rect));
-            self.overlay = Some((rect, saved));
-        }
-        (changed, reached)
+        changed
     }
 }
 
@@ -434,53 +460,11 @@ fn clamp(replay: &Replay, target: Position) -> Option<Position> {
 )]
 mod tests {
     use super::*;
+    use crate::fixture::JOB;
     use crate::run::run_setup;
     use crate::setup::Bodies;
     use camcraft_geom::synthetic;
     use camcraft_geom::topology::Body;
-
-    const JOB: &str = r#"
-version = 1
-tolerance = 0.05
-
-[tools.rough]
-kind = "flat"
-diameter = 6.0
-number = 1
-
-[tools.finish]
-kind = "ball"
-diameter = 4.0
-number = 2
-
-[[model]]
-name = "dome"
-path = "dome.stl"
-units = "mm"
-
-[[stock]]
-name = "block"
-kind = "around-models"
-margin = [1.0, 1.0, 2.0]
-
-[[setup]]
-name = "top"
-models = ["dome"]
-stocks = ["block"]
-
-[[setup.operation]]
-name = "rough"
-strategy = "zlevel-rough"
-tool = "rough"
-stepdown = 2.5
-passes = { stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.5, axial = 0.5 } }
-
-[[setup.operation]]
-name = "finish"
-strategy = "parallel"
-tool = "finish"
-passes = { stepover = 0.8, feed = 2000.0 }
-"#;
 
     fn run() -> (Job, SetupResult) {
         let job: Job = toml::from_str(JOB).unwrap();
@@ -490,9 +474,13 @@ passes = { stepover = 0.8, feed = 2000.0 }
         (job, result)
     }
 
-    /// The run's stages, unpacked.
+    /// The run's keyframes, unpacked.
     fn stages(result: &SetupResult) -> Vec<Stock> {
-        result.stages.iter().map(|s| s.unpack().unwrap()).collect()
+        result
+            .keyframes
+            .iter()
+            .map(|s| s.unpack().unwrap())
+            .collect()
     }
 
     fn bits(stock: &Stock) -> Vec<u32> {
@@ -519,7 +507,7 @@ passes = { stepover = 0.8, feed = 2000.0 }
     #[test]
     fn stages_are_the_keyframes_of_the_run() {
         let (job, result) = run();
-        assert_eq!(result.stages.len(), job.setups[0].operations.len() + 1);
+        assert_eq!(result.keyframes.len(), job.setups[0].operations.len() + 1);
         let block = &stages(&result)[0];
         let top = result.heights.stock_top;
         assert!(
@@ -664,7 +652,7 @@ passes = { stepover = 0.8, feed = 2000.0 }
         let replay = Replay::new(&job, &job.setups[0], &result).unwrap();
         // A small budget, room for a few checkpoints the size of the stock after
         // roughing: some to use, and some not kept.
-        let budget = result.stages[1].bytes() * 4;
+        let budget = result.keyframes[1].bytes() * 4;
         let mut live = Live::new(&replay, budget).unwrap();
         let (n0, n1) = (replay.moves_in(0), replay.moves_in(1));
         let walk = [

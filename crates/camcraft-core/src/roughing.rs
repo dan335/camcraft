@@ -33,11 +33,11 @@
 
 use camcraft_geom::contour::{Contour, Region, RegionError, contour_above};
 use camcraft_geom::heightmap::HeightMap;
-use glam::{DVec2, DVec3, dvec3};
+use glam::{DVec2, dvec3};
 use rayon::prelude::*;
 
-use crate::parallel::StrategyError;
 use crate::reach::{LevelReach, ReachError};
+use crate::strategy::{StrategyError, check};
 use crate::toolpath::{MoveRole, Toolpath};
 
 /// Stock standing less than this above a level is not material to cut there, in
@@ -355,26 +355,12 @@ fn reach_err(e: ReachError) -> StrategyError {
     StrategyError::Region(e.to_string())
 }
 
-fn check(name: &'static str, value: f64) -> Result<(), StrategyError> {
-    (value.is_finite() && value > 0.0)
-        .then_some(())
-        .ok_or(StrategyError::BadParameter { name, value })
-}
-
-/// Height of the tool tip, for a ring lying at `z`.
-///
-/// Trivial today, but it is where a per-ring lift would go if roughing ever needed
-/// to ride over something rather than cut through it.
-pub fn ring_height(z: f64) -> DVec3 {
-    dvec3(0.0, 0.0, z)
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
 mod tests {
     use super::*;
+    use crate::allowance::{Allowance, EffectiveTool};
     use crate::dropcutter::DropCutter;
-    use crate::stock::{EffectiveTool, Stock};
     use crate::tool::Flat;
     use camcraft_geom::mesh::TriMesh;
     use camcraft_geom::synthetic;
@@ -386,7 +372,7 @@ mod tests {
     const TOLERANCE: f64 = 0.05;
 
     fn flat(radius: f64) -> EffectiveTool {
-        EffectiveTool::new(&Flat::new(radius).unwrap(), Stock::none()).unwrap()
+        EffectiveTool::new(&Flat::new(radius).unwrap(), Allowance::none()).unwrap()
     }
 
     fn rough(

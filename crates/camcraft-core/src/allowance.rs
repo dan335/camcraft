@@ -44,21 +44,21 @@
 //! only raises it, and pure radial widens it without raising it at all.
 
 use crate::dropcutter::DropTest;
-use crate::tool::{Bullnose, BullnoseFamily, Cutter, ToolError, ToolKey, ToolProfile};
+use crate::tool::{Bullnose, BullnoseFamily, Cutter, ToolError, ToolProfile};
 use glam::DVec3;
 
 /// How much material to leave behind, measured perpendicular to the tool axis
 /// (`radial`) and along it (`axial`).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Stock {
+pub struct Allowance {
     radial: f64,
     axial: f64,
 }
 
-/// Stock values that were not usable.
+/// Stock to leave that was not usable.
 #[derive(Debug, thiserror::Error, PartialEq)]
-pub enum StockError {
-    /// Stock must be finite and not negative.
+pub enum AllowanceError {
+    /// Stock to leave must be finite and not negative.
     #[error("stock to leave must be finite and at least zero, got radial {radial}, axial {axial}")]
     Negative {
         /// The radial amount given.
@@ -68,17 +68,17 @@ pub enum StockError {
     },
 }
 
-impl Stock {
+impl Allowance {
     /// Leave `radial` perpendicular to the axis and `axial` along it.
-    pub fn new(radial: f64, axial: f64) -> Result<Self, StockError> {
+    pub fn new(radial: f64, axial: f64) -> Result<Self, AllowanceError> {
         if !radial.is_finite() || !axial.is_finite() || radial < 0.0 || axial < 0.0 {
-            return Err(StockError::Negative { radial, axial });
+            return Err(AllowanceError::Negative { radial, axial });
         }
         Ok(Self { radial, axial })
     }
 
     /// Leave the same amount in both directions.
-    pub fn isotropic(amount: f64) -> Result<Self, StockError> {
+    pub fn isotropic(amount: f64) -> Result<Self, AllowanceError> {
         Self::new(amount, amount)
     }
 
@@ -115,32 +115,32 @@ impl Stock {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EffectiveTool {
     shape: Cutter,
-    stock: Stock,
+    allowance: Allowance,
 }
 
 impl EffectiveTool {
     /// Dilate `tool` by `stock`.
     ///
-    /// Takes anything convertible into the bullnose family, which is every cutter
-    /// this engine currently has.
-    pub fn new(tool: &(impl BullnoseFamily + ?Sized), stock: Stock) -> Result<Self, ToolError> {
+    /// Takes anything convertible into the bullnose family: every cutter but a
+    /// cone, which [`EffectiveTool::of`] takes as it is.
+    pub fn new(tool: &(impl BullnoseFamily + ?Sized), stock: Allowance) -> Result<Self, ToolError> {
         let base = tool.as_bullnose();
         let m = stock.radial.min(stock.axial);
         let shape = Bullnose::new(base.max_radius() + stock.radial, base.corner() + m)?;
         Ok(Self {
             shape: Cutter::Bullnose(shape),
-            stock,
+            allowance: stock,
         })
     }
 
     /// Dilate any cutter by `stock`. A cone grown by a ball is no longer a cone,
     /// so a cone is taken only as it is, with no stock to leave.
-    pub fn of(tool: &Cutter, stock: Stock) -> Result<Self, ToolError> {
+    pub fn of(tool: &Cutter, stock: Allowance) -> Result<Self, ToolError> {
         match tool {
             Cutter::Bullnose(b) => Self::new(b, stock),
             Cutter::Cone(_) if stock.is_none() => Ok(Self {
                 shape: *tool,
-                stock,
+                allowance: stock,
             }),
             Cutter::Cone(_) => Err(ToolError::ConeStock),
         }
@@ -151,14 +151,14 @@ impl EffectiveTool {
         &self.shape
     }
 
-    /// The stock this was built for.
-    pub fn stock(&self) -> &Stock {
-        &self.stock
+    /// The stock to leave this was built for.
+    pub fn allowance(&self) -> &Allowance {
+        &self.allowance
     }
 
     /// How far the real tool tip sits above the dilated shape's contact.
     pub fn tip_offset(&self) -> f64 {
-        self.stock.axial
+        self.allowance.axial
     }
 }
 
@@ -177,26 +177,6 @@ impl ToolProfile for EffectiveTool {
     fn height_at(&self, d: f64) -> Option<f64> {
         self.shape.height_at(d)
     }
-
-    fn geometry_key(&self) -> ToolKey {
-        let base = self.shape.geometry_key();
-        if let Cutter::Cone(_) = self.shape {
-            // Always without stock, which leaves the cone's own three slots.
-            return ToolKey {
-                kind: "effective-cone",
-                params: base.params,
-            };
-        }
-        ToolKey {
-            kind: "effective",
-            params: [
-                base.params[0],
-                base.params[1],
-                self.stock.radial.to_bits(),
-                self.stock.axial.to_bits(),
-            ],
-        }
-    }
 }
 
 impl DropTest for EffectiveTool {
@@ -205,7 +185,7 @@ impl DropTest for EffectiveTool {
     fn drop_triangle(&self, x: f64, y: f64, tri: &[DVec3; 3]) -> Option<f64> {
         self.shape
             .drop_triangle(x, y, tri)
-            .map(|z| z + self.stock.axial)
+            .map(|z| z + self.allowance.axial)
     }
 }
 
@@ -220,15 +200,15 @@ mod tests {
     #[test]
     fn rejects_unusable_stock() {
         assert!(matches!(
-            Stock::new(-0.1, 0.0),
-            Err(StockError::Negative { .. })
+            Allowance::new(-0.1, 0.0),
+            Err(AllowanceError::Negative { .. })
         ));
         assert!(matches!(
-            Stock::new(0.0, f64::NAN),
-            Err(StockError::Negative { .. })
+            Allowance::new(0.0, f64::NAN),
+            Err(AllowanceError::Negative { .. })
         ));
-        assert!(Stock::new(0.0, 0.0).is_ok());
-        assert!(Stock::none().is_none());
+        assert!(Allowance::new(0.0, 0.0).is_ok());
+        assert!(Allowance::none().is_none());
     }
 
     /// A flat mill leaving stock becomes a bullnose. Getting this wrong -- treating
@@ -236,8 +216,8 @@ mod tests {
     /// protect.
     #[test]
     fn isotropic_stock_rounds_a_flat_mill() {
-        let e =
-            EffectiveTool::new(&Flat::new(5.0).unwrap(), Stock::isotropic(0.5).unwrap()).unwrap();
+        let e = EffectiveTool::new(&Flat::new(5.0).unwrap(), Allowance::isotropic(0.5).unwrap())
+            .unwrap();
         assert_eq!(e.shape().max_radius(), 5.5);
         assert_eq!(e.shape().bullnose().unwrap().corner(), 0.5);
         assert_eq!(e.tip_offset(), 0.5);
@@ -245,8 +225,8 @@ mod tests {
 
     #[test]
     fn isotropic_stock_keeps_a_ball_a_ball() {
-        let e =
-            EffectiveTool::new(&Ball::new(3.0).unwrap(), Stock::isotropic(0.5).unwrap()).unwrap();
+        let e = EffectiveTool::new(&Ball::new(3.0).unwrap(), Allowance::isotropic(0.5).unwrap())
+            .unwrap();
         // corner == radius is exactly a ball.
         assert_eq!(e.shape().max_radius(), 3.5);
         assert_eq!(e.shape().bullnose().unwrap().corner(), 3.5);
@@ -256,7 +236,7 @@ mod tests {
     fn pure_axial_widens_nothing_and_pure_radial_raises_nothing() {
         let flat = Flat::new(4.0).unwrap();
 
-        let axial = EffectiveTool::new(&flat, Stock::new(0.0, 0.7).unwrap()).unwrap();
+        let axial = EffectiveTool::new(&flat, Allowance::new(0.0, 0.7).unwrap()).unwrap();
         assert_eq!(
             axial.shape().max_radius(),
             4.0,
@@ -269,7 +249,7 @@ mod tests {
         );
         assert_eq!(axial.tip_offset(), 0.7);
 
-        let radial = EffectiveTool::new(&flat, Stock::new(0.7, 0.0).unwrap()).unwrap();
+        let radial = EffectiveTool::new(&flat, Allowance::new(0.7, 0.0).unwrap()).unwrap();
         assert_eq!(radial.shape().max_radius(), 4.7, "radial stock must widen");
         assert_eq!(radial.tip_offset(), 0.0, "radial stock must not raise");
     }
@@ -281,7 +261,7 @@ mod tests {
         let mesh = synthetic::uv_sphere(9.0, 40, 60);
         let dc = DropCutter::new(&mesh);
         let ball = Ball::new(2.0).unwrap();
-        let effective = EffectiveTool::new(&ball, Stock::none()).unwrap();
+        let effective = EffectiveTool::new(&ball, Allowance::none()).unwrap();
 
         let mut compared = 0;
         for i in -7..=7 {
@@ -307,7 +287,7 @@ mod tests {
         let mesh = synthetic::plane(2.0, 30.0);
         let dc = DropCutter::new(&mesh);
         for (radial, axial) in [(0.0, 0.5), (0.5, 0.5), (1.0, 0.25), (0.8, 0.0)] {
-            let stock = Stock::new(radial, axial).unwrap();
+            let stock = Allowance::new(radial, axial).unwrap();
             let tool = EffectiveTool::new(&Flat::new(4.0).unwrap(), stock).unwrap();
             let z = dc.drop_at(&tool, 0.0, 0.0).unwrap();
             assert!(
@@ -330,7 +310,7 @@ mod tests {
             let mut previous = f64::NEG_INFINITY;
             for step in 0..5 {
                 let s = f64::from(step) * 0.25;
-                let tool = EffectiveTool::new(&base, Stock::isotropic(s).unwrap()).unwrap();
+                let tool = EffectiveTool::new(&base, Allowance::isotropic(s).unwrap()).unwrap();
                 if let Some(z) = dc.drop_at(&tool, x, y) {
                     assert!(
                         z >= previous - 1e-9,
@@ -340,38 +320,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    /// Different stock must key differently, or a cached CL map computed for a
-    /// roughing pass would be handed to a finishing one.
-    #[test]
-    fn stock_participates_in_the_cache_key() {
-        let flat = Flat::new(4.0).unwrap();
-        let a = EffectiveTool::new(&flat, Stock::isotropic(0.5).unwrap()).unwrap();
-        let b = EffectiveTool::new(&flat, Stock::isotropic(0.25).unwrap()).unwrap();
-        let c = EffectiveTool::new(&flat, Stock::new(0.5, 0.25).unwrap()).unwrap();
-        assert_ne!(a.geometry_key(), b.geometry_key());
-        assert_ne!(a.geometry_key(), c.geometry_key());
-        assert_eq!(
-            a.geometry_key(),
-            EffectiveTool::new(&flat, Stock::isotropic(0.5).unwrap())
-                .unwrap()
-                .geometry_key()
-        );
-
-        // The collision that actually matters. Once the axial amount exceeds the
-        // radial one, `min(a, b)` saturates at `b`, so these two dilate to the
-        // *identical* shape -- yet they leave 1 mm and 2 mm on a floor respectively.
-        // A key built from the shape alone would hand one operation the other's
-        // cached surface.
-        let d = EffectiveTool::new(&flat, Stock::new(0.5, 1.0).unwrap()).unwrap();
-        let e = EffectiveTool::new(&flat, Stock::new(0.5, 2.0).unwrap()).unwrap();
-        assert_eq!(
-            d.shape(),
-            e.shape(),
-            "fixture is pointless unless the shapes really do coincide"
-        );
-        assert_ne!(d.tip_offset(), e.tip_offset());
-        assert_ne!(d.geometry_key(), e.geometry_key());
     }
 }

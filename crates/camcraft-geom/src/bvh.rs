@@ -68,8 +68,8 @@ impl MeshBvh {
     /// Collect the triangles whose bounding boxes overlap the vertical column of
     /// radius `r` about `(x, y)`, appending their indices to `out`.
     ///
-    /// `out` is cleared first. Taking a caller-owned buffer keeps a dense CL map from
-    /// allocating once per sample.
+    /// `out` is cleared first. Taking a caller-owned buffer lets a caller making many
+    /// queries reuse one allocation.
     ///
     /// This is a conservative over-approximation — callers still perform the exact
     /// per-triangle test. Erring wide is correct here; erring narrow would silently

@@ -26,6 +26,8 @@
 
 use glam::DVec3;
 
+use crate::is_positive;
+
 /// Descent-to-advance ratio past which a cutting move is falling rather than
 /// cutting along.
 ///
@@ -93,7 +95,7 @@ pub enum MoveKind {
     Linear,
     /// A circular arc to the target about `centre`.
     ///
-    /// Reserved: nothing emits arcs in 0.1. It exists so that arc fitting can be
+    /// Reserved: nothing emits arcs yet. It exists so that arc fitting can be
     /// added as a `Toolpath -> Toolpath` transform without changing this type, which
     /// is the whole reason strategies emit toolpaths rather than instructions.
     Arc {
@@ -184,7 +186,7 @@ impl Toolpath {
         }
         let wants_feed = m.role != MoveRole::Rapid;
         match (wants_feed, m.feed) {
-            (true, Some(f)) if f.is_finite() && f > 0.0 => {}
+            (true, Some(f)) if is_positive(f) => {}
             (true, Some(f)) => return Err(ToolpathError::BadFeed(f)),
             (false, None) => {}
             (expected, _) => {
@@ -276,8 +278,9 @@ impl Toolpath {
 
     /// Total length of moves whose role cuts, in millimetres.
     ///
-    /// Arcs are measured by their chord in 0.1, since nothing emits them yet.
-    pub fn cutting_length(&self, from: DVec3) -> f64 {
+    /// Arcs are measured by their chord, since nothing emits them yet.
+    #[cfg(test)]
+    pub(crate) fn cutting_length(&self, from: DVec3) -> f64 {
         let mut at = from;
         let mut total = 0.0;
         for m in &self.moves {

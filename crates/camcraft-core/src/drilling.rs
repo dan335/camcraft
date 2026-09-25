@@ -11,7 +11,7 @@
 use glam::{DVec2, DVec3, dvec3};
 
 use crate::features::Chain;
-use crate::parallel::StrategyError;
+use crate::strategy::{StrategyError, check};
 use crate::toolpath::{MoveRole, Toolpath};
 
 /// How far above a hole's top a drill starts feeding, and backs out to between
@@ -183,17 +183,10 @@ pub struct DrillReport {
 /// A plunge down each hole, in order, each a pass the linker joins.
 pub fn drill(holes: &[Hole], params: &DrillParams) -> Result<Toolpath, StrategyError> {
     for (name, v) in [("feed", params.feed), ("retract_feed", params.retract_feed)] {
-        if !(v.is_finite() && v > 0.0) {
-            return Err(StrategyError::BadParameter { name, value: v });
-        }
+        check(name, v)?;
     }
-    if let Some(p) = params.peck
-        && !(p.is_finite() && p > 0.0)
-    {
-        return Err(StrategyError::BadParameter {
-            name: "peck",
-            value: p,
-        });
+    if let Some(p) = params.peck {
+        check("peck", p)?;
     }
     let mut path = Toolpath::new();
     for h in holes {

@@ -3,7 +3,7 @@
 //! This is the interface between import and everything downstream: nothing past
 //! this point knows or cares whether the triangles came from STL or STEP.
 
-use glam::DVec3;
+use glam::{DVec2, DVec3};
 
 /// A triangle mesh in setup space, millimetres, Z-up.
 ///
@@ -73,6 +73,22 @@ impl Aabb {
     /// The middle of the box.
     pub fn center(&self) -> DVec3 {
         (self.min + self.max) * 0.5
+    }
+
+    /// The box moved by `by`.
+    #[must_use]
+    pub fn translated(&self, by: DVec3) -> Aabb {
+        Aabb {
+            min: self.min + by,
+            max: self.max + by,
+        }
+    }
+
+    /// The smallest box holding all of `boxes`, or `None` when there are none.
+    pub fn union_all<'a>(boxes: impl IntoIterator<Item = &'a Aabb>) -> Option<Aabb> {
+        boxes.into_iter().fold(None, |all: Option<Aabb>, b| {
+            Some(all.map_or(*b, |a| a.union(b)))
+        })
     }
 }
 
@@ -254,6 +270,18 @@ pub fn closest_point_on_triangle(p: DVec3, [a, b, c]: [DVec3; 3]) -> DVec3 {
     }
     let denom = 1.0 / sum;
     a + ab * (vb * denom) + ac * (vc * denom)
+}
+
+/// Distance in the plane from `p` to the segment `a`-`b`.
+pub fn distance_to_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
+    let ab = b - a;
+    let len2 = ab.length_squared();
+    let t = if len2 > 0.0 {
+        ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (p - (a + ab * t)).length()
 }
 
 /// The point of the segment `a`-`b` nearest `p`.

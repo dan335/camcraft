@@ -557,7 +557,7 @@ tool = "rough-6-flat"
             worst.as_secs_f64() * 1e3,
             live.checkpoints()
         );
-        let finished = result.stages.last().unwrap().unpack().unwrap();
+        let finished = result.keyframes.last().unwrap().unpack().unwrap();
         let whole = &finished.field().data();
         assert_eq!(
             live.stock().field().data(),

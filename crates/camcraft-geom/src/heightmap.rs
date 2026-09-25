@@ -75,6 +75,19 @@ pub fn narrow(v: f64) -> f32 {
     v as f32
 }
 
+/// The cell at `v`, a position along an axis of `n` cells counted in cells and
+/// already rounded to a whole one: clamped into the axis, and the first cell when
+/// `v` is not finite.
+pub fn cell_index(v: f64, n: u32) -> u32 {
+    if !v.is_finite() {
+        return 0;
+    }
+    // Clamped into the axis, so the narrowing is exact.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let i = v.clamp(0.0, f64::from(n.saturating_sub(1))) as u32;
+    i
+}
+
 impl HeightMap {
     /// A grid of `nx` by `ny` cells with the given spacing, every cell set to `value`.
     ///
@@ -129,6 +142,14 @@ impl HeightMap {
                 min
             }));
         }
+        let (nx, ny) = Self::covering_size(min, max, pitch);
+        Self::filled(min, pitch, nx, ny, value)
+    }
+
+    /// The columns and rows [`HeightMap::covering`] lays over `[min, max]` at
+    /// `pitch`, which must be finite and greater than zero: for a grid that is
+    /// laid out the same way but not allocated.
+    pub fn covering_size(min: DVec2, max: DVec2, pitch: f64) -> (u32, u32) {
         let span = (max - min).max(DVec2::ZERO);
         let cells = |s: f64| -> u32 {
             let n = (s / pitch).ceil() + 1.0;
@@ -141,7 +162,7 @@ impl HeightMap {
                 1
             }
         };
-        Self::filled(min, pitch, cells(span.x), cells(span.y), value)
+        (cells(span.x), cells(span.y))
     }
 
     /// Grid width in cells.
