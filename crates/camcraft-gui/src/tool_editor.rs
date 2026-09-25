@@ -14,7 +14,7 @@ use eframe::egui;
 
 use crate::measure::Measure;
 use crate::theme;
-use crate::tool_drawing::{Part, draw};
+use crate::tool_drawing::kind_name;
 use crate::widgets::{self, Icon, Size, Tab, Variant, form};
 
 /// The fields each tab edits, as the checks name them, to flag a tab with an
@@ -29,6 +29,9 @@ const CUTTER_FIELDS: [&str; 7] = [
     "shoulder_length",
 ];
 const HOLDER_FIELDS: [&str; 4] = ["shank_diameter", "stickout", "overall_length", "holder"];
+
+/// What a value left out reads as.
+const NOT_GIVEN: &str = "not given";
 
 /// The tabs, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,17 +54,13 @@ const PAGES: [Page; 5] = [
 /// Every field of the tool, on tabs, edited in place. Lengths and feeds are shown
 /// in `m` and kept in millimetres. The tab showing is remembered per `ui` id, so
 /// call inside `ui.push_id` when more than one tool may be edited in the same
-/// window. The tool's picture is [`paint_tool`], drawn by the caller.
+/// window. The tool's picture is [`crate::tool_drawing::paint_tool`], drawn by the
+/// caller.
 pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure) {
     let (errors, preset_errors): (Vec<_>, Vec<_>) =
         tool.check().into_iter().partition(|e| e.preset.is_none());
     let flagged = |fields: &[&str]| errors.iter().any(|e| fields.contains(&e.field));
 
-    let page_id = ui.id().with("tool-page");
-    let mut page = ui
-        .data(|d| d.get_temp::<usize>(page_id))
-        .unwrap_or(1)
-        .min(PAGES.len() - 1);
     let tabs = [
         Tab::new("General"),
         Tab::new("Cutter").flagged(flagged(&CUTTER_FIELDS)),
@@ -71,9 +70,7 @@ pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure) {
             .flagged(flagged(&["rpm"]) || !preset_errors.is_empty()),
         Tab::new("Post"),
     ];
-    widgets::tabs(ui, &mut page, &tabs);
-    ui.data_mut(|d| d.insert_temp(page_id, page));
-    ui.add_space(theme::SPACE_4);
+    let page = widgets::remembered_tabs(ui, ui.id().with("tool-page"), &tabs, 1, None);
 
     match PAGES.get(page).copied().unwrap_or(Page::Cutter) {
         Page::General => form(ui, "general", |ui| general(ui, tool)),
@@ -165,7 +162,7 @@ fn cutter(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
         );
     }
     row(ui, "Flutes", errors, "flutes", |ui| {
-        optional(ui, &mut tool.flutes, 2, |ui, f| {
+        widgets::optional(ui, &mut tool.flutes, 2, NOT_GIVEN, |ui, f| {
             ui.add(egui::DragValue::new(f).range(0..=16));
         });
     });
@@ -226,7 +223,7 @@ fn holder(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
                     length: 20.0,
                 }],
             };
-            optional(ui, &mut tool.holder, default, |ui, h| {
+            widgets::optional(ui, &mut tool.holder, default, NOT_GIVEN, |ui, h| {
                 ui.add(
                     egui::TextEdit::singleline(&mut h.name)
                         .hint_text("name, e.g. ER20")
@@ -375,13 +372,10 @@ fn presets(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFie
         });
     });
     if tool.presets.is_empty() {
-        ui.label(
-            egui::RichText::new(
-                "None yet. A preset is a named set of speeds and feeds, \
-                 e.g. Roughing and Finishing, that an operation copies.",
-            )
-            .color(theme::egui_color(theme::TEXT_3)),
-        );
+        ui.label(widgets::hint_text(
+            "None yet. A preset is a named set of speeds and feeds, \
+             e.g. Roughing and Finishing, that an operation copies.",
+        ));
     }
 
     let picked_id = ui.id().with("preset-picked");
@@ -400,7 +394,7 @@ fn presets(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFie
         if response.clicked() {
             picked = i;
         }
-        list_row_background(ui, rect, on, response.hovered());
+        widgets::list_row_background(ui, rect, on, response.hovered());
         let mut row = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(rect.shrink2(egui::vec2(theme::SPACE_3, 0.0)))
@@ -412,13 +406,13 @@ fn presets(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFie
             p.name.as_str()
         };
         let color = if bad {
-            theme::ERR
+            widgets::Level::Err.color()
         } else if on {
-            theme::TEXT_1
+            theme::egui_color(theme::TEXT_1)
         } else {
-            theme::TEXT_2
+            theme::egui_color(theme::TEXT_2)
         };
-        row.label(egui::RichText::new(name).color(theme::egui_color(color)));
+        row.label(egui::RichText::new(name).color(color));
         if i == 0 {
             widgets::tag(&mut row, "default")
                 .on_hover_text("A new operation with this tool gets this preset.");
@@ -520,22 +514,6 @@ fn preset_summary(p: &Preset, m: Measure) -> String {
     }
 }
 
-/// A row of a list: the selected one on `--accent-subtle` with an amber edge,
-/// the one under the pointer on `--hover-overlay`.
-pub fn list_row_background(ui: &egui::Ui, rect: egui::Rect, selected: bool, hovered: bool) {
-    let painter = ui.painter();
-    if selected {
-        painter.rect_filled(rect, theme::RADIUS_SM, theme::ACCENT_SUBTLE.color());
-        painter.rect_filled(
-            egui::Rect::from_min_max(rect.min, egui::pos2(rect.min.x + 2.0, rect.max.y)),
-            0.0,
-            theme::egui_color(theme::ACCENT),
-        );
-    } else if hovered {
-        painter.rect_filled(rect, theme::RADIUS_SM, theme::HOVER_OVERLAY.color());
-    }
-}
-
 fn preset_fields(
     ui: &mut egui::Ui,
     p: &mut Preset,
@@ -554,7 +532,7 @@ fn preset_fields(
     );
     ui.end_row();
     row(ui, "Spindle", errors, "presets.rpm", |ui| {
-        optional(ui, &mut p.rpm, tool_rpm, |ui, rpm| {
+        widgets::optional(ui, &mut p.rpm, tool_rpm, NOT_GIVEN, |ui, rpm| {
             ui.add(
                 egui::DragValue::new(rpm)
                     .range(0..=60000)
@@ -605,10 +583,11 @@ fn preset_fields(
         errors,
         "presets.stock_to_leave",
         |ui| {
-            optional(
+            widgets::optional(
                 ui,
                 &mut p.stock_to_leave,
                 StockToLeave::default(),
+                NOT_GIVEN,
                 |ui, s| {
                     m.length_field(ui, &mut s.radial, 0.01, 100.0, "radial ");
                     m.length_field(ui, &mut s.axial, 0.01, 100.0, "axial ");
@@ -638,7 +617,7 @@ pub fn surface_speed_row(ui: &mut egui::Ui, rpm: &mut Option<u32>, diameter: f64
             }
         }
         _ => {
-            quiet(ui, "needs a spindle speed");
+            widgets::hint(ui, "needs a spindle speed");
         }
     });
     ui.end_row();
@@ -670,18 +649,13 @@ pub fn chip_load_row(
             }
         }
         (_, _, None) | (_, _, Some(0)) => {
-            quiet(ui, "needs the tool's flutes");
+            widgets::hint(ui, "needs the tool's flutes");
         }
         _ => {
-            quiet(ui, "needs a spindle speed and cutting feed");
+            widgets::hint(ui, "needs a spindle speed and cutting feed");
         }
     });
     ui.end_row();
-}
-
-/// Text that says why a field is not there: `--text-4`, the quietest.
-fn quiet(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.label(egui::RichText::new(text).color(theme::egui_color(theme::TEXT_4)))
 }
 
 /// A spindle speed worked out from a surface speed, to the nearest rev/min and
@@ -691,17 +665,6 @@ fn whole_rpm(rpm: f64) -> u32 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let whole = rpm.round().clamp(1.0, 60000.0) as u32;
     whole
-}
-
-/// A tool type's name, as the user reads it.
-pub fn kind_name(kind: ToolKind) -> &'static str {
-    match kind {
-        ToolKind::Flat => "flat",
-        ToolKind::Ball => "ball",
-        ToolKind::Bullnose => "bullnose",
-        ToolKind::Cone => "V-bit / chamfer",
-        ToolKind::Drill => "drill",
-    }
 }
 
 /// One row of a form: the label, then what `add` puts in, bordered in red when
@@ -722,7 +685,7 @@ fn row(
     ui.horizontal(|ui| {
         if !why.is_empty() {
             // The system's `invalid` field: an `--err` border, nothing louder.
-            let err = egui::Stroke::new(1.0, theme::egui_color(theme::ERR));
+            let err = egui::Stroke::new(1.0, widgets::Level::Err.color());
             let w = &mut ui.visuals_mut().widgets;
             w.inactive.bg_stroke = err;
             w.hovered.bg_stroke = err;
@@ -733,46 +696,8 @@ fn row(
     ui.end_row();
     for why in why {
         ui.label("");
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(why)
-                    .size(theme::TEXT_SM)
-                    .color(theme::egui_color(theme::ERR)),
-            )
-            .wrap(),
-        );
+        ui.add(egui::Label::new(widgets::error_text(why).size(theme::TEXT_SM)).wrap());
         ui.end_row();
-    }
-}
-
-/// A value that may be left out: a quiet "not given" to give it, or its field
-/// and a button to take it out again. Replaces a checkbox beside every field.
-fn optional<T>(
-    ui: &mut egui::Ui,
-    value: &mut Option<T>,
-    default: T,
-    add: impl FnOnce(&mut egui::Ui, &mut T),
-) {
-    let clear = if let Some(v) = value.as_mut() {
-        add(ui, v);
-        widgets::icon_button(ui, Icon::X, "clear: not given").clicked()
-    } else {
-        let given = ui
-            .add(
-                egui::Button::new(
-                    egui::RichText::new("not given").color(theme::egui_color(theme::TEXT_4)),
-                )
-                .frame(false),
-            )
-            .on_hover_text("Give it")
-            .clicked();
-        if given {
-            *value = Some(default);
-        }
-        false
-    };
-    if clear {
-        *value = None;
     }
 }
 
@@ -799,7 +724,7 @@ fn opt_length(
     field: &str,
 ) {
     row(ui, label, errors, field, |ui| {
-        optional(ui, value, default, |ui, v| {
+        widgets::optional(ui, value, default, NOT_GIVEN, |ui, v| {
             m.length_field(ui, v, 0.1, 1000.0, "");
         });
     });
@@ -814,7 +739,7 @@ fn opt_feed(
     field: &str,
 ) {
     row(ui, label, errors, field, |ui| {
-        optional(ui, value, 1000.0, |ui, v| {
+        widgets::optional(ui, value, 1000.0, NOT_GIVEN, |ui, v| {
             m.feed_field(ui, v, 50000.0);
         });
     });
@@ -834,81 +759,4 @@ fn opt_text(ui: &mut egui::Ui, label: &str, value: &mut Option<String>, hint: &s
         *value = (!text.trim().is_empty()).then_some(text);
     }
     ui.end_row();
-}
-
-/// The height of a tool's picture.
-const PICTURE: f32 = 180.0;
-
-/// The tool, side on and to scale, with its holder face marked, on the CAD grid.
-pub fn paint_tool(ui: &mut egui::Ui, tool: &ToolSpec, m: Measure) {
-    let d = draw(tool);
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), PICTURE),
-        egui::Sense::hover(),
-    );
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, theme::RADIUS_SM, theme::egui_color(theme::BG));
-    widgets::grid_background(&painter, rect);
-    painter.rect_stroke(
-        rect,
-        theme::RADIUS_SM,
-        egui::Stroke::new(1.0, theme::egui_color(theme::BORDER)),
-        egui::StrokeKind::Inside,
-    );
-    let margin = 16.0_f64;
-    let w = f64::from(rect.width()) - 2.0 * margin;
-    let h = f64::from(rect.height()) - 2.0 * margin;
-    let scale = (w / (2.0 * d.max_radius.max(1e-6))).min(h / d.height.max(1e-6));
-    let base = rect.center_bottom() - egui::vec2(0.0, 16.0);
-    // Drawing coordinates are millimetres at most a few hundred across.
-    #[allow(clippy::cast_possible_truncation)]
-    let at = |x: f64, z: f64| base + egui::vec2((x * scale) as f32, -(z * scale) as f32);
-    for o in &d.outlines {
-        let (fill, stroke) = match o.part {
-            Part::Flutes => (theme::AMBER_5, theme::AMBER_3),
-            Part::Shank => (theme::GRAY_7, theme::GRAY_8),
-            Part::Holder => (theme::GRAY_5, theme::GRAY_7),
-        };
-        // Right half up, left half down: one closed, convex outline per part.
-        let mut points: Vec<egui::Pos2> = o.half.iter().map(|(x, z)| at(*x, *z)).collect();
-        points.extend(o.half.iter().rev().map(|(x, z)| at(-x, *z)));
-        painter.add(egui::Shape::convex_polygon(
-            points,
-            theme::egui_color(fill),
-            egui::Stroke::new(1.0, theme::egui_color(stroke)),
-        ));
-    }
-    // The holder face: where the stickout is measured to.
-    let face = at(0.0, d.holder_face).y;
-    painter.line_segment(
-        [
-            egui::pos2(rect.left() + 8.0, face),
-            egui::pos2(rect.right() - 8.0, face),
-        ],
-        egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
-    );
-    // Just below the face line, at the right edge: above it the holder is at its
-    // widest, and below it only the narrower cutter, centred. Anywhere nearer the
-    // middle, dim text lands on the grey shank and disappears.
-    painter.text(
-        egui::pos2(rect.right() - 10.0, face + 4.0),
-        egui::Align2::RIGHT_TOP,
-        format!("stickout {}", m.length(d.holder_face, 1)),
-        theme::caption(ui.style()),
-        ui.visuals().weak_text_color(),
-    );
-    painter.text(
-        egui::pos2(rect.right() - 10.0, rect.bottom() - 6.0),
-        egui::Align2::RIGHT_BOTTOM,
-        format!("Ø {}", m.length(tool.diameter, 2)),
-        theme::caption(ui.style()),
-        ui.visuals().text_color(),
-    );
-    if !d.assumed.is_empty() {
-        ui.label(
-            egui::RichText::new(format!("assumed, not given: {}", d.assumed.join(", ")))
-                .size(theme::TEXT_SM)
-                .color(theme::egui_color(theme::TEXT_4)),
-        );
-    }
 }

@@ -20,7 +20,7 @@ mod parts;
 mod setup;
 mod work_zero;
 
-pub use operation::height_planes;
+pub use operation::{OperationTab, height_planes};
 
 use eframe::egui;
 
@@ -28,8 +28,8 @@ use crate::document::{Document, Level, Selection};
 use crate::measure::Measure;
 use crate::slots::{Kind, Shown, Slot};
 use crate::theme;
-use crate::tool_editor::kind_name;
-use crate::widgets::{self, Icon, Size, Tab, Variant, form};
+use crate::tool_drawing::kind_name;
+use crate::widgets::{self, Icon, Size, Variant, form, hint};
 
 /// Something the panel asks the app to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,14 +59,19 @@ pub struct Picks<'a> {
     pub shown: Option<&'a Shown>,
 }
 
+/// What the panel asks of the app, and what it shows that the view follows.
+#[derive(Debug, Default)]
+pub struct Panel {
+    /// What to do, in order.
+    pub actions: Vec<PropAction>,
+    /// The tab of the selected operation showing, when an operation is selected.
+    pub operation_tab: Option<OperationTab>,
+}
+
 /// The panel for `doc`'s selection.
-pub fn show(
-    ui: &mut egui::Ui,
-    doc: &mut Document,
-    m: Measure,
-    picks: Picks<'_>,
-) -> Vec<PropAction> {
+pub fn show(ui: &mut egui::Ui, doc: &mut Document, m: Measure, picks: Picks<'_>) -> Panel {
     let mut actions = Vec::new();
+    let mut operation_tab = None;
     match doc.selection.clone() {
         Selection::Job => job(ui, doc, m),
         Selection::Models => group(
@@ -118,10 +123,13 @@ pub fn show(
         }
         Selection::Setup(name) => setup::show(ui, doc, m, &name, picks, &mut actions),
         Selection::Operation(setup, index) => {
-            operation::show(ui, doc, m, &setup, index, picks, &mut actions);
+            operation_tab = operation::show(ui, doc, m, &setup, index, picks, &mut actions);
         }
     }
-    actions
+    Panel {
+        actions,
+        operation_tab,
+    }
 }
 
 /// A group in the tree: what it holds, and, when it holds nothing, the way to
@@ -135,7 +143,7 @@ fn group(
 ) {
     ui.label(widgets::section_label(title));
     ui.add_space(theme::SPACE_2);
-    quiet(ui, about);
+    hint(ui, about);
     if let Some((icon, what, button)) = empty {
         widgets::empty_state(ui, icon, what, "", |ui| {
             if widgets::button(ui, Variant::Secondary, Size::Sm, Some(Icon::Plus), button).clicked()
@@ -182,39 +190,13 @@ fn name_field(ui: &mut egui::Ui, id: egui::Id, current: &str) -> Option<String> 
     None
 }
 
-/// Underline tabs whose choice is remembered under `id`: the one showing. While
-/// something is being picked in the view, the tab that lists it is `picking`, and
-/// shows, so what a click adds is in sight.
-fn tab_bar(ui: &mut egui::Ui, id: egui::Id, tabs: &[Tab<'_>], picking: Option<usize>) -> usize {
-    let mut page = picking
-        .or_else(|| ui.data(|d| d.get_temp::<usize>(id)))
-        .unwrap_or(0)
-        .min(tabs.len().saturating_sub(1));
-    widgets::tabs(ui, &mut page, tabs);
-    ui.data_mut(|d| d.insert_temp(id, page));
-    ui.add_space(theme::SPACE_4);
-    page
-}
-
 /// Why setup `name` cannot be generated, if it cannot: the tree's dot says it
 /// cannot, and this says why.
-fn cannot_run(ui: &mut egui::Ui, doc: &Document, name: &str) {
-    if let Some(why) = doc.setup_index(name).and_then(|i| doc.cannot_run(i)) {
+fn cannot_generate(ui: &mut egui::Ui, doc: &Document, name: &str) {
+    if let Some(why) = doc.cannot_generate(name, None) {
         widgets::diagnostic(ui, widgets::Level::Warn, &why, |_| {});
         ui.add_space(theme::SPACE_3);
     }
-}
-
-/// Explaining text, quieter than what it explains.
-fn quiet(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(
-        egui::Label::new(egui::RichText::new(text).color(theme::egui_color(theme::TEXT_3))).wrap(),
-    )
-}
-
-/// Text that says something is wrong.
-fn error(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(egui::Label::new(egui::RichText::new(text).color(widgets::Level::Err.color())).wrap())
 }
 
 fn job(ui: &mut egui::Ui, doc: &mut Document, m: Measure) {
@@ -224,7 +206,7 @@ fn job(ui: &mut egui::Ui, doc: &mut Document, m: Measure) {
         widgets::field_label(ui, "File");
         match &doc.path {
             Some(p) => ui.label(widgets::mono(p.display().to_string(), theme::TEXT_SM)),
-            None => quiet(ui, "not saved yet"),
+            None => hint(ui, "not saved yet"),
         };
         ui.end_row();
         widgets::field_label(ui, "Tolerance");
@@ -246,7 +228,7 @@ fn job(ui: &mut egui::Ui, doc: &mut Document, m: Measure) {
         |_| {},
         |ui| {
             if doc.job.tools.is_empty() {
-                quiet(ui, "None yet: an operation's Select tool brings one in.");
+                hint(ui, "None yet: an operation's Select tool brings one in.");
             }
             egui::Grid::new("job-tools")
                 .num_columns(4)
@@ -265,7 +247,7 @@ fn job(ui: &mut egui::Ui, doc: &mut Document, m: Measure) {
                         if used.contains(name) {
                             ui.label("");
                         } else {
-                            quiet(ui, "unused; dropped on save");
+                            hint(ui, "unused; dropped on save");
                         }
                         ui.end_row();
                     }

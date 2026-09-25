@@ -35,7 +35,7 @@ pub struct Camera {
 
 impl Camera {
     /// A camera framing a sphere of `radius` around `centre`, from the front right
-    /// and above: the same view the web inspector opened with.
+    /// and above, looking down on it: the view the part is first shown in.
     pub fn framing(centre: Vec3, radius: f32) -> Self {
         let radius = if radius.is_finite() && radius > 0.0 {
             radius

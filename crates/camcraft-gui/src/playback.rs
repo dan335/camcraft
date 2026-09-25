@@ -9,14 +9,16 @@ use eframe::egui;
 use glam::DVec3;
 
 use crate::document::{SetupState, StockMode, next_key};
-use crate::live::{LiveStock, Target};
+use crate::live::{Goal, LiveStock};
 use crate::measure::Measure;
 use crate::scene::{Playhead, Scene, Steep};
 use crate::stock_view::{CLASSES, Class, ColorMode, StockImage, cell_color, class_name};
 use crate::theme;
+use crate::transport;
 use crate::viewport::{Content, StockChange, StockRef, StockShow, View};
+use crate::widgets::{self, hint_text, section_label};
 
-/// `12345` as `12,345`, as the inspector printed counts.
+/// `12345` as `12,345`, as counts are printed.
 pub fn thousands(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::new();
@@ -100,9 +102,32 @@ pub fn follow_stock(ctx: &egui::Context, state: &mut SetupState) {
     }
     let (at, fraction) = ran.scene.target(state.view.at);
     if let Some(live) = &mut state.live {
-        live.seek(Target { at, fraction });
+        live.seek(Goal { at, fraction });
         live.poll();
     }
+}
+
+/// A square of `color`, as a legend keys what it names.
+fn swatch(ui: &mut egui::Ui, color: egui::Color32) {
+    let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    ui.painter().rect_filled(r, 2.0, color);
+}
+
+/// One row of a legend: `left`, then at the right its count, `count`, and
+/// before that `right`.
+fn legend_row(
+    ui: &mut egui::Ui,
+    count: usize,
+    left: impl FnOnce(&mut egui::Ui),
+    right: impl FnOnce(&mut egui::Ui),
+) {
+    ui.horizontal(|ui| {
+        left(ui);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            right(ui);
+            ui.label(hint_text(thousands(count)));
+        });
+    });
 }
 
 /// What the last run did, and its verdict.
@@ -115,10 +140,9 @@ pub fn result(ui: &mut egui::Ui, state: &SetupState, m: Measure) {
         .num_columns(4)
         .striped(true)
         .show(ui, |ui| {
-            ui.strong("operation");
-            ui.strong("passes");
-            ui.strong("removed");
-            ui.strong("rapid hits");
+            for heading in ["operation", "passes", "removed", "rapid hits"] {
+                ui.label(section_label(heading));
+            }
             ui.end_row();
             for op in &result.operations {
                 ui.label(&op.name);
@@ -136,7 +160,7 @@ pub fn result(ui: &mut egui::Ui, state: &SetupState, m: Measure) {
         ));
     } else {
         ui.colored_label(
-            ui.visuals().error_fg_color,
+            widgets::Level::Err.color(),
             format!(
                 "NOT verified: {} gouged column(s), deepest {}.",
                 v.gouged,
@@ -150,7 +174,7 @@ pub fn result(ui: &mut egui::Ui, state: &SetupState, m: Measure) {
 /// point to bring the camera in on, when a steep descent is clicked.
 pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option<DVec3> {
     let view = &mut state.view;
-    ui.heading("Show");
+    ui.label(section_label("Show"));
     ui.checkbox(&mut view.view.part, "part");
     ui.checkbox(&mut view.view.stock, "stock outline");
     ui.checkbox(&mut view.view.origin, "work zero");
@@ -166,34 +190,41 @@ pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option
         if n == 0 {
             continue;
         }
-        ui.horizontal(|ui| {
-            bit(ui, &mut view.view.roles, i, "");
-            let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-            ui.painter()
-                .rect_filled(r, 2.0, theme::egui_color(theme::role_srgb(*role)));
-            ui.label(theme::role_name(*role));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.weak(thousands(n));
-            });
-        });
+        legend_row(
+            ui,
+            n,
+            |ui| {
+                bit(ui, &mut view.view.roles, i, "");
+                swatch(ui, theme::egui_color(theme::role_srgb(*role)));
+                ui.label(theme::role_name(*role));
+            },
+            |_| {},
+        );
     }
     let mut jump = None;
     if scene.ops.len() > 1 {
         ui.add_space(4.0);
         for (i, op) in scene.ops.iter().enumerate() {
-            ui.horizontal(|ui| {
-                bit(ui, &mut view.view.ops, i, format!("{}. {}", i + 1, op.name));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button("go to end")
+            legend_row(
+                ui,
+                op.count,
+                |ui| bit(ui, &mut view.view.ops, i, format!("{}. {}", i + 1, op.name)),
+                |ui| {
+                    let go = widgets::button(
+                        ui,
+                        widgets::Variant::Ghost,
+                        widgets::Size::Sm,
+                        None,
+                        "go to end",
+                    );
+                    if go
                         .on_hover_text("show everything up to the end of this operation")
                         .clicked()
                     {
                         jump = Some(op.first + op.count);
                     }
-                    ui.weak(thousands(op.count));
-                });
-            });
+                },
+            );
         }
     }
     if let Some(end) = jump {
@@ -201,7 +232,7 @@ pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option
     }
 
     ui.separator();
-    ui.heading("Stock");
+    ui.label(section_label("Stock"));
     let stage_name = |i: usize| match i {
         0 => "the block, before anything".to_string(),
         n => scene
@@ -266,29 +297,29 @@ pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option
                 ColorMode::Material => &[Class::Gouge],
             };
             for &class in classes {
-                ui.horizontal(|ui| {
-                    let (r, _) =
-                        ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                    ui.painter().rect_filled(
-                        r,
-                        2.0,
-                        theme::egui_color(cell_color(mode, class, 0.0)),
-                    );
-                    ui.label(class_name(class));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.weak(thousands(count(class)));
-                    });
-                });
+                legend_row(
+                    ui,
+                    count(class),
+                    |ui| {
+                        swatch(ui, theme::egui_color(cell_color(mode, class, 0.0)));
+                        ui.label(class_name(class));
+                    },
+                    |_| {},
+                );
             }
-            ui.weak("cells of the simulated material, by the verifier's rule");
+            ui.label(hint_text(
+                "cells of the simulated material, by the verifier's rule",
+            ));
         }
     }
 
     let mut go = None;
     if !scene.steep.is_empty() {
         ui.separator();
-        ui.heading("Steep descents");
-        ui.weak("cutting descents that drop further than allowed while barely advancing");
+        ui.label(section_label("Steep descents"));
+        ui.label(hint_text(
+            "cutting descents that drop further than allowed while barely advancing",
+        ));
         let setup = ran
             .job
             .setups
@@ -312,15 +343,16 @@ pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option
                 m.length(allowance, 2)
             ));
         }
-        // Deepest first: the worst is the one to look at.
-        let mut worst: Vec<Steep> = scene.steep.clone();
-        worst.sort_by(|a, b| b.drop.total_cmp(&a.drop));
-        ui.weak(format!("drop, operation and position ({})", m.unit()));
+        // Deepest first, as the scene keeps them: the worst is the one to look at.
+        ui.label(hint_text(format!(
+            "drop, operation and position ({})",
+            m.unit()
+        )));
         egui::ScrollArea::vertical()
             .id_salt("steep")
             .max_height(160.0)
             .show(ui, |ui| {
-                for s in worst.iter().take(200) {
+                for s in scene.steep.iter().take(200) {
                     let label = format!(
                         "{}  {}. at {}, {}, {}",
                         m.number(s.drop, 2),
@@ -384,7 +416,7 @@ pub fn checks(ui: &mut egui::Ui, state: &mut SetupState) -> Option<DVec3> {
         if shown.is_empty() {
             continue;
         }
-        ui.strong(&group.title);
+        ui.label(section_label(&group.title));
         for f in shown {
             let segment = finding_segment(scene, group.op, f);
             if finding(ui, f, segment.is_some()) {
@@ -397,7 +429,7 @@ pub fn checks(ui: &mut egui::Ui, state: &mut SetupState) -> Option<DVec3> {
         .show(ui, |ui| {
             for (group, f) in passed {
                 ui.horizontal_wrapped(|ui| {
-                    ui.colored_label(theme::egui_color(theme::PATH_CUT), "pass");
+                    ui.colored_label(widgets::Level::Ok.color(), "pass");
                     ui.monospace(f.code);
                     ui.label(format!("{}: {}", group.title, f.message));
                 });
@@ -420,22 +452,21 @@ pub fn finding_segment(scene: &Scene, op: Option<usize>, f: &Finding) -> Option<
 
 /// Stop and stand after `shown` segments, cutting the stock as it plays.
 fn go_to(state: &mut SetupState, shown: usize) {
-    state.view.at = Playhead::at(shown);
-    state.view.transport.playing = false;
+    transport::stand(state, Playhead::at(shown));
     state.view.stock_mode = StockMode::Follow;
 }
 
 /// One finding. Returns whether it was clicked, when it goes somewhere.
 fn finding(ui: &mut egui::Ui, f: &Finding, goes: bool) -> bool {
     let (word, color) = match f.level {
-        Level::Fail => ("FAIL", theme::ERR),
-        Level::Warn => ("warn", theme::AMBER_5),
-        Level::Note => ("note", theme::GRAY_7),
-        Level::Pass => ("pass", theme::PATH_CUT),
+        Level::Fail => ("FAIL", widgets::Level::Err.color()),
+        Level::Warn => ("warn", widgets::Level::Warn.color()),
+        Level::Note => ("note", theme::egui_color(theme::TEXT_3)),
+        Level::Pass => ("pass", widgets::Level::Ok.color()),
     };
     let mut clicked = false;
     ui.horizontal_wrapped(|ui| {
-        ui.colored_label(theme::egui_color(color), egui::RichText::new(word).strong());
+        ui.colored_label(color, egui::RichText::new(word).strong());
         ui.monospace(f.code);
         if goes {
             clicked = ui
@@ -447,7 +478,7 @@ fn finding(ui: &mut egui::Ui, f: &Finding, goes: bool) -> bool {
         }
     });
     if !f.detail.is_empty() {
-        ui.weak(&f.detail);
+        ui.label(hint_text(&f.detail));
     }
     clicked
 }

@@ -20,8 +20,9 @@ use eframe::egui;
 
 use crate::measure::Measure;
 use crate::theme;
-use crate::tool_editor::{kind_name, list_row_background, paint_tool, tool_fields};
-use crate::widgets::{self, Icon, Level, Size, Variant};
+use crate::tool_drawing::{kind_name, paint_tool};
+use crate::tool_editor::tool_fields;
+use crate::widgets::{self, Icon, Level, Size, Variant, list_row_background};
 
 /// The library: as saved, and as edited.
 #[derive(Debug, Clone, Default)]
@@ -507,16 +508,13 @@ impl ToolManager {
             } else {
                 (Level::Ok, "saved as you go".to_string())
             };
-            widgets::status_dot(ui, level);
+            widgets::status_dot(ui, level.color(), true);
             let color = if level == Level::Ok {
-                theme::TEXT_3
+                theme::egui_color(theme::TEXT_3)
             } else {
-                theme::ERR
+                Level::Err.color()
             };
-            ui.add(
-                egui::Label::new(egui::RichText::new(text).color(theme::egui_color(color)))
-                    .truncate(),
-            );
+            ui.add(egui::Label::new(egui::RichText::new(text).color(color)).truncate());
             if let Some(p) = &self.library_path {
                 ui.label(
                     widgets::mono(short_path(p), theme::TEXT_XS)
@@ -526,11 +524,12 @@ impl ToolManager {
             }
             if let Some((ok, text)) = &self.message {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let color = if *ok { theme::TEXT_2 } else { theme::ERR };
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(text).color(theme::egui_color(color)))
-                            .truncate(),
-                    );
+                    let color = if *ok {
+                        theme::egui_color(theme::TEXT_2)
+                    } else {
+                        Level::Err.color()
+                    };
+                    ui.add(egui::Label::new(egui::RichText::new(text).color(color)).truncate());
                 });
             }
         });
@@ -746,28 +745,13 @@ impl ToolManager {
         });
         ui.add_space(theme::SPACE_2);
 
-        let filter = self.filter.to_lowercase();
         let Some(here) = self.library.edited.at(&self.folder) else {
             self.folder = Vec::new();
             return;
         };
-        let subs = if self.include_subfolders {
-            here.folder_paths()
-        } else {
-            vec![Vec::new()]
-        };
-        let mut rows: Vec<(FolderPath, &String, &ToolSpec)> = subs
-            .into_iter()
-            .filter_map(|sub| here.at(&sub).map(|f| (sub, f)))
-            .flat_map(|(sub, f)| f.tools.iter().map(move |(n, t)| (sub.clone(), n, t)))
-            .filter(|(_, n, t)| {
-                filter.is_empty()
-                    || n.to_lowercase().contains(&filter)
-                    || t.comment.to_lowercase().contains(&filter)
-            })
-            .collect();
+        let mut rows = here.find(self.include_subfolders, &self.filter);
         if rows.is_empty() {
-            let (title, detail) = if filter.is_empty() {
+            let (title, detail) = if self.filter.is_empty() {
                 (
                     "No tools here",
                     "Add one, or import a maker's Fusion library.",
@@ -805,8 +789,8 @@ impl ToolManager {
             return;
         }
         match self.sort {
-            Sort::Number => rows.sort_by_key(|(f, n, t)| (t.number, (*n).clone(), f.clone())),
-            Sort::Name => rows.sort_by_key(|(f, n, _)| ((*n).clone(), f.clone())),
+            Sort::Number => rows.sort_by_key(|(f, n, t)| (t.number, *n, f.clone())),
+            Sort::Name => rows.sort_by_key(|(f, n, _)| (*n, f.clone())),
             Sort::Diameter => rows.sort_by(|a, b| a.2.diameter.total_cmp(&b.2.diameter)),
         }
         let m = self.measure;
@@ -818,25 +802,9 @@ impl ToolManager {
         let mut duplicates = Vec::new();
         let mut deletes = Vec::new();
         let mut sort = self.sort;
-        let number = |text: String| {
-            egui::Label::new(
-                widgets::mono(text, theme::TEXT_SM).color(theme::egui_color(theme::TEXT_1)),
-            )
-        };
-        let dim = |text: String| {
-            egui::Label::new(egui::RichText::new(text).color(theme::egui_color(theme::TEXT_3)))
-                .truncate()
-        };
         let right = egui::Layout::right_to_left(egui::Align::Center);
 
-        // The selected row on `--accent-subtle` with an amber edge, as the folder
-        // selected is, rather than the heavier `--selection`.
-        ui.visuals_mut().selection.bg_fill = theme::ACCENT_SUBTLE.color();
-        let mut table = egui_extras::TableBuilder::new(ui)
-            .id_salt("tools-table")
-            .striped(false)
-            .sense(egui::Sense::click_and_drag())
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        let mut table = tool_table(ui, "tools-table", egui::Sense::click_and_drag())
             .column(egui_extras::Column::exact(44.0))
             .column(
                 egui_extras::Column::initial(116.0)
@@ -856,16 +824,15 @@ impl ToolManager {
             .header(theme::CONTROL_MD, |mut header| {
                 header.col(|ui| {
                     ui.add_space(theme::SPACE_3);
-                    column_header(ui, "T", None, Some(Sort::Number), &mut sort, false);
+                    sort_header(ui, "T", None, Some(Sort::Number), &mut sort, false);
                 });
-                header
-                    .col(|ui| column_header(ui, "Name", None, Some(Sort::Name), &mut sort, false));
+                header.col(|ui| sort_header(ui, "Name", None, Some(Sort::Name), &mut sort, false));
                 if with_folder {
-                    header.col(|ui| column_header(ui, "In", None, None, &mut sort, false));
+                    header.col(|ui| sort_header(ui, "In", None, None, &mut sort, false));
                 }
-                header.col(|ui| column_header(ui, "Type", None, None, &mut sort, false));
+                header.col(|ui| sort_header(ui, "Type", None, None, &mut sort, false));
                 header.col(|ui| {
-                    column_header(
+                    sort_header(
                         ui,
                         "Ø",
                         Some(m.unit()),
@@ -874,12 +841,12 @@ impl ToolManager {
                         true,
                     );
                 });
-                header.col(|ui| column_header(ui, "Flutes", None, None, &mut sort, true));
-                header.col(|ui| column_header(ui, "Presets", None, None, &mut sort, true));
+                header.col(|ui| sort_header(ui, "Flutes", None, None, &mut sort, true));
+                header.col(|ui| sort_header(ui, "Presets", None, None, &mut sort, true));
                 header.col(|ui| {
-                    column_header(ui, "Stickout", Some(m.unit()), None, &mut sort, true);
+                    sort_header(ui, "Stickout", Some(m.unit()), None, &mut sort, true);
                 });
-                header.col(|ui| column_header(ui, "Description", None, None, &mut sort, false));
+                header.col(|ui| sort_header(ui, "Description", None, None, &mut sort, false));
             })
             .body(|mut body| {
                 for (sub, name, tool) in rows {
@@ -891,32 +858,8 @@ impl ToolManager {
                         .is_some_and(|(f, n)| *f == folder && n == name);
                     body.row(theme::CONTROL_MD, |mut row| {
                         row.set_selected(is);
-                        row.col(|ui| {
-                            if is {
-                                let r = ui.max_rect();
-                                ui.painter().rect_filled(
-                                    egui::Rect::from_min_max(
-                                        r.left_top(),
-                                        egui::pos2(r.left() + 2.0, r.bottom()),
-                                    ),
-                                    0.0,
-                                    theme::egui_color(theme::ACCENT),
-                                );
-                            }
-                            ui.add_space(theme::SPACE_3);
-                            ui.add(number(format!("T{}", tool.number)));
-                        });
-                        row.col(|ui| {
-                            let color = if is { theme::TEXT_1 } else { theme::TEXT_2 };
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(name.as_str())
-                                        .color(theme::egui_color(color)),
-                                )
-                                .truncate()
-                                .selectable(false),
-                            );
-                        });
+                        row.col(|ui| number_cell(ui, tool.number, is));
+                        row.col(|ui| name_cell(ui, name, is));
                         if with_folder {
                             row.col(|ui| {
                                 ui.add(dim(sub.join("/")).selectable(false));
@@ -962,47 +905,39 @@ impl ToolManager {
                         let r = row.response();
                         let drag = ToolDrag {
                             folder: folder.clone(),
-                            name: name.clone(),
+                            name: name.to_string(),
                         };
                         r.dnd_set_drag_payload(drag);
-                        if r.dragged()
-                            && let Some(at) = r.ctx.pointer_interact_pos()
-                        {
-                            egui::Area::new(egui::Id::new(("tool-drag", &folder, name)))
-                                .order(egui::Order::Tooltip)
-                                .fixed_pos(at + egui::vec2(12.0, 0.0))
-                                .interactable(false)
-                                .show(&r.ctx, |ui| {
-                                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                                        ui.label(widgets::mono(name.as_str(), theme::TEXT_SM));
-                                    });
-                                });
+                        if r.dragged() {
+                            widgets::drag_label(
+                                &r.ctx,
+                                name,
+                                egui::FontId::monospace(theme::TEXT_SM),
+                            );
                         }
                         if r.clicked() || r.secondary_clicked() {
-                            clicked = Some((folder.clone(), name.clone()));
+                            clicked = Some((folder.clone(), name.to_string()));
                         }
                         r.context_menu(|ui| {
                             if ui.button("Duplicate").clicked() {
-                                duplicates.push((folder.clone(), name.clone()));
+                                duplicates.push((folder.clone(), name.to_string()));
                                 ui.close();
                             }
                             ui.menu_button("Move to", |ui| {
                                 for path in &all_folders {
                                     if *path != folder && ui.button(folder_label(path)).clicked() {
-                                        moves.push((folder.clone(), name.clone(), path.clone()));
+                                        moves.push((
+                                            folder.clone(),
+                                            name.to_string(),
+                                            path.clone(),
+                                        ));
                                         ui.close();
                                     }
                                 }
                             });
                             ui.separator();
-                            if ui
-                                .button(
-                                    egui::RichText::new("Delete")
-                                        .color(theme::egui_color(theme::ERR)),
-                                )
-                                .clicked()
-                            {
-                                deletes.push((folder.clone(), name.clone()));
+                            if ui.button(widgets::error_text("Delete")).clicked() {
+                                deletes.push((folder.clone(), name.to_string()));
                                 ui.close();
                             }
                         });
@@ -1326,10 +1261,63 @@ fn short_path(path: &Path) -> String {
     }
 }
 
-/// A column's header: the small uppercase label and its unit, lowercase as
-/// units are written, and, where the table sorts by it, an arrow on the column
-/// it sorts by now.
-fn column_header(
+/// A table of tools, as the library lists them: rows that answer `sense`, the one
+/// selected on `--accent-subtle` as the folder selected is, rather than the heavier
+/// `--selection`. The columns and rows are the caller's.
+pub fn tool_table<'a>(
+    ui: &'a mut egui::Ui,
+    id: &str,
+    sense: egui::Sense,
+) -> egui_extras::TableBuilder<'a> {
+    ui.visuals_mut().selection.bg_fill = theme::ACCENT_SUBTLE.color();
+    egui_extras::TableBuilder::new(ui)
+        .id_salt(id)
+        .striped(false)
+        .sense(sense)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+}
+
+/// A tool's number, in a table's first column: an amber edge on the row when it is
+/// `selected`, as a list row has.
+pub fn number_cell(ui: &mut egui::Ui, tool_number: u32, selected: bool) {
+    if selected {
+        let r = ui.max_rect();
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(r.left_top(), egui::pos2(r.left() + 2.0, r.bottom())),
+            0.0,
+            theme::egui_color(theme::ACCENT),
+        );
+    }
+    ui.add_space(theme::SPACE_3);
+    ui.add(number(format!("T{tool_number}")));
+}
+
+/// A tool's name in a table: brightest when `selected`.
+pub fn name_cell(ui: &mut egui::Ui, name: &str, selected: bool) {
+    let color = if selected {
+        theme::TEXT_1
+    } else {
+        theme::TEXT_2
+    };
+    ui.add(
+        egui::Label::new(egui::RichText::new(name).color(theme::egui_color(color)))
+            .truncate()
+            .selectable(false),
+    );
+}
+
+/// A figure in a table: mono, the value to compare.
+pub fn number(text: String) -> egui::Label {
+    egui::Label::new(widgets::mono(text, theme::TEXT_SM).color(theme::egui_color(theme::TEXT_1)))
+}
+
+/// Secondary text in a table, cut short to its column.
+pub fn dim(text: String) -> egui::Label {
+    egui::Label::new(egui::RichText::new(text).color(theme::egui_color(theme::TEXT_3))).truncate()
+}
+
+/// A header that sorts the table by `key`, when it has one, on a click.
+fn sort_header(
     ui: &mut egui::Ui,
     label: &str,
     unit: Option<&str>,
@@ -1337,7 +1325,25 @@ fn column_header(
     sort: &mut Sort,
     right: bool,
 ) {
-    let on = key.is_some_and(|k| k == *sort);
+    if column_header(ui, label, unit, key.map(|k| k == *sort), right)
+        && let Some(k) = key
+    {
+        *sort = k;
+    }
+}
+
+/// A column's header: the small uppercase label and its unit, lowercase as
+/// units are written. `sorted` is `None` for a column the table does not sort by,
+/// and otherwise whether it sorts by it now, which puts an arrow on it. Whether it
+/// was clicked.
+pub fn column_header(
+    ui: &mut egui::Ui,
+    label: &str,
+    unit: Option<&str>,
+    sorted: Option<bool>,
+    right: bool,
+) -> bool {
+    let on = sorted == Some(true);
     let mut text = widgets::section_label(label);
     if on {
         text = text.color(theme::egui_color(theme::TEXT_1));
@@ -1360,7 +1366,7 @@ fn column_header(
     } else {
         egui::Layout::left_to_right(egui::Align::Center)
     };
-    let sense = if key.is_some() {
+    let sense = if sorted.is_some() {
         egui::Sense::click()
     } else {
         egui::Sense::hover()
@@ -1377,11 +1383,6 @@ fn column_header(
             clicked
         })
         .inner;
-    if let Some(k) = key
-        && clicked
-    {
-        *sort = k;
-    }
     // The hairline under the header row.
     let rect = ui.max_rect();
     ui.painter().hline(
@@ -1389,6 +1390,7 @@ fn column_header(
         rect.bottom(),
         egui::Stroke::new(1.0, theme::egui_color(theme::BORDER)),
     );
+    clicked
 }
 
 #[cfg(test)]

@@ -14,7 +14,7 @@
 //! cut, and a pick that can no longer be found says so here before it stops a run.
 
 use camcraft_core::features::{self, FeatureError};
-use camcraft_core::job::{BoxOf, FeatureRef, Geometry, Origin, Setup, Snap};
+use camcraft_core::job::{BoxOf, FeatureRef, Origin, Snap};
 use camcraft_core::run::cutting_tool;
 use camcraft_core::setup::{Bodies, Prepared};
 use camcraft_core::tool::ToolProfile;
@@ -80,17 +80,6 @@ impl Slot {
         matches!(self, Slot::WorkZero { .. })
     }
 
-    /// The setup it belongs to.
-    pub fn setup(&self) -> &str {
-        match self {
-            Slot::WorkZero { setup }
-            | Slot::Models { setup }
-            | Slot::Stocks { setup }
-            | Slot::Faces { setup, .. }
-            | Slot::Edges { setup, .. } => setup,
-        }
-    }
-
     /// What the view says while it is armed.
     pub fn hint(&self) -> &'static str {
         match self {
@@ -114,28 +103,16 @@ impl Slot {
     /// still there, and still what the panel shows. Undoing past an operation, or
     /// selecting something else, stops picking into it.
     pub fn still_valid(&self, doc: &Document) -> bool {
-        let Some(i) = doc.setup_index(self.setup()) else {
-            return false;
-        };
         match self {
             Slot::WorkZero { setup } | Slot::Models { setup } | Slot::Stocks { setup } => {
-                doc.selection == Selection::Setup(setup.clone())
+                doc.setup(setup).is_some() && doc.selection == Selection::Setup(setup.clone())
             }
             Slot::Faces { setup, op } | Slot::Edges { setup, op } => {
-                doc.job
-                    .setups
-                    .get(i)
-                    .is_some_and(|s| *op < s.operations.len())
+                doc.operation(setup, *op).is_some()
                     && doc.selection == Selection::Operation(setup.clone(), *op)
             }
         }
     }
-}
-
-/// The picks a slot holds, as they stand in the job.
-fn geometry_mut<'a>(doc: &'a mut Document, setup: &str, op: usize) -> Option<&'a mut Geometry> {
-    let i = doc.setup_index(setup)?;
-    Some(&mut doc.job.setups.get_mut(i)?.operations.get_mut(op)?.geometry)
 }
 
 /// Write a click on `target` into the job, for `slot`. Returns whether anything
@@ -166,36 +143,28 @@ pub fn apply(
                 offset,
             })
         }
-        (Slot::Models { setup }, Target::Model { model }) => {
-            names_mut(doc, setup, |s| &mut s.models).is_some_and(|names| toggle_name(names, model))
-        }
-        (Slot::Stocks { setup }, Target::Stock { stock }) => {
-            names_mut(doc, setup, |s| &mut s.stocks).is_some_and(|names| toggle_name(names, stock))
-        }
+        (Slot::Models { setup }, Target::Model { model }) => doc
+            .setup_mut(setup)
+            .is_some_and(|s| toggle_name(&mut s.models, model)),
+        (Slot::Stocks { setup }, Target::Stock { stock }) => doc
+            .setup_mut(setup)
+            .is_some_and(|s| toggle_name(&mut s.stocks, stock)),
         (Slot::Faces { setup, op }, Target::Face { model, face, at }) => {
-            let Some(g) = geometry_mut(doc, setup, *op) else {
-                return false;
-            };
-            toggle(&mut g.faces, model, *face, *at, |r| current(r, Kind::Face))
+            doc.operation_mut(setup, *op).is_some_and(|o| {
+                toggle(&mut o.geometry.faces, model, *face, *at, |r| {
+                    current(r, Kind::Face)
+                })
+            })
         }
         (Slot::Edges { setup, op }, Target::Edge { model, edge, at }) => {
-            let Some(g) = geometry_mut(doc, setup, *op) else {
-                return false;
-            };
-            toggle(&mut g.edges, model, *edge, *at, |r| current(r, Kind::Edge))
+            doc.operation_mut(setup, *op).is_some_and(|o| {
+                toggle(&mut o.geometry.edges, model, *edge, *at, |r| {
+                    current(r, Kind::Edge)
+                })
+            })
         }
         _ => false,
     }
-}
-
-/// One of setup `setup`'s lists of names.
-fn names_mut<'a>(
-    doc: &'a mut Document,
-    setup: &str,
-    list: impl FnOnce(&mut Setup) -> &mut Vec<String>,
-) -> Option<&'a mut Vec<String>> {
-    let i = doc.setup_index(setup)?;
-    Some(list(doc.job.setups.get_mut(i)?))
 }
 
 /// Take `name` out of `names` if it is there, or else add it.
@@ -217,11 +186,21 @@ pub enum Kind {
     Edge,
 }
 
+impl Kind {
+    /// Which of `body`'s faces or edges saved pick `r` is now, found as the engine
+    /// finds it, in a job machined to `tolerance`.
+    pub fn find(self, body: &Body, r: &FeatureRef, tolerance: f64) -> Result<u32, FeatureError> {
+        let tol = features::tolerance(tolerance, body);
+        match self {
+            Kind::Face => features::find_face(body, r, tol),
+            Kind::Edge => features::find_edge(body, r, tol),
+        }
+        .map(|found| found.index)
+    }
+}
+
 fn set_origin(doc: &mut Document, setup: &str, make: impl FnOnce([f64; 3]) -> Origin) -> bool {
-    let Some(i) = doc.setup_index(setup) else {
-        return false;
-    };
-    let Some(s) = doc.job.setups.get_mut(i) else {
+    let Some(s) = doc.setup_mut(setup) else {
         return false;
     };
     // The offset stays: it is the person's, measured from wherever zero is.
@@ -279,28 +258,30 @@ pub fn shown(
     m: Measure,
 ) -> Shown {
     let mut out = Shown::default();
-    let Some(s) = doc.setup_index(setup).and_then(|i| doc.job.setups.get(i)) else {
+    let Some(s) = doc.setup(setup) else {
         return out;
     };
     let bodies: Bodies<'_> = scene.setup_models().map(|m| (m.name(), m.body())).collect();
-    let tol = |body: &Body| features::tolerance(doc.job.tolerance, body);
+    let tolerance = doc.job.tolerance;
     let to_setup = |p: DVec3| scene.frame.to_setup(p);
 
     if let Origin::Point { point, .. } = &s.origin {
         out.origin = Some(match bodies.get(point.model.as_str()) {
-            Some(body) => match features::find_point(body, point, tol(body)) {
-                Ok((p, found)) => {
-                    out.highlight.markers.push(to_setup(p));
-                    Ok(describe_point(
-                        body,
-                        &point.model,
-                        point.snap,
-                        found.index,
-                        m,
-                    ))
+            Some(body) => {
+                match features::find_point(body, point, features::tolerance(tolerance, body)) {
+                    Ok((p, found)) => {
+                        out.highlight.markers.push(to_setup(p));
+                        Ok(describe_point(
+                            body,
+                            &point.model,
+                            point.snap,
+                            found.index,
+                            m,
+                        ))
+                    }
+                    Err(e) => Err(e.to_string()),
                 }
-                Err(e) => Err(e.to_string()),
-            },
+            }
             None => Err(FeatureError::NotLoaded(point.model.clone()).to_string()),
         });
     }
@@ -309,37 +290,33 @@ pub fn shown(
         return out;
     };
     let g = &operation.geometry;
+    // Each pick found, with the model it is on, or why not.
+    let find = |r: &FeatureRef, kind: Kind| {
+        let body = bodies
+            .get(r.model.as_str())
+            .ok_or_else(|| FeatureError::NotLoaded(r.model.clone()).to_string())?;
+        let index = kind.find(body, r, tolerance).map_err(|e| e.to_string())?;
+        Ok::<_, String>((*body, index))
+    };
     for r in &g.faces {
-        out.faces.push(match bodies.get(r.model.as_str()) {
-            Some(body) => match features::find_face(body, r, tol(body)) {
-                Ok(found) => {
-                    out.highlight
-                        .faces
-                        .extend(face_triangles(body, found.index, &to_setup));
-                    Ok(describe_face(body, &r.model, found.index, m))
-                }
-                Err(e) => Err(e.to_string()),
-            },
-            None => Err(FeatureError::NotLoaded(r.model.clone()).to_string()),
-        });
+        out.faces.push(find(r, Kind::Face).map(|(body, face)| {
+            out.highlight
+                .faces
+                .extend(face_triangles(body, face, &to_setup));
+            describe_face(body, &r.model, face, m)
+        }));
     }
     for r in &g.edges {
-        out.edges.push(match bodies.get(r.model.as_str()) {
-            Some(body) => match features::find_edge(body, r, tol(body)) {
-                Ok(found) => {
-                    if let Some(pm) = scene.model(&r.model) {
-                        out.highlight.lines.extend(edge_lines(
-                            pm.edges.get(found.index as usize),
-                            body.topology().edge(found.index).is_some_and(|e| e.closed),
-                            OutlineKind::Selected,
-                        ));
-                    }
-                    Ok(describe_edge(body, &r.model, found.index, m))
-                }
-                Err(e) => Err(e.to_string()),
-            },
-            None => Err(FeatureError::NotLoaded(r.model.clone()).to_string()),
-        });
+        out.edges.push(find(r, Kind::Edge).map(|(body, edge)| {
+            if let Some(pm) = scene.model(&r.model) {
+                out.highlight.lines.extend(edge_lines(
+                    pm.edges.get(edge as usize),
+                    body.topology().edge(edge).is_some_and(|e| e.closed),
+                    OutlineKind::Selected,
+                ));
+            }
+            describe_edge(body, &r.model, edge, m)
+        }));
     }
 
     // The boundary, drawn at the stock's top so it reads over everything. Worked

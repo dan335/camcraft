@@ -7,6 +7,7 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use crate::measure::Measure;
+use crate::widgets;
 
 /// What is remembered.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -24,21 +25,18 @@ impl Settings {
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                egui::Grid::new("settings")
-                    .num_columns(2)
-                    .spacing([12.0, 6.0])
-                    .show(ui, |ui| {
-                        ui.label("Units");
-                        ui.vertical(|ui| {
-                            for m in Measure::ALL {
-                                ui.radio_value(&mut self.measure, m, m.name());
-                            }
-                        });
-                        ui.end_row();
+                widgets::form(ui, "settings", |ui| {
+                    widgets::field_label(ui, "Units");
+                    ui.vertical(|ui| {
+                        for m in Measure::ALL {
+                            ui.radio_value(&mut self.measure, m, m.name());
+                        }
                     });
-                ui.weak(
+                    ui.end_row();
+                });
+                ui.label(widgets::hint_text(
                     "How the app shows lengths and feeds. Jobs and programs stay in millimetres.",
-                );
+                ));
             });
     }
 }

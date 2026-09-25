@@ -134,7 +134,7 @@ fn play(state: &mut SetupState, reverse: bool) {
 }
 
 /// Stop, and stand at `at`.
-fn stand(state: &mut SetupState, at: Playhead) {
+pub fn stand(state: &mut SetupState, at: Playhead) {
     state.view.transport.playing = false;
     state.view.at = at;
 }

@@ -10,7 +10,7 @@
 //! Toolpaths are instanced screen-space quads rather than GPU lines: a GPU line is
 //! one physical pixel, half a point on a Retina display, and too thin to read.
 //! Every segment is uploaded once per run, in machine order, so its instance index
-//! *is* its order. Visibility by role and operation, and the scrub, are then a
+//! *is* its order. Visibility by role and operation, and the playhead, are then a
 //! uniform the vertex shader reads, not a buffer rebuilt on every change.
 //!
 //! What is picked, and what is under the pointer, is drawn over the part: its faces
@@ -148,11 +148,11 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32, l: LineI
     let kind_on = ((f.masks.x >> l.kind) & 1u) == 1u;
     let is_move = l.kind < 7u;
     let op_on = l.op >= 32u || ((f.masks.y >> l.op) & 1u) == 1u;
-    let scrubbed = ii < f.masks.z;
+    let reached = ii < f.masks.z;
     let ca = f.view_proj * vec4<f32>(l.a, 1.0);
     let cb = f.view_proj * vec4<f32>(l.b, 1.0);
-    // Hidden, past the scrub, or crossing the eye: put it outside the clip volume.
-    if (!kind_on || (is_move && (!op_on || !scrubbed)) || ca.w <= 1e-6 || cb.w <= 1e-6) {
+    // Hidden, past the playhead, or crossing the eye: put it outside the clip volume.
+    if (!kind_on || (is_move && (!op_on || !reached)) || ca.w <= 1e-6 || cb.w <= 1e-6) {
         out.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
         return out;
     }
@@ -546,9 +546,8 @@ fn v3(p: DVec3) -> [f32; 3] {
     [narrow(p.x), narrow(p.y), narrow(p.z)]
 }
 
-/// Unshared vertices with a face normal each, so every triangle shades flat, as
-/// the web inspector did. Flat shading shows facets, which is honest about what
-/// the engine is cutting against.
+/// Unshared vertices with a face normal each, so every triangle shades flat. Flat
+/// shading shows facets, which is honest about what the engine is cutting against.
 fn flat_vertices(triangles: impl Iterator<Item = [Vec3; 3]>) -> Vec<Vertex> {
     let mut out = Vec::new();
     for [a, b, c] in triangles {
@@ -1084,13 +1083,18 @@ struct Uploaded {
     selection: Option<HighlightGpu>,
     hover: Option<HighlightGpu>,
     ghost: Option<HighlightGpu>,
-    scene: Option<u64>,
-    moves: Option<(wgpu::Buffer, u32)>,
+    scene: Option<SceneGpu>,
     outline: Option<(u64, wgpu::Buffer, u32)>,
-    /// One per operation; `None` where the job named no tool that could be drawn.
-    cutters: Vec<Option<(wgpu::Buffer, u32)>>,
     /// The height planes as uploaded: each one's fill, and all their edges.
     planes: Option<PlanesGpu>,
+}
+
+/// A run's toolpaths and cutters on the GPU, with the key they were made under.
+struct SceneGpu {
+    key: u64,
+    moves: Option<(wgpu::Buffer, u32)>,
+    /// One per operation; `None` where the job named no tool that could be drawn.
+    cutters: Vec<Option<(wgpu::Buffer, u32)>>,
 }
 
 /// Height planes on the GPU, with the planes they were made from.
@@ -1118,6 +1122,9 @@ struct StockGpu {
     key: (u64, usize),
     size: [u32; 2],
     tiles: Vec<TileGpu>,
+    /// How the tiles' grids colour the material, as last written; `None` before
+    /// they are.
+    grids: Option<ColorMode>,
 }
 
 struct Gpu {
@@ -1226,7 +1233,7 @@ impl Viewport {
                 egui::Align2::CENTER_CENTER,
                 "3D view needs a GPU (wgpu), which is not available",
                 theme::font(ui.style(), egui::TextStyle::Body),
-                ui.visuals().warn_fg_color,
+                crate::widgets::Level::Warn.color(),
             );
             return event;
         };
@@ -1326,7 +1333,7 @@ impl Viewport {
             );
         }
 
-        let faint = ui.visuals().weak_text_color();
+        let faint = theme::egui_color(theme::TEXT_3);
         if content.part.is_none() {
             ui.painter().text(
                 rect.center(),
@@ -1384,6 +1391,106 @@ struct FrameInput {
     view: View,
     /// Whether there is material to draw this frame.
     stock: bool,
+}
+
+/// What sets one of the viewport's pipelines apart: they share the targets, the
+/// sample count and everything else.
+struct PipelineSpec<'a> {
+    label: &'a str,
+    layout: &'a wgpu::PipelineLayout,
+    module: &'a wgpu::ShaderModule,
+    /// The vertex shader's entry point; the fragment shader's is `fs`.
+    vertex: &'a str,
+    buffers: &'a [Option<wgpu::VertexBufferLayout<'a>>],
+    blend: Option<wgpu::BlendState>,
+    depth_write: bool,
+    compare: wgpu::CompareFunction,
+    bias: wgpu::DepthBiasState,
+}
+
+/// A pipeline drawing triangles, unculled, into the offscreen targets.
+fn pipeline(device: &wgpu::Device, spec: &PipelineSpec<'_>) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(spec.label),
+        layout: Some(spec.layout),
+        vertex: wgpu::VertexState {
+            module: spec.module,
+            entry_point: Some(spec.vertex),
+            buffers: spec.buffers,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH,
+            depth_write_enabled: Some(spec.depth_write),
+            depth_compare: Some(spec.compare),
+            stencil: wgpu::StencilState::default(),
+            bias: spec.bias,
+        }),
+        multisample: wgpu::MultisampleState {
+            count: SAMPLES,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: spec.module,
+            entry_point: Some("fs"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: COLOR,
+                blend: spec.blend,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// `data` in a new vertex buffer, with how many items it holds.
+fn vertex_buffer<T: bytemuck::Pod>(
+    rs: &RenderState,
+    label: &str,
+    data: &[T],
+) -> (wgpu::Buffer, u32) {
+    let buffer = rs
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(label),
+            contents: bytemuck::cast_slice(data),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+    (buffer, u32::try_from(data.len()).unwrap_or(u32::MAX))
+}
+
+/// As [`vertex_buffer`], or nothing for no `data`: a buffer may not be empty, and
+/// an empty one would draw nothing anyway.
+fn vertex_buffer_of<T: bytemuck::Pod>(
+    rs: &RenderState,
+    label: &str,
+    data: &[T],
+) -> Option<(wgpu::Buffer, u32)> {
+    (!data.is_empty()).then(|| vertex_buffer(rs, label, data))
+}
+
+/// Keep `slot`, an upload made under a key, in step with `wanted`, the key it
+/// should be made under now and what from: made again by `make` when the key has
+/// changed, dropped when nothing is wanted, and otherwise left as it is.
+fn keep_up<K: PartialEq, W, U>(
+    slot: &mut Option<U>,
+    key: impl Fn(&U) -> K,
+    wanted: Option<(K, W)>,
+    make: impl FnOnce(K, W) -> Option<U>,
+) {
+    match wanted {
+        Some((k, w)) if slot.as_ref().map(key).as_ref() != Some(&k) => *slot = make(k, w),
+        Some(_) => {}
+        None => *slot = None,
+    }
 }
 
 impl Gpu {
@@ -1459,46 +1566,22 @@ impl Gpu {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
         };
+        let mesh_buffers = [Some(mesh_vertex)];
         let mesh_pipeline_biased = |label, blend, depth_write, compare, bias| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&mesh_layout),
-                vertex: wgpu::VertexState {
+            pipeline(
+                device,
+                &PipelineSpec {
+                    label,
+                    layout: &mesh_layout,
                     module: &mesh_module,
-                    entry_point: Some("vs"),
-                    buffers: &[Some(mesh_vertex.clone())],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH,
-                    depth_write_enabled: Some(depth_write),
-                    depth_compare: Some(compare),
-                    stencil: wgpu::StencilState::default(),
+                    vertex: "vs",
+                    buffers: &mesh_buffers,
+                    blend,
+                    depth_write,
+                    compare,
                     bias,
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: SAMPLES,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
                 },
-                fragment: Some(wgpu::FragmentState {
-                    module: &mesh_module,
-                    entry_point: Some("fs"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: COLOR,
-                        blend,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
+            )
         };
         let mesh_pipeline = |label, blend, depth_write, compare| {
             mesh_pipeline_biased(
@@ -1552,12 +1635,13 @@ impl Gpu {
             pull,
         );
 
-        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("camcraft lines"),
-            layout: Some(&line_layout),
-            vertex: wgpu::VertexState {
+        let line_pipeline = pipeline(
+            device,
+            &PipelineSpec {
+                label: "camcraft lines",
+                layout: &line_layout,
                 module: &line_module,
-                entry_point: Some("vs"),
+                vertex: "vs",
                 buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<LineInstance>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
@@ -1565,38 +1649,12 @@ impl Gpu {
                         0 => Float32x3, 1 => Float32x3, 2 => Uint32, 3 => Uint32
                     ],
                 })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: wgpu::StencilState::default(),
+                blend: None,
+                depth_write: true,
+                compare: wgpu::CompareFunction::LessEqual,
                 bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: SAMPLES,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &line_module,
-                entry_point: Some("fs"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: COLOR,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        );
 
         let stock_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("camcraft stock"),
@@ -1653,48 +1711,20 @@ impl Gpu {
                 bind_group_layouts: &[Some(&frame_layout), Some(&stock_layout)],
                 immediate_size: 0,
             });
-        let stock_pipeline = |label, entry| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&stock_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &stock_module,
-                    entry_point: Some(entry),
-                    buffers: &[],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::Less),
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: SAMPLES,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &stock_module,
-                    entry_point: Some("fs"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: COLOR,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let stock_pipeline = stock_pipeline("camcraft stock", "vs");
+        let stock_pipeline = pipeline(
+            device,
+            &PipelineSpec {
+                label: "camcraft stock",
+                layout: &stock_pipeline_layout,
+                module: &stock_module,
+                vertex: "vs",
+                buffers: &[],
+                blend: None,
+                depth_write: true,
+                compare: wgpu::CompareFunction::Less,
+                bias: wgpu::DepthBiasState::default(),
+            },
+        );
 
         Self {
             stock_pipeline,
@@ -1726,9 +1756,7 @@ impl Gpu {
                 hover: None,
                 ghost: None,
                 scene: None,
-                moves: None,
                 outline: None,
-                cutters: Vec::new(),
                 planes: None,
             },
         }
@@ -1765,7 +1793,15 @@ impl Gpu {
             StockChange::Cells(_) | StockChange::All => None,
         };
         if same && show.changed == StockChange::Nothing {
-            self.write_grids(rs, image, show.mode);
+            // Nothing in the image changed, so the grids stand unless the colours
+            // asked for did.
+            if self
+                .stock
+                .as_ref()
+                .is_some_and(|s| s.grids != Some(show.mode))
+            {
+                self.write_grids(rs, image, show.mode);
+            }
             return;
         }
         if self.stock.as_ref().is_none_or(|s| s.size != size) {
@@ -1773,7 +1809,12 @@ impl Gpu {
                 .into_iter()
                 .map(|t| self.tile_textures(rs, t, image))
                 .collect();
-            self.stock = Some(StockGpu { key, size, tiles });
+            self.stock = Some(StockGpu {
+                key,
+                size,
+                tiles,
+                grids: None,
+            });
         }
         let Some(gpu) = self.stock.as_mut() else {
             return;
@@ -1829,10 +1870,11 @@ impl Gpu {
     }
 
     /// Each tile's grid: where it is, how high its material stands, the colours.
-    fn write_grids(&self, rs: &RenderState, image: &StockImage, mode: ColorMode) {
-        let Some(gpu) = &self.stock else {
+    fn write_grids(&mut self, rs: &RenderState, image: &StockImage, mode: ColorMode) {
+        let Some(gpu) = &mut self.stock else {
             return;
         };
+        gpu.grids = Some(mode);
         let palette = palette();
         let floor = narrow(image.floor);
         for tile in &gpu.tiles {
@@ -1954,64 +1996,40 @@ impl Gpu {
     /// Upload whatever changed since the last frame.
     fn upload(&mut self, rs: &RenderState, content: &Content<'_>) {
         self.upload_stock(rs, content.stock.as_ref());
-        let vertices = |label, data: &[u8], usage| {
-            rs.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(label),
-                    contents: data,
-                    usage,
-                })
-        };
-        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
 
-        match content.part {
-            Some((g, mesh)) if self.up.part.as_ref().map(|p| p.0) != Some(g) => {
+        keep_up(
+            &mut self.up.part,
+            |p| p.0,
+            content.part,
+            |key, mesh| {
                 let v = flat_vertices(mesh_triangles(mesh));
-                let buf = vertices(
-                    "camcraft part",
-                    bytemuck::cast_slice(&v),
-                    wgpu::BufferUsages::VERTEX,
-                );
-                self.up.part = Some((g, buf, count(v.len())));
-            }
-            None => self.up.part = None,
-            _ => {}
-        }
+                let (buffer, n) = vertex_buffer(rs, "camcraft part", &v);
+                Some((key, buffer, n))
+            },
+        );
 
         for (slot, wanted) in [
             (&mut self.up.selection, content.selection),
             (&mut self.up.hover, content.hover),
             (&mut self.up.ghost, content.ghost),
         ] {
-            match wanted {
-                Some((key, h)) if slot.as_ref().map(|s| s.key) != Some(key) => {
+            keep_up(
+                slot,
+                |h| h.key,
+                wanted,
+                |key, h| {
                     let faces = flat_vertices(h.faces.iter().copied());
-                    let lines = outline_instances(&h.lines);
-                    let usage = wgpu::BufferUsages::VERTEX;
-                    // A buffer may not be empty: an empty half draws nothing instead.
-                    *slot = Some(HighlightGpu {
+                    Some(HighlightGpu {
                         key,
-                        faces: (!faces.is_empty()).then(|| {
-                            let buf = vertices(
-                                "camcraft picked faces",
-                                bytemuck::cast_slice(&faces),
-                                usage,
-                            );
-                            (buf, count(faces.len()))
-                        }),
-                        lines: (!lines.is_empty()).then(|| {
-                            let buf = vertices(
-                                "camcraft picked lines",
-                                bytemuck::cast_slice(&lines),
-                                usage,
-                            );
-                            (buf, count(lines.len()))
-                        }),
-                    });
-                }
-                None => *slot = None,
-                _ => {}
-            }
+                        faces: vertex_buffer_of(rs, "camcraft picked faces", &faces),
+                        lines: vertex_buffer_of(
+                            rs,
+                            "camcraft picked lines",
+                            &outline_instances(&h.lines),
+                        ),
+                    })
+                },
+            );
         }
 
         if content.planes.is_empty() {
@@ -2022,17 +2040,13 @@ impl Gpu {
             .as_ref()
             .is_none_or(|p| p.from != content.planes)
         {
-            let usage = wgpu::BufferUsages::VERTEX;
             let fills = content
                 .planes
                 .iter()
                 .map(|p| {
                     let [a, b, c, d] = p.corners().map(|c| Vec3::from(v3(c)));
                     let v = flat_vertices([[a, b, c], [a, c, d]].into_iter());
-                    (
-                        p.kind,
-                        vertices("camcraft plane", bytemuck::cast_slice(&v), usage),
-                    )
+                    (p.kind, vertex_buffer(rs, "camcraft plane", &v).0)
                 })
                 .collect();
             let edges: Vec<Outline> = content
@@ -2048,65 +2062,42 @@ impl Gpu {
                     })
                 })
                 .collect();
-            let lines = outline_instances(&edges);
             self.up.planes = Some(PlanesGpu {
                 from: content.planes.to_vec(),
                 fills,
-                lines: (
-                    vertices("camcraft plane edges", bytemuck::cast_slice(&lines), usage),
-                    count(lines.len()),
-                ),
+                lines: vertex_buffer(rs, "camcraft plane edges", &outline_instances(&edges)),
             });
         }
 
-        match content.outline {
-            Some((g, outline)) if self.up.outline.as_ref().map(|o| o.0) != Some(g) => {
+        keep_up(
+            &mut self.up.outline,
+            |o| o.0,
+            content.outline,
+            |key, outline| {
                 let lines = outline_instances(outline);
-                // A buffer may not be empty; an empty outline draws nothing instead.
-                self.up.outline = (!lines.is_empty()).then(|| {
-                    let buf = vertices(
-                        "camcraft outline",
-                        bytemuck::cast_slice(&lines),
-                        wgpu::BufferUsages::VERTEX,
-                    );
-                    (g, buf, count(lines.len()))
-                });
-            }
-            None => self.up.outline = None,
-            _ => {}
-        }
+                vertex_buffer_of(rs, "camcraft outline", &lines).map(|(buffer, n)| (key, buffer, n))
+            },
+        );
 
-        match content.scene {
-            Some((g, scene)) if self.up.scene != Some(g) => {
-                let moves = line_instances(scene);
-                let usage = wgpu::BufferUsages::VERTEX;
-                // A buffer may not be empty; an empty scene draws nothing instead.
-                self.up.moves = (!moves.is_empty()).then(|| {
-                    (
-                        vertices("camcraft moves", bytemuck::cast_slice(&moves), usage),
-                        count(moves.len()),
-                    )
-                });
-                self.up.cutters = scene
-                    .ops
-                    .iter()
-                    .map(|op| {
-                        let v = flat_vertices(op.cutter.iter().copied());
-                        (!v.is_empty()).then(|| {
-                            let buf = vertices("camcraft cutter", bytemuck::cast_slice(&v), usage);
-                            (buf, count(v.len()))
+        keep_up(
+            &mut self.up.scene,
+            |s| s.key,
+            content.scene,
+            |key, scene| {
+                Some(SceneGpu {
+                    key,
+                    moves: vertex_buffer_of(rs, "camcraft moves", &line_instances(scene)),
+                    cutters: scene
+                        .ops
+                        .iter()
+                        .map(|op| {
+                            let v = flat_vertices(op.cutter.iter().copied());
+                            vertex_buffer_of(rs, "camcraft cutter", &v)
                         })
-                    })
-                    .collect();
-                self.up.scene = Some(g);
-            }
-            None => {
-                self.up.scene = None;
-                self.up.moves = None;
-                self.up.cutters.clear();
-            }
-            _ => {}
-        }
+                        .collect(),
+                })
+            },
+        );
     }
 
     /// Make sure the offscreen targets are `size`, and that egui knows the texture.
@@ -2194,14 +2185,14 @@ impl Gpu {
             *slot = theme::linear(theme::role_srgb(role)).into_rgba();
         }
         for (kind, color) in [
-            (STOCK, theme::GRAY_7),
+            (STOCK, theme::MATERIAL),
             (AXIS_X, theme::AXIS_X),
             (AXIS_Y, theme::AXIS_Y),
             (AXIS_Z, theme::AXIS_Z),
             (SELECTED, theme::SELECTED),
             (HOVER, theme::HOVER),
             (BOUNDARY, theme::BOUNDARY),
-            (GHOST, theme::GRAY_5),
+            (GHOST, theme::GHOST),
             (CLEARANCE, PlaneKind::Clearance.color()),
             (TOP, PlaneKind::Top.color()),
             (BOTTOM, PlaneKind::Bottom.color()),
@@ -2224,7 +2215,7 @@ impl Gpu {
         let shown = u32::try_from(view.shown).unwrap_or(u32::MAX);
         let frame = FrameUniforms {
             view_proj: input.view_proj.to_cols_array_2d(),
-            // From the front right and above, as the inspector lit it.
+            // From the front right and above, where the camera starts.
             light: Vec3::new(0.4, -0.7, 0.9).normalize().extend(0.0).to_array(),
             viewport: [input.pixels[0], input.pixels[1], input.line_width, 2e-4],
             masks: [kinds, view.ops, shown, 0],
@@ -2418,7 +2409,7 @@ impl Gpu {
             }
 
             pass.set_pipeline(&self.line_pipeline);
-            if let Some((buffer, n)) = &self.up.moves {
+            if let Some((buffer, n)) = self.up.scene.as_ref().and_then(|s| s.moves.as_ref()) {
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..6, 0..(*n).min(shown));
             }
@@ -2445,7 +2436,8 @@ impl Gpu {
             // Only where it is in sight: the material and the part hide it as they
             // would the real tool.
             if let Some((op, _)) = view.cutter
-                && let Some(Some((buffer, n))) = self.up.cutters.get(op)
+                && let Some(Some((buffer, n))) =
+                    self.up.scene.as_ref().and_then(|s| s.cutters.get(op))
             {
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.set_pipeline(&self.cutter_pipeline);
@@ -2536,7 +2528,7 @@ mod tests {
     }
 
     /// The instance buffer is the scene in order, so the GPU's instance index is
-    /// the move's place in the program, which is what the scrub compares against.
+    /// the move's place in the program, which is what the playhead compares against.
     #[test]
     fn line_instances_keep_machine_order_and_roles() {
         use crate::scene::{Scene, Segment};

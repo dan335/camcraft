@@ -7,11 +7,14 @@
 //! copied into the operation.
 
 use camcraft_core::job::{Job, ToolSpec};
-use camcraft_session::library::{Folder, FolderPath, folder_label};
+use camcraft_session::library::{Folder, FolderPath, folder_label, tool_matches};
 use eframe::egui;
 
 use crate::measure::Measure;
-use crate::tool_editor::{kind_name, paint_tool};
+use crate::theme;
+use crate::tool_drawing::{kind_name, paint_tool};
+use crate::tool_manager::{column_header, dim, name_cell, number, number_cell, tool_table};
+use crate::widgets::hint_text;
 use crate::worker::DocId;
 
 /// Where the table's tools come from.
@@ -30,6 +33,22 @@ pub enum Picked {
     Job(String),
     /// A library tool: its name there, and what it is.
     Library(String, Box<ToolSpec>),
+}
+
+/// What the picker has come to.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Outcome {
+    /// Nothing yet: it is still open.
+    Open,
+    /// Closed without choosing.
+    Cancelled,
+    /// A tool, and which of its presets to copy into the operation, if any.
+    Chosen {
+        /// The tool.
+        tool: Picked,
+        /// Its preset, by name.
+        preset: Option<String>,
+    },
 }
 
 /// The picker, while it is open.
@@ -71,16 +90,15 @@ impl ToolPicker {
         }
     }
 
-    /// Draw it. `Some(Some(_))` once a tool and maybe a preset are chosen,
-    /// `Some(None)` if cancelled, `None` while still open.
+    /// Draw it, and say what it has come to.
     pub fn show(
         &mut self,
         ctx: &egui::Context,
         job: &Job,
         library: &Folder,
         m: Measure,
-    ) -> Option<Option<(Picked, Option<String>)>> {
-        let mut outcome = None;
+    ) -> Outcome {
+        let mut outcome = Outcome::Open;
         let modal = egui::Modal::new(egui::Id::new("tool-picker")).show(ctx, |ui| {
             // A fixed size throughout. The tool's picture fills the width it is
             // given and a divider the height, and a window sizes itself to what it
@@ -103,10 +121,7 @@ impl ToolPicker {
                 ui.vertical(|ui| {
                     ui.set_width(380.0);
                     ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("filter"));
-                    egui::ScrollArea::vertical()
-                        .id_salt("picker-tools")
-                        .max_height(body.y - 30.0)
-                        .show(ui, |ui| self.table(ui, job, library, m));
+                    self.table(ui, job, library, m, body.y - 30.0);
                 });
                 ui.separator();
                 ui.vertical(|ui| {
@@ -117,7 +132,7 @@ impl ToolPicker {
                         ui.add_space(6.0);
                         self.preset_choice(ui, tool);
                     } else {
-                        ui.weak("Choose a tool to see it.");
+                        ui.label(hint_text("Choose a tool to see it."));
                     }
                 });
             });
@@ -127,19 +142,25 @@ impl ToolPicker {
                 if ui
                     .add_enabled(picked.is_some(), egui::Button::new("Use this tool"))
                     .clicked()
+                    && let Some(tool) = picked
                 {
-                    outcome = Some(picked.map(|p| (p, self.preset.clone())));
+                    outcome = Outcome::Chosen {
+                        tool,
+                        preset: self.preset.clone(),
+                    };
                 }
                 if ui.button("Cancel").clicked() {
-                    outcome = Some(None);
+                    outcome = Outcome::Cancelled;
                 }
                 if matches!(self.chosen, Some((Source::Library(_), _, _))) {
-                    ui.weak("A copy goes into the job; the library is not linked.");
+                    ui.label(hint_text(
+                        "A copy goes into the job; the library is not linked.",
+                    ));
                 }
             });
         });
-        if outcome.is_none() && modal.should_close() {
-            outcome = Some(None);
+        if outcome == Outcome::Open && modal.should_close() {
+            outcome = Outcome::Cancelled;
         }
         outcome
     }
@@ -153,7 +174,7 @@ impl ToolPicker {
             self.source = Source::Job;
         }
         ui.add_space(6.0);
-        ui.weak("Library");
+        ui.label(hint_text("Library"));
         for path in library.folder_paths() {
             let count = library.at(&path).map_or(0, Folder::count);
             let name = path.last().map_or("Library", String::as_str);
@@ -178,74 +199,95 @@ impl ToolPicker {
         &self,
         job: &'a Job,
         library: &'a Folder,
-    ) -> Vec<(FolderPath, &'a String, &'a ToolSpec)> {
-        let filter = self.filter.to_lowercase();
-        let keep = |n: &String, t: &ToolSpec| {
-            filter.is_empty()
-                || n.to_lowercase().contains(&filter)
-                || t.comment.to_lowercase().contains(&filter)
-        };
-        let mut rows: Vec<(FolderPath, &String, &ToolSpec)> = match &self.source {
+    ) -> Vec<(FolderPath, &'a str, &'a ToolSpec)> {
+        let mut rows: Vec<(FolderPath, &str, &ToolSpec)> = match &self.source {
             Source::Job => job
                 .tools
                 .iter()
-                .filter(|(n, t)| keep(n, t))
-                .map(|(n, t)| (Vec::new(), n, t))
+                .filter(|(n, t)| tool_matches(n, t, &self.filter))
+                .map(|(n, t)| (Vec::new(), n.as_str(), t))
                 .collect(),
             Source::Library(path) => {
                 let Some(here) = library.at(path) else {
                     return Vec::new();
                 };
-                here.folder_paths()
-                    .into_iter()
-                    .filter_map(|sub| here.at(&sub).map(|f| (sub, f)))
-                    .flat_map(|(sub, f)| f.tools.iter().map(move |(n, t)| (sub.clone(), n, t)))
-                    .filter(|(_, n, t)| keep(n, t))
-                    .collect()
+                here.find(true, &self.filter)
             }
         };
-        rows.sort_by_key(|(f, n, t)| (t.number, f.clone(), (*n).clone()));
+        rows.sort_by_key(|(f, n, t)| (t.number, f.clone(), *n));
         rows
     }
 
-    fn table(&mut self, ui: &mut egui::Ui, job: &Job, library: &Folder, m: Measure) {
+    /// The tools of the source showing, as the tool library lists them, in a
+    /// table at most `height` tall. Clicking one chooses it.
+    fn table(&mut self, ui: &mut egui::Ui, job: &Job, library: &Folder, m: Measure, height: f32) {
         let rows = self.rows(job, library);
         if rows.is_empty() {
-            ui.weak(match self.source {
+            ui.label(hint_text(match self.source {
                 Source::Job => "The job has no tools yet: choose one from the library.",
                 Source::Library(_) => "No tools here. Add them in the tool library.",
-            });
+            }));
             return;
         }
         let mut clicked = None;
-        egui::Grid::new("picker-tools")
-            .striped(true)
-            .num_columns(5)
-            .show(ui, |ui| {
-                ui.strong("T");
-                ui.strong("name");
-                ui.strong("type");
-                ui.strong(format!("Ø {}", m.unit()));
-                ui.strong("in");
-                ui.end_row();
+        let right = egui::Layout::right_to_left(egui::Align::Center);
+        tool_table(ui, "picker-tools", egui::Sense::click())
+            .max_scroll_height(height)
+            .column(egui_extras::Column::exact(44.0))
+            .column(
+                egui_extras::Column::initial(132.0)
+                    .at_least(72.0)
+                    .clip(true),
+            )
+            .column(egui_extras::Column::initial(84.0).at_least(56.0).clip(true))
+            .column(egui_extras::Column::exact(56.0))
+            .column(egui_extras::Column::remainder().at_least(40.0).clip(true))
+            .header(theme::CONTROL_MD, |mut header| {
+                header.col(|ui| {
+                    ui.add_space(theme::SPACE_3);
+                    column_header(ui, "T", None, None, false);
+                });
+                header.col(|ui| {
+                    column_header(ui, "Name", None, None, false);
+                });
+                header.col(|ui| {
+                    column_header(ui, "Type", None, None, false);
+                });
+                header.col(|ui| {
+                    column_header(ui, "Ø", Some(m.unit()), None, true);
+                });
+                header.col(|ui| {
+                    column_header(ui, "In", None, None, false);
+                });
+            })
+            .body(|mut body| {
                 for (sub, name, tool) in rows {
-                    ui.label(format!("T{}", tool.number));
                     let is = self
                         .chosen
                         .as_ref()
                         .is_some_and(|(s, f, n)| *s == self.source && *f == sub && n == name);
-                    let r = ui.selectable_label(is, name.as_str());
-                    if r.clicked() {
-                        clicked = Some((sub.clone(), name.clone()));
-                    }
-                    ui.label(kind_name(tool.kind));
-                    ui.label(m.number(tool.diameter, 2));
-                    ui.weak(if sub.is_empty() {
-                        String::new()
-                    } else {
-                        folder_label(&sub)
+                    body.row(theme::CONTROL_MD, |mut row| {
+                        row.set_selected(is);
+                        row.col(|ui| number_cell(ui, tool.number, is));
+                        row.col(|ui| name_cell(ui, name, is));
+                        row.col(|ui| {
+                            ui.add(dim(kind_name(tool.kind).to_string()).selectable(false));
+                        });
+                        row.col(|ui| {
+                            ui.with_layout(right, |ui| ui.add(number(m.number(tool.diameter, 2))));
+                        });
+                        row.col(|ui| {
+                            let folder = if sub.is_empty() {
+                                String::new()
+                            } else {
+                                folder_label(&sub)
+                            };
+                            ui.add(dim(folder).selectable(false));
+                        });
+                        if row.response().clicked() {
+                            clicked = Some((sub.clone(), name.to_string()));
+                        }
                     });
-                    ui.end_row();
                 }
             });
         if let Some((sub, name)) = clicked {
@@ -267,7 +309,9 @@ impl ToolPicker {
             self.preset = None;
         }
         if tool.presets.is_empty() {
-            ui.weak("This tool has no presets; the operation keeps its speeds and feeds.");
+            ui.label(hint_text(
+                "This tool has no presets; the operation keeps its speeds and feeds.",
+            ));
             return;
         }
         ui.label("Preset");
@@ -286,9 +330,9 @@ impl ToolPicker {
             });
         if let Some(p) = self.preset.as_ref().and_then(|n| tool.preset(n)) {
             if !p.comment.is_empty() {
-                ui.weak(&p.comment);
+                ui.label(hint_text(&p.comment));
             }
-            ui.weak("Its values are copied into the operation.");
+            ui.label(hint_text("Its values are copied into the operation."));
         }
     }
 

@@ -18,9 +18,9 @@ const MODELS: &str = "Models (STEP, STL)";
 const PROFILES: &str = "Machine profiles (TOML)";
 const TOOLS: &str = "Fusion tool libraries (CSV)";
 
-/// What a pick is for.
+/// What the dialog is opened for.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Pick {
+pub enum FileRequest {
     /// Job files to open, each in its own tab.
     OpenJobs,
     /// Where to save job `doc`.
@@ -76,28 +76,28 @@ impl AppFileDialog {
         Self { dialog }
     }
 
-    /// Start picking for `pick`. `name` is the file name a save starts with.
-    pub fn open(&mut self, pick: Pick, name: &str) {
+    /// Open the dialog for `request`. `name` is the file name a save starts with.
+    pub fn open(&mut self, request: FileRequest, name: &str) {
         let config = self.dialog.config_mut();
-        let (title, filter) = match &pick {
-            Pick::OpenJobs => ("Open jobs", JOBS),
-            Pick::SaveJob(_) => ("Save job as", JOBS),
-            Pick::AddModels(..) => ("Add models", MODELS),
-            Pick::Locate(_, _) => ("Find the model", MODELS),
-            Pick::Profile(_, _) => ("Choose a machine profile", PROFILES),
-            Pick::PostTo(_, _) => ("Post programs into", PROFILES),
-            Pick::ImportTools => ("Import Fusion tool libraries", TOOLS),
+        let (title, filter) = match &request {
+            FileRequest::OpenJobs => ("Open jobs", JOBS),
+            FileRequest::SaveJob(_) => ("Save job as", JOBS),
+            FileRequest::AddModels(..) => ("Add models", MODELS),
+            FileRequest::Locate(_, _) => ("Find the model", MODELS),
+            FileRequest::Profile(_, _) => ("Choose a machine profile", PROFILES),
+            FileRequest::PostTo(_, _) => ("Post programs into", PROFILES),
+            FileRequest::ImportTools => ("Import Fusion tool libraries", TOOLS),
         };
         config.title = Some(title.to_owned());
         config.default_file_filter = Some(filter.to_owned());
         config.default_file_name = name.to_owned();
         let many = matches!(
-            pick,
-            Pick::OpenJobs | Pick::AddModels(..) | Pick::ImportTools
+            request,
+            FileRequest::OpenJobs | FileRequest::AddModels(..) | FileRequest::ImportTools
         );
-        let save = matches!(pick, Pick::SaveJob(_));
-        let folder = matches!(pick, Pick::PostTo(_, _));
-        self.dialog.set_user_data(pick);
+        let save = matches!(request, FileRequest::SaveJob(_));
+        let folder = matches!(request, FileRequest::PostTo(_, _));
+        self.dialog.set_user_data(request);
         if folder {
             self.dialog.pick_directory();
         } else if save {
@@ -109,17 +109,18 @@ impl AppFileDialog {
         }
     }
 
-    /// Draw the dialog, and hand back a finished pick with what it was for.
-    pub fn update(&mut self, ctx: &egui::Context) -> Option<(Pick, Vec<PathBuf>)> {
+    /// Draw the dialog, and hand back the paths chosen, once they are, with the
+    /// request they answer.
+    pub fn update(&mut self, ctx: &egui::Context) -> Option<(FileRequest, Vec<PathBuf>)> {
         self.dialog.update(ctx);
-        let pick = self.dialog.user_data::<Pick>()?.clone();
-        let paths = match pick {
-            Pick::OpenJobs | Pick::AddModels(..) | Pick::ImportTools => {
+        let request = self.dialog.user_data::<FileRequest>()?.clone();
+        let paths = match request {
+            FileRequest::OpenJobs | FileRequest::AddModels(..) | FileRequest::ImportTools => {
                 self.dialog.take_picked_multiple()?
             }
             _ => vec![self.dialog.take_picked()?],
         };
-        Some((pick, paths))
+        Some((request, paths))
     }
 
     /// What to remember between runs of the app.

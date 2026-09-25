@@ -5,12 +5,12 @@
 use camcraft_core::job::{Along, BoxOf, Origin};
 use eframe::egui;
 
-use super::{Picks, PropAction, error, quiet};
+use super::{Picks, PropAction};
 use crate::measure::Measure;
 use crate::pick::describe_box_point;
 use crate::slots::Slot;
 use crate::theme;
-use crate::widgets::{self, Icon, Size, Variant, form};
+use crate::widgets::{self, Icon, Size, Variant, error, form, hint};
 
 /// What the work zero is measured from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,7 +70,7 @@ pub(super) fn show(
                 Variant::Ghost,
                 Size::Sm,
                 Some(Icon::MousePointerClick),
-                "Pick in view",
+                "Select in view…",
             )
             .on_hover_text("a corner, a round edge's centre, or a corner or side of the stock")
             .clicked()
@@ -100,14 +100,14 @@ pub(super) fn show(
                         BoxOf::Stock => "stock",
                         BoxOf::Model => "models' box",
                     };
-                    quiet(
+                    hint(
                         ui,
                         &format!("The {what}'s {}.", describe_box_point(*x, *y, *z)),
                     );
                 }
                 Origin::Point { .. } => picked_row(ui, origin, picks),
                 Origin::ModelOrigin { .. } => {
-                    quiet(ui, "Where the design's own zero is, turned with the part.");
+                    hint(ui, "Where the design's own zero is, turned with the part.");
                 }
             }
             ui.add_space(theme::SPACE_3);
@@ -249,7 +249,7 @@ fn picked_row(ui: &mut egui::Ui, origin: &mut Origin, picks: Picks<'_>) {
                 error(ui, why);
             }
             None => {
-                quiet(ui, "the model is not loaded yet");
+                hint(ui, "the model is not loaded yet");
             }
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

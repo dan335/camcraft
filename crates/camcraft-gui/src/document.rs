@@ -19,7 +19,7 @@ use camcraft_core::job::{
     Job, LengthUnit, ModelDef, Operation, Origin, Setup, StockDef, StockSpec, StrategySpec,
     ToolSpec,
 };
-use camcraft_core::run::{Made, Plan, Stage};
+use camcraft_core::run::{Made, OperationResult, Plan, Stage};
 use camcraft_core::setup::{Bodies, PrepareError, Prepared, prepare};
 use camcraft_geom::bvh::MeshBvh;
 use camcraft_session::fs::{job_dir, relative_path, resolve, with_job_extension};
@@ -191,17 +191,74 @@ impl SetupInputs {
 
     /// The part of this that decides where the part and stock sit: not the
     /// operations or their tools.
-    fn layout(&self) -> Self {
-        let mut setup = self.setup.clone();
-        setup.operations.clear();
-        Self {
-            tolerance: self.tolerance,
-            setup,
-            tools: BTreeMap::new(),
-            stocks: self.stocks.clone(),
-            models: self.models.clone(),
-        }
+    fn into_layout(mut self) -> Self {
+        self.setup.operations.clear();
+        self.tools.clear();
+        self
     }
+
+    /// Whether these are what setup `index` of `job` is made from now, with the
+    /// models `loaded`: `SetupInputs::of(job, loaded, index) == Some(self)`, found
+    /// without copying the setup. The tree asks for every operation every frame.
+    fn is_now(&self, job: &Job, loaded: &BTreeMap<String, ModelSlot>, index: usize) -> bool {
+        let Some(setup) = job.setups.get(index) else {
+            return false;
+        };
+        // With the same operations, the tools taken are the ones they name: each
+        // must be as it was, or missing as it was.
+        self.setup.operations == setup.operations
+            && setup
+                .operations
+                .iter()
+                .filter_map(|op| op.tool.as_ref())
+                .all(|t| self.tools.get(t) == job.tools.get(t))
+            && self.layout_is_now(job, loaded, index)
+    }
+
+    /// Whether the part of these that decides where the part and stock sit (see
+    /// [`SetupInputs::into_layout`]) is as setup `index` of `job` has it now.
+    fn layout_is_now(&self, job: &Job, loaded: &BTreeMap<String, ModelSlot>, index: usize) -> bool {
+        let Some(setup) = job.setups.get(index) else {
+            return false;
+        };
+        let models = job.models_for(index);
+        let models_now = models
+            .iter()
+            .map(|m| (*m, loaded.get(&m.name).map(ModelSlot::key)));
+        self.tolerance == job.tolerance.to_bits()
+            && same_but_operations(&self.setup, setup)
+            && self
+                .stocks
+                .iter()
+                .eq(setup.stocks.iter().filter_map(|s| job.stock(s)))
+            && self
+                .models
+                .iter()
+                .map(|(m, key)| (m, key.as_ref()))
+                .eq(models_now)
+    }
+}
+
+/// Whether two setups are the same but for their operations. Every field is named,
+/// so one added to `Setup` has to be decided on here.
+fn same_but_operations(a: &Setup, b: &Setup) -> bool {
+    let Setup {
+        name,
+        models,
+        stocks,
+        wcs,
+        post,
+        orientation,
+        origin,
+        operations: _,
+    } = a;
+    *name == b.name
+        && *models == b.models
+        && *stocks == b.stocks
+        && *wcs == b.wcs
+        && *post == b.post
+        && *orientation == b.orientation
+        && *origin == b.origin
 }
 
 /// A setup's last run, and what is drawn from it.
@@ -232,19 +289,19 @@ pub struct Layout {
     pub key: u64,
 }
 
-/// How a setup is being looked at: its own camera, scrub and choices, kept while
-/// another is shown.
+/// How a setup is being looked at: its own camera, playhead and choices, kept
+/// while another is shown.
 #[derive(Debug, Clone)]
 pub struct SetupView {
     /// The camera, once it has been shown.
     pub camera: Option<Camera>,
     /// Frames the camera once, on the first layout that has a part.
     pub framing: u64,
-    /// Where the program stands: the scrub, and what playback moves.
+    /// Where the program stands: what the timeline, the keys and playback move.
     pub at: Playhead,
     /// Playing, and how.
     pub transport: Transport,
-    /// The cutter at the scrub.
+    /// The cutter at the playhead.
     pub show_cutter: bool,
     /// All toolpaths at once, over the per-role choices.
     pub show_paths: bool,
@@ -579,7 +636,7 @@ impl Document {
     /// Have setup `setup` machine `names` too, and show it: models added from its
     /// panel are added to it.
     pub fn include_models(&mut self, setup: &str, names: &[String]) {
-        let Some(s) = self.job.setups.iter_mut().find(|s| s.name == setup) else {
+        let Some(s) = self.setup_mut(setup) else {
             return;
         };
         for n in names {
@@ -727,6 +784,26 @@ impl Document {
         self.job.setups.iter().position(|s| s.name == name)
     }
 
+    /// Setup `name`.
+    pub fn setup(&self, name: &str) -> Option<&Setup> {
+        self.job.setups.iter().find(|s| s.name == name)
+    }
+
+    /// Setup `name`, to change.
+    pub fn setup_mut(&mut self, name: &str) -> Option<&mut Setup> {
+        self.job.setups.iter_mut().find(|s| s.name == name)
+    }
+
+    /// Operation `index` of setup `setup`.
+    pub fn operation(&self, setup: &str, index: usize) -> Option<&Operation> {
+        self.setup(setup)?.operations.get(index)
+    }
+
+    /// Operation `index` of setup `setup`, to change.
+    pub fn operation_mut(&mut self, setup: &str, index: usize) -> Option<&mut Operation> {
+        self.setup_mut(setup)?.operations.get_mut(index)
+    }
+
     /// Add a setup machining every model, from the first stock.
     pub fn add_setup(&mut self) -> String {
         let name = free("Setup", self.job.setups.iter().map(|s| s.name.as_str()));
@@ -764,7 +841,7 @@ impl Document {
         if to == from {
             return Ok(());
         }
-        let Some(s) = self.job.setups.iter_mut().find(|s| s.name == from) else {
+        let Some(s) = self.setup_mut(from) else {
             return Err(format!("there is no setup '{from}'"));
         };
         s.name.clone_from(&to);
@@ -845,7 +922,7 @@ impl Document {
 
     /// A copy of an operation, after it.
     pub fn duplicate_operation(&mut self, setup: &str, index: usize) {
-        let Some(s) = self.job.setups.iter_mut().find(|s| s.name == setup) else {
+        let Some(s) = self.setup_mut(setup) else {
             return;
         };
         let Some(mut op) = s.operations.get(index).cloned() else {
@@ -861,7 +938,7 @@ impl Document {
 
     /// Remove an operation.
     pub fn remove_operation(&mut self, setup: &str, index: usize) {
-        if let Some(s) = self.job.setups.iter_mut().find(|s| s.name == setup)
+        if let Some(s) = self.setup_mut(setup)
             && index < s.operations.len()
         {
             s.operations.remove(index);
@@ -872,7 +949,7 @@ impl Document {
     /// Move operation `from` of `setup` so it is at `to`, the others closing up
     /// behind it and making room; the selection stays on the operation it was on.
     pub fn reorder_operation(&mut self, setup: &str, from: usize, to: usize) {
-        let Some(s) = self.job.setups.iter_mut().find(|s| s.name == setup) else {
+        let Some(s) = self.setup_mut(setup) else {
             return;
         };
         let n = s.operations.len();
@@ -896,8 +973,7 @@ impl Document {
     pub fn move_operation_to(&mut self, from_setup: &str, from: usize, to_setup: &str, to: usize) {
         if from_setup == to_setup {
             let last = self
-                .setup_index(from_setup)
-                .and_then(|i| self.job.setups.get(i))
+                .setup(from_setup)
                 .map_or(0, |s| s.operations.len().saturating_sub(1));
             self.reorder_operation(from_setup, from, to.min(last));
             return;
@@ -925,7 +1001,7 @@ impl Document {
 
     /// Move an operation up (`-1`) or down (`1`) within its setup.
     pub fn move_operation(&mut self, setup: &str, index: usize, by: isize) {
-        if let Some(s) = self.job.setups.iter_mut().find(|s| s.name == setup)
+        if let Some(s) = self.setup_mut(setup)
             && let Some(to) = shift(&mut s.operations, index, by)
         {
             self.selection = Selection::Operation(setup.to_string(), to);
@@ -951,13 +1027,7 @@ impl Document {
     /// no longer names a preset.
     pub fn use_tool(&mut self, setup: &str, op: usize, tool: String, preset: Option<&str>) {
         let preset = preset.and_then(|p| self.job.tools.get(&tool)?.preset(p).cloned());
-        let Some(o) = self
-            .job
-            .setups
-            .iter_mut()
-            .find(|s| s.name == setup)
-            .and_then(|s| s.operations.get_mut(op))
-        else {
+        let Some(o) = self.operation_mut(setup, op) else {
             return;
         };
         o.tool = Some(tool);
@@ -1095,12 +1165,7 @@ impl Document {
             Selection::Model(m) => self.job.model(m).is_some(),
             Selection::Stock(s) => self.job.stock(s).is_some(),
             Selection::Setup(s) => setups.contains(&s.as_str()),
-            Selection::Operation(s, i) => self
-                .job
-                .setups
-                .iter()
-                .find(|x| x.name == *s)
-                .is_some_and(|x| *i < x.operations.len()),
+            Selection::Operation(s, i) => self.operation(s, *i).is_some(),
             _ => true,
         };
         if !ok {
@@ -1127,26 +1192,25 @@ impl Document {
             .collect()
     }
 
-    /// Why setup `index` cannot run now, if it cannot.
-    pub fn cannot_run(&self, index: usize) -> Option<String> {
-        self.cannot_generate(index, None)
-    }
-
-    /// Why setup `index`, or its operation `only` alone, cannot be generated
-    /// now, if it cannot. Only the operations the run would work out or keep
-    /// are checked: the rest are left out, and may be unfinished.
-    pub fn cannot_generate(&self, index: usize, only: Option<usize>) -> Option<String> {
+    /// Why setup `name`, or its operation `only` alone, cannot be generated
+    /// now, if it cannot; nothing for a setup there is not. Only the operations
+    /// the run would work out or keep are checked: the rest are left out, and may
+    /// be unfinished.
+    pub fn cannot_generate(&self, name: &str, only: Option<usize>) -> Option<String> {
+        let index = self.setup_index(name)?;
+        let setup = self.job.setups.get(index)?;
         if let Some(k) = only
-            && self
-                .job
-                .setups
-                .get(index)
-                .and_then(|s| s.operations.get(k))
-                .is_some_and(|o| !o.enabled)
+            && setup.operations.get(k).is_some_and(|o| !o.enabled)
         {
             return Some("it is turned off".into());
         }
-        if let Err(e) = check_runnable(&self.job, index, &self.plans(index, only)) {
+        // Which operations the run works out or keeps, as `plans` has them, asked
+        // of each without copying what would be kept: this is asked every frame.
+        let runs = |i: usize| match only {
+            Some(k) => i == k || self.kept(setup, i).is_some(),
+            None => true,
+        };
+        if let Err(e) = check_runnable(&self.job, index, &runs) {
             return Some(e.to_string());
         }
         for m in self.job.models_for(index) {
@@ -1167,20 +1231,28 @@ impl Document {
         let (Some(k), Some(setup)) = (only, self.job.setups.get(index)) else {
             return Vec::new();
         };
-        let ran = self.setups.get(&setup.name).and_then(|s| s.ran.as_ref());
         (0..setup.operations.len())
             .map(|i| {
                 if i == k {
                     return Plan::Generate;
                 }
-                match ran.and_then(|r| r.ran.result.operations.get(i)) {
-                    Some(op) if op.made.has_paths() && self.op_unchanged(&setup.name, i) => {
-                        Plan::Keep(Box::new(op.clone()))
-                    }
-                    _ => Plan::Skip,
+                match self.kept(setup, i) {
+                    Some(op) => Plan::Keep(Box::new(op.clone())),
+                    None => Plan::Skip,
                 }
             })
             .collect()
+    }
+
+    /// What `setup` last made of its operation `i`, if a run of another operation
+    /// alone can keep it: it has paths, and nothing it was made from has changed.
+    fn kept(&self, setup: &Setup, i: usize) -> Option<&OperationResult> {
+        let ran = self.setups.get(&setup.name)?.ran.as_ref()?;
+        ran.ran
+            .result
+            .operations
+            .get(i)
+            .filter(|op| op.made.has_paths() && self.op_unchanged(&setup.name, i))
     }
 
     /// Whether operation `i` of setup `name` is as it was when the setup last
@@ -1191,30 +1263,22 @@ impl Document {
             .get(name)
             .and_then(|s| s.ran.as_ref())
             .map(|r| &r.inputs);
-        let now = self
-            .setup_index(name)
-            .and_then(|x| SetupInputs::of(&self.job, &self.models, x));
-        let (Some(then), Some(now)) = (then, now) else {
+        let (Some(then), Some(index)) = (then, self.setup_index(name)) else {
             return false;
         };
-        let (Some(a), Some(b)) = (then.setup.operations.get(i), now.setup.operations.get(i)) else {
+        let now = self.job.setups.get(index).and_then(|s| s.operations.get(i));
+        let (Some(a), Some(b)) = (then.setup.operations.get(i), now) else {
             return false;
         };
-        let tool = |inputs: &SetupInputs, op: &Operation| {
-            op.tool.as_ref().map(|t| inputs.tools.get(t).cloned())
-        };
-        a == b && tool(then, a) == tool(&now, b) && then.layout() == now.layout()
+        // The tool as it was taken then, and as the job has it now.
+        let tool_then = a.tool.as_ref().map(|t| then.tools.get(t));
+        let tool_now = b.tool.as_ref().map(|t| self.job.tools.get(t));
+        a == b && tool_then == tool_now && then.layout_is_now(&self.job, &self.models, index)
     }
 
     /// Turn operation `index` of `setup` on or off.
     pub fn set_enabled(&mut self, setup: &str, index: usize, on: bool) {
-        if let Some(op) = self
-            .job
-            .setups
-            .iter_mut()
-            .find(|s| s.name == setup)
-            .and_then(|s| s.operations.get_mut(index))
-        {
+        if let Some(op) = self.operation_mut(setup, index) {
             op.enabled = on;
         }
     }
@@ -1243,10 +1307,7 @@ impl Document {
 
     /// Where operation `index` of setup `name` stands.
     pub fn op_status(&self, name: &str, index: usize) -> OpStatus {
-        let off = self
-            .setup_index(name)
-            .and_then(|i| self.job.setups.get(i)?.operations.get(index))
-            .is_some_and(|o| !o.enabled);
+        let off = self.operation(name, index).is_some_and(|o| !o.enabled);
         if off {
             return OpStatus::Disabled;
         }
@@ -1356,7 +1417,7 @@ impl Document {
         };
         let now = self
             .setup_index(name)
-            .and_then(|i| SetupInputs::of(&self.job, &self.models, i));
+            .is_some_and(|i| ran.inputs.is_now(&self.job, &self.models, i));
         // Anything changed, or an operation that should run left out of it.
         let partial = ran
             .ran
@@ -1364,7 +1425,7 @@ impl Document {
             .operations
             .iter()
             .any(|o| o.made == Made::Skipped);
-        if now.as_ref() != Some(&ran.inputs) || partial {
+        if !now || partial {
             Status::Stale
         } else if !ran.ran.passed() {
             Status::Refused
@@ -1381,23 +1442,27 @@ impl Document {
     /// setup is drawn measured from it, so a view kept on the part moves with it.
     pub fn refresh_layout(&mut self, name: &str) -> Option<DVec3> {
         let index = self.setup_index(name)?;
-        let inputs = SetupInputs::of(&self.job, &self.models, index).map(|i| i.layout())?;
         // A model that finishes loading changes the layout without changing the job.
-        let ready: Vec<String> = self
-            .models
-            .iter()
-            .filter(|(_, s)| s.model().is_some())
-            .map(|(n, _)| n.clone())
-            .collect();
-        let inputs = (inputs, ready);
+        let ready = || {
+            self.models
+                .iter()
+                .filter(|(_, s)| s.model().is_some())
+                .map(|(n, _)| n)
+        };
+        // Asked every frame, so compared in place and copied only when changed.
         if self
             .setups
             .get(name)
             .and_then(|s| s.layout.as_ref())
-            .is_some_and(|l| l.inputs == inputs)
+            .is_some_and(|l| {
+                l.inputs.0.layout_is_now(&self.job, &self.models, index)
+                    && l.inputs.1.iter().eq(ready())
+            })
         {
             return None;
         }
+        let inputs = SetupInputs::of(&self.job, &self.models, index)?.into_layout();
+        let inputs = (inputs, ready().cloned().collect());
         let meshes: Bodies<'_> = self
             .models
             .iter()
@@ -1520,7 +1585,6 @@ fn rename_in(names: &mut [String], from: &str, to: &str) {
     }
 }
 
-/// Move item `i` by `by` places, within the list; where it ended up.
 /// Where the item at `k` ends up when the one at `from` is moved to `to`.
 fn moved_index(k: usize, from: usize, to: usize) -> usize {
     if k == from {
@@ -1534,6 +1598,7 @@ fn moved_index(k: usize, from: usize, to: usize) -> usize {
     }
 }
 
+/// Move item `i` by `by` places, within the list; where it ended up.
 fn shift<T>(items: &mut [T], i: usize, by: isize) -> Option<usize> {
     let to = i.checked_add_signed(by)?;
     if to >= items.len() || i >= items.len() {
@@ -1884,7 +1949,7 @@ mod tests {
 
         doc.set_enabled("top", 0, false);
         assert_eq!(doc.op_status("top", 0), OpStatus::Disabled);
-        assert!(doc.cannot_generate(0, Some(0)).is_some());
+        assert!(doc.cannot_generate("top", Some(0)).is_some());
     }
 
     #[test]
@@ -2018,28 +2083,37 @@ mod tests {
 
         // A stand-in result, as a run would leave it.
         let inputs = SetupInputs::of(&doc.job, &doc.models, 0).unwrap();
-        assert_eq!(
-            Some(&inputs),
-            SetupInputs::of(&doc.job, &doc.models, 0).as_ref()
-        );
+        // Whether they are as they were, asked both ways: by making them again,
+        // and in place, as the tree asks every frame. The two must agree.
+        let same = |doc: &Document| {
+            let made = SetupInputs::of(&doc.job, &doc.models, 0).as_ref() == Some(&inputs);
+            assert_eq!(made, inputs.is_now(&doc.job, &doc.models, 0));
+            made
+        };
+        assert!(same(&doc));
         doc.job.setups[0].operations[0].passes.stepover = 2.5;
-        assert_ne!(
-            Some(&inputs),
-            SetupInputs::of(&doc.job, &doc.models, 0).as_ref()
-        );
+        assert!(!same(&doc));
         doc.job.setups[0].operations[0].passes.stepover = 3.0;
         doc.job.tools.get_mut("rough-6-flat").unwrap().rpm = 12000;
-        assert_ne!(
-            Some(&inputs),
-            SetupInputs::of(&doc.job, &doc.models, 0).as_ref()
-        );
+        assert!(!same(&doc));
         doc.job.tools.get_mut("rough-6-flat").unwrap().rpm = 16000;
         // A tool no operation of this setup uses does not matter to it.
         doc.job.tools.insert("spare".into(), ToolSpec::default());
-        assert_eq!(
-            Some(&inputs),
-            SetupInputs::of(&doc.job, &doc.models, 0).as_ref()
-        );
+        assert!(same(&doc));
+        // What decides where the part and stock sit matters, and so does a tool
+        // an operation names going missing.
+        doc.job.setups[0].wcs = 55;
+        assert!(!same(&doc));
+        doc.job.setups[0].wcs = 54;
+        doc.job.tolerance = 0.1;
+        assert!(!same(&doc));
+        doc.job.tolerance = 0.05;
+        doc.job.stocks[0].name = "other".into();
+        assert!(!same(&doc));
+        doc.job.stocks[0].name = "block".into();
+        assert!(same(&doc));
+        doc.job.tools.remove("rough-6-flat");
+        assert!(!same(&doc));
     }
 
     #[test]

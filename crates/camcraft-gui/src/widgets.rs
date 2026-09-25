@@ -22,6 +22,9 @@ const TAB_HEIGHT: f32 = 34.0;
 const CARD_HEADER: f32 = 32.0;
 /// The size of a status dot: a square, never a circle, as `readme.md` gives it.
 const DOT: f32 = 6.0;
+/// The room a status dot takes in a row: a small spinner's, so one can stand in
+/// for the other while something runs.
+const DOT_SLOT: f32 = 10.0;
 /// The size of an icon in a control.
 const ICON: f32 = 16.0;
 
@@ -186,6 +189,61 @@ pub fn field_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.label(egui::RichText::new(text).color(theme::egui_color(theme::TEXT_3)))
 }
 
+/// Text that explains, quieter than what it explains: `--text-3`, as `readme.md`
+/// gives everything but the value the reader compares.
+pub fn hint_text(text: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(text).color(theme::egui_color(theme::TEXT_3))
+}
+
+/// [`hint_text`] on its own line, wrapped to the width there is.
+pub fn hint(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.add(egui::Label::new(hint_text(text)).wrap())
+}
+
+/// Text that says something is wrong: `--err`.
+pub fn error_text(text: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(text).color(Level::Err.color())
+}
+
+/// [`error_text`] on its own line, wrapped to the width there is.
+pub fn error(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.add(egui::Label::new(error_text(text)).wrap())
+}
+
+/// A value that may be left out: `absent`, quiet, saying what is used without it,
+/// to click to give it `default`; or its field, from `add`, and a button to take
+/// it out again. In place of a checkbox beside every field.
+pub fn optional<T>(
+    ui: &mut egui::Ui,
+    value: &mut Option<T>,
+    default: T,
+    absent: &str,
+    add: impl FnOnce(&mut egui::Ui, &mut T),
+) {
+    let clear = if let Some(v) = value.as_mut() {
+        add(ui, v);
+        icon_button(ui, Icon::X, &format!("clear: {absent}")).clicked()
+    } else {
+        // `--text-4`, the quietest, as the system gives "not given".
+        let given = ui
+            .add(
+                egui::Button::new(
+                    egui::RichText::new(absent).color(theme::egui_color(theme::TEXT_4)),
+                )
+                .frame(false),
+            )
+            .on_hover_text("Give it")
+            .clicked();
+        if given {
+            *value = Some(default);
+        }
+        false
+    };
+    if clear {
+        *value = None;
+    }
+}
+
 /// A form: labels in a column on the left, their fields lined up on the right.
 pub fn form(ui: &mut egui::Ui, id: impl egui::AsIdSalt, body: impl FnOnce(&mut egui::Ui)) {
     egui::Grid::new(id)
@@ -327,10 +385,22 @@ pub fn tag(ui: &mut egui::Ui, text: &str) -> egui::Response {
     response
 }
 
-/// A status dot: a 6 px square in the level's colour.
-pub fn status_dot(ui: &mut egui::Ui, level: Level) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(DOT, DOT), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 0.0, level.color());
+/// A status dot, as `readme.md` gives it: a 6 px square in a status colour,
+/// hollow when there is no result to show or the one there is out of date.
+pub fn status_dot(ui: &mut egui::Ui, color: egui::Color32, filled: bool) -> egui::Response {
+    let (slot, response) =
+        ui.allocate_exact_size(egui::vec2(DOT_SLOT, DOT_SLOT), egui::Sense::hover());
+    let rect = egui::Rect::from_center_size(slot.center(), egui::vec2(DOT, DOT));
+    if filled {
+        ui.painter().rect_filled(rect, 0.0, color);
+    } else {
+        ui.painter().rect_stroke(
+            rect,
+            0.0,
+            egui::Stroke::new(1.25, color),
+            egui::StrokeKind::Inside,
+        );
+    }
     response
 }
 
@@ -377,6 +447,52 @@ pub fn diagnostic(
         level.color(),
     );
     response
+}
+
+/// A row of a list: the selected one on `--accent-subtle` with an amber edge,
+/// the one under the pointer on `--hover-overlay`.
+pub fn list_row_background(ui: &egui::Ui, rect: egui::Rect, selected: bool, hovered: bool) {
+    let painter = ui.painter();
+    if selected {
+        painter.rect_filled(rect, theme::RADIUS_SM, theme::ACCENT_SUBTLE.color());
+        painter.rect_filled(
+            egui::Rect::from_min_max(rect.min, egui::pos2(rect.min.x + 2.0, rect.max.y)),
+            0.0,
+            theme::egui_color(theme::ACCENT),
+        );
+    } else if hovered {
+        painter.rect_filled(rect, theme::RADIUS_SM, theme::HOVER_OVERLAY.color());
+    }
+}
+
+/// What is being dragged, named in `font` by the pointer and over everything, on
+/// a raised surface as an open menu is.
+pub fn drag_label(ctx: &egui::Context, text: &str, font: egui::FontId) {
+    let Some(at) = ctx.pointer_interact_pos() else {
+        return;
+    };
+    ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("drag label"),
+    ));
+    let galley = painter.layout_no_wrap(text.to_string(), font, theme::egui_color(theme::TEXT_1));
+    let rect = egui::Rect::from_min_size(
+        at + egui::vec2(12.0, 4.0),
+        galley.size() + egui::vec2(12.0, 6.0),
+    );
+    painter.rect(
+        rect,
+        theme::RADIUS_SM,
+        theme::egui_color(theme::SURFACE_RAISED),
+        egui::Stroke::new(1.0, theme::egui_color(theme::BORDER_STRONG)),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(
+        rect.min + egui::vec2(6.0, 3.0),
+        galley,
+        theme::egui_color(theme::TEXT_1),
+    );
 }
 
 /// One tab in [`tabs`].
@@ -485,6 +601,27 @@ pub fn tabs(ui: &mut egui::Ui, selected: &mut usize, tabs: &[Tab<'_>]) -> bool {
         egui::Stroke::new(1.0, theme::egui_color(theme::BORDER)),
     );
     changed
+}
+
+/// [`tabs`] whose choice is remembered under `id` from frame to frame, starting
+/// on tab `first`, with space after them: the one showing. `forced`, when given,
+/// shows instead and is remembered, as when picking in the view needs the tab
+/// that lists what is picked in sight.
+pub fn remembered_tabs(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    list: &[Tab<'_>],
+    first: usize,
+    forced: Option<usize>,
+) -> usize {
+    let mut page = forced
+        .or_else(|| ui.data(|d| d.get_temp::<usize>(id)))
+        .unwrap_or(first)
+        .min(list.len().saturating_sub(1));
+    tabs(ui, &mut page, list);
+    ui.data_mut(|d| d.insert_temp(id, page));
+    ui.add_space(theme::SPACE_4);
+    page
 }
 
 /// A card, as `Card.jsx`: `--surface-2` on the panel, a hairline border, and an

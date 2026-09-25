@@ -13,7 +13,8 @@
 //! else). Everything else is done as the pointer moves: a ray cast and a look along
 //! the edges on the screen.
 
-use camcraft_core::features;
+use std::borrow::Cow;
+
 use camcraft_core::job::{FeatureRef, Geometry, Origin, ToolSpec};
 #[cfg(all(test, feature = "ui-snapshots"))]
 use eframe::egui;
@@ -26,18 +27,36 @@ use crate::viewport::{Content, Highlight, PointerEvent};
 use crate::worker::DocId;
 
 /// What the picks shown were worked out from: when any of it changes, they are
-/// worked out again.
+/// worked out again. Each frame's is borrowed from the job, to compare with the
+/// one kept, and copied only when they differ.
 #[derive(Debug, Clone, PartialEq)]
-struct ShownFrom {
+struct ShownFrom<'a> {
     doc: DocId,
     layout: u64,
-    setup: String,
+    setup: Cow<'a, str>,
     op: Option<usize>,
-    origin: Origin,
-    geometry: Option<Geometry>,
-    tool: Option<ToolSpec>,
+    origin: Cow<'a, Origin>,
+    geometry: Option<Cow<'a, Geometry>>,
+    tool: Option<Cow<'a, ToolSpec>>,
     tolerance: u64,
     measure: Measure,
+}
+
+impl ShownFrom<'_> {
+    /// A copy to keep.
+    fn into_owned(self) -> ShownFrom<'static> {
+        ShownFrom {
+            doc: self.doc,
+            layout: self.layout,
+            setup: Cow::Owned(self.setup.into_owned()),
+            op: self.op,
+            origin: Cow::Owned(self.origin.into_owned()),
+            geometry: self.geometry.map(|g| Cow::Owned(g.into_owned())),
+            tool: self.tool.map(|t| Cow::Owned(t.into_owned())),
+            tolerance: self.tolerance,
+            measure: self.measure,
+        }
+    }
 }
 
 /// Picking, across frames.
@@ -54,7 +73,7 @@ pub struct Picking {
     /// The showing setup, ready to pick from: for which job and layout.
     scene: Option<(DocId, u64, PickScene)>,
     /// What the selection's picks show, with the key its upload goes by.
-    shown: Option<(ShownFrom, Shown, u64)>,
+    shown: Option<(ShownFrom<'static>, Shown, u64)>,
     /// What the thing under the pointer shows, with its upload key.
     hovered: Option<(Target, Highlight, u64)>,
     /// What could be picked into the armed slot, drawn faintly: for which job,
@@ -219,16 +238,18 @@ impl Picking {
             _ => None,
         };
         let from = op.and_then(|op| {
-            let s = doc.job.setups.get(doc.setup_index(setup)?)?;
+            let s = doc.setup(setup)?;
             let operation = op.and_then(|i| s.operations.get(i));
             Some(ShownFrom {
                 doc: doc.id,
                 layout,
-                setup: setup.clone(),
+                setup: Cow::Borrowed(setup.as_str()),
                 op,
-                origin: s.origin.clone(),
-                geometry: operation.map(|o| o.geometry.clone()),
-                tool: operation.and_then(|o| doc.job.tool_for(o)).cloned(),
+                origin: Cow::Borrowed(&s.origin),
+                geometry: operation.map(|o| Cow::Borrowed(&o.geometry)),
+                tool: operation
+                    .and_then(|o| doc.job.tool_for(o))
+                    .map(Cow::Borrowed),
                 tolerance: doc.job.tolerance.to_bits(),
                 measure: m,
             })
@@ -237,7 +258,7 @@ impl Picking {
             None => self.shown = None,
             Some(from) if self.shown.as_ref().is_none_or(|(f, ..)| *f != from) => {
                 let shown = slots::shown(doc, setup, from.op, prepared, scene, m);
-                self.shown = Some((from, shown, next_key()));
+                self.shown = Some((from.into_owned(), shown, next_key()));
             }
             Some(_) => {}
         }
@@ -311,13 +332,7 @@ impl Picking {
         };
         let tolerance = doc.job.tolerance;
         let current = |r: &FeatureRef, kind: Kind| {
-            let body = scene.model(&r.model)?.body();
-            let tol = features::tolerance(tolerance, body);
-            let found = match kind {
-                Kind::Face => features::find_face(body, r, tol),
-                Kind::Edge => features::find_edge(body, r, tol),
-            };
-            found.ok().map(|f| f.index)
+            kind.find(scene.model(&r.model)?.body(), r, tolerance).ok()
         };
         if slots::apply(doc, &slot, &t, current) && slot.single() {
             self.armed = None;
@@ -333,7 +348,7 @@ fn stocks(
     setup: &str,
     prepared: &camcraft_core::setup::Prepared,
 ) -> Vec<PickStock> {
-    let Some(s) = doc.setup_index(setup).and_then(|i| doc.job.setups.get(i)) else {
+    let Some(s) = doc.setup(setup) else {
         return Vec::new();
     };
     let mut out: Vec<PickStock> = s
@@ -373,18 +388,19 @@ fn stocks(
 
 /// Where a saved pick is now, as if it were under the pointer.
 fn row_target(scene: &PickScene, doc: &Document, r: &FeatureRef, kind: Kind) -> Option<Target> {
-    let body = scene.model(&r.model)?.body();
-    let tol = features::tolerance(doc.job.tolerance, body);
-    let at = glam::DVec3::from_array(r.at);
+    let index = kind
+        .find(scene.model(&r.model)?.body(), r, doc.job.tolerance)
+        .ok()?;
+    let (model, at) = (r.model.clone(), glam::DVec3::from_array(r.at));
     Some(match kind {
         Kind::Face => Target::Face {
-            model: r.model.clone(),
-            face: features::find_face(body, r, tol).ok()?.index,
+            model,
+            face: index,
             at,
         },
         Kind::Edge => Target::Edge {
-            model: r.model.clone(),
-            edge: features::find_edge(body, r, tol).ok()?.index,
+            model,
+            edge: index,
             at,
         },
     })

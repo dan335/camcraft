@@ -4,7 +4,7 @@
 //!
 //! - **Segments are the program in machine order.** Each joins two consecutive
 //!   moves of one operation, and its index in the list *is* its order, which is
-//!   what the scrubber walks.
+//!   what the playhead walks.
 //! - **Segments never join operations.** Between two operations is a tool change,
 //!   not a move, and drawing a line there would show a traverse that never happens.
 //! - **The cutter is the job's own tool,** revolved from its real profile, with the
@@ -79,7 +79,8 @@ pub struct Scene {
     /// Segments per role, indexed as [`theme::ROLES`].
     pub role_counts: [usize; 7],
     /// Continuous cutting descents steeper than [`PLUNGE_RATIO`] and deeper than
-    /// their operation's `max_cut_step`, in machine order, each at its last move.
+    /// their operation's `max_cut_step`, each at its last move: deepest first, the
+    /// order they are listed in, and in machine order among equals.
     pub steep: Vec<Steep>,
 }
 
@@ -104,7 +105,7 @@ impl Playhead {
     }
 }
 
-/// Where the scrub stands: the last move shown.
+/// Where the playhead stands: the last move shown.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AtMove<'a> {
     /// Which operation, from zero.
@@ -174,6 +175,8 @@ impl Scene {
                 cutter,
             });
         }
+        // Once, here, rather than each frame they are listed.
+        scene.steep.sort_by(|a, b| b.drop.total_cmp(&a.drop));
         scene
     }
 
@@ -186,8 +189,8 @@ impl Scene {
     /// position: an operation, and how many of its moves have been made.
     ///
     /// At the end of an operation this is that operation complete, not the next one
-    /// unstarted: the material is the same either way, and the operation the scrub
-    /// is on is the one to name.
+    /// unstarted: the material is the same either way, and the operation the
+    /// playhead is on is the one to name.
     pub fn position(&self, shown: usize) -> Position {
         match self.at(shown) {
             // A segment is a move after the operation's first, so showing k of an
@@ -277,7 +280,7 @@ impl Scene {
         (self.position(p.shown), 0.0)
     }
 
-    /// The segment the scrub ends on, when `shown` segments are showing.
+    /// The segment the playhead ends on, when `shown` segments are showing.
     pub fn at(&self, shown: usize) -> Option<AtMove<'_>> {
         let index = shown.checked_sub(1)?;
         let segment = self.segments.get(index)?;
@@ -560,10 +563,10 @@ passes = { stepover = 2.0, feed = 2000.0 }
         assert_eq!(clock(3725.0), "1:02:05");
     }
 
-    /// The scrub, as a replay position, counts the moves made in the operation it is
-    /// on, and lands exactly on each operation's end.
+    /// The playhead, as a replay position, counts the moves made in the operation
+    /// it is on, and lands exactly on each operation's end.
     #[test]
-    fn scrub_positions_are_replay_positions() {
+    fn playhead_positions_are_replay_positions() {
         let (_, result, scene) = scene();
         assert_eq!(scene.position(0), Position { op: 0, moves: 0 });
         assert_eq!(scene.position(1), Position { op: 0, moves: 2 });
@@ -646,7 +649,7 @@ passes = { stepover = 2.0, feed = 2000.0 }
     }
 
     #[test]
-    fn the_scrub_names_the_move_it_stands_on() {
+    fn the_playhead_names_the_move_it_stands_on() {
         let (_, _, scene) = scene();
         assert!(scene.at(0).is_none(), "nothing shown, nothing to name");
         let first = scene.at(1).unwrap();

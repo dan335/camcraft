@@ -29,15 +29,20 @@ pub fn run_setup(job: &Job, index: usize, models: &Models<'_>) -> Result<Ran, Se
     run_setup_planned(job, index, models, &[], &mut |_| {})
 }
 
-/// Whether setup `index` of `job` can run with `plans`, and if not, why.
+/// Whether setup `index` of `job` can run, and if not, why.
 ///
-/// Only the operations the run will work out or keep are checked: one `plans`
-/// skips is left out, and may be unfinished. [`run_setup_planned`] asks this
-/// before computing anything, and the app asks it to say why a run is not
-/// offered, so the two cannot disagree.
-pub fn check_runnable(job: &Job, index: usize, plans: &[Plan]) -> Result<(), JobError> {
+/// Only the operations the run will work out or keep are checked, those for which
+/// `runs` holds by their place: one it skips is left out, and may be unfinished.
+/// [`run_setup_planned`] asks this before computing anything, and the app asks it
+/// to say why a run is not offered, so the two cannot disagree. The app asks every
+/// frame, so it says which operations run without building the plans themselves.
+pub fn check_runnable(
+    job: &Job,
+    index: usize,
+    runs: &dyn Fn(usize) -> bool,
+) -> Result<(), JobError> {
     job.check_common()?;
-    job.check_setup_where(index, &|i| !matches!(plans.get(i), Some(Plan::Skip)))
+    job.check_setup_where(index, runs)
 }
 
 /// As [`run_setup`], doing with each operation what `plans` says, by its place
@@ -52,7 +57,7 @@ pub fn run_setup_planned(
 ) -> Result<Ran, SessionError> {
     // Validation happens before anything is computed, so a bad job fails on its own
     // terms rather than part-way through an operation.
-    check_runnable(job, index, plans)?;
+    check_runnable(job, index, &|i| !matches!(plans.get(i), Some(Plan::Skip)))?;
     let setup = job.setups.get(index).ok_or(JobError::NoSetups)?;
     let mut notes = vec![format!(
         "setup '{}': {} operation(s), tolerance {} mm",

@@ -1,11 +1,16 @@
 //! A tool drawn side on, to scale: cutter, shank and holder.
 //!
-//! Pure geometry in millimetres, with the tip at the origin and +Z up the tool, so
-//! the proportions can be tested without a screen. Dimensions the tool does not
-//! give are assumed from its diameter and marked as assumed, so the picture never
-//! claims more than the tool says.
+//! The drawing is pure geometry in millimetres, with the tip at the origin and +Z
+//! up the tool, so the proportions can be tested without a screen; [`paint_tool`]
+//! puts it on one. Dimensions the tool does not give are assumed from its diameter
+//! and marked as assumed, so the picture never claims more than the tool says.
 
 use camcraft_core::job::{DRILL_POINT, ToolKind, ToolSpec};
+use eframe::egui;
+
+use crate::measure::Measure;
+use crate::theme;
+use crate::widgets;
 
 /// What a region of the drawing is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,6 +168,94 @@ pub fn draw(tool: &ToolSpec) -> Drawing {
         max_radius,
         height: top,
         assumed,
+    }
+}
+
+/// A tool type's name, as the user reads it.
+pub fn kind_name(kind: ToolKind) -> &'static str {
+    match kind {
+        ToolKind::Flat => "flat",
+        ToolKind::Ball => "ball",
+        ToolKind::Bullnose => "bullnose",
+        ToolKind::Cone => "V-bit / chamfer",
+        ToolKind::Drill => "drill",
+    }
+}
+
+/// The height of a tool's picture.
+const PICTURE: f32 = 180.0;
+
+/// The tool, side on and to scale, with its holder face marked, on the CAD grid.
+pub fn paint_tool(ui: &mut egui::Ui, tool: &ToolSpec, m: Measure) {
+    let d = draw(tool);
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), PICTURE),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, theme::RADIUS_SM, theme::egui_color(theme::BG));
+    widgets::grid_background(&painter, rect);
+    painter.rect_stroke(
+        rect,
+        theme::RADIUS_SM,
+        egui::Stroke::new(1.0, theme::egui_color(theme::BORDER)),
+        egui::StrokeKind::Inside,
+    );
+    let margin = 16.0_f64;
+    let w = f64::from(rect.width()) - 2.0 * margin;
+    let h = f64::from(rect.height()) - 2.0 * margin;
+    let scale = (w / (2.0 * d.max_radius.max(1e-6))).min(h / d.height.max(1e-6));
+    let base = rect.center_bottom() - egui::vec2(0.0, 16.0);
+    // Drawing coordinates are millimetres at most a few hundred across.
+    #[allow(clippy::cast_possible_truncation)]
+    let at = |x: f64, z: f64| base + egui::vec2((x * scale) as f32, -(z * scale) as f32);
+    for o in &d.outlines {
+        let (fill, stroke) = match o.part {
+            Part::Flutes => (theme::AMBER_5, theme::AMBER_3),
+            Part::Shank => (theme::GRAY_7, theme::GRAY_8),
+            Part::Holder => (theme::GRAY_5, theme::GRAY_7),
+        };
+        // Right half up, left half down: one closed, convex outline per part.
+        let mut points: Vec<egui::Pos2> = o.half.iter().map(|(x, z)| at(*x, *z)).collect();
+        points.extend(o.half.iter().rev().map(|(x, z)| at(-x, *z)));
+        painter.add(egui::Shape::convex_polygon(
+            points,
+            theme::egui_color(fill),
+            egui::Stroke::new(1.0, theme::egui_color(stroke)),
+        ));
+    }
+    // The holder face: where the stickout is measured to.
+    let face = at(0.0, d.holder_face).y;
+    painter.line_segment(
+        [
+            egui::pos2(rect.left() + 8.0, face),
+            egui::pos2(rect.right() - 8.0, face),
+        ],
+        egui::Stroke::new(1.0, theme::egui_color(theme::TEXT_3)),
+    );
+    // Just below the face line, at the right edge: above it the holder is at its
+    // widest, and below it only the narrower cutter, centred. Anywhere nearer the
+    // middle, dim text lands on the grey shank and disappears.
+    painter.text(
+        egui::pos2(rect.right() - 10.0, face + 4.0),
+        egui::Align2::RIGHT_TOP,
+        format!("stickout {}", m.length(d.holder_face, 1)),
+        theme::caption(ui.style()),
+        theme::egui_color(theme::TEXT_3),
+    );
+    painter.text(
+        egui::pos2(rect.right() - 10.0, rect.bottom() - 6.0),
+        egui::Align2::RIGHT_BOTTOM,
+        format!("Ø {}", m.length(tool.diameter, 2)),
+        theme::caption(ui.style()),
+        ui.visuals().text_color(),
+    );
+    if !d.assumed.is_empty() {
+        ui.label(
+            egui::RichText::new(format!("assumed, not given: {}", d.assumed.join(", ")))
+                .size(theme::TEXT_SM)
+                .color(theme::egui_color(theme::TEXT_4)),
+        );
     }
 }
 

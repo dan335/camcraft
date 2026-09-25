@@ -1,5 +1,6 @@
 //! The window: open jobs in tabs, each with its tree on the left, the properties of
-//! what is selected on the right, the part in the middle and a log beneath.
+//! what is selected on the right and the part in the middle; the log, the checks,
+//! the tool library and the settings in windows of their own.
 //!
 //! A job is a document, as in any program: New, Open, Save, Save As and Close,
 //! with a prompt before unsaved work is lost. Each tab keeps its own models,
@@ -16,7 +17,7 @@ use eframe::egui;
 
 use crate::browser::{self, BrowserAction};
 use crate::document::{Document, Level, ModelSlot, Selection, Status, next_key};
-use crate::file_dialog::{AppFileDialog, Pick};
+use crate::file_dialog::{AppFileDialog, FileRequest};
 use crate::measure::Measure;
 use crate::picking::Picking;
 use crate::playback;
@@ -24,7 +25,7 @@ use crate::properties::{self, Picks, PropAction};
 use crate::settings::Settings;
 use crate::theme;
 use crate::tool_manager::ToolManager;
-use crate::tool_picker::{Picked, ToolPicker};
+use crate::tool_picker::{Outcome, Picked, ToolPicker};
 use crate::transport;
 use crate::viewport::{Content, Plane, Viewport};
 use crate::widgets;
@@ -67,6 +68,16 @@ pub fn explain(e: &SessionError) -> String {
     }
 }
 
+/// The colour a log line of `level` is written in: body text, or the status
+/// colour for a warning or an error.
+fn log_color(level: Level) -> egui::Color32 {
+    match level {
+        Level::Info => theme::egui_color(theme::TEXT_2),
+        Level::Warn => widgets::Level::Warn.color(),
+        Level::Error => widgets::Level::Err.color(),
+    }
+}
+
 /// Why `names` of `doc` cannot be posted at all, if they cannot: each must have a
 /// result, finished and up to date. A result that did not pass can be posted, but
 /// only once that is confirmed.
@@ -93,6 +104,9 @@ pub struct App {
     viewport: Viewport,
     /// Picking in the view: what is armed, under the pointer, and looked at.
     picking: Picking,
+    /// The tab of the selected operation the properties panel shows, as of the
+    /// panel's last drawing.
+    operation_tab: Option<properties::OperationTab>,
     /// The selected operation's heights, drawn while its Heights tab shows.
     planes: Vec<Plane>,
     dialog: AppFileDialog,
@@ -139,6 +153,7 @@ impl App {
             worker: Worker::default(),
             viewport: Viewport::default(),
             picking: Picking::default(),
+            operation_tab: None,
             planes: Vec::new(),
             dialog: AppFileDialog::new(dialog),
             tools: ToolManager::new(),
@@ -240,7 +255,7 @@ impl App {
             .find(id)
             .map(|d| format!("{}.camcraft", d.title()))
             .unwrap_or_default();
-        self.dialog.open(Pick::SaveJob(id), &name);
+        self.dialog.open(FileRequest::SaveJob(id), &name);
     }
 
     /// Close job `id`, asking first if it has unsaved changes.
@@ -266,9 +281,8 @@ impl App {
 
     // ---- work -----------------------------------------------------------------
 
-    /// Run setup `setup` of the showing job.
-    /// Generate setup `setup`: all its operations, or its operation `only`
-    /// alone, keeping the others as they were made.
+    /// Generate setup `setup` of the showing job: all its operations, or its
+    /// operation `only` alone, keeping the others as they were made.
     fn generate(&mut self, ctx: &egui::Context, setup: &str, only: Option<usize>) {
         let Some(doc) = self.docs.get_mut(self.active) else {
             return;
@@ -276,7 +290,7 @@ impl App {
         let Some(index) = doc.setup_index(setup) else {
             return;
         };
-        if let Some(why) = doc.cannot_generate(index, only) {
+        if let Some(why) = doc.cannot_generate(setup, only) {
             doc.note(Level::Warn, format!("'{setup}' cannot run: {why}"));
             return;
         }
@@ -284,12 +298,10 @@ impl App {
             return;
         };
         let plans = doc.plans(index, only);
-        let what = only
-            .and_then(|k| doc.job.setups.get(index)?.operations.get(k))
-            .map_or_else(
-                || format!("'{setup}'"),
-                |op| format!("'{setup}/{}'", op.name),
-            );
+        let what = only.and_then(|k| doc.operation(setup, k)).map_or_else(
+            || format!("'{setup}'"),
+            |op| format!("'{setup}/{}'", op.name),
+        );
         let seq = doc.started(setup);
         doc.note(Level::Info, format!("generating {what}…"));
         let request = Request::Run {
@@ -438,7 +450,7 @@ impl App {
             self.new_job();
         }
         if pressed(Modifiers::COMMAND, Key::O) {
-            self.dialog.open(Pick::OpenJobs, "");
+            self.dialog.open(FileRequest::OpenJobs, "");
         }
         if pressed(Modifiers::COMMAND, Key::W)
             && let Some(id) = id
@@ -481,7 +493,7 @@ impl App {
                     ui.close();
                 }
                 if ui.button("Open…").clicked() {
-                    self.dialog.open(Pick::OpenJobs, "");
+                    self.dialog.open(FileRequest::OpenJobs, "");
                     ui.close();
                 }
                 ui.add_enabled_ui(!self.recent.is_empty(), |ui| {
@@ -578,7 +590,7 @@ impl App {
                     post = Some((doc.id, None));
                 }
                 if let Some((id, scope)) = post {
-                    self.dialog.open(Pick::PostTo(id, scope), "");
+                    self.dialog.open(FileRequest::PostTo(id, scope), "");
                     ui.close();
                 }
             });
@@ -604,12 +616,12 @@ impl App {
     /// selected setup (or the one showing).
     fn add_menu(&mut self, ui: &mut egui::Ui) {
         let Some(doc) = self.docs.get_mut(self.active) else {
-            ui.weak("Open or start a job first.");
+            ui.label(widgets::hint_text("Open or start a job first."));
             return;
         };
         let id = doc.id;
         if ui.button("Model…").clicked() {
-            self.dialog.open(Pick::AddModels(id, None), "");
+            self.dialog.open(FileRequest::AddModels(id, None), "");
             ui.close();
             return;
         }
@@ -659,16 +671,12 @@ impl App {
                 if r.clicked() {
                     self.active = i;
                 }
-                if ui
-                    .small_button("×")
-                    .on_hover_text("close this job")
-                    .clicked()
-                {
+                if widgets::icon_button(ui, widgets::Icon::X, "close this job").clicked() {
                     close = Some(doc.id);
                 }
                 ui.separator();
             }
-            if ui.small_button("+").on_hover_text("new job").clicked() {
+            if widgets::icon_button(ui, widgets::Icon::Plus, "new job").clicked() {
                 self.new_job();
             }
         });
@@ -682,13 +690,20 @@ impl App {
         let ctx = ui.ctx().clone();
         ui.vertical_centered(|ui| {
             ui.add_space(ui.available_height() * 0.25);
-            ui.heading("camcraft");
+            // The wordmark: Fira Code at 500, as the design system sets it where a
+            // logo would go.
+            ui.label(
+                egui::RichText::new("camcraft")
+                    .family(egui::FontFamily::Name(theme::MONO_MEDIUM.into()))
+                    .size(theme::TEXT_LG)
+                    .color(theme::egui_color(theme::TEXT_1)),
+            );
             ui.add_space(12.0);
             if ui.button("New job").clicked() {
                 self.new_job();
             }
             if ui.button("Open job…").clicked() {
-                self.dialog.open(Pick::OpenJobs, "");
+                self.dialog.open(FileRequest::OpenJobs, "");
             }
             if !self.worker.idle() {
                 ui.add_space(8.0);
@@ -696,7 +711,7 @@ impl App {
             }
             if !self.recent.is_empty() {
                 ui.add_space(16.0);
-                ui.weak("Recent");
+                ui.label(widgets::section_label("Recent"));
                 for path in self.recent.clone() {
                     let name = path.file_name().map_or_else(
                         || path.display().to_string(),
@@ -712,12 +727,7 @@ impl App {
                 }
             }
             for (level, text) in &self.log {
-                let color = match level {
-                    Level::Error => ui.visuals().error_fg_color,
-                    Level::Warn => ui.visuals().warn_fg_color,
-                    Level::Info => ui.visuals().text_color(),
-                };
-                ui.colored_label(color, text);
+                ui.colored_label(log_color(*level), text);
             }
         });
     }
@@ -746,18 +756,18 @@ impl App {
                 };
                 let status = doc.status(&name);
                 let state = doc.setups.entry(name.clone()).or_default();
-                ui.heading(format!("Setup {name}"));
+                ui.label(widgets::section_label(&format!("Setup {name}")));
                 if state.ran.is_some() {
                     if status == Status::Stale {
                         ui.colored_label(
-                            ui.visuals().warn_fg_color,
+                            widgets::Level::Warn.color(),
                             "Out of date: the setup has changed since this ran. Generate it again.",
                         );
                     }
                     playback::result(ui, state, m);
                     ui.separator();
                 } else if state.running.is_none() {
-                    ui.weak("Not generated yet.");
+                    ui.label(widgets::hint_text("Not generated yet."));
                 }
                 focus = playback::controls(ui, state, m).or(focus);
             });
@@ -767,8 +777,8 @@ impl App {
         }
         for a in actions {
             match a {
-                BrowserAction::AddModels => self.dialog.open(Pick::AddModels(id, None), ""),
-                BrowserAction::Locate(name) => self.dialog.open(Pick::Locate(id, name), ""),
+                BrowserAction::AddModels => self.dialog.open(FileRequest::AddModels(id, None), ""),
+                BrowserAction::Locate(name) => self.dialog.open(FileRequest::Locate(id, name), ""),
                 BrowserAction::Generate(name) => self.generate(&ctx, &name, None),
                 BrowserAction::GenerateOperation(name, i) => {
                     self.generate(&ctx, &name, Some(i));
@@ -784,7 +794,6 @@ impl App {
             return;
         };
         let id = doc.id;
-        let mut actions = Vec::new();
         let picks = Picks {
             armed: self.picking.armed(id),
             shown: self.picking.shown(id),
@@ -796,9 +805,7 @@ impl App {
             egui::Panel::bottom("operation-generate")
                 .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 8)))
                 .show(ui, |ui| {
-                    let why = doc
-                        .setup_index(setup)
-                        .and_then(|i| doc.cannot_generate(i, Some(*index)));
+                    let why = doc.cannot_generate(setup, Some(*index));
                     let running = doc.status(setup) == Status::Running;
                     ui.horizontal(|ui| {
                         let label = if running { "Generating…" } else { "Generate" };
@@ -829,13 +836,15 @@ impl App {
                     });
                 });
         }
-        egui::ScrollArea::vertical()
+        let panel = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show(ui, |ui| actions = properties::show(ui, doc, m, picks));
+            .show(ui, |ui| properties::show(ui, doc, m, picks))
+            .inner;
+        self.operation_tab = panel.operation_tab;
         if let Some((setup, index)) = generate {
             self.generate(&ctx, &setup, Some(index));
         }
-        for a in actions {
+        for a in panel.actions {
             match a {
                 PropAction::Arm(slot) => self.picking.arm(id, slot),
                 PropAction::Disarm => self.picking.disarm(),
@@ -844,9 +853,13 @@ impl App {
                         ctx.request_repaint();
                     }
                 }
-                PropAction::AddModels(setup) => self.dialog.open(Pick::AddModels(id, setup), ""),
-                PropAction::Locate(name) => self.dialog.open(Pick::Locate(id, name), ""),
-                PropAction::ProfileFile(setup) => self.dialog.open(Pick::Profile(id, setup), ""),
+                PropAction::AddModels(setup) => {
+                    self.dialog.open(FileRequest::AddModels(id, setup), "")
+                }
+                PropAction::Locate(name) => self.dialog.open(FileRequest::Locate(id, name), ""),
+                PropAction::ProfileFile(setup) => {
+                    self.dialog.open(FileRequest::Profile(id, setup), "")
+                }
                 PropAction::PickTool(setup, op) => {
                     if let Some(doc) = self.find(id) {
                         let picker = ToolPicker::new(id, setup, op, &doc.job);
@@ -868,16 +881,18 @@ impl App {
             .resizable(true)
             .show(ctx, |ui| {
                 let Some(doc) = self.docs.get_mut(self.active) else {
-                    ui.weak("No job is open.");
+                    ui.label(widgets::hint_text("No job is open."));
                     return;
                 };
                 let Some(name) = doc.active.clone() else {
-                    ui.weak("No setup is showing.");
+                    ui.label(widgets::hint_text("No setup is showing."));
                     return;
                 };
                 let state = doc.setups.entry(name.clone()).or_default();
                 if state.ran.is_none() {
-                    ui.weak(format!("'{name}' has not been generated yet."));
+                    ui.label(widgets::hint_text(format!(
+                        "'{name}' has not been generated yet."
+                    )));
                     return;
                 }
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -909,12 +924,11 @@ impl App {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for (level, text) in lines {
-                    let color = match level {
-                        Level::Info => ui.visuals().text_color(),
-                        Level::Warn => ui.visuals().warn_fg_color,
-                        Level::Error => ui.visuals().error_fg_color,
-                    };
-                    ui.label(egui::RichText::new(text).monospace().color(color));
+                    ui.label(
+                        egui::RichText::new(text)
+                            .monospace()
+                            .color(log_color(*level)),
+                    );
                 }
             });
     }
@@ -945,22 +959,23 @@ impl App {
         self.shown = now;
     }
 
-    fn picks(&mut self, ctx: &egui::Context) {
-        let Some((pick, paths)) = self.dialog.update(ctx) else {
+    /// Do what a file dialog that has just finished was for.
+    fn file_dialog_results(&mut self, ctx: &egui::Context) {
+        let Some((request, paths)) = self.dialog.update(ctx) else {
             return;
         };
-        match pick {
-            Pick::OpenJobs => {
+        match request {
+            FileRequest::OpenJobs => {
                 for p in paths {
                     self.open_job(ctx, p);
                 }
             }
-            Pick::SaveJob(id) => {
+            FileRequest::SaveJob(id) => {
                 if let Some(path) = paths.into_iter().next() {
                     self.save_job(id, Some(path));
                 }
             }
-            Pick::AddModels(id, setup) => {
+            FileRequest::AddModels(id, setup) => {
                 if let Some(doc) = self.find(id) {
                     let names = doc.add_models(&paths);
                     if let Some(setup) = setup {
@@ -969,28 +984,28 @@ impl App {
                     doc.note(Level::Info, format!("added {}", names.join(", ")));
                 }
             }
-            Pick::Locate(id, name) => {
+            FileRequest::Locate(id, name) => {
                 if let (Some(doc), Some(path)) = (self.find(id), paths.first()) {
                     doc.locate_model(&name, path);
                 }
             }
-            Pick::PostTo(id, scope) => {
+            FileRequest::PostTo(id, scope) => {
                 if let Some(dir) = paths.into_iter().next() {
                     self.prepare_post(id, scope, &dir);
                 }
             }
-            Pick::ImportTools => {
+            FileRequest::ImportTools => {
                 for path in &paths {
                     self.tools.import_fusion(path);
                 }
             }
-            Pick::Profile(id, setup) => {
+            FileRequest::Profile(id, setup) => {
                 if let (Some(doc), Some(path)) = (self.find(id), paths.first()) {
                     let post = match &doc.path {
                         Some(_) => camcraft_session::fs::relative_path(&doc.dir(), path),
                         None => path.display().to_string(),
                     };
-                    if let Some(s) = doc.job.setups.iter_mut().find(|s| s.name == setup) {
+                    if let Some(s) = doc.setup_mut(&setup) {
                         s.post = post;
                     }
                 }
@@ -1064,12 +1079,16 @@ impl App {
             self.picker = None;
             return;
         };
-        let Some(outcome) = picker.show(ctx, &doc.job, library, m) else {
-            return;
-        };
-        self.picker = None;
-        let Some((picked, preset)) = outcome else {
-            return;
+        let (picked, preset) = match picker.show(ctx, &doc.job, library, m) {
+            Outcome::Open => return,
+            Outcome::Cancelled => {
+                self.picker = None;
+                return;
+            }
+            Outcome::Chosen { tool, preset } => {
+                self.picker = None;
+                (tool, preset)
+            }
         };
         let name = match picked {
             Picked::Job(name) => name,
@@ -1165,7 +1184,7 @@ impl App {
                             ui.label(&name);
                             if ui.button("Find…").clicked() {
                                 then = Some(Box::new(move |app: &mut Self| {
-                                    app.dialog.open(Pick::Locate(id, name), "");
+                                    app.dialog.open(FileRequest::Locate(id, name), "");
                                 }));
                             }
                         });
@@ -1186,7 +1205,7 @@ impl App {
                     ));
                     if !plan.refused.is_empty() {
                         ui.colored_label(
-                            ui.visuals().error_fg_color,
+                            widgets::Level::Err.color(),
                             "These setups did NOT pass their checks. Their programs are \
                              not safe to run as they stand:",
                         );
@@ -1213,7 +1232,10 @@ impl App {
                             ui.monospace(name.unwrap_or_default());
                         }
                         if plan.overwrites.len() > 8 {
-                            ui.weak(format!("and {} more", plan.overwrites.len() - 8));
+                            ui.label(widgets::hint_text(format!(
+                                "and {} more",
+                                plan.overwrites.len() - 8
+                            )));
                         }
                     }
                     let go = if plan.refused.is_empty() {
@@ -1293,7 +1315,8 @@ impl App {
     }
 
     /// Select operation `op` of the showing setup and pick faces for it in the
-    /// view: the two largest that face up. Only the snapshot harness asks. How many faces the model has.
+    /// view: the two largest that face up. How many faces the model has. Only the
+    /// snapshot harness asks.
     #[cfg(all(test, feature = "ui-snapshots"))]
     pub fn pick_faces_for_snapshot(&mut self, op: usize) -> usize {
         use camcraft_core::job::FeatureRef;
@@ -1304,13 +1327,7 @@ impl App {
         let (Some(setup), id) = (doc.active.clone(), doc.id) else {
             return 0;
         };
-        let Some(model) = doc
-            .job
-            .setups
-            .iter()
-            .find(|s| s.name == setup)
-            .and_then(|s| s.models.first().cloned())
-        else {
+        let Some(model) = doc.setup(&setup).and_then(|s| s.models.first().cloned()) else {
             return 0;
         };
         let Some((loaded, _)) = doc.models.get(&model).and_then(|s| s.loaded()) else {
@@ -1336,13 +1353,7 @@ impl App {
         up.sort_by(|a, b| b.1.total_cmp(&a.1));
         let faces = t.faces().len();
         doc.selection = crate::document::Selection::Operation(setup.clone(), op);
-        let Some(o) = doc
-            .job
-            .setups
-            .iter_mut()
-            .find(|s| s.name == setup)
-            .and_then(|s| s.operations.get_mut(op))
-        else {
+        let Some(o) = doc.operation_mut(&setup, op) else {
             return faces;
         };
         o.geometry.faces = up
@@ -1400,7 +1411,7 @@ impl App {
     /// Open the job dialog, as File › Open would. Only the snapshot harness asks.
     #[cfg(all(test, feature = "ui-snapshots"))]
     pub fn open_dialog_for_snapshot(&mut self) {
-        self.dialog.open(Pick::OpenJobs, "");
+        self.dialog.open(FileRequest::OpenJobs, "");
     }
 
     /// Ask to close the showing job, as ⌘W would. Only the snapshot harness asks.
@@ -1421,8 +1432,8 @@ impl App {
         });
     }
 
-    /// Put the scrub part-way through operation `op`, and show only `roles`. Only
-    /// the snapshot harness asks.
+    /// Put the playhead part-way through operation `op`, and show only `roles`.
+    /// Only the snapshot harness asks.
     #[cfg(all(test, feature = "ui-snapshots"))]
     pub fn set_view_for_snapshot(&mut self, op: usize, fraction: f64, roles: u32) {
         let Some(state) = self.state_for_snapshot() else {
@@ -1441,8 +1452,8 @@ impl App {
         state.view.view.roles = roles;
     }
 
-    /// Show the stock at a fixed stage, or following the scrub. Only the snapshot
-    /// harness asks.
+    /// Show the stock at a fixed stage, or following the playhead. Only the
+    /// snapshot harness asks.
     #[cfg(all(test, feature = "ui-snapshots"))]
     pub fn set_stock_for_snapshot(&mut self, stage: Option<usize>) {
         use crate::document::StockMode;
@@ -1598,7 +1609,7 @@ impl eframe::App for App {
         self.tools.measure = m;
         self.tools.show(&ctx);
         if std::mem::take(&mut self.tools.import_requested) {
-            self.dialog.open(Pick::ImportTools, "");
+            self.dialog.open(FileRequest::ImportTools, "");
         }
 
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
@@ -1606,7 +1617,7 @@ impl eframe::App for App {
         self.settings.show(&ctx, &mut self.settings_open);
         self.log_window(&ctx);
         self.checks_window(&ctx);
-        self.picks(&ctx);
+        self.file_dialog_results(&ctx);
         self.tool_picker(&ctx);
         self.prompts(&ctx);
 
@@ -1638,7 +1649,7 @@ impl eframe::App for App {
                     // After the panel, so the heights drawn are the ones just edited.
                     self.planes = self
                         .doc()
-                        .map(|d| properties::height_planes(&ctx, d, m))
+                        .map(|d| properties::height_planes(d, m, self.operation_tab))
                         .unwrap_or_default();
                     // The viewport is taken out for the call, because the content it
                     // draws borrows the rest of the app.

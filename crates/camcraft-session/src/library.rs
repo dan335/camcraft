@@ -215,6 +215,24 @@ impl Folder {
         }
     }
 
+    /// The tools here, and in every folder below when `below`, whose name or
+    /// description has `filter` in it (see [`tool_matches`]): with their folders,
+    /// in the order of [`Folder::walk`].
+    pub fn find(&self, below: bool, filter: &str) -> Vec<(FolderPath, &str, &ToolSpec)> {
+        let tools = if below {
+            self.walk()
+        } else {
+            self.tools
+                .iter()
+                .map(|(n, t)| (Vec::new(), n.as_str(), t))
+                .collect()
+        };
+        tools
+            .into_iter()
+            .filter(|(_, n, t)| tool_matches(n, t, filter))
+            .collect()
+    }
+
     /// Every folder here and below, this one first.
     pub fn folder_paths(&self) -> Vec<FolderPath> {
         let mut out = vec![Vec::new()];
@@ -231,6 +249,16 @@ impl Folder {
     pub fn count(&self) -> usize {
         self.tools.len() + self.folders.values().map(Folder::count).sum::<usize>()
     }
+}
+
+/// Whether a tool called `name` is one a person filtering by `filter` wants: the
+/// filter is in its name or its description, ignoring case. An empty filter wants
+/// every tool.
+pub fn tool_matches(name: &str, tool: &ToolSpec, filter: &str) -> bool {
+    let filter = filter.to_lowercase();
+    filter.is_empty()
+        || name.to_lowercase().contains(&filter)
+        || tool.comment.to_lowercase().contains(&filter)
 }
 
 fn check_name(name: &str) -> Result<String, FolderError> {
@@ -499,5 +527,30 @@ mod tests {
             .map(|(p, n, _)| format!("{}/{n}", folder_label(p)))
             .collect();
         assert_eq!(walked, ["a/t", "a/t-2"]);
+    }
+
+    /// Tools are found by their name or description, ignoring case, here alone or
+    /// here and below.
+    #[test]
+    fn tools_are_found_by_name_or_description() {
+        let mut root = Folder::default();
+        let a = root.create(&[], "a").unwrap();
+        root.tools.insert("Flat 6".into(), ToolSpec::default());
+        let ball = ToolSpec {
+            comment: "for FINISHING".into(),
+            ..ToolSpec::default()
+        };
+        root.at_mut(&a).unwrap().tools.insert("b".into(), ball);
+        let names = |found: Vec<(FolderPath, &str, &ToolSpec)>| -> Vec<String> {
+            found
+                .iter()
+                .map(|(p, n, _)| format!("{}/{n}", folder_label(p)))
+                .collect()
+        };
+        assert_eq!(names(root.find(false, "")), ["Library/Flat 6"]);
+        assert_eq!(names(root.find(true, "")), ["Library/Flat 6", "a/b"]);
+        assert_eq!(names(root.find(true, "flat")), ["Library/Flat 6"]);
+        assert_eq!(names(root.find(true, "finish")), ["a/b"]);
+        assert!(root.find(false, "finish").is_empty());
     }
 }

@@ -13,6 +13,7 @@ use eframe::egui;
 
 use crate::document::{Document, Level, ModelSlot, OpStatus, Selection, Status};
 use crate::theme;
+use crate::widgets::{self, hint_text};
 
 /// Something the tree asks the app to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,70 +61,62 @@ pub fn status_text(status: Status) -> &'static str {
     }
 }
 
-fn status_color(status: Status) -> [u8; 3] {
-    match status {
-        Status::NotRun | Status::Running => theme::GRAY_5,
-        Status::Verified => theme::PATH_CUT,
-        Status::Warnings | Status::Stale => theme::AMBER_5,
-        Status::Refused => theme::ERR,
-    }
+/// The colour of nothing to show yet: a status with no result, drawn as a
+/// hairline would be.
+fn none_yet() -> egui::Color32 {
+    theme::egui_color(theme::BORDER_STRONG)
 }
 
-/// A dot in the status's colour: filled for a result, a ring for none or one out
-/// of date.
+/// Where a setup stands, as a status dot: filled for a result, hollow for none or
+/// one out of date; a spinner while it runs.
 fn status_dot(ui: &mut egui::Ui, status: Status) {
-    if status == Status::Running {
-        ui.add(egui::Spinner::new().size(10.0));
-        return;
-    }
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-    let color = theme::egui_color(status_color(status));
-    let centre = rect.center();
-    if matches!(status, Status::NotRun | Status::Stale) {
-        ui.painter()
-            .circle_stroke(centre, 3.5, egui::Stroke::new(1.5, color));
-    } else {
-        ui.painter().circle_filled(centre, 4.0, color);
-    }
-    response.on_hover_text(status_text(status));
+    let (color, filled) = match status {
+        Status::Running => {
+            ui.add(egui::Spinner::new().size(10.0));
+            return;
+        }
+        Status::NotRun => (none_yet(), false),
+        Status::Verified => (widgets::Level::Ok.color(), true),
+        Status::Warnings => (widgets::Level::Warn.color(), true),
+        Status::Stale => (widgets::Level::Warn.color(), false),
+        Status::Refused => (widgets::Level::Err.color(), true),
+    };
+    widgets::status_dot(ui, color, filled).on_hover_text(status_text(status));
 }
 
-/// Where an operation stands: a spinner while it runs, a ring while it waits or
-/// has not been made, a dot once made (amber with warnings), and an amber ring
-/// once its setup has changed since.
+/// Where an operation stands: a spinner while it runs, a hollow dot while it
+/// waits or has not been made, a filled one once made (amber with warnings), a
+/// hollow amber one once its setup has changed since, and a dash while it is
+/// turned off.
 fn op_marker(ui: &mut egui::Ui, status: OpStatus) {
-    if let OpStatus::Running(_) = status {
-        ui.add(egui::Spinner::new().size(10.0))
-            .on_hover_text("generating");
-        return;
-    }
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
     let (color, filled, text) = match status {
-        OpStatus::NotRun => (theme::GRAY_5, false, "not generated"),
-        OpStatus::Waiting => (theme::GRAY_7, false, "waiting its turn"),
-        OpStatus::Done => (theme::PATH_CUT, true, "generated"),
-        OpStatus::Warnings => (theme::AMBER_5, true, "generated, with warnings"),
-        OpStatus::Stale | OpStatus::Running(_) => (theme::AMBER_5, false, "out of date"),
+        OpStatus::Running(_) => {
+            ui.add(egui::Spinner::new().size(10.0))
+                .on_hover_text("generating");
+            return;
+        }
         OpStatus::Disabled => {
-            // A dash: turned off, left out of every run.
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
             ui.painter().hline(
                 rect.center().x - 3.0..=rect.center().x + 3.0,
                 rect.center().y,
-                egui::Stroke::new(1.5, theme::egui_color(theme::GRAY_5)),
+                egui::Stroke::new(1.5, none_yet()),
             );
             response.on_hover_text("turned off");
             return;
         }
+        OpStatus::NotRun => (none_yet(), false, "not generated"),
+        OpStatus::Waiting => (theme::egui_color(theme::TEXT_3), false, "waiting its turn"),
+        OpStatus::Done => (widgets::Level::Ok.color(), true, "generated"),
+        OpStatus::Warnings => (
+            widgets::Level::Warn.color(),
+            true,
+            "generated, with warnings",
+        ),
+        OpStatus::Stale => (widgets::Level::Warn.color(), false, "out of date"),
     };
-    let color = theme::egui_color(color);
-    let centre = rect.center();
-    if filled {
-        ui.painter().circle_filled(centre, 3.0, color);
-    } else {
-        ui.painter()
-            .circle_stroke(centre, 2.5, egui::Stroke::new(1.25, color));
-    }
-    response.on_hover_text(text);
+    widgets::status_dot(ui, color, filled).on_hover_text(text);
 }
 
 /// What a running setup is doing, in a few words: which operation of how many,
@@ -137,13 +130,9 @@ fn stage_text(stage: Stage, operations: usize) -> String {
     }
 }
 
-/// Text quieter than a row's, beside it.
-fn quiet(ui: &mut egui::Ui, text: impl Into<String>) {
-    ui.label(
-        egui::RichText::new(text.into())
-            .size(theme::TEXT_SM)
-            .color(theme::egui_color(theme::TEXT_3)),
-    );
+/// Text quieter than a row's, and smaller, beside it.
+fn beside(ui: &mut egui::Ui, text: impl Into<String>) {
+    ui.label(hint_text(text).size(theme::TEXT_SM));
 }
 
 /// A row that selects `selection`, with `extra` beside it.
@@ -257,41 +246,12 @@ fn dropped(ui: &egui::Ui) -> Option<std::sync::Arc<DraggedOp>> {
     egui::DragAndDrop::take_payload::<DraggedOp>(ctx)
 }
 
-/// What is being dragged, by the pointer, over everything.
+/// The operation being dragged, named by the pointer, over everything.
 fn drag_label(ui: &egui::Ui) {
-    let ctx = ui.ctx();
-    let (Some(dragged), Some(at)) = (
-        egui::DragAndDrop::payload::<DraggedOp>(ctx),
-        ctx.pointer_interact_pos(),
-    ) else {
-        return;
-    };
-    ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Tooltip,
-        egui::Id::new("dragged operation"),
-    ));
-    let galley = painter.layout_no_wrap(
-        dragged.label.clone(),
-        theme::font(ui.style(), egui::TextStyle::Body),
-        theme::egui_color(theme::TEXT_1),
-    );
-    let rect = egui::Rect::from_min_size(
-        at + egui::vec2(12.0, 4.0),
-        galley.size() + egui::vec2(12.0, 6.0),
-    );
-    painter.rect(
-        rect,
-        theme::RADIUS_SM,
-        theme::egui_color(theme::SURFACE_RAISED),
-        egui::Stroke::new(1.0, theme::egui_color(theme::BORDER_STRONG)),
-        egui::StrokeKind::Inside,
-    );
-    painter.galley(
-        rect.min + egui::vec2(6.0, 3.0),
-        galley,
-        egui::Color32::WHITE,
-    );
+    if let Some(dragged) = egui::DragAndDrop::payload::<DraggedOp>(ui.ctx()) {
+        let font = theme::font(ui.style(), egui::TextStyle::Body);
+        widgets::drag_label(ui.ctx(), &dragged.label, font);
+    }
 }
 
 /// The tree for `doc`.
@@ -332,9 +292,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) -> Vec<BrowserAction> {
                         leaf(ui, |ui| {
                             let slot = d.models.get(&m.name);
                             let text = match slot {
-                                Some(ModelSlot::Failed { .. }) => {
-                                    egui::RichText::new(&m.name).color(ui.visuals().error_fg_color)
-                                }
+                                Some(ModelSlot::Failed { .. }) => widgets::error_text(&m.name),
                                 _ => egui::RichText::new(&m.name),
                             };
                             let r = row(ui, d, Selection::Model(m.name.clone()), text, &edits);
@@ -434,7 +392,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) -> Vec<BrowserAction> {
                                 }
                                 let progress = d.setups.get(&name).and_then(|st| st.progress);
                                 if let Some((stage, _)) = progress {
-                                    quiet(ui, stage_text(stage, s.operations.len()));
+                                    beside(ui, stage_text(stage, s.operations.len()));
                                 }
                             },
                             |ui| {
@@ -448,7 +406,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) -> Vec<BrowserAction> {
                                         let shown = if op.enabled {
                                             egui::RichText::new(&text)
                                         } else {
-                                            egui::RichText::new(&text).weak().strikethrough()
+                                            hint_text(&text).strikethrough()
                                         };
                                         let r = row(
                                             ui,
@@ -465,10 +423,13 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) -> Vec<BrowserAction> {
                                             label: text,
                                         });
                                         if op.tool.is_none() {
-                                            ui.colored_label(ui.visuals().warn_fg_color, "no tool");
+                                            ui.colored_label(
+                                                widgets::Level::Warn.color(),
+                                                "no tool",
+                                            );
                                         }
                                         if let OpStatus::Running(since) = status {
-                                            quiet(ui, format!("{} s", since.elapsed().as_secs()));
+                                            beside(ui, format!("{} s", since.elapsed().as_secs()));
                                         }
                                         r.context_menu(|ui| {
                                             generate_op_item(ui, d, &name, i, &actions);
@@ -527,7 +488,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) -> Vec<BrowserAction> {
                                 }
                                 if s.operations.is_empty() {
                                     leaf(ui, |ui| {
-                                        ui.weak("no operations: right-click the setup");
+                                        ui.label(hint_text("no operations: right-click the setup"));
                                     });
                                 }
                             },
@@ -554,9 +515,7 @@ fn generate_op_item(
     index: usize,
     actions: &RefCell<Vec<BrowserAction>>,
 ) {
-    let why_not = doc
-        .setup_index(name)
-        .and_then(|i| doc.cannot_generate(i, Some(index)));
+    let why_not = doc.cannot_generate(name, Some(index));
     if ui
         .add_enabled(why_not.is_none(), egui::Button::new("Generate"))
         .on_hover_text("generates this operation alone: the others keep what they have")
@@ -577,7 +536,7 @@ fn generate_item(
     name: &str,
     actions: &RefCell<Vec<BrowserAction>>,
 ) {
-    let why_not = doc.setup_index(name).and_then(|i| doc.cannot_run(i));
+    let why_not = doc.cannot_generate(name, None);
     if ui
         .add_enabled(why_not.is_none(), egui::Button::new("Generate"))
         .on_hover_text(format!("generates setup '{name}', all its operations"))

@@ -106,7 +106,7 @@ fn main_window_after_a_run() {
     h.run_steps(2);
     shoot(&mut h, "after_run");
 
-    // Part-way through roughing, with the cutter where the scrub stands.
+    // Part-way through roughing, with the cutter where the playhead stands.
     h.state_mut().set_view_for_snapshot(0, 0.4, u32::MAX);
     h.run_steps(2);
     shoot(&mut h, "scrub_mid_rough");
@@ -166,7 +166,7 @@ fn main_window_after_a_run() {
     assert_eq!(h.state_mut().playhead_for_snapshot().unwrap().0, stopped);
     println!("played from {before:?} to {stopped:?}");
 
-    // Clicking the deepest steep descent: scrub, stock and camera all go there.
+    // Clicking the deepest steep descent: playhead, stock and camera all go there.
     let deepest = h.state_mut().jump_to_deepest_for_snapshot();
     println!("deepest steep descent {deepest:?}");
     h.run_steps(3);

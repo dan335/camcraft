@@ -5,12 +5,12 @@ use camcraft_core::frame::{Axis, Orientation};
 use eframe::egui;
 
 use super::parts::{Names, names};
-use super::{Picks, PropAction, cannot_run, header, quiet, renamed, tab_bar, work_zero};
+use super::{Picks, PropAction, cannot_generate, header, renamed, work_zero};
 use crate::document::{Document, Selection};
 use crate::measure::Measure;
 use crate::slots::Slot;
 use crate::theme;
-use crate::widgets::{self, Size, Tab, Variant, form};
+use crate::widgets::{self, Size, Tab, Variant, form, hint};
 
 /// Which tab a setup shows: the same for every setup, so moving between them
 /// keeps the place.
@@ -24,17 +24,17 @@ pub(super) fn show(
     picks: Picks<'_>,
     actions: &mut Vec<PropAction>,
 ) {
-    let Some(i) = doc.setup_index(name) else {
+    if doc.setup(name).is_none() {
         doc.selection = Selection::Setups;
         return;
-    };
+    }
     let id = ui.id().with(("setup", name));
     if let Some(to) = header(ui, "Setup", id, name) {
         let r = doc.rename_setup(name, &to);
         renamed(doc, r);
         return;
     }
-    cannot_run(ui, doc, name);
+    cannot_generate(ui, doc, name);
 
     // Picking in the view needs the setup laid out: a model and a stock to lay out.
     let laid_out = doc
@@ -49,7 +49,7 @@ pub(super) fn show(
         .shown
         .and_then(|s| s.origin.as_ref())
         .is_some_and(Result::is_err);
-    let Some(s) = doc.job.setups.get_mut(i) else {
+    let Some(s) = doc.setup_mut(name) else {
         return;
     };
 
@@ -65,7 +65,7 @@ pub(super) fn show(
         Some(Slot::WorkZero { .. }) => Some(1),
         _ => None,
     };
-    match tab_bar(ui, egui::Id::new(TAB), &tabs, picking) {
+    match widgets::remembered_tabs(ui, egui::Id::new(TAB), &tabs, 0, picking) {
         0 => {
             names(
                 ui,
@@ -110,7 +110,7 @@ pub(super) fn show(
                 actions,
             );
             ui.add_space(theme::SPACE_3);
-            quiet(
+            hint(
                 ui,
                 "Each setup starts from its own stock: what one leaves is not carried to the next.",
             );

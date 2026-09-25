@@ -6,7 +6,8 @@
 //! works only on the newest position it has been sent, a few milliseconds at a
 //! time, and sends back the cells that changed, recoloured, for the UI to copy into
 //! its own image and the viewport to upload. So the window keeps its frame rate
-//! while the material catches up, and a fast scrub costs no more than a slow one.
+//! while the material catches up, and dragging the playhead fast costs no more
+//! than dragging it slowly.
 
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -45,9 +46,9 @@ const SHADE_STEP: Duration = Duration::from_millis(4);
 /// Cells shaded at a time while catching up, so it looks at the clock often.
 const SHADE_CELLS: u64 = 65_536;
 
-/// Where the program stands.
+/// Where the program stands, for the material to catch up with.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Target {
+pub struct Goal {
     /// Whole moves made.
     pub at: Position,
     /// How far along the next.
@@ -58,7 +59,7 @@ pub struct Target {
 /// anything, on the way to a target, and whether it got there.
 #[derive(Debug)]
 struct Update {
-    target: Target,
+    target: Goal,
     reached: bool,
     change: Option<Change>,
     /// Whether every cell is shaded for its heights, as of this update.
@@ -89,10 +90,10 @@ fn lock(shared: &Shared) -> MutexGuard<'_, StockImage> {
 pub struct LiveStock {
     /// Which run it replays.
     pub scene_key: u64,
-    to_thread: Sender<Target>,
+    to_thread: Sender<Goal>,
     from_thread: Receiver<Update>,
     /// The last target sent.
-    sent: Option<Target>,
+    sent: Option<Goal>,
     /// The material, as the thread last left it.
     image: Shared,
     /// Tells one whole image from the next, for the viewport.
@@ -101,7 +102,7 @@ pub struct LiveStock {
     pending_all: bool,
     pending: Option<Tiles>,
     /// The last target the thread reached.
-    reached: Option<Target>,
+    reached: Option<Goal>,
     /// Whether the thread had shaded every cell, as of its last word.
     shaded: bool,
 }
@@ -138,7 +139,7 @@ impl LiveStock {
     }
 
     /// Ask for the material at `target`, unless that is what was last asked for.
-    pub fn seek(&mut self, target: Target) {
+    pub fn seek(&mut self, target: Goal) {
         if self.sent != Some(target) && self.to_thread.send(target).is_ok() {
             self.sent = Some(target);
         }
@@ -226,8 +227,8 @@ impl LiveStock {
 /// shading a cell costs many times classifying it. So cutting never waits on
 /// shading: the cells a cut reaches are kept to shade once there is time, a few
 /// milliseconds between sweeps and all of them before sweeping ahead. At playing
-/// speed the shade is a frame or two behind the cut; during a fast scrub it
-/// follows the cutter. A new image is shaded whole before it is shown, so a
+/// speed the shade is a frame or two behind the cut; while the playhead is dragged
+/// fast it follows the cutter. A new image is shaded whole before it is shown, so a
 /// jump never shows the shade of somewhere else in the program.
 #[derive(Default)]
 struct Shading {
@@ -280,7 +281,7 @@ fn work(
     replay: &Replay,
     (part, budget): (&PartSurface, f64),
     (shared, shading): (&Shared, &mut Shading),
-    t: Target,
+    t: Goal,
     until: Instant,
 ) -> (Option<Change>, bool) {
     let (nx, ny) = (live.stock().field().nx(), live.stock().field().ny());
@@ -336,7 +337,7 @@ fn run(
     part: &PartSurface,
     budget: f64,
     shared: &Shared,
-    rx: &Receiver<Target>,
+    rx: &Receiver<Goal>,
     tx: &Sender<Update>,
     ctx: &egui::Context,
 ) {
@@ -349,8 +350,8 @@ fn run(
     // to do, dropping checkpoints for the first: then going back anywhere costs at
     // most one spacing of sweeping, even to where playback has never been.
     let mut ahead = Live::new(replay, CHECKPOINT_BYTES);
-    let mut target: Option<Target> = None;
-    let mut last: Option<Target> = None;
+    let mut target: Option<Goal> = None;
+    let mut last: Option<Goal> = None;
     let mut shading = Shading::default();
     loop {
         // Idle: shade what is behind, then sweep ahead, or wait once that is
@@ -524,7 +525,7 @@ tool = "rough-6-flat"
         let mut frame = |live: &mut Live, to: Playhead| {
             let started = Instant::now();
             let (at, fraction) = scene.target(to);
-            let target = Target { at, fraction };
+            let target = Goal { at, fraction };
             // As the thread does, but to the end rather than for a while, with
             // its few milliseconds of catching up on the shading.
             let far = started + Duration::from_secs(3600);

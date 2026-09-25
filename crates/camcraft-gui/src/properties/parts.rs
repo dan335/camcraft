@@ -2,16 +2,15 @@
 //! setup (or a stock around models) includes, with a way to add more from a
 //! filtered list or by clicking them in the view.
 
-use camcraft_core::job::{LengthUnit, StockSpec};
+use camcraft_core::job::{LengthUnit, Setup, StockSpec};
 use eframe::egui;
 
-use super::{Picks, PropAction, error, header, quiet, renamed};
+use super::{Picks, PropAction, header, renamed};
 use crate::document::{Document, ModelSlot, Selection};
 use crate::measure::Measure;
 use crate::slots::Slot;
 use crate::theme;
-use crate::tool_editor::list_row_background;
-use crate::widgets::{self, Icon, Size, Variant, form};
+use crate::widgets::{self, Icon, Size, Variant, error, form, hint, list_row_background};
 
 /// A list of names included from a larger one: a card with each included name
 /// and a way to take it out, and in its header a way to add more.
@@ -54,7 +53,7 @@ pub(super) fn names(
                 } else {
                     let r = ui
                         .add_enabled_ui(why_not.is_none(), |ui| {
-                            widgets::icon_button(ui, Icon::MousePointerClick, "Select in the view")
+                            widgets::icon_button(ui, Icon::MousePointerClick, "Select in view…")
                         })
                         .inner;
                     if r.clicked() {
@@ -76,7 +75,7 @@ pub(super) fn names(
         },
         |ui| {
             if included.is_empty() {
-                quiet(ui, n.empty);
+                hint(ui, n.empty);
             }
             for (i, name) in included.iter().enumerate() {
                 if row(ui, name, !n.all.contains(name)) {
@@ -121,7 +120,7 @@ fn add_list(
         .max_height(240.0)
         .show(ui, |ui| {
             if shown.is_empty() {
-                quiet(
+                hint(
                     ui,
                     if others.is_empty() {
                         "All of them are in already."
@@ -240,14 +239,14 @@ pub(super) fn model(
         Some(ModelSlot::Loading(_)) => {
             ui.horizontal(|ui| {
                 ui.spinner();
-                quiet(ui, "loading");
+                hint(ui, "loading");
             });
         }
         Some(ModelSlot::Failed { why, .. }) => {
             error(ui, why);
         }
         None => {
-            quiet(ui, "not loaded");
+            hint(ui, "not loaded");
         }
     }
     if failed
@@ -255,21 +254,13 @@ pub(super) fn model(
     {
         actions.push(PropAction::Locate(name.to_string()));
     }
-    let users: Vec<String> = doc
-        .job
-        .setups
-        .iter()
-        .filter(|s| s.models.iter().any(|x| x == name))
-        .map(|s| s.name.clone())
-        .collect();
     ui.add_space(theme::SPACE_2);
-    quiet(
+    used_by(
         ui,
-        &if users.is_empty() {
-            "No setup machines it.".to_string()
-        } else {
-            format!("Machined by {}.", users.join(", "))
-        },
+        doc,
+        |s| s.models.iter().any(|x| x == name),
+        "No setup machines it.",
+        "Machined by",
     );
 }
 
@@ -377,21 +368,36 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
         }
     }
     ui.add_space(theme::SPACE_3);
-    let users: Vec<String> = doc
+    used_by(
+        ui,
+        doc,
+        |s| s.stocks.iter().any(|x| x == name),
+        "No setup uses it.",
+        "Used by",
+    );
+}
+
+/// Which setups use a model or stock, those `uses` holds for: "`some` A, B.", or
+/// `none` when no setup does.
+fn used_by(
+    ui: &mut egui::Ui,
+    doc: &Document,
+    uses: impl Fn(&Setup) -> bool,
+    none: &str,
+    some: &str,
+) {
+    let users: Vec<&str> = doc
         .job
         .setups
         .iter()
-        .filter(|s| s.stocks.iter().any(|x| x == name))
-        .map(|s| s.name.clone())
+        .filter(|s| uses(s))
+        .map(|s| s.name.as_str())
         .collect();
-    quiet(
-        ui,
-        &if users.is_empty() {
-            "No setup uses it.".to_string()
-        } else {
-            format!("Used by {}.", users.join(", "))
-        },
-    );
+    if users.is_empty() {
+        hint(ui, none);
+    } else {
+        hint(ui, &format!("{some} {}.", users.join(", ")));
+    }
 }
 
 /// The box around every loaded model, in model coordinates.

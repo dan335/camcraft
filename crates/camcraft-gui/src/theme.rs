@@ -178,6 +178,8 @@ pub const TEXT_SM: f32 = 12.0;
 pub const TEXT_BASE: f32 = 14.0;
 /// `--text-md`: section headings.
 pub const TEXT_MD: f32 = 16.0;
+/// `--text-lg`: the wordmark, where a logo would go.
+pub const TEXT_LG: f32 = 20.0;
 /// `--tracking-wide`, in ems: the spread of the uppercase labels.
 pub const TRACKING_WIDE: f32 = 0.06;
 
@@ -209,8 +211,8 @@ pub const RADIUS_SM: u8 = 2;
 /// `--radius-lg`: dialogs and windows, the most the system rounds anything.
 pub const RADIUS_LG: u8 = 4;
 
-/// A named text style for captions: monospace at `--text-xs`, as the web
-/// inspector set its figures and hints.
+/// A named text style for captions: monospace at `--text-xs`, for figures and
+/// notes drawn small, as over the view and on a tool's picture.
 pub const CAPTION: &str = "caption";
 
 /// IBM Plex Sans at 500, for labels and tabs: egui has no font weights, so each
@@ -577,6 +579,7 @@ mod tests {
             ("--text-sm:", TEXT_SM),
             ("--text-base:", TEXT_BASE),
             ("--text-md:", TEXT_MD),
+            ("--text-lg:", TEXT_LG),
         ] {
             let want = format!("{token}{size}px");
             assert!(TYPOGRAPHY.contains(&want), "typography.css has no {want}");
