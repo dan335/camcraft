@@ -8,11 +8,11 @@ from Google Fonts as a stand-in, and asks for local files).
 |---|---|---|
 | `IBMPlexSans-{Regular,Medium,SemiBold}.ttf` | IBM Plex v6.4.0, `IBM-Plex-Sans/fonts/complete/ttf/` (github.com/IBM/plex) | SIL OFL 1.1, `OFL-IBMPlexSans.txt` |
 | `FiraCode-{Regular,Medium}.ttf` | npm `firacode@6.2.0`, `distr/ttf/` | SIL OFL 1.1, `OFL-FiraCode.txt` |
-| `lucide-subset.ttf` | npm `lucide-static@1.47.0`, `font/lucide.ttf`, cut to the icons in `src/widgets.rs` | ISC, `LICENSE-Lucide.txt` |
+| `lucide-subset.ttf` | npm `lucide-static@1.47.0`, `font/lucide.ttf`, cut to the icons in `src/ui/widgets.rs` | ISC, `LICENSE-Lucide.txt` |
 
 The Lucide font is 900 KB whole, so only the glyphs the app draws are kept. To add an icon, look
 its codepoint up in `font/codepoints.json` of the same package, add it to `Icon` in
-`src/widgets.rs`, and cut the font again with every codepoint listed there:
+`src/ui/widgets.rs`, and cut the font again with every codepoint listed there:
 
 ```text
 pip install fonttools

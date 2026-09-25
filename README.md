@@ -7,10 +7,10 @@ A B-rep modelling kernel is 50+ person-years of work — which is why Plasticity
 Shapr3D both license Parasolid rather than write one — but CAM needs no kernel at all.
 This is the CAM half.
 
-**Status: 0.1-d complete, pre-alpha.** Takes a STEP or STL model and a job file,
-writes G-code, and refuses to write a program the simulator has not verified against
-material. STEP files are read in the units they declare, and every import is checked
-against the file it came from.
+**Status: 0.2, pre-alpha.** A desktop app and a command line on one engine. Takes
+STEP or STL models and a job file, writes G-code, and refuses to write a program the
+simulator has not verified against material. STEP files are read in the units they
+declare, and every import is checked against the file it came from.
 Nothing has been cut yet. See [STATUS.md](STATUS.md) for where the work left off and
 what the simulator cannot check for you.
 
@@ -20,23 +20,24 @@ what the simulator cannot check for you.
 - **Native and parallel.** No mesh decimation, no vertex budgets, no accuracy traded
   for speed.
 - **A CLI and a desktop app on one engine path.** The `camcraft` command line
-  scripts it. `camcraft-gui` (0.2, in progress) opens a part and a job, runs it,
-  and shows the result. Both go through the same library, so they cannot disagree
-  about what runs.
+  scripts it ([docs/jobs.md](docs/jobs.md)). `camcraft-gui` edits jobs, runs and
+  checks them, plays the program back against the material, and posts
+  ([docs/app.md](docs/app.md)). Both go through the same library, so they cannot
+  disagree about what runs or what is posted.
 
 ## Architecture
 
 The dependency graph is acyclic, and the direction carries meaning:
 
 ```
-camcraft-geom     BVH, height maps, 2D contours, conventions      (leaf)
-camcraft-import   STL and STEP to meshes                          -> geom
-camcraft-sim      material removal: stock updater + gouge oracle  -> geom
-camcraft-core     tools, CL maps, strategies, toolpaths, linking  -> geom, sim
-camcraft-post     Op IR, TOML-driven dialect renderers            -> geom, core
-camcraft-session  load, run, gate, post: shared by both front ends -> all libraries
-camcraft-cli      job (.camcraft) -> .nc                           -> session
-camcraft-gui      desktop app (egui, wgpu)                        -> session
+camcraft-geom     BVH, height maps, contours, shadows, topology     (leaf)
+camcraft-import   STL and STEP to meshes, checked against the file -> geom
+camcraft-sim      material removal: stock updater + gouge oracle   -> geom
+camcraft-core     tools, jobs, strategies, toolpaths, linking, run -> geom, sim
+camcraft-post     Op IR, TOML-driven dialect renderers             -> core
+camcraft-session  load, run, check, gate, post: both front ends    -> all libraries
+camcraft-cli      post / job (.camcraft) -> .nc                     -> session
+camcraft-gui      desktop app (egui, wgpu)                         -> session
 ```
 
 `core` does not depend on `post`. It therefore *cannot* reference a G-code concept,
@@ -76,20 +77,23 @@ style preferences:
   worst available failure mode.
 - **The simulator gates release.** No cut from a toolpath it has not verified.
 
-## Build and check
+## Build, run and check
 
 ```sh
 cargo build --workspace
+bash scripts/run.sh [JOB]...                                    # the app
+cargo run --release -p camcraft-cli -- job examples/rail-jig.camcraft --out out
 ```
 
 There is deliberately **no CI** while this repository is private, so one script is
 the only thing standing between a mistake and `main`. Run it before every push:
 
 ```sh
-bash scripts/check.sh            # the crates your changes can affect: before committing
-bash scripts/check.sh --dry-run  # which crates that is, without running anything
-bash scripts/check.sh --all      # every crate: before pushing
-bash scripts/check.sh --full     # every crate, plus benchmarks
+bash scripts/check.sh               # the crates your changes can affect: before committing
+bash scripts/check.sh --since main  # the same, for everything since main
+bash scripts/check.sh --dry-run     # which crates that is, without running anything
+bash scripts/check.sh --all         # every crate: before pushing
+bash scripts/check.sh --full        # every crate, plus benchmarks
 ```
 
 By default it checks only what the uncommitted changes can affect: the crates they
@@ -101,19 +105,18 @@ a fixture) checks everything.
 Run it unpiped. Piping through `tail` buffers the whole run and hides progress on
 a suite that now takes minutes; read the tail of the output afterwards instead.
 
-```powershell
-.\scripts\check.ps1
-.\scripts\check.ps1 -Full
-```
+On Windows, `.\scripts\check.ps1` (and `-Full`) checks every crate.
 
 It checks each gate on its own exit status and prints a summary, rather than
 chaining commands in a way that can report success without having checked anything.
 Restore the GitHub Actions workflow when the repository goes public.
 
-From 0.1-d, `camcraft-import` pulls in OpenCascade, which adds **cmake and a C++
-toolchain** as prerequisites (on Windows, build from an MSVC environment so cmake can
-find `cl.exe`). That crate is reached only by the two binaries, so the inner loop
-on `geom` / `sim` / `core` / `post` never pays that cost. Reasoning in
+`camcraft-import` pulls in OpenCascade, which adds **cmake and a C++ toolchain** as
+prerequisites (on Windows, build from an MSVC environment so cmake can find
+`cl.exe`). That crate is reached only by the two binaries, so the inner loop on
+`geom` / `sim` / `core` / `post` never pays that cost. `vendor/` holds opencascade's
+sources, patched on every platform: the MSVC fix, and each B-rep face's triangle
+count, which picking needs (see the root `Cargo.toml`). Reasoning in
 [docs/decisions/0001-step-backend.md](docs/decisions/0001-step-backend.md).
 
 ## License

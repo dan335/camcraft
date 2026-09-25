@@ -118,6 +118,17 @@ Accepted costs, all of which were actually hit and resolved during the spike:
   count should replace it; until then that regression is only caught on a machine with
   `CAMCRAFT_FIXTURES` set.
 - **Licensing was not weighed here, and must be before binaries are distributed.**
+
+## Since
+
+- **2026-09: vendored and patched.** "No fork" did not last: opencascade 0.3.0 does
+  not build with MSVC, and picking needs each B-rep face's triangle count, which
+  upstream does not give. `vendor/` holds the crates.io sources with upstream PR #234
+  and that count added, patched in from the root `Cargo.toml`, until a release
+  includes both.
+- **2026-09: the app depends on it too.** `camcraft-import` is reached through
+  `camcraft-session`, which both binaries use. The engine crates still never pay
+  for OCCT.
   `opencascade` and `occt-sys` are LGPL-2.1, and OpenCascade itself is LGPL-2.1
   with an additional exception. `occt-sys` links it statically. camcraft is MIT or
   Apache-2.0. A static LGPL link in a distributed binary brings obligations, such as

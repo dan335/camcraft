@@ -51,10 +51,10 @@ Both are checked on every STEP import, not only in tests (`crates/camcraft-impor
 Some of the most informative parts are commercial work and must never enter this
 repository or its history. Tests therefore also sweep any `*.step` under the directory
 named by the `CAMCRAFT_FIXTURES` environment variable, and skip that sweep when the
-variable is unset. On this machine:
+variable is unset. For example:
 
 ```
-CAMCRAFT_FIXTURES=D:\rust\camcraft-fixtures-private
+CAMCRAFT_FIXTURES=../camcraft-fixtures-private
 ```
 
 ### Known coverage gap

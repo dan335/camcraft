@@ -1,56 +1,42 @@
 # Where this is
 
-Last updated 2026-09-23. Read this before picking the work back up.
+Last updated 2026-09-24. Read this before picking the work back up.
 
-**0.2 is feature-complete bar the carried items: the desktop app runs, checks and
-posts jobs.** All gates green. The engine takes a STEP or STL model and a job file
-and writes G-code, and refuses to write a program that fails a check, the
-simulator's against material among them. The web inspector is gone; the app is
-where a job is looked at.
+**0.2 is done: the desktop app runs, checks, plays back and posts jobs**, and some
+of 0.3 came in with it (drilling, V-bits and chamfer mills, speed and feed presets,
+Fusion CSV tool import). All gates are green. The engine takes STEP or STL models
+and a job file and writes G-code, and refuses to write a program that fails a
+check, the simulator's against material among them.
 
-**Nothing has been cut yet.** See *Before the first cut* below — there are things
-only the machine can tell us.
+**Nothing has been cut yet.** See *Before the first cut*: there are things only the
+machine can tell us.
 
-## What works
+## Where to read
 
-```powershell
-cd D:\rust\camcraft
+| For                                                     | Read                                              |
+|---------------------------------------------------------|---------------------------------------------------|
+| What camcraft is, the crates, the rules, how to build   | [README.md](README.md)                            |
+| The job file, its versions, the checks, the CLI, posts  | [docs/jobs.md](docs/jobs.md)                      |
+| The app: tree, properties, picking, playback, tools     | [docs/app.md](docs/app.md)                        |
+| Simulation, verification, playback internals, memory    | [docs/simulation.md](docs/simulation.md)          |
+| Decisions and their reasoning                           | [docs/decisions/](docs/decisions/)                |
+| Bugs found by looking, and what they taught             | [docs/history.md](docs/history.md)                |
 
-# Look first, in the app: Generate, read the checks, scrub, then Post
-scripts\run.bat examples\rail-jig.camcraft
+## Running it
 
-# Or from the command line: run and check, nothing written
-cargo run --release -p camcraft-cli -- job examples\rail-jig.camcraft
-
-# Then write one program per operation
-cargo run --release -p camcraft-cli -- job examples\rail-jig.camcraft --out out
+```sh
+bash scripts/run.sh examples/rail-jig.camcraft        # the app: Generate, read the checks, play, Post
+cargo run --release -p camcraft-cli -- job examples/rail-jig.camcraft            # run and check
+cargo run --release -p camcraft-cli -- job examples/rail-jig.camcraft --out out  # and write programs
+bash scripts/check.sh                                 # the gates, for what changed
 ```
 
-A job file names its own models (relative to itself), stocks and setups; each setup
-has its own post, work offset, orientation and work zero, and programs are named
-`<setup>-NN-<operation>`. `--setup NAME` runs only that setup; `--profile` overrides
-every setup's post. A STEP file states its own units; an STL model needs
-`units = "mm"` or `"inch"` in the job.
-
-`post` still exists for a single finishing pass described with flags. It builds a
-one-operation job and goes through the same `run_setup` as `job` and the app, so
-there is exactly one engine path. `crates/camcraft-cli/tests/one_path.rs` parses
-every written program back into positions and compares them with the paths
-`run_setup` produces in-process, move for move.
-
-**Checks** (`camcraft_session::checks`) are one list, printed by the command line
-and shown in the app: `CC1xx` failures (unresolved links, a rapid through the part,
-a sideways plunge or retract, feeds that do not suit their move, a plunge at cutting
-feed, a rapid through material, a gouge) and `CC2xx` advisories. They are
-re-derived from the path and the exact part where they can be — the rapid check
-lowers the job's cutter along every rapid — rather than echoing the engine's own
-report. The gate is "no failures".
-
-Exit codes: `0` clean, `2` ran with warnings worth reading, `1` a check failed (and,
-with `--out`, nothing was written). `--force` overrides and says loudly that it did.
+On Windows, `scripts\run.bat` and `.\scripts\check.ps1`, from an MSVC environment.
+Day to day the work is on macOS; the lego brick (`lego_4x2_01.step`) is the part
+the app is usually tried on.
 
 Last full run on the 237 × 227 × 76 mm router jig, read straight from
-`sled_base.step`, 17 s on an M-series Mac (26 s before roughing came from the model):
+`sled_base.step`, 17 s on an M-series Mac:
 
 ```
 rough:  1262 passes, removed 3570370 mm3, travel saved 78%, rapid contacts 0
@@ -58,110 +44,28 @@ finish:  556 passes, removed   55924 mm3, travel saved  0%, rapid contacts 0
 verified: 155326 columns compared, gouges 0, deepest 0.000 mm
 ```
 
-Roughing now removes more and finishing less: walls are left exactly the stock to
-leave, where they used to be left half a stepover more.
+Finishing saving 0% travel is correct: a parallel zigzag already ends each pass
+next to where the following one starts.
 
-Finishing saving 0% travel is correct, not a failure: a parallel zigzag already ends
-each pass next to where the following one starts.
+## What is next
 
-## What is next, in order
+Not yet built, roughly in the order they matter:
 
-1. **Build on Windows: done.** opencascade 0.3.0 did not compile with MSVC: it
-   assumes OpenCascade's `Handle_X` is an alias of `opencascade::handle<X>`, which
-   Visual Studio makes a derived class instead (`Standard_Handle.hxx`). `vendor/`
-   holds the crates.io 0.3.0 sources with upstream PR #234 applied
-   (bschwind/opencascade-rs, reviewed line by line; it changes nothing on GCC or
-   Clang), patched in from the root `Cargo.toml`. Delete both once a release
-   includes the fix. Release and debug builds both link, no further libraries were
-   needed, and `camcraft job examples\rail-jig.camcraft` reads the STEP part and
-   passes all 13 checks on Windows 11 with MSVC 14.44.
-2. **STL format detection: done.** A nameless ASCII file (`solid` then a newline,
-   as most opencamlib samples begin) was read as binary and failed, and a binary
-   file whose header began `solid ` would have been read as ASCII. The format is
-   now decided before `stl_io` sees the file: a binary STL is exactly as long as
-   the triangle count in its header says.
-3. **0.2: a native desktop app.** Agreed scope, high level; each item gets its own
-   detailed plan before work starts:
-   - **App shell: done.** `camcraft-gui`, on eframe/egui 0.36 with wgpu, and
-     `egui-file-dialog` as in nodemangler. Jobs are documents, as in Fusion: File
-     › New, Open (several at once), Open Recent, Save, Save As and Close, each job
-     in its own tab (⌃Tab switches), with a prompt before unsaved work is lost, and
-     undo/redo (⌘Z, ⌘⇧Z) of whole edits. A job's models load in the background; a
-     model not where the job says is asked about, and can be found elsewhere.
-     Setups run on worker threads exactly as `camcraft job` runs them, several at
-     once, from the job as it is on screen, saved or not. The orchestration lives in
-     `camcraft-session`, which both use. Run with
-     `bash scripts/run.sh [JOB]...`. Headless PNGs of the real UI:
-     `cargo test --release -p camcraft-gui --features ui-snapshots -- --ignored`,
-     written to `target/ui-snapshots/`. Built and looked at on macOS only.
-   - **3D viewport: done, bar the checks.** Every operation's toolpath, coloured by
-     move role from the design system's palette, as screen-space lines that stay
-     readable on Retina. Playback through the whole program in machine order (see
-     *Playback*), with a readout of the move. Toggles by role, by operation,
-     for the part and for the stock outline. The job's own cutter is drawn at the
-     playhead, and still shows, fainter, when a pocket hides it.
-   - **Simulated stock view: done.** The material at any stage (the block, after
-     each operation, or cut as the program plays), coloured by the verifier's own rule:
-     red below the part, amber left above it (deeper amber for more), grey finished,
-     dark where there is no part. The legend's counts are the verifier's counts,
-     and a test holds them equal. **Steep descents** are listed deepest first; clicking one
-     scrubs to it, follows the stock and flies the camera there. The scrub readout
-     gives estimated machining time.
-   - **Job editing: done.** The job's tree, after Fusion's browser: Models,
-     Stocks and Setups, each setup with its operations and a status dot (not run,
-     running, verified, warnings, refused, out of date). Right-click adds, copies,
-     moves and removes; the properties panel edits whatever is selected: a model's
-     file and STL units, a stock's shape (around models, or a fixed box), a setup's
-     models and stocks, work offset, post, orientation (the 24 square ways a part
-     sits, with Turn over) and work zero (the model's, or a point on the stock or
-     model box, plus an offset), and every operation parameter. An operation's tool
-     is chosen from the job's tools or a library folder, and copied in. The view
-     shows the selected setup as it sits on the machine, with its stock and its
-     work zero's axes; each setup keeps its own camera, scrub and stock view. A
-     result goes out of date when anything it was made from changes, and says so.
-   - **Picking features: done.** Every model has faces, edges and corners: the
-     file's own B-rep faces for STEP, faces found from the triangles for STL
-     (`camcraft_geom::topology`). A property filled by picking has **Select in
-     view…**, which arms the view for what it takes. Hovering lights what a click
-     would pick. The work zero takes a corner, a round edge's centre or an edge's
-     middle on a model, or a corner, edge or side of the stock. An operation takes
-     faces and edges, which keep Parallel and Z-level rough to their outline seen
-     from above (tool centre, whole tool inside, or reaching in from outside, plus
-     the margin), drawn in the view at the stock's top. With nothing armed, a click
-     shows what is there. Picks are saved as a point on the feature, found again
-     after the model is re-tessellated or renumbered, and refused by name when the
-     model has changed under them (`docs/decisions/0002-feature-references.md`).
-   - **Run, check, post: done.** Background runs (Generate, Generate all). The
-     checks panel under each setup's result: a HALT banner when anything fails,
-     findings by operation, and a click on one at a move scrubs, follows the stock
-     and flies the camera there. **Post {setup}…** and **Post all…** write the
-     same programs, names and folder layout as `camcraft job --out`, all setups or
-     none, from results that are up to date; they ask before replacing files, and
-     a setup that failed a check is posted only after ticking "I know why" and
-     pressing Post anyway. The web inspector, `scripts/view.sh` and `--inspect`
-     are gone.
-   - **Steep descents: done.** A plunge is a *continuous* descent steeper than
-     `PLUNGE_RATIO` (10:1) that falls further than `max_cut_step`, measured over
-     the whole run of moves, not move by move. Finishing breaks its passes there,
-     and the gate refuses any that remains; the checks and the app measure it the
-     same way.
-   - **Design system: in.** The claude.ai/design project "CamCraft Design System"
-     is copied whole into `crates/camcraft-gui/design/system/` (tokens, components,
-     guidelines, readme); `theme.rs` mirrors its tokens and tests hold them to the
-     CSS. `theme::apply` gives every window its graphite surfaces, hairlines, 2 px
-     corners, amber selection, and IBM Plex Sans and Fira Code, bundled with a cut
-     of Lucide for icons (`assets/fonts/`). `widgets.rs` has the components egui
-     lacks: buttons by role, tabs, cards, tags, diagnostics, status dots, empty
-     states. The tool library is rebuilt on them: one toolbar, a status line, a
-     folder tree with counts, a sortable table, and an editor on tabs (General,
-     Cutter, Holder, Presets, Post) where a value left out reads "not given" rather
-     than an unticked box. The rest of the app has the theme but not yet the
-     components.
-
-   Also carried along: item 1 above, and the OpenCascade licensing decision.
-   Not in 0.2: new strategies (2D profile, pocket, drilling, waterline, adaptive),
-   arc fitting, and feeds and speeds. Those are 0.3. The first physical cut can
-   happen whenever it is ready and does not gate the release.
+1. **Feed height in the linker.** Every link descends from the clearance height to
+   the cut at the plunge feed, including through air roughing already cleared; on
+   the router jig that is about three of its seven hours (129 min of rough plunges,
+   57 of finish). Fusion rapids to a feed height just above the material first.
+   Worth doing before the first real cut.
+2. **Ramp and helix entry.** Roughing plunges into each pass. The ramp feed is kept
+   on presets but nothing uses it yet.
+3. **More strategies**: 2D profile, pocket, waterline, adaptive clearing.
+4. **Arc fitting**, as a `Toolpath -> Toolpath` transform.
+5. **A volumetric stock**, so what a top setup leaves carries to a flipped bottom
+   one.
+6. **Exact slicing of the offset surface** for Z-level work
+   ([decision 0003](docs/decisions/0003-grids-only-for-stock.md)).
+7. The work offset manager in the toolbar; Fusion's `.json` tool libraries, which
+   carry holders; tapered ball mills.
 
 ## Before the first cut
 
@@ -170,329 +74,38 @@ actually break cutters on the day:
 
 - **The Masso profile has never run on the machine.** It was built from the
   controller's documented G-code reference. Dry-run it well above the work first.
+  Canned drilling cycles are off in both built-in profiles until they have been
+  dry-run.
 - Nothing knows whether the WCS is where the job assumes, whether the tool in the
-  spindle matches `diameter`, or whether the stock is the size the job was told.
+  spindle matches its `diameter`, or whether the stock is the size the job was told.
 - Roughing is contour-parallel clearing that plunges into each pass; there is no
   ramp or helix entry yet. It has never cut anything.
-
-## Jobs
-
-A job (`.camcraft`, TOML) has three groups, as in Fusion. It is written as
-`version = 1` unless it holds picked features, which need `version = 2`: an older
-build would skip them and cut the whole part, so it must refuse the file instead.
-An operation with its own spindle speed, or a tool that turns backwards or wants
-coolant, needs `version = 3`, for the same reason: an older build would skip it.
-All three are read.
-
-- **Models**: design files, referenced by path relative to the job file, never
-  copied in. STL needs `units`; STEP states its own.
-- **Stocks**: blocks of material in model coordinates, either around models (by
-  name, or the setup's own when none are named) with margins, or a fixed box. A
-  top and a bottom setup share one block and see it from each side.
-- **Setups**: which models and stocks each includes (by name), its work offset,
-  post, orientation and work zero (the model's, a point on the stock or model box,
-  or a point picked on a model), and its operations, each optionally kept to picked
-  faces and edges. Everything past layout
-  (`core::setup::prepare`) is in the setup's own frame, so strategies, linker,
-  simulator and post never see a rotation.
-
-Each setup simulates from its own stock: the material is a height field seen from
-above, so what the top leaves cannot be carried to a flipped bottom. That needs a
-volumetric stock, later. The old `job.toml` format is refused by name; there is no
-converter. `examples/rail-jig.camcraft` is the reference job. With the default
-orientation and work zero, a run is bit-identical to before setups existed.
-
-## Tool manager
-
-**Tools** in the app's toolbar opens a window inside the app, after Fusion's Tool Library,
-with the per-user library only
-(`~/Library/Application Support/camcraft/tools.toml`, or `CAMCRAFT_TOOL_LIBRARY`),
-which saves itself as you edit. Tools are grouped in folders that nest (a folder per
-machine, say); drag a tool onto a folder, or use Move to. A library from before
-folders reads as its top folder. Tools carry Fusion-style detail: flutes, lengths,
-shank, stickout, holder, material and vendor. Each gets a scale drawing and
-per-field checks. A job's tools are chosen inside its operations, which copy them
-into the job, never link them. A job whose used tools share a T number is refused,
-by the CLI too.
-
-Speeds and feeds are **presets**: named sets on a tool ("Roughing", "Finishing",
-"MDF", whatever the person calls them), each with any of spindle speed, cutting,
-plunge and ramp feed, stepdown, stepover and stock to leave. Choosing a tool for an
-operation chooses one of its presets too, the first by default, and copies the
-values it has into the operation; the operation then says what has been changed
-since, can be reset to the preset, and can save its own values as a new preset of
-the job's copy. An operation has its own spindle speed, the tool's unless given; a
-job that sets one is written as version 3. A tool's old single `cutting` table
-reads as a preset called "Default". Nothing uses the ramp feed until entries ramp.
-Beside each speed and feed the editor shows the surface speed (m/min or ft/min)
-and chip load (per tooth, needing the tool's flutes), as makers chart them; typing
-either sets the spindle speed or feed. Neither is kept, so neither goes stale.
-
-A tool also says which way its spindle turns (M3, or M4 for a left-hand cutter)
-and its coolant (off, flood M8 or mist M7), and the program says so; before, every
-program was M3 with no coolant. A job with a tool that turns backwards or wants
-coolant is written as version 3, since an older build would drop either silently.
-
-**Import…** reads a Fusion tool library exported as CSV, as makers such as Bits &
-Bits publish theirs (`fixtures/tools/` holds two), into the folder showing. Each
-tool's rows become one tool with a preset per row, named as Fusion named it, in
-millimetres; columns are found by their key, not their place. A tool the folder
-already has (same product and diameter) gets the file's presets beside its own
-instead of a twin. Chamfer mills and spot drills come in as cones; types this build
-cannot cut with (drills, face mills, taps and the like) are skipped, and the manager
-says which and why.
-
-**V-bits and chamfer mills** are a fourth cutter, a cone: an included angle and an
-optional flat tip. The drop-cutter contacts it exactly (vertex and facet in closed
-form, edges by the same bounded search as the bullnose), the simulator sweeps it,
-and the tool drawing and 3D cutter show its flank. A cone finishes; it is refused
-for Z-level roughing, whose reach offsets a widening flank would multiply, and for
-stock to leave, since a cone grown by a ball is no longer a cone.
-
-**Drills and drilling.** A drill is a tool whose point is a cone (118° unless
-given), and it drills only. A drilling operation's holes are picked by their round
-top rims; pick a hole's bottom rim too and it is drilled to there, otherwise to the
-operation's bottom height. A rim that is not level in the setup, or an edge that is
-not round, is refused by name. Each hole is a pass: across at clearance, down (in
-pecks, backing out 2 mm above the rim between, when asked), and out, nearest hole
-next; so it is simulated and checked like any other path, and a drill that does
-not match its hole's size is said. Posted as those moves by default. A profile with
-`drill_cycles = true` gets one canned cycle a hole instead (G81, G82 with a dwell,
-G83 with pecks; G98, then G80), checked against golden files; both built-in
-profiles leave it off until cycles have been dry-run on the machine. Fusion drills
-import as drills.
-
-The work offset manager is to join the toolbar. Not yet: Fusion's own `.json`
-libraries, which carry holders; tapered ball mills.
-
-## Playback
-
-**Done: press play and watch the cutter cut the stock.** A bar under the view has
-the timeline (one span per operation, as long as it takes to run, with failed
-checks marked red and warnings and steep descents amber; click or drag to go
-anywhere), start, previous operation, step back, play backwards, play, step on,
-next operation and end, the estimated machining clock, the speed (¼× to 10,000×;
-the router jig's 8 h program plays in under a minute at 1,000×) and where playing
-stops by itself (at problems, on by default; at the end of each operation). Under
-it, the operation and the move under way. The old scrub slider and its readout
-are gone from the side panel.
-
-Keys, when no field has the keyboard: Space plays and pauses; J, K and L shuttle
-backwards, pause and forwards, and J or L again goes faster; Left and Right step a
-move (Shift: a hundred); Up and Down go to the previous and next operation; Home
-and End; `[` and `]` change the speed.
-
-While it plays the stock is one shaded material colour with anything below the
-part red the moment it is cut; *compare* in the Stock section gives the verifier's
-colours instead, during playback too. How it is built:
-
-- **One position.** `scene::Playhead` is whole segments made plus a fraction of
-  the next. The clock, the paths drawn, the cutter (part-way along its move) and
-  the material all come from it; `Scene::target` turns it into a replay position.
-- **The UI thread never sweeps.** `live.rs` gives each setup being played a thread
-  that owns a `camcraft_core::replay::Live` stock. The UI sends the playhead when
-  it moves; the thread works only on the newest, 12 ms at a time, and sends back
-  the cells that changed, recoloured. The viewport uploads only that rectangle
-  (`Stock::sweep` reports it). "cutting…" beside the clock means the material is
-  still catching up.
-- **Exact.** `Live` advances by whole moves and sweeps a part-way move onto the
-  stock, putting those cells back before the next step. Tests hold any walk,
-  forward, back and part-way, to `Replay::stock_at` bit for bit, and every changed
-  cell inside the rectangle reported.
-- **Rewind is bounded.** `Live` drops a checkpoint every 1/64th of the program,
-  packed (`sim::PackedStock`: runs of equal heights, and machined material is
-  mostly flat), within 256 MB a setup. The thread's idle sweep drops them all;
-  the stock that seeks does not pack any, so a seek someone waits on never pauses
-  to. A restore unpacks in place and redraws only the cells that differ.
-- **Only what the cutter touched moves.** Changes are kept in 32 × 32-cell tiles
-  (`tiles.rs`): only those are classified (in parallel, and only cells whose
-  height changed), and a frame uploads at most 4 million cells of them, the rest
-  following over the next frames, so a long seek never stalls the window.
-- **One image, shared.** The playback thread and the UI share one image of the
-  material behind a lock, taken only to classify a batch or upload one.
-- Measured (`cargo test --release -p camcraft-gui -- --ignored keeps_up
-  --nocapture`, with `CAMCRAFT_SHEET_JOB` naming a sheet job for the third), the
-  thread's work a frame at 1,000×, and the worst rewind after the idle sweep:
-  router jig 2 ms, 60 ms; lego brick 8.5 ms, 15 ms; full sheet 9 ms, 0.3 s.
-- Machining time is length over feed, rapids at an assumed 5000 mm/min until a
-  machine profile gives a rate.
-
-### Resolution, big stock and vertical walls
-
-- **The grid follows the job** (`run::sim_pitch`): fine enough that the setup's
-  narrowest tool cuts a slot 8 cells wide, never coarser than tolerance × 8,
-  finer still to spend 2 million cells on a small stock, and never more than 64
-  million cells (`MAX_SIM_CELLS`), never finer than 0.02 mm. So: the lego brick at
-  0.053 mm; a 300 mm stock with a 1/32" cutter at 0.1 mm; a full 5' × 12' × 8"
-  sheet at 0.4 mm with a 1/4" cutter and at 0.3 mm (the cap) with a 1/16". The
-  verifier runs on the same grid, its budget tolerance + pitch.
-- **Sweeps are exact where they can be.** A level move is swept in closed form
-  (every cell to the tool's underside at its distance from the move's line, in
-  parallel rows for a long pass), a move straight up or down is the tool at its
-  lowest end, and only climbing moves are sampled every half cell. The part
-  surface is rasterised triangle by triangle, over the part's own footprint only.
-- **Walls are judged across as well as down.** Beside a vertical wall a column's
-  height cannot tell a hair past the wall from a gouge the wall's height deep.
-  `PartSurface::reaching` judges material against the lowest the part comes
-  within the budget across (none beside no part, or past the grid), looked for
-  only where the material is already that far below its own column.
-- **Walls are drawn vertical.** The stock shader traces each pixel's ray down a
-  pyramid of maxima (`pyramid.rs`, the height texture's mips) to the first column
-  it meets: a column's top, or its side as a vertical wall, lit by which way the
-  material around it falls away so round walls read round. Rays start where they
-  enter the box, so a sheet seen from metres off draws as cleanly as a brick up
-  close. Colour is one byte a cell (`stock_view::code`), mapped on the GPU, so
-  switching material and compare colours redraws nothing.
-- **Big stock is drawn as tiles** (`stock_tiles.rs`): 2040 cells square, each its
-  own box, textures and pyramid, with a 4-cell apron of its neighbours so seams do
-  not show; eframe gives textures 8192 across at most, a sheet at 0.3 mm is 12,000.
-  The view frames the part and its stock together and can always zoom and see out
-  to all the stock.
-- **Memory.** The stock after each operation is kept packed and shared by the run
-  and its playback; the part surface is shared too. A full sheet at the 64
-  million cell cap: the run peaks at 1.1 GB, the app at about 2.4 GB with the
-  sheet playing (`sheet_playback` snapshot, measured with `/usr/bin/time -l`).
-- **Shaders are checked by the tests** (naga, as wgpu builds it), not first by a
-  GPU when the app draws.
-- The heightfield is complete for 3-axis work from above: every column has one top.
-  It cannot hold an undercut, which 3-axis cutting from the top cannot make, and
-  what a top setup leaves is not carried to a flipped bottom one (as before).
 
 ## Open questions
 
 - **Licensing of distributed binaries.** STEP import links OpenCascade statically
   through LGPL-2.1 crates, while camcraft is MIT or Apache-2.0. This doesn't matter
   while the repo is private, but it has to be settled before anyone ships a binary.
-  See the decision record.
-
-- **Plunges spend three of the router jig's seven hours in air.** The machining-time
-  estimate, checked independently from the inspection JSON, puts `rail-jig.toml` on
-  `sled_base.step` at about 7 h. Of that, 129 min is rough plunges and 57 min
-  finish plunges. Every link descends from the clearance height to the cut at the
-  plunge feed, including through air roughing already cleared. Fusion rapids to a
-  feed height just above the material first. This is a linker improvement, and
-  worth doing before the first real cut.
-
+  See [decision 0001](docs/decisions/0001-step-backend.md).
 - **One unexplained STEP read failure.** During a full gate run on 2026-09-23, two
   session tests reading `hinge_jig.step` failed with OpenCascade's "failed to read
-  STEP file". The same tests passed 80 times since, with and without a new lock
-  that serialises every OpenCascade call (`camcraft_import::step`). The lock stays
-  as a precaution, since OpenCascade's data exchange uses process-wide statics.
-  If it happens again, capture the run: this is not understood.
-
-## Grids are only for stock
-
-A rule, not a preference. Height fields represent material — the simulation, rest
-machining, clearance — and nothing else. Every point a toolpath follows, and every
-boundary it is offset from, comes from the model: exact drop-cutter queries, or
-shadows of the mesh. A stock grid may decide *whether* a path cuts somewhere, never
-*where* it runs. No smoothing is added to hide anything.
-
-Z-level roughing works that way now (`core::reach`, `geom::shadow`):
-
-- Where the cutter may not be at a level is the mesh's shadow from above, grown by
-  the cutter's radius: exact for a flat mill. A ball or bullnose (and stock to leave
-  makes every cutter a bullnose) is cut into height bands across which its radius
-  grows by at most half the tolerance, each grown by its widest radius, so the
-  region is never short of the truth and at most that much over. Vertical walls and
-  flats come out exact. Tested against the drop-cutter as the oracle.
-- The first ring is that boundary itself, then inward by the stepover. Every offset
-  is padded by its arc tolerance so arcs err away from the part.
-- The stock grid only clips away stretches of rings that would cut nothing but air.
-- Exact slicing of the offset surface would remove the band error altogether. It
-  would replace `LevelReach::forbidden` and nothing else, and matters most for
-  Z-level *finishing* with a ball on freeform surfaces.
-
-On the lego fixture, the median turn between successive roughing moves fell from 7.2°
-to 1.1°, and moves turning more than 20° from 15% to 1.3% (the brick's real corners).
-Clipper is now the pure-Rust `clipper2-rust` port, for its arc tolerance control;
-it is slower per call than the C++ one, so levels are worked in parallel.
-
-## Things that were wrong and are now right
-
-Worth knowing, because each was found by looking rather than by a test passing:
-
-- **Roughing followed a grid.** Its rings were marching-squares contours of a
-  0.4 mm cutter-location grid, their points on cell-edge midpoints, then rounded to
-  Clipper's 0.01 mm: a staircase on every curved wall of a smooth CAD part, and on
-  the jobs tested it also cleared far less than it could (the two-block test job
-  kept almost all its material). See *Grids are only for stock*.
-- **Plunges got through finishing, split small.** A steep face that is straight
-  passes refinement's chord test at once, so its depth was never compared with
-  `max_cut_step`, and the check afterwards judged each move alone. On
-  `mount_rush.stl` two moves fell 1.44 mm over 0.07 mm of travel at cutting feed,
-  and the engine only warned while the viewer called it a failure. Descents are
-  now measured continuously, finishing breaks its passes at them, and the gate
-  refuses what remains. The sled's finishing now leaves nothing past the
-  allowance (deepest 0.48 mm), where it used to warn of 0.65 mm.
-- **Rapids could clip terraces.** The linker's clearance looked at five points under
-  the cutter, centre and compass, and a rapid running tangent to roughing's
-  terraces passed material on its diagonal. It now takes the highest cell anywhere
-  under the swept disc. Hidden until roughing actually cleared material.
-- **Cut moves that were really plunges.** On the router jig, parallel finishing
-  emitted moves descending 48 mm in 0.01 mm of travel — a full-depth plunge at cutting
-  feed. Every point was exactly on the CL surface and every existing check passed; only
-  the *connection between* correct points was unmachinable. Found by reading real
-  output in the inspector. Passes now break at walls and at gaps in coverage.
-- **Marching squares emitted nothing for a uniformly high field**, because such a
-  field has no boundary inside the grid. Roughing read that as "nothing to clear" —
-  the difference between clearing the whole block and clearing none of it.
-- **The simulator's stamp loop missed the cell at the cutter's rim.** Under-removal,
-  which is the direction that hides a gouge.
-- **The inspector showed a different path from the one that ran.** `inspect` had its
-  own single-operation engine path, with a flat clearance plane, no pass reordering
-  and a differently sized block, while `job` ran `run_job`. Now there is one path.
-  The viewer's rapid check (CC102) used to compare rapids against that plane. It now
-  rasterises the part triangles, grows the result by the cutter radius, and checks
-  that every rapid clears it, which stays true when clearance follows the material.
-- **The STEP containment check wrongly failed correct geometry.** Growing the box
-  of the file's points by the largest circle radius is not enough for a surface of
-  revolution. `bowl_01`'s rim reaches 190 mm from its axis, on a side of the axis
-  where the file has no points at all. A check that fails correct parts gets
-  loosened until it means nothing, so it was made right instead.
-- **`fixtures/step/README.md` gave the wrong sizes.** They were the box around every
-  point in the file, not the part.
-- **The CLI logged to stdout.** Errors now go to stderr.
-- **The post golden files were never committed.** `*.nc` in `.gitignore` caught
-  `tests/golden/*.nc`, so on a fresh clone every golden test failed.
-- **The viewer drew off-screen on a 2x display.** The canvas laid out at its pixel
-  size, which pushed its own column wider, over and over.
-- **The determinism gate could not detect non-determinism.** It ran the suite twice at
-  different thread counts; a deterministic test run twice simply passes twice, and
-  nothing ever compared the runs. Replaced with tests that diff output against itself.
+  STEP file". The same tests passed 80 times since, with and without a lock that
+  serialises every OpenCascade call (`camcraft_import::step`). The lock stays as a
+  precaution, since OpenCascade's data exchange uses process-wide statics. If it
+  happens again, capture the run: this is not understood.
 
 ## Standing cautions
 
 - **`fixtures/step/` holds real shop jigs.** They are not customer work, but they are
   not public either. Decide before making the repo public — deleting them later does
-  not remove them from history. One commercial part was already removed and scrubbed;
-  parts that cannot be published belong in `CAMCRAFT_FIXTURES`.
-- **The public fixture set cannot reproduce the bug that disqualified `truck-stepio`.**
-  The part that exposed it is private. A synthetic sculpted-surface fixture should
-  replace it.
-- **This has now been worked on from macOS as well as Windows.** Paths above are the
-  Windows ones.
-- **Run `bash scripts/check.sh` unpiped.** Piping through `tail` buffers the whole run
-  and hides progress.
-- There is no CI while the repo is private, so that script is the only thing between a
-  mistake and `main`.
-
-## Map of the code
-
-```
-camcraft-geom     BVH, height maps, contours, shadows, synthetic     (leaf)
-camcraft-import   STL and STEP (OpenCascade), checked against the file -> geom
-camcraft-sim      material removal: stock updater + gouge oracle     -> geom
-camcraft-core     tools, reach, strategies, toolpaths, job, run      -> geom, sim
-camcraft-post     Op IR, TOML dialect renderers                      -> geom, core
-camcraft-session  load, run, check, gate, post: shared by CLI and app -> all libraries
-camcraft-cli      post / job                                          -> session
-camcraft-gui      desktop app: egui/eframe, wgpu viewport             -> session
-```
-
-`core` cannot see `post`, so it cannot name a G-code concept. That is what keeps
-strategies emitting toolpaths rather than instructions.
-
-The full design and its reasoning live in the approved plan at
-`C:\Users\danph\.claude\plans\i-use-autodesk-fusion-wobbly-wave.md`. Read it before
-changing anything structural; it records eight decisions that would force a rewrite.
+  not remove them from history. One commercial part was already removed and
+  scrubbed; parts that cannot be published belong in `CAMCRAFT_FIXTURES`.
+- **The public fixture set cannot reproduce the bug that disqualified
+  `truck-stepio`.** The part that exposed it is private. A synthetic
+  sculpted-surface fixture should replace it.
+- **`vendor/` patches opencascade** (the MSVC fix, and each B-rep face's triangle
+  count, which picking needs). Delete it and its `[patch.crates-io]` block only once
+  a release includes both.
+- **There is no CI while the repo is private**, so `scripts/check.sh` is the only
+  thing between a mistake and `main`. Run it unpiped: piping through `tail` buffers
+  the whole run and hides progress.
