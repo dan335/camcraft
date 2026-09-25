@@ -5,7 +5,7 @@ struct Frame {
     viewport: vec4<f32>,
     // Visible kinds (roles, then stock and axes), visible operations, segments shown.
     masks: vec4<u32>,
-    colors: array<vec4<f32>, 19>,
+    colors: array<vec4<f32>, 21>,
     // Where the eye is.
     eye: vec4<f32>,
 };

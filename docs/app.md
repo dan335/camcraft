@@ -54,7 +54,9 @@ it.
     with its offset folded away.
   - *Post*: work offset and machine profile.
 - **Operation**, on tabs: *Tool* (the tool and its feeds and speeds), *Geometry*
-  (picked faces and edges, containment), *Heights* (clearance, top and bottom,
+  (Fusion's machining boundary: the stock, the part's bounding box or silhouette,
+  or picked faces and edges; where the tool goes against it; an additional
+  offset), *Heights* (clearance, top and bottom,
   drawn in the view as planes), *Passes* and *Linking* (retract feed, safe
   distance, stay-down distance, and the lead radius or the ramp angle and feed;
   one left out says what the strategy's default comes to for the tool). Choosing a
@@ -73,10 +75,18 @@ and a slot being picked into brings its tab forward.
 
 - The work zero takes a corner, a round edge's centre or an edge's middle on a
   model, or a corner, edge or side of the stock.
-- An operation takes faces and edges, which keep parallel finishing and Z-level
-  roughing to their outline seen from above (tool centre, whole tool inside, or
-  reaching in from outside, plus the margin), drawn in the view at the stock's
-  top.
+- An operation whose boundary is a selection takes faces and edges, which keep
+  parallel finishing and Z-level roughing to their outline seen from above.
+
+Any boundary but the stock's is drawn in the view at the stock's top. It shows
+the boundary as chosen (wide), where the tool's centre may go against it (thin),
+and, hatched, what the tool cuts outside the part. Containment and offset are as
+Fusion's: the tool's centre on the boundary, the whole tool inside it, or the
+tool reaching in from outside it. A positive offset moves the boundary out, or
+in when the whole tool is kept inside. Choosing the part's bounding box or
+silhouette with the tool reaching in from outside, when the offset is 0, sets
+the offset to the tool's diameter. That clears a channel two tools wide round
+the part, where an offset of 0 would only touch its walls.
 - A drilling operation takes holes by their round top rims, and optionally their
   bottom rims.
 

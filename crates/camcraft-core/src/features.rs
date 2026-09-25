@@ -31,10 +31,12 @@
 //! the operation's [`Containment`] and margin.
 
 use camcraft_geom::contour::{Contour, Region, RegionError};
+use camcraft_geom::mesh::TriMesh;
+use camcraft_geom::shadow::shadow_above;
 use camcraft_geom::topology::{Body, EdgeKind, FaceSource};
 use glam::{DVec2, DVec3};
 
-use crate::job::{Containment, FeatureRef, Geometry, PointRef, Snap};
+use crate::job::{Boundary, Containment, FeatureRef, Geometry, PointRef, Snap};
 use crate::setup::{Bodies, Prepared};
 
 /// How a pick was found.
@@ -104,10 +106,13 @@ pub enum FeatureError {
     /// Seen from above, the picks cover nothing: walls, say.
     #[error("seen from above, the picked faces and edges enclose no area to machine")]
     NoArea,
+    /// The boundary is the selection, and nothing is selected.
+    #[error("the machining boundary is a selection, and no face or edge is picked")]
+    NothingPicked,
     /// The tool does not fit inside the boundary.
     #[error(
-        "a {diameter:.3} mm tool does not fit inside the picked boundary; pick more, or let \
-         the tool's centre reach the boundary"
+        "a {diameter:.3} mm tool does not fit inside the machining boundary; make it larger, \
+         or let the tool's centre reach it"
     )]
     NoRoom {
         /// The tool's diameter.
@@ -448,25 +453,56 @@ pub fn loops(chains: &[Chain]) -> Result<Vec<Vec<DVec3>>, FeatureError> {
     Ok(out)
 }
 
-/// Where the tool's centre may go for an operation kept to picked faces and edges,
-/// in the setup's frame; `None` when nothing is picked.
+/// An operation's machining boundary as chosen, before the tool is kept to it, in
+/// the setup's frame; `None` for the stock's footprint, which the strategies keep
+/// to themselves.
 ///
-/// The picked faces' triangles are projected straight down and joined, dropping
-/// any seen edge-on; the loops the picked edges close are read even-odd, so a loop
-/// inside another is a hole. That area is then offset for the operation's
-/// containment and margin: out by the margin for the tool's centre, in by the
-/// tool's radius for all of it inside, out by the radius for its side to reach from
-/// outside. The arcs err by at most half the tolerance, inward when shrinking.
-pub fn machining_boundary(
+/// The bounding box and silhouette are the setup's models' seen from straight
+/// above. A selection is the picked faces' triangles projected straight down and
+/// joined, dropping any seen edge-on, with the loops the picked edges close read
+/// even-odd, so a loop inside another is a hole.
+pub fn boundary_shape(
     g: &Geometry,
     prepared: &Prepared,
     bodies: &Bodies<'_>,
-    tool_radius: f64,
     job_tolerance: f64,
 ) -> Result<Option<Region>, FeatureError> {
-    if !g.picked() {
-        return Ok(None);
+    let region_err = |e: RegionError| FeatureError::Region(e.to_string());
+    let area = match g.boundary() {
+        Boundary::Stock => return Ok(None),
+        Boundary::BoundingBox => {
+            let b = prepared.model_bounds;
+            Region::rectangle(DVec2::new(b.min.x, b.min.y), DVec2::new(b.max.x, b.max.y))
+        }
+        Boundary::Silhouette => silhouette(&prepared.part).map_err(region_err)?,
+        Boundary::Selection => {
+            if !g.picked() {
+                return Err(FeatureError::NothingPicked);
+            }
+            selection(g, prepared, bodies, job_tolerance)?
+        }
+    };
+    if area.area() <= 1e-6 {
+        return Err(FeatureError::NoArea);
     }
+    Ok(Some(area))
+}
+
+/// A mesh's outline from straight above: everything it covers, seen from the top.
+pub fn silhouette(mesh: &TriMesh) -> Result<Region, RegionError> {
+    let Some(b) = mesh.bounds() else {
+        return Ok(Region::default());
+    };
+    Ok(shadow_above(mesh, b.min.z - 1.0)?.area().clone())
+}
+
+/// The area picked faces and edges enclose, seen from above.
+fn selection(
+    g: &Geometry,
+    prepared: &Prepared,
+    bodies: &Bodies<'_>,
+    job_tolerance: f64,
+) -> Result<Region, FeatureError> {
     let region_err = |e: RegionError| FeatureError::Region(e.to_string());
     let flat = |p: &DVec3| DVec2::new(p.x, p.y);
 
@@ -492,16 +528,34 @@ pub fn machining_boundary(
         .collect();
     let from_edges = Region::new(rings);
 
-    let area = from_faces.union(&from_edges).map_err(region_err)?;
-    if area.area() <= 1e-6 {
-        return Err(FeatureError::NoArea);
-    }
-    let by = match g.containment {
+    from_faces.union(&from_edges).map_err(region_err)
+}
+
+/// How far the tool's centre may go past a boundary: Fusion's containment and
+/// additional offset. The offset moves the boundary out, or in when the whole tool
+/// is kept inside it.
+pub fn containment_offset(g: &Geometry, tool_radius: f64) -> f64 {
+    match g.containment {
         Containment::Center => g.margin,
-        Containment::Inside => g.margin - tool_radius,
-        Containment::Outside => g.margin + tool_radius,
+        Containment::Inside => -tool_radius - g.margin,
+        Containment::Outside => tool_radius + g.margin,
+    }
+}
+
+/// Where the tool's centre may go for an operation, in the setup's frame: its
+/// [`boundary_shape`], offset by [`containment_offset`]. `None` for the stock's
+/// footprint. The arcs err by at most half the tolerance, inward when shrinking.
+pub fn machining_boundary(
+    g: &Geometry,
+    prepared: &Prepared,
+    bodies: &Bodies<'_>,
+    tool_radius: f64,
+    job_tolerance: f64,
+) -> Result<Option<Region>, FeatureError> {
+    let Some(area) = boundary_shape(g, prepared, bodies, job_tolerance)? else {
+        return Ok(None);
     };
-    let region = area.offset(by, job_tolerance / 2.0);
+    let region = area.offset(containment_offset(g, tool_radius), job_tolerance / 2.0);
     if region.area() <= 1e-9 {
         return Err(FeatureError::NoRoom {
             diameter: tool_radius * 2.0,
@@ -514,7 +568,6 @@ pub fn machining_boundary(
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use camcraft_geom::mesh::TriMesh;
     use camcraft_geom::synthetic;
     use camcraft_geom::topology::FaceKind;
     use glam::{dvec2, dvec3};
@@ -751,6 +804,57 @@ mod tests {
     fn nothing_picked_is_no_boundary() {
         let body = plate();
         assert_eq!(boundary(&body, &Geometry::default(), 1.0), Ok(None));
+    }
+
+    /// The models' box and outline from above: the plate is 40 square with a
+    /// hole through it, which the box covers and the silhouette leaves open.
+    #[test]
+    fn the_bounding_box_and_silhouette_are_the_part_from_above() {
+        let body = plate();
+        let mut g = Geometry {
+            boundary_kind: Some(Boundary::BoundingBox),
+            ..Geometry::default()
+        };
+        let b = boundary(&body, &g, 1.0).unwrap().unwrap();
+        assert!((b.area() - 1600.0).abs() < 1e-6, "{}", b.area());
+        assert!(b.contains(dvec2(0.0, 0.0)));
+
+        g.boundary_kind = Some(Boundary::Silhouette);
+        let s = boundary(&body, &g, 1.0).unwrap().unwrap();
+        let hole = 0.5 * 32.0 * 16.0 * (std::f64::consts::TAU / 32.0).sin();
+        assert!((s.area() - (1600.0 - hole)).abs() < 1e-3, "{}", s.area());
+        assert!(!s.contains(dvec2(0.0, 0.0)));
+        assert!(s.contains(dvec2(10.0, 10.0)));
+
+        // Kept wholly inside, a positive offset moves it in, as Fusion's does.
+        g.containment = Containment::Inside;
+        g.margin = 1.0;
+        let inside = boundary(&body, &g, 1.0).unwrap().unwrap();
+        assert!(!inside.contains(dvec2(18.5, 0.0)));
+        assert!(inside.contains(dvec2(17.5, 0.0)));
+        // Reaching in from outside, it moves out.
+        g.containment = Containment::Outside;
+        let outside = boundary(&body, &g, 1.0).unwrap().unwrap();
+        assert!(outside.contains(dvec2(21.9, 0.0)));
+        assert!(!outside.contains(dvec2(22.1, 0.0)));
+    }
+
+    /// The stock's boundary is none; a selection with nothing picked is refused,
+    /// not taken for the stock's.
+    #[test]
+    fn a_selection_needs_picks() {
+        let body = plate();
+        let mut g = Geometry {
+            boundary_kind: Some(Boundary::Stock),
+            ..Geometry::default()
+        };
+        assert_eq!(boundary(&body, &g, 1.0), Ok(None));
+        g.boundary_kind = Some(Boundary::Selection);
+        assert_eq!(boundary(&body, &g, 1.0), Err(FeatureError::NothingPicked));
+        // Picks with the stock's boundary chosen are kept, and not used.
+        g.faces.push(face_at(&body, [15.0, 15.0, 5.0]));
+        g.boundary_kind = Some(Boundary::Stock);
+        assert_eq!(boundary(&body, &g, 1.0), Ok(None));
     }
 
     /// The step's plateau, seen from above, is a 10 by 20 rectangle; the tool's

@@ -156,6 +156,13 @@ impl EffectiveTool {
         &self.allowance
     }
 
+    /// The real tool's widest radius, without the stock to leave: what a
+    /// machining boundary's containment keeps in or out, since stock is left on
+    /// the part, not on the boundary.
+    pub fn cutter_radius(&self) -> f64 {
+        self.shape.max_radius() - self.allowance.radial
+    }
+
     /// How far the real tool tip sits above the dilated shape's contact.
     pub fn tip_offset(&self) -> f64 {
         self.allowance.axial

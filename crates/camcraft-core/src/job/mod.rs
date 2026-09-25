@@ -56,6 +56,10 @@
 //! and a tool's spindle direction and coolant, are the same kind of field, so a
 //! job with any of them is version 3. Leaving an operation out is version 4, and
 //! a fixed box placed against the models, rather than at a corner, is version 5.
+//! A machining boundary chosen other than as picks alone would make it, or an
+//! additional offset that moves a boundary the whole tool is kept inside inward
+//! where it used to move it out, is version 6: an older build would clear the
+//! whole stock, or cut past where it was asked.
 
 mod error;
 mod model;
@@ -81,8 +85,8 @@ use serde::{Deserialize, Serialize};
 pub use error::JobError;
 pub use model::{FixedBox, LengthUnit, ModelDef, Place, StockDef, StockSpec};
 pub use operation::{
-    Containment, Geometry, Height, HeightContext, HeightRef, Heights, Linking, Operation, Passes,
-    StockToLeave, StrategySpec,
+    Boundary, Containment, Geometry, Height, HeightContext, HeightRef, Heights, Linking, Operation,
+    Passes, StockToLeave, StrategySpec,
 };
 pub use pick::{FeatureRef, PointRef, Snap};
 pub use setup::{Along, BoxOf, Origin, Setup};
@@ -94,7 +98,7 @@ pub use tool::{
 /// The newest job file format this build reads and writes. It reads every version
 /// from 1, and writes the oldest that holds what a job says
 /// ([`Job::required_version`]).
-pub const JOB_VERSION: u32 = 5;
+pub const JOB_VERSION: u32 = 6;
 
 /// A complete job.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]

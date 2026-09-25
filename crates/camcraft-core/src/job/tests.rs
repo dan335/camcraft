@@ -233,13 +233,50 @@ fn a_fixed_box_is_checked() {
     assert!(matches!(j.validate(), Err(JobError::UnknownModel { .. })));
 }
 
+/// A job from before boundaries has none written: picks are its boundary, and
+/// without them the stock's. One chosen otherwise, or an offset that now moves a
+/// boundary the tool is kept inside inward, is version 6.
+#[test]
+fn a_machining_boundary_reads_as_before_or_is_version_6() {
+    let j = sample();
+    let g = &j.setups[0].operations[0].geometry;
+    assert_eq!(g.boundary(), Boundary::Stock);
+    let mut picked = Geometry::default();
+    picked.faces.push(FeatureRef {
+        model: "part".into(),
+        index: 0,
+        at: [0.0; 3],
+    });
+    assert_eq!(picked.boundary(), Boundary::Selection);
+    let base = j.required_version();
+    assert!(base < 6);
+
+    let mut chosen = j.clone();
+    chosen.setups[0].operations[0].geometry.boundary_kind = Some(Boundary::Stock);
+    assert_eq!(chosen.required_version(), base, "the same as before");
+    chosen.setups[0].operations[0].geometry.boundary_kind = Some(Boundary::Silhouette);
+    assert_eq!(chosen.required_version(), 6);
+    let text = toml::to_string(&chosen).unwrap();
+    assert!(text.contains("boundary = \"silhouette\""), "{text}");
+    let again: Job = toml::from_str(&text).unwrap();
+    assert_eq!(again, chosen);
+
+    let mut inward = j.clone();
+    let g = &mut inward.setups[0].operations[1].geometry;
+    *g = picked;
+    g.containment = Containment::Inside;
+    assert_eq!(inward.required_version(), 2, "picks, and no offset");
+    inward.setups[0].operations[1].geometry.margin = 0.5;
+    assert_eq!(inward.required_version(), 6);
+}
+
 /// A file without a version is refused by name, not with a parse error about
 /// some field.
 #[test]
 fn another_format_is_refused() {
     let mut j = sample();
-    j.version = 7;
-    assert_eq!(j.validate(), Err(JobError::UnsupportedVersion(7)));
+    j.version = 9;
+    assert_eq!(j.validate(), Err(JobError::UnsupportedVersion(9)));
 }
 
 /// The reason heights are symbolic: the same job survives a different block.
@@ -741,7 +778,10 @@ fn only_a_job_with_picks_needs_version_2() {
     five.validate().unwrap();
     let mut six = sample();
     six.version = 6;
-    assert_eq!(six.validate(), Err(JobError::UnsupportedVersion(6)));
+    six.validate().unwrap();
+    let mut seven = sample();
+    seven.version = 7;
+    assert_eq!(seven.validate(), Err(JobError::UnsupportedVersion(7)));
 }
 
 /// An older reader would skip an operation's own spindle speed and cut at the

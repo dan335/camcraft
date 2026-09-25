@@ -717,6 +717,81 @@ tool = "rough-6-flat"
     shoot(&mut h, "lego_close");
 }
 
+/// The lego brick in a block well past it, roughed only in a channel round its
+/// silhouette: the Geometry tab with the boundary, the tool's centre's limit and
+/// the hatched channel in the view, then the brick roughed with the block around
+/// the channel left standing.
+#[test]
+#[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
+fn lego_silhouette_boundary() {
+    use crate::document::Selection;
+    let dir = output_dir().join("lego-boundary");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = repo("fixtures/step/lego_4x2_01.step");
+    let job = format!(
+        r#"version = 6
+tolerance = 0.05
+
+[tools.rough-6-flat]
+kind = "flat"
+diameter = 6.35
+number = 1
+rpm = 16000
+
+[[model]]
+name = "lego"
+path = "{}"
+
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [20.0, 20.0, 2.0]
+
+[[setup]]
+name = "top"
+models = ["lego"]
+stocks = ["block"]
+
+[[setup.operation]]
+name = "rough"
+strategy = "zlevel-rough"
+stepdown = 2.0
+min_ring_length = 3.0
+tool = "rough-6-flat"
+geometry = {{ boundary = "silhouette", containment = "outside", margin = 6.35 }}
+"#,
+        model.display()
+    );
+    let path = dir.join("lego-boundary.camcraft");
+    std::fs::write(&path, job).unwrap();
+
+    let mut h = harness();
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    h.state_mut().open_job(&ctx, path);
+    settle(&mut h);
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.selection = Selection::Operation("top".into(), 0);
+    }
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 1_usize));
+    h.run_steps(4);
+    shoot(&mut h, "lego_boundary_geometry");
+
+    h.state_mut().start_run(&ctx);
+    settle(&mut h);
+    h.state_mut().set_stock_for_snapshot(None);
+    h.state_mut().set_view_for_snapshot(0, 1.0, u32::MAX);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    h.run_steps(2);
+    while !h.state_mut().live_caught_up_for_snapshot() {
+        assert!(Instant::now() < deadline, "the material never caught up");
+        std::thread::sleep(Duration::from_millis(20));
+        h.step();
+    }
+    h.run_steps(3);
+    shoot(&mut h, "lego_boundary_roughed");
+}
+
 /// A full 5 by 12 foot sheet, 8 inches thick, with a sixteenth-inch cutter in the
 /// setup: the largest stock a router here takes, at the finest pitch memory allows
 /// for it, drawn as tiles. Surfaced down to the lego brick with a half-inch end

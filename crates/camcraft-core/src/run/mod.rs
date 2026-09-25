@@ -36,7 +36,6 @@ use crate::features::machining_boundary;
 use crate::job::{HeightContext, Job, JobError, Operation, StrategySpec, ToolSpec};
 use crate::setup::{Bodies, Prepared, prepare};
 use crate::simadapt::sim_moves;
-use crate::tool::ToolProfile;
 
 pub use crate::toolpath::PLUNGE_RATIO;
 pub use error::RunError;
@@ -142,7 +141,7 @@ pub fn run_prepared_planned(
                 &op.geometry,
                 prepared,
                 bodies,
-                tool.max_radius(),
+                tool.cutter_radius(),
                 job.tolerance,
             )
             .map_err(in_op(op))?;

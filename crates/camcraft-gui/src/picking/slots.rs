@@ -13,14 +13,16 @@
 //! ([`camcraft_core::features`]), so a face lit in the view is the face that will be
 //! cut, and a pick that can no longer be found says so here before it stops a run.
 
+use camcraft_core::allowance::EffectiveTool;
 use camcraft_core::features::{self, FeatureError};
-use camcraft_core::job::{BoxOf, FeatureRef, Origin, Snap};
+use camcraft_core::job::{Boundary, BoxOf, FeatureRef, Geometry, Origin, Snap, StrategySpec};
 use camcraft_core::run::cutting_tool;
 use camcraft_core::setup::{Bodies, Prepared};
 use camcraft_core::tool::ToolProfile;
+use camcraft_geom::contour::Region;
 use camcraft_geom::mesh::Aabb;
 use camcraft_geom::topology::Body;
-use glam::{DVec3, Vec3};
+use glam::{DVec2, DVec3, Vec3};
 
 use crate::document::{Document, Selection};
 use crate::picking::describe::{describe_edge, describe_face, describe_point};
@@ -322,29 +324,100 @@ pub fn shown(
 
     // The boundary, drawn at the stock's top so it reads over everything. Worked
     // out as the run will work it out, with the operation's own tool.
-    if g.picked() && out.faces.iter().chain(&out.edges).all(Result::is_ok) {
-        let radius = cutting_tool(&doc.job, operation).map_or(0.0, |t| t.max_radius());
+    let bounded = !matches!(operation.strategy, StrategySpec::Drill { .. })
+        && g.boundary() != Boundary::Stock;
+    if bounded && out.faces.iter().chain(&out.edges).all(Result::is_ok) {
+        let tool = cutting_tool(&doc.job, operation).ok();
         let z = prepared.stock_bounds().max.z;
         out.boundary = Some(
-            match features::machining_boundary(g, prepared, &bodies, radius, doc.job.tolerance) {
-                Ok(Some(region)) => {
-                    for ring in region.rings() {
-                        let pts = ring.points();
-                        let next = pts.iter().skip(1).chain(pts.first());
-                        out.highlight
-                            .lines
-                            .extend(pts.iter().zip(next).map(|(a, b)| Outline {
-                                a: DVec3::new(a.x, a.y, z),
-                                b: DVec3::new(b.x, b.y, z),
-                                kind: OutlineKind::Boundary,
-                            }));
-                    }
-                    Ok(())
-                }
-                Ok(None) => Ok(()),
-                Err(e) => Err(e.to_string()),
-            },
+            boundary_lines(g, tool.as_ref(), prepared, &bodies, tolerance, z)
+                .map(|lines| out.highlight.lines.extend(lines))
+                .map_err(|e| e.to_string()),
         );
+    }
+    out
+}
+
+/// An operation's machining boundary as lines at height `z`: the boundary as
+/// chosen, where the tool's centre may go against it, and hatched, what the tool
+/// cuts outside the part. That last is worked out against the part's whole
+/// outline, so for a wall straight down it is exact, and for one that leans out
+/// it is where the tool reaches at the bottom.
+fn boundary_lines(
+    g: &Geometry,
+    tool: Option<&EffectiveTool>,
+    prepared: &Prepared,
+    bodies: &Bodies<'_>,
+    tolerance: f64,
+    z: f64,
+) -> Result<Vec<Outline>, FeatureError> {
+    let Some(shape) = features::boundary_shape(g, prepared, bodies, tolerance)? else {
+        return Ok(Vec::new());
+    };
+    let radius = tool.map_or(0.0, EffectiveTool::cutter_radius);
+    let arc = tolerance / 2.0;
+    let limit = shape.offset(features::containment_offset(g, radius), arc);
+    if limit.area() <= 1e-9 {
+        return Err(FeatureError::NoRoom {
+            diameter: radius * 2.0,
+        });
+    }
+    let mut lines = rings_at(&shape, z, OutlineKind::Boundary);
+    lines.extend(rings_at(&limit, z, OutlineKind::Limit));
+    if let Some(tool) = tool {
+        let region = |e: camcraft_geom::contour::RegionError| FeatureError::Region(e.to_string());
+        let part = features::silhouette(&prepared.part).map_err(region)?;
+        let centres = limit
+            .difference(&part.offset(tool.max_radius(), arc))
+            .map_err(region)?;
+        let cut = centres
+            .offset(radius, arc)
+            .difference(&part)
+            .map_err(region)?;
+        for line in cut.clip_polylines(&hatch(&cut)).map_err(region)? {
+            lines.extend(line.windows(2).filter_map(|w| match w {
+                [a, b] => Some(Outline {
+                    a: DVec3::new(a.x, a.y, z),
+                    b: DVec3::new(b.x, b.y, z),
+                    kind: OutlineKind::Channel,
+                }),
+                _ => None,
+            }));
+        }
+    }
+    Ok(lines)
+}
+
+/// Each ring of `region` as closed lines at height `z`.
+fn rings_at(region: &Region, z: f64, kind: OutlineKind) -> Vec<Outline> {
+    let mut out = Vec::new();
+    for ring in region.rings() {
+        let pts = ring.points();
+        let next = pts.iter().skip(1).chain(pts.first());
+        out.extend(pts.iter().zip(next).map(|(a, b)| Outline {
+            a: DVec3::new(a.x, a.y, z),
+            b: DVec3::new(b.x, b.y, z),
+            kind,
+        }));
+    }
+    out
+}
+
+/// Diagonal lines across `region`'s bounds, to be clipped to it: some sixty
+/// across its longer side, and no closer than a millimetre and a half.
+fn hatch(region: &Region) -> Vec<Vec<DVec2>> {
+    let Some((lo, hi)) = region.bounds() else {
+        return Vec::new();
+    };
+    let size = hi - lo;
+    let gap = (size.x.max(size.y) / 60.0).max(1.5);
+    // Lines x - y = c, from the lowest c to the highest.
+    let (from, to) = (lo.x - hi.y, hi.x - lo.y);
+    let mut out = Vec::new();
+    let mut c = from + gap / 2.0;
+    while c < to {
+        out.push(vec![DVec2::new(lo.y + c, lo.y), DVec2::new(hi.y + c, hi.y)]);
+        c += gap;
     }
     out
 }

@@ -8,7 +8,21 @@ use serde::{Deserialize, Serialize};
 use super::validate::positive;
 use super::{FeatureRef, JobError, Preset, ToolKind, ToolSpec, is_default};
 
-/// Where the tool may go, against a boundary made from picked faces or edges.
+/// What an operation is kept to, seen from above: Fusion's machining boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Boundary {
+    /// The stock's footprint: the whole part, and everything around it.
+    Stock,
+    /// The rectangle around the setup's models.
+    BoundingBox,
+    /// The setup's models' outline: their shadow from straight above.
+    Silhouette,
+    /// The picked faces seen from above, and the loops the picked edges close.
+    Selection,
+}
+
+/// Where the tool may go, against the machining boundary.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Containment {
@@ -104,15 +118,24 @@ fn default_min_ring() -> f64 {
 
 /// What to machine.
 ///
-/// With nothing picked, an operation machines the whole part within the stock's
-/// footprint. Picked faces and edges keep it to a boundary instead: the outline of
-/// the faces seen from above, and the loops the edges close. What else they mean is
-/// the strategy's to say, which is why they live here and not with it: a pocket
-/// will clear a picked floor, a trace will follow picked edges.
+/// Fusion's Geometry tab: a machining boundary seen from above, where the tool
+/// may go against it, and how far past it. The stock's footprint, the default,
+/// machines the whole part and everything around it; the models' bounding box or
+/// silhouette keeps the tool near the part; picked faces and edges keep it to their
+/// outline. What else picks mean is the strategy's to say, which is why they live
+/// here and not with it: a pocket will clear a picked floor, a trace will follow
+/// picked edges.
+///
+/// A job from before boundaries had no `boundary`: picks made the boundary, and
+/// with none it was the stock's. [`Geometry::boundary`] reads it so.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Geometry {
-    /// How far the tool may go past what is machined, in millimetres: past the
-    /// stock's footprint, or past the picked boundary.
+    /// The boundary; `None` for what a job from before boundaries meant.
+    #[serde(default, rename = "boundary", skip_serializing_if = "Option::is_none")]
+    pub boundary_kind: Option<Boundary>,
+    /// Fusion's additional offset, in millimetres: how far the boundary moves
+    /// out, or in when the whole tool is kept inside it. Past the stock's
+    /// footprint, with no boundary.
     #[serde(default)]
     pub margin: f64,
     /// Highest level to cut at.
@@ -127,7 +150,7 @@ pub struct Geometry {
     /// Edges picked on the models.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edges: Vec<FeatureRef>,
-    /// Where the tool may go against the picked boundary.
+    /// Where the tool may go against the boundary.
     #[serde(default, skip_serializing_if = "is_default")]
     pub containment: Containment,
 }
@@ -135,6 +158,7 @@ pub struct Geometry {
 impl Default for Geometry {
     fn default() -> Self {
         Self {
+            boundary_kind: None,
             margin: 0.0,
             top: None,
             bottom: None,
@@ -149,6 +173,27 @@ impl Geometry {
     /// Whether any face or edge is picked.
     pub fn picked(&self) -> bool {
         !self.faces.is_empty() || !self.edges.is_empty()
+    }
+
+    /// The machining boundary. One never chosen is what it was before there was a
+    /// choice: the picks', when there are any, or the stock's.
+    pub fn boundary(&self) -> Boundary {
+        self.boundary_kind.unwrap_or(self.legacy_boundary())
+    }
+
+    /// Whether a build from before boundaries would keep the tool where this
+    /// does: the same boundary, and an offset that means the same.
+    pub fn reads_as_before(&self) -> bool {
+        self.boundary() == self.legacy_boundary()
+            && (self.containment != Containment::Inside || self.margin == 0.0)
+    }
+
+    fn legacy_boundary(&self) -> Boundary {
+        if self.picked() {
+            Boundary::Selection
+        } else {
+            Boundary::Stock
+        }
     }
 }
 

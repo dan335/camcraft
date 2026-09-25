@@ -68,6 +68,12 @@ pub const HOVER: [u8; 3] = AMBER_3;
 /// The boundary an operation is kept to: `--accent-press`, a step darker than
 /// what is picked, so the outline reads as derived from the picks.
 pub const BOUNDARY: [u8; 3] = AMBER_6;
+/// Where the tool's centre may go against the boundary: `--accent`, thin, so the
+/// boundary itself stays the line that reads first.
+pub const BOUNDARY_LIMIT: [u8; 3] = AMBER_5;
+/// Hatching over what the tool cuts outside the part: the darkest amber, thin,
+/// so the part and the lines over it still read through.
+pub const CHANNEL: [u8; 3] = AMBER_7;
 /// What could be picked into a setup but is not in it: its models and stock,
 /// drawn faintly while they are being picked.
 pub const GHOST: [u8; 3] = GRAY_8;

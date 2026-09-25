@@ -2,7 +2,8 @@
 //! it is kept to, its heights, its passes, and how its passes are linked.
 
 use camcraft_core::job::{
-    Containment, FeatureRef, Height, HeightContext, HeightRef, Operation, StrategySpec,
+    Boundary, Containment, FeatureRef, Geometry, Height, HeightContext, HeightRef, Operation,
+    StrategySpec,
 };
 use eframe::egui;
 use glam::DVec2;
@@ -107,7 +108,9 @@ pub(super) fn show(
     } else if let Some(op) = doc.operation_mut(setup, index) {
         match page {
             OperationTab::Tool => {}
-            OperationTab::Geometry => geometry(ui, m, setup, index, op, picks, actions),
+            OperationTab::Geometry => {
+                geometry(ui, m, setup, index, op, diameter, picks, actions);
+            }
             OperationTab::Heights => heights(ui, m, op),
             OperationTab::Passes => passes(ui, m, op),
             OperationTab::Linking => linking(ui, m, op, diameter),
@@ -284,28 +287,135 @@ fn preset_row(ui: &mut egui::Ui, doc: &mut Document, setup: &str, index: usize, 
     ui.end_row();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn geometry(
     ui: &mut egui::Ui,
     m: Measure,
     setup: &str,
     index: usize,
     op: &mut Operation,
+    diameter: Option<f64>,
     picks: Picks<'_>,
     actions: &mut Vec<PropAction>,
 ) {
     let drilling = matches!(op.strategy, StrategySpec::Drill { .. });
-    hint(
-        ui,
-        if drilling {
-            "Pick the round edge at the top of each hole. Pick its bottom edge too to \
-             drill to there; otherwise each hole is drilled to the Bottom height."
-        } else {
-            "With nothing picked, the whole part within the stock is machined. Picked faces \
-             and edges keep the tool to their outline seen from above."
-        },
-    );
-    ui.add_space(theme::SPACE_3);
     let g = &mut op.geometry;
+    if drilling {
+        hint(
+            ui,
+            "Pick the round edge at the top of each hole. Pick its bottom edge too to \
+             drill to there; otherwise each hole is drilled to the Bottom height.",
+        );
+        ui.add_space(theme::SPACE_3);
+    } else {
+        boundary_form(ui, m, g, diameter);
+        ui.add_space(theme::SPACE_3);
+    }
+    if drilling || g.boundary() == Boundary::Selection {
+        pick_cards(ui, setup, index, g, picks, actions);
+    }
+    if !drilling {
+        match picks.shown.and_then(|s| s.boundary.as_ref()) {
+            Some(Err(why)) => {
+                error(ui, why);
+            }
+            Some(Ok(())) => {
+                hint(ui, boundary_hint(g));
+            }
+            None => {}
+        }
+    }
+}
+
+/// The machining boundary, where the tool may go against it, and how far past it:
+/// Fusion's Geometry tab.
+fn boundary_form(ui: &mut egui::Ui, m: Measure, g: &mut Geometry, diameter: Option<f64>) {
+    let before = (g.boundary(), g.containment);
+    form(ui, "geometry", |ui| {
+        widgets::field_label(ui, "Boundary");
+        let name = |b: Boundary| match b {
+            Boundary::Stock => "the stock",
+            Boundary::BoundingBox => "the part's bounding box",
+            Boundary::Silhouette => "the part's silhouette",
+            Boundary::Selection => "picked faces and edges",
+        };
+        let mut chosen = g.boundary();
+        egui::ComboBox::from_id_salt("boundary")
+            .selected_text(name(chosen))
+            .show_ui(ui, |ui| {
+                for b in [
+                    Boundary::Stock,
+                    Boundary::BoundingBox,
+                    Boundary::Silhouette,
+                    Boundary::Selection,
+                ] {
+                    ui.selectable_value(&mut chosen, b, name(b));
+                }
+            });
+        if chosen != g.boundary() {
+            g.boundary_kind = Some(chosen);
+        }
+        ui.end_row();
+        if g.boundary() != Boundary::Stock {
+            widgets::field_label(ui, "Tool");
+            let name = |c: Containment| match c {
+                Containment::Center => "centre inside the boundary",
+                Containment::Inside => "all of it inside",
+                Containment::Outside => "reaching in from outside",
+            };
+            egui::ComboBox::from_id_salt("containment")
+                .selected_text(name(g.containment))
+                .show_ui(ui, |ui| {
+                    for c in [
+                        Containment::Center,
+                        Containment::Inside,
+                        Containment::Outside,
+                    ] {
+                        ui.selectable_value(&mut g.containment, c, name(c));
+                    }
+                });
+            ui.end_row();
+        }
+        widgets::field_label(ui, "Additional offset");
+        m.signed_length_field(ui, &mut g.margin, 0.1, 1000.0, "");
+        ui.end_row();
+    });
+    // Reaching in from outside the part's own outline, the tool only touches its
+    // walls: it needs room past them to clear anything. A tool's width is a
+    // channel two wide, room for a finishing tool to follow. Set once, as a
+    // number, so changing the tool later does not move the boundary.
+    let around_part = matches!(g.boundary(), Boundary::BoundingBox | Boundary::Silhouette);
+    if (g.boundary(), g.containment) != before
+        && around_part
+        && g.containment == Containment::Outside
+        && g.margin == 0.0
+        && let Some(d) = diameter
+    {
+        g.margin = d;
+    }
+}
+
+/// What the view shows for an operation's boundary.
+fn boundary_hint(g: &Geometry) -> &'static str {
+    let around_part = matches!(g.boundary(), Boundary::BoundingBox | Boundary::Silhouette);
+    if around_part && g.containment == Containment::Outside && g.margin <= 0.0 {
+        "The tool only touches the part's walls: nothing outside them is cut. An \
+         additional offset makes room for a channel round the part."
+    } else {
+        "In the view at the stock's top: the boundary, where the tool's centre may go, \
+         and hatched, what is cut outside the part."
+    }
+}
+
+/// The cards of picked faces and edges, each with a way to pick more in the view.
+fn pick_cards(
+    ui: &mut egui::Ui,
+    setup: &str,
+    index: usize,
+    g: &mut Geometry,
+    picks: Picks<'_>,
+    actions: &mut Vec<PropAction>,
+) {
     for (kind, title) in [(Kind::Face, "Faces"), (Kind::Edge, "Edges")] {
         let slot = match kind {
             Kind::Face => Slot::Faces {
@@ -359,42 +469,6 @@ fn geometry(
             list.clear();
         }
         ui.add_space(theme::SPACE_3);
-    }
-    form(ui, "geometry", |ui| {
-        if g.picked() && !drilling {
-            widgets::field_label(ui, "Tool");
-            let name = |c: Containment| match c {
-                Containment::Center => "centre inside the boundary",
-                Containment::Inside => "all of it inside",
-                Containment::Outside => "reaching in from outside",
-            };
-            egui::ComboBox::from_id_salt("containment")
-                .selected_text(name(g.containment))
-                .show_ui(ui, |ui| {
-                    for c in [
-                        Containment::Center,
-                        Containment::Inside,
-                        Containment::Outside,
-                    ] {
-                        ui.selectable_value(&mut g.containment, c, name(c));
-                    }
-                });
-            ui.end_row();
-        }
-        widgets::field_label(ui, "Margin");
-        m.length_field(ui, &mut g.margin, 0.1, 1000.0, "");
-        ui.end_row();
-    });
-    if g.picked() && !drilling {
-        match picks.shown.and_then(|s| s.boundary.as_ref()) {
-            Some(Err(why)) => {
-                error(ui, why);
-            }
-            Some(Ok(())) => {
-                hint(ui, "The boundary is drawn in the view at the stock's top.");
-            }
-            None => {}
-        }
     }
 }
 

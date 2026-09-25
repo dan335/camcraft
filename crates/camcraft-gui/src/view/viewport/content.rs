@@ -28,8 +28,12 @@ pub enum OutlineKind {
     Selected,
     /// The edge under the pointer.
     Hover,
-    /// The boundary an operation is kept to.
+    /// The machining boundary an operation is kept to, as chosen.
     Boundary,
+    /// Where the tool's centre may go against it.
+    Limit,
+    /// Hatching over what the tool cuts outside the part.
+    Channel,
     /// A stock that could be picked into the setup.
     Ghost,
     /// The edge of one of an operation's height planes.

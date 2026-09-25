@@ -24,8 +24,12 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
   zero, a run is bit-identical to before setups existed.
 
 An operation has a strategy (parallel finishing, Z-level roughing or drilling), a
-tool, heights, passes and linking. It may be kept to faces and edges picked on a
-model, and it may be turned off, which leaves it in the job but out of every run,
+tool, heights, passes and linking. Its machining boundary, as Fusion's, keeps it
+to the stock, the part's bounding box or silhouette, or faces and edges picked on
+a model, with the tool's containment and an additional offset. A job from before
+boundaries reads picks as a selection and no picks as the stock. Any other
+boundary, or a positive offset with the whole tool inside (which now moves the
+boundary in), is version 6. It may be turned off, which leaves it in the job but out of every run,
 check and post.
 
 **Linking** is how the tool moves between cuts, after Fusion's

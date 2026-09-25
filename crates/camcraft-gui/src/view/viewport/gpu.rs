@@ -40,8 +40,12 @@ const GHOST: u32 = 15;
 pub(super) const CLEARANCE: u32 = 16;
 pub(super) const TOP: u32 = 17;
 pub(super) const BOTTOM: u32 = 18;
+/// Line kinds for where the tool's centre may go against the boundary, and the
+/// hatching over what it cuts outside the part. Always shown, drawn thin.
+const LIMIT: u32 = 19;
+const CHANNEL: u32 = 20;
 /// Line kinds in all, and so colours.
-const KINDS: usize = 19;
+const KINDS: usize = 21;
 
 pub(super) const COMMON: &str = include_str!("shaders/common.wgsl");
 
@@ -132,6 +136,8 @@ fn outline_instances(outline: &[Outline]) -> Vec<LineInstance> {
                 OutlineKind::Selected => SELECTED,
                 OutlineKind::Hover => HOVER,
                 OutlineKind::Boundary => BOUNDARY,
+                OutlineKind::Limit => LIMIT,
+                OutlineKind::Channel => CHANNEL,
                 OutlineKind::Ghost => GHOST,
                 OutlineKind::Plane(k) => k.line_kind(),
             },
@@ -809,6 +815,8 @@ impl Gpu {
             (SELECTED, theme::SELECTED),
             (HOVER, theme::HOVER),
             (BOUNDARY, theme::BOUNDARY),
+            (LIMIT, theme::BOUNDARY_LIMIT),
+            (CHANNEL, theme::CHANNEL),
             (GHOST, theme::GHOST),
             (CLEARANCE, PlaneKind::Clearance.color()),
             (TOP, PlaneKind::Top.color()),
@@ -825,6 +833,8 @@ impl Gpu {
             | (1 << SELECTED)
             | (1 << HOVER)
             | (1 << BOUNDARY)
+            | (1 << LIMIT)
+            | (1 << CHANNEL)
             | (1 << GHOST)
             | (1 << CLEARANCE)
             | (1 << TOP)

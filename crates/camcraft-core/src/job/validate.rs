@@ -224,6 +224,9 @@ impl Job {
     /// and 1 otherwise.
     pub fn required_version(&self) -> u32 {
         let ops = || self.setups.iter().flat_map(|s| &s.operations);
+        if ops().any(|op| !op.geometry.reads_as_before()) {
+            return 6;
+        }
         let placed = self
             .stocks
             .iter()

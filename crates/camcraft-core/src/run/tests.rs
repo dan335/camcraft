@@ -411,6 +411,61 @@ fn roughing_keeps_to_a_picked_face() {
     );
 }
 
+/// Roughing kept to the part's silhouette leaves the block around it alone: with
+/// the tool's centre on it, nothing is cut outside the part; reaching in from
+/// outside with an offset, a channel that wide is cut round it and no further.
+#[test]
+fn roughing_keeps_to_the_silhouette() {
+    use crate::job::{Boundary, Containment, StockSpec};
+    let body = Body::derived(synthetic::step(5.0, 10.0));
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    job.setups[0].operations.retain(|op| op.name == "rough");
+    job.stocks[0].spec = StockSpec::AroundModels {
+        models: vec![],
+        margin: [20.0, 20.0, 2.0],
+        below: 0.0,
+    };
+    let all = run_setup(&job, 0, &bodies).unwrap();
+
+    let g = &mut job.setups[0].operations[0].geometry;
+    g.boundary_kind = Some(Boundary::Silhouette);
+    let inside = run_setup(&job, 0, &bodies).unwrap();
+    for p in cuts(&inside) {
+        assert!(
+            p.x.abs() <= 10.01 && p.y.abs() <= 10.01,
+            "a cut at {p} leaves the part"
+        );
+    }
+
+    let g = &mut job.setups[0].operations[0].geometry;
+    g.containment = Containment::Outside;
+    g.margin = 6.0;
+    let channel = run_setup(&job, 0, &bodies).unwrap();
+    let cuts = cuts(&channel);
+    // The step is 20 square; the tool's centre may go its radius and the offset
+    // past it.
+    let reach = 10.0 + 3.0 + 6.0 + 0.05;
+    for p in &cuts {
+        assert!(
+            p.x.abs() <= reach && p.y.abs() <= reach,
+            "a cut at {p} is past the channel"
+        );
+    }
+    assert!(
+        cuts.iter().any(|p| p.x.abs() > 12.0 || p.y.abs() > 12.0),
+        "no channel is cut round the part"
+    );
+    let removed = |r: &SetupResult| r.operations[0].sim.removed_mm3;
+    assert!(removed(&inside) < removed(&channel));
+    assert!(
+        removed(&channel) < removed(&all),
+        "channel {} vs the whole block {}",
+        removed(&channel),
+        removed(&all)
+    );
+}
+
 /// A pick on nothing stops the run and names the operation.
 #[test]
 fn a_gone_pick_stops_the_run() {
