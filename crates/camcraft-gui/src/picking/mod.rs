@@ -12,6 +12,13 @@
 //! thing under the pointer shows (redone when the pointer moves onto something
 //! else). Everything else is done as the pointer moves: a ray cast and a look along
 //! the edges on the screen.
+//!
+//! What the pointer hits is found in [`ray`], what a slot takes and what a click
+//! does to the job in [`slots`], and what a pick is called in [`describe`].
+
+pub mod describe;
+pub mod ray;
+pub mod slots;
 
 use std::borrow::Cow;
 
@@ -20,11 +27,11 @@ use camcraft_core::job::{FeatureRef, Geometry, Origin, ToolSpec};
 use eframe::egui;
 
 use crate::document::{Document, Selection, next_key};
-use crate::measure::Measure;
-use crate::pick::{PickScene, PickStock, Target};
-use crate::slots::{self, Kind, Shown, Slot};
-use crate::viewport::{Content, Highlight, PointerEvent};
+use crate::ui::measure::Measure;
+use crate::view::viewport::{Content, Highlight, PointerEvent};
 use crate::worker::DocId;
+use ray::{PickScene, PickStock, Target};
+use slots::{Kind, Shown, Slot};
 
 /// What the picks shown were worked out from: when any of it changes, they are
 /// worked out again. Each frame's is borrowed from the job, to compare with the

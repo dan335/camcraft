@@ -3,18 +3,18 @@
 //! Everything moves the one [`Playhead`]. Playing advances it by machining time at
 //! the chosen speed, a frame at a time; the buttons, the timeline and the keys set
 //! it. The paths, the cutter and the material all follow from it, the material on
-//! its own thread (`live.rs`), so nothing here waits for a sweep.
+//! its own thread (`stock/live.rs`), so nothing here waits for a sweep.
 
 use camcraft_geom::heightmap::narrow;
 use camcraft_session::checks::Level;
 use eframe::egui;
 
 use crate::document::{SetupState, StockMode, Transport};
-use crate::measure::Measure;
 use crate::playback::{finding_segment, thousands};
-use crate::scene::{Playhead, Scene, clock};
-use crate::theme;
-use crate::widgets::{self, Icon, Size, Variant};
+use crate::ui::measure::Measure;
+use crate::ui::theme;
+use crate::ui::widgets::{self, Icon, Size, Variant};
+use crate::view::scene::{Playhead, Scene, clock};
 
 /// The speeds on offer, in machining seconds per second.
 pub const SPEEDS: [f64; 15] = [

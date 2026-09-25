@@ -7,10 +7,10 @@ use eframe::egui;
 
 use super::{Picks, PropAction, header, renamed};
 use crate::document::{Document, ModelSlot, Selection};
-use crate::measure::Measure;
-use crate::slots::Slot;
-use crate::theme;
-use crate::widgets::{self, Icon, Size, Variant, error, form, hint, list_row_background};
+use crate::picking::slots::Slot;
+use crate::ui::measure::Measure;
+use crate::ui::theme;
+use crate::ui::widgets::{self, Icon, Size, Variant, error, form, hint, list_row_background};
 
 /// A list of names included from a larger one: a card with each included name
 /// and a way to take it out, and in its header a way to add more.

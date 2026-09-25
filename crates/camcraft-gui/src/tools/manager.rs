@@ -18,11 +18,12 @@ use camcraft_session::library::{
 };
 use eframe::egui;
 
-use crate::measure::Measure;
-use crate::theme;
-use crate::tool_drawing::{kind_name, paint_tool};
-use crate::tool_editor::tool_fields;
-use crate::widgets::{self, Icon, Level, Size, Variant, list_row_background};
+use crate::tools::drawing::{kind_name, paint_tool};
+use crate::tools::editor::tool_fields;
+use crate::tools::table::{column_header, dim, name_cell, number, number_cell, tool_table};
+use crate::ui::measure::Measure;
+use crate::ui::theme;
+use crate::ui::widgets::{self, Icon, Level, Size, Variant, list_row_background};
 
 /// The library: as saved, and as edited.
 #[derive(Debug, Clone, Default)]
@@ -111,6 +112,14 @@ enum TreeAction {
     CancelRename,
     Delete(FolderPath),
     Drop(ToolDrag, FolderPath),
+}
+
+/// Something done to a tool's row, applied once the table has been drawn.
+enum RowAction {
+    Select(FolderPath, String),
+    Move(FolderPath, String, FolderPath),
+    Duplicate(FolderPath, String),
+    Delete(FolderPath, String),
 }
 
 /// The manager's state.
@@ -692,7 +701,32 @@ impl ToolManager {
                 ui.checkbox(&mut self.include_subfolders, "Include subfolders");
             });
         });
-        // What can be done to the tool selected, only while one is.
+        self.selection_bar(ui, &all_folders);
+
+        let Some(here) = self.library.edited.at(&self.folder) else {
+            self.folder = Vec::new();
+            return;
+        };
+        let mut rows = here.find(self.include_subfolders, &self.filter);
+        if rows.is_empty() {
+            self.empty_table(ui);
+            return;
+        }
+        match self.sort {
+            Sort::Number => rows.sort_by_key(|(f, n, t)| (t.number, *n, f.clone())),
+            Sort::Name => rows.sort_by_key(|(f, n, _)| (*n, f.clone())),
+            Sort::Diameter => rows.sort_by(|a, b| a.2.diameter.total_cmp(&b.2.diameter)),
+        }
+        let mut sort = self.sort;
+        let actions = self.tool_rows(ui, rows, &all_folders, &mut sort);
+        self.sort = sort;
+        for action in actions {
+            self.apply_row(action);
+        }
+    }
+
+    /// What can be done to the tool selected, only while one is.
+    fn selection_bar(&mut self, ui: &mut egui::Ui, all_folders: &[FolderPath]) {
         let selected = self.selected.clone();
         let has_tools = self
             .library
@@ -731,7 +765,7 @@ impl ToolManager {
                 "Move to…",
             );
             egui::Popup::menu(&moving).show(|ui| {
-                for path in &all_folders {
+                for path in all_folders {
                     if path != folder && ui.button(folder_label(path)).clicked() {
                         self.move_tool(folder, name, path);
                         ui.close();
@@ -744,65 +778,61 @@ impl ToolManager {
             }
         });
         ui.add_space(theme::SPACE_2);
+    }
 
-        let Some(here) = self.library.edited.at(&self.folder) else {
-            self.folder = Vec::new();
-            return;
+    /// What shows in place of the table when no tool is listed: why, and the ways
+    /// to add one.
+    fn empty_table(&mut self, ui: &mut egui::Ui) {
+        let (title, detail) = if self.filter.is_empty() {
+            (
+                "No tools here",
+                "Add one, or import a maker's Fusion library.",
+            )
+        } else {
+            (
+                "Nothing matches",
+                "No tool here has that in its name or description.",
+            )
         };
-        let mut rows = here.find(self.include_subfolders, &self.filter);
-        if rows.is_empty() {
-            let (title, detail) = if self.filter.is_empty() {
-                (
-                    "No tools here",
-                    "Add one, or import a maker's Fusion library.",
-                )
-            } else {
-                (
-                    "Nothing matches",
-                    "No tool here has that in its name or description.",
-                )
-            };
-            let mut new = false;
-            let mut import = false;
-            widgets::empty_state(ui, Icon::Folder, title, detail, |ui| {
-                new = widgets::button(
-                    ui,
-                    Variant::Secondary,
-                    Size::Md,
-                    Some(Icon::Plus),
-                    "New tool",
-                )
-                .clicked();
-                import = widgets::button(
-                    ui,
-                    Variant::Secondary,
-                    Size::Md,
-                    Some(Icon::Upload),
-                    "Import…",
-                )
-                .clicked();
-            });
-            if new {
-                self.new_tool();
-            }
-            self.import_requested |= import;
-            return;
+        let mut new = false;
+        let mut import = false;
+        widgets::empty_state(ui, Icon::Folder, title, detail, |ui| {
+            new = widgets::button(
+                ui,
+                Variant::Secondary,
+                Size::Md,
+                Some(Icon::Plus),
+                "New tool",
+            )
+            .clicked();
+            import = widgets::button(
+                ui,
+                Variant::Secondary,
+                Size::Md,
+                Some(Icon::Upload),
+                "Import…",
+            )
+            .clicked();
+        });
+        if new {
+            self.new_tool();
         }
-        match self.sort {
-            Sort::Number => rows.sort_by_key(|(f, n, t)| (t.number, *n, f.clone())),
-            Sort::Name => rows.sort_by_key(|(f, n, _)| (*n, f.clone())),
-            Sort::Diameter => rows.sort_by(|a, b| a.2.diameter.total_cmp(&b.2.diameter)),
-        }
+        self.import_requested |= import;
+    }
+
+    /// The table of `rows`, whose headers set `sort` when clicked, and what was
+    /// done to the rows.
+    fn tool_rows(
+        &self,
+        ui: &mut egui::Ui,
+        rows: Vec<(FolderPath, &str, &ToolSpec)>,
+        all_folders: &[FolderPath],
+        sort: &mut Sort,
+    ) -> Vec<RowAction> {
         let m = self.measure;
-        let base = self.folder.clone();
         // Which folder a tool is in, only when some are in folders further down.
         let with_folder = rows.iter().any(|(sub, _, _)| !sub.is_empty());
-        let mut clicked = None;
-        let mut moves = Vec::new();
-        let mut duplicates = Vec::new();
-        let mut deletes = Vec::new();
-        let mut sort = self.sort;
-        let right = egui::Layout::right_to_left(egui::Align::Center);
+        let mut actions = Vec::new();
 
         let mut table = tool_table(ui, "tools-table", egui::Sense::click_and_drag())
             .column(egui_extras::Column::exact(44.0))
@@ -824,138 +854,138 @@ impl ToolManager {
             .header(theme::CONTROL_MD, |mut header| {
                 header.col(|ui| {
                     ui.add_space(theme::SPACE_3);
-                    sort_header(ui, "T", None, Some(Sort::Number), &mut sort, false);
+                    sort_header(ui, "T", None, Some(Sort::Number), sort, false);
                 });
-                header.col(|ui| sort_header(ui, "Name", None, Some(Sort::Name), &mut sort, false));
+                header.col(|ui| sort_header(ui, "Name", None, Some(Sort::Name), sort, false));
                 if with_folder {
-                    header.col(|ui| sort_header(ui, "In", None, None, &mut sort, false));
+                    header.col(|ui| sort_header(ui, "In", None, None, sort, false));
                 }
-                header.col(|ui| sort_header(ui, "Type", None, None, &mut sort, false));
+                header.col(|ui| sort_header(ui, "Type", None, None, sort, false));
                 header.col(|ui| {
-                    sort_header(
-                        ui,
-                        "Ø",
-                        Some(m.unit()),
-                        Some(Sort::Diameter),
-                        &mut sort,
-                        true,
-                    );
+                    sort_header(ui, "Ø", Some(m.unit()), Some(Sort::Diameter), sort, true);
                 });
-                header.col(|ui| sort_header(ui, "Flutes", None, None, &mut sort, true));
-                header.col(|ui| sort_header(ui, "Presets", None, None, &mut sort, true));
+                header.col(|ui| sort_header(ui, "Flutes", None, None, sort, true));
+                header.col(|ui| sort_header(ui, "Presets", None, None, sort, true));
                 header.col(|ui| {
-                    sort_header(ui, "Stickout", Some(m.unit()), None, &mut sort, true);
+                    sort_header(ui, "Stickout", Some(m.unit()), None, sort, true);
                 });
-                header.col(|ui| sort_header(ui, "Description", None, None, &mut sort, false));
+                header.col(|ui| sort_header(ui, "Description", None, None, sort, false));
             })
             .body(|mut body| {
-                for (sub, name, tool) in rows {
-                    let mut folder = base.clone();
-                    folder.extend(sub.iter().cloned());
-                    let is = self
-                        .selected
-                        .as_ref()
-                        .is_some_and(|(f, n)| *f == folder && n == name);
-                    body.row(theme::CONTROL_MD, |mut row| {
-                        row.set_selected(is);
-                        row.col(|ui| number_cell(ui, tool.number, is));
-                        row.col(|ui| name_cell(ui, name, is));
-                        if with_folder {
-                            row.col(|ui| {
-                                ui.add(dim(sub.join("/")).selectable(false));
-                            });
-                        }
-                        row.col(|ui| {
-                            ui.add(dim(kind_name(tool.kind).to_string()).selectable(false));
-                        });
-                        row.col(|ui| {
-                            ui.with_layout(right, |ui| ui.add(number(m.number(tool.diameter, 2))));
-                        });
-                        row.col(|ui| {
-                            ui.with_layout(right, |ui| {
-                                ui.add(number(
-                                    tool.flutes.map_or_else(|| "–".into(), |f| f.to_string()),
-                                ))
-                            });
-                        });
-                        row.col(|ui| {
-                            ui.with_layout(right, |ui| match tool.presets.len() {
-                                0 => ui.add(dim("–".into())),
-                                n => ui.add(number(n.to_string())).on_hover_text(
-                                    tool.presets
-                                        .iter()
-                                        .map(|p| p.name.as_str())
-                                        .collect::<Vec<_>>()
-                                        .join(", "),
-                                ),
-                            });
-                        });
-                        row.col(|ui| {
-                            ui.with_layout(right, |ui| {
-                                ui.add(number(
-                                    tool.stickout.map_or_else(|| "–".into(), |s| m.number(s, 1)),
-                                ))
-                            });
-                        });
-                        row.col(|ui| {
-                            ui.add(dim(tool.comment.clone()).selectable(false));
-                        });
-
-                        // The row both clicks and drags onto a folder.
-                        let r = row.response();
-                        let drag = ToolDrag {
-                            folder: folder.clone(),
-                            name: name.to_string(),
-                        };
-                        r.dnd_set_drag_payload(drag);
-                        if r.dragged() {
-                            widgets::drag_label(
-                                &r.ctx,
-                                name,
-                                egui::FontId::monospace(theme::TEXT_SM),
-                            );
-                        }
-                        if r.clicked() || r.secondary_clicked() {
-                            clicked = Some((folder.clone(), name.to_string()));
-                        }
-                        r.context_menu(|ui| {
-                            if ui.button("Duplicate").clicked() {
-                                duplicates.push((folder.clone(), name.to_string()));
-                                ui.close();
-                            }
-                            ui.menu_button("Move to", |ui| {
-                                for path in &all_folders {
-                                    if *path != folder && ui.button(folder_label(path)).clicked() {
-                                        moves.push((
-                                            folder.clone(),
-                                            name.to_string(),
-                                            path.clone(),
-                                        ));
-                                        ui.close();
-                                    }
-                                }
-                            });
-                            ui.separator();
-                            if ui.button(widgets::error_text("Delete")).clicked() {
-                                deletes.push((folder.clone(), name.to_string()));
-                                ui.close();
-                            }
-                        });
-                    });
+                for tool in rows {
+                    self.tool_row(&mut body, tool, with_folder, all_folders, &mut actions);
                 }
             });
-        self.sort = sort;
-        if let Some(tool) = clicked {
-            self.select(Some(tool));
-        }
-        for (from, name, to) in moves {
-            self.move_tool(&from, &name, &to);
-        }
-        for (folder, name) in duplicates {
-            self.duplicate(&folder, &name);
-        }
-        for (folder, name) in deletes {
-            self.delete(&folder, &name);
+        actions
+    }
+
+    /// One tool's row: its cells, then what a click, a drag or its menu does.
+    fn tool_row(
+        &self,
+        body: &mut egui_extras::TableBody<'_>,
+        (sub, name, tool): (FolderPath, &str, &ToolSpec),
+        with_folder: bool,
+        all_folders: &[FolderPath],
+        actions: &mut Vec<RowAction>,
+    ) {
+        let m = self.measure;
+        let right = egui::Layout::right_to_left(egui::Align::Center);
+        let mut folder = self.folder.clone();
+        folder.extend(sub.iter().cloned());
+        let is = self
+            .selected
+            .as_ref()
+            .is_some_and(|(f, n)| *f == folder && n == name);
+        body.row(theme::CONTROL_MD, |mut row| {
+            row.set_selected(is);
+            row.col(|ui| number_cell(ui, tool.number, is));
+            row.col(|ui| name_cell(ui, name, is));
+            if with_folder {
+                row.col(|ui| {
+                    ui.add(dim(sub.join("/")).selectable(false));
+                });
+            }
+            row.col(|ui| {
+                ui.add(dim(kind_name(tool.kind).to_string()).selectable(false));
+            });
+            row.col(|ui| {
+                ui.with_layout(right, |ui| ui.add(number(m.number(tool.diameter, 2))));
+            });
+            row.col(|ui| {
+                ui.with_layout(right, |ui| {
+                    ui.add(number(
+                        tool.flutes.map_or_else(|| "–".into(), |f| f.to_string()),
+                    ))
+                });
+            });
+            row.col(|ui| {
+                ui.with_layout(right, |ui| match tool.presets.len() {
+                    0 => ui.add(dim("–".into())),
+                    n => ui.add(number(n.to_string())).on_hover_text(
+                        tool.presets
+                            .iter()
+                            .map(|p| p.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                });
+            });
+            row.col(|ui| {
+                ui.with_layout(right, |ui| {
+                    ui.add(number(
+                        tool.stickout.map_or_else(|| "–".into(), |s| m.number(s, 1)),
+                    ))
+                });
+            });
+            row.col(|ui| {
+                ui.add(dim(tool.comment.clone()).selectable(false));
+            });
+
+            // The row both clicks and drags onto a folder.
+            let r = row.response();
+            let drag = ToolDrag {
+                folder: folder.clone(),
+                name: name.to_string(),
+            };
+            r.dnd_set_drag_payload(drag);
+            if r.dragged() {
+                widgets::drag_label(&r.ctx, name, egui::FontId::monospace(theme::TEXT_SM));
+            }
+            if r.clicked() || r.secondary_clicked() {
+                actions.push(RowAction::Select(folder.clone(), name.to_string()));
+            }
+            r.context_menu(|ui| {
+                if ui.button("Duplicate").clicked() {
+                    actions.push(RowAction::Duplicate(folder.clone(), name.to_string()));
+                    ui.close();
+                }
+                ui.menu_button("Move to", |ui| {
+                    for path in all_folders {
+                        if *path != folder && ui.button(folder_label(path)).clicked() {
+                            actions.push(RowAction::Move(
+                                folder.clone(),
+                                name.to_string(),
+                                path.clone(),
+                            ));
+                            ui.close();
+                        }
+                    }
+                });
+                ui.separator();
+                if ui.button(widgets::error_text("Delete")).clicked() {
+                    actions.push(RowAction::Delete(folder.clone(), name.to_string()));
+                    ui.close();
+                }
+            });
+        });
+    }
+
+    fn apply_row(&mut self, action: RowAction) {
+        match action {
+            RowAction::Select(folder, name) => self.select(Some((folder, name))),
+            RowAction::Move(from, name, to) => self.move_tool(&from, &name, &to),
+            RowAction::Duplicate(folder, name) => self.duplicate(&folder, &name),
+            RowAction::Delete(folder, name) => self.delete(&folder, &name),
         }
     }
 
@@ -1154,6 +1184,27 @@ fn folder_row(
             ui.data_mut(|d| d.insert_persisted(open_id, open));
         }
     }
+    folder_name(&mut row, folder, path, is, renaming, actions);
+    folder_actions(&response, path, actions);
+
+    if open {
+        for (name, sub) in &folder.folders {
+            path.push(name.clone());
+            folder_row(ui, sub, path, selected, renaming, actions);
+            path.pop();
+        }
+    }
+}
+
+/// A folder's name and how many tools it holds, or the field renaming it.
+fn folder_name(
+    row: &mut egui::Ui,
+    folder: &Folder,
+    path: &FolderPath,
+    is: bool,
+    renaming: &mut Option<(FolderPath, String)>,
+    actions: &mut Vec<TreeAction>,
+) {
     let editing = renaming.as_ref().is_some_and(|(at, _)| at == path);
     if editing {
         if let Some((_, buffer)) = renaming.as_mut() {
@@ -1185,6 +1236,10 @@ fn folder_row(
             );
         });
     }
+}
+
+/// What dropping a tool on a folder's row, clicking it, and its menu do.
+fn folder_actions(response: &egui::Response, path: &FolderPath, actions: &mut Vec<TreeAction>) {
     if let Some(drag) = response.dnd_release_payload::<ToolDrag>() {
         actions.push(TreeAction::Drop((*drag).clone(), path.clone()));
     }
@@ -1214,14 +1269,6 @@ fn folder_row(
             }
         }
     });
-
-    if open {
-        for (name, sub) in &folder.folders {
-            path.push(name.clone());
-            folder_row(ui, sub, path, selected, renaming, actions);
-            path.pop();
-        }
-    }
 }
 
 /// Where a folder is: `Library / machine_01 / flat`, the last part brightest.
@@ -1261,61 +1308,6 @@ fn short_path(path: &Path) -> String {
     }
 }
 
-/// A table of tools, as the library lists them: rows that answer `sense`, the one
-/// selected on `--accent-subtle` as the folder selected is, rather than the heavier
-/// `--selection`. The columns and rows are the caller's.
-pub fn tool_table<'a>(
-    ui: &'a mut egui::Ui,
-    id: &str,
-    sense: egui::Sense,
-) -> egui_extras::TableBuilder<'a> {
-    ui.visuals_mut().selection.bg_fill = theme::ACCENT_SUBTLE.color();
-    egui_extras::TableBuilder::new(ui)
-        .id_salt(id)
-        .striped(false)
-        .sense(sense)
-        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-}
-
-/// A tool's number, in a table's first column: an amber edge on the row when it is
-/// `selected`, as a list row has.
-pub fn number_cell(ui: &mut egui::Ui, tool_number: u32, selected: bool) {
-    if selected {
-        let r = ui.max_rect();
-        ui.painter().rect_filled(
-            egui::Rect::from_min_max(r.left_top(), egui::pos2(r.left() + 2.0, r.bottom())),
-            0.0,
-            theme::egui_color(theme::ACCENT),
-        );
-    }
-    ui.add_space(theme::SPACE_3);
-    ui.add(number(format!("T{tool_number}")));
-}
-
-/// A tool's name in a table: brightest when `selected`.
-pub fn name_cell(ui: &mut egui::Ui, name: &str, selected: bool) {
-    let color = if selected {
-        theme::TEXT_1
-    } else {
-        theme::TEXT_2
-    };
-    ui.add(
-        egui::Label::new(egui::RichText::new(name).color(theme::egui_color(color)))
-            .truncate()
-            .selectable(false),
-    );
-}
-
-/// A figure in a table: mono, the value to compare.
-pub fn number(text: String) -> egui::Label {
-    egui::Label::new(widgets::mono(text, theme::TEXT_SM).color(theme::egui_color(theme::TEXT_1)))
-}
-
-/// Secondary text in a table, cut short to its column.
-pub fn dim(text: String) -> egui::Label {
-    egui::Label::new(egui::RichText::new(text).color(theme::egui_color(theme::TEXT_3))).truncate()
-}
-
 /// A header that sorts the table by `key`, when it has one, on a click.
 fn sort_header(
     ui: &mut egui::Ui,
@@ -1330,67 +1322,6 @@ fn sort_header(
     {
         *sort = k;
     }
-}
-
-/// A column's header: the small uppercase label and its unit, lowercase as
-/// units are written. `sorted` is `None` for a column the table does not sort by,
-/// and otherwise whether it sorts by it now, which puts an arrow on it. Whether it
-/// was clicked.
-pub fn column_header(
-    ui: &mut egui::Ui,
-    label: &str,
-    unit: Option<&str>,
-    sorted: Option<bool>,
-    right: bool,
-) -> bool {
-    let on = sorted == Some(true);
-    let mut text = widgets::section_label(label);
-    if on {
-        text = text.color(theme::egui_color(theme::TEXT_1));
-    }
-    let mut parts = vec![text];
-    if let Some(u) = unit {
-        parts.push(widgets::mono(u, theme::TEXT_XS).color(theme::egui_color(theme::TEXT_4)));
-    }
-    if on {
-        parts.push(
-            Icon::ArrowDown
-                .text(12.0)
-                .color(theme::egui_color(theme::ACCENT)),
-        );
-    }
-    let layout = if right {
-        // Laid out from the right, so added last part first.
-        parts.reverse();
-        egui::Layout::right_to_left(egui::Align::Center)
-    } else {
-        egui::Layout::left_to_right(egui::Align::Center)
-    };
-    let sense = if sorted.is_some() {
-        egui::Sense::click()
-    } else {
-        egui::Sense::hover()
-    };
-    let clicked = ui
-        .with_layout(layout, |ui| {
-            ui.spacing_mut().item_spacing.x = theme::SPACE_2;
-            let mut clicked = false;
-            for part in parts {
-                clicked |= ui
-                    .add(egui::Label::new(part).selectable(false).sense(sense))
-                    .clicked();
-            }
-            clicked
-        })
-        .inner;
-    // The hairline under the header row.
-    let rect = ui.max_rect();
-    ui.painter().hline(
-        rect.x_range(),
-        rect.bottom(),
-        egui::Stroke::new(1.0, theme::egui_color(theme::BORDER)),
-    );
-    clicked
 }
 
 #[cfg(test)]

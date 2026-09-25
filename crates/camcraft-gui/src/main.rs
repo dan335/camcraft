@@ -3,40 +3,37 @@
 //! Open a job, run its setups, and see what will be cut. It runs on the same
 //! engine path as the `camcraft` command line, through `camcraft-session`, so the
 //! two cannot disagree about what a file means, what runs, or what may be posted.
+//!
+//! Position in the dependency DAG: a **root**. Depends on `camcraft-session` and,
+//! through it and directly, on the library crates whose types it shows
+//! (`camcraft-core`, `camcraft-geom`, `camcraft-sim`); nothing depends on it.
 
+// The window and its panels.
 mod app;
 mod browser;
-mod camera;
-mod document;
 mod file_dialog;
-mod live;
-mod measure;
-mod part_ao;
-mod pick;
-mod picking;
 mod playback;
 mod properties;
-mod pyramid;
-mod scene;
 mod settings;
-mod slots;
-mod stock_ao;
-mod stock_tiles;
-mod stock_view;
+mod tools;
+mod transport;
+
+// A job as the app holds it, and the work done off the UI thread.
+mod document;
+mod worker;
+
+// The 3D view, picking in it, and the material it draws.
+mod picking;
+mod stock;
+mod view;
+
+// The design system, and lengths in millimetres or inches.
+mod ui;
+
 #[cfg(test)]
 mod test_jobs;
-mod theme;
-mod tiles;
-mod tool_drawing;
-mod tool_editor;
-mod tool_manager;
-mod tool_picker;
-mod transport;
 #[cfg(all(test, feature = "ui-snapshots"))]
 mod ui_snapshots;
-mod viewport;
-mod widgets;
-mod worker;
 
 use eframe::egui;
 

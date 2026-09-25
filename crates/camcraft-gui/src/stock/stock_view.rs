@@ -18,8 +18,8 @@ use camcraft_geom::heightmap::narrow;
 use camcraft_sim::stock::{CellRect, PartSurface, Stock};
 use glam::DVec2;
 
-use crate::stock_ao::{self, Occluder};
-use crate::theme;
+use crate::stock::stock_ao::{self, Occluder};
+use crate::ui::theme;
 
 /// How a column of material compares with the part.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,7 +247,7 @@ pub struct StockImage {
     pub heights: Vec<f32>,
     /// Class and shade per cell, row by row: see [`code`].
     pub codes: Vec<u8>,
-    /// How much sky each cell sees, row by row: see [`crate::stock_ao`].
+    /// How much sky each cell sees, row by row: see [`crate::stock::stock_ao`].
     pub ao: Vec<u8>,
     /// Cells per class, in [`CLASSES`] order.
     pub counts: [usize; 4],
@@ -625,7 +625,7 @@ passes = { stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.3, axial
                 // Once as one rectangle, once as tiles in parallel.
                 let mut tiled = image.clone();
                 image.patch(&stock, &part, 0.1, rect);
-                let mut tiles = crate::tiles::Tiles::new(image.nx, image.ny);
+                let mut tiles = crate::stock::dirty::DirtyTiles::new(image.nx, image.ny);
                 tiles.mark(rect);
                 tiled.patch_many(&stock, &part, 0.1, &tiles.rects());
                 let fresh = StockImage::build(&stock, &part, 0.1);

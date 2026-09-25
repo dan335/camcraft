@@ -7,13 +7,13 @@
 
 use std::cell::RefCell;
 
-use camcraft_core::job::StrategySpec;
+use camcraft_core::job::{Operation, Setup, StrategySpec};
 use camcraft_core::run::Stage;
 use eframe::egui;
 
 use crate::document::{Document, Level, ModelSlot, OpStatus, Selection, Status};
-use crate::theme;
-use crate::widgets::{self, hint_text};
+use crate::ui::theme;
+use crate::ui::widgets::{self, hint_text};
 
 /// Something the tree asks the app to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -274,228 +274,9 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) -> Vec<BrowserAction> {
             );
         },
         |ui| {
-            // Models.
-            branch(
-                ui,
-                ("models", d.id),
-                |ui| {
-                    let r = row(ui, d, Selection::Models, "Models", &edits);
-                    r.context_menu(|ui| {
-                        if ui.button("Add models…").clicked() {
-                            actions.borrow_mut().push(BrowserAction::AddModels);
-                            ui.close();
-                        }
-                    });
-                },
-                |ui| {
-                    for m in &d.job.models {
-                        leaf(ui, |ui| {
-                            let slot = d.models.get(&m.name);
-                            let text = match slot {
-                                Some(ModelSlot::Failed { .. }) => widgets::error_text(&m.name),
-                                _ => egui::RichText::new(&m.name),
-                            };
-                            let r = row(ui, d, Selection::Model(m.name.clone()), text, &edits);
-                            if let Some(ModelSlot::Loading(_)) = slot {
-                                ui.add(egui::Spinner::new().size(10.0));
-                            }
-                            let r = match slot {
-                                Some(ModelSlot::Failed { why, .. }) => r.on_hover_text(why),
-                                _ => r.on_hover_text(&m.path),
-                            };
-                            r.context_menu(|ui| {
-                                if ui.button("Find it elsewhere…").clicked() {
-                                    actions
-                                        .borrow_mut()
-                                        .push(BrowserAction::Locate(m.name.clone()));
-                                    ui.close();
-                                }
-                                if ui.button("Remove").clicked() {
-                                    edits.borrow_mut().push(Edit::RemoveModel(m.name.clone()));
-                                    ui.close();
-                                }
-                            });
-                        });
-                    }
-                },
-            );
-
-            // Stocks.
-            branch(
-                ui,
-                ("stocks", d.id),
-                |ui| {
-                    let r = row(ui, d, Selection::Stocks, "Stocks", &edits);
-                    r.context_menu(|ui| {
-                        if ui.button("New stock").clicked() {
-                            edits.borrow_mut().push(Edit::AddStock);
-                            ui.close();
-                        }
-                    });
-                },
-                |ui| {
-                    for s in &d.job.stocks {
-                        leaf(ui, |ui| {
-                            let r = row(ui, d, Selection::Stock(s.name.clone()), &s.name, &edits);
-                            r.context_menu(|ui| {
-                                if ui.button("Duplicate").clicked() {
-                                    edits
-                                        .borrow_mut()
-                                        .push(Edit::DuplicateStock(s.name.clone()));
-                                    ui.close();
-                                }
-                                if ui.button("Remove").clicked() {
-                                    edits.borrow_mut().push(Edit::RemoveStock(s.name.clone()));
-                                    ui.close();
-                                }
-                            });
-                        });
-                    }
-                },
-            );
-
-            // Setups.
-            branch(
-                ui,
-                ("setups", d.id),
-                |ui| {
-                    let r = row(ui, d, Selection::Setups, "Setups", &edits);
-                    r.context_menu(|ui| {
-                        if ui.button("New setup").clicked() {
-                            edits.borrow_mut().push(Edit::AddSetup);
-                            ui.close();
-                        }
-                    });
-                },
-                |ui| {
-                    for s in &d.job.setups {
-                        let name = s.name.clone();
-                        branch(
-                            ui,
-                            ("setup", d.id, &name),
-                            |ui| {
-                                status_dot(ui, d.status(&name));
-                                let shown = d.active.as_deref() == Some(name.as_str());
-                                let mut text = egui::RichText::new(&name);
-                                if shown {
-                                    text = text.strong();
-                                }
-                                let r = row(ui, d, Selection::Setup(name.clone()), text, &edits);
-                                r.context_menu(|ui| setup_menu(ui, d, &name, &edits, &actions));
-                                let line = egui::Rect::from_x_y_ranges(
-                                    ui.max_rect().x_range(),
-                                    r.rect.y_range(),
-                                );
-                                if let Some(edit) = setup_drop(ui, &name, s.operations.len(), line)
-                                {
-                                    edits.borrow_mut().push(edit);
-                                }
-                                let progress = d.setups.get(&name).and_then(|st| st.progress);
-                                if let Some((stage, _)) = progress {
-                                    beside(ui, stage_text(stage, s.operations.len()));
-                                }
-                            },
-                            |ui| {
-                                for (i, op) in s.operations.iter().enumerate() {
-                                    let line = leaf(ui, |ui| {
-                                        let status = d.op_status(&name, i);
-                                        op_marker(ui, status);
-                                        let tool = op.tool.as_deref().unwrap_or("no tool");
-                                        let text = format!("{}. {}", i + 1, op.name);
-                                        // Turned off: dim and struck through.
-                                        let shown = if op.enabled {
-                                            egui::RichText::new(&text)
-                                        } else {
-                                            hint_text(&text).strikethrough()
-                                        };
-                                        let r = row(
-                                            ui,
-                                            d,
-                                            Selection::Operation(name.clone(), i),
-                                            shown,
-                                            &edits,
-                                        )
-                                        .interact(egui::Sense::drag())
-                                        .on_hover_text(format!("{tool} · drag to reorder"));
-                                        r.dnd_set_drag_payload(DraggedOp {
-                                            setup: name.clone(),
-                                            index: i,
-                                            label: text,
-                                        });
-                                        if op.tool.is_none() {
-                                            ui.colored_label(
-                                                widgets::Level::Warn.color(),
-                                                "no tool",
-                                            );
-                                        }
-                                        if let OpStatus::Running(since) = status {
-                                            beside(ui, format!("{} s", since.elapsed().as_secs()));
-                                        }
-                                        r.context_menu(|ui| {
-                                            generate_op_item(ui, d, &name, i, &actions);
-                                            let label =
-                                                if op.enabled { "Turn off" } else { "Turn on" };
-                                            if ui
-                                                .button(label)
-                                                .on_hover_text(
-                                                    "a turned-off operation stays in the job, \
-                                                     but is not generated, cut or posted",
-                                                )
-                                                .clicked()
-                                            {
-                                                edits.borrow_mut().push(Edit::SetEnabled(
-                                                    name.clone(),
-                                                    i,
-                                                    !op.enabled,
-                                                ));
-                                                ui.close();
-                                            }
-                                            ui.separator();
-                                            if ui.button("Duplicate").clicked() {
-                                                edits.borrow_mut().push(Edit::DuplicateOperation(
-                                                    name.clone(),
-                                                    i,
-                                                ));
-                                                ui.close();
-                                            }
-                                            if ui.button("Move up").clicked() {
-                                                edits.borrow_mut().push(Edit::MoveOperation(
-                                                    name.clone(),
-                                                    i,
-                                                    -1,
-                                                ));
-                                                ui.close();
-                                            }
-                                            if ui.button("Move down").clicked() {
-                                                edits.borrow_mut().push(Edit::MoveOperation(
-                                                    name.clone(),
-                                                    i,
-                                                    1,
-                                                ));
-                                                ui.close();
-                                            }
-                                            if ui.button("Delete").clicked() {
-                                                edits
-                                                    .borrow_mut()
-                                                    .push(Edit::RemoveOperation(name.clone(), i));
-                                                ui.close();
-                                            }
-                                        });
-                                    });
-                                    if let Some(edit) = drop_target(ui, &name, i, line) {
-                                        edits.borrow_mut().push(edit);
-                                    }
-                                }
-                                if s.operations.is_empty() {
-                                    leaf(ui, |ui| {
-                                        ui.label(hint_text("no operations: right-click the setup"));
-                                    });
-                                }
-                            },
-                        );
-                    }
-                },
-            );
+            models(ui, d, &edits, &actions);
+            stocks(ui, d, &edits);
+            setups(ui, d, &edits, &actions);
         },
     );
 
@@ -504,6 +285,269 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document) -> Vec<BrowserAction> {
         apply(doc, edit);
     }
     actions.into_inner()
+}
+
+/// The Models group: each model, a spinner while it loads, and why not when it
+/// failed.
+fn models(
+    ui: &mut egui::Ui,
+    d: &Document,
+    edits: &RefCell<Vec<Edit>>,
+    actions: &RefCell<Vec<BrowserAction>>,
+) {
+    branch(
+        ui,
+        ("models", d.id),
+        |ui| {
+            let r = row(ui, d, Selection::Models, "Models", edits);
+            r.context_menu(|ui| {
+                if ui.button("Add models…").clicked() {
+                    actions.borrow_mut().push(BrowserAction::AddModels);
+                    ui.close();
+                }
+            });
+        },
+        |ui| {
+            for m in &d.job.models {
+                leaf(ui, |ui| {
+                    let slot = d.models.get(&m.name);
+                    let text = match slot {
+                        Some(ModelSlot::Failed { .. }) => widgets::error_text(&m.name),
+                        _ => egui::RichText::new(&m.name),
+                    };
+                    let r = row(ui, d, Selection::Model(m.name.clone()), text, edits);
+                    if let Some(ModelSlot::Loading(_)) = slot {
+                        ui.add(egui::Spinner::new().size(10.0));
+                    }
+                    let r = match slot {
+                        Some(ModelSlot::Failed { why, .. }) => r.on_hover_text(why),
+                        _ => r.on_hover_text(&m.path),
+                    };
+                    r.context_menu(|ui| {
+                        if ui.button("Find it elsewhere…").clicked() {
+                            actions
+                                .borrow_mut()
+                                .push(BrowserAction::Locate(m.name.clone()));
+                            ui.close();
+                        }
+                        if ui.button("Remove").clicked() {
+                            edits.borrow_mut().push(Edit::RemoveModel(m.name.clone()));
+                            ui.close();
+                        }
+                    });
+                });
+            }
+        },
+    );
+}
+
+/// The Stocks group: each stock.
+fn stocks(ui: &mut egui::Ui, d: &Document, edits: &RefCell<Vec<Edit>>) {
+    branch(
+        ui,
+        ("stocks", d.id),
+        |ui| {
+            let r = row(ui, d, Selection::Stocks, "Stocks", edits);
+            r.context_menu(|ui| {
+                if ui.button("New stock").clicked() {
+                    edits.borrow_mut().push(Edit::AddStock);
+                    ui.close();
+                }
+            });
+        },
+        |ui| {
+            for s in &d.job.stocks {
+                leaf(ui, |ui| {
+                    let r = row(ui, d, Selection::Stock(s.name.clone()), &s.name, edits);
+                    r.context_menu(|ui| {
+                        if ui.button("Duplicate").clicked() {
+                            edits
+                                .borrow_mut()
+                                .push(Edit::DuplicateStock(s.name.clone()));
+                            ui.close();
+                        }
+                        if ui.button("Remove").clicked() {
+                            edits.borrow_mut().push(Edit::RemoveStock(s.name.clone()));
+                            ui.close();
+                        }
+                    });
+                });
+            }
+        },
+    );
+}
+
+/// The Setups group: each setup with its operations.
+fn setups(
+    ui: &mut egui::Ui,
+    d: &Document,
+    edits: &RefCell<Vec<Edit>>,
+    actions: &RefCell<Vec<BrowserAction>>,
+) {
+    branch(
+        ui,
+        ("setups", d.id),
+        |ui| {
+            let r = row(ui, d, Selection::Setups, "Setups", edits);
+            r.context_menu(|ui| {
+                if ui.button("New setup").clicked() {
+                    edits.borrow_mut().push(Edit::AddSetup);
+                    ui.close();
+                }
+            });
+        },
+        |ui| {
+            for s in &d.job.setups {
+                setup(ui, d, s, edits, actions);
+            }
+        },
+    );
+}
+
+/// One setup: where it stands and how far a run has got, then its operations,
+/// each somewhere to drop one being dragged.
+fn setup(
+    ui: &mut egui::Ui,
+    d: &Document,
+    s: &Setup,
+    edits: &RefCell<Vec<Edit>>,
+    actions: &RefCell<Vec<BrowserAction>>,
+) {
+    let name = s.name.clone();
+    branch(
+        ui,
+        ("setup", d.id, &name),
+        |ui| {
+            status_dot(ui, d.status(&name));
+            let shown = d.active.as_deref() == Some(name.as_str());
+            let mut text = egui::RichText::new(&name);
+            if shown {
+                text = text.strong();
+            }
+            let r = row(ui, d, Selection::Setup(name.clone()), text, edits);
+            r.context_menu(|ui| setup_menu(ui, d, &name, edits, actions));
+            let line = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), r.rect.y_range());
+            if let Some(edit) = setup_drop(ui, &name, s.operations.len(), line) {
+                edits.borrow_mut().push(edit);
+            }
+            let progress = d.setups.get(&name).and_then(|st| st.progress);
+            if let Some((stage, _)) = progress {
+                beside(ui, stage_text(stage, s.operations.len()));
+            }
+        },
+        |ui| {
+            for (i, op) in s.operations.iter().enumerate() {
+                let line = operation_row(ui, d, &name, i, op, edits, actions);
+                if let Some(edit) = drop_target(ui, &name, i, line) {
+                    edits.borrow_mut().push(edit);
+                }
+            }
+            if s.operations.is_empty() {
+                leaf(ui, |ui| {
+                    ui.label(hint_text("no operations: right-click the setup"));
+                });
+            }
+        },
+    );
+}
+
+/// Operation `i` of setup `name`: where it stands, its name, a warning when it has
+/// no tool, and its menu. It drags to a new place. Returns where its row is.
+fn operation_row(
+    ui: &mut egui::Ui,
+    d: &Document,
+    name: &str,
+    i: usize,
+    op: &Operation,
+    edits: &RefCell<Vec<Edit>>,
+    actions: &RefCell<Vec<BrowserAction>>,
+) -> egui::Rect {
+    leaf(ui, |ui| {
+        let status = d.op_status(name, i);
+        op_marker(ui, status);
+        let tool = op.tool.as_deref().unwrap_or("no tool");
+        let text = format!("{}. {}", i + 1, op.name);
+        // Turned off: dim and struck through.
+        let shown = if op.enabled {
+            egui::RichText::new(&text)
+        } else {
+            hint_text(&text).strikethrough()
+        };
+        let r = row(
+            ui,
+            d,
+            Selection::Operation(name.to_string(), i),
+            shown,
+            edits,
+        )
+        .interact(egui::Sense::drag())
+        .on_hover_text(format!("{tool} · drag to reorder"));
+        r.dnd_set_drag_payload(DraggedOp {
+            setup: name.to_string(),
+            index: i,
+            label: text,
+        });
+        if op.tool.is_none() {
+            ui.colored_label(widgets::Level::Warn.color(), "no tool");
+        }
+        if let OpStatus::Running(since) = status {
+            beside(ui, format!("{} s", since.elapsed().as_secs()));
+        }
+        r.context_menu(|ui| operation_menu(ui, d, name, i, op, edits, actions));
+    })
+}
+
+/// An operation's menu: generate it alone, turn it off or on, duplicate, move or
+/// delete it.
+fn operation_menu(
+    ui: &mut egui::Ui,
+    d: &Document,
+    name: &str,
+    i: usize,
+    op: &Operation,
+    edits: &RefCell<Vec<Edit>>,
+    actions: &RefCell<Vec<BrowserAction>>,
+) {
+    generate_op_item(ui, d, name, i, actions);
+    let label = if op.enabled { "Turn off" } else { "Turn on" };
+    if ui
+        .button(label)
+        .on_hover_text(
+            "a turned-off operation stays in the job, \
+             but is not generated, cut or posted",
+        )
+        .clicked()
+    {
+        edits
+            .borrow_mut()
+            .push(Edit::SetEnabled(name.to_string(), i, !op.enabled));
+        ui.close();
+    }
+    ui.separator();
+    if ui.button("Duplicate").clicked() {
+        edits
+            .borrow_mut()
+            .push(Edit::DuplicateOperation(name.to_string(), i));
+        ui.close();
+    }
+    if ui.button("Move up").clicked() {
+        edits
+            .borrow_mut()
+            .push(Edit::MoveOperation(name.to_string(), i, -1));
+        ui.close();
+    }
+    if ui.button("Move down").clicked() {
+        edits
+            .borrow_mut()
+            .push(Edit::MoveOperation(name.to_string(), i, 1));
+        ui.close();
+    }
+    if ui.button("Delete").clicked() {
+        edits
+            .borrow_mut()
+            .push(Edit::RemoveOperation(name.to_string(), i));
+        ui.close();
+    }
 }
 
 /// Generate operation `index` of setup `name` alone: the others keep what they

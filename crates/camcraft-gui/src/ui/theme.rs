@@ -233,27 +233,27 @@ fn fonts() -> egui::FontDefinitions {
     for (name, bytes) in [
         (
             "plex",
-            &include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf")[..],
+            &include_bytes!("../../assets/fonts/IBMPlexSans-Regular.ttf")[..],
         ),
         (
             "plex-medium",
-            include_bytes!("../assets/fonts/IBMPlexSans-Medium.ttf"),
+            include_bytes!("../../assets/fonts/IBMPlexSans-Medium.ttf"),
         ),
         (
             "plex-semibold",
-            include_bytes!("../assets/fonts/IBMPlexSans-SemiBold.ttf"),
+            include_bytes!("../../assets/fonts/IBMPlexSans-SemiBold.ttf"),
         ),
         (
             "fira",
-            include_bytes!("../assets/fonts/FiraCode-Regular.ttf"),
+            include_bytes!("../../assets/fonts/FiraCode-Regular.ttf"),
         ),
         (
             "fira-medium",
-            include_bytes!("../assets/fonts/FiraCode-Medium.ttf"),
+            include_bytes!("../../assets/fonts/FiraCode-Medium.ttf"),
         ),
         (
             "lucide",
-            include_bytes!("../assets/fonts/lucide-subset.ttf"),
+            include_bytes!("../../assets/fonts/lucide-subset.ttf"),
         ),
     ] {
         fonts
@@ -491,10 +491,10 @@ pub fn egui_color(c: [u8; 3]) -> eframe::egui::Color32 {
 mod tests {
     use super::*;
 
-    const COLORS: &str = include_str!("../design/system/tokens/colors.css");
-    const TYPOGRAPHY: &str = include_str!("../design/system/tokens/typography.css");
-    const SPACING: &str = include_str!("../design/system/tokens/spacing.css");
-    const EFFECTS: &str = include_str!("../design/system/tokens/effects.css");
+    const COLORS: &str = include_str!("../../design/system/tokens/colors.css");
+    const TYPOGRAPHY: &str = include_str!("../../design/system/tokens/typography.css");
+    const SPACING: &str = include_str!("../../design/system/tokens/spacing.css");
+    const EFFECTS: &str = include_str!("../../design/system/tokens/effects.css");
 
     /// The palette is the design system's, read from the copied tokens rather
     /// than trusted to have been copied correctly.

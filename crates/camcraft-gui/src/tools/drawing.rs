@@ -8,9 +8,9 @@
 use camcraft_core::job::{DRILL_POINT, ToolKind, ToolSpec};
 use eframe::egui;
 
-use crate::measure::Measure;
-use crate::theme;
-use crate::widgets;
+use crate::ui::measure::Measure;
+use crate::ui::theme;
+use crate::ui::widgets;
 
 /// What a region of the drawing is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

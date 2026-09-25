@@ -7,10 +7,10 @@ use eframe::egui;
 use super::parts::{Names, names};
 use super::{Picks, PropAction, cannot_generate, header, renamed, work_zero};
 use crate::document::{Document, Selection};
-use crate::measure::Measure;
-use crate::slots::Slot;
-use crate::theme;
-use crate::widgets::{self, Size, Tab, Variant, form, hint};
+use crate::picking::slots::Slot;
+use crate::ui::measure::Measure;
+use crate::ui::theme;
+use crate::ui::widgets::{self, Size, Tab, Variant, form, hint};
 
 /// Which tab a setup shows: the same for every setup, so moving between them
 /// keeps the place.

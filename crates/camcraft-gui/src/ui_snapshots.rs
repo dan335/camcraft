@@ -209,13 +209,13 @@ fn main_window_after_a_run() {
 
     // The same, in inches, with the settings window that chose them open.
     h.state_mut()
-        .settings_for_snapshot(crate::measure::Measure::Imperial);
+        .settings_for_snapshot(crate::ui::measure::Measure::Imperial);
     h.run_steps(3);
     shoot(&mut h, "steep_deepest_imperial");
 
     // A check fails: the HALT banner, and posting asks before writing anyway.
     h.state_mut()
-        .settings_for_snapshot(crate::measure::Measure::Metric);
+        .settings_for_snapshot(crate::ui::measure::Measure::Metric);
     let out = output_dir().join("posted");
     let _ = std::fs::remove_dir_all(&out);
     h.state_mut().fail_a_check_and_post_for_snapshot(&out);
@@ -310,7 +310,7 @@ fn two_setups_in_tabs() {
 #[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
 fn setup_panel() {
     use crate::document::Selection;
-    use crate::slots::Slot;
+    use crate::picking::slots::Slot;
     use camcraft_core::job::{ModelDef, StockDef, StockSpec};
 
     // The example, with two more models and a second stock the setup does not use.
@@ -438,7 +438,7 @@ fn open_job_dialog() {
 #[test]
 #[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
 fn tool_manager() {
-    use crate::tool_manager::ToolManager;
+    use crate::tools::manager::ToolManager;
     use camcraft_core::job::{
         Coolant, Holder, HolderSegment, Preset, SpindleDirection, StockToLeave, ToolKind,
         ToolMaterial, ToolSpec,
@@ -468,7 +468,7 @@ fn tool_manager() {
                 },
                 manager,
             );
-        crate::theme::apply(&h.ctx);
+        crate::ui::theme::apply(&h.ctx);
         h.run_steps(3);
         for (name, tab) in shots {
             if let Some(tab) = tab {
@@ -556,9 +556,9 @@ fn tool_manager() {
     );
 
     // The same tool shown in inches: the fields and labels are wider.
-    manager.measure = crate::measure::Measure::Imperial;
+    manager.measure = crate::ui::measure::Measure::Imperial;
     let mut manager = shoot_manager(manager, "tools_library_imperial");
-    manager.measure = crate::measure::Measure::Metric;
+    manager.measure = crate::ui::measure::Measure::Metric;
 
     // Flutes longer than the stickout: the error sits beside the field.
     let wrong = ToolSpec {

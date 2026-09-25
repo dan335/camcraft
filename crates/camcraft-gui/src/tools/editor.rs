@@ -12,10 +12,10 @@ use camcraft_core::job::{
 };
 use eframe::egui;
 
-use crate::measure::Measure;
-use crate::theme;
-use crate::tool_drawing::kind_name;
-use crate::widgets::{self, Icon, Size, Tab, Variant, form};
+use crate::tools::drawing::kind_name;
+use crate::ui::measure::Measure;
+use crate::ui::theme;
+use crate::ui::widgets::{self, Icon, Size, Tab, Variant, form};
 
 /// The fields each tab edits, as the checks name them, to flag a tab with an
 /// error on it.
@@ -54,7 +54,7 @@ const PAGES: [Page; 5] = [
 /// Every field of the tool, on tabs, edited in place. Lengths and feeds are shown
 /// in `m` and kept in millimetres. The tab showing is remembered per `ui` id, so
 /// call inside `ui.push_id` when more than one tool may be edited in the same
-/// window. The tool's picture is [`crate::tool_drawing::paint_tool`], drawn by the
+/// window. The tool's picture is [`crate::tools::drawing::paint_tool`], drawn by the
 /// caller.
 pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure) {
     let (errors, preset_errors): (Vec<_>, Vec<_>) =
@@ -353,13 +353,6 @@ fn post(ui: &mut egui::Ui, tool: &mut ToolSpec) {
 /// and the one picked shown in full below. The first is the one a new operation
 /// gets.
 fn presets(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFieldError]) {
-    enum Act {
-        Add,
-        Up(usize),
-        Down(usize),
-        Copy(usize),
-        Remove(usize),
-    }
     let mut act = None;
     ui.horizontal(|ui| {
         ui.label(widgets::section_label("Presets"));
@@ -367,7 +360,7 @@ fn presets(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFie
             if widgets::button(ui, Variant::Ghost, Size::Sm, Some(Icon::Plus), "Add preset")
                 .clicked()
             {
-                act = Some(Act::Add);
+                act = Some(PresetAction::Add);
             }
         });
     });
@@ -420,19 +413,19 @@ fn presets(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFie
         row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if on {
                 if widgets::icon_button(ui, Icon::Trash, "remove this preset").clicked() {
-                    act = Some(Act::Remove(i));
+                    act = Some(PresetAction::Remove(i));
                 }
                 if widgets::icon_button(ui, Icon::Copy, "duplicate this preset").clicked() {
-                    act = Some(Act::Copy(i));
+                    act = Some(PresetAction::Copy(i));
                 }
                 ui.add_enabled_ui(i + 1 < count, |ui| {
                     if widgets::icon_button(ui, Icon::ChevronDown, "move down").clicked() {
-                        act = Some(Act::Down(i));
+                        act = Some(PresetAction::Down(i));
                     }
                 });
                 ui.add_enabled_ui(i > 0, |ui| {
                     if widgets::icon_button(ui, Icon::ChevronUp, "move up").clicked() {
-                        act = Some(Act::Up(i));
+                        act = Some(PresetAction::Up(i));
                     }
                 });
             } else {
@@ -444,6 +437,31 @@ fn presets(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFie
         });
     }
 
+    preset_card(ui, tool, picked, m, errors);
+
+    if let Some(act) = act {
+        apply_preset_action(tool, act, &mut picked);
+    }
+    ui.data_mut(|d| d.insert_temp(picked_id, picked));
+}
+
+/// Something done to the list of presets, applied once it is drawn.
+enum PresetAction {
+    Add,
+    Up(usize),
+    Down(usize),
+    Copy(usize),
+    Remove(usize),
+}
+
+/// The preset picked, `picked`, in full, in a card below the list.
+fn preset_card(
+    ui: &mut egui::Ui,
+    tool: &mut ToolSpec,
+    picked: usize,
+    m: Measure,
+    errors: &[ToolFieldError],
+) {
     let (diameter, flutes, rpm) = (tool.diameter, tool.flutes, tool.rpm);
     if let Some(p) = tool.presets.get_mut(picked) {
         ui.add_space(theme::SPACE_3);
@@ -465,39 +483,40 @@ fn presets(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFie
             );
         });
     }
+}
 
-    match act {
-        Some(Act::Add) => {
+/// Do `action` to `tool`'s presets, and pick the one it leaves in hand.
+fn apply_preset_action(tool: &mut ToolSpec, action: PresetAction, picked: &mut usize) {
+    match action {
+        PresetAction::Add => {
             let name = free_preset_name(&tool.presets, "Preset");
             tool.presets.push(Preset {
                 name,
                 rpm: Some(tool.rpm),
                 ..Preset::default()
             });
-            picked = tool.presets.len() - 1;
+            *picked = tool.presets.len() - 1;
         }
-        Some(Act::Up(i)) => {
+        PresetAction::Up(i) => {
             tool.presets.swap(i - 1, i);
-            picked = i - 1;
+            *picked = i - 1;
         }
-        Some(Act::Down(i)) => {
+        PresetAction::Down(i) => {
             tool.presets.swap(i, i + 1);
-            picked = i + 1;
+            *picked = i + 1;
         }
-        Some(Act::Copy(i)) => {
+        PresetAction::Copy(i) => {
             if let Some(p) = tool.presets.get(i).cloned() {
                 let name = free_preset_name(&tool.presets, &p.name);
                 tool.presets.insert(i + 1, Preset { name, ..p });
-                picked = i + 1;
+                *picked = i + 1;
             }
         }
-        Some(Act::Remove(i)) => {
+        PresetAction::Remove(i) => {
             tool.presets.remove(i);
-            picked = i.saturating_sub(1);
+            *picked = i.saturating_sub(1);
         }
-        None => {}
     }
-    ui.data_mut(|d| d.insert_temp(picked_id, picked));
 }
 
 /// A preset in a line: its speed and feed, the two a person compares.

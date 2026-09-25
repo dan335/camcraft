@@ -18,10 +18,10 @@ use camcraft_sim::stock::{CellRect, PartSurface};
 use eframe::egui;
 
 use crate::document::{RanSetup, next_key};
-use crate::stock_ao::{self, Occluder};
-use crate::stock_view::StockImage;
-use crate::tiles::Tiles;
-use crate::viewport::StockChange;
+use crate::stock::dirty::DirtyTiles;
+use crate::stock::stock_ao::{self, Occluder};
+use crate::stock::stock_view::StockImage;
+use crate::view::viewport::StockChange;
 
 /// Memory the checkpoints of one setup's playback may take. Going back costs at
 /// most sweeping the moves between two of them.
@@ -100,7 +100,7 @@ pub struct LiveStock {
     key: u64,
     /// What changed since the viewport last uploaded: all of it, or these tiles.
     pending_all: bool,
-    pending: Option<Tiles>,
+    pending: Option<DirtyTiles>,
     /// The last target the thread reached.
     reached: Option<Goal>,
     /// Whether the thread had shaded every cell, as of its last word.
@@ -154,7 +154,7 @@ impl LiveStock {
                         let image = lock(&self.image);
                         (image.nx, image.ny)
                     };
-                    self.pending = Some(Tiles::new(nx, ny));
+                    self.pending = Some(DirtyTiles::new(nx, ny));
                     self.key = next_key();
                     self.pending_all = true;
                 }
@@ -234,7 +234,7 @@ impl LiveStock {
 struct Shading {
     occluder: Option<Occluder>,
     /// Cells whose occlusion a cut has changed and that are not shaded yet.
-    pending: Option<Tiles>,
+    pending: Option<DirtyTiles>,
 }
 
 impl Shading {
@@ -285,7 +285,7 @@ fn work(
     until: Instant,
 ) -> (Option<Change>, bool) {
     let (nx, ny) = (live.stock().field().nx(), live.stock().field().ny());
-    let mut tiles = Tiles::new(nx, ny);
+    let mut tiles = DirtyTiles::new(nx, ny);
     let mut all = false;
     let mut reached = false;
     while !reached && Instant::now() < until {
@@ -306,7 +306,7 @@ fn work(
         let (image, occluder) = StockImage::build_shaded(live.stock(), part, budget);
         *shading = Shading {
             occluder: Some(occluder),
-            pending: Some(Tiles::new(nx, ny)),
+            pending: Some(DirtyTiles::new(nx, ny)),
         };
         *lock(shared) = image;
         return (Some(Change::Full), reached);
@@ -446,8 +446,8 @@ fn run(
 #[allow(clippy::unwrap_used, clippy::print_stdout, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use crate::scene::{Playhead, Scene};
     use crate::test_jobs::run_setup_zero;
+    use crate::view::scene::{Playhead, Scene};
     use camcraft_core::job::Job;
 
     /// How playback keeps up on the router jig, and on the lego brick at its
@@ -516,7 +516,7 @@ tool = "rough-6-flat"
         println!(
             "{} moves, {} of machining, {} x {} cells",
             scene.segments.len(),
-            crate::scene::clock(scene.total_time()),
+            crate::view::scene::clock(scene.total_time()),
             live.stock().field().nx(),
             live.stock().field().ny()
         );

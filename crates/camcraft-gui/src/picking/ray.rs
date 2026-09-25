@@ -24,7 +24,7 @@ use camcraft_core::job::{Along, PointRef, Snap};
 use camcraft_core::setup::Prepared;
 use camcraft_geom::bvh::MeshBvh;
 use camcraft_geom::mesh::Aabb;
-use camcraft_geom::topology::{Body, EdgeKind};
+use camcraft_geom::topology::Body;
 use camcraft_session::Model;
 use eframe::egui::{Pos2, Rect, pos2};
 use glam::{DVec3, Mat4};
@@ -583,46 +583,12 @@ pub fn box_points() -> impl Iterator<Item = (Along, Along, Along)> {
         .filter(|p| *p != (Along::Center, Along::Center, Along::Center))
 }
 
-/// Where the stock's corner, edge middle or face centre is, in words: "top,
-/// front-left corner", "the middle of the top's front edge", "the centre of the
-/// top".
-pub fn describe_box_point(x: Along, y: Along, z: Along) -> String {
-    let side = |a: Along, lo: &'static str, hi: &'static str| match a {
-        Along::Min => Some(lo),
-        Along::Max => Some(hi),
-        Along::Center => None,
-    };
-    let (sx, sy, sz) = (
-        side(x, "left", "right"),
-        side(y, "front", "back"),
-        side(z, "bottom", "top"),
-    );
-    match (sz, sy, sx) {
-        (Some(z), Some(y), Some(x)) => format!("{z}, {y}-{x} corner"),
-        (Some(z), Some(y), None) => format!("middle of the {z}'s {y} edge"),
-        (Some(z), None, Some(x)) => format!("middle of the {z}'s {x} edge"),
-        (None, Some(y), Some(x)) => format!("middle of the {y}-{x} upright edge"),
-        (Some(s), None, None) | (None, Some(s), None) | (None, None, Some(s)) => {
-            format!("centre of the {s}")
-        }
-        (None, None, None) => "centre".to_string(),
-    }
-}
-
-/// How a round edge is described: "Ø6.35 circle" or "R3.00 arc".
-pub fn describe_circle(body: &Body, edge: u32) -> Option<String> {
-    match body.topology().edge(edge)?.kind {
-        EdgeKind::Circle(c) if c.full => Some(format!("Ø{:.2} circle", c.radius * 2.0)),
-        EdgeKind::Circle(c) => Some(format!("R{:.2} arc", c.radius)),
-        EdgeKind::Line | EdgeKind::Curve => None,
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::camera::Camera;
+    use crate::picking::describe::{describe_box_point, describe_circle};
+    use crate::view::camera::Camera;
     use camcraft_core::job::{Job, ModelDef, Setup, StockDef, StockSpec};
     use camcraft_core::setup::{Bodies, prepare};
     use camcraft_geom::synthetic;

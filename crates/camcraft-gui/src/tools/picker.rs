@@ -10,11 +10,11 @@ use camcraft_core::job::{Job, ToolSpec};
 use camcraft_session::library::{Folder, FolderPath, folder_label, tool_matches};
 use eframe::egui;
 
-use crate::measure::Measure;
-use crate::theme;
-use crate::tool_drawing::{kind_name, paint_tool};
-use crate::tool_manager::{column_header, dim, name_cell, number, number_cell, tool_table};
-use crate::widgets::hint_text;
+use crate::tools::drawing::{kind_name, paint_tool};
+use crate::tools::table::{column_header, dim, name_cell, number, number_cell, tool_table};
+use crate::ui::measure::Measure;
+use crate::ui::theme;
+use crate::ui::widgets::hint_text;
 use crate::worker::DocId;
 
 /// Where the table's tools come from.

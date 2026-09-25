@@ -9,13 +9,13 @@ use glam::DVec2;
 
 use super::{Picks, PropAction, cannot_generate, header};
 use crate::document::{Document, Level, Selection};
-use crate::measure::Measure;
-use crate::slots::{Kind, Slot};
-use crate::theme;
-use crate::tool_drawing::paint_tool;
-use crate::tool_editor::{chip_load_row, surface_speed_row};
-use crate::viewport::{Plane, PlaneKind};
-use crate::widgets::{self, Icon, Size, Tab, Variant, error, form, hint, list_row_background};
+use crate::picking::slots::{Kind, Slot};
+use crate::tools::drawing::paint_tool;
+use crate::tools::editor::{chip_load_row, surface_speed_row};
+use crate::ui::measure::Measure;
+use crate::ui::theme;
+use crate::ui::widgets::{self, Icon, Size, Tab, Variant, error, form, hint, list_row_background};
+use crate::view::viewport::{Plane, PlaneKind};
 
 /// Which tab an operation shows: the same for every operation, so moving between
 /// them keeps the place.

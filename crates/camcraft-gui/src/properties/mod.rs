@@ -12,8 +12,8 @@
 //!
 //! A property filled by picking in the view (a setup's models, stocks and work
 //! zero, an operation's faces or edges) has a button that asks the app to arm the
-//! view for it ([`crate::slots`]), and lists what is picked as the engine will find
-//! it, so a pick that is gone says so here first.
+//! view for it ([`crate::picking::slots`]), and lists what is picked as the engine
+//! will find it, so a pick that is gone says so here first.
 
 mod operation;
 mod parts;
@@ -25,11 +25,11 @@ pub use operation::{OperationTab, height_planes};
 use eframe::egui;
 
 use crate::document::{Document, Level, Selection};
-use crate::measure::Measure;
-use crate::slots::{Kind, Shown, Slot};
-use crate::theme;
-use crate::tool_drawing::kind_name;
-use crate::widgets::{self, Icon, Size, Variant, form, hint};
+use crate::picking::slots::{Kind, Shown, Slot};
+use crate::tools::drawing::kind_name;
+use crate::ui::measure::Measure;
+use crate::ui::theme;
+use crate::ui::widgets::{self, Icon, Size, Variant, form, hint};
 
 /// Something the panel asks the app to do.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -6,8 +6,8 @@
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
-use crate::measure::Measure;
-use crate::widgets;
+use crate::ui::measure::Measure;
+use crate::ui::widgets;
 
 /// What is remembered.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

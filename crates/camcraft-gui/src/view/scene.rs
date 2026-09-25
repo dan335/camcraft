@@ -18,8 +18,8 @@ use camcraft_geom::heightmap::narrow;
 use camcraft_geom::mesh::Aabb;
 use glam::{DVec3, Vec3};
 
-use crate::theme;
-use crate::tool_drawing::tip_profile;
+use crate::tools::drawing::tip_profile;
+use crate::ui::theme;
 
 /// One move, drawn as a line from where the tool was to where it went.
 #[derive(Debug, Clone, Copy, PartialEq)]

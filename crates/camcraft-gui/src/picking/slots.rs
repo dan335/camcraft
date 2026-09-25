@@ -19,14 +19,15 @@ use camcraft_core::run::cutting_tool;
 use camcraft_core::setup::{Bodies, Prepared};
 use camcraft_core::tool::ToolProfile;
 use camcraft_geom::mesh::Aabb;
-use camcraft_geom::topology::{Body, EdgeKind, FaceKind};
+use camcraft_geom::topology::Body;
 use glam::{DVec3, Vec3};
 
 use crate::document::{Document, Selection};
-use crate::measure::Measure;
-use crate::pick::{Accept, PickScene, Target, describe_circle};
-use crate::scene::box_edges;
-use crate::viewport::{Highlight, Outline, OutlineKind};
+use crate::picking::describe::{describe_edge, describe_face, describe_point};
+use crate::picking::ray::{Accept, PickScene, Target};
+use crate::ui::measure::Measure;
+use crate::view::scene::box_edges;
+use crate::view::viewport::{Highlight, Outline, OutlineKind};
 
 /// A property a click in the view can fill.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -460,55 +461,6 @@ fn edge_lines(points: Option<&Vec<DVec3>>, closed: bool, kind: OutlineKind) -> V
         out.push(Outline { a, b, kind });
     }
     out
-}
-
-/// "Face 12 · plane · 240.0 mm² · on 'part'".
-pub fn describe_face(body: &Body, model: &str, face: u32, m: Measure) -> String {
-    match body.topology().face(face) {
-        Some(f) => {
-            let kind = match f.kind {
-                FaceKind::Plane { .. } => "plane",
-                FaceKind::Curved => "curved",
-            };
-            format!("Face {face} · {kind} · {} · on '{model}'", m.area(f.area))
-        }
-        None => format!("Face {face} on '{model}'"),
-    }
-}
-
-/// "Edge 3 · Ø6.35 circle · on 'part'", or a line or curve with its length.
-pub fn describe_edge(body: &Body, model: &str, edge: u32, m: Measure) -> String {
-    let Some(e) = body.topology().edge(edge) else {
-        return format!("Edge {edge} on '{model}'");
-    };
-    let what = match e.kind {
-        EdgeKind::Circle(c) if c.full => format!("Ø{} circle", m.number(c.radius * 2.0, 2)),
-        EdgeKind::Circle(c) => format!("R{} arc", m.number(c.radius, 2)),
-        EdgeKind::Line => format!("line {} long", m.length(e.length, 2)),
-        EdgeKind::Curve => format!("curve {} long", m.length(e.length, 2)),
-    };
-    let closed = if e.closed { ", closed" } else { "" };
-    format!("Edge {edge} · {what}{closed} · on '{model}'")
-}
-
-/// "Centre of the Ø6.35 circle on 'part'", "Corner 4 on 'part'", "Middle of edge 7
-/// on 'part'".
-pub fn describe_point(body: &Body, model: &str, snap: Snap, index: u32, m: Measure) -> String {
-    match snap {
-        Snap::Vertex => format!("Corner {index} on '{model}'"),
-        Snap::CircleCenter => match describe_circle(body, index) {
-            Some(c) => format!("Centre of the {c} on '{model}'"),
-            None => format!("Centre of edge {index} on '{model}'"),
-        },
-        Snap::EdgeMiddle => {
-            let long = body
-                .topology()
-                .edge(index)
-                .map(|e| format!(", {} long", m.length(e.length, 2)))
-                .unwrap_or_default();
-            format!("Middle of edge {index}{long} on '{model}'")
-        }
-    }
 }
 
 #[cfg(test)]

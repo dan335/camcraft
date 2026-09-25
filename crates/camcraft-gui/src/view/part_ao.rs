@@ -1,9 +1,9 @@
 //! Ambient occlusion for the part, worked out on the screen.
 //!
-//! The material is shaded on its own heights ([`crate::stock_ao`]); the part is a
-//! mesh, so it is shaded as GTAO does: from the depth the part leaves, each pixel
-//! looks out along a few directions on the screen for the highest horizon, and
-//! turns the horizons into the share of cosine-weighted sky left open.
+//! The material is shaded on its own heights ([`crate::stock::stock_ao`]); the part
+//! is a mesh, so it is shaded as GTAO does: from the depth the part leaves, each
+//! pixel looks out along a few directions on the screen for the highest horizon,
+//! and turns the horizons into the share of cosine-weighted sky left open.
 //!
 //! The part is drawn alone first; its depth is read at half the view's size (a
 //! quarter of the pixels), each pixel turning its directions by its place in a 4

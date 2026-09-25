@@ -16,9 +16,9 @@
 use camcraft_sim::stock::CellRect;
 use rayon::prelude::*;
 
-use crate::pyramid::{Level, Pyramid};
-use crate::stock_view::StockImage;
-use crate::viewport::WALL_CELLS;
+use crate::stock::pyramid::{Level, Pyramid};
+use crate::stock::stock_view::StockImage;
+use crate::view::viewport::WALL_CELLS;
 
 /// Directions looked along from each cell, each both ways.
 const SLICES: usize = 8;

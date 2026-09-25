@@ -6,11 +6,11 @@ use camcraft_core::job::{Along, BoxOf, Origin};
 use eframe::egui;
 
 use super::{Picks, PropAction};
-use crate::measure::Measure;
-use crate::pick::describe_box_point;
-use crate::slots::Slot;
-use crate::theme;
-use crate::widgets::{self, Icon, Size, Variant, error, form, hint};
+use crate::picking::describe::describe_box_point;
+use crate::picking::slots::Slot;
+use crate::ui::measure::Measure;
+use crate::ui::theme;
+use crate::ui::widgets::{self, Icon, Size, Variant, error, form, hint};
 
 /// What the work zero is measured from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

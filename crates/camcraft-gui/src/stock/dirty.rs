@@ -12,7 +12,7 @@ pub const TILE: u32 = 32;
 
 /// A set of tiles over a stock `nx` by `ny` cells.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Tiles {
+pub struct DirtyTiles {
     nx: u32,
     ny: u32,
     cols: u32,
@@ -20,7 +20,7 @@ pub struct Tiles {
     marked: Vec<bool>,
 }
 
-impl Tiles {
+impl DirtyTiles {
     /// None marked.
     pub fn new(nx: u32, ny: u32) -> Self {
         let (cols, rows) = (nx.div_ceil(TILE), ny.div_ceil(TILE));
@@ -75,7 +75,7 @@ impl Tiles {
         }
     }
 
-    /// The first of the marked rectangles ([`Tiles::rects`]) that together hold
+    /// The first of the marked rectangles ([`DirtyTiles::rects`]) that together hold
     /// no more than `cells`, or the first alone if it holds more.
     pub fn first(&self, cells: u64) -> Vec<CellRect> {
         let mut out = Vec::new();
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn tiles_cover_what_was_marked_and_little_else() {
         let (nx, ny) = (100, 70);
-        let mut t = Tiles::new(nx, ny);
+        let mut t = DirtyTiles::new(nx, ny);
         assert!(t.is_empty() && t.rects().is_empty());
         let a = CellRect {
             x0: 5,

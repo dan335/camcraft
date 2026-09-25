@@ -8,7 +8,7 @@
 
 use eframe::egui;
 
-use crate::theme::{self, Tint};
+use crate::ui::theme::{self, Tint};
 
 /// The text size of controls at their default size, as `Button.jsx`, `Input.jsx`
 /// and `Tabs.jsx` set it: a step under body text, so a row of controls reads
