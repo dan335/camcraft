@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use camcraft_session::SessionError;
+use camcraft_session::{Posting, SessionError, plan_posting, write_posting};
 use eframe::egui;
 
 use crate::browser::{self, BrowserAction};
@@ -20,7 +20,6 @@ use crate::file_dialog::{AppFileDialog, Pick};
 use crate::measure::Measure;
 use crate::picking::Picking;
 use crate::playback;
-use crate::posting::{self, Plan};
 use crate::properties::{self, Picks, PropAction};
 use crate::settings::Settings;
 use crate::theme;
@@ -113,7 +112,7 @@ pub struct App {
     /// What happened outside any job: a file that would not open.
     log: Vec<(Level, String)>,
     /// Programs rendered and waiting on [`Prompt::Post`], for job `doc`.
-    post_plan: Option<(DocId, Plan)>,
+    post_plan: Option<(DocId, Posting)>,
     /// Whether posting setups that did not pass their checks has been confirmed.
     post_anyway: bool,
 }
@@ -1022,7 +1021,7 @@ impl App {
                 Some((setup, &ran.ran))
             })
             .collect();
-        match posting::plan(&entries, &doc.dir(), dir) {
+        match plan_posting(&entries, &doc.dir(), dir, None) {
             Err(e) => doc.note(Level::Error, format!("not posted: {e}")),
             Ok(plan) if plan.needs_confirming() => {
                 self.post_plan = Some((id, plan));
@@ -1033,11 +1032,11 @@ impl App {
         }
     }
 
-    fn write_post(&mut self, id: DocId, plan: &Plan) {
+    fn write_post(&mut self, id: DocId, plan: &Posting) {
         let Some(doc) = self.find(id) else {
             return;
         };
-        match posting::write(plan) {
+        match write_posting(plan) {
             Ok(n) => {
                 for (setup, _) in &plan.refused {
                     doc.note(

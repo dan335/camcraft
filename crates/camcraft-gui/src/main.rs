@@ -15,7 +15,6 @@ mod part_ao;
 mod pick;
 mod picking;
 mod playback;
-mod posting;
 mod properties;
 mod pyramid;
 mod scene;

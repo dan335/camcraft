@@ -16,13 +16,13 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use std::collections::BTreeMap;
-
-use camcraft_core::job::{Job as JobSpec, LengthUnit, ModelDef};
+use camcraft_core::job::{Job as JobSpec, LengthUnit, ModelDef, Setup};
 use camcraft_session::checks::{Checks, Level};
+use camcraft_session::fs::write_atomically;
 use camcraft_session::{
-    FinishSpec, FinishTool, Model, Models, Passed, Ran, SessionError, Units, gate, load_job_model,
-    load_model, load_profile, program, program_name, read_job, run_setup, single_operation,
+    FinishSpec, FinishTool, Model, Models, Passed, Program, Ran, SessionError, Units, gate,
+    load_model, load_models, load_profile, models_of, plan_posting, program, read_job, run_setup,
+    single_operation, write_posting,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -307,24 +307,16 @@ fn report_checks(title: &str, checks: &Checks) {
     }
 }
 
-fn write_program(
-    op: &camcraft_core::run::OperationResult,
-    wcs: u8,
-    profile: &camcraft_post::profile::Profile,
-    name: &str,
-    path: &Path,
-) -> Fallible<()> {
-    let (text, report) = program(op, wcs, profile, name)?;
-    std::fs::write(path, &text)?;
+/// Say what was written.
+fn report_program(p: &Program) {
     tracing::info!(
         "{}: {} lines, {} motion blocks for {} -> {}",
-        op.name,
-        report.lines,
-        report.motion_blocks,
-        profile.name,
-        path.display()
+        p.op,
+        p.report.lines,
+        p.report.motion_blocks,
+        p.profile,
+        p.path.display()
     );
-    Ok(())
 }
 
 fn job(args: JobArgs) -> Fallible<usize> {
@@ -355,20 +347,13 @@ fn job(args: JobArgs) -> Fallible<usize> {
 
     // Each model once, however many setups use it, at the job's tolerance: it
     // decides how finely a STEP model is tessellated.
-    let mut loaded: BTreeMap<String, Model> = BTreeMap::new();
-    for &i in &chosen {
-        for m in job.models_for(i) {
-            if loaded.contains_key(&m.name) {
-                continue;
-            }
-            let model = load_job_model(&job_dir, m, job.tolerance).map_err(explain)?;
-            for n in &model.notes {
-                tracing::info!("{}: {n}", m.name);
-            }
-            loaded.insert(m.name.clone(), model);
+    let loaded = load_models(&job, &job_dir, &chosen).map_err(explain)?;
+    for (name, model) in &loaded {
+        for n in &model.notes {
+            tracing::info!("{name}: {n}");
         }
     }
-    let models: Models<'_> = loaded.iter().map(|(n, m)| (n.as_str(), m)).collect();
+    let models = models_of(&loaded);
 
     let mut runs = Vec::with_capacity(chosen.len());
     for &i in &chosen {
@@ -390,21 +375,14 @@ fn job(args: JobArgs) -> Fallible<usize> {
                 "bash scripts/run.sh JOB, to open it in the app",
             )?;
         }
-        std::fs::create_dir_all(dir)?;
-        for (i, ran) in &runs {
-            let Some(setup) = job.setups.get(*i) else {
-                continue;
-            };
-            let post = args.profile.as_deref().unwrap_or(&setup.post);
-            let profile = load_profile(post, Some(&job_dir))?;
-            // An operation turned off or left out of the run has no program.
-            let made = ran.result.operations.iter().enumerate();
-            for (k, op) in made.filter(|(_, op)| op.made.has_paths()) {
-                let name = program_name(&setup.name, k, &op.name);
-                let path = dir.join(format!("{name}.{}", profile.extension));
-                write_program(op, setup.wcs, &profile, &name, &path)?;
-            }
-        }
+        // Everything is rendered before anything is written.
+        let setups: Vec<(&Setup, &Ran)> = runs
+            .iter()
+            .filter_map(|(i, ran)| Some((job.setups.get(*i)?, ran)))
+            .collect();
+        let posting = plan_posting(&setups, &job_dir, dir, args.profile.as_deref())?;
+        write_posting(&posting)?;
+        posting.programs.iter().for_each(report_program);
     }
 
     let failed: usize = runs.iter().map(|(_, r)| r.checks.failures().count()).sum();
@@ -447,7 +425,15 @@ fn post(args: PostArgs) -> Fallible<usize> {
     let name = out
         .file_stem()
         .map_or_else(|| "camcraft".into(), |s| s.to_string_lossy().to_string());
-    write_program(op, args.wcs, &profile, &name, out)?;
+    let (text, report) = program(op, args.wcs, &profile, &name)?;
+    write_atomically(out, &text)?;
+    report_program(&Program {
+        path: out.clone(),
+        text,
+        op: op.name.clone(),
+        profile: profile.name.clone(),
+        report,
+    });
     Ok(ran.warnings.len())
 }
 

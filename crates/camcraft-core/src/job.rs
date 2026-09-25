@@ -66,7 +66,7 @@ use crate::tool::{Ball, Bullnose, Cone, Cutter, Flat, ToolError};
 /// The newest job file format this build reads and writes. It reads every version
 /// from 1, and writes the oldest that holds what a job says
 /// ([`Job::required_version`]).
-pub const JOB_VERSION: u32 = 3;
+pub const JOB_VERSION: u32 = 4;
 
 /// A complete job.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -97,7 +97,7 @@ impl Default for Job {
     fn default() -> Self {
         Self {
             version: JOB_VERSION,
-            tolerance: 0.05,
+            tolerance: NEW_JOB_TOLERANCE,
             tools: BTreeMap::new(),
             models: Vec::new(),
             stocks: Vec::new(),
@@ -106,6 +106,12 @@ impl Default for Job {
     }
 }
 
+/// The tolerance a job made in the app starts with: fine enough for router work,
+/// and quick to run. It is always written to the file.
+pub const NEW_JOB_TOLERANCE: f64 = 0.05;
+
+/// The tolerance of a job file that leaves it out: finer than a new job's, since
+/// a file written by hand said nothing, and finer is the safe side to err on.
 fn default_tolerance() -> f64 {
     0.01
 }
@@ -1746,13 +1752,17 @@ impl Job {
         Ok(())
     }
 
-    /// The oldest file format that holds everything this job says: 3 if an
+    /// The oldest file format that holds everything this job says: 4 if an
+    /// operation is turned off, which an older reader would cut; 3 if an
     /// operation sets its own spindle speed, or a tool turns backwards or wants
     /// coolant, which an older reader would skip and cut without; 2 if it uses
     /// picked features, which a version 1 reader would skip and cut the whole part;
     /// and 1 otherwise.
     pub fn required_version(&self) -> u32 {
         let ops = || self.setups.iter().flat_map(|s| &s.operations);
+        if ops().any(|op| !op.enabled) {
+            return 4;
+        }
         let turned = self
             .tools
             .values()
@@ -2516,9 +2526,9 @@ stock_to_leave = { radial = 0.0, axial = 0.0 }
         let mut two = sample();
         two.version = 2;
         two.validate().unwrap();
-        let mut four = sample();
-        four.version = 4;
-        assert_eq!(four.validate(), Err(JobError::UnsupportedVersion(4)));
+        let mut five = sample();
+        five.version = 5;
+        assert_eq!(five.validate(), Err(JobError::UnsupportedVersion(5)));
     }
 
     /// An older reader would skip an operation's own spindle speed and cut at the
@@ -2540,6 +2550,18 @@ stock_to_leave = { radial = 0.0, axial = 0.0 }
         assert_eq!(left.required_version(), 3);
         j.setups[0].operations[1].passes.rpm = Some(0);
         assert!(matches!(j.validate(), Err(JobError::BadValue { .. })));
+    }
+
+    /// An older reader would cut an operation turned off, so a job with one is
+    /// version 4, whatever else it has.
+    #[test]
+    fn only_a_job_with_an_operation_off_needs_version_4() {
+        let mut j = picked();
+        j.setups[0].operations[0].passes.rpm = Some(12000);
+        assert_eq!(j.required_version(), 3);
+        j.setups[0].operations[1].enabled = false;
+        assert_eq!(j.required_version(), 4);
+        j.validate().unwrap();
     }
 
     fn preset_tool() -> ToolSpec {

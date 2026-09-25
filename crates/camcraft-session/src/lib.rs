@@ -11,7 +11,8 @@
 //! - the one engine path ([`run_setup`]),
 //! - the one set of checks ([`checks`]) and the one verification policy
 //!   ([`gate`]): no program from a setup with a failure among them,
-//! - and how a program is named and rendered ([`program`], [`program_name`]).
+//! - and how a program is named, rendered and written ([`plan_posting`],
+//!   [`program_name`]).
 //!
 //! Position in the dependency DAG: depends on every library crate, and only the two
 //! binaries depend on it. It says nothing about how anything is shown. It returns
@@ -21,28 +22,29 @@
 pub mod checks;
 pub mod fs;
 pub mod library;
+mod post;
+
+pub use post::{
+    Posting, Program, builtin_posts, load_profile, plan_posting, program, program_name,
+    write_posting,
+};
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use camcraft_core::job::{
-    Coolant, Geometry, Height, HeightRef, Heights, JOB_VERSION, Job, JobError, LengthUnit, Linking,
-    ModelDef, Operation, Passes, Setup, SpindleDirection, StockDef, StockSpec, StockToLeave,
-    StrategySpec, ToolKind, ToolSpec,
+    Geometry, Height, HeightRef, Heights, JOB_VERSION, Job, JobError, LengthUnit, Linking,
+    ModelDef, Operation, Passes, Setup, StockDef, StockSpec, StockToLeave, StrategySpec, ToolKind,
+    ToolSpec,
 };
-use camcraft_core::run::{
-    Made, OperationResult, Plan, RunError, SetupResult, Stage, StrategyDetail, run_prepared_planned,
-};
+use camcraft_core::run::{Made, Plan, RunError, SetupResult, Stage, run_prepared_planned};
 use camcraft_core::setup::{Bodies, PrepareError, prepare};
 use camcraft_geom::mesh::{Aabb, TriMesh};
 use camcraft_geom::topology::{Body, FaceSource};
 use camcraft_import::step::{FileCheck, StepError, load_step};
 use camcraft_import::stl::{ImportError, load_stl};
-use camcraft_post::op::{
-    Coolant as PostCoolant, DrillCycles, LowerError, ProgramSpec, Spin, Units as PostUnits, lower,
-};
-use camcraft_post::profile::{Profile, ProfileError};
-use camcraft_post::render::{RenderReport, render};
+use camcraft_post::op::LowerError;
+use camcraft_post::profile::ProfileError;
 
 use crate::checks::Checks;
 
@@ -144,6 +146,22 @@ pub enum SessionError {
     /// A path could not be lowered to instructions.
     #[error(transparent)]
     Lower(#[from] LowerError),
+    /// Something went wrong posting one setup.
+    #[error("setup '{setup}': {source}")]
+    InSetup {
+        /// The setup's name.
+        setup: String,
+        /// Why.
+        source: Box<SessionError>,
+    },
+    /// A program, or the folder for it, could not be written.
+    #[error("cannot write {path}: {source}")]
+    ProgramWrite {
+        /// Which file or folder.
+        path: String,
+        /// Why.
+        source: std::io::Error,
+    },
     /// The job did not verify, and nobody insisted.
     #[error("verification failed")]
     Refused,
@@ -378,6 +396,29 @@ pub fn load_job_model(
 /// A job's models, loaded, by name.
 pub type Models<'a> = BTreeMap<&'a str, &'a Model>;
 
+/// Load every model the setups at `setups` use, each once however many use it,
+/// found relative to `job_dir` at the job's tolerance, by name.
+pub fn load_models(
+    job: &Job,
+    job_dir: &Path,
+    setups: &[usize],
+) -> Result<BTreeMap<String, Model>, SessionError> {
+    let mut loaded = BTreeMap::new();
+    for &i in setups {
+        for m in job.models_for(i) {
+            if !loaded.contains_key(&m.name) {
+                loaded.insert(m.name.clone(), load_job_model(job_dir, m, job.tolerance)?);
+            }
+        }
+    }
+    Ok(loaded)
+}
+
+/// Loaded models as a run takes them.
+pub fn models_of(loaded: &BTreeMap<String, Model>) -> Models<'_> {
+    loaded.iter().map(|(n, m)| (n.as_str(), m)).collect()
+}
+
 /// A setup, run.
 #[derive(Debug, Clone)]
 pub struct Ran {
@@ -522,88 +563,6 @@ pub fn gate(ran: &Ran, force: bool) -> Result<Passed, SessionError> {
     } else {
         Err(SessionError::Refused)
     }
-}
-
-/// A builtin machine profile by name, or a TOML profile by path. A relative path
-/// is found from `job_dir`, when there is one.
-pub fn load_profile(name: &str, job_dir: Option<&Path>) -> Result<Profile, SessionError> {
-    Ok(match Profile::builtin(name) {
-        Some(p) => p?,
-        None => match job_dir {
-            Some(dir) => Profile::load(fs::resolve(dir, name))?,
-            None => Profile::load(name)?,
-        },
-    })
-}
-
-/// The machine profiles built in, by name.
-pub fn builtin_posts() -> &'static [&'static str] {
-    Profile::builtin_names()
-}
-
-fn file_safe(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect()
-}
-
-/// The program name for the `index`-th operation (from zero) of a setup:
-/// `top-01-rough`.
-///
-/// The name is kept usable as a file name.
-pub fn program_name(setup: &str, index: usize, op_name: &str) -> String {
-    format!(
-        "{}-{:02}-{}",
-        file_safe(setup),
-        index + 1,
-        file_safe(op_name)
-    )
-}
-
-/// Render one operation as a program for `profile`.
-pub fn program(
-    op: &OperationResult,
-    wcs: u8,
-    profile: &Profile,
-    name: &str,
-) -> Result<(String, RenderReport), SessionError> {
-    let spec = ProgramSpec {
-        name: name.to_string(),
-        op_name: op.name.clone(),
-        strategy: op.strategy.to_string(),
-        tool: op.tool_number,
-        tool_comment: op.tool_comment.clone(),
-        wcs,
-        rpm: op.rpm,
-        spin: match op.spindle {
-            SpindleDirection::Clockwise => Spin::Clockwise,
-            SpindleDirection::CounterClockwise => Spin::CounterClockwise,
-        },
-        coolant: match op.coolant {
-            Coolant::Off => None,
-            Coolant::Flood => Some(PostCoolant::Flood),
-            Coolant::Mist => Some(PostCoolant::Mist),
-        },
-        units: PostUnits::Millimetres,
-        drill: match &op.detail {
-            StrategyDetail::Drill(r) if profile.drill_cycles => Some(DrillCycles {
-                holes: r.holes.clone(),
-                peck: r.peck,
-                dwell: r.dwell,
-                feed: r.feed,
-                clearance: op.clearance_z,
-            }),
-            _ => None,
-        },
-    };
-    let ops = lower(&op.path, &spec)?;
-    Ok(render(&ops, profile, name))
 }
 
 /// Cutter shape for a single finishing pass.
@@ -764,15 +723,6 @@ mod tests {
         assert!(m.notes.iter().any(|n| n.starts_with("read STEP in inch")));
     }
 
-    #[test]
-    fn program_names_are_numbered_and_file_safe() {
-        assert_eq!(program_name("top", 0, "rough"), "top-01-rough");
-        assert_eq!(
-            program_name("side 2", 11, "finish / walls"),
-            "side-2-12-finish---walls"
-        );
-    }
-
     fn hinge() -> ModelDef {
         ModelDef {
             name: "hinge".into(),
@@ -801,7 +751,7 @@ mod tests {
         )
     }
 
-    fn run_small() -> Ran {
+    pub(crate) fn run_small() -> Ran {
         let job = small_job();
         let model = load_job_model(Path::new("."), &job.models[0], job.tolerance).unwrap();
         let models: Models<'_> = [("hinge", &model)].into_iter().collect();
@@ -1079,62 +1029,6 @@ mod tests {
         });
         assert!(matches!(gate(&ran, false), Err(SessionError::Refused)));
         assert_eq!(gate(&ran, true).unwrap(), Passed::Forced);
-    }
-
-    #[test]
-    fn a_program_renders_from_a_run() {
-        let ran = run_small();
-        let profile = load_profile("masso", None).unwrap();
-        let op = ran.result.operations.first().unwrap();
-        let (text, report) = program(op, 54, &profile, "01-finish").unwrap();
-        assert!(text.contains("G54"));
-        assert!(report.motion_blocks > 10);
-        let word = |w: &str| text.split_whitespace().any(|x| x == w);
-        assert!(word("M3") && !word("M8"), "{text}");
-    }
-
-    /// A drilling operation is posted as canned cycles only for a profile that
-    /// takes them; otherwise as its moves.
-    #[test]
-    fn holes_are_cycles_only_where_the_profile_takes_them() {
-        use camcraft_core::drilling::{DrillReport, Hole};
-        let ran = run_small();
-        let mut op = ran.result.operations.first().unwrap().clone();
-        op.detail = StrategyDetail::Drill(DrillReport {
-            holes: vec![Hole {
-                at: glam::dvec2(3.0, 4.0),
-                top: 5.0,
-                bottom: 0.0,
-                radius: 2.0,
-            }],
-            peck: Some(1.5),
-            dwell: None,
-            feed: 200.0,
-        });
-        let mut profile = load_profile("masso", None).unwrap();
-        let (moves, _) = program(&op, 54, &profile, "01-holes").unwrap();
-        assert!(!moves.contains("G83"), "{moves}");
-        profile.drill_cycles = true;
-        let (cycles, _) = program(&op, 54, &profile, "01-holes").unwrap();
-        assert!(
-            cycles.contains("G83 X3.000 Y4.000 Z0.000 R7.000"),
-            "{cycles}"
-        );
-        assert!(cycles.contains("G80"), "{cycles}");
-    }
-
-    /// A tool's spindle direction and coolant reach the program.
-    #[test]
-    fn a_tools_direction_and_coolant_are_posted() {
-        let ran = run_small();
-        let profile = load_profile("masso", None).unwrap();
-        let mut op = ran.result.operations.first().unwrap().clone();
-        op.spindle = SpindleDirection::CounterClockwise;
-        op.coolant = Coolant::Mist;
-        let (text, _) = program(&op, 54, &profile, "01-finish").unwrap();
-        let word = |w: &str| text.split_whitespace().any(|x| x == w);
-        assert!(word("M4") && !word("M3"), "{text}");
-        assert!(word("M7") && word("M9"), "{text}");
     }
 
     /// The example job reads, and a job written and read back is the same job.

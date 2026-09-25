@@ -51,7 +51,9 @@ pub struct Position {
 /// What a replay needs to sweep one operation again.
 #[derive(Debug, Clone)]
 struct Pass {
-    tool: EffectiveTool,
+    /// None for an operation the run did not make (turned off, or left out),
+    /// which has no moves and may have no tool.
+    tool: Option<EffectiveTool>,
     moves: Vec<SimMove>,
 }
 
@@ -73,7 +75,11 @@ impl Replay {
             .zip(&result.operations)
             .map(|(op, ran)| {
                 Ok(Pass {
-                    tool: cutting_tool(job, op)?,
+                    tool: if ran.made.has_paths() {
+                        Some(cutting_tool(job, op)?)
+                    } else {
+                        None
+                    },
                     moves: sim_moves(&ran.path),
                 })
             })
@@ -116,7 +122,7 @@ impl Replay {
             return None;
         }
         let slice = pass.moves.get(from.saturating_sub(1)..to)?;
-        stock.sweep(slice, &pass.tool).touched
+        stock.sweep(slice, pass.tool.as_ref()?).touched
     }
 
     /// How many operations there are.
@@ -139,14 +145,15 @@ impl Replay {
         // to sweep from.
         let from = pass.moves.get(made.checked_sub(1)?)?;
         let next = pass.moves.get(made)?;
-        let r = pass.tool.max_radius();
+        let tool = pass.tool.as_ref()?;
+        let r = tool.max_radius();
         let rect = CellRect::join(stock.footprint(from.to, r), stock.footprint(next.to, r))?;
         let saved = stock.read_cells(rect);
         let part = SimMove {
             to: from.to.lerp(next.to, fraction.clamp(0.0, 1.0)),
             class: next.class,
         };
-        stock.sweep(&[*from, part], &pass.tool);
+        stock.sweep(&[*from, part], tool);
         Some((rect, saved))
     }
 }
@@ -490,6 +497,21 @@ passes = { stepover = 0.8, feed = 2000.0 }
 
     fn bits(stock: &Stock) -> Vec<u32> {
         stock.field().data().iter().map(|v| v.to_bits()).collect()
+    }
+
+    /// An operation turned off may have no tool; the rest still replay.
+    #[test]
+    fn an_operation_turned_off_without_a_tool_still_replays() {
+        let mut job: Job = toml::from_str(JOB).unwrap();
+        let rough = &mut job.setups[0].operations[0];
+        rough.enabled = false;
+        rough.tool = None;
+        let dome = Body::derived(synthetic::uv_sphere(8.0, 60, 84));
+        let bodies: Bodies<'_> = [("dome", &dome)].into_iter().collect();
+        let result = run_setup(&job, 0, &bodies).unwrap();
+        let replay = Replay::new(&job, &job.setups[0], &result).unwrap();
+        assert_eq!(replay.moves_in(0), 0);
+        assert!(replay.moves_in(1) > 0);
     }
 
     /// The keyframes are what the run passed through: the untouched block first, the
