@@ -158,11 +158,12 @@ impl StrategySpec {
 #[serde(rename_all = "kebab-case")]
 pub enum ProfileSide {
     /// Outside it: the tool's side runs along the boundary from beyond, and what
-    /// the boundary encloses is kept. Cutting a part out.
+    /// the boundary encloses is kept. Cutting a part out: its holes are cut from
+    /// inside them.
     #[default]
     Outside,
     /// Inside it: what the boundary encloses is cut away along its edge. Cutting
-    /// a hole out.
+    /// a hole out: anything left standing in it is cut round from outside.
     Inside,
     /// The tool's centre on it: a slot or a groove along it.
     On,

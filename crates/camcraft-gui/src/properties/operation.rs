@@ -382,9 +382,9 @@ fn outline_form(ui: &mut egui::Ui, op: &mut Operation) {
         if let StrategySpec::Profile { side, .. } = &mut op.strategy {
             widgets::field_label(ui, "Side");
             let name = |s: ProfileSide| match s {
-                ProfileSide::Outside => "outside: keep what it encloses",
-                ProfileSide::Inside => "inside: cut what it encloses",
-                ProfileSide::On => "on it: the tool's centre",
+                ProfileSide::Outside => "outside: cut the part out",
+                ProfileSide::Inside => "inside: cut a hole out",
+                ProfileSide::On => "on the line: a groove",
             };
             egui::ComboBox::from_id_salt("side")
                 .selected_text(name(*side))
@@ -396,6 +396,24 @@ fn outline_form(ui: &mut egui::Ui, op: &mut Operation) {
             ui.end_row();
         }
     });
+    // The side is the region's, not each ring's: a part's holes are cut from
+    // inside them, a hole's islands from outside them.
+    if let StrategySpec::Profile { side, .. } = op.strategy {
+        hint(
+            ui,
+            match side {
+                ProfileSide::Outside => {
+                    "The tool goes round the outside of the part, and round inside each \
+                     of its holes."
+                }
+                ProfileSide::Inside => {
+                    "The tool goes round inside the outline, and round the outside of \
+                     anything left standing in it."
+                }
+                ProfileSide::On => "The tool's centre follows the line.",
+            },
+        );
+    }
 }
 
 /// The machining boundary, where the tool may go against it, and how far past it:
