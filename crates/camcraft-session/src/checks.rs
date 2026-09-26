@@ -427,6 +427,19 @@ fn operation_findings(
                 ));
             }
         }
+        StrategyDetail::Profile(r) | StrategyDetail::Pocket(r) => {
+            if r.too_shallow > 0 {
+                out.push(finding(
+                    Level::Warn,
+                    "CC207",
+                    format!(
+                        "{} area(s) not cut: the floor is not below the top",
+                        r.too_shallow
+                    ),
+                    "set the bottom lower, or the top higher".into(),
+                ));
+            }
+        }
         // A hole the tool does not fit is among the run's own warnings.
         StrategyDetail::Drill(_) => {}
     }

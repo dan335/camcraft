@@ -43,7 +43,7 @@ pub use pitch::{CELLS_PER_TOOL, FINEST_PITCH, MAX_SIM_CELLS, SIM_CELLS, sim_pitc
 pub use result::{Made, OperationResult, Plan, SetupResult, Stage, StrategyDetail};
 
 use error::in_op;
-use operation::{Work, drill_holes, not_made, run_operation};
+use operation::{Target, Work, drill_holes, not_made, planar_areas, run_operation};
 
 /// Material further above the part than this, in millimetres, counts as left over.
 ///
@@ -133,19 +133,25 @@ pub fn run_prepared_planned(
             keyframes.push(Arc::new(PackedStock::pack(&stock)));
             continue;
         }
-        // A drilling operation's picked edges are its holes, not a boundary.
-        let (limit, holes) = if let StrategySpec::Drill { .. } = op.strategy {
-            (None, drill_holes(job, op, prepared, bodies, &ctx)?)
-        } else {
-            let limit = machining_boundary(
-                &op.geometry,
-                prepared,
-                bodies,
-                tool.cutter_radius(),
-                job.tolerance,
-            )
-            .map_err(in_op(op))?;
-            (limit, Vec::new())
+        // A drilling operation's picked edges are its holes, and a 2D one's
+        // boundary is what it cuts round or clears, not a limit.
+        let target = match op.strategy {
+            StrategySpec::Drill { .. } => {
+                Target::Holes(drill_holes(job, op, prepared, bodies, &ctx)?)
+            }
+            StrategySpec::Profile { .. } | StrategySpec::Pocket { .. } => {
+                Target::Areas(planar_areas(job, op, prepared, bodies, &ctx, &tool)?)
+            }
+            StrategySpec::Parallel { .. } | StrategySpec::ZlevelRough { .. } => Target::Limit(
+                machining_boundary(
+                    &op.geometry,
+                    prepared,
+                    bodies,
+                    tool.cutter_radius(),
+                    job.tolerance,
+                )
+                .map_err(in_op(op))?,
+            ),
         };
         let work = Work {
             job,
@@ -157,7 +163,7 @@ pub fn run_prepared_planned(
             cutter: &cutter,
             bounds: (lo, hi),
         };
-        operations.push(run_operation(&work, limit.as_ref(), &holes, &mut stock)?);
+        operations.push(run_operation(&work, &target, &mut stock)?);
         keyframes.push(Arc::new(PackedStock::pack(&stock)));
     }
 

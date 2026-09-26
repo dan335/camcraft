@@ -64,13 +64,15 @@ it.
 - **Operation**, on tabs: *Tool* (the tool and its feeds and speeds), *Geometry*
   (Fusion's machining boundary: the stock, the part's bounding box or silhouette,
   or picked faces and edges; where the tool goes against it; an additional
-  offset), *Heights* (clearance, top and bottom,
+  offset. For a 2D profile or pocket, the boundary it cuts round or clears, and a
+  profile's side of it), *Heights* (clearance, top and bottom,
   drawn in the view as planes), *Passes* and *Linking* (retract feed, safe
   distance, stay-down distance, and the lead radius or the ramp angle and feed;
   one left out says what the strategy's default comes to for the tool). Choosing a
   tool whose preset gives no stepover sets Fusion's: a quarter of the diameter for
   parallel with a square end, the tolerance's cusp with a round one, and 0.6 of
-  the diameter for Z-level. A Generate button sits at
+  the diameter for Z-level and 2D pockets. A 2D operation's *Passes* has its
+  stepdown and climb or conventional; a profile has no stepover. A Generate button sits at
   the panel's foot. The strategy is fixed once the operation is made.
 
 ## Picking in the view
@@ -97,6 +99,9 @@ the offset to the tool's diameter. That clears a channel two tools wide round
 the part, where an offset of 0 would only touch its walls.
 - A drilling operation takes holes by their round top rims, and optionally their
   bottom rims.
+- A 2D profile or pocket takes faces and edges as what it cuts round or clears.
+  The view draws that boundary (wide) and the rings the tool's centre follows
+  beside it (thin): outside or inside it for a profile, a pocket's walls.
 
 ## Running and checking
 

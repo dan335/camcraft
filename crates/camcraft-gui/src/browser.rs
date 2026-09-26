@@ -7,7 +7,7 @@
 
 use std::cell::RefCell;
 
-use camcraft_core::job::{Operation, Setup, StrategySpec};
+use camcraft_core::job::{Operation, ProfileSide, Setup, StrategySpec};
 use camcraft_core::run::Stage;
 use eframe::egui;
 
@@ -596,7 +596,7 @@ fn generate_item(
 
 /// The kinds of operation there are to add, each with what a new one starts
 /// from.
-pub fn new_operations() -> [(&'static str, StrategySpec); 3] {
+pub fn new_operations() -> [(&'static str, StrategySpec); 5] {
     [
         ("parallel finish", StrategySpec::Parallel { angle: 0.0 }),
         (
@@ -604,6 +604,21 @@ pub fn new_operations() -> [(&'static str, StrategySpec); 3] {
             StrategySpec::ZlevelRough {
                 stepdown: 2.0,
                 min_ring_length: 3.0,
+            },
+        ),
+        (
+            "2D pocket",
+            StrategySpec::Pocket {
+                stepdown: 2.0,
+                conventional: false,
+            },
+        ),
+        (
+            "2D profile",
+            StrategySpec::Profile {
+                side: ProfileSide::Outside,
+                stepdown: 2.0,
+                conventional: false,
             },
         ),
         (

@@ -216,7 +216,10 @@ impl Job {
         running().try_for_each(|op| op.check(name, &self.tools))
     }
 
-    /// The oldest file format that holds everything this job says: 4 if an
+    /// The oldest file format that holds everything this job says: 7 if an
+    /// operation profiles or pockets, which an older reader has no strategy for;
+    /// 6 if a boundary would not read as it did before boundaries could be
+    /// chosen; 5 if a fixed box is placed against the models; 4 if an
     /// operation is turned off, which an older reader would cut; 3 if an
     /// operation sets its own spindle speed, or a tool turns backwards or wants
     /// coolant, which an older reader would skip and cut without; 2 if it uses
@@ -224,6 +227,9 @@ impl Job {
     /// and 1 otherwise.
     pub fn required_version(&self) -> u32 {
         let ops = || self.setups.iter().flat_map(|s| &s.operations);
+        if ops().any(|op| op.strategy.is_2d()) {
+            return 7;
+        }
         if ops().any(|op| !op.geometry.reads_as_before()) {
             return 6;
         }

@@ -58,6 +58,8 @@ pub mod cutting;
 
 pub mod drilling;
 
+pub mod planar;
+
 pub mod frame;
 
 pub mod setup;

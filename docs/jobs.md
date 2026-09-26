@@ -23,8 +23,8 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
   simulator and post never see a rotation. With the default orientation and work
   zero, a run is bit-identical to before setups existed.
 
-An operation has a strategy (parallel finishing, Z-level roughing or drilling), a
-tool, heights, passes and linking. Its machining boundary, as Fusion's, keeps it
+An operation has a strategy (parallel finishing, Z-level roughing, a 2D profile,
+a 2D pocket or drilling), a tool, heights, passes and linking. Its machining boundary, as Fusion's, keeps it
 to the stock, the part's bounding box or silhouette, or faces and edges picked on
 a model, with the tool's containment and an additional offset. A job from before
 boundaries reads picks as a selection and no picks as the stock. Any other
@@ -32,14 +32,39 @@ boundary, or a positive offset with the whole tool inside (which now moves the
 boundary in), is version 6. It may be turned off, which leaves it in the job but out of every run,
 check and post.
 
+**2D profiles and pockets** are Fusion's 2D Contour and 2D Pocket
+([decision 0005](decisions/0005-2d-profile-and-pocket.md)). Their boundary is what
+they cut round or clear: picked faces and edges, or with nothing picked, the
+part's silhouette. The tool's centre goes its radius, plus the stock to leave
+sideways, beside it: outside (the default, cutting a part out), inside (cutting a
+hole out) or on it for a profile, inside for a pocket. Each is cut from the top
+(the stock's, unless given) down in even levels no deeper than `stepdown`, to its
+floor: the bottom given, or else the lowest picked point in each area, so pockets
+picked at different depths each go to theirs, or the part's bottom. A profile
+cuts each ring all the way down before the next, and never a ring before the
+rings inside it, so a part's holes are cut while it is held; a pocket clears
+from its middle out, the wall last. Both climb unless `conventional = true`, and
+their order is their own, so they are not reordered. A V-bit profiles only on
+the line. Any job with one is version 7.
+
+```toml
+[[setup.operation]]
+name = "cut out"
+strategy = "profile"          # side = "outside" | "inside" | "on"
+stepdown = 3.0
+tool = "quarter-upcut"
+geometry = { bottom = { ref = "stock-bottom", offset = -0.3 } }
+```
+
 **Linking** is how the tool moves between cuts, after Fusion's
 ([decision 0004](decisions/0004-linking-and-entries.md)). It rapids down to the
 *safe distance* (2 mm) above the material under it and feeds from there, and feeds
 out of a cut only that far before rapiding. A link no longer than the *stay-down*
 distance is made without lifting, at the cutting feed: 50 mm for parallel, riding
-over the part; five times the tool's diameter for Z-level, straight and level.
+over the part; five times the tool's diameter for Z-level and 2D, straight and
+level.
 Parallel enters and leaves each pass along a vertical arc (the *lead radius*, a
-tenth of the tool); Z-level ramps into material along the pass it is about to cut
+tenth of the tool); Z-level and 2D ramp into material along the pass they are about to cut
 (the *ramp angle*, 2°, at the *ramp feed*, a third of the cutting feed). After the
 last cut the tool goes up to the clearance height before the spindle stops. The
 settings are written only when changed, and need no newer version: a build that
@@ -70,6 +95,9 @@ version newer than it reads, by name.
 | 2       | a pick: faces or edges on an operation, or a work zero on a model point |
 | 3       | an operation's own spindle speed, or a tool that turns backwards or wants coolant |
 | 4       | an operation turned off                                                |
+| 5       | a fixed box placed against the models, rather than at a corner         |
+| 6       | a machining boundary chosen other than picks alone, or an offset that moves one the whole tool is inside inward |
+| 7       | a 2D profile or pocket                                                 |
 
 Every version from 1 is read. The old `job.toml` format, from before setups, is
 refused by name; there is no converter.
@@ -106,6 +134,7 @@ with.
 | CC204 | note    | passes broken at a wall or steep face                            |
 | CC205 | warn    | roughing found nothing to clear                                  |
 | CC206 | note    | material left more than 1 mm above the part                      |
+| CC207 | warn    | a profile's or pocket's area not cut: its floor is not below the top |
 | CC299 | warn    | a warning from reading the model                                 |
 
 A **plunge** is a continuous descent steeper than `PLUNGE_RATIO` (10:1) that falls

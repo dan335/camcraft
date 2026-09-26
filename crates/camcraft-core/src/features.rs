@@ -118,6 +118,13 @@ pub enum FeatureError {
         /// The tool's diameter.
         diameter: f64,
     },
+    /// The tool does not fit inside the boundary a pocket or an inside profile
+    /// cuts within.
+    #[error("a {diameter:.3} mm tool does not fit inside the boundary; use a smaller one")]
+    TooWide {
+        /// The tool's diameter.
+        diameter: f64,
+    },
     /// A polygon operation failed.
     #[error("the boundary could not be built: {0}")]
     Region(String),
@@ -529,6 +536,33 @@ fn selection(
     let from_edges = Region::new(rings);
 
     from_faces.union(&from_edges).map_err(region_err)
+}
+
+/// A 2D operation's boundary, in the setup's frame, and the picked points its
+/// floors are found among. `None` for the stock's footprint.
+///
+/// The boundary is [`Geometry::boundary_2d`]. Only picks have floors: every point
+/// of the picked faces and edges.
+pub fn outline(
+    g: &Geometry,
+    prepared: &Prepared,
+    bodies: &Bodies<'_>,
+    job_tolerance: f64,
+) -> Result<(Option<Region>, Vec<DVec3>), FeatureError> {
+    let mut g = g.clone();
+    g.boundary_kind = Some(g.boundary_2d());
+    let shape = boundary_shape(&g, prepared, bodies, job_tolerance)?;
+    if g.boundary() != Boundary::Selection {
+        return Ok((shape, Vec::new()));
+    }
+    let faces = picked_faces(&g, prepared, bodies, job_tolerance)?;
+    let chains = picked_chains(&g, prepared, bodies, job_tolerance)?;
+    let floors = faces
+        .iter()
+        .flat_map(|f| f.triangles.iter().flatten().copied())
+        .chain(chains.iter().flat_map(|c| c.points.iter().copied()))
+        .collect();
+    Ok((shape, floors))
 }
 
 /// How far the tool's centre may go past a boundary: Fusion's containment and

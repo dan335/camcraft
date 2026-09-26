@@ -89,6 +89,27 @@ pub enum StrategySpec {
         #[serde(default = "default_min_ring")]
         min_ring_length: f64,
     },
+    /// A 2D contour: the tool run round the boundary, beside it or on it, level
+    /// by level down to its floor. Fusion's 2D Contour.
+    Profile {
+        /// Which side of the boundary the tool cuts on.
+        #[serde(default, skip_serializing_if = "is_default")]
+        side: ProfileSide,
+        /// Depth of each level, in millimetres.
+        stepdown: f64,
+        /// Cut conventional rather than climb.
+        #[serde(default, skip_serializing_if = "is_default")]
+        conventional: bool,
+    },
+    /// A 2D pocket: the boundary cleared, from its middle out to its walls, level
+    /// by level down to its floor. Fusion's 2D Pocket.
+    Pocket {
+        /// Depth of each level, in millimetres.
+        stepdown: f64,
+        /// Cut conventional rather than climb.
+        #[serde(default, skip_serializing_if = "is_default")]
+        conventional: bool,
+    },
     /// Holes, picked by their rims, each drilled straight down.
     Drill {
         /// Depth of each peck, backing out between; all at once when not given.
@@ -107,9 +128,44 @@ impl StrategySpec {
         match self {
             StrategySpec::Parallel { .. } => "parallel",
             StrategySpec::ZlevelRough { .. } => "zlevel-rough",
+            StrategySpec::Profile { .. } => "profile",
+            StrategySpec::Pocket { .. } => "pocket",
             StrategySpec::Drill { .. } => "drill",
         }
     }
+
+    /// Its depth of each level, for a strategy that cuts in levels.
+    pub fn stepdown(&self) -> Option<f64> {
+        match *self {
+            StrategySpec::ZlevelRough { stepdown, .. }
+            | StrategySpec::Profile { stepdown, .. }
+            | StrategySpec::Pocket { stepdown, .. } => Some(stepdown),
+            StrategySpec::Parallel { .. } | StrategySpec::Drill { .. } => None,
+        }
+    }
+
+    /// Whether it is a 2D strategy: flat passes round a boundary, down to a floor.
+    pub fn is_2d(&self) -> bool {
+        matches!(
+            self,
+            StrategySpec::Profile { .. } | StrategySpec::Pocket { .. }
+        )
+    }
+}
+
+/// Which side of its boundary a profile cuts on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileSide {
+    /// Outside it: the tool's side runs along the boundary from beyond, and what
+    /// the boundary encloses is kept. Cutting a part out.
+    #[default]
+    Outside,
+    /// Inside it: what the boundary encloses is cut away along its edge. Cutting
+    /// a hole out.
+    Inside,
+    /// The tool's centre on it: a slot or a groove along it.
+    On,
 }
 
 fn default_min_ring() -> f64 {
@@ -179,6 +235,17 @@ impl Geometry {
     /// choice: the picks', when there are any, or the stock's.
     pub fn boundary(&self) -> Boundary {
         self.boundary_kind.unwrap_or(self.legacy_boundary())
+    }
+
+    /// A 2D operation's boundary: what it profiles round or pockets. One never
+    /// chosen is the picks', when there are any, or else the models' silhouette,
+    /// so a profile goes round the part.
+    pub fn boundary_2d(&self) -> Boundary {
+        self.boundary_kind.unwrap_or(if self.picked() {
+            Boundary::Selection
+        } else {
+            Boundary::Silhouette
+        })
     }
 
     /// Whether a build from before boundaries would keep the tool where this
@@ -300,8 +367,22 @@ impl Operation {
         if tool.kind != ToolKind::Cone {
             return None;
         }
-        if matches!(self.strategy, StrategySpec::ZlevelRough { .. }) {
-            return Some("a V-bit or chamfer mill cannot rough in Z levels; use a parallel pass");
+        match self.strategy {
+            StrategySpec::ZlevelRough { .. } => {
+                return Some(
+                    "a V-bit or chamfer mill cannot rough in Z levels; use a parallel pass",
+                );
+            }
+            StrategySpec::Pocket { .. } => {
+                return Some("a V-bit or chamfer mill cannot clear a pocket's floor flat");
+            }
+            StrategySpec::Profile { side, .. } if side != ProfileSide::On => {
+                return Some(
+                    "a V-bit or chamfer mill profiles only on the line: its width changes \
+                     with depth",
+                );
+            }
+            _ => {}
         }
         if leaves {
             return Some("a V-bit or chamfer mill cuts to size: set stock to leave to zero");
@@ -361,7 +442,7 @@ impl Operation {
                 value: leave.radial.min(leave.axial),
             });
         }
-        if let StrategySpec::ZlevelRough { stepdown, .. } = self.strategy {
+        if let Some(stepdown) = self.strategy.stepdown() {
             positive(&format!("{at}.stepdown"), stepdown)?;
         }
         if let StrategySpec::Drill { peck, dwell } = self.strategy {
@@ -384,7 +465,8 @@ impl Operation {
     /// parallel finishing, a quarter of the tool's diameter with a square end, and
     /// with a round one the spacing that leaves a cusp no taller than the
     /// tolerance, `2·√(r² − (r − tol)²) / √2`; for Z-level clearing, 0.6 of the
-    /// diameter, its 3D pocket's. `None` for drilling, which has none.
+    /// diameter, its 3D pocket's, and a 2D pocket's the same. `None` for a profile
+    /// or drilling, which have none.
     pub fn default_stepover(&self, tool: &ToolSpec, tolerance: f64) -> Option<f64> {
         let d = tool.diameter;
         match self.strategy {
@@ -402,8 +484,8 @@ impl Operation {
                 // To the micron, as Fusion rounds it.
                 Some((over * 1000.0).round() / 1000.0)
             }
-            StrategySpec::ZlevelRough { .. } => Some(0.6 * d),
-            StrategySpec::Drill { .. } => None,
+            StrategySpec::ZlevelRough { .. } | StrategySpec::Pocket { .. } => Some(0.6 * d),
+            StrategySpec::Profile { .. } | StrategySpec::Drill { .. } => None,
         }
     }
 
@@ -423,7 +505,12 @@ impl Operation {
             self.passes.stepover = stepover;
         }
         match (preset.stepdown, &mut self.strategy) {
-            (Some(d), StrategySpec::ZlevelRough { stepdown, .. }) => *stepdown = d,
+            (
+                Some(d),
+                StrategySpec::ZlevelRough { stepdown, .. }
+                | StrategySpec::Profile { stepdown, .. }
+                | StrategySpec::Pocket { stepdown, .. },
+            ) => *stepdown = d,
             (Some(d), StrategySpec::Drill { peck, .. }) => *peck = Some(d),
             _ => {}
         }
@@ -445,9 +532,8 @@ impl Operation {
             plunge_feed: Some(self.linking.plunge_feed),
             ramp_feed: None,
             stepdown: match self.strategy {
-                StrategySpec::ZlevelRough { stepdown, .. } => Some(stepdown),
                 StrategySpec::Drill { peck, .. } => peck,
-                StrategySpec::Parallel { .. } => None,
+                s => s.stepdown(),
             },
             stepover: Some(self.passes.stepover),
             stock_to_leave: Some(self.passes.stock_to_leave),
@@ -479,11 +565,11 @@ impl Operation {
             out.push("stepover");
         }
         match (preset.stepdown, &self.strategy) {
-            (Some(d), StrategySpec::ZlevelRough { stepdown, .. }) if !same(d, *stepdown) => {
-                out.push("stepdown");
-            }
             (Some(d), StrategySpec::Drill { peck, .. }) if !peck.is_some_and(|p| same(d, p)) => {
                 out.push("peck");
+            }
+            (Some(d), s) if s.stepdown().is_some_and(|s| !same(d, s)) => {
+                out.push("stepdown");
             }
             _ => {}
         }

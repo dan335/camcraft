@@ -1,10 +1,11 @@
 # Where this is
 
-Last updated 2026-09-24. Read this before picking the work back up.
+Last updated 2026-09-26. Read this before picking the work back up.
 
 **0.2 is done: the desktop app runs, checks, plays back and posts jobs**, and some
-of 0.3 came in with it (drilling, V-bits and chamfer mills, speed and feed presets,
-Fusion CSV tool import, a built-in System library of twenty common bits). All gates are green. The engine takes STEP or STL models
+of 0.3 came in with it (drilling, 2D profiles and pockets, V-bits and chamfer
+mills, speed and feed presets, Fusion CSV tool import, a built-in System library
+of twenty common bits). All gates are green. The engine takes STEP or STL models
 and a job file and writes G-code, and refuses to write a program that fails a
 check, the simulator's against material among them.
 
@@ -62,7 +63,10 @@ program went from about 8 h to 4.6 h.
    are helices and tangent arcs.
 2. **Start rapids split XY then Z.** The first move is one G0 in all three axes
    from wherever the tool change left the spindle.
-3. **More strategies**: 2D profile, pocket, waterline, adaptive clearing.
+3. **More strategies**: waterline, adaptive clearing. 2D profile and pocket are
+   done ([decision 0005](docs/decisions/0005-2d-profile-and-pocket.md)); they
+   lack tabs, which a part cut free from a sheet needs unless the table holds
+   it, finishing passes and horizontal leads.
 4. **Arc fitting**, as a `Toolpath -> Toolpath` transform.
 5. **A volumetric stock**, so what a top setup leaves carries to a flipped bottom
    one.

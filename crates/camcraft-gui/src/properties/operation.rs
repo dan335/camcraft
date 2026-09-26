@@ -3,7 +3,7 @@
 
 use camcraft_core::job::{
     Boundary, Containment, FeatureRef, Geometry, Height, HeightContext, HeightRef, Operation,
-    StrategySpec,
+    ProfileSide, StrategySpec,
 };
 use eframe::egui;
 use glam::DVec2;
@@ -143,6 +143,8 @@ fn strategy_name(s: &StrategySpec) -> &'static str {
     match s {
         StrategySpec::Parallel { .. } => "parallel",
         StrategySpec::ZlevelRough { .. } => "z-level rough",
+        StrategySpec::Profile { .. } => "2D profile",
+        StrategySpec::Pocket { .. } => "2D pocket",
         StrategySpec::Drill { .. } => "drilling",
     }
 }
@@ -299,6 +301,11 @@ fn geometry(
     actions: &mut Vec<PropAction>,
 ) {
     let drilling = matches!(op.strategy, StrategySpec::Drill { .. });
+    let flat = op.strategy.is_2d();
+    if flat {
+        outline_form(ui, op);
+        ui.add_space(theme::SPACE_3);
+    }
     let g = &mut op.geometry;
     if drilling {
         hint(
@@ -307,14 +314,29 @@ fn geometry(
              drill to there; otherwise each hole is drilled to the Bottom height.",
         );
         ui.add_space(theme::SPACE_3);
-    } else {
+    } else if !flat {
         boundary_form(ui, m, g, diameter);
         ui.add_space(theme::SPACE_3);
     }
-    if drilling || g.boundary() == Boundary::Selection {
+    let selection = if flat { g.boundary_2d() } else { g.boundary() };
+    if drilling || selection == Boundary::Selection {
         pick_cards(ui, setup, index, g, picks, actions);
     }
-    if !drilling {
+    if flat {
+        match picks.shown.and_then(|s| s.boundary.as_ref()) {
+            Some(Err(why)) => {
+                error(ui, why);
+            }
+            Some(Ok(())) => {
+                hint(
+                    ui,
+                    "In the view at the stock's top: the boundary, and where the tool's \
+                     centre goes.",
+                );
+            }
+            None => {}
+        }
+    } else if !drilling {
         match picks.shown.and_then(|s| s.boundary.as_ref()) {
             Some(Err(why)) => {
                 error(ui, why);
@@ -325,6 +347,55 @@ fn geometry(
             None => {}
         }
     }
+}
+
+/// A 2D operation's boundary, what it profiles round or pockets, and a profile's
+/// side of it: Fusion's 2D Contour and 2D Pocket Geometry tabs. The tool's centre
+/// goes its radius beside the boundary, so there is no containment or offset.
+fn outline_form(ui: &mut egui::Ui, op: &mut Operation) {
+    form(ui, "outline", |ui| {
+        let g = &mut op.geometry;
+        widgets::field_label(ui, "Boundary");
+        let name = |b: Boundary| match b {
+            Boundary::Stock => "the stock",
+            Boundary::BoundingBox => "the part's bounding box",
+            Boundary::Silhouette => "the part's silhouette",
+            Boundary::Selection => "picked faces and edges",
+        };
+        let mut chosen = g.boundary_2d();
+        egui::ComboBox::from_id_salt("outline")
+            .selected_text(name(chosen))
+            .show_ui(ui, |ui| {
+                for b in [
+                    Boundary::Stock,
+                    Boundary::BoundingBox,
+                    Boundary::Silhouette,
+                    Boundary::Selection,
+                ] {
+                    ui.selectable_value(&mut chosen, b, name(b));
+                }
+            });
+        if chosen != g.boundary_2d() {
+            g.boundary_kind = Some(chosen);
+        }
+        ui.end_row();
+        if let StrategySpec::Profile { side, .. } = &mut op.strategy {
+            widgets::field_label(ui, "Side");
+            let name = |s: ProfileSide| match s {
+                ProfileSide::Outside => "outside: keep what it encloses",
+                ProfileSide::Inside => "inside: cut what it encloses",
+                ProfileSide::On => "on it: the tool's centre",
+            };
+            egui::ComboBox::from_id_salt("side")
+                .selected_text(name(*side))
+                .show_ui(ui, |ui| {
+                    for s in [ProfileSide::Outside, ProfileSide::Inside, ProfileSide::On] {
+                        ui.selectable_value(side, s, name(s));
+                    }
+                });
+            ui.end_row();
+        }
+    });
 }
 
 /// The machining boundary, where the tool may go against it, and how far past it:
@@ -519,7 +590,9 @@ fn pick_list(
 /// Which of Top and Bottom the strategy cuts to: the others are not asked for.
 fn uses_top_bottom(strategy: &StrategySpec) -> (bool, bool) {
     match strategy {
-        StrategySpec::ZlevelRough { .. } => (true, true),
+        StrategySpec::ZlevelRough { .. }
+        | StrategySpec::Profile { .. }
+        | StrategySpec::Pocket { .. } => (true, true),
         StrategySpec::Drill { .. } => (false, true),
         StrategySpec::Parallel { .. } => (false, false),
     }
@@ -561,6 +634,13 @@ fn heights(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
                 ui,
                 "Each hole starts at its picked rim. Bottom is how deep a hole goes when \
                  its bottom edge is not picked.",
+            );
+        }
+        StrategySpec::Profile { .. } | StrategySpec::Pocket { .. } => {
+            hint(
+                ui,
+                "Without a Bottom, each area is cut down to the lowest point picked in \
+                 it, or to the part's bottom when nothing is picked.",
             );
         }
         StrategySpec::ZlevelRough { .. } => {}
@@ -658,6 +738,28 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
                 m.length_field(ui, min_ring_length, 0.1, 1000.0, "");
                 ui.end_row();
             }
+            StrategySpec::Profile {
+                stepdown,
+                conventional,
+                ..
+            }
+            | StrategySpec::Pocket {
+                stepdown,
+                conventional,
+            } => {
+                widgets::field_label(ui, "Stepdown");
+                m.length_field(ui, stepdown, 0.05, 100.0, "")
+                    .on_hover_text("The deepest each level may be: they are spaced evenly");
+                ui.end_row();
+                widgets::field_label(ui, "Direction");
+                let mut climb = !*conventional;
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut climb, true, "climb");
+                    ui.selectable_value(&mut climb, false, "conventional");
+                });
+                *conventional = !climb;
+                ui.end_row();
+            }
             StrategySpec::Drill { peck, dwell } => {
                 widgets::field_label(ui, "Peck");
                 ui.horizontal(|ui| {
@@ -680,9 +782,12 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
                 ui.end_row();
             }
         }
-        widgets::field_label(ui, "Stepover");
-        m.length_field(ui, &mut op.passes.stepover, 0.05, 100.0, "");
-        ui.end_row();
+        // A profile is one ring round: it has no stepover.
+        if !matches!(op.strategy, StrategySpec::Profile { .. }) {
+            widgets::field_label(ui, "Stepover");
+            m.length_field(ui, &mut op.passes.stepover, 0.05, 100.0, "");
+            ui.end_row();
+        }
         widgets::field_label(ui, "Leave, sideways");
         m.length_field(ui, &mut op.passes.stock_to_leave.radial, 0.05, 50.0, "");
         ui.end_row();
@@ -698,9 +803,11 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
 /// How the operation moves between cuts. A value left out is the strategy's own,
 /// as Fusion's, and says what that comes to for the tool chosen.
 fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f64>) {
+    // A 2D operation links as Z-level roughing does: level by level, ramping in.
+    let flat = op.strategy.is_2d();
     let (parallel, zlevel) = (
         matches!(op.strategy, StrategySpec::Parallel { .. }),
-        matches!(op.strategy, StrategySpec::ZlevelRough { .. }),
+        matches!(op.strategy, StrategySpec::ZlevelRough { .. }) || flat,
     );
     let of_tool = |part: f64, what: &str| match diameter {
         Some(d) => format!("{what}: {}", m.length(part * d, 2)),
@@ -776,15 +883,19 @@ fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f
             });
             ui.end_row();
         }
-        widgets::field_label(ui, "Reorder passes");
-        ui.checkbox(&mut op.linking.reorder, "to shorten travel");
-        ui.end_row();
-        widgets::field_label(ui, "Reverse passes");
-        ui.checkbox(
-            &mut op.linking.allow_reverse,
-            "while reordering (changes climb)",
-        );
-        ui.end_row();
+        // A 2D operation's order is its own: what is inside before what frees
+        // it, the middle of a pocket before its walls.
+        if !flat {
+            widgets::field_label(ui, "Reorder passes");
+            ui.checkbox(&mut op.linking.reorder, "to shorten travel");
+            ui.end_row();
+            widgets::field_label(ui, "Reverse passes");
+            ui.checkbox(
+                &mut op.linking.allow_reverse,
+                "while reordering (changes climb)",
+            );
+            ui.end_row();
+        }
     });
 }
 

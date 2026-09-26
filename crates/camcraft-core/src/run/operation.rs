@@ -12,13 +12,14 @@ use super::{Made, OperationResult, PLUNGE_RATIO, RunError, StrategyDetail};
 use crate::allowance::EffectiveTool;
 use crate::drilling::{DrillParams, DrillReport, Hole, drill, holes, nearest_first};
 use crate::dropcutter::DropCutter;
-use crate::features::{Chain, picked_chains};
-use crate::job::{HeightContext, Job, Operation, StrategySpec, ToolSpec};
+use crate::features::{Chain, FeatureError, outline, picked_chains};
+use crate::job::{HeightContext, Job, Operation, SpindleDirection, StrategySpec, ToolSpec};
 use crate::linker::{
     ClearanceField, LinkParams, LinkReport, Material, Ramp, StayDown, Surface, highest_under, link,
 };
 use crate::ordering::order_passes;
 use crate::parallel::{ParallelParams, follow, parallel_finish_within};
+use crate::planar::{Area, PlanarParams, PlanarReport, areas, centre_offset, pocket, profile};
 use crate::reach::LevelReach;
 use crate::roughing::{RoughingParams, zlevel_rough};
 use crate::setup::{Bodies, Prepared};
@@ -64,25 +65,41 @@ impl Work<'_> {
 /// has, and what the strategy reported.
 type Paths = (Toolpath, u64, StrategyDetail);
 
+/// What an operation is cut to, found before its strategy runs.
+pub(super) enum Target {
+    /// The machining boundary its tool's centre is kept to, if any.
+    Limit(Option<Region>),
+    /// A drilling operation's holes, in order.
+    Holes(Vec<Hole>),
+    /// A 2D operation's areas, each with its floor.
+    Areas(Vec<Area>),
+}
+
 /// Work out one operation's paths, link them over the material as it stands, and
-/// cut them into it. `limit` is the boundary it is kept to, if any, and `holes`
-/// are a drilling operation's.
+/// cut them into it, to `target`.
 pub(super) fn run_operation(
     work: &Work<'_>,
-    limit: Option<&Region>,
-    holes: &[Hole],
+    target: &Target,
     stock: &mut Stock,
 ) -> Result<OperationResult, RunError> {
     let op = work.op;
     let ctx = work.heights;
     let mut warnings = Vec::new();
 
+    let (limit, holes, found) = match target {
+        Target::Limit(limit) => (limit.as_ref(), &[][..], &[][..]),
+        Target::Holes(holes) => (None, holes.as_slice(), &[][..]),
+        Target::Areas(areas) => (None, &[][..], areas.as_slice()),
+    };
     let (raw, passes, detail) = match op.strategy {
         StrategySpec::Parallel { angle } => parallel_paths(work, angle, limit, &mut warnings)?,
         StrategySpec::ZlevelRough {
             stepdown,
             min_ring_length,
         } => zlevel_paths(work, stepdown, min_ring_length, limit, stock, &mut warnings)?,
+        StrategySpec::Profile { .. } | StrategySpec::Pocket { .. } => {
+            planar_paths(work, found, &mut warnings)?
+        }
         StrategySpec::Drill { peck, dwell } => {
             drill_paths(work, peck, dwell, holes, &mut warnings)?
         }
@@ -91,8 +108,10 @@ pub(super) fn run_operation(
     // Ordering is a Toolpath -> Toolpath transform, applied before linking so the
     // retracts it needs are planned around the order actually used. Holes are
     // already in order, and a hole reversed would be drilled from the bottom up.
-    let drilling = matches!(op.strategy, StrategySpec::Drill { .. });
-    let (ordered, order) = if op.linking.reorder && !drilling {
+    // A 2D operation's order is its own: holes before the outline that frees a
+    // part, a pocket's middle before its walls.
+    let ordered_already = matches!(op.strategy, StrategySpec::Drill { .. }) || op.strategy.is_2d();
+    let (ordered, order) = if op.linking.reorder && !ordered_already {
         order_passes(&raw, op.linking.allow_reverse)?
     } else {
         (raw, Default::default())
@@ -188,7 +207,9 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
             linking.lead_radius.unwrap_or(0.1 * diameter),
             None,
         ),
-        StrategySpec::ZlevelRough { .. } => (
+        StrategySpec::ZlevelRough { .. }
+        | StrategySpec::Profile { .. }
+        | StrategySpec::Pocket { .. } => (
             StayDown::Level {
                 max: linking.stay_down.unwrap_or(5.0 * diameter),
             },
@@ -331,6 +352,87 @@ fn zlevel_paths(
     Ok((path, report.rings, StrategyDetail::ZlevelRough(report)))
 }
 
+/// A 2D profile or pocket of `areas`.
+fn planar_paths(
+    work: &Work<'_>,
+    areas: &[Area],
+    warnings: &mut Vec<String>,
+) -> Result<Paths, RunError> {
+    let (op, ctx) = (work.op, work.heights);
+    let conventional = match op.strategy {
+        StrategySpec::Profile { conventional, .. } | StrategySpec::Pocket { conventional, .. } => {
+            conventional
+        }
+        _ => false,
+    };
+    let clockwise = work.spec.spindle == SpindleDirection::Clockwise;
+    let params = PlanarParams {
+        stepdown: op.strategy.stepdown().unwrap_or(f64::NAN),
+        stepover: op.passes.stepover,
+        feed: op.passes.feed,
+        top: op.geometry.top.map_or(ctx.stock_top, |h| h.resolve(ctx)),
+        arc: work.job.tolerance * 0.5,
+        radius: work.tool.max_radius(),
+        kept_on_right: clockwise != conventional,
+    };
+    let (path, report, detail): (Toolpath, PlanarReport, fn(PlanarReport) -> StrategyDetail) =
+        match op.strategy {
+            StrategySpec::Profile { side, .. } => {
+                let (path, report) = profile(areas, side, &params).map_err(in_op(op))?;
+                (path, report, StrategyDetail::Profile)
+            }
+            _ => {
+                let (path, report) = pocket(areas, &params).map_err(in_op(op))?;
+                (path, report, StrategyDetail::Pocket)
+            }
+        };
+    if report.too_shallow > 0 {
+        warnings.push(format!(
+            "{} area(s) have their floor at or above the top, {:.3} mm, and are not cut",
+            report.too_shallow, params.top
+        ));
+    }
+    Ok((path, report.passes, detail(report)))
+}
+
+/// A 2D operation's areas: its boundary, which the tool's centre follows its
+/// radius and the stock to leave beside, or inside for a pocket, split into its
+/// pieces, each with its floor. The floor is the one asked for, or else the
+/// lowest point picked in the piece, or the models' bottom; raised by the stock
+/// to leave down.
+pub(super) fn planar_areas(
+    job: &Job,
+    op: &Operation,
+    prepared: &Prepared,
+    bodies: &Bodies<'_>,
+    ctx: &HeightContext,
+    tool: &EffectiveTool,
+) -> Result<Vec<Area>, RunError> {
+    let (shape, floors) =
+        outline(&op.geometry, prepared, bodies, job.tolerance).map_err(in_op(op))?;
+    let shape = shape.unwrap_or_else(|| {
+        let b = prepared.stock_bounds();
+        Region::rectangle(b.min.truncate(), b.max.truncate())
+    });
+    let leave = op.passes.stock_to_leave;
+    let offset = centre_offset(op, tool.cutter_radius());
+    let (fallback, floors) = match op.geometry.bottom {
+        Some(h) => (h.resolve(ctx), &[][..]),
+        None => (ctx.model_bottom, floors.as_slice()),
+    };
+    let mut found =
+        areas(&shape, offset, job.tolerance * 0.5, floors, fallback).map_err(in_op(op))?;
+    if found.is_empty() {
+        return Err(in_op(op)(FeatureError::TooWide {
+            diameter: 2.0 * tool.cutter_radius(),
+        }));
+    }
+    for a in &mut found {
+        a.bottom += leave.axial;
+    }
+    Ok(found)
+}
+
 /// Each of `holes` drilled straight down, pecking by `peck` if given; a hole the
 /// tool is not the size of is drilled, and said.
 fn drill_paths(
@@ -404,6 +506,8 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
     let detail = match op.strategy {
         StrategySpec::Parallel { .. } => StrategyDetail::Parallel(Default::default()),
         StrategySpec::ZlevelRough { .. } => StrategyDetail::ZlevelRough(Default::default()),
+        StrategySpec::Profile { .. } => StrategyDetail::Profile(Default::default()),
+        StrategySpec::Pocket { .. } => StrategyDetail::Pocket(Default::default()),
         StrategySpec::Drill { peck, dwell } => StrategyDetail::Drill(DrillReport {
             holes: Vec::new(),
             peck,

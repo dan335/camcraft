@@ -15,7 +15,10 @@
 
 use camcraft_core::allowance::EffectiveTool;
 use camcraft_core::features::{self, FeatureError};
-use camcraft_core::job::{Boundary, BoxOf, FeatureRef, Geometry, Origin, Snap, StrategySpec};
+use camcraft_core::job::{
+    Boundary, BoxOf, FeatureRef, Geometry, Operation, Origin, Snap, StrategySpec,
+};
+use camcraft_core::planar::centre_offset;
 use camcraft_core::run::cutting_tool;
 use camcraft_core::setup::{Bodies, Prepared};
 use camcraft_core::tool::ToolProfile;
@@ -324,11 +327,23 @@ pub fn shown(
 
     // The boundary, drawn at the stock's top so it reads over everything. Worked
     // out as the run will work it out, with the operation's own tool.
+    let found = out.faces.iter().chain(&out.edges).all(Result::is_ok);
+    let z = prepared.stock_bounds().max.z;
+    if operation.strategy.is_2d() {
+        if found {
+            let tool = cutting_tool(&doc.job, operation).ok();
+            out.boundary = Some(
+                outline_lines(operation, tool.as_ref(), prepared, &bodies, tolerance, z)
+                    .map(|lines| out.highlight.lines.extend(lines))
+                    .map_err(|e| e.to_string()),
+            );
+        }
+        return out;
+    }
     let bounded = !matches!(operation.strategy, StrategySpec::Drill { .. })
         && g.boundary() != Boundary::Stock;
-    if bounded && out.faces.iter().chain(&out.edges).all(Result::is_ok) {
+    if bounded && found {
         let tool = cutting_tool(&doc.job, operation).ok();
-        let z = prepared.stock_bounds().max.z;
         out.boundary = Some(
             boundary_lines(g, tool.as_ref(), prepared, &bodies, tolerance, z)
                 .map(|lines| out.highlight.lines.extend(lines))
@@ -336,6 +351,37 @@ pub fn shown(
         );
     }
     out
+}
+
+/// A 2D operation's boundary as lines at height `z`, and the rings the tool's
+/// centre follows beside it: for a pocket, its walls. The stock's footprint when
+/// that is the boundary.
+fn outline_lines(
+    op: &Operation,
+    tool: Option<&EffectiveTool>,
+    prepared: &Prepared,
+    bodies: &Bodies<'_>,
+    tolerance: f64,
+    z: f64,
+) -> Result<Vec<Outline>, FeatureError> {
+    let (shape, _) = features::outline(&op.geometry, prepared, bodies, tolerance)?;
+    let shape = shape.unwrap_or_else(|| {
+        let b = prepared.stock_bounds();
+        Region::rectangle(b.min.truncate(), b.max.truncate())
+    });
+    let mut lines = rings_at(&shape, z, OutlineKind::Boundary);
+    let radius = tool.map_or(0.0, EffectiveTool::cutter_radius);
+    let offset = centre_offset(op, radius);
+    if offset != 0.0 {
+        let centres = shape.offset(offset, tolerance / 2.0);
+        if centres.area() <= 1e-9 {
+            return Err(FeatureError::TooWide {
+                diameter: radius * 2.0,
+            });
+        }
+        lines.extend(rings_at(&centres, z, OutlineKind::Limit));
+    }
+    Ok(lines)
 }
 
 /// An operation's machining boundary as lines at height `z`: the boundary as

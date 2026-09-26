@@ -1,0 +1,751 @@
+//! 2D strategies: a profile round a boundary, and a pocket cleared inside one,
+//! each cut in flat levels down to a floor. Fusion's 2D Contour and 2D Pocket.
+//!
+//! # From the model, seen from above
+//!
+//! The boundary is the operation's: picked faces and edges, the models' silhouette
+//! or box, or the stock's footprint. The tool's centre follows it offset by the
+//! tool's radius and the stock to leave, and every ring here is an offset of it,
+//! so every point of a path comes from the model's geometry. Nothing here reads the
+//! stock. Nor the part below the boundary, as Fusion's 2D operations do not: a
+//! part that reaches past its boundary lower down is cut into, and the verifier
+//! says so.
+//!
+//! # Areas and their floors
+//!
+//! Where the tool's centre goes falls into areas, each an outer ring and the holes
+//! inside it. Each is cut down to its own floor, the lowest picked point in it, so
+//! pockets picked at different depths are each cut to theirs, as Fusion's
+//! "selected contour" bottom. With nothing picked, or a bottom asked for, every
+//! area goes to the same one.
+//!
+//! # Order
+//!
+//! A profile cuts each ring all the way down before the next, and never a ring
+//! before everything inside it: a part's holes are cut while it is still held,
+//! and the outline that frees it last. A pocket is cleared area by area, level by
+//! level, from the middle out: the tool goes in where there is room, and the last
+//! ring of each level is a light cut along the wall. Between them, the nearest
+//! next, and each ring is started where it comes nearest to where the tool is.
+//!
+//! # Direction
+//!
+//! Climb by default. With a clockwise spindle a climb cut has the material kept on
+//! the tool's right; a spindle turning the other way, or conventional cutting,
+//! puts it on the left.
+
+use camcraft_geom::contour::{Contour, Region, RegionError};
+use glam::{DVec2, DVec3, dvec3};
+
+use crate::job::{Operation, ProfileSide, StrategySpec};
+use crate::strategy::{StrategyError, check};
+use crate::toolpath::{MoveRole, Toolpath};
+
+/// One connected piece of where the tool's centre goes, and the floor it is cut
+/// down to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Area {
+    /// An outer ring and the holes inside it.
+    pub region: Region,
+    /// The lowest level it is cut at.
+    pub bottom: f64,
+}
+
+/// How to cut the areas.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlanarParams {
+    /// Deepest a level may be below the one above, in millimetres. The levels are
+    /// spaced evenly, so none is thinner than the rest.
+    pub stepdown: f64,
+    /// Distance between a pocket's rings, in millimetres.
+    pub stepover: f64,
+    /// Cutting feed, in mm/min.
+    pub feed: f64,
+    /// Highest level cut from: every area is cut from here down.
+    pub top: f64,
+    /// Chordal tolerance of a pocket's inner rings, which err inward.
+    pub arc: f64,
+    /// The tool's radius, which a pocket's middle must be within to be cut.
+    pub radius: f64,
+    /// Whether the material kept is on the tool's right: climbing with a
+    /// clockwise spindle.
+    pub kept_on_right: bool,
+}
+
+/// What a profile or a pocket did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PlanarReport {
+    /// Areas cut.
+    pub areas: u64,
+    /// Areas left alone because their floor is not below the top.
+    pub too_shallow: u64,
+    /// Rings round each level, counted once however many levels they are cut at.
+    pub rings: u64,
+    /// The most levels any area was cut in.
+    pub levels: u64,
+    /// Passes emitted: every ring at every level.
+    pub passes: u64,
+}
+
+/// How far `op`'s tool's centre stays outside its boundary, inward when
+/// negative: its radius, `cutter_radius`, and the stock to leave beside, on the
+/// side a profile cuts, and inside for a pocket. Zero for anything else.
+pub fn centre_offset(op: &Operation, cutter_radius: f64) -> f64 {
+    let radius = cutter_radius + op.passes.stock_to_leave.radial;
+    match op.strategy {
+        StrategySpec::Profile { side, .. } => match side {
+            ProfileSide::Outside => radius,
+            ProfileSide::Inside => -radius,
+            ProfileSide::On => 0.0,
+        },
+        StrategySpec::Pocket { .. } => -radius,
+        StrategySpec::Parallel { .. }
+        | StrategySpec::ZlevelRough { .. }
+        | StrategySpec::Drill { .. } => 0.0,
+    }
+}
+
+/// The areas where the tool's centre goes, with their floors.
+///
+/// `shape` is the boundary; `offset` how far the tool's centre stays from it,
+/// outward when positive. Each area's floor is the lowest of `floors` within the
+/// boundary it came from, or `fallback` where none is. Rings err by at most `arc`,
+/// away from the boundary when growing and inside it when shrinking.
+pub fn areas(
+    shape: &Region,
+    offset: f64,
+    arc: f64,
+    floors: &[DVec3],
+    fallback: f64,
+) -> Result<Vec<Area>, StrategyError> {
+    // The boundary's own pieces, each with its floor. A picked edge lies on its
+    // piece's boundary, so each is grown a little to take in what lies on it.
+    let shapes = pieces(shape);
+    let shape_floors: Vec<f64> = shapes
+        .iter()
+        .map(|s| {
+            let near = s.offset(arc.max(1e-3), arc);
+            floors
+                .iter()
+                .filter(|p| near.contains(p.truncate()))
+                .map(|p| p.z)
+                .reduce(f64::min)
+                .unwrap_or(fallback)
+        })
+        .collect();
+    let centres = shape.offset(offset, arc);
+    let mut out = Vec::new();
+    for region in pieces(&centres) {
+        // A piece grown from the boundary covers the boundary's pieces it took in;
+        // one shrunk lies in the one it came from. Either way, the ones it
+        // overlaps.
+        let mut bottom: Option<f64> = None;
+        for (s, &floor) in shapes.iter().zip(&shape_floors) {
+            if !overlapping(&region, s) {
+                continue;
+            }
+            if region.intersection(s).map_err(region_err)?.area() > 1e-9 {
+                bottom = Some(bottom.map_or(floor, |b| b.min(floor)));
+            }
+        }
+        out.push(Area {
+            region,
+            bottom: bottom.unwrap_or(fallback),
+        });
+    }
+    Ok(out)
+}
+
+/// A profile round each area's rings, `side` of the boundary they came from,
+/// each ring all the way down before the next.
+pub fn profile(
+    areas: &[Area],
+    side: ProfileSide,
+    params: &PlanarParams,
+) -> Result<(Toolpath, PlanarReport), StrategyError> {
+    check_params(params)?;
+    let mut report = PlanarReport::default();
+    // Outside, what is kept is the side the region is on: the left of a ring as
+    // the region winds it. Inside or on it, the right.
+    let kept_left = side == ProfileSide::Outside;
+    let reverse = kept_left == params.kept_on_right;
+    let mut rings: Vec<(Vec<DVec2>, Vec<f64>)> = Vec::new();
+    for area in areas {
+        let levels = levels(params.top, area.bottom, params.stepdown);
+        if levels.is_empty() {
+            report.too_shallow += 1;
+            continue;
+        }
+        report.areas += 1;
+        report.levels = report.levels.max(levels.len() as u64);
+        for ring in area.region.rings() {
+            rings.push((wound(ring, reverse), levels.clone()));
+        }
+    }
+
+    let mut path = Toolpath::new();
+    let mut at: Option<DVec2> = None;
+    let loops: Vec<&[DVec2]> = rings.iter().map(|(r, _)| r.as_slice()).collect();
+    for i in inside_first(&loops) {
+        let Some((ring, levels)) = rings.get(i) else {
+            continue;
+        };
+        let ring = starting_near(ring, at);
+        report.rings += 1;
+        for &z in levels {
+            emit(&ring, z, params.feed, &mut path)?;
+            report.passes += 1;
+        }
+        at = ring.first().copied();
+    }
+    Ok((path, report))
+}
+
+/// Each area cleared from its middle out to its walls, level by level down to its
+/// floor, area after area.
+pub fn pocket(
+    areas: &[Area],
+    params: &PlanarParams,
+) -> Result<(Toolpath, PlanarReport), StrategyError> {
+    check_params(params)?;
+    let mut report = PlanarReport::default();
+    // The material kept, the wall, is outward of every ring: on the right of a
+    // ring as the region winds it.
+    let reverse = !params.kept_on_right;
+    // Each area's rings, from its middle out, with its levels.
+    let mut cleared: Vec<(Vec<RingSet>, Vec<f64>)> = Vec::new();
+    for area in areas {
+        let levels = levels(params.top, area.bottom, params.stepdown);
+        if levels.is_empty() {
+            report.too_shallow += 1;
+            continue;
+        }
+        let rings = middle_out(&area.region, params, reverse);
+        if rings.is_empty() {
+            continue;
+        }
+        report.areas += 1;
+        report.levels = report.levels.max(levels.len() as u64);
+        report.rings += rings.iter().map(|r| r.len() as u64).sum::<u64>();
+        cleared.push((rings, levels));
+    }
+
+    let mut path = Toolpath::new();
+    let mut at: Option<DVec2> = None;
+    let mut left: Vec<usize> = (0..cleared.len()).collect();
+    while !left.is_empty() {
+        // The nearest area next, by where its middle is first cut.
+        let pick = nearest(&left, at, |&i| {
+            cleared
+                .get(i)
+                .and_then(|(rings, _)| rings.first())
+                .map(|set| set.iter().flatten().copied().collect())
+                .unwrap_or_default()
+        });
+        let i = left.remove(pick);
+        let Some((rings, levels)) = cleared.get(i) else {
+            continue;
+        };
+        for &z in levels {
+            for set in rings {
+                let mut todo: Vec<usize> = (0..set.len()).collect();
+                while !todo.is_empty() {
+                    let k = todo.remove(nearest(&todo, at, |&j| {
+                        set.get(j).cloned().unwrap_or_default()
+                    }));
+                    let Some(ring) = set.get(k) else { continue };
+                    let ring = starting_near(ring, at);
+                    emit(&ring, z, params.feed, &mut path)?;
+                    report.passes += 1;
+                    at = ring.first().copied();
+                }
+            }
+        }
+    }
+    Ok((path, report))
+}
+
+fn check_params(params: &PlanarParams) -> Result<(), StrategyError> {
+    check("stepdown", params.stepdown)?;
+    check("stepover", params.stepover)?;
+    check("feed", params.feed)?;
+    check("arc tolerance", params.arc)?;
+    check("tool radius", params.radius)?;
+    if !params.top.is_finite() {
+        return Err(StrategyError::BadParameter {
+            name: "top",
+            value: params.top,
+        });
+    }
+    Ok(())
+}
+
+/// The levels from `top` down to `bottom`, evenly spaced no more than `stepdown`
+/// apart, the last at `bottom`. None when `bottom` is not below `top`.
+fn levels(top: f64, bottom: f64, stepdown: f64) -> Vec<f64> {
+    let span = top - bottom;
+    if !(span > 1e-9 && bottom.is_finite()) {
+        return Vec::new();
+    }
+    // Bounded, so a tiny stepdown cannot run away.
+    let count = (span / stepdown - 1e-9).ceil().clamp(1.0, 10_000.0);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let count = count as u32;
+    (1..=count)
+        .map(|i| {
+            if i == count {
+                bottom
+            } else {
+                top - span * f64::from(i) / f64::from(count)
+            }
+        })
+        .collect()
+}
+
+/// The rings the same distance in from a pocket's walls.
+type RingSet = Vec<Vec<DVec2>>;
+
+/// A pocket's rings, grouped by how far in they are and from the middle out: each
+/// an offset of the area inward by a whole number of stepovers, and where the
+/// tool on the innermost would leave some of the middle, one ring nearer it.
+fn middle_out(area: &Region, params: &PlanarParams, reverse: bool) -> Vec<RingSet> {
+    let mut sets: Vec<Region> = Vec::new();
+    // Bounded: an area cannot take more rings than its extent over the step, and
+    // the loop stops as soon as an offset leaves nothing.
+    for k in 0..10_000u32 {
+        let inset = area.offset(-f64::from(k) * params.stepover, params.arc);
+        if inset.is_empty() {
+            break;
+        }
+        sets.push(inset);
+    }
+    if let Some(inner) = sets.last()
+        && let Some(middle) = middle(inner, params)
+    {
+        sets.push(middle);
+    }
+    sets.iter()
+        .rev()
+        .map(|r| r.rings().iter().map(|c| wound(c, reverse)).collect())
+        .collect()
+}
+
+/// A ring nearer the middle of `inner`, if the tool round its edge would leave
+/// some of it uncut: an offset inward as far as leaves anything, found by
+/// halving. `None` if the tool round its edge reaches everything in it.
+fn middle(inner: &Region, params: &PlanarParams) -> Option<Region> {
+    if inner.offset(-params.radius, params.arc).is_empty() {
+        return None;
+    }
+    let (mut lo, mut hi) = (0.0, params.stepover);
+    let mut best = None;
+    for _ in 0..24 {
+        let mid = 0.5 * (lo + hi);
+        let r = inner.offset(-mid, params.arc);
+        if r.is_empty() {
+            hi = mid;
+        } else {
+            lo = mid;
+            best = Some(r);
+        }
+    }
+    best
+}
+
+/// `region`'s connected pieces: each outer ring with the holes directly inside it.
+fn pieces(region: &Region) -> Vec<Region> {
+    let rings = region.rings();
+    let outers: Vec<(usize, Region, f64)> = rings
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.signed_area() > 0.0)
+        .map(|(i, r)| (i, Region::new(vec![r.clone()]), r.signed_area()))
+        .collect();
+    let mut groups: Vec<Vec<Contour>> = outers
+        .iter()
+        .map(|&(i, ..)| rings.get(i).into_iter().cloned().collect())
+        .collect();
+    for hole in rings.iter().filter(|r| r.signed_area() <= 0.0) {
+        let Some(&p) = hole.points().first() else {
+            continue;
+        };
+        // The smallest outer round it is the one it is a hole of.
+        let owner = outers
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, o, _))| o.contains(p))
+            .min_by(|a, b| a.1.2.total_cmp(&b.1.2))
+            .map(|(k, _)| k);
+        if let Some(group) = owner.and_then(|k| groups.get_mut(k)) {
+            group.push(hole.clone());
+        }
+    }
+    groups.into_iter().map(Region::new).collect()
+}
+
+/// Whether two regions' bounds overlap: a quick test before an exact one.
+fn overlapping(a: &Region, b: &Region) -> bool {
+    match (a.bounds(), b.bounds()) {
+        (Some((alo, ahi)), Some((blo, bhi))) => {
+            alo.x <= bhi.x && blo.x <= ahi.x && alo.y <= bhi.y && blo.y <= ahi.y
+        }
+        _ => false,
+    }
+}
+
+/// A ring's points as its region winds it, or the other way round.
+fn wound(ring: &Contour, reverse: bool) -> Vec<DVec2> {
+    let mut points = ring.points().to_vec();
+    if reverse {
+        points.reverse();
+    }
+    points
+}
+
+/// The order to cut closed `rings` in: never one before every ring inside it, and
+/// of those that may go next, the nearest to where the last one started and
+/// ended. Ties go to the earlier ring.
+fn inside_first(rings: &[&[DVec2]]) -> Vec<usize> {
+    let filled: Vec<Option<Region>> = rings
+        .iter()
+        .map(|r| Contour::new(r.to_vec()).map(|c| Region::new(vec![c])))
+        .collect();
+    // For each ring, the rings inside it.
+    let inside: Vec<Vec<usize>> = filled
+        .iter()
+        .enumerate()
+        .map(|(i, outer)| {
+            let Some(outer) = outer else {
+                return Vec::new();
+            };
+            rings
+                .iter()
+                .enumerate()
+                .filter(|&(j, r)| {
+                    j != i
+                        && filled.get(j).and_then(Option::as_ref).is_some_and(|inner| {
+                            overlapping(outer, inner)
+                                && r.first().is_some_and(|&p| outer.contains(p))
+                        })
+                })
+                .map(|(j, _)| j)
+                .collect()
+        })
+        .collect();
+    let mut done = vec![false; rings.len()];
+    let mut order = Vec::with_capacity(rings.len());
+    let mut at: Option<DVec2> = None;
+    while order.len() < rings.len() {
+        let ready: Vec<usize> = (0..rings.len())
+            .filter(|&i| {
+                !done.get(i).copied().unwrap_or(true)
+                    && inside
+                        .get(i)
+                        .is_some_and(|js| js.iter().all(|&j| done.get(j).copied().unwrap_or(true)))
+            })
+            .collect();
+        // Rings cannot each lie inside the other, but should rounding say they
+        // do, the rest go in order rather than never.
+        let ready = if ready.is_empty() {
+            (0..rings.len())
+                .filter(|&i| !done.get(i).copied().unwrap_or(true))
+                .take(1)
+                .collect()
+        } else {
+            ready
+        };
+        let i = ready
+            .get(nearest(&ready, at, |&i| {
+                rings.get(i).map(|r| r.to_vec()).unwrap_or_default()
+            }))
+            .copied()
+            .unwrap_or(0);
+        if let Some(d) = done.get_mut(i) {
+            *d = true;
+        }
+        order.push(i);
+        at = rings.get(i).and_then(|r| nearest_point(r, at?)).or(at);
+    }
+    order
+}
+
+/// Which of `items` (by place in it) comes nearest to `at`, the points of each
+/// given by `points`; the first when there is nowhere yet. Ties go to the
+/// earlier.
+fn nearest<T>(items: &[T], at: Option<DVec2>, points: impl Fn(&T) -> Vec<DVec2>) -> usize {
+    let Some(at) = at else {
+        return 0;
+    };
+    let mut best = (0, f64::MAX);
+    for (k, item) in items.iter().enumerate() {
+        let d = nearest_point(&points(item), at).map_or(f64::MAX, |p| p.distance(at));
+        if d < best.1 {
+            best = (k, d);
+        }
+    }
+    best.0
+}
+
+/// The point of closed ring `ring` nearest `at`.
+fn nearest_point(ring: &[DVec2], at: DVec2) -> Option<DVec2> {
+    closest_on(ring, at).map(|(_, p)| p)
+}
+
+/// Where closed ring `ring` comes nearest `at`: the segment it is on, from that
+/// point, and the point.
+fn closest_on(ring: &[DVec2], at: DVec2) -> Option<(usize, DVec2)> {
+    let n = ring.len();
+    let mut best: Option<(usize, DVec2, f64)> = None;
+    for i in 0..n {
+        let (Some(&a), Some(&b)) = (ring.get(i), ring.get((i + 1) % n)) else {
+            continue;
+        };
+        let ab = b - a;
+        let t = if ab.length_squared() > 0.0 {
+            ((at - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let p = a + ab * t;
+        let d = p.distance_squared(at);
+        if best.is_none_or(|(.., bd)| d < bd) {
+            best = Some((i, p, d));
+        }
+    }
+    best.map(|(i, p, _)| (i, p))
+}
+
+/// Closed ring `ring`, starting where it comes nearest `at`: a point put in there
+/// if it is not already one of its own.
+fn starting_near(ring: &[DVec2], at: Option<DVec2>) -> Vec<DVec2> {
+    let Some((i, p)) = at.and_then(|at| closest_on(ring, at)) else {
+        return ring.to_vec();
+    };
+    let n = ring.len();
+    let next = (i + 1) % n;
+    let mut out = Vec::with_capacity(n + 1);
+    let near = |q: Option<&DVec2>| q.is_some_and(|q| q.distance(p) < 1e-6);
+    // Start at p, then round from the segment's far end back to its near one.
+    let start = if near(ring.get(i)) {
+        i
+    } else if near(ring.get(next)) {
+        next
+    } else {
+        out.push(p);
+        next
+    };
+    for k in 0..n {
+        if let Some(&q) = ring.get((start + k) % n) {
+            out.push(q);
+        }
+    }
+    out
+}
+
+/// A closed ring cut at height `z`: a link to its start, then round and back to it.
+fn emit(ring: &[DVec2], z: f64, feed: f64, path: &mut Toolpath) -> Result<(), StrategyError> {
+    let Some(first) = ring.first() else {
+        return Ok(());
+    };
+    // The strategy does not plan how to arrive; the linker does.
+    path.feed_to(dvec3(first.x, first.y, z), MoveRole::Link, feed)?;
+    for p in ring.iter().skip(1).chain(std::iter::once(first)) {
+        path.feed_to(dvec3(p.x, p.y, z), MoveRole::Cut, feed)?;
+    }
+    Ok(())
+}
+
+fn region_err(e: RegionError) -> StrategyError {
+    StrategyError::Region(e.to_string())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::float_cmp, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+    use glam::dvec2;
+
+    fn square(lo: f64, hi: f64) -> Contour {
+        Contour::new(vec![
+            dvec2(lo, lo),
+            dvec2(hi, lo),
+            dvec2(hi, hi),
+            dvec2(lo, hi),
+        ])
+        .unwrap()
+    }
+
+    fn params() -> PlanarParams {
+        PlanarParams {
+            stepdown: 2.0,
+            stepover: 2.0,
+            feed: 1000.0,
+            top: 0.0,
+            arc: 0.01,
+            radius: 1.5,
+            kept_on_right: true,
+        }
+    }
+
+    /// The cutting moves of a path, grouped into passes.
+    fn passes(path: &Toolpath) -> Vec<Vec<DVec3>> {
+        let mut out: Vec<Vec<DVec3>> = Vec::new();
+        for m in path.moves() {
+            if m.role == MoveRole::Link {
+                out.push(vec![m.to]);
+            } else if let Some(p) = out.last_mut() {
+                p.push(m.to);
+            }
+        }
+        out
+    }
+
+    fn signed_area(pass: &[DVec3]) -> f64 {
+        pass.iter()
+            .zip(pass.iter().skip(1))
+            .map(|(a, b)| a.x * b.y - b.x * a.y)
+            .sum::<f64>()
+            * 0.5
+    }
+
+    #[test]
+    fn levels_are_even_and_end_at_the_bottom() {
+        assert_eq!(levels(0.0, -5.0, 2.0), vec![-5.0 / 3.0, -10.0 / 3.0, -5.0]);
+        assert_eq!(levels(0.0, -4.0, 2.0), vec![-2.0, -4.0]);
+        assert_eq!(levels(0.0, -1.0, 2.0), vec![-1.0]);
+        assert!(levels(0.0, 0.0, 2.0).is_empty());
+        assert!(levels(0.0, 1.0, 2.0).is_empty());
+    }
+
+    /// Cutting a part out: its hole first, then its outline, each all the way
+    /// down, climbing: clockwise round the outside, anticlockwise round the hole.
+    #[test]
+    fn a_profile_cuts_the_holes_before_the_outline() {
+        let part = Region::new(vec![square(0.0, 40.0), square(15.0, 25.0)]);
+        let areas = areas(&part, 1.5, 0.01, &[], -3.0).unwrap();
+        assert_eq!(areas.len(), 1);
+        let (path, report) = profile(&areas, ProfileSide::Outside, &params()).unwrap();
+        assert_eq!(report.rings, 2);
+        assert_eq!(report.levels, 2);
+        assert_eq!(report.passes, 4);
+        let passes = passes(&path);
+        assert_eq!(passes.len(), 4);
+        // The hole, at both levels, then the outline.
+        for p in &passes[..2] {
+            assert!(p.iter().all(|q| q.x > 10.0 && q.x < 30.0));
+            assert!(signed_area(p) > 0.0, "the hole is climbed anticlockwise");
+        }
+        for p in &passes[2..] {
+            assert!(p.iter().any(|q| q.x < 0.0));
+            assert!(signed_area(p) < 0.0, "the outline is climbed clockwise");
+        }
+        assert_eq!(passes[0][0].z, -1.5);
+        assert_eq!(passes[1][0].z, -3.0);
+        // The tool's side on the part's edge, to the arc tolerance.
+        let left = passes[2].iter().map(|q| q.x).fold(f64::MAX, f64::min);
+        assert!((left + 1.5).abs() < 0.02, "{left}");
+    }
+
+    /// Conventional cutting goes the other way round.
+    #[test]
+    fn conventional_reverses_a_profile() {
+        let part = Region::new(vec![square(0.0, 40.0)]);
+        let areas = areas(&part, 1.5, 0.01, &[], -1.0).unwrap();
+        let p = PlanarParams {
+            kept_on_right: false,
+            ..params()
+        };
+        let (path, _) = profile(&areas, ProfileSide::Outside, &p).unwrap();
+        assert!(signed_area(&passes(&path)[0]) > 0.0);
+        let (path, _) = profile(&areas, ProfileSide::Inside, &params()).unwrap();
+        assert!(signed_area(&passes(&path)[0]) > 0.0);
+    }
+
+    /// A part inside another part's hole is cut out before that hole frees it.
+    #[test]
+    fn a_part_inside_a_hole_is_cut_first() {
+        let rings = [square(0.0, 100.0), square(20.0, 80.0), square(40.0, 60.0)];
+        let areas: Vec<Area> = rings
+            .iter()
+            .map(|r| Area {
+                region: Region::new(vec![r.clone()]),
+                bottom: -1.0,
+            })
+            .collect();
+        let (path, _) = profile(&areas, ProfileSide::On, &params()).unwrap();
+        let widths: Vec<f64> = passes(&path)
+            .iter()
+            .map(|p| {
+                let xs = p.iter().map(|q| q.x);
+                xs.clone().fold(f64::MIN, f64::max) - xs.fold(f64::MAX, f64::min)
+            })
+            .collect();
+        assert_eq!(widths, vec![20.0, 60.0, 100.0]);
+    }
+
+    /// A pocket goes from its middle out, its last ring along the wall, and
+    /// leaves nothing in the middle the tool does not reach.
+    #[test]
+    fn a_pocket_clears_from_the_middle_out() {
+        let floor = Region::new(vec![square(0.0, 21.0)]);
+        let areas = areas(&floor, -1.5, 0.01, &[], -2.0).unwrap();
+        let (path, report) = pocket(&areas, &params()).unwrap();
+        assert_eq!(report.areas, 1);
+        let passes = passes(&path);
+        let widths: Vec<f64> = passes
+            .iter()
+            .map(|p| {
+                let xs = p.iter().map(|q| q.x);
+                xs.clone().fold(f64::MIN, f64::max) - xs.fold(f64::MAX, f64::min)
+            })
+            .collect();
+        assert!(widths.windows(2).all(|w| w[0] < w[1]), "{widths:?}");
+        // The wall ring, erring inward by the arc tolerance on each side.
+        let last = widths.last().copied().unwrap();
+        assert!(last <= 18.0 && last > 18.0 - 0.03, "{last}");
+        // The innermost ring is within the tool's radius of the middle.
+        let first = passes[0].iter().map(|q| q.x).fold(f64::MAX, f64::min);
+        assert!(10.5 - first <= 1.5, "{first}");
+        // Climbing: the wall on the right, anticlockwise.
+        assert!(passes.iter().all(|p| signed_area(p) > 0.0));
+        // Each ring starts where the last one came nearest: a stepover away, and
+        // the arc tolerance the inner rings are shrunk by.
+        for w in passes.windows(2) {
+            let end = w[0].last().unwrap();
+            let start = w[1][0];
+            assert!(end.truncate().distance(start.truncate()) <= 2.0 + 0.02);
+        }
+    }
+
+    /// Pockets picked at different depths are each cut to their own floor.
+    #[test]
+    fn each_area_goes_to_its_own_floor() {
+        let shape = Region::new(vec![square(0.0, 10.0), square(20.0, 30.0)]);
+        let floors = [dvec3(0.0, 0.0, -3.0), dvec3(25.0, 25.0, -6.0)];
+        let areas = areas(&shape, -1.5, 0.01, &floors, -1.0).unwrap();
+        let mut bottoms: Vec<f64> = areas.iter().map(|a| a.bottom).collect();
+        bottoms.sort_by(f64::total_cmp);
+        assert_eq!(bottoms, vec![-6.0, -3.0]);
+    }
+
+    /// Two outlines closer together than the tool is wide make one ring round
+    /// both, cut to the lower of their floors.
+    #[test]
+    fn outlines_the_tool_cannot_pass_between_merge() {
+        let shape = Region::new(vec![square(0.0, 10.0), square(11.0, 21.0)]);
+        let shape = Region::union_of(shape.rings()).unwrap();
+        let floors = [dvec3(0.0, 0.0, -2.0), dvec3(21.0, 21.0, -4.0)];
+        let areas = areas(&shape, 1.5, 0.01, &floors, 0.0).unwrap();
+        assert_eq!(areas.len(), 1);
+        assert_eq!(areas[0].bottom, -4.0);
+    }
+
+    #[test]
+    fn a_floor_above_the_top_cuts_nothing() {
+        let shape = Region::new(vec![square(0.0, 10.0)]);
+        let areas = areas(&shape, 1.5, 0.01, &[], 1.0).unwrap();
+        let (path, report) = profile(&areas, ProfileSide::Outside, &params()).unwrap();
+        assert!(path.is_empty());
+        assert_eq!(report.too_shallow, 1);
+    }
+}

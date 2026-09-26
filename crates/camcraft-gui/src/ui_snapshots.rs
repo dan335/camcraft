@@ -808,6 +808,90 @@ geometry = {{ boundary = "silhouette", containment = "outside", margin = 6.35 }}
     shoot(&mut h, "lego_boundary_roughed");
 }
 
+/// The lego brick faced with a 2D pocket and cut out of its block with a 2D
+/// profile: the profile's Geometry tab with its boundary in the view, its Passes
+/// tab, and the brick played back to the end.
+#[test]
+#[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
+fn lego_profile_and_pocket() {
+    use crate::document::Selection;
+    let dir = output_dir().join("lego-2d");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = repo("fixtures/step/lego_4x2_01.step");
+    let job = format!(
+        r#"version = 7
+tolerance = 0.05
+
+[tools.eighth-flat]
+kind = "flat"
+diameter = 3.175
+number = 1
+rpm = 18000
+
+[[model]]
+name = "lego"
+path = "{}"
+
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [8.0, 8.0, 3.0]
+
+[[setup]]
+name = "top"
+models = ["lego"]
+stocks = ["block"]
+
+[[setup.operation]]
+name = "face"
+strategy = "pocket"
+stepdown = 2.0
+tool = "eighth-flat"
+passes = {{ feed = 1500.0, stepover = 1.9 }}
+geometry = {{ boundary = "stock", bottom = {{ ref = "model-top" }} }}
+
+[[setup.operation]]
+name = "cut out"
+strategy = "profile"
+stepdown = 3.0
+tool = "eighth-flat"
+passes = {{ feed = 1500.0 }}
+"#,
+        model.display()
+    );
+    let path = dir.join("lego-2d.camcraft");
+    std::fs::write(&path, job).unwrap();
+
+    let mut h = harness();
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    h.state_mut().open_job(&ctx, path);
+    settle(&mut h);
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.selection = Selection::Operation("top".into(), 1);
+    }
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 1_usize));
+    h.run_steps(4);
+    shoot(&mut h, "lego_2d_profile_geometry");
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 3_usize));
+    h.run_steps(4);
+    shoot(&mut h, "lego_2d_profile_passes");
+
+    h.state_mut().start_run(&ctx);
+    settle(&mut h);
+    h.state_mut().playback_for_snapshot(false);
+    h.state_mut().set_view_for_snapshot(1, 1.0, u32::MAX);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    h.run_steps(2);
+    while !h.state_mut().live_caught_up_for_snapshot() {
+        assert!(Instant::now() < deadline, "the material never caught up");
+        std::thread::sleep(Duration::from_millis(20));
+        h.step();
+    }
+    h.run_steps(3);
+    shoot(&mut h, "lego_2d_played");
+}
+
 /// A full 5 by 12 foot sheet, 8 inches thick, with a sixteenth-inch cutter in the
 /// setup: the largest stock a router here takes, at the finest pitch memory allows
 /// for it, drawn as tiles. Surfaced down to the lego brick with a half-inch end

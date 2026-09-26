@@ -776,12 +776,12 @@ fn only_a_job_with_picks_needs_version_2() {
     let mut five = sample();
     five.version = 5;
     five.validate().unwrap();
-    let mut six = sample();
-    six.version = 6;
-    six.validate().unwrap();
     let mut seven = sample();
     seven.version = 7;
-    assert_eq!(seven.validate(), Err(JobError::UnsupportedVersion(7)));
+    seven.validate().unwrap();
+    let mut eight = sample();
+    eight.version = 8;
+    assert_eq!(eight.validate(), Err(JobError::UnsupportedVersion(8)));
 }
 
 /// An older reader would skip an operation's own spindle speed and cut at the
@@ -969,4 +969,83 @@ fn an_origin_keeps_its_kind_when_its_offset_changes() {
     let moved = o.clone().with_offset([1.0, 2.0, 3.0]);
     assert_eq!(moved.offset(), [1.0, 2.0, 3.0]);
     assert!(matches!(moved, Origin::Point { .. }));
+}
+
+/// A profile and a pocket read from a job as Fusion's 2D operations are set,
+/// take a preset's stepdown, and need version 7. A V-bit profiles only on the
+/// line, and pockets nothing.
+#[test]
+fn profiles_and_pockets_are_version_7() {
+    let text = SAMPLE.replace(
+        "strategy = \"parallel\"",
+        "strategy = \"profile\"\nside = \"inside\"\nstepdown = 1.5\nconventional = true",
+    );
+    let mut j: Job = toml::from_str(&text).unwrap();
+    j.validate().unwrap();
+    assert_eq!(
+        j.setups[0].operations[1].strategy,
+        StrategySpec::Profile {
+            side: ProfileSide::Inside,
+            stepdown: 1.5,
+            conventional: true,
+        }
+    );
+    assert_eq!(j.required_version(), 7);
+    let again: Job = toml::from_str(&toml::to_string(&j).unwrap()).unwrap();
+    assert_eq!(again, j);
+
+    let op = &mut j.setups[0].operations[1];
+    op.strategy = StrategySpec::Profile {
+        side: ProfileSide::default(),
+        stepdown: 1.5,
+        conventional: false,
+    };
+    let text = toml::to_string(&j).unwrap();
+    assert!(!text.contains("side ="), "outside is the default: {text}");
+    assert!(!text.contains("conventional"), "{text}");
+
+    let op = &mut j.setups[0].operations[1];
+    op.strategy = StrategySpec::Pocket {
+        stepdown: 1.5,
+        conventional: false,
+    };
+    op.apply_preset(&Preset {
+        name: "Deep".into(),
+        comment: String::new(),
+        rpm: None,
+        feed: None,
+        plunge_feed: None,
+        ramp_feed: None,
+        stepdown: Some(3.0),
+        stepover: None,
+        stock_to_leave: None,
+    });
+    assert_eq!(op.strategy.stepdown(), Some(3.0));
+    op.strategy = StrategySpec::Pocket {
+        stepdown: 0.0,
+        conventional: false,
+    };
+    assert!(matches!(j.validate(), Err(JobError::BadValue { .. })));
+
+    j.tools.insert("v".into(), vbit());
+    let op = &mut j.setups[0].operations[1];
+    op.tool = Some("v".into());
+    op.passes.stock_to_leave = Default::default();
+    op.strategy = StrategySpec::Pocket {
+        stepdown: 1.0,
+        conventional: false,
+    };
+    assert!(matches!(j.validate(), Err(JobError::WrongTool { .. })));
+    j.setups[0].operations[1].strategy = StrategySpec::Profile {
+        side: ProfileSide::Outside,
+        stepdown: 1.0,
+        conventional: false,
+    };
+    assert!(matches!(j.validate(), Err(JobError::WrongTool { .. })));
+    j.setups[0].operations[1].strategy = StrategySpec::Profile {
+        side: ProfileSide::On,
+        stepdown: 1.0,
+        conventional: false,
+    };
+    j.validate().unwrap();
 }

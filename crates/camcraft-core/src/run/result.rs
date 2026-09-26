@@ -12,6 +12,7 @@ use crate::frame::Frame;
 use crate::job::{Coolant, HeightContext, SpindleDirection};
 use crate::linker::LinkReport;
 use crate::parallel::ParallelReport;
+use crate::planar::PlanarReport;
 use crate::roughing::RoughingReport;
 use crate::toolpath::Toolpath;
 
@@ -26,6 +27,10 @@ pub enum StrategyDetail {
     Parallel(ParallelReport),
     /// Z-level clearing.
     ZlevelRough(RoughingReport),
+    /// A 2D profile.
+    Profile(PlanarReport),
+    /// A 2D pocket.
+    Pocket(PlanarReport),
     /// Drilling.
     Drill(DrillReport),
 }

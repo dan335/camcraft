@@ -3,7 +3,7 @@ use crate::fixture::JOB;
 use crate::setup::PrepareError;
 use camcraft_geom::synthetic;
 use camcraft_geom::topology::Body;
-use glam::{DVec2, dvec2};
+use glam::{DVec2, DVec3, dvec2};
 
 /// A small stock is simulated finely, a large one fine enough for its
 /// narrowest tool, and nothing beyond the memory cap.
@@ -494,4 +494,123 @@ fn bounded_runs_are_deterministic() {
     };
     let (one, eight) = (on(1), on(8));
     assert_eq!(one.operations[0].path, eight.operations[0].path);
+}
+
+/// The plate with an 8 mm hole, standing in a sheet 10 mm bigger all round and no
+/// thicker, and one operation with the 6 mm flat and no stock to leave, made
+/// `strategy`.
+fn in_a_sheet(strategy: StrategySpec, body: &Body) -> (Job, SetupResult) {
+    use crate::job::StockSpec;
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    job.setups[0].operations.retain(|op| op.name == "rough");
+    job.stocks[0].spec = StockSpec::AroundModels {
+        models: vec![],
+        margin: [10.0, 10.0, 0.0],
+        below: 0.0,
+    };
+    let op = &mut job.setups[0].operations[0];
+    op.strategy = strategy;
+    op.passes.stock_to_leave = Default::default();
+    let bodies: Bodies<'_> = [("dome", body)].into_iter().collect();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    (job, result)
+}
+
+/// A part profiled out of a sheet with nothing picked: round its silhouette, the
+/// hole before the outline, each all the way through in even levels, and the
+/// result verifies.
+#[test]
+fn a_part_is_profiled_out_hole_first() {
+    use crate::job::ProfileSide;
+    let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
+    let profile = StrategySpec::Profile {
+        side: ProfileSide::Outside,
+        stepdown: 2.0,
+        conventional: false,
+    };
+    let (_, result) = in_a_sheet(profile, &body);
+    let op = &result.operations[0];
+    let StrategyDetail::Profile(report) = &op.detail else {
+        panic!("reported {:?}", op.detail);
+    };
+    assert_eq!((report.areas, report.rings, report.levels), (1, 2, 3));
+    assert_eq!(op.strategy, "profile");
+    let cuts: Vec<DVec3> = op
+        .path
+        .moves()
+        .iter()
+        .filter(|m| m.role == crate::toolpath::MoveRole::Cut)
+        .map(|m| m.to)
+        .collect();
+    let deepest = cuts.iter().map(|p| p.z).fold(f64::MAX, f64::min);
+    assert!(deepest.abs() < 1e-9, "down to {deepest}");
+    // The hole's ring, a tool's radius inside it, then the outline's, one outside.
+    let first = cuts.first().unwrap().truncate().length();
+    assert!(first < 1.1, "starts {first} from the hole's middle");
+    let last = cuts.last().unwrap().truncate();
+    assert!(last.x.abs().max(last.y.abs()) > 22.9, "ends at {last}");
+    assert!(result.is_clean(), "{:?}", result.warnings());
+    assert_eq!(result.verify.gouged, 0);
+}
+
+/// A pocket picked by its floor, the step's shelf: cleared to it within the
+/// shelf's outline, the tool's side on the wall and nowhere past it, and the
+/// result verifies. A tool too wide for it is refused.
+#[test]
+fn a_pocket_is_cleared_to_its_picked_floor() {
+    use crate::features::find_face;
+    use crate::job::FeatureRef;
+    let body = Body::derived(synthetic::step(5.0, 10.0));
+    let pick = FeatureRef {
+        model: "dome".into(),
+        index: 0,
+        at: [5.0, 0.0, 0.0],
+    };
+    let face = find_face(&body, &pick, 0.01).unwrap().index;
+    let pocket = StrategySpec::Pocket {
+        stepdown: 2.0,
+        conventional: false,
+    };
+    let (mut job, _) = in_a_sheet(pocket, &body);
+    job.stocks[0].spec = crate::job::StockSpec::AroundModels {
+        models: vec![],
+        margin: [0.0, 0.0, 0.0],
+        below: 0.0,
+    };
+    job.setups[0].operations[0].geometry.faces.push(FeatureRef {
+        index: face,
+        ..pick
+    });
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let op = &result.operations[0];
+    let StrategyDetail::Pocket(report) = &op.detail else {
+        panic!("reported {:?}", op.detail);
+    };
+    assert_eq!((report.areas, report.levels), (1, 3));
+    let cuts: Vec<DVec3> = op
+        .path
+        .moves()
+        .iter()
+        .filter(|m| m.role == crate::toolpath::MoveRole::Cut)
+        .map(|m| m.to)
+        .collect();
+    for p in &cuts {
+        assert!(
+            p.x >= 3.0 - 1e-6 && p.x <= 7.0 + 1e-6 && p.y.abs() <= 7.0 + 1e-6,
+            "a cut at {p} leaves the shelf, less the tool's radius"
+        );
+    }
+    assert!(
+        cuts.iter()
+            .any(|p| (p.x - 3.0).abs() < 0.03 && p.z.abs() < 1e-9)
+    );
+    // All of the shelf's block but its corners, which a round tool leaves.
+    assert!(op.sim.removed_mm3 > 950.0, "{}", op.sim.removed_mm3);
+    assert!(result.is_clean(), "{:?}", result.warnings());
+    assert_eq!(result.verify.gouged, 0);
+
+    job.tools.get_mut("rough").unwrap().diameter = 25.0;
+    let err = run_setup(&job, 0, &bodies).unwrap_err().to_string();
+    assert!(err.contains("does not fit"), "{err}");
 }
