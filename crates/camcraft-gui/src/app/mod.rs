@@ -768,13 +768,17 @@ impl App {
 
     /// What the viewport should draw this frame.
     fn content(&self) -> Content<'_> {
-        let state = self.doc().and_then(|d| d.setups.get(d.active.as_ref()?));
-        let mut content = match state {
-            Some(state) => playback::content(state),
+        let shown = self.doc().and_then(|d| {
+            let name = d.active.as_ref()?;
+            Some((d.setups.get(name)?, name, &d.selection))
+        });
+        let mut content = match shown {
+            Some((state, name, selection)) => playback::content(state, name, selection),
             None => Content::empty(),
         };
         if let Some(doc) = self.doc() {
-            self.picking.decorate(doc.id, &mut content);
+            let geometry = self.operation_tab == Some(properties::OperationTab::Geometry);
+            self.picking.decorate(doc.id, geometry, &mut content);
         }
         content.planes = &self.planes;
         content
@@ -800,7 +804,6 @@ impl eframe::App for App {
         if let Some(doc) = self.docs.get_mut(self.active) {
             doc.tidy_selection();
             doc.invalidate_changed_operations();
-            doc.follow_selection();
             if let Some(name) = doc.active.clone() {
                 // The work zero moved: keep the view on the part, which moved with
                 // it. The camera is the viewport's if this setup is showing, else
@@ -817,9 +820,9 @@ impl eframe::App for App {
                     }
                 }
                 let state = doc.setups.entry(name).or_default();
+                playback::settle_mode(state);
                 transport::keys(&ctx, state);
                 transport::tick(&ctx, state);
-                playback::ensure_stock_image(state);
                 playback::follow_stock(&ctx, state);
             }
         }
@@ -855,7 +858,7 @@ impl eframe::App for App {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| {
-                    if let Some(state) = self.active_state_mut().filter(|s| s.ran.is_some()) {
+                    if let Some(state) = self.active_state_mut() {
                         egui::Panel::bottom("transport")
                             .frame(
                                 egui::Frame::new()
@@ -874,10 +877,15 @@ impl eframe::App for App {
                     // The viewport is taken out for the call, because the content it
                     // draws borrows the rest of the app.
                     let mut viewport = std::mem::take(&mut self.viewport);
-                    let event = viewport.show(ui, frame.wgpu_render_state(), &self.content());
+                    let content = self.content();
+                    let drew_live = content.stock.is_some();
+                    let event = viewport.show(ui, frame.wgpu_render_state(), &content);
+                    drop(content);
                     self.viewport = viewport;
-                    // A frame with a GPU uploads whatever of the material changed.
-                    if frame.wgpu_render_state().is_some()
+                    // A frame with a GPU that drew the material uploads whatever of
+                    // it changed; one that did not leaves it for one that does.
+                    if drew_live
+                        && frame.wgpu_render_state().is_some()
                         && let Some(live) = self.active_state_mut().and_then(|s| s.live.as_mut())
                     {
                         live.uploaded();

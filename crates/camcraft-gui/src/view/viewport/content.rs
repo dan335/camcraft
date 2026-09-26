@@ -223,22 +223,17 @@ pub enum StockChange {
     Cells(Vec<CellRect>),
 }
 
-/// The material's image: one of a stage's, or playback's, shared with its thread
-/// and locked only while it is read.
-pub enum StockRef<'a> {
-    /// Held by the view.
-    Plain(&'a StockImage),
-    /// Shared with the playback thread.
-    Shared(&'a std::sync::Mutex<StockImage>),
-}
+/// The material's image, playback's, shared with its thread and locked only
+/// while it is read.
+pub struct StockRef<'a>(pub &'a std::sync::Mutex<StockImage>);
 
 impl StockRef<'_> {
     /// Look at the image, locked for no longer than `f` takes.
     pub fn with<R>(&self, f: impl FnOnce(&StockImage) -> R) -> R {
-        match self {
-            StockRef::Plain(image) => f(image),
-            StockRef::Shared(m) => f(&m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)),
-        }
+        f(&self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
     }
 }
 

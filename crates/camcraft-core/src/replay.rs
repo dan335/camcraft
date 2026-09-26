@@ -271,8 +271,8 @@ impl Live {
     /// Sweep on toward the end of the program through every operation, dropping
     /// checkpoints, about `budget` moves at a time. Returns whether it is there.
     ///
-    /// A seek to the end would restore the last operation's keyframe and sweep
-    /// only that; this goes through each operation in turn.
+    /// A seek to the end would restore the finished stock and sweep nothing;
+    /// this sweeps through each operation in turn, from wherever it stands.
     pub fn sweep_ahead(&mut self, replay: &Replay, budget: usize) -> bool {
         let Some(last) = replay.ops().checked_sub(1) else {
             return true;
@@ -289,7 +289,8 @@ impl Live {
             op,
             moves: replay.moves_in(op),
         };
-        self.seek(replay, end, 0.0, budget);
+        self.lift_overlay();
+        self.sweep_toward(replay, end, budget);
         op == last && self.at == end
     }
 
@@ -340,24 +341,33 @@ impl Live {
     /// sweeping forward. Returns what changed, or `None` when the stock could not
     /// be restored.
     fn restore_near(&mut self, replay: &Replay, target: Position) -> Option<Changed> {
-        // The nearest stock at or before the target that is not behind where we
-        // are: the operation's keyframe, or a checkpoint in it.
-        let start = self
-            .checkpoints
-            .range(
-                Position {
-                    op: target.op,
-                    moves: 0,
-                }..=target,
-            )
-            .next_back()
-            .map_or(
-                Position {
-                    op: target.op,
-                    moves: 0,
-                },
-                |(p, _)| *p,
-            );
+        // The end of an operation is the keyframe after it, so going there needs
+        // no sweeping at all: at the end of the program, the finished stock.
+        let finished = replay
+            .keyframes
+            .get(target.op + 1)
+            .filter(|_| target.moves >= replay.moves_in(target.op));
+        // Else the nearest stock at or before the target that is not behind where
+        // we are: the operation's keyframe, or a checkpoint in it.
+        let start = if finished.is_some() {
+            target
+        } else {
+            self.checkpoints
+                .range(
+                    Position {
+                        op: target.op,
+                        moves: 0,
+                    }..=target,
+                )
+                .next_back()
+                .map_or(
+                    Position {
+                        op: target.op,
+                        moves: 0,
+                    },
+                    |(p, _)| *p,
+                )
+        };
         let behind = target < self.at;
         // Worth restoring ahead only when it saves a whole spacing of sweeping.
         let ahead = start > self.at
@@ -365,10 +375,11 @@ impl Live {
         if !(behind || ahead) {
             return Some(Changed::Nothing);
         }
-        let from = self
-            .checkpoints
-            .get(&start)
-            .or_else(|| replay.keyframes.get(start.op).map(|k| &**k));
+        let from = finished.map(|k| &**k).or_else(|| {
+            self.checkpoints
+                .get(&start)
+                .or_else(|| replay.keyframes.get(start.op).map(|k| &**k))
+        });
         let Some(from) = from else {
             return Some(Changed::Nothing);
         };
@@ -589,6 +600,32 @@ mod tests {
                 "operation {op} drifted move by move"
             );
         }
+    }
+
+    /// The end of an operation is its keyframe, restored at once however far
+    /// away: going to the end of the program sweeps nothing on the way.
+    #[test]
+    fn the_end_of_an_operation_is_reached_at_once() {
+        let (job, result) = run();
+        let replay = Replay::new(&job, &job.setups[0], &result).unwrap();
+        let mut live = Live::new(&replay, usize::MAX).unwrap();
+        for op in (0..replay.ops()).rev().chain(0..replay.ops()) {
+            let end = Position {
+                op,
+                moves: replay.moves_in(op),
+            };
+            let (_, reached) = live.seek(&replay, end, 0.0, 1);
+            assert!(reached, "operation {op}'s end took sweeping");
+            assert_eq!(live.at(), end);
+            assert_eq!(bits(live.stock()), bits(&stages(&result)[op + 1]));
+        }
+        // And on from there by sweeping, as before.
+        let (_, reached) = live.seek(&replay, Position { op: 0, moves: 3 }, 0.0, usize::MAX);
+        assert!(reached);
+        assert_eq!(
+            bits(live.stock()),
+            bits(&replay.stock_at(Position { op: 0, moves: 3 }).unwrap())
+        );
     }
 
     /// Part-way through an operation the stock lies between its keyframes.

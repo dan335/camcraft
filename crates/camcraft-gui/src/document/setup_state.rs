@@ -11,21 +11,20 @@ use camcraft_session::Ran;
 use super::next_key;
 use super::run::SetupInputs;
 use crate::stock::live::LiveStock;
-use crate::stock::stock_view::{ColorMode, StockImage};
+use crate::stock::stock_view::ColorMode;
 use crate::view::camera::Camera;
 use crate::view::scene::{Playhead, Scene};
 use crate::view::viewport::{Outline, View};
 
-/// Which material to draw.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StockMode {
-    /// None.
-    Off,
-    /// As it stands at the playhead, cut as the program plays.
-    Follow,
-    /// A fixed stage: the block before everything is 0, after operation `n` is
-    /// `n + 1`.
-    Stage(usize),
+/// What the view is for: setting the setup up, or playing its program back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ViewMode {
+    /// The part, the stock's outline, and the selection's toolpaths in full.
+    #[default]
+    Setup,
+    /// The material cut as far as the playhead, the cutter there, and the
+    /// transport.
+    Playback,
 }
 
 /// A setup's last run, and what is drawn from it.
@@ -68,19 +67,19 @@ pub struct SetupView {
     pub at: Playhead,
     /// Playing, and how.
     pub transport: Transport,
+    /// Setting up, or playing back.
+    pub mode: ViewMode,
     /// The cutter at the playhead.
     pub show_cutter: bool,
-    /// All toolpaths at once, over the per-role choices.
+    /// Toolpaths while setting up, over the per-role choices.
     pub show_paths: bool,
-    /// Which material to draw.
-    pub stock_mode: StockMode,
-    /// The material covers the part, so the part is hidden while it shows.
-    pub hide_part_with_stock: bool,
+    /// Toolpaths while playing back, as far as the playhead: off until asked for,
+    /// the material being what playback is for.
+    pub paths_in_playback: bool,
+    /// The part while playing back: off until asked for, the material covering it.
+    pub part_in_playback: bool,
     /// What to draw.
     pub view: View,
-    /// The material at each stage, classified and coloured, built when first shown,
-    /// each with a key for its upload.
-    pub stock_images: Vec<Option<(u64, StockImage)>>,
 }
 
 /// Playback: whether it plays, which way, how fast, and where it stops by itself.
@@ -120,15 +119,15 @@ impl Default for SetupView {
             framing: next_key(),
             at: Playhead::default(),
             transport: Transport::default(),
+            mode: ViewMode::Setup,
             show_cutter: true,
             show_paths: true,
-            stock_mode: StockMode::Off,
-            hide_part_with_stock: true,
+            paths_in_playback: false,
+            part_in_playback: false,
             view: View {
                 stock: true,
                 ..View::default()
             },
-            stock_images: Vec::new(),
         }
     }
 }
@@ -160,11 +159,10 @@ impl SetupState {
         let view = &mut self.view;
         view.at = Playhead::default();
         view.transport.playing = false;
-        view.stock_images.clear();
     }
 
-    /// Keep only the first `kept` operations of its last run: their toolpaths,
-    /// material and stages. The playhead stops and comes back to their end if
+    /// Keep only the first `kept` operations of its last run: their toolpaths
+    /// and material. The playhead stops and comes back to their end if
     /// it was past it. None kept is the run forgotten.
     pub fn cut_run_back(&mut self, kept: usize) {
         let Some(ran) = self.ran.as_mut() else {
@@ -190,6 +188,5 @@ impl SetupState {
             view.at = Playhead::at(end);
         }
         view.transport.playing = false;
-        view.stock_images.truncate(kept + 1);
     }
 }

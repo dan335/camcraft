@@ -239,36 +239,6 @@ fn operations_are_reordered() {
     assert_eq!(names(&doc), ["rough", "finish", "finish copy"]);
 }
 
-/// Selecting a setup shows all its toolpaths; selecting an operation, its
-/// alone; and the choice is made once, not held against what Show says after.
-#[test]
-fn the_view_follows_the_selection() {
-    let mut doc = example();
-    let ops = |d: &Document| {
-        let v = &d.setups["top"].view;
-        (v.show_paths, v.view.ops)
-    };
-    doc.selection = Selection::Operation("top".into(), 1);
-    doc.follow_selection();
-    assert_eq!(ops(&doc), (true, 0b10));
-    doc.setups.get_mut("top").unwrap().view.view.ops = 0b11;
-    doc.follow_selection();
-    assert_eq!(
-        ops(&doc),
-        (true, 0b11),
-        "left alone until the selection changes"
-    );
-    doc.selection = Selection::Setup("top".into());
-    doc.follow_selection();
-    assert_eq!(ops(&doc), (true, u32::MAX));
-    doc.selection = Selection::Operation("top".into(), 0);
-    doc.follow_selection();
-    assert_eq!(ops(&doc), (true, 0b01));
-    doc.selection = Selection::Models;
-    doc.follow_selection();
-    assert_eq!(ops(&doc), (true, 0b01), "anything else leaves the view be");
-}
-
 /// An operation dragged into another setup leaves its own, takes its place
 /// in the other under a name free there, and is shown there.
 #[test]
@@ -347,7 +317,6 @@ fn a_changed_operation_takes_its_toolpath_with_it() {
         "back to the roughing's end"
     );
     assert!(!state.view.transport.playing);
-    assert_eq!(state.view.stock_images.len(), 2);
     assert!(matches!(
         doc.op_status("top", 0),
         OpStatus::Done | OpStatus::Warnings
@@ -381,6 +350,73 @@ fn a_changed_operation_takes_its_toolpath_with_it() {
     doc.undo();
     doc.invalidate_changed_operations();
     assert_eq!(ops(&doc), 1, "undoing the copy leaves what was before it");
+}
+
+/// Setting up draws the selection's toolpaths in full over the part and the
+/// stock's outline; playing back, the material and the cutter as far as the
+/// playhead, the toolpaths only when asked for; and with nothing to play back,
+/// the view goes back to setting up.
+#[test]
+fn the_view_sets_up_or_plays_back() {
+    use crate::playback::{cannot_play_back, content, playing_back, set_mode, settle_mode};
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let text = std::fs::read_to_string(dir.join("rail-jig.camcraft")).unwrap();
+    let text = text.replace("sled_base.step", "hinge_jig.step");
+    let job = camcraft_session::parse_job(&text, "rail-jig").unwrap();
+    let mut doc = Document::opened(1, Some(dir.join("rail-jig.camcraft")), job);
+    assert!(cannot_play_back(doc.setups.entry("top".into()).or_default()).is_some());
+    let seq = doc.started("top");
+    let ran = crate::test_jobs::run_setup_zero(&doc.job, &dir);
+    doc.finished("top", seq, Ok(ran));
+    let whole = doc.setups["top"].ran.as_ref().unwrap().scene.segments.len();
+
+    let state = doc.setups.get_mut("top").unwrap();
+    state.view.at = Playhead::at(3);
+    let setup = Selection::Setup("top".into());
+    let c = content(state, "top", &setup);
+    assert!(c.stock.is_none() && c.view.cutter.is_none());
+    assert!(c.view.part && c.view.stock && c.view.roles != 0);
+    assert_eq!(
+        (c.view.shown, c.view.ops),
+        (whole, u32::MAX),
+        "all, in full"
+    );
+    let finish = Selection::Operation("top".into(), 1);
+    assert_eq!(
+        content(state, "top", &finish).view.ops,
+        0b10,
+        "the one selected"
+    );
+    let other = Selection::Operation("bottom".into(), 0);
+    assert_eq!(content(state, "top", &other).view.ops, u32::MAX);
+
+    assert!(cannot_play_back(state).is_none());
+    set_mode(state, ViewMode::Playback);
+    assert!(playing_back(state));
+    let c = content(state, "top", &finish);
+    assert_eq!(c.view.shown, 3, "as far as the playhead");
+    assert_eq!(
+        c.view.ops,
+        u32::MAX,
+        "every operation, whatever is selected"
+    );
+    assert!(c.view.cutter.is_some());
+    assert!(!c.view.part && c.view.roles == 0, "the material alone");
+    state.view.paths_in_playback = true;
+    assert_ne!(content(state, "top", &finish).view.roles, 0);
+
+    state.view.transport.playing = true;
+    set_mode(state, ViewMode::Setup);
+    assert!(!state.view.transport.playing, "setting up pauses");
+    set_mode(state, ViewMode::Playback);
+
+    // The roughing changed: nothing is left to play back.
+    doc.job.setups[0].operations[0].passes.feed += 100.0;
+    doc.invalidate_changed_operations();
+    let state = doc.setups.get_mut("top").unwrap();
+    assert!(!playing_back(state) && cannot_play_back(state).is_some());
+    settle_mode(state);
+    assert_eq!(state.view.mode, ViewMode::Setup);
 }
 
 fn ops_of(doc: &Document, setup: &str) -> usize {

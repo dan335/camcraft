@@ -106,7 +106,9 @@ fn main_window_after_a_run() {
     h.run_steps(2);
     shoot(&mut h, "after_run");
 
-    // Part-way through roughing, with the cutter where the playhead stands.
+    // Played back with the toolpaths: part-way through roughing, with the cutter
+    // where the playhead stands.
+    h.state_mut().playback_for_snapshot(true);
     h.state_mut().set_view_for_snapshot(0, 0.4, u32::MAX);
     h.run_steps(2);
     shoot(&mut h, "scrub_mid_rough");
@@ -121,15 +123,21 @@ fn main_window_after_a_run() {
     h.run_steps(2);
     shoot(&mut h, "rapids_only");
 
-    // The finished material, coloured against the part, with its legend.
-    h.state_mut().set_stock_for_snapshot(Some(passes.len()));
-    h.run_steps(3);
-    shoot(&mut h, "stock_final");
-
-    // The material after roughing: what finishing starts from.
-    h.state_mut().set_stock_for_snapshot(Some(1));
-    h.run_steps(3);
-    shoot(&mut h, "stock_after_rough");
+    // The finished material, with its legend; then after roughing, what
+    // finishing starts from.
+    h.state_mut().playback_for_snapshot(false);
+    for (op, name) in [(passes.len() - 1, "stock_final"), (0, "stock_after_rough")] {
+        h.state_mut().set_view_for_snapshot(op, 1.0, u32::MAX);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        h.run_steps(2);
+        while !h.state_mut().live_caught_up_for_snapshot() {
+            assert!(Instant::now() < deadline, "the material never caught up");
+            std::thread::sleep(Duration::from_millis(20));
+            h.step();
+        }
+        h.run_steps(3);
+        shoot(&mut h, name);
+    }
 
     // Playing: the material cut as far as the playhead, part-way through
     // roughing and then finishing, in the material's colour, with the transport.
@@ -137,7 +145,7 @@ fn main_window_after_a_run() {
         (0, 0.3, "playback_mid_rough"),
         (1, 0.5, "playback_mid_finish"),
     ] {
-        h.state_mut().set_stock_for_snapshot(None);
+        h.state_mut().playback_for_snapshot(false);
         h.state_mut().set_view_for_snapshot(op, fraction, u32::MAX);
         let deadline = Instant::now() + Duration::from_secs(60);
         h.run_steps(2);
@@ -687,7 +695,7 @@ tool = "rough-6-flat"
     settle(&mut h);
 
     for (fraction, name) in [(0.5, "lego_half_roughed"), (1.0, "lego_roughed")] {
-        h.state_mut().set_stock_for_snapshot(None);
+        h.state_mut().playback_for_snapshot(false);
         h.state_mut().set_view_for_snapshot(0, fraction, u32::MAX);
         let deadline = Instant::now() + Duration::from_secs(120);
         h.run_steps(2);
@@ -710,9 +718,9 @@ tool = "rough-6-flat"
         started.elapsed().as_secs_f64() * 1e3 / 20.0
     };
     let with = frame_ms(&mut h);
-    h.state_mut().stock_off_for_snapshot();
+    h.state_mut().setup_for_snapshot();
     let without = frame_ms(&mut h);
-    h.state_mut().set_stock_for_snapshot(None);
+    h.state_mut().playback_for_snapshot(false);
     h.run_steps(3);
     println!(
         "lego frame, drawn and read back: {with:.1} ms with the material, {without:.1} ms without"
@@ -787,7 +795,7 @@ geometry = {{ boundary = "silhouette", containment = "outside", margin = 6.35 }}
 
     h.state_mut().start_run(&ctx);
     settle(&mut h);
-    h.state_mut().set_stock_for_snapshot(None);
+    h.state_mut().playback_for_snapshot(false);
     h.state_mut().set_view_for_snapshot(0, 1.0, u32::MAX);
     let deadline = Instant::now() + Duration::from_secs(120);
     h.run_steps(2);
@@ -870,7 +878,7 @@ passes = {{ stepover = 0.8, feed = 1500.0 }}
     println!("sheet run: {:.1} s", started.elapsed().as_secs_f64());
 
     for (fraction, name) in [(0.4, "sheet_part_surfaced"), (1.0, "sheet_surfaced")] {
-        h.state_mut().set_stock_for_snapshot(None);
+        h.state_mut().playback_for_snapshot(false);
         h.state_mut().set_view_for_snapshot(0, fraction, u32::MAX);
         let started = Instant::now();
         let deadline = started + Duration::from_secs(300);

@@ -1,8 +1,10 @@
-//! Looking at a setup's result: what it did, the playhead through its program in
-//! machine order, the material at any stage, and the steep descents.
+//! Looking at a setup, in one of two modes. Setting up: the part, the stock's
+//! outline and the selection's toolpaths in full. Playing back: the playhead
+//! through its program in machine order, the material cut as far as it and the
+//! cutter there. And in both, what its last run did and its steep descents.
 //!
 //! All of it is per setup, kept in its [`SetupState`], so each setup of each open
-//! job keeps its own place.
+//! job keeps its own mode and place.
 //!
 //! Here is what is kept up each frame and what the viewport is given; the panel on
 //! the left is [`show_panel`], and the checks window [`checks_window`].
@@ -14,12 +16,11 @@ use camcraft_session::checks::Finding;
 use eframe::egui;
 use glam::DVec3;
 
-use crate::document::{SetupState, StockMode, next_key};
+use crate::document::{Selection, SetupState, ViewMode};
 use crate::stock::live::{Goal, LiveStock};
-use crate::stock::stock_view::StockImage;
 use crate::transport;
 use crate::view::scene::{Playhead, Scene, Steep};
-use crate::view::viewport::{Content, StockChange, StockRef, StockShow, View};
+use crate::view::viewport::{Content, StockRef, StockShow, View};
 
 pub use checks_window::checks;
 pub use show_panel::{controls, result};
@@ -50,35 +51,42 @@ pub fn paths_fit(state: &SetupState) -> bool {
     }
 }
 
-/// The fixed stage the stock view shows, if it shows one.
-pub fn stage_shown(state: &SetupState) -> Option<usize> {
-    match state.view.stock_mode {
-        StockMode::Stage(i) => Some(i),
-        StockMode::Off | StockMode::Follow => None,
+/// Whether the setup is being played back: asked for, and its last run laid out
+/// as the setup is now. Otherwise it is being set up.
+pub fn playing_back(state: &SetupState) -> bool {
+    state.view.mode == ViewMode::Playback && paths_fit(state)
+}
+
+/// Why it cannot be played back, if it cannot.
+pub fn cannot_play_back(state: &SetupState) -> Option<&'static str> {
+    if state.ran.is_none() {
+        Some("Generate the setup to play it back.")
+    } else if !paths_fit(state) {
+        Some("Out of date: generate it again to play it back.")
+    } else {
+        None
     }
 }
 
-/// Classify the shown stage's material, the first time it is shown.
-pub fn ensure_stock_image(state: &mut SetupState) {
-    let Some(stage) = stage_shown(state) else {
-        return;
-    };
-    let Some(ran) = &state.ran else {
-        return;
-    };
-    let result = &ran.ran.result;
-    if let (Some(slot @ None), Some(Ok(stock))) = (
-        state.view.stock_images.get_mut(stage),
-        result.keyframes.get(stage).map(|s| s.unpack()),
-    ) {
-        let image = StockImage::build(&stock, &result.part, result.verify_budget);
-        *slot = Some((next_key(), image));
+/// Back to setting up, once there is nothing that fits to play back: a run
+/// forgotten, or the setup laid out otherwise since.
+pub fn settle_mode(state: &mut SetupState) {
+    if state.view.mode == ViewMode::Playback && !playing_back(state) {
+        set_mode(state, ViewMode::Setup);
+    }
+}
+
+/// Set it up, or play it back; setting up pauses playing.
+pub fn set_mode(state: &mut SetupState, mode: ViewMode) {
+    state.view.mode = mode;
+    if mode == ViewMode::Setup {
+        state.view.transport.playing = false;
     }
 }
 
 /// Keep the playback material following the playhead, while it is shown.
 pub fn follow_stock(ctx: &egui::Context, state: &mut SetupState) {
-    if state.view.stock_mode != StockMode::Follow || !paths_fit(state) {
+    if !playing_back(state) {
         return;
     }
     let Some(ran) = &state.ran else {
@@ -107,10 +115,10 @@ pub fn finding_segment(scene: &Scene, op: Option<usize>, f: &Finding) -> Option<
         .filter(|&i| i < scene.segments.len())
 }
 
-/// Stop and stand after `shown` segments, cutting the stock as it plays.
+/// Stop and stand after `shown` segments, playing back.
 fn go_to(state: &mut SetupState, shown: usize) {
     transport::stand(state, Playhead::at(shown));
-    state.view.stock_mode = StockMode::Follow;
+    set_mode(state, ViewMode::Playback);
 }
 
 /// Move the playhead to a steep descent, following the stock; where to look.
@@ -119,35 +127,23 @@ pub fn jump_to(state: &mut SetupState, steep: Steep) -> DVec3 {
     steep.at
 }
 
-/// What the viewport should draw for this setup.
-pub fn content(state: &SetupState) -> Content<'_> {
+/// What the viewport should draw for setup `name`, with `selection` the job's.
+pub fn content<'a>(state: &'a SetupState, name: &str, selection: &Selection) -> Content<'a> {
     let view = &state.view;
-    let fits = paths_fit(state);
-    let scene = state.ran.as_ref().filter(|_| fits);
+    let back = playing_back(state);
+    let scene = state.ran.as_ref().filter(|_| paths_fit(state));
     let cutter = scene
-        .filter(|_| view.show_cutter)
+        .filter(|_| back && view.show_cutter)
         .and_then(|r| r.scene.cutter_at(view.at));
-    let stock = scene.and_then(|r| match view.stock_mode {
-        StockMode::Off => None,
-        StockMode::Stage(i) => {
-            let (key, image) = view.stock_images.get(i)?.as_ref()?;
-            Some(StockShow {
-                key: (*key, i),
-                image: StockRef::Plain(image),
-                changed: StockChange::Nothing,
-                mode: view.transport.color,
-            })
-        }
-        StockMode::Follow => {
-            let live = state.live.as_ref().filter(|l| l.scene_key == r.scene_key)?;
-            let (key, image, changed) = live.shown()?;
-            Some(StockShow {
-                key: (key, usize::MAX),
-                image: StockRef::Shared(image),
-                changed,
-                mode: view.transport.color,
-            })
-        }
+    let stock = scene.filter(|_| back).and_then(|r| {
+        let live = state.live.as_ref().filter(|l| l.scene_key == r.scene_key)?;
+        let (key, image, changed) = live.shown()?;
+        Some(StockShow {
+            key: (key, usize::MAX),
+            image: StockRef(image),
+            changed,
+            mode: view.transport.color,
+        })
     });
     let laid = state
         .layout
@@ -156,7 +152,26 @@ pub fn content(state: &SetupState) -> Content<'_> {
     let part = laid
         .map(|(key, p, _)| (key, &p.part))
         .or_else(|| state.ran.as_ref().map(|r| (r.scene_key, &r.ran.part)));
-    let show_part = view.view.part && !(stock.is_some() && view.hide_part_with_stock);
+    let (show_part, show_paths, shown, ops) = if back {
+        (
+            view.part_in_playback,
+            view.paths_in_playback,
+            view.at.shown,
+            view.view.ops,
+        )
+    } else {
+        // Setting up: the selection's toolpaths, all of them. An operation of
+        // this setup is its alone; anything else, the setup's.
+        let ops = match selection {
+            Selection::Operation(s, i) if s == name => u32::try_from(*i)
+                .ok()
+                .and_then(|i| 1u32.checked_shl(i))
+                .unwrap_or(0),
+            _ => u32::MAX,
+        };
+        let all = scene.map_or(0, |r| r.scene.segments.len());
+        (view.view.part, view.show_paths, all, ops)
+    };
     Content {
         part,
         framing: view.framing,
@@ -169,8 +184,9 @@ pub fn content(state: &SetupState) -> Content<'_> {
         stock,
         view: View {
             part: show_part,
-            roles: if view.show_paths { view.view.roles } else { 0 },
-            shown: view.at.shown,
+            roles: if show_paths { view.view.roles } else { 0 },
+            ops,
+            shown,
             cutter,
             ..view.view
         },

@@ -330,7 +330,6 @@ impl Document {
         for (name, first) in cuts {
             if let Some(state) = self.setups.get_mut(&name) {
                 state.cut_run_back(first);
-                self.followed = None;
             }
         }
     }
@@ -442,9 +441,6 @@ impl Document {
                 view.at = Playhead::at(scene.segments.len());
                 view.transport.playing = false;
                 view.view.ops = u32::MAX;
-                view.stock_images = vec![None; ran.result.keyframes.len()];
-                // Then shown as the selection has it.
-                self.followed = None;
                 if let Some(inputs) = inputs {
                     state.ran = Some(RanSetup {
                         inputs,

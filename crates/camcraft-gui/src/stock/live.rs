@@ -224,11 +224,10 @@ impl LiveStock {
 /// Keeping the material's occlusion up to date as it is cut.
 ///
 /// A cut changes what the cells round it see, out to the occluder's reach, and
-/// shading a cell costs many times classifying it. So cutting never waits on
-/// shading: the cells a cut reaches are kept to shade once there is time, a few
-/// milliseconds between sweeps and all of them before sweeping ahead. At playing
-/// speed the shade is a frame or two behind the cut; while the playhead is dragged
-/// fast it follows the cutter. A new image is shaded whole before it is shown, so a
+/// shading a cell costs many times classifying it. So the cells cut are shaded as
+/// they are cut, and the rest a cut reaches are kept to shade once there is time,
+/// a few milliseconds between sweeps and all of them before sweeping ahead. While
+/// playing, the shade round a cut can lag; the cut itself never does. A new image is shaded whole before it is shown, so a
 /// jump never shows the shade of somewhere else in the program.
 #[derive(Default)]
 struct Shading {
@@ -322,9 +321,13 @@ fn work(
         let mut image = lock(shared);
         image.patch_many(live.stock(), part, budget, &rects);
         occluder.update(&image, &rects);
+        // The cells just cut are shaded with them: left for later, a fresh
+        // cut would show the shade of the surface it took away until playing
+        // stops and the shading catches up.
+        occluder.shade_into(&mut image, &rects);
     }
-    // What the change of height reaches: its own tiles, and the tiles round them
-    // whose cells see it on their horizon.
+    // What else the change of height reaches: the tiles round them whose cells
+    // see it on their horizon.
     for r in &rects {
         pending.mark(stock_ao::grow(*r, occluder.reach(), nx, ny));
     }
@@ -464,8 +467,20 @@ mod tests {
         let jig: Job = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         println!("== router jig");
         keeps_up_on(&jig, &repo.join("examples"));
-        let lego: Job = toml::from_str(
-            r#"
+        let lego: Job = toml::from_str(LEGO).unwrap();
+        println!("== lego brick");
+        keeps_up_on(&lego, &repo);
+        let sheet = std::env::var("CAMCRAFT_SHEET_JOB").ok();
+        if let Some(path) = sheet {
+            let path = std::path::PathBuf::from(path);
+            let job: Job = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            println!("== sheet");
+            keeps_up_on(&job, path.parent().unwrap());
+        }
+    }
+
+    /// The lego brick, roughed with a quarter-inch flat.
+    const LEGO: &str = r#"
 version = 1
 tolerance = 0.05
 [tools.rough-6-flat]
@@ -489,18 +504,73 @@ strategy = "zlevel-rough"
 stepdown = 2.0
 min_ring_length = 3.0
 tool = "rough-6-flat"
-"#,
-        )
-        .unwrap();
-        println!("== lego brick");
-        keeps_up_on(&lego, &repo);
-        let sheet = std::env::var("CAMCRAFT_SHEET_JOB").ok();
-        if let Some(path) = sheet {
-            let path = std::path::PathBuf::from(path);
-            let job: Job = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            println!("== sheet");
-            keeps_up_on(&job, path.parent().unwrap());
+"#;
+
+    /// A cut is shaded as it is cut. Playing, frame after frame with no time to
+    /// catch up on the shading round the cuts, the cells a frame cut still carry
+    /// the shade of the material as it now stands, not of what was cut away.
+    #[test]
+    fn a_cut_is_shaded_as_it_is_cut() {
+        // The router jig, whose shade reaches far enough for a pocket's floor to
+        // be darker by its walls than the top it was cut from.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let text = std::fs::read_to_string(dir.join("rail-jig.camcraft")).unwrap();
+        let text = text.replace("sled_base.step", "hinge_jig.step");
+        let job = camcraft_session::parse_job(&text, "rail-jig").unwrap();
+        let ran = run_setup_zero(&job, &dir);
+        let result = &ran.result;
+        let setup = &job.setups[0];
+        let scene = Scene::build(&job, setup, result);
+        let replay = Replay::new(&job, setup, result).unwrap();
+        let mut live = Live::new(&replay, CHECKPOINT_BYTES).unwrap();
+        let (part, budget) = (&result.part, result.verify_budget);
+        let image: Shared = Arc::new(Mutex::new(StockImage::empty()));
+        let mut shading = Shading::default();
+        let mut frame = |live: &mut Live, to: Playhead| {
+            let (at, fraction) = scene.target(to);
+            let far = Instant::now() + Duration::from_secs(3600);
+            let mut change = None;
+            loop {
+                let (c, reached) = work(
+                    live,
+                    &replay,
+                    (part, budget),
+                    (&image, &mut shading),
+                    Goal { at, fraction },
+                    far,
+                );
+                change = merge(change, c);
+                if reached {
+                    return change;
+                }
+            }
+        };
+        let mut at = scene.locate(scene.total_time() * 0.4);
+        frame(&mut live, at);
+        let mut cut = Vec::new();
+        for _ in 0..30 {
+            at = scene.advance(at, 20.0 / 60.0);
+            if let Some(Change::Cells(rects)) = frame(&mut live, at) {
+                cut = rects;
+            }
         }
+        assert!(!cut.is_empty(), "the last frame cut nothing");
+        let (fresh, _) = StockImage::build_shaded(live.stock(), part, budget);
+        let image = lock(&image);
+        let (mut cells, mut off) = (0, 0);
+        for r in &cut {
+            for y in r.y0..=r.y1 {
+                for x in r.x0..=r.x1 {
+                    let i = y as usize * image.nx as usize + x as usize;
+                    cells += 1;
+                    off += usize::from(image.ao[i] != fresh.ao[i]);
+                }
+            }
+        }
+        assert_eq!(
+            off, 0,
+            "{off} of {cells} cells just cut shaded as they were"
+        );
     }
 
     fn keeps_up_on(job: &Job, dir: &std::path::Path) {

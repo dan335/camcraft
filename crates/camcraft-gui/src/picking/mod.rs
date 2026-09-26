@@ -293,14 +293,16 @@ impl Picking {
     }
 
     /// Add what picking draws, and says, to what the view draws for job `doc`.
-    pub fn decorate<'a>(&'a self, doc: DocId, content: &mut Content<'a>) {
+    /// An operation's picks show only while its geometry is being looked at,
+    /// `geometry`; a setup's work zero, whenever the setup is selected.
+    pub fn decorate<'a>(&'a self, doc: DocId, geometry: bool, content: &mut Content<'a>) {
         if self.scene.as_ref().is_none_or(|(d, ..)| *d != doc) {
             return;
         }
         content.selection = self
             .shown
             .as_ref()
-            .filter(|(f, ..)| f.doc == doc)
+            .filter(|(f, ..)| f.doc == doc && (f.op.is_none() || geometry))
             .map(|(_, s, key)| (*key, &s.highlight));
         content.hover = self.hovered.as_ref().map(|(_, h, key)| (*key, h));
         content.ghost = self

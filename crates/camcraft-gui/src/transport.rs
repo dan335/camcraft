@@ -1,4 +1,6 @@
 //! Playing a setup's program: the bar under the view, its keys, and the clock.
+//! The bar also switches the view between setting the setup up and playing it
+//! back; only playing back does the rest of it show, and the keys work.
 //!
 //! Everything moves the one [`Playhead`]. Playing advances it by machining time at
 //! the chosen speed, a frame at a time; the buttons, the timeline and the keys set
@@ -9,8 +11,8 @@ use camcraft_geom::heightmap::narrow;
 use camcraft_session::checks::Level;
 use eframe::egui;
 
-use crate::document::{SetupState, StockMode, Transport};
-use crate::playback::{finding_segment, thousands};
+use crate::document::{SetupState, Transport, ViewMode};
+use crate::playback::{self, finding_segment, playing_back, thousands};
 use crate::ui::measure::Measure;
 use crate::ui::theme;
 use crate::ui::widgets::{self, Icon, Size, Variant};
@@ -128,9 +130,6 @@ fn play(state: &mut SetupState, reverse: bool) {
     }
     view.transport.playing = true;
     view.transport.reverse = reverse;
-    if view.stock_mode == StockMode::Off {
-        view.stock_mode = StockMode::Follow;
-    }
 }
 
 /// Stop, and stand at `at`.
@@ -218,9 +217,18 @@ fn apply(state: &mut SetupState, command: Command) {
 /// Keys, unless a widget has the keyboard: Space plays and pauses; J, K and L
 /// shuttle back, pause and forward, J or L again going faster; Left and Right
 /// step a move, a hundred with Shift; Up and Down go to the previous and next
-/// operation; Home and End; `[` and `]` change the speed.
+/// operation; Home and End; `[` and `]` change the speed. Only while playing
+/// back, but for Space, which starts it if it can.
 pub fn keys(ctx: &egui::Context, state: &mut SetupState) {
     if state.ran.is_none() || ctx.memory(|m| m.focused().is_some()) {
+        return;
+    }
+    if !playing_back(state) {
+        let space = ctx.input(|i| i.key_pressed(egui::Key::Space) && !i.modifiers.command);
+        if space && playback::cannot_play_back(state).is_none() {
+            playback::set_mode(state, ViewMode::Playback);
+            apply(state, Command::Play { reverse: false });
+        }
         return;
     }
     let commands = ctx.input(|i| {
@@ -263,7 +271,12 @@ pub fn tick(ctx: &egui::Context, state: &mut SetupState) {
     if !playing {
         return;
     }
-    let Some(scene) = state.ran.as_ref().map(|r| &r.scene) else {
+    let Some(scene) = state
+        .ran
+        .as_ref()
+        .filter(|_| playing_back(state))
+        .map(|r| &r.scene)
+    else {
         state.view.transport.playing = false;
         return;
     };
@@ -297,12 +310,33 @@ pub fn tick(ctx: &egui::Context, state: &mut SetupState) {
     ctx.request_repaint();
 }
 
-/// The bar: the timeline, then the buttons, where the program stands, and how it
-/// plays.
+/// The bar: whether the setup is being set up or played back, and playing back,
+/// the timeline, then the buttons, where the program stands, and how it plays.
 pub fn bar(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) {
-    if state.ran.is_none() {
+    let cannot = playback::cannot_play_back(state);
+    ui.horizontal(|ui| {
+        let mut page = usize::from(playing_back(state));
+        let changed = widgets::tabs(
+            ui,
+            &mut page,
+            &[widgets::Tab::new("Setup"), widgets::Tab::new("Playback")],
+        );
+        if changed {
+            match (page, cannot) {
+                (0, _) => playback::set_mode(state, ViewMode::Setup),
+                (_, None) => playback::set_mode(state, ViewMode::Playback),
+                (_, Some(_)) => {}
+            }
+        }
+        if let Some(why) = cannot {
+            ui.add_space(theme::SPACE_3);
+            ui.label(widgets::hint_text(why));
+        }
+    });
+    if !playing_back(state) {
         return;
     }
+    ui.add_space(theme::SPACE_2);
     let marks = marks(state);
     timeline(ui, state, &marks);
     ui.add_space(theme::SPACE_2);
@@ -367,6 +401,18 @@ pub fn bar(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) {
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = theme::SPACE_3;
+            let paths = &mut state.view.paths_in_playback;
+            let variant = if *paths {
+                Variant::Secondary
+            } else {
+                Variant::Ghost
+            };
+            if widgets::button(ui, variant, Size::Sm, None, "toolpaths")
+                .on_hover_text("the toolpaths, as far as the playhead")
+                .clicked()
+            {
+                *paths = !*paths;
+            }
             let t = &mut state.view.transport;
             let stops = usize::from(t.stop_at_problems) + usize::from(t.stop_at_op_end);
             ui.menu_button(format!("stops ({stops})"), |ui| {
@@ -410,8 +456,7 @@ fn clock_readout(ui: &mut egui::Ui, state: &SetupState) {
         theme::TEXT_SM,
     ))
     .on_hover_text("machining time, estimated");
-    let behind = state.view.stock_mode == StockMode::Follow
-        && state.live.as_ref().is_some_and(|l| !l.caught_up());
+    let behind = playing_back(state) && state.live.as_ref().is_some_and(|l| !l.caught_up());
     if behind {
         ui.label(
             egui::RichText::new("cutting…")
@@ -555,9 +600,6 @@ fn timeline(ui: &mut egui::Ui, state: &mut SetupState, marks: &[(usize, Mark)]) 
     {
         let to = scene.locate(time_at(pos.x));
         stand(state, to);
-        if state.view.stock_mode == StockMode::Off {
-            state.view.stock_mode = StockMode::Follow;
-        }
     }
 }
 

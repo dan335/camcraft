@@ -37,7 +37,7 @@ use camcraft_session::{Model, SessionError, write_job};
 use crate::worker::DocId;
 
 pub use run::{OpStatus, Status};
-pub use setup_state::{Layout, RanSetup, SetupState, SetupView, StockMode, Transport};
+pub use setup_state::{Layout, RanSetup, SetupState, SetupView, Transport, ViewMode};
 
 /// A number never handed out before, for telling uploads apart.
 pub fn next_key() -> u64 {
@@ -169,8 +169,6 @@ pub struct Document {
     pub asked_missing: bool,
     /// Runs asked for so far, to tell the latest.
     seq: u64,
-    /// The selection the view last followed.
-    followed: Option<Selection>,
 }
 
 impl Document {
@@ -210,7 +208,6 @@ impl Document {
             log: Vec::new(),
             asked_missing: false,
             seq: 0,
-            followed: None,
         }
     }
 
@@ -303,30 +300,6 @@ impl Document {
             self.checkpoint = self.job.clone();
             self.tidy_selection();
         }
-    }
-
-    /// Show the toolpaths of what is selected: all of a setup's, or an
-    /// operation's alone. Only when the selection changes, or a run finishes,
-    /// so what is ticked under Show in between is left as it is.
-    pub fn follow_selection(&mut self) {
-        if self.followed.as_ref() == Some(&self.selection) {
-            return;
-        }
-        self.followed = Some(self.selection.clone());
-        let (setup, only) = match &self.selection {
-            Selection::Setup(s) => (s, None),
-            Selection::Operation(s, i) => (s, Some(*i)),
-            _ => return,
-        };
-        let view = &mut self.setups.entry(setup.clone()).or_default().view;
-        view.show_paths = true;
-        view.view.ops = match only {
-            None => u32::MAX,
-            Some(i) => u32::try_from(i)
-                .ok()
-                .and_then(|i| 1u32.checked_shl(i))
-                .unwrap_or(0),
-        };
     }
 
     /// Keep the selection and the view on things that still exist.

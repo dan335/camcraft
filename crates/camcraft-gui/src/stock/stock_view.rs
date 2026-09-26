@@ -271,12 +271,13 @@ impl StockImage {
 
     /// Classify `stock` against `part`, with the job's gouge `budget`, and
     /// shade it.
+    #[cfg(test)]
     pub fn build(stock: &Stock, part: &PartSurface, budget: f64) -> Self {
         Self::build_shaded(stock, part, budget).0
     }
 
-    /// As [`StockImage::build`], with what shaded it, to keep it shaded as it
-    /// changes.
+    /// Classify `stock` against `part`, with the job's gouge `budget`, and
+    /// shade it; with what shaded it, to keep it shaded as it changes.
     pub fn build_shaded(stock: &Stock, part: &PartSurface, budget: f64) -> (Self, Occluder) {
         let field = stock.field();
         let (nx, ny) = (field.nx(), field.ny());

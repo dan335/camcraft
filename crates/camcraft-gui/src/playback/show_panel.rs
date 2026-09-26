@@ -1,12 +1,11 @@
-//! The setup's panel on the left: what its last run did, what is shown of it, the
-//! material and how it is coloured, and the steep descents.
+//! The setup's panel on the left: what its last run did, what is shown of it, and
+//! the steep descents; playing back, also the material and how it is coloured.
 
 use eframe::egui;
 use glam::DVec3;
 
-use super::{jump_to, thousands};
-use crate::document::{RanSetup, SetupState, SetupView, StockMode};
-use crate::stock::live::LiveStock;
+use super::{jump_to, playing_back, thousands};
+use crate::document::{RanSetup, SetupState, SetupView};
 use crate::stock::stock_view::{CLASSES, Class, ColorMode, cell_color, class_name};
 use crate::ui::measure::Measure;
 use crate::ui::theme;
@@ -92,28 +91,41 @@ pub fn result(ui: &mut egui::Ui, state: &SetupState, m: Measure) {
     }
 }
 
-/// What to show, and the material. Returns a
-/// point to bring the camera in on, when a steep descent is clicked.
+/// What to show, and playing back, the material. Returns a point to bring the
+/// camera in on, when a steep descent is clicked.
 pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option<DVec3> {
+    let back = playing_back(state);
     let view = &mut state.view;
     ui.label(section_label("Show"));
-    ui.checkbox(&mut view.view.part, "part");
+    if back {
+        ui.checkbox(&mut view.part_in_playback, "part");
+    } else {
+        ui.checkbox(&mut view.view.part, "part");
+    }
     ui.checkbox(&mut view.view.stock, "stock outline");
     ui.checkbox(&mut view.view.origin, "work zero");
     let Some(ran) = &state.ran else {
         return None;
     };
-    toolpaths(ui, view, &ran.scene);
-    ui.separator();
-    stock(ui, view, state.live.as_ref(), &ran.scene);
+    if back {
+        ui.checkbox(&mut view.show_cutter, "cutter");
+        ui.checkbox(&mut view.paths_in_playback, "toolpaths");
+    } else {
+        ui.checkbox(&mut view.show_paths, "toolpaths");
+    }
+    toolpaths(ui, view, &ran.scene, back);
+    if back {
+        ui.separator();
+        material(ui, state);
+    }
+    let ran = state.ran.as_ref()?;
     let go = steep(ui, ran, m);
     go.map(|s| jump_to(state, s))
 }
 
-/// The cutter and the toolpaths, by role and by operation, each with its count.
-fn toolpaths(ui: &mut egui::Ui, view: &mut SetupView, scene: &Scene) {
-    ui.checkbox(&mut view.show_cutter, "cutter");
-    ui.checkbox(&mut view.show_paths, "toolpaths");
+/// The toolpaths by role, and playing back, by operation, each with its count.
+/// Setting up, the selection says which operations'.
+fn toolpaths(ui: &mut egui::Ui, view: &mut SetupView, scene: &Scene, back: bool) {
     ui.add_space(4.0);
     for (i, role) in theme::ROLES.iter().enumerate() {
         let n = scene.role_counts.get(i).copied().unwrap_or(0);
@@ -132,7 +144,7 @@ fn toolpaths(ui: &mut egui::Ui, view: &mut SetupView, scene: &Scene) {
         );
     }
     let mut jump = None;
-    if scene.ops.len() > 1 {
+    if back && scene.ops.len() > 1 {
         ui.add_space(4.0);
         for (i, op) in scene.ops.iter().enumerate() {
             legend_row(
@@ -162,34 +174,10 @@ fn toolpaths(ui: &mut egui::Ui, view: &mut SetupView, scene: &Scene) {
     }
 }
 
-/// Which material shows, how it is coloured, and a legend of its cells.
-fn stock(ui: &mut egui::Ui, view: &mut SetupView, live: Option<&LiveStock>, scene: &Scene) {
-    ui.label(section_label("Stock"));
-    let stage_name = |i: usize| match i {
-        0 => "the block, before anything".to_string(),
-        n => scene
-            .ops
-            .get(n - 1)
-            .map_or_else(String::new, |o| format!("after {n}. {}", o.name)),
-    };
-    let selected = match view.stock_mode {
-        StockMode::Off => "off".to_string(),
-        StockMode::Follow => "cut as it plays".to_string(),
-        StockMode::Stage(i) => stage_name(i),
-    };
-    egui::ComboBox::from_id_salt("stock")
-        .selected_text(selected)
-        .show_ui(ui, |ui| {
-            ui.selectable_value(&mut view.stock_mode, StockMode::Off, "off");
-            ui.selectable_value(&mut view.stock_mode, StockMode::Follow, "cut as it plays");
-            for i in 0..=scene.ops.len() {
-                ui.selectable_value(&mut view.stock_mode, StockMode::Stage(i), stage_name(i));
-            }
-        });
-    ui.checkbox(
-        &mut view.hide_part_with_stock,
-        "hide the part while showing it",
-    );
+/// How the material is coloured, and a legend of its cells.
+fn material(ui: &mut egui::Ui, state: &mut SetupState) {
+    let view = &mut state.view;
+    ui.label(section_label("Material"));
     ui.horizontal(|ui| {
         ui.label("colours");
         ui.selectable_value(&mut view.transport.color, ColorMode::Material, "material")
@@ -197,51 +185,39 @@ fn stock(ui: &mut egui::Ui, view: &mut SetupView, live: Option<&LiveStock>, scen
         ui.selectable_value(&mut view.transport.color, ColorMode::Compare, "compare")
             .on_hover_text("every column against the part, by the verifier's rule");
     });
-    // In a block, so the image (playback's is locked, shared with its thread) is
-    // held no longer than the legend needs it.
-    {
-        let image = match view.stock_mode {
-            StockMode::Off => None,
-            StockMode::Stage(i) => view
-                .stock_images
-                .get(i)
-                .and_then(Option::as_ref)
-                .map(|(_, image)| StockRef::Plain(image)),
-            StockMode::Follow => live
-                .and_then(|l| l.shown())
-                .map(|(_, image, _)| StockRef::Shared(image)),
-        };
-        let mode = view.transport.color;
-        if let Some(image) = image {
-            let counts: Vec<usize> = image.with(|i| CLASSES.iter().map(|c| i.count(*c)).collect());
-            let count = |class: Class| {
-                CLASSES
-                    .iter()
-                    .position(|c| *c == class)
-                    .and_then(|i| counts.get(i))
-                    .copied()
-                    .unwrap_or(0)
-            };
-            let classes: &[Class] = match mode {
-                ColorMode::Compare => &CLASSES,
-                ColorMode::Material => &[Class::Gouge],
-            };
-            for &class in classes {
-                legend_row(
-                    ui,
-                    count(class),
-                    |ui| {
-                        swatch(ui, theme::egui_color(cell_color(mode, class, 0.0)));
-                        ui.label(class_name(class));
-                    },
-                    |_| {},
-                );
-            }
-            ui.label(hint_text(
-                "cells of the simulated material, by the verifier's rule",
-            ));
-        }
+    let mode = view.transport.color;
+    // Locked, shared with its thread: held no longer than the legend needs it.
+    let Some((_, image, _)) = state.live.as_ref().and_then(|l| l.shown()) else {
+        return;
+    };
+    let counts: Vec<usize> =
+        StockRef(image).with(|i| CLASSES.iter().map(|c| i.count(*c)).collect());
+    let count = |class: Class| {
+        CLASSES
+            .iter()
+            .position(|c| *c == class)
+            .and_then(|i| counts.get(i))
+            .copied()
+            .unwrap_or(0)
+    };
+    let classes: &[Class] = match mode {
+        ColorMode::Compare => &CLASSES,
+        ColorMode::Material => &[Class::Gouge],
+    };
+    for &class in classes {
+        legend_row(
+            ui,
+            count(class),
+            |ui| {
+                swatch(ui, theme::egui_color(cell_color(mode, class, 0.0)));
+                ui.label(class_name(class));
+            },
+            |_| {},
+        );
     }
+    ui.label(hint_text(
+        "cells of the simulated material, by the verifier's rule",
+    ));
 }
 
 /// The steep descents, by operation and then deepest first. The one clicked.

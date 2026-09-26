@@ -107,8 +107,8 @@ other one made before and unchanged since (cutting it into the material again),
 and leaves out the rest, which may be unfinished.
 
 The checks window lists each setup's findings by operation, under a HALT banner
-when anything fails; a click on one at a move takes the playhead there, follows
-the stock and flies the camera there. **Steep descents** are listed deepest first
+when anything fails; a click on one at a move switches to Playback, takes the
+playhead there and flies the camera there. **Steep descents** are listed deepest first
 in the Show panel, and work the same way.
 
 ## Posting
@@ -120,29 +120,42 @@ only after ticking "I know why" and pressing Post anyway.
 
 ## The view
 
-Every operation's toolpath, coloured by move role, as screen-space lines that stay
-readable on Retina; toggles by role, by operation, for the part and for the stock
-outline. The job's own cutter is drawn at the playhead, hidden by the stock and
-part in front of it. The part is shaded with half-resolution GTAO, the material
-with horizon ambient occlusion on its own heights. Each setup keeps its own
-camera, playhead and stock view.
+The view has two modes for each setup, switched by the **Setup** and **Playback**
+tabs on the bar under it. Each setup keeps its own mode, camera and playhead.
 
-The stock can be shown as the block, as it stands after any operation, or cut as
-the program plays. *Compare* colours it by the verifier's own rule: red below the
-part, amber left above it (deeper amber for more), grey finished, dark where there
-is no part. The legend's counts are the verifier's counts, and a test holds them
-equal.
+**Setup** is for setting the job up: the part, the stock's outline, and the
+selection's toolpaths in full, coloured by move role (an operation's alone, or
+the whole setup's), as screen-space lines that stay readable on Retina. There is
+no cutter and no material. An operation's picked geometry shows only on its
+Geometry tab, and its height planes only on its Heights tab.
+
+**Playback** is for watching the program cut: the material as it stands at the
+playhead, and the job's own cutter there, hidden by the material and part in front
+of it. The toolpaths (as far as the playhead) and the part are off until asked
+for, with the toolpaths button on the bar or the Show panel, which also has
+toggles by role and by operation. Playback needs a run that fits the setup as it
+is; without one the tab says to generate, and an out-of-date run drops the view
+back to Setup.
+
+The part is shaded with half-resolution GTAO, the material with horizon ambient
+occlusion on its own heights, shaded as it is cut. *Compare* colours the material
+by the verifier's own rule: red below the part, amber left above it (deeper amber
+for more), grey finished, dark where there is no part. The legend's counts are the
+verifier's counts, and a test holds them equal.
 
 ## Playback
 
-A transport bar under the view: the timeline (one span per operation, as long as
+Playing back, the bar under the view has the timeline (one span per operation, as long as
 it takes to run, failed checks marked red, warnings and steep descents amber; click
 or drag to go anywhere), start, previous operation, step back, play backwards,
 play, step on, next operation and end, the estimated machining clock, the speed
 (¼× to 10,000×) and where playing stops by itself (at problems, on by default; at
-the end of each operation). Under it, the operation and the move under way.
+the end of each operation) and the toolpaths button. Under it, the operation and
+the move under way. Going to the end of an operation, or of the program, is
+immediate: the stock there is kept from the run.
 
-Keys, when no field has the keyboard: Space plays and pauses; J, K and L shuttle
+Keys, when no field has the keyboard, while playing back: Space plays and pauses
+(and in Setup, switches to Playback and plays); J, K and L shuttle
 backwards, pause and forwards, and J or L again goes faster; Left and Right step a
 move (Shift: a hundred); Up and Down go to the previous and next operation; Home
 and End; `[` and `]` change the speed.

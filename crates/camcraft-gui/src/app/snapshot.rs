@@ -175,21 +175,20 @@ impl App {
         state.view.view.roles = roles;
     }
 
-    /// Show the stock at a fixed stage, or following the playhead. Only the
-    /// snapshot harness asks.
-    pub fn set_stock_for_snapshot(&mut self, stage: Option<usize>) {
-        use crate::document::StockMode;
+    /// Play back, the material cut as far as the playhead, with the toolpaths
+    /// too if `paths`. Only the snapshot harness asks.
+    pub fn playback_for_snapshot(&mut self, paths: bool) {
         if let Some(state) = self.state_for_snapshot() {
-            state.view.stock_mode = stage.map_or(StockMode::Follow, StockMode::Stage);
+            crate::playback::set_mode(state, crate::document::ViewMode::Playback);
             state.view.view.roles = u32::MAX;
-            state.view.show_paths = false;
+            state.view.paths_in_playback = paths;
         }
     }
 
-    /// Hide the material. Only the snapshot harness asks.
-    pub fn stock_off_for_snapshot(&mut self) {
+    /// Back to setting up. Only the snapshot harness asks.
+    pub fn setup_for_snapshot(&mut self) {
         if let Some(state) = self.state_for_snapshot() {
-            state.view.stock_mode = crate::document::StockMode::Off;
+            crate::playback::set_mode(state, crate::document::ViewMode::Setup);
         }
     }
 

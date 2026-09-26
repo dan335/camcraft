@@ -68,15 +68,19 @@ cell inside the rectangle reported.
 **Rewind is bounded.** `Live` drops a packed checkpoint every 1/64th of the
 program, within 256 MB a setup. The thread's idle sweep drops them all; the stock
 that seeks does not pack any, so a seek someone waits on never pauses to. A
-restore unpacks in place and redraws only the cells that differ.
+restore unpacks in place and redraws only the cells that differ. The end of an
+operation is the run's own stock after it, so going there, or to the end of the
+program, restores at once with no sweeping.
 
 **Only what the cutter touched moves.** Changes are kept in 32 × 32-cell tiles:
 only those are classified (in parallel, and only cells whose height changed), and
 a frame uploads at most 4 million cells of them, the rest following over the next
 frames, so a long seek never stalls the window. The playback thread and the UI
 share one image of the material behind a lock, taken only to classify a batch or
-upload one. The same thread keeps the material's ambient occlusion up to date, in
-short slices.
+upload one. The same thread keeps the material's ambient occlusion up to date:
+the cells cut are shaded with the cut, so fresh material never shows the shade of
+the surface taken away; the cells round them, whose horizon the cut changed, in
+short slices when there is time.
 
 Measured (`cargo test --release -p camcraft-gui -- --ignored keeps_up --nocapture`,
 with `CAMCRAFT_SHEET_JOB` naming a sheet job for the third), the thread's work a
