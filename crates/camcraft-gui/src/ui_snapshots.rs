@@ -427,6 +427,14 @@ fn setup_panel() {
     h.run_steps(3);
     shoot(&mut h, "stock_fixed_at_corner");
     if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.selection = Selection::Stock("block".into());
+    }
+    h.run_steps(3);
+    shoot(&mut h, "stock_around_models");
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.selection = Selection::Stock("offcut".into());
+    }
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
         if let Some(s) = doc.job.stocks.iter_mut().find(|s| s.name == "offcut") {
             s.spec = StockSpec::FixedBox(FixedBox {
                 place: [

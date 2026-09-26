@@ -41,9 +41,11 @@ The properties panel only edits; what the tree and its menus do is not repeated 
 it.
 
 - **Model**: its file, and units for an STL.
-- **Stock**: its shape. Around models, it has margins. A fixed box has a width,
-  depth and height, and a position on each axis against the models. Below that
-  is the block it comes to: its size, and its corners in model coordinates.
+- **Stock**: laid out as the tool library lays out a tool. At the top is a
+  drawing of the block (amber) around the models, from the top and the front,
+  with its size under each view and its corners in model coordinates below.
+  Then its fields: for a fixed box, one row per axis with the size, where it
+  sits against the models and the offset; around models, one row per margin.
 - **Setup**, on tabs:
   - *Parts*: cards for the models and stocks it includes, each with a remove
     button. Add lists the job's others; **Select in view…** picks them in the view,

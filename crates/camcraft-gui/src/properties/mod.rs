@@ -18,6 +18,7 @@
 mod operation;
 mod parts;
 mod setup;
+mod stock;
 mod work_zero;
 
 pub use operation::{OperationTab, height_planes};
@@ -103,7 +104,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, m: Measure, picks: Picks<'_>)
                 doc.add_stock();
             }
         }
-        Selection::Stock(name) => parts::stock(ui, doc, m, &name),
+        Selection::Stock(name) => stock::stock(ui, doc, m, &name),
         Selection::Setups => {
             let mut add = false;
             group(
