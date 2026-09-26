@@ -95,6 +95,17 @@ impl SetupInputs {
     /// Whether the part of these that decides where the part and stock sit (see
     /// [`SetupInputs::into_layout`]) is as setup `index` of `job` has it now.
     fn layout_is_now(&self, job: &Job, loaded: &BTreeMap<String, ModelSlot>, index: usize) -> bool {
+        job.setups
+            .get(index)
+            .is_some_and(|setup| same_but_operations(&self.setup, setup))
+            && self.cut_is_now(job, loaded, index)
+    }
+
+    /// Whether what shapes the cuts, not what is only posted with them, is as
+    /// setup `index` of `job` has it now: the tolerance, how the part sits, and
+    /// the stocks and models. A setup renamed, or given another work offset or
+    /// post, still cuts the same paths.
+    fn cut_is_now(&self, job: &Job, loaded: &BTreeMap<String, ModelSlot>, index: usize) -> bool {
         let Some(setup) = job.setups.get(index) else {
             return false;
         };
@@ -103,7 +114,10 @@ impl SetupInputs {
             .iter()
             .map(|m| (*m, loaded.get(&m.name).map(ModelSlot::key)));
         self.tolerance == job.tolerance.to_bits()
-            && same_but_operations(&self.setup, setup)
+            && self.setup.models == setup.models
+            && self.setup.stocks == setup.stocks
+            && self.setup.orientation == setup.orientation
+            && self.setup.origin == setup.origin
             && self
                 .stocks
                 .iter()
@@ -271,21 +285,51 @@ impl Document {
         a == b && tool_then == tool_now && then.layout_is_now(&self.job, &self.models, index)
     }
 
-    /// Forget a setup's last run once the setup has fewer operations than it
-    /// ran: one was deleted, moved to another setup, or undone since. The run's
-    /// toolpaths, material and checks were the whole program's, and drawing them
-    /// would still show the operation that is gone.
-    pub fn forget_runs_of_removed_operations(&mut self) {
-        for setup in &self.job.setups {
-            let Some(state) = self.setups.get_mut(&setup.name) else {
-                continue;
-            };
-            if state
-                .ran
-                .as_ref()
-                .is_some_and(|r| r.inputs.setup.operations.len() > setup.operations.len())
-            {
-                state.forget_run();
+    /// Whether operation `i` of setup `name`, setup `index` of the job, would cut
+    /// what it cut when the setup last ran: the operation, its tool, and what
+    /// shapes the cuts (see [`SetupInputs::cut_is_now`]) are as they were.
+    fn op_cuts_as_ran(&self, name: &str, index: usize, i: usize) -> bool {
+        let Some(then) = self
+            .setups
+            .get(name)
+            .and_then(|s| s.ran.as_ref())
+            .map(|r| &r.inputs)
+        else {
+            return false;
+        };
+        let now = self.job.setups.get(index).and_then(|s| s.operations.get(i));
+        let (Some(a), Some(b)) = (then.setup.operations.get(i), now) else {
+            return false;
+        };
+        let tool_then = a.tool.as_ref().map(|t| then.tools.get(t));
+        let tool_now = b.tool.as_ref().map(|t| self.job.tools.get(t));
+        a == b && tool_then == tool_now && then.cut_is_now(&self.job, &self.models, index)
+    }
+
+    /// Take out of each setup's last run what no longer stands: from its first
+    /// operation that would cut otherwise now (changed, retooled, turned off,
+    /// moved, removed, or with something ahead of it added), to the end. Each
+    /// operation cuts the material the ones before it left, so none after a
+    /// changed one stands either. Their toolpaths, the cutter and material along
+    /// them, and the playhead past them go; the operations before are kept,
+    /// drawn and ready to be kept again. With the part, stock or tolerance
+    /// changed, nothing stands, and the run is forgotten.
+    pub fn invalidate_changed_operations(&mut self) {
+        let cuts: Vec<(String, usize)> = self
+            .job
+            .setups
+            .iter()
+            .enumerate()
+            .filter_map(|(index, setup)| {
+                let ran = self.setups.get(&setup.name)?.ran.as_ref()?;
+                let len = ran.ran.result.operations.len();
+                let first = (0..len).find(|&i| !self.op_cuts_as_ran(&setup.name, index, i))?;
+                Some((setup.name.clone(), first))
+            })
+            .collect();
+        for (name, first) in cuts {
+            if let Some(state) = self.setups.get_mut(&name) {
+                state.cut_run_back(first);
                 self.followed = None;
             }
         }

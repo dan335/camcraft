@@ -295,12 +295,13 @@ fn an_operation_moves_to_another_setup() {
     assert_eq!(names(&doc, 1), ["rough 2", "finish", "finish 2", "rough"]);
 }
 
-/// A deleted operation leaves nothing behind: its setup's last run, paused
-/// part way through, is forgotten with its playhead and material. An edit that
-/// leaves every operation in place keeps the run, shown out of date; an undo
-/// that takes an operation away forgets it too.
+/// A changed operation takes its toolpath with it, and every one after it, since
+/// each cuts what the ones before left: the run is cut back to the operations
+/// before it, still drawn, and the playhead comes back to their end. Changing
+/// the first, or deleting it, forgets the run. What only goes to the post, or
+/// a setup's name, keeps every path.
 #[test]
-fn a_deleted_operation_takes_its_run_with_it() {
+fn a_changed_operation_takes_its_toolpath_with_it() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let text = std::fs::read_to_string(dir.join("rail-jig.camcraft")).unwrap();
     let text = text.replace("sled_base.step", "hinge_jig.step");
@@ -311,35 +312,82 @@ fn a_deleted_operation_takes_its_run_with_it() {
         let ran = crate::test_jobs::run_setup_zero(&doc.job, &dir);
         doc.finished("top", seq, Ok(ran));
     };
+    let ops = |doc: &Document| {
+        doc.setups["top"]
+            .ran
+            .as_ref()
+            .map_or(0, |r| r.ran.result.operations.len())
+    };
     run(&mut doc);
+    let whole = doc.setups["top"].ran.as_ref().unwrap().scene.segments.len();
     let state = doc.setups.get_mut("top").unwrap();
-    state.view.at = Playhead::at(3);
+    state.view.at = Playhead::at(whole);
     state.view.transport.playing = true;
 
-    doc.job.setups[0].operations[0].passes.feed += 100.0;
-    doc.forget_runs_of_removed_operations();
-    assert!(doc.setups["top"].ran.is_some(), "an edit keeps the run");
-    assert_eq!(doc.status("top"), Status::Stale);
+    // A new name, or posting only: every path stands.
+    doc.rename_setup("top", "upper").unwrap();
+    doc.invalidate_changed_operations();
+    assert_eq!(ops_of(&doc, "upper"), 2, "a renamed setup cuts the same");
+    doc.rename_setup("upper", "top").unwrap();
+    doc.job.setups[0].wcs = 55;
+    doc.invalidate_changed_operations();
+    assert_eq!(ops(&doc), 2, "a work offset changes no path");
+    doc.job.setups[0].wcs = 54;
 
+    // The finish changed: the roughing stands, the finish is gone.
+    doc.job.setups[0].operations[1].passes.feed += 100.0;
+    doc.invalidate_changed_operations();
+    assert_eq!(ops(&doc), 1);
+    let state = &doc.setups["top"];
+    let left = state.ran.as_ref().unwrap().scene.segments.len();
+    assert!(0 < left && left < whole, "{left} of {whole}");
+    assert_eq!(
+        state.view.at,
+        Playhead::at(left),
+        "back to the roughing's end"
+    );
+    assert!(!state.view.transport.playing);
+    assert_eq!(state.view.stock_images.len(), 2);
+    assert!(matches!(
+        doc.op_status("top", 0),
+        OpStatus::Done | OpStatus::Warnings
+    ));
+    assert_eq!(doc.op_status("top", 1), OpStatus::NotRun);
+    assert_eq!(doc.status("top"), Status::Stale);
+    // Asked again, nothing more goes.
+    doc.invalidate_changed_operations();
+    assert_eq!(ops(&doc), 1);
+
+    // Deleting the finish keeps the roughing.
+    run(&mut doc);
     doc.remove_operation("top", 1);
-    doc.forget_runs_of_removed_operations();
+    doc.invalidate_changed_operations();
+    assert_eq!(ops(&doc), 1, "the operation before a deleted one stands");
+
+    // Changing the first leaves nothing.
+    doc.job.setups[0].operations[0].passes.feed += 100.0;
+    doc.invalidate_changed_operations();
     let state = &doc.setups["top"];
     assert!(state.ran.is_none() && state.live.is_none());
     assert_eq!(state.view.at, Playhead::default());
-    assert!(!state.view.transport.playing);
     assert_eq!(doc.status("top"), Status::NotRun);
     assert_eq!(doc.op_status("top", 0), OpStatus::NotRun);
 
+    // An undo that takes away an operation keeps what was before it.
     doc.checkpoint();
     doc.duplicate_operation("top", 0);
     doc.checkpoint();
     run(&mut doc);
     doc.undo();
-    doc.forget_runs_of_removed_operations();
-    assert!(
-        doc.setups["top"].ran.is_none(),
-        "undoing an add forgets too"
-    );
+    doc.invalidate_changed_operations();
+    assert_eq!(ops(&doc), 1, "undoing the copy leaves what was before it");
+}
+
+fn ops_of(doc: &Document, setup: &str) -> usize {
+    doc.setups[setup]
+        .ran
+        .as_ref()
+        .map_or(0, |r| r.ran.result.operations.len())
 }
 
 /// After a run, generating one operation keeps the others that have not

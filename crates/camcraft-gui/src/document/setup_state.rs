@@ -162,4 +162,34 @@ impl SetupState {
         view.transport.playing = false;
         view.stock_images.clear();
     }
+
+    /// Keep only the first `kept` operations of its last run: their toolpaths,
+    /// material and stages. The playhead stops and comes back to their end if
+    /// it was past it. None kept is the run forgotten.
+    pub fn cut_run_back(&mut self, kept: usize) {
+        let Some(ran) = self.ran.as_mut() else {
+            return;
+        };
+        let result = &mut ran.ran.result;
+        let Some(setup) = ran.job.setups.iter().find(|s| s.name == result.setup) else {
+            self.forget_run();
+            return;
+        };
+        if kept == 0 {
+            self.forget_run();
+            return;
+        }
+        result.operations.truncate(kept);
+        result.keyframes.truncate(kept + 1);
+        ran.scene = Scene::build(&ran.job, setup, result);
+        ran.scene_key = next_key();
+        self.live = None;
+        let view = &mut self.view;
+        let end = ran.scene.segments.len();
+        if view.at.shown >= end {
+            view.at = Playhead::at(end);
+        }
+        view.transport.playing = false;
+        view.stock_images.truncate(kept + 1);
+    }
 }

@@ -33,7 +33,13 @@ or another. Selecting a setup shows all its toolpaths, an operation only its
 own.
 
 A result goes out of date when anything it was made from changes (the operation,
-its tool, or where the part and stock sit), and says so.
+its tool, or where the part and stock sit), and says so. A changed operation
+takes its toolpath with it, and every operation after it, since each cuts what
+the ones before left: the run is cut back to the operations before it, still
+drawn and ready to be kept, and the playhead comes back to their end. A change
+to the part, stock or tolerance takes the whole run. A new setup name, work
+offset or post changes no path, so the paths stay; the setup is out of date
+until it is generated again, since its checks and program depend on those.
 
 ## Properties
 
