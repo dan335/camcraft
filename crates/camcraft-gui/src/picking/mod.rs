@@ -22,7 +22,9 @@ pub mod slots;
 
 use std::borrow::Cow;
 
-use camcraft_core::job::{FeatureRef, Geometry, Origin, ToolSpec};
+use camcraft_core::job::{
+    FeatureRef, Geometry, Operation, Origin, StockToLeave, StrategySpec, ToolSpec,
+};
 #[cfg(all(test, feature = "ui-snapshots"))]
 use eframe::egui;
 
@@ -44,6 +46,10 @@ struct ShownFrom<'a> {
     op: Option<usize>,
     origin: Cow<'a, Origin>,
     geometry: Option<Cow<'a, Geometry>>,
+    /// A 2D operation's boundary is drawn with what its tool cuts, which its
+    /// strategy (a profile's side) and the stock it leaves decide.
+    strategy: Option<Cow<'a, StrategySpec>>,
+    leave: Option<StockToLeave>,
     tool: Option<Cow<'a, ToolSpec>>,
     tolerance: u64,
     measure: Measure,
@@ -59,6 +65,8 @@ impl ShownFrom<'_> {
             op: self.op,
             origin: Cow::Owned(self.origin.into_owned()),
             geometry: self.geometry.map(|g| Cow::Owned(g.into_owned())),
+            strategy: self.strategy.map(|s| Cow::Owned(s.into_owned())),
+            leave: self.leave,
             tool: self.tool.map(|t| Cow::Owned(t.into_owned())),
             tolerance: self.tolerance,
             measure: self.measure,
@@ -117,6 +125,42 @@ impl Picking {
             .as_ref()
             .filter(|(from, ..)| from.doc == doc)
             .map(|(_, s, _)| s)
+    }
+
+    /// Click edge `edge` of `model` into the armed slot of `doc`, as a click in the
+    /// view does, once the scene is laid out. Whether anything changed. Only the
+    /// snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn click_edge_for_snapshot(&mut self, doc: &mut Document, model: &str, edge: u32) -> bool {
+        let scene = self
+            .scene
+            .as_ref()
+            .filter(|(d, ..)| *d == doc.id)
+            .map(|(.., s)| s);
+        let (Some(scene), Some(slot)) = (scene, self.armed(doc.id).cloned()) else {
+            return false;
+        };
+        let Some(body) = scene.model(model).map(ray::PickModel::body) else {
+            return false;
+        };
+        let at = body
+            .topology()
+            .edge_middle(body.mesh(), edge)
+            .unwrap_or_default();
+        let t = slots::widen(
+            scene,
+            &slot,
+            Target::Edge {
+                model: model.to_string(),
+                edge,
+                at,
+            },
+        );
+        let tolerance = doc.job.tolerance;
+        let current = |r: &FeatureRef, kind: Kind| {
+            kind.find(scene.model(&r.model)?.body(), r, tolerance).ok()
+        };
+        slots::apply(doc, &slot, &t, current)
     }
 
     /// Where the view is in the window: the snapshot harness keeps it up to date.
@@ -206,7 +250,9 @@ impl Picking {
             .as_ref()
             .is_none_or(|(d, k, _)| (*d, *k) != (doc.id, layout))
         {
+            // The job's models: one undone out of it may still be loaded.
             let loaded = doc.models.iter().filter_map(|(name, slot)| {
+                doc.job.model(name)?;
                 let (model, bvh) = slot.loaded()?;
                 Some((name.clone(), model.clone(), bvh.clone()))
             });
@@ -254,6 +300,8 @@ impl Picking {
                 op,
                 origin: Cow::Borrowed(&s.origin),
                 geometry: operation.map(|o| Cow::Borrowed(&o.geometry)),
+                strategy: operation.map(|o| Cow::Borrowed(&o.strategy)),
+                leave: operation.map(Operation::stock_to_leave),
                 tool: operation
                     .and_then(|o| doc.job.tool_for(o))
                     .map(Cow::Borrowed),
@@ -279,7 +327,7 @@ impl Picking {
                 Kind::Face => g.faces.get(i),
                 Kind::Edge => g.edges.get(i),
             }?;
-            row_target(scene, doc, r, kind)
+            row_target(scene, doc, r, kind).map(|t| slots::whole_loop(scene, t))
         });
         let under = row.or_else(|| self.hover.clone());
         match under {
@@ -332,8 +380,9 @@ impl Picking {
             self.hover = None;
             return changed;
         };
-        let target =
-            event.and_then(|e| scene.pick(e.ray, e.sight, &e.projector, e.pos, slot.accept()));
+        let target = event
+            .and_then(|e| scene.pick(e.ray, e.sight, &e.projector, e.pos, slot.accept()))
+            .map(|t| slots::widen(scene, &slot, t));
         let changed = target != self.hover;
         self.hover.clone_from(&target);
 

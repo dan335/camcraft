@@ -86,6 +86,9 @@ pub struct LevelReach<'m> {
     /// How far the controlled point sits above the profile's own tip.
     lift: f64,
     max_radius: f64,
+    /// How much wider than the real tool the profile is: the stock to leave
+    /// beside, or zero.
+    leave: f64,
     tolerance: f64,
     band_step: f64,
     arc_tolerance: f64,
@@ -101,7 +104,9 @@ impl<'m> LevelReach<'m> {
         tool: &EffectiveTool,
         tolerance: f64,
     ) -> Result<Self, ReachError> {
-        Self::with_profile(mesh, tool, tool.tip_offset(), tolerance)
+        let mut reach = Self::with_profile(mesh, tool, tool.tip_offset(), tolerance)?;
+        reach.leave = tool.max_radius() - tool.cutter_radius();
+        Ok(reach)
     }
 
     /// Prepare for any monotonic `profile` whose controlled point sits `lift` above
@@ -128,6 +133,7 @@ impl<'m> LevelReach<'m> {
             bands,
             lift,
             max_radius: profile.max_radius(),
+            leave: 0.0,
             tolerance,
             band_step,
             arc_tolerance,
@@ -159,6 +165,12 @@ impl<'m> LevelReach<'m> {
     /// The cutter's largest radius.
     pub fn max_radius(&self) -> f64 {
         self.max_radius
+    }
+
+    /// The real tool's largest radius, without the stock to leave: how far
+    /// round its centre it cuts.
+    pub fn cutter_radius(&self) -> f64 {
+        self.max_radius - self.leave
     }
 
     /// The chordal tolerance this was built to.

@@ -64,9 +64,12 @@ program went from about 8 h to 4.6 h.
 2. **Start rapids split XY then Z.** The first move is one G0 in all three axes
    from wherever the tool change left the spindle.
 3. **More strategies**: waterline, adaptive clearing. 2D profile and pocket are
-   done ([decision 0005](docs/decisions/0005-2d-profile-and-pocket.md)); they
-   lack tabs, which a part cut free from a sheet needs unless the table holds
-   it, finishing passes and horizontal leads.
+   done ([decision 0005](docs/decisions/0005-2d-profile-and-pocket.md)), with
+   tabs (on profiles, as Fusion's on a 2D contour) and a profile's horizontal
+   leads; they lack finishing passes, a pocket's leads, and picked entry points
+   and tab positions. Stock to leave is Fusion's, radial and axial, negative
+   included, on every operation; which shared settings a strategy uses is one
+   table (`StrategySpec::uses`), for a new strategy to fill in.
 4. **Arc fitting**, as a `Toolpath -> Toolpath` transform.
 5. **A volumetric stock**, so what a top setup leaves carries to a flipped bottom
    one.

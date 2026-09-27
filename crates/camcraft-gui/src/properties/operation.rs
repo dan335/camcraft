@@ -2,8 +2,8 @@
 //! it is kept to, its heights, its passes, and how its passes are linked.
 
 use camcraft_core::job::{
-    Boundary, Containment, FeatureRef, Geometry, Height, HeightContext, HeightRef, Operation,
-    ProfileSide, StrategySpec,
+    Boundary, Containment, FeatureRef, Geometry, Height, HeightContext, HeightRef, Leads, Leave,
+    Operation, ProfileSide, StockToLeave, StrategySpec, TabShape, Tabs,
 };
 use eframe::egui;
 use glam::DVec2;
@@ -66,7 +66,8 @@ pub(super) fn show(
     };
     let taken: Vec<String> = s.operations.iter().map(|o| o.name.clone()).collect();
     let id = ui.id().with(("operation", setup, index));
-    if let Some(to) = header(ui, "Operation", id, &current) {
+    let what = (doc.id, Selection::Operation(setup.to_string(), index));
+    if let Some(to) = header(ui, "Operation", id, &current, what) {
         rename(doc, setup, index, &to, &taken);
     }
     cannot_generate(ui, doc, setup);
@@ -93,16 +94,32 @@ pub(super) fn show(
         Tab::new("Passes"),
         Tab::new("Linking"),
     ];
-    // Picking faces or edges shows the tab that lists them.
+    // Picking faces or edges starts on the tab that lists them.
     let geometry_tab = TABS.iter().position(|t| *t == OperationTab::Geometry);
     let picking = geometry_tab
         .filter(|_| matches!(picks.armed, Some(Slot::Faces { .. } | Slot::Edges { .. })));
     let page = widgets::remembered_tabs(ui, egui::Id::new(TAB), &tabs, 0, picking);
+    // Another tab chosen while picking stops it: what is picked is out of sight.
+    if picking.is_some_and(|p| p != page) {
+        actions.push(PropAction::Disarm);
+    }
     let page = TABS.get(page).copied().unwrap_or(OperationTab::Linking);
     let diameter = tool_name
         .as_ref()
         .and_then(|t| doc.job.tools.get(t))
         .map(|t| t.diameter);
+    // How far below zero its stock to leave may go: the tool's to say.
+    let least = tool_name
+        .as_ref()
+        .and_then(|t| doc.job.tools.get(t))
+        .zip(doc.operation(setup, index))
+        .map_or(
+            StockToLeave {
+                radial: f64::NEG_INFINITY,
+                axial: f64::NEG_INFINITY,
+            },
+            |(t, op)| op.least_stock_to_leave(t),
+        );
     if page == OperationTab::Tool {
         tool(ui, doc, m, setup, index, tool_name.as_deref(), actions);
     } else if let Some(op) = doc.operation_mut(setup, index) {
@@ -112,11 +129,21 @@ pub(super) fn show(
                 geometry(ui, m, setup, index, op, diameter, picks, actions);
             }
             OperationTab::Heights => heights(ui, m, op),
-            OperationTab::Passes => passes(ui, m, op),
+            OperationTab::Passes => passes(ui, m, op, least),
             OperationTab::Linking => linking(ui, m, op, diameter),
         }
     }
     Some(page)
+}
+
+/// Rename operation `index` of `setup` to `to`, if no other of its setup's
+/// operations has the name.
+pub(super) fn rename_to(doc: &mut Document, setup: &str, index: usize, to: &str) {
+    let taken: Vec<String> = doc
+        .setup(setup)
+        .map(|s| s.operations.iter().map(|o| o.name.clone()).collect())
+        .unwrap_or_default();
+    rename(doc, setup, index, to, &taken);
 }
 
 /// Rename operation `index` of `setup` to `to`, if the name is free.
@@ -303,7 +330,7 @@ fn geometry(
     let drilling = matches!(op.strategy, StrategySpec::Drill { .. });
     let flat = op.strategy.is_2d();
     if flat {
-        outline_form(ui, op);
+        outline_form(ui, m, op);
         ui.add_space(theme::SPACE_3);
     }
     let g = &mut op.geometry;
@@ -322,37 +349,109 @@ fn geometry(
     if drilling || selection == Boundary::Selection {
         pick_cards(ui, setup, index, g, picks, actions);
     }
-    if flat {
-        match picks.shown.and_then(|s| s.boundary.as_ref()) {
-            Some(Err(why)) => {
-                error(ui, why);
-            }
-            Some(Ok(())) => {
-                hint(
-                    ui,
-                    "In the view at the stock's top: the boundary, and where the tool's \
-                     centre goes.",
-                );
-            }
-            None => {}
-        }
-    } else if !drilling {
-        match picks.shown.and_then(|s| s.boundary.as_ref()) {
-            Some(Err(why)) => {
-                error(ui, why);
-            }
-            Some(Ok(())) => {
-                hint(ui, boundary_hint(g));
-            }
-            None => {}
-        }
+    if drilling {
+        return;
     }
+    match picks.shown.and_then(|s| s.boundary.as_ref()) {
+        Some(Err(why)) => {
+            error(ui, why);
+        }
+        Some(Ok(())) if flat => {
+            let pocket = matches!(op.strategy, StrategySpec::Pocket { .. });
+            let mut items = vec![(Swatch::Bold(theme::BOUNDARY), "The boundary")];
+            if diameter.is_some() {
+                items.push((
+                    Swatch::Hatch(theme::CHANNEL),
+                    if pocket {
+                        "What the tool clears"
+                    } else {
+                        "What the tool cuts away"
+                    },
+                ));
+            }
+            legend(ui, &items);
+            hint(
+                ui,
+                if diameter.is_none() {
+                    "Select a tool to see what it cuts."
+                } else if g.boundary_2d() == Boundary::Selection {
+                    "Both are drawn at the height of what is picked."
+                } else {
+                    "Both are drawn at the stock's top."
+                },
+            );
+        }
+        Some(Ok(())) => {
+            let mut items = vec![
+                (Swatch::Bold(theme::BOUNDARY), "The boundary"),
+                (
+                    Swatch::Thin(theme::BOUNDARY_LIMIT),
+                    "Where the tool's centre may go",
+                ),
+            ];
+            if diameter.is_some() {
+                items.push((
+                    Swatch::Hatch(theme::CHANNEL),
+                    "What is cut outside the part",
+                ));
+            }
+            legend(ui, &items);
+            hint(ui, boundary_hint(g));
+        }
+        None => {}
+    }
+}
+
+/// How a line in the view is drawn, for its legend.
+#[derive(Debug, Clone, Copy)]
+enum Swatch {
+    /// A wide line.
+    Bold([u8; 3]),
+    /// A thin one.
+    Thin([u8; 3]),
+    /// Hatching.
+    Hatch([u8; 3]),
+}
+
+/// What the lines in the view are: each one's look, and its name.
+fn legend(ui: &mut egui::Ui, items: &[(Swatch, &str)]) {
+    for &(swatch, name) in items {
+        ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(28.0, 14.0), egui::Sense::hover());
+            let painter = ui.painter();
+            let (y, x0, x1) = (rect.center().y, rect.left() + 2.0, rect.right() - 2.0);
+            match swatch {
+                Swatch::Bold(c) => {
+                    let stroke = egui::Stroke::new(3.0, theme::egui_color(c));
+                    painter.line_segment([egui::pos2(x0, y), egui::pos2(x1, y)], stroke);
+                }
+                Swatch::Thin(c) => {
+                    let stroke = egui::Stroke::new(1.0, theme::egui_color(c));
+                    painter.line_segment([egui::pos2(x0, y), egui::pos2(x1, y)], stroke);
+                }
+                Swatch::Hatch(c) => {
+                    let stroke = egui::Stroke::new(1.0, theme::egui_color(c));
+                    let r = rect.shrink2(egui::vec2(2.0, 1.0));
+                    let mut x = r.left() - r.height();
+                    while x < r.right() {
+                        let a = egui::pos2(x.max(r.left()), r.bottom() - (x.max(r.left()) - x));
+                        let right = (x + r.height()).min(r.right());
+                        let b = egui::pos2(right, r.bottom() - (right - x));
+                        painter.line_segment([a, b], stroke);
+                        x += 4.0;
+                    }
+                }
+            }
+            ui.label(name);
+        });
+    }
+    ui.add_space(theme::SPACE_2);
 }
 
 /// A 2D operation's boundary, what it profiles round or pockets, and a profile's
 /// side of it: Fusion's 2D Contour and 2D Pocket Geometry tabs. The tool's centre
 /// goes its radius beside the boundary, so there is no containment or offset.
-fn outline_form(ui: &mut egui::Ui, op: &mut Operation) {
+fn outline_form(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
     form(ui, "outline", |ui| {
         let g = &mut op.geometry;
         widgets::field_label(ui, "Boundary");
@@ -380,11 +479,11 @@ fn outline_form(ui: &mut egui::Ui, op: &mut Operation) {
         }
         ui.end_row();
         if let StrategySpec::Profile { side, .. } = &mut op.strategy {
-            widgets::field_label(ui, "Side");
+            widgets::field_label(ui, "Cut");
             let name = |s: ProfileSide| match s {
-                ProfileSide::Outside => "outside: cut the part out",
-                ProfileSide::Inside => "inside: cut a hole out",
-                ProfileSide::On => "on the line: a groove",
+                ProfileSide::Outside => "outside the boundary",
+                ProfileSide::Inside => "inside the boundary",
+                ProfileSide::On => "on the boundary",
             };
             egui::ComboBox::from_id_salt("side")
                 .selected_text(name(*side))
@@ -395,22 +494,26 @@ fn outline_form(ui: &mut egui::Ui, op: &mut Operation) {
                 });
             ui.end_row();
         }
+        widgets::field_label(ui, "Additional offset");
+        m.signed_length_field(ui, &mut op.geometry.margin, 0.1, 1000.0, "")
+            .on_hover_text("Moves the cut out from the boundary, or in when negative");
+        ui.end_row();
     });
-    // The side is the region's, not each ring's: a part's holes are cut from
+    // The side is the area's, not each loop's: a part's holes are cut from
     // inside them, a hole's islands from outside them.
     if let StrategySpec::Profile { side, .. } = op.strategy {
         hint(
             ui,
             match side {
                 ProfileSide::Outside => {
-                    "The tool goes round the outside of the part, and round inside each \
-                     of its holes."
+                    "Cuts a part out: the tool runs round outside the boundary, and \
+                     inside any hole in it."
                 }
                 ProfileSide::Inside => {
-                    "The tool goes round inside the outline, and round the outside of \
-                     anything left standing in it."
+                    "Cuts a hole out: the tool runs round inside the boundary, and \
+                     outside anything left standing in it."
                 }
-                ProfileSide::On => "The tool's centre follows the line.",
+                ProfileSide::On => "Cuts a groove: the tool's centre runs on the boundary.",
             },
         );
     }
@@ -516,9 +619,25 @@ fn pick_cards(
                 op: index,
             },
         };
-        let (list, found) = match kind {
-            Kind::Face => (&mut g.faces, picks.shown.map(|s| s.faces.as_slice())),
-            Kind::Edge => (&mut g.edges, picks.shown.map(|s| s.edges.as_slice())),
+        let list = match kind {
+            Kind::Face => &mut g.faces,
+            Kind::Edge => &mut g.edges,
+        };
+        // A row for each face, and for each loop of edges; each pick alone, as the
+        // job names it, until the view has found them.
+        let rows: Vec<PickRow> = match (kind, picks.shown) {
+            (Kind::Face, Some(s)) => s
+                .faces
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (vec![i], Some(f.clone())))
+                .collect(),
+            (Kind::Edge, Some(s)) => s
+                .edge_loops
+                .iter()
+                .map(|(picks, what)| (picks.clone(), Some(what.clone())))
+                .collect(),
+            (_, None) => (0..list.len()).map(|i| (vec![i], None)).collect(),
         };
         let mut clear = false;
         let mut asked = None;
@@ -550,7 +669,7 @@ fn pick_cards(
                 if list.is_empty() {
                     hint(ui, "None picked.");
                 }
-                pick_list(ui, kind, list, found.unwrap_or_default(), actions);
+                pick_list(ui, kind, list, &rows, actions);
             },
         );
         actions.extend(asked);
@@ -561,17 +680,25 @@ fn pick_cards(
     }
 }
 
-/// A list of picks, as the engine finds them: each can be taken out, and a row under
-/// the pointer shows its pick in the view.
+/// A row of a list of picks: the places in the job's list of the picks it stands
+/// for, and what they are or why they cannot be found, once the view has looked.
+type PickRow = (Vec<usize>, Option<Result<String, String>>);
+
+/// A list of picks, as the engine finds them, a row for each of `rows`: the picks
+/// it stands for, and what they are or why they cannot be found. Each row can be
+/// taken out, and a row under the pointer shows its picks in the view.
 fn pick_list(
     ui: &mut egui::Ui,
     kind: Kind,
     list: &mut Vec<FeatureRef>,
-    found: &[Result<String, String>],
+    rows: &[PickRow],
     actions: &mut Vec<PropAction>,
 ) {
     let mut remove = None;
-    for (i, r) in list.iter().enumerate() {
+    for (picks, found) in rows {
+        let Some((&i, r)) = picks.first().and_then(|i| Some((i, list.get(*i)?))) else {
+            continue;
+        };
         let (rect, _) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), theme::CONTROL_SM),
             egui::Sense::hover(),
@@ -586,7 +713,7 @@ fn pick_list(
                 .max_rect(rect.shrink2(egui::vec2(theme::SPACE_3, 0.0)))
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
-        match found.get(i) {
+        match found {
             Some(Ok(what)) => row.label(what),
             Some(Err(why)) => row.colored_label(widgets::Level::Err.color(), why),
             None => row.label(
@@ -596,12 +723,16 @@ fn pick_list(
         };
         row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if hovered && widgets::icon_button(ui, Icon::X, "take it out").clicked() {
-                remove = Some(i);
+                remove = Some(picks);
             }
         });
     }
-    if let Some(i) = remove {
-        list.remove(i);
+    if let Some(picks) = remove {
+        let mut i = 0;
+        list.retain(|_| {
+            i += 1;
+            !picks.contains(&(i - 1))
+        });
     }
 }
 
@@ -732,7 +863,8 @@ pub fn height_planes(doc: &Document, m: Measure, tab: Option<OperationTab>) -> V
     .collect()
 }
 
-fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
+fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave) {
+    let uses = op.strategy.uses();
     form(ui, "passes", |ui| {
         match &mut op.strategy {
             StrategySpec::Parallel { angle } => {
@@ -800,33 +932,115 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
                 ui.end_row();
             }
         }
-        // A profile is one ring round: it has no stepover.
-        if !matches!(op.strategy, StrategySpec::Profile { .. }) {
+        if uses.stepover {
             widgets::field_label(ui, "Stepover");
             m.length_field(ui, &mut op.passes.stepover, 0.05, 100.0, "");
             ui.end_row();
         }
-        widgets::field_label(ui, "Leave, sideways");
-        m.length_field(ui, &mut op.passes.stock_to_leave.radial, 0.05, 50.0, "");
-        ui.end_row();
-        widgets::field_label(ui, "Leave, down");
-        m.length_field(ui, &mut op.passes.stock_to_leave.axial, 0.05, 50.0, "");
-        ui.end_row();
+        if uses.stock_to_leave != Leave::None {
+            widgets::field_label(ui, "Stock to leave");
+            stock_to_leave(
+                ui,
+                m,
+                &mut op.passes.stock_to_leave,
+                uses.stock_to_leave,
+                least,
+            );
+            ui.end_row();
+        }
         widgets::field_label(ui, "Deepest step cut");
         m.length_field(ui, &mut op.passes.max_cut_step, 0.05, 50.0, "");
         ui.end_row();
     });
+    if uses.tabs {
+        ui.add_space(theme::SPACE_4);
+        ui.label(widgets::section_label("Tabs"));
+        ui.add_space(theme::SPACE_2);
+        tabs(ui, m, &mut op.passes.tabs);
+    }
+}
+
+/// Stock to leave, as Fusion's Passes tab has it: ticked to leave any, then how
+/// much on the walls and floors. Unticked is none, and ticked starts at
+/// roughing's half a millimetre each way; set back to none, it unticks.
+fn stock_to_leave(
+    ui: &mut egui::Ui,
+    m: Measure,
+    stock: &mut StockToLeave,
+    leave: Leave,
+    least: StockToLeave,
+) {
+    ui.horizontal(|ui| {
+        let mut on = *stock != StockToLeave::default();
+        if ui.checkbox(&mut on, "").changed() {
+            *stock = if on {
+                StockToLeave {
+                    radial: 0.5,
+                    axial: 0.5,
+                }
+            } else {
+                StockToLeave::default()
+            };
+        }
+        if on {
+            m.stock_to_leave_fields(ui, stock, leave, least);
+        }
+    });
+}
+
+/// Tabs left across the deepest cut to hold what it frees, and their size.
+fn tabs(ui: &mut egui::Ui, m: Measure, tabs: &mut Option<Tabs>) {
+    let mut on = tabs.is_some();
+    ui.checkbox(&mut on, "Leave tabs to hold the part");
+    match (on, tabs.is_some()) {
+        (true, false) => *tabs = Some(Tabs::default()),
+        (false, true) => *tabs = None,
+        _ => {}
+    }
+    let Some(t) = tabs else {
+        return;
+    };
+    ui.add_space(theme::SPACE_2);
+    form(ui, "tabs", |ui| {
+        widgets::field_label(ui, "Shape");
+        let name = |s: TabShape| match s {
+            TabShape::Rectangular => "rectangular",
+            TabShape::Triangular => "triangular: ramped, no plunge",
+        };
+        egui::ComboBox::from_id_salt("tab-shape")
+            .selected_text(name(t.shape))
+            .show_ui(ui, |ui| {
+                for s in [TabShape::Rectangular, TabShape::Triangular] {
+                    ui.selectable_value(&mut t.shape, s, name(s));
+                }
+            });
+        ui.end_row();
+        widgets::field_label(ui, "Width");
+        m.length_field(ui, &mut t.width, 0.1, 1000.0, "")
+            .on_hover_text("Material left along the cut, at the tab's top");
+        ui.end_row();
+        widgets::field_label(ui, "Height");
+        m.length_field(ui, &mut t.height, 0.1, 1000.0, "")
+            .on_hover_text("How far above the bottom of the cut the tab's top is");
+        ui.end_row();
+        widgets::field_label(ui, "Spacing");
+        m.length_field(ui, &mut t.spacing, 1.0, 100_000.0, "about ")
+            .on_hover_text("About how far apart round each loop; at least two to a loop");
+        ui.end_row();
+    });
+    hint(
+        ui,
+        "Tabs go evenly round each loop cut at the deepest level, and every cut \
+         over one rides over its top.",
+    );
 }
 
 /// How the operation moves between cuts. A value left out is the strategy's own,
 /// as Fusion's, and says what that comes to for the tool chosen.
 fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f64>) {
-    // A 2D operation links as Z-level roughing does: level by level, ramping in.
-    let flat = op.strategy.is_2d();
-    let (parallel, zlevel) = (
-        matches!(op.strategy, StrategySpec::Parallel { .. }),
-        matches!(op.strategy, StrategySpec::ZlevelRough { .. }) || flat,
-    );
+    let uses = op.strategy.uses();
+    // Parallel stays down over the part; the rest level by level.
+    let parallel = matches!(op.strategy, StrategySpec::Parallel { .. });
     let of_tool = |part: f64, what: &str| match diameter {
         Some(d) => format!("{what}: {}", m.length(part * d, 2)),
         None => what.to_string(),
@@ -842,7 +1056,7 @@ fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f
                  and feeds up to on the way out",
             );
         ui.end_row();
-        if parallel || zlevel {
+        if uses.stay_down {
             widgets::field_label(ui, "Stay down");
             let absent = if parallel {
                 format!("up to {}", m.length(50.0, 0))
@@ -864,7 +1078,7 @@ fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f
             });
             ui.end_row();
         }
-        if parallel {
+        if uses.lead_radius {
             widgets::field_label(ui, "Lead radius");
             let absent = of_tool(0.1, "a tenth of the tool");
             let start = 0.1 * diameter.unwrap_or(6.0);
@@ -877,7 +1091,7 @@ fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f
             });
             ui.end_row();
         }
-        if zlevel {
+        if uses.ramp {
             widgets::field_label(ui, "Ramp angle");
             ui.add(
                 egui::DragValue::new(&mut op.linking.ramp_angle)
@@ -901,9 +1115,44 @@ fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f
             });
             ui.end_row();
         }
-        // A 2D operation's order is its own: what is inside before what frees
-        // it, the middle of a pocket before its walls.
-        if !flat {
+        if uses.leads {
+            widgets::field_label(ui, "Leads");
+            let mut on = op.linking.leads.is_some();
+            ui.checkbox(&mut on, "arc on and off each ring");
+            match (on, op.linking.leads.is_some()) {
+                (true, false) => op.linking.leads = Some(Leads::default()),
+                (false, true) => op.linking.leads = None,
+                _ => {}
+            }
+            ui.end_row();
+            if let Some(l) = &mut op.linking.leads {
+                widgets::field_label(ui, "Lead radius");
+                let absent = of_tool(0.5, "half the tool");
+                let start = 0.5 * diameter.unwrap_or(6.0);
+                ui.horizontal(|ui| {
+                    widgets::optional(ui, &mut l.radius, start, &absent, |ui, v| {
+                        m.length_field(ui, v, 0.05, 1000.0, "").on_hover_text(
+                            "The level arc's radius; smaller where the waste has no room",
+                        );
+                    });
+                });
+                ui.end_row();
+                widgets::field_label(ui, "Lead sweep");
+                ui.add(
+                    egui::DragValue::new(&mut l.sweep)
+                        .speed(1.0)
+                        .range(1.0..=180.0)
+                        .suffix("°"),
+                )
+                .on_hover_text("How far round the arc turns");
+                ui.end_row();
+                widgets::field_label(ui, "Straight lead");
+                m.length_field(ui, &mut l.straight, 0.1, 1000.0, "")
+                    .on_hover_text("A straight run before the arc in and after it out");
+                ui.end_row();
+            }
+        }
+        if uses.reorder {
             widgets::field_label(ui, "Reorder passes");
             ui.checkbox(&mut op.linking.reorder, "to shorten travel");
             ui.end_row();

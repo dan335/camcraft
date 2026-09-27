@@ -120,6 +120,17 @@ pub enum SessionError {
         /// Why.
         source: std::io::Error,
     },
+    /// Two programs of one posting would be written to the same file: their
+    /// names differ only in what a file name cannot hold, or in case.
+    #[error("{first} and {second} would both be written to {path}: rename one")]
+    SameProgram {
+        /// The file.
+        path: String,
+        /// The one written first.
+        first: String,
+        /// The one that would replace it.
+        second: String,
+    },
     /// The job did not verify, and nobody insisted.
     #[error("verification failed")]
     Refused,

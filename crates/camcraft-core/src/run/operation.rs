@@ -19,12 +19,15 @@ use crate::linker::{
 };
 use crate::ordering::order_passes;
 use crate::parallel::{ParallelParams, follow, parallel_finish_within};
-use crate::planar::{Area, PlanarParams, PlanarReport, areas, centre_offset, pocket, profile};
+use crate::planar::{
+    Area, LeadArc, PlanarParams, PlanarReport, areas, centre_offset, pocket, profile,
+};
 use crate::reach::LevelReach;
 use crate::roughing::{RoughingParams, zlevel_rough};
 use crate::setup::{Bodies, Prepared};
 use crate::simadapt::sim_moves_of;
 use crate::strategy::StrategyError;
+use crate::tabs::{TabParams, add_tabs};
 use crate::tool::ToolProfile;
 use crate::toolpath::{Move, Toolpath};
 
@@ -110,11 +113,37 @@ pub(super) fn run_operation(
     // already in order, and a hole reversed would be drilled from the bottom up.
     // A 2D operation's order is its own: holes before the outline that frees a
     // part, a pocket's middle before its walls.
-    let ordered_already = matches!(op.strategy, StrategySpec::Drill { .. }) || op.strategy.is_2d();
-    let (ordered, order) = if op.linking.reorder && !ordered_already {
+    let (ordered, order) = if op.linking.reorder && op.strategy.uses().reorder {
         order_passes(&raw, op.linking.allow_reverse)?
     } else {
         (raw, Default::default())
+    };
+
+    // Tabs are another Toolpath -> Toolpath transform, on the order used, before
+    // linking: the linker cuts the passes into the material as it links them,
+    // so it plans round the tabs left standing. Only a strategy that cuts loops
+    // has them.
+    let ordered = match op.passes.tabs {
+        Some(tabs) if op.strategy.uses().tabs => {
+            let params = TabParams {
+                tabs,
+                tool_radius: work.tool.cutter_radius(),
+                plunge_feed: op.linking.plunge_feed,
+            };
+            let (tabbed, report) =
+                add_tabs(&ordered, &params).map_err(|e| in_op(op)(StrategyError::from(e)))?;
+            if report.tabs == 0 {
+                warnings
+                    .push("no tabs: no closed loop at the deepest level has room for one".into());
+            } else if report.too_short > 0 {
+                warnings.push(format!(
+                    "{} loop(s) at the deepest level too short for a tab",
+                    report.too_short
+                ));
+            }
+            tabbed
+        }
+        _ => ordered,
     };
 
     // Traverses clear the material as it stood before the operation: never lower
@@ -226,7 +255,7 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
     LinkParams {
         retract_feed: linking.retract_feed,
         plunge_feed: linking.plunge_feed,
-        tool_radius: work.tool.max_radius(),
+        tool_radius: work.tool.cutter_radius(),
         safe_distance: linking.safe_distance,
         stay_down,
         lead_radius,
@@ -372,8 +401,17 @@ fn planar_paths(
         feed: op.passes.feed,
         top: op.geometry.top.map_or(ctx.stock_top, |h| h.resolve(ctx)),
         arc: work.job.tolerance * 0.5,
-        radius: work.tool.max_radius(),
+        radius: work.tool.cutter_radius(),
         kept_on_right: clockwise != conventional,
+        leads: op
+            .linking
+            .leads
+            .filter(|_| op.strategy.uses().leads)
+            .map(|l| LeadArc {
+                radius: l.radius.unwrap_or(0.5 * work.spec.diameter),
+                sweep: l.sweep.to_radians(),
+                straight: l.straight,
+            }),
     };
     let (path, report, detail): (Toolpath, PlanarReport, fn(PlanarReport) -> StrategyDetail) =
         match op.strategy {
@@ -386,6 +424,13 @@ fn planar_paths(
                 (path, report, StrategyDetail::Pocket)
             }
         };
+    if report.no_room_to_lead > 0 {
+        warnings.push(format!(
+            "{} ring(s) have no room for a lead in the waste beside them, and are \
+             entered and left without",
+            report.no_room_to_lead
+        ));
+    }
     if report.too_shallow > 0 {
         warnings.push(format!(
             "{} area(s) have their floor at or above the top, {:.3} mm, and are not cut",
@@ -414,7 +459,7 @@ pub(super) fn planar_areas(
         let b = prepared.stock_bounds();
         Region::rectangle(b.min.truncate(), b.max.truncate())
     });
-    let leave = op.passes.stock_to_leave;
+    let leave = op.stock_to_leave();
     let offset = centre_offset(op, tool.cutter_radius());
     let (fallback, floors) = match op.geometry.bottom {
         Some(h) => (h.resolve(ctx), &[][..]),

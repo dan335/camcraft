@@ -90,6 +90,7 @@ pub fn single_operation(spec: &FinishSpec, model: ModelDef) -> Job {
             },
             max_cut_step: spec.max_cut_step,
             rpm: None,
+            tabs: None,
         },
         linking: Linking {
             retract_feed: spec.feed,

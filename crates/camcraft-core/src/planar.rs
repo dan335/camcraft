@@ -70,6 +70,20 @@ pub struct PlanarParams {
     /// Whether the material kept is on the tool's right: climbing with a
     /// clockwise spindle.
     pub kept_on_right: bool,
+    /// The arcs a profile enters and leaves each ring along, if any.
+    pub leads: Option<LeadArc>,
+}
+
+/// A level arc a profile enters a ring along and leaves it along, in the waste
+/// beside it: Fusion's horizontal lead-in and lead-out, the same both ways.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LeadArc {
+    /// Its radius, in millimetres.
+    pub radius: f64,
+    /// How far round it turns, in radians.
+    pub sweep: f64,
+    /// A straight run before it in and after it out, in millimetres.
+    pub straight: f64,
 }
 
 /// What a profile or a pocket did.
@@ -85,14 +99,22 @@ pub struct PlanarReport {
     pub levels: u64,
     /// Passes emitted: every ring at every level.
     pub passes: u64,
+    /// Rings a lead was asked for that had no room for one in the waste, even
+    /// a quarter the size, and so are entered and left without.
+    pub no_room_to_lead: u64,
 }
 
 /// How far `op`'s tool's centre stays outside its boundary, inward when
 /// negative: its radius, `cutter_radius`, and the stock to leave beside, on the
-/// side a profile cuts, and inside for a pocket. Zero for anything else.
+/// side a profile cuts, and inside for a pocket; then the geometry's additional
+/// offset, which moves the cut out from the boundary, or in when negative, as if
+/// the boundary were moved. Zero for anything else.
+///
+/// The offset moves the tool and not the boundary, so a floor is still found
+/// among the picks on the boundary itself.
 pub fn centre_offset(op: &Operation, cutter_radius: f64) -> f64 {
-    let radius = cutter_radius + op.passes.stock_to_leave.radial;
-    match op.strategy {
+    let radius = cutter_radius + op.stock_to_leave().radial;
+    let beside = match op.strategy {
         StrategySpec::Profile { side, .. } => match side {
             ProfileSide::Outside => radius,
             ProfileSide::Inside => -radius,
@@ -101,8 +123,9 @@ pub fn centre_offset(op: &Operation, cutter_radius: f64) -> f64 {
         StrategySpec::Pocket { .. } => -radius,
         StrategySpec::Parallel { .. }
         | StrategySpec::ZlevelRough { .. }
-        | StrategySpec::Drill { .. } => 0.0,
-    }
+        | StrategySpec::Drill { .. } => return 0.0,
+    };
+    beside + op.geometry.margin
 }
 
 /// The areas where the tool's centre goes, with their floors.
@@ -118,21 +141,10 @@ pub fn areas(
     floors: &[DVec3],
     fallback: f64,
 ) -> Result<Vec<Area>, StrategyError> {
-    // The boundary's own pieces, each with its floor. A picked edge lies on its
-    // piece's boundary, so each is grown a little to take in what lies on it.
-    let shapes = pieces(shape);
-    let shape_floors: Vec<f64> = shapes
-        .iter()
-        .map(|s| {
-            let near = s.offset(arc.max(1e-3), arc);
-            floors
-                .iter()
-                .filter(|p| near.contains(p.truncate()))
-                .map(|p| p.z)
-                .reduce(f64::min)
-                .unwrap_or(fallback)
-        })
-        .collect();
+    let (shapes, shape_floors): (Vec<Region>, Vec<f64>) =
+        floored_pieces(shape, arc, floors, fallback)
+            .into_iter()
+            .unzip();
     let centres = shape.offset(offset, arc);
     let mut out = Vec::new();
     for region in pieces(&centres) {
@@ -156,6 +168,31 @@ pub fn areas(
     Ok(out)
 }
 
+/// The boundary's own pieces, each an outer ring with the holes inside it, and
+/// the floor of each: the lowest of `floors` in it, or `fallback` where none is.
+/// A picked edge lies on its piece's boundary, so each is grown by `arc`, or a
+/// micron at least, to take in what lies on it.
+pub fn floored_pieces(
+    shape: &Region,
+    arc: f64,
+    floors: &[DVec3],
+    fallback: f64,
+) -> Vec<(Region, f64)> {
+    pieces(shape)
+        .into_iter()
+        .map(|s| {
+            let near = s.offset(arc.max(1e-3), arc);
+            let floor = floors
+                .iter()
+                .filter(|p| near.contains(p.truncate()))
+                .map(|p| p.z)
+                .reduce(f64::min)
+                .unwrap_or(fallback);
+            (s, floor)
+        })
+        .collect()
+}
+
 /// A profile round each area's rings, `side` of the boundary they came from,
 /// each ring all the way down before the next.
 pub fn profile(
@@ -169,8 +206,8 @@ pub fn profile(
     // the region winds it. Inside or on it, the right.
     let kept_left = side == ProfileSide::Outside;
     let reverse = kept_left == params.kept_on_right;
-    let mut rings: Vec<(Vec<DVec2>, Vec<f64>)> = Vec::new();
-    for area in areas {
+    let mut rings: Vec<(Vec<DVec2>, Vec<f64>, usize)> = Vec::new();
+    for (i, area) in areas.iter().enumerate() {
         let levels = levels(params.top, area.bottom, params.stepdown);
         if levels.is_empty() {
             report.too_shallow += 1;
@@ -179,26 +216,136 @@ pub fn profile(
         report.areas += 1;
         report.levels = report.levels.max(levels.len() as u64);
         for ring in area.region.rings() {
-            rings.push((wound(ring, reverse), levels.clone()));
+            rings.push((wound(ring, reverse), levels.clone(), i));
         }
     }
 
+    // Where a lead may go: the waste beside the rings, outside every area for a
+    // profile outside its boundary, inside its own area for one inside. A
+    // groove on the boundary has waste on neither side it can be sure of, so
+    // has no leads.
+    let waste = |area: usize, p: DVec2| match side {
+        ProfileSide::Outside => areas.iter().all(|a| !a.region.contains(p)),
+        ProfileSide::Inside => areas.get(area).is_some_and(|a| a.region.contains(p)),
+        ProfileSide::On => false,
+    };
+
     let mut path = Toolpath::new();
     let mut at: Option<DVec2> = None;
-    let loops: Vec<&[DVec2]> = rings.iter().map(|(r, _)| r.as_slice()).collect();
+    let loops: Vec<&[DVec2]> = rings.iter().map(|(r, _, _)| r.as_slice()).collect();
     for i in inside_first(&loops) {
-        let Some((ring, levels)) = rings.get(i) else {
+        let Some((ring, levels, area)) = rings.get(i) else {
             continue;
         };
-        let ring = starting_near(ring, at);
+        let mut ring = starting_near(ring, at);
         report.rings += 1;
+        // The waste is on the side away from what is kept: the left, when what
+        // is kept is on the right. A lead needs a straight run to join: where the
+        // ring starts at a corner, it starts instead halfway along its longest
+        // side.
+        let asked = params.leads.filter(|_| side != ProfileSide::On);
+        let fit = |r: &[DVec2]| {
+            asked.and_then(|l| leads_for(r, l, params.kept_on_right, |p| waste(*area, p)))
+        };
+        let mut leads = fit(&ring);
+        if asked.is_some() && leads.is_none() {
+            let middle = longest_middle(&ring);
+            leads = fit(&middle);
+            if leads.is_some() {
+                ring = middle;
+            }
+        }
+        if asked.is_some() && leads.is_none() {
+            report.no_room_to_lead += 1;
+        }
         for &z in levels {
-            emit(&ring, z, params.feed, &mut path)?;
+            emit(&ring, z, params.feed, leads.as_ref(), &mut path)?;
             report.passes += 1;
         }
         at = ring.first().copied();
     }
     Ok((path, report))
+}
+
+/// The lead-in onto the start of closed `ring` and the lead-out off its end, as
+/// points seen from above, each in the order the tool goes, the ring's start
+/// left out: arcs of `lead` tangent to the ring, on its left when `left`, else
+/// its right. The largest of the lead's radius, its half and its quarter whose
+/// points are all in the waste, as `waste` says; `None` where none is.
+fn leads_for(
+    ring: &[DVec2],
+    lead: LeadArc,
+    left: bool,
+    waste: impl Fn(DVec2) -> bool,
+) -> Option<(Vec<DVec2>, Vec<DVec2>)> {
+    let start = *ring.first()?;
+    // The way the ring leaves its start, and the way it comes back to it.
+    let into = ring
+        .iter()
+        .skip(1)
+        .map(|p| *p - start)
+        .find(|d| d.length() > 1e-9)?
+        .normalize();
+    // The ring does not repeat its start at its end.
+    let back = ring
+        .iter()
+        .rev()
+        .map(|p| start - *p)
+        .find(|d| d.length() > 1e-9)?
+        .normalize();
+    let aside = |t: DVec2| if left { t.perp() } else { -t.perp() };
+    let steps = arc_steps(lead.sweep);
+    let angles = move || (1..=steps).map(move |k| lead.sweep * f64::from(k) / f64::from(steps));
+    [1.0, 0.5, 0.25].into_iter().find_map(|k| {
+        let r = lead.radius * k;
+        // In: round an arc from the waste onto the start, heading along `into`.
+        // Angle `a` back from the start is at centre − n·r·cos a − t·r·sin a.
+        let n = aside(into);
+        let point_in = |a: f64| start + n * r * (1.0 - a.cos()) - into * r * a.sin();
+        let heading_in = |a: f64| (into * a.cos() - n * a.sin()).normalize_or_zero();
+        let mut lead_in: Vec<DVec2> = angles().map(point_in).collect();
+        lead_in.reverse();
+        if lead.straight > 0.0 {
+            let far = point_in(lead.sweep);
+            lead_in.insert(0, far - heading_in(lead.sweep) * lead.straight);
+        }
+        // Out: on along `back`, round an arc away into the waste.
+        let n = aside(back);
+        let point_out = |a: f64| start + n * r * (1.0 - a.cos()) + back * r * a.sin();
+        let heading_out = |a: f64| (back * a.cos() + n * a.sin()).normalize_or_zero();
+        let mut lead_out: Vec<DVec2> = angles().map(point_out).collect();
+        if lead.straight > 0.0 {
+            let far = point_out(lead.sweep);
+            lead_out.push(far + heading_out(lead.sweep) * lead.straight);
+        }
+        let clear = lead_in.iter().chain(&lead_out).all(|p| waste(*p));
+        clear.then_some((lead_in, lead_out))
+    })
+}
+
+/// Closed `ring` started halfway along its longest side instead.
+fn longest_middle(ring: &[DVec2]) -> Vec<DVec2> {
+    let n = ring.len();
+    let Some((i, _)) = (0..n)
+        .filter_map(|i| Some((i, ring.get(i)?.distance(*ring.get((i + 1) % n)?))))
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+    else {
+        return ring.to_vec();
+    };
+    let (Some(&a), Some(&b)) = (ring.get(i), ring.get((i + 1) % n)) else {
+        return ring.to_vec();
+    };
+    let mut out = vec![(a + b) / 2.0];
+    out.extend((1..=n).filter_map(|k| ring.get((i + k) % n)));
+    out
+}
+
+/// How many chords an arc turning `sweep` radians is drawn in: one every five
+/// degrees or so, at least two.
+fn arc_steps(sweep: f64) -> u32 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let n = (sweep.abs() / 5f64.to_radians()).ceil().clamp(2.0, 72.0) as u32;
+    n
 }
 
 /// Each area cleared from its middle out to its walls, level by level down to its
@@ -255,7 +402,7 @@ pub fn pocket(
                     }));
                     let Some(ring) = set.get(k) else { continue };
                     let ring = starting_near(ring, at);
-                    emit(&ring, z, params.feed, &mut path)?;
+                    emit(&ring, z, params.feed, None, &mut path)?;
                     report.passes += 1;
                     at = ring.first().copied();
                 }
@@ -543,14 +690,32 @@ fn starting_near(ring: &[DVec2], at: Option<DVec2>) -> Vec<DVec2> {
 }
 
 /// A closed ring cut at height `z`: a link to its start, then round and back to it.
-fn emit(ring: &[DVec2], z: f64, feed: f64, path: &mut Toolpath) -> Result<(), StrategyError> {
+fn emit(
+    ring: &[DVec2],
+    z: f64,
+    feed: f64,
+    leads: Option<&(Vec<DVec2>, Vec<DVec2>)>,
+    path: &mut Toolpath,
+) -> Result<(), StrategyError> {
     let Some(first) = ring.first() else {
         return Ok(());
     };
-    // The strategy does not plan how to arrive; the linker does.
-    path.feed_to(dvec3(first.x, first.y, z), MoveRole::Link, feed)?;
+    let (lead_in, lead_out) =
+        leads.map_or((&[][..], &[][..]), |(i, o)| (i.as_slice(), o.as_slice()));
+    // The strategy does not plan how to arrive; the linker does. With a lead, it
+    // arrives where the lead starts, and goes round it onto the ring.
+    let arrive = lead_in.first().unwrap_or(first);
+    path.feed_to(dvec3(arrive.x, arrive.y, z), MoveRole::Link, feed)?;
+    if !lead_in.is_empty() {
+        for p in lead_in.iter().skip(1).chain(std::iter::once(first)) {
+            path.feed_to(dvec3(p.x, p.y, z), MoveRole::Lead, feed)?;
+        }
+    }
     for p in ring.iter().skip(1).chain(std::iter::once(first)) {
         path.feed_to(dvec3(p.x, p.y, z), MoveRole::Cut, feed)?;
+    }
+    for p in lead_out {
+        path.feed_to(dvec3(p.x, p.y, z), MoveRole::Lead, feed)?;
     }
     Ok(())
 }
@@ -584,6 +749,7 @@ mod tests {
             arc: 0.01,
             radius: 1.5,
             kept_on_right: true,
+            leads: None,
         }
     }
 
@@ -606,6 +772,73 @@ mod tests {
             .map(|(a, b)| a.x * b.y - b.x * a.y)
             .sum::<f64>()
             * 0.5
+    }
+
+    /// A profile with leads arrives on each ring along an arc in the waste,
+    /// tangent to the ring where it joins it, and leaves along another: outside
+    /// a part cut out, inside a hole. Where the waste has no room even for a
+    /// quarter of the arc, the ring goes without, and says so; a groove has none.
+    #[test]
+    fn leads_arc_on_and_off_in_the_waste() {
+        let part = Region::new(vec![square(0.0, 40.0)]);
+        let lead = LeadArc {
+            radius: 4.0,
+            sweep: 90f64.to_radians(),
+            straight: 1.0,
+        };
+        let p = PlanarParams {
+            leads: Some(lead),
+            ..params()
+        };
+        for (side, offset) in [(ProfileSide::Outside, 1.5), (ProfileSide::Inside, -1.5)] {
+            let areas = areas(&part, offset, 0.01, &[], -1.0).unwrap();
+            let region = &areas[0].region;
+            let (path, report) = profile(&areas, side, &p).unwrap();
+            assert_eq!(report.no_room_to_lead, 0, "{side:?}");
+            let moves = path.moves();
+            let first_cut = moves.iter().position(|m| m.role == MoveRole::Cut).unwrap();
+            // Link, then the lead in, then the ring.
+            assert_eq!(moves[0].role, MoveRole::Link);
+            assert!(moves[1..first_cut].iter().all(|m| m.role == MoveRole::Lead));
+            assert!(first_cut > 3, "{side:?}: a lead of several chords");
+            for m in moves.iter().filter(|m| m.role == MoveRole::Lead) {
+                let q = m.to.truncate();
+                let ring = region.rings()[0].points();
+                let on_ring = ring.iter().zip(ring.iter().cycle().skip(1)).any(|(a, b)| {
+                    let t = ((q - *a).dot(*b - *a) / b.distance_squared(*a)).clamp(0.0, 1.0);
+                    q.distance(*a + (*b - *a) * t) < 1e-9
+                });
+                let inside = region.contains(q);
+                assert!(
+                    on_ring || inside == (side == ProfileSide::Inside),
+                    "{side:?}: a lead point at {q} is not in the waste"
+                );
+            }
+            // Joining the ring along it: the lead's last chord heads the way
+            // the ring's first cut does.
+            let join = moves[first_cut - 1].to;
+            let before = moves[first_cut - 2].to;
+            let along = (moves[first_cut].to - join).truncate().normalize();
+            let arriving = (join - before).truncate().normalize();
+            assert!(
+                along.dot(arriving) > 0.99,
+                "{side:?}: {along} vs {arriving}"
+            );
+            // Left along a lead too, after the ring closes.
+            assert_eq!(moves.last().unwrap().role, MoveRole::Lead);
+        }
+
+        // A 4 mm hole cut from inside: no room for even a 1 mm arc.
+        let hole = Region::new(vec![square(0.0, 4.0)]);
+        let small = areas(&hole, -1.5, 0.01, &[], -1.0).unwrap();
+        let (path, report) = profile(&small, ProfileSide::Inside, &p).unwrap();
+        assert_eq!(report.no_room_to_lead, 1);
+        assert!(path.moves().iter().all(|m| m.role != MoveRole::Lead));
+
+        let on = areas(&part, 0.0, 0.01, &[], -1.0).unwrap();
+        let (path, report) = profile(&on, ProfileSide::On, &p).unwrap();
+        assert_eq!(report.no_room_to_lead, 0);
+        assert!(path.moves().iter().all(|m| m.role != MoveRole::Lead));
     }
 
     #[test]

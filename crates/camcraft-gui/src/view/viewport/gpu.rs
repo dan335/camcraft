@@ -203,6 +203,8 @@ pub(super) struct Gpu {
     plane_pipeline: wgpu::RenderPipeline,
     plane_hidden_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
+    /// Lines where the part hides them, faint: picks and boundaries under it.
+    line_hidden_pipeline: wgpu::RenderPipeline,
     frame: wgpu::Buffer,
     frame_group: wgpu::BindGroup,
     part_object: Object,
@@ -278,11 +280,17 @@ pub(super) fn pipeline(device: &wgpu::Device, spec: &PipelineSpec<'_>) -> wgpu::
     })
 }
 
+/// How much of a line shows where the part hides it: the blend constant its
+/// hidden pipeline mixes it in by.
+const HIDDEN_LINE: f64 = 0.35;
+
 /// The pipeline that draws every line, toolpaths and outlines alike, as
-/// instanced quads.
-fn line_pipeline(
+/// instanced quads. `hidden`, the one that draws them only where something is in
+/// front, mixed in by [`HIDDEN_LINE`], and leaves the depth alone.
+fn line_pipeline_for(
     device: &wgpu::Device,
     frame_layout: &wgpu::BindGroupLayout,
+    hidden: bool,
 ) -> wgpu::RenderPipeline {
     let line_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("camcraft lines"),
@@ -307,9 +315,20 @@ fn line_pipeline(
                     0 => Float32x3, 1 => Float32x3, 2 => Uint32, 3 => Uint32
                 ],
             })],
-            blend: None,
-            depth_write: true,
-            compare: wgpu::CompareFunction::LessEqual,
+            blend: hidden.then_some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Constant,
+                    dst_factor: wgpu::BlendFactor::OneMinusConstant,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent::OVER,
+            }),
+            depth_write: !hidden,
+            compare: if hidden {
+                wgpu::CompareFunction::Greater
+            } else {
+                wgpu::CompareFunction::LessEqual
+            },
             bias: wgpu::DepthBiasState::default(),
         },
     )
@@ -490,7 +509,8 @@ impl Gpu {
             pull,
         );
 
-        let line_pipeline = line_pipeline(device, &frame_layout);
+        let line_hidden_pipeline = line_pipeline_for(device, &frame_layout, true);
+        let line_pipeline = line_pipeline_for(device, &frame_layout, false);
 
         let (stock_pipeline, stock_layout) = stock_gpu::stock_pipeline(device, &frame_layout);
 
@@ -505,6 +525,7 @@ impl Gpu {
             plane_pipeline,
             plane_hidden_pipeline,
             line_pipeline,
+            line_hidden_pipeline,
             frame,
             frame_group,
             part_object: object("camcraft part"),
@@ -976,6 +997,26 @@ impl Gpu {
                     pass.set_vertex_buffer(0, buffer.slice(..));
                     pass.draw(0..6, 0..1);
                 }
+            }
+        }
+
+        // Picks and boundaries where the part hides them, faintly: a boundary
+        // round the part's bottom, or a pocket's floor, lies under it.
+        pass.set_pipeline(&self.line_hidden_pipeline);
+        pass.set_blend_constant(wgpu::Color {
+            r: HIDDEN_LINE,
+            g: HIDDEN_LINE,
+            b: HIDDEN_LINE,
+            a: HIDDEN_LINE,
+        });
+        for up in [&self.up.selection, &self.up.hover] {
+            if let Some(HighlightGpu {
+                lines: Some((buffer, n)),
+                ..
+            }) = up
+            {
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(0..6, 0..*n);
             }
         }
 

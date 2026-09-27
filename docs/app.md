@@ -64,15 +64,27 @@ it.
 - **Operation**, on tabs: *Tool* (the tool and its feeds and speeds), *Geometry*
   (Fusion's machining boundary: the stock, the part's bounding box or silhouette,
   or picked faces and edges; where the tool goes against it; an additional
-  offset. For a 2D profile or pocket, the boundary it cuts round or clears, and a
-  profile's side of it), *Heights* (clearance, top and bottom,
+  offset. For a 2D profile or pocket, the boundary it cuts round or clears,
+  whether a profile cuts outside, inside or on it, and an additional offset that
+  moves the cut out from it, or in when negative. New operations start on the
+  part's silhouette: parallel with the tool's centre inside it, Z-level reaching
+  in from outside with a channel a tool wide), *Heights* (clearance, top and bottom,
   drawn in the view as planes), *Passes* and *Linking* (retract feed, safe
   distance, stay-down distance, and the lead radius or the ramp angle and feed;
+  a profile's level lead arcs on and off each ring, their radius, sweep and
+  straight run;
   one left out says what the strategy's default comes to for the tool). Choosing a
   tool whose preset gives no stepover sets Fusion's: a quarter of the diameter for
   parallel with a square end, the tolerance's cusp with a round one, and 0.6 of
   the diameter for Z-level and 2D pockets. A 2D operation's *Passes* has its
-  stepdown and climb or conventional; a profile has no stepover. A Generate button sits at
+  stepdown and climb or conventional; a profile has no stepover. *Stock to
+  leave*, as Fusion's, is ticked to leave any (starting at 0.5 mm), then its
+  wall and floor amounts, negative to cut past the part; the floor follows the
+  wall until it is given its own. A drill has none, and a profile on the
+  boundary only a floor. Profiles can leave tabs, from *Passes*: shape,
+  width, height and spacing. Which rows a
+  strategy shows is the core's to say (`StrategySpec::uses`), as is which
+  settings it reads. A Generate button sits at
   the panel's foot. The strategy is fixed once the operation is made.
 
 ## Picking in the view
@@ -81,12 +93,21 @@ Every model has faces, edges and corners: the file's own B-rep faces for STEP,
 faces found from the triangles for STL (`camcraft_geom::topology`). As in Fusion,
 the view picks only while a slot is armed by its button in the panel (**Select in
 view…**); otherwise a click does nothing. Hovering lights what a click would pick,
-and a slot being picked into brings its tab forward.
+and a slot being picked into brings its tab forward. Choosing another tab stops
+picking. Legends under the picks name what the view draws.
 
 - The work zero takes a corner, a round edge's centre or an edge's middle on a
   model, or a corner, edge or side of the stock.
 - An operation whose boundary is a selection takes faces and edges, which keep
   parallel finishing and Z-level roughing to their outline seen from above.
+  Edges are only ever cut round in loops, so a click takes the whole loop the
+  edge goes round: the edges joined to it end to end at its height, taking at
+  each corner the one that turns least. An edge of a pocket's floor or of the
+  part's outline takes all of it, however its faces are split (a chamfer in
+  strips still gives the outline), and a hole's rim is its own loop. An edge
+  that is not level is taken alone. A click on a loop all picked takes it out.
+  The panel lists each loop once. Picks and boundaries the part hides are drawn
+  faintly through it.
 
 Any boundary but the stock's is drawn in the view at the stock's top. It shows
 the boundary as chosen (wide), where the tool's centre may go against it (thin),
@@ -100,8 +121,10 @@ the part, where an offset of 0 would only touch its walls.
 - A drilling operation takes holes by their round top rims, and optionally their
   bottom rims.
 - A 2D profile or pocket takes faces and edges as what it cuts round or clears.
-  The view draws that boundary (wide) and the rings the tool's centre follows
-  beside it (thin): outside or inside it for a profile, a pocket's walls.
+  The view draws that boundary (wide), each piece of it at the height of what is
+  picked in it so it lies on the picks, or at the stock's top with nothing
+  picked, and, hatched, what the tool cuts away: a band beside it for a profile,
+  outside, inside or on it, all of it for a pocket.
 
 ## Running and checking
 

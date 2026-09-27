@@ -168,6 +168,15 @@ pub enum Target {
         /// Where on it, in model coordinates.
         at: DVec3,
     },
+    /// A loop of a model's edges, end to end, as picking edges takes them: the
+    /// loop the edge under the pointer goes round.
+    Loop {
+        /// The model.
+        model: String,
+        /// Each edge's number, and where on it, in model coordinates: where the
+        /// pointer is on the one under it, the middle of the others.
+        edges: Vec<(u32, DVec3)>,
+    },
     /// A point on a model.
     Point {
         /// The point, as a work zero would name it.

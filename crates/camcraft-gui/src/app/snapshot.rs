@@ -42,6 +42,57 @@ impl App {
         self.doc_mut()
     }
 
+    /// Select operation `op` of the showing setup, make its boundary a selection,
+    /// and click the longest edge along the bottom of its first model into it, as
+    /// a click in the view does. Whether anything was picked. Only the snapshot
+    /// harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn pick_bottom_loop_for_snapshot(&mut self, op: usize) -> bool {
+        use crate::picking::slots::Slot;
+        let Some(doc) = self.docs.get_mut(self.active) else {
+            return false;
+        };
+        let Some(setup) = doc.active.clone() else {
+            return false;
+        };
+        let Some(model) = doc.setup(&setup).and_then(|s| s.models.first().cloned()) else {
+            return false;
+        };
+        let Some((loaded, _)) = doc.models.get(&model).and_then(|s| s.loaded()) else {
+            return false;
+        };
+        let body = &loaded.body;
+        let Some(bottom) = body.mesh().bounds().map(|b| b.min.z) else {
+            return false;
+        };
+        let t = body.topology();
+        let Some(edge) = (0..t.edges().len())
+            .filter_map(|e| u32::try_from(e).ok())
+            .filter(|&e| {
+                t.edge_points(body.mesh(), e)
+                    .all(|p| (p.z - bottom).abs() < 1e-6)
+            })
+            .max_by(|&a, &b| {
+                let len = |e| t.edge(e).map_or(0.0, |e| e.length);
+                len(a).total_cmp(&len(b))
+            })
+        else {
+            return false;
+        };
+        doc.selection = crate::document::Selection::Operation(setup.clone(), op);
+        if let Some(o) = doc.operation_mut(&setup, op) {
+            o.geometry.boundary_kind = Some(camcraft_core::job::Boundary::Selection);
+        }
+        self.picking.arm(doc.id, Slot::Edges { setup, op });
+        self.picking.click_edge_for_snapshot(doc, &model, edge)
+    }
+
+    /// Stop picking. Only the snapshot harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn picking_disarm_for_snapshot(&mut self) {
+        self.picking.disarm();
+    }
+
     /// Select operation `op` of the showing setup and pick faces for it in the
     /// view: the two largest that face up. How many faces the model has. Only the
     /// snapshot harness asks.

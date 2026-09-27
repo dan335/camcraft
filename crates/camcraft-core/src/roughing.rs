@@ -122,9 +122,13 @@ pub fn zlevel_rough(
     let mut path = Toolpath::new();
     let mut report = RoughingReport::default();
     // Material counts for a ring wherever the cutter would touch it: within the
-    // tool's radius, plus a cell's diagonal because the outline is only known to
-    // the grid.
-    let touch = reach.max_radius() + stock.pitch() * std::f64::consts::SQRT_2;
+    // real tool's radius, plus a cell's diagonal because the outline is only
+    // known to the grid.
+    let slop = stock.pitch() * std::f64::consts::SQRT_2;
+    let touch = reach.cutter_radius() + slop;
+    // The stock to leave beside: what an operation before this one that left it
+    // left standing on the walls, which no ring here may cut.
+    let leave = reach.max_radius() - reach.cutter_radius();
     // Rings inside the first are drawn to half the chordal tolerance: their arcs
     // err inward, so never toward the part, and a finer arc on a clearing ring
     // buys nothing but points. The first ring is the reachable boundary itself,
@@ -149,9 +153,17 @@ pub fn zlevel_rough(
     // Where the tool may be, level by level from the top: the shadows are cheapest
     // asked for in descending order.
     let mut reachable = Vec::with_capacity(levels.len());
+    let mut kept = Vec::with_capacity(levels.len());
     for &z in &levels {
         let forbidden = reach.forbidden(z).map_err(reach_err)?;
         reachable.push(area.difference(&forbidden).map_err(region_err)?);
+        // The part and the stock left on it: where the tool's centre may not go,
+        // less the real tool's reach, and a cell for the grid.
+        kept.push(if leave > 0.0 {
+            Some(forbidden.offset(-(reach.cutter_radius() - slop), arc))
+        } else {
+            None
+        });
     }
 
     // Each level's rings depend on nothing but its own regions, so the levels are
@@ -160,11 +172,23 @@ pub fn zlevel_rough(
     let worked: Vec<Result<Option<Level>, StrategyError>> = levels
         .par_iter()
         .zip(reachable.par_iter())
-        .map(|(&z, reachable)| {
+        .zip(kept.par_iter())
+        .map(|((&z, reachable), kept)| {
             // Where there is material to remove: stock still standing above this
             // level. Standing *on* it is nothing to cut; a cut to `z` leaves the
-            // stock at `z`, give or take the grid's f32 storage.
-            let material = contour_above(stock, z + MATERIAL_THICKNESS).grow_covering(touch);
+            // stock at `z`, give or take the grid's f32 storage. What is kept on
+            // the part is not.
+            let material = contour_above(stock, z + MATERIAL_THICKNESS);
+            let material = match kept {
+                // Less what is kept, the slivers the two outlines leave between
+                // them taken back off with a cell's width, and given back after.
+                Some(kept) => material
+                    .difference(kept)
+                    .map_err(region_err)?
+                    .offset(-slop, arc)
+                    .grow_covering(touch + slop),
+                None => material.grow_covering(touch),
+            };
             if reachable.is_empty() || material.is_empty() {
                 return Ok(None);
             }

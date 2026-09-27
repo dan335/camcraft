@@ -191,7 +191,8 @@ pub(super) fn model(
         doc.selection = Selection::Models;
         return;
     };
-    if let Some(to) = header(ui, "Model", ui.id().with(("model", name)), name) {
+    let what = (doc.id, Selection::Model(name.to_string()));
+    if let Some(to) = header(ui, "Model", ui.id().with(("model", name)), name, what) {
         let r = doc.rename_model(name, &to);
         renamed(doc, r);
         return;
@@ -289,8 +290,10 @@ pub(super) fn used_by(
 
 /// The box around every loaded model, in model coordinates.
 pub(super) fn all_model_bounds(doc: &Document) -> Option<camcraft_geom::mesh::Aabb> {
-    doc.models
-        .values()
-        .filter_map(|s| s.model().map(|m| m.bounds))
+    // The job's models: one undone out of it may still be loaded, for a redo.
+    doc.job
+        .models
+        .iter()
+        .filter_map(|d| doc.models.get(&d.name)?.model().map(|m| m.bounds))
         .reduce(|a, b| a.union(&b))
 }

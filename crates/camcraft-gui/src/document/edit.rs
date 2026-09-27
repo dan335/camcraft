@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use camcraft_core::job::{
-    LengthUnit, ModelDef, Operation, Origin, Preset, Setup, StockDef, StockSpec, StrategySpec,
-    ToolSpec,
+    Boundary, Containment, Leads, LengthUnit, ModelDef, Operation, Origin, Passes, Preset, Setup,
+    StockDef, StockSpec, StrategySpec, ToolSpec,
 };
 use camcraft_geom::bvh::MeshBvh;
 use camcraft_session::fs::relative_path;
@@ -409,7 +409,10 @@ impl Document {
             preset: None,
             geometry: Default::default(),
             heights: Default::default(),
-            passes: Default::default(),
+            passes: Passes {
+                stock_to_leave: strategy.default_stock_to_leave(),
+                ..Default::default()
+            },
             linking: Default::default(),
             enabled: true,
         };
@@ -418,6 +421,12 @@ impl Document {
         }
         let spec = op.tool.as_ref().and_then(|t| self.job.tools.get(t));
         fit_stepover(&mut op, spec, preset, self.job.tolerance);
+        start_on_silhouette(&mut op);
+        fit_channel(&mut op, spec);
+        // A profile arcs on and off each ring, as Fusion's 2D contour does.
+        if op.strategy.uses().leads {
+            op.linking.leads = Some(Leads::default());
+        }
         let s = self.setup_mut(setup)?;
         s.operations.push(op);
         let i = s.operations.len() - 1;
@@ -538,12 +547,18 @@ impl Document {
         let Some(o) = self.operation_mut(setup, op) else {
             return;
         };
+        let first = o.tool.is_none();
         o.tool = Some(tool);
         match &preset {
             Some(p) => o.apply_preset(p),
             None => o.preset = None,
         }
         fit_stepover(o, spec.as_ref(), preset.as_ref(), tolerance);
+        // The channel is made once, for the first tool: an offset of zero after
+        // that is one chosen, and a new tool keeps it.
+        if first {
+            fit_channel(o, spec.as_ref());
+        }
     }
 
     /// Another tool the job's operations use with the same number as tool `name`,
@@ -575,6 +590,40 @@ impl Document {
         used.sort();
         used.dedup();
         used
+    }
+}
+
+/// Start a new 3D operation on the part's silhouette, as Fusion does. Parallel
+/// finishing keeps the tool's centre inside it. Z-level roughing reaches in from
+/// outside: kept inside the part's outline, the tool never reaches its walls, as
+/// its centre sits a radius outside them ([`fit_channel`] makes room round them).
+/// A 2D operation's boundary is left unchosen: the silhouette until something is
+/// picked, then the picks.
+fn start_on_silhouette(op: &mut Operation) {
+    let containment = match op.strategy {
+        StrategySpec::Parallel { .. } => Containment::Center,
+        StrategySpec::ZlevelRough { .. } => Containment::Outside,
+        StrategySpec::Profile { .. } | StrategySpec::Pocket { .. } | StrategySpec::Drill { .. } => {
+            return;
+        }
+    };
+    op.geometry.boundary_kind = Some(Boundary::Silhouette);
+    op.geometry.containment = containment;
+}
+
+/// Room for `tool` round the part, as the Geometry tab gives it: a boundary round
+/// the part that the tool reaches in from outside, with no offset yet, is offset
+/// by the tool's diameter, a channel two tools wide. Set once, as a number, so
+/// changing the tool later does not move it.
+fn fit_channel(op: &mut Operation, tool: Option<&ToolSpec>) {
+    let g = &mut op.geometry;
+    let around_part = matches!(g.boundary(), Boundary::BoundingBox | Boundary::Silhouette);
+    if around_part
+        && g.containment == Containment::Outside
+        && g.margin == 0.0
+        && let Some(t) = tool
+    {
+        g.margin = t.diameter;
     }
 }
 

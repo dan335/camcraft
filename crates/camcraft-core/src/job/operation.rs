@@ -151,6 +151,112 @@ impl StrategySpec {
             StrategySpec::Profile { .. } | StrategySpec::Pocket { .. }
         )
     }
+
+    /// Which of the settings every operation has this strategy uses.
+    pub fn uses(&self) -> Uses {
+        // Tabs go only where every ring is beside what is kept: a profile's, as
+        // Fusion's go only on a 2D contour. Put on a pocket's or a roughing
+        // level's clearing rings, they would leave pillars standing in the
+        // waste.
+        let cuts_loops = Uses {
+            stepover: true,
+            stock_to_leave: Leave::Both,
+            tabs: false,
+            stay_down: true,
+            lead_radius: false,
+            ramp: true,
+            leads: false,
+            reorder: true,
+        };
+        match *self {
+            StrategySpec::Parallel { .. } => Uses {
+                lead_radius: true,
+                ramp: false,
+                ..cuts_loops
+            },
+            StrategySpec::ZlevelRough { .. } => cuts_loops,
+            // A 2D operation's order is its own: what is inside before what frees
+            // it, a pocket's middle before its walls.
+            StrategySpec::Pocket { .. } => Uses {
+                reorder: false,
+                ..cuts_loops
+            },
+            StrategySpec::Profile { side, .. } => Uses {
+                stepover: false,
+                // On the line, it has no side to leave anything beside.
+                stock_to_leave: if side == ProfileSide::On {
+                    Leave::Axial
+                } else {
+                    Leave::Both
+                },
+                tabs: true,
+                leads: true,
+                reorder: false,
+                ..cuts_loops
+            },
+            StrategySpec::Drill { .. } => Uses {
+                stepover: false,
+                stock_to_leave: Leave::None,
+                tabs: false,
+                stay_down: false,
+                lead_radius: false,
+                ramp: false,
+                leads: false,
+                // Holes are drilled in the order found, nearest first.
+                reorder: false,
+            },
+        }
+    }
+
+    /// The stock to leave Fusion starts this strategy with: roughing leaves half
+    /// a millimetre each way for the finish, and the rest cut to size.
+    pub fn default_stock_to_leave(&self) -> StockToLeave {
+        match self {
+            StrategySpec::ZlevelRough { .. } => StockToLeave {
+                radial: 0.5,
+                axial: 0.5,
+            },
+            _ => StockToLeave::default(),
+        }
+    }
+}
+
+/// Which of the settings every operation has ([`Passes`], [`Linking`]) its
+/// strategy uses, as [`StrategySpec::uses`] says.
+///
+/// Every operation has them all, so switching strategy keeps what was set; one
+/// its strategy does not use is not shown, not checked and not read. Anything
+/// that asks whether a strategy has a setting asks this, so the panel, the
+/// checks and the run always agree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Uses {
+    /// The distance between passes.
+    pub stepover: bool,
+    /// Which stock to leave it cuts with.
+    pub stock_to_leave: Leave,
+    /// Tabs across the deepest cut of the loops it cuts.
+    pub tabs: bool,
+    /// Links made without lifting.
+    pub stay_down: bool,
+    /// Vertical arcs into and out of each pass.
+    pub lead_radius: bool,
+    /// Ramping into material.
+    pub ramp: bool,
+    /// Level arcs into and out of each ring.
+    pub leads: bool,
+    /// Passes reordered, and maybe reversed, to shorten travel.
+    pub reorder: bool,
+}
+
+/// Which of the stock to leave a strategy cuts with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Leave {
+    /// None: it cuts to size.
+    None,
+    /// Only down, at the floor.
+    Axial,
+    /// Both beside, at the walls, and down, at the floor.
+    Both,
 }
 
 /// Which side of its boundary a profile cuts on.
@@ -192,7 +298,8 @@ pub struct Geometry {
     pub boundary_kind: Option<Boundary>,
     /// Fusion's additional offset, in millimetres: how far the boundary moves
     /// out, or in when the whole tool is kept inside it. Past the stock's
-    /// footprint, with no boundary.
+    /// footprint, with no boundary. A 2D operation's cut moves out from its
+    /// boundary by it, or in when negative.
     #[serde(default)]
     pub margin: f64,
     /// Highest level to cut at.
@@ -347,11 +454,46 @@ impl Height {
 }
 
 impl Operation {
+    /// The stock to leave it cuts with: its own, less what its strategy does not
+    /// use. A drill cuts to size; a profile on the line leaves only its floor.
+    pub fn stock_to_leave(&self) -> StockToLeave {
+        let s = self.passes.stock_to_leave;
+        match self.strategy.uses().stock_to_leave {
+            Leave::None => StockToLeave::default(),
+            Leave::Axial => StockToLeave { radial: 0.0, ..s },
+            Leave::Both => s,
+        }
+    }
+
+    /// How far below zero its stock to leave can go with `tool`: beside, more
+    /// than minus the tool's radius, which it would shrink to nothing; down, no
+    /// lower than minus a round end's corner radius in 3D, where the end has to
+    /// stay round, and in 2D or with a flat end as low as it likes.
+    pub fn least_stock_to_leave(&self, tool: &ToolSpec) -> StockToLeave {
+        let corner = match tool.kind {
+            ToolKind::Ball => tool.diameter / 2.0,
+            ToolKind::Bullnose => tool.corner,
+            ToolKind::Flat | ToolKind::Cone | ToolKind::Drill => 0.0,
+        };
+        StockToLeave {
+            radial: -tool.diameter / 2.0,
+            axial: if !self.strategy.is_2d() && corner > 0.0 {
+                -corner
+            } else {
+                f64::NEG_INFINITY
+            },
+        }
+    }
+
     /// Why this operation cannot cut with `tool`, if it cannot.
     ///
     /// A cone slices badly into Z levels (its reach widens all the way up, so the
     /// levels need far too many offsets) and cannot leave stock (grown by a ball it
     /// is not a cone); it finishes, engraves and chamfers.
+    ///
+    /// Negative stock shrinks the tool, as Fusion's does, so it can take no more
+    /// than the tool's radius beside; and in 3D, where a round end has to stay
+    /// round, no more than its corner radius down.
     pub fn cannot_use(&self, tool: &ToolSpec) -> Option<&'static str> {
         let drilling = matches!(self.strategy, StrategySpec::Drill { .. });
         if tool.kind == ToolKind::Drill && !drilling {
@@ -360,10 +502,21 @@ impl Operation {
         if drilling && !matches!(tool.kind, ToolKind::Drill | ToolKind::Flat) {
             return Some("drill holes with a drill, or a flat end mill that plunges");
         }
-        let leave = self.passes.stock_to_leave;
+        if self.strategy.uses().stepover && self.passes.stepover > tool.diameter {
+            return Some(
+                "the stepover is wider than the tool: it would leave ridges between passes",
+            );
+        }
+        let leave = self.stock_to_leave();
         let leaves = leave.radial != 0.0 || leave.axial != 0.0;
-        if drilling && leaves {
-            return Some("a hole is drilled to size: set stock to leave to zero");
+        let least = self.least_stock_to_leave(tool);
+        if leave.radial <= least.radial {
+            return Some("negative stock to leave beside must be less than the tool's radius");
+        }
+        if leave.axial < least.axial {
+            return Some(
+                "negative stock to leave down must be no more than the tool's corner radius",
+            );
         }
         if tool.kind != ToolKind::Cone {
             return None;
@@ -436,12 +589,31 @@ impl Operation {
             &format!("{at}.linking.plunge_feed"),
             self.linking.plunge_feed,
         )?;
-        let leave = self.passes.stock_to_leave;
-        if leave.radial < 0.0 || leave.axial < 0.0 {
-            return Err(JobError::BadValue {
-                field: format!("{at}.passes.stock_to_leave"),
-                value: leave.radial.min(leave.axial),
-            });
+        self.passes
+            .stock_to_leave
+            .check(&format!("{at}.passes.stock_to_leave"))?;
+        let uses = self.strategy.uses();
+        if let Some(l) = self.linking.leads.filter(|_| uses.leads) {
+            if let Some(r) = l.radius {
+                positive(&format!("{at}.linking.leads.radius"), r)?;
+            }
+            if !(l.sweep > 0.0 && l.sweep <= 180.0) {
+                return Err(JobError::BadValue {
+                    field: format!("{at}.linking.leads.sweep"),
+                    value: l.sweep,
+                });
+            }
+            if !(l.straight.is_finite() && l.straight >= 0.0) {
+                return Err(JobError::BadValue {
+                    field: format!("{at}.linking.leads.straight"),
+                    value: l.straight,
+                });
+            }
+        }
+        if let Some(t) = self.passes.tabs.filter(|_| uses.tabs) {
+            positive(&format!("{at}.passes.tabs.width"), t.width)?;
+            positive(&format!("{at}.passes.tabs.height"), t.height)?;
+            positive(&format!("{at}.passes.tabs.spacing"), t.spacing)?;
         }
         if let Some(stepdown) = self.strategy.stepdown() {
             positive(&format!("{at}.stepdown"), stepdown)?;
@@ -593,8 +765,9 @@ pub struct Passes {
     /// Cutting feed, in mm/min.
     #[serde(default = "default_feed")]
     pub feed: f64,
-    /// Material to leave behind.
-    #[serde(default)]
+    /// Material to leave behind: Fusion's radial and axial stock to leave. What
+    /// the operation cuts with is [`Operation::stock_to_leave`].
+    #[serde(default, skip_serializing_if = "is_default")]
     pub stock_to_leave: StockToLeave,
     /// Largest Z drop that may be traversed as a cut.
     #[serde(default = "default_max_cut_step")]
@@ -602,6 +775,11 @@ pub struct Passes {
     /// Spindle speed; the tool's own when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpm: Option<u32>,
+    /// Tabs left across the deepest cut, to hold what it frees; none when not
+    /// given. Any operation that cuts closed loops can have them
+    /// ([`crate::tabs`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tabs: Option<Tabs>,
 }
 
 impl Default for Passes {
@@ -612,8 +790,49 @@ impl Default for Passes {
             stock_to_leave: StockToLeave::default(),
             max_cut_step: default_max_cut_step(),
             rpm: None,
+            tabs: None,
         }
     }
+}
+
+/// Tabs: bridges of material left standing across the deepest cut, so a part cut
+/// free of its sheet stays held in it. Fusion's holding tabs, placed by distance.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+pub struct Tabs {
+    /// Square-sided, or with sides at 45°.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub shape: TabShape,
+    /// Material left along the cut, at the tab's top, in millimetres.
+    pub width: f64,
+    /// How far above the cut's floor the tab's top is, in millimetres.
+    pub height: f64,
+    /// About how far apart they are round each loop, in millimetres: at least
+    /// two to a loop.
+    pub spacing: f64,
+}
+
+impl Default for Tabs {
+    /// Two sheet-sized tabs a foot apart, or so: 6 mm wide, 3 mm tall, every
+    /// 150 mm.
+    fn default() -> Self {
+        Self {
+            shape: TabShape::default(),
+            width: 6.0,
+            height: 3.0,
+            spacing: 150.0,
+        }
+    }
+}
+
+/// A tab's shape.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TabShape {
+    /// Square-sided: the tool steps straight up onto it and straight down off it.
+    #[default]
+    Rectangular,
+    /// Sides at 45°: the tool climbs onto it and ramps off, never plunging.
+    Triangular,
 }
 
 fn default_stepover() -> f64 {
@@ -628,15 +847,40 @@ fn default_max_cut_step() -> f64 {
     0.5
 }
 
-/// Material to leave, radial and axial.
+/// Material to leave, radial and axial, in millimetres: Fusion's stock to leave.
+///
+/// Positive leaves material for a later operation to finish, zero cuts to the
+/// part, and negative cuts past it, for a looser fit. Where a surface is neither
+/// wall nor floor, what is left is between the two.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
 pub struct StockToLeave {
-    /// Perpendicular to the tool axis.
+    /// Perpendicular to the tool axis: on the walls.
     #[serde(default)]
     pub radial: f64,
-    /// Along the tool axis.
+    /// Along the tool axis: on the floors.
     #[serde(default)]
     pub axial: f64,
+}
+
+impl StockToLeave {
+    /// The first of the two that is not a number, if one is not. How negative
+    /// they may be is the tool's to say ([`Operation::cannot_use`]).
+    pub(super) fn unusable(&self) -> Option<f64> {
+        [self.radial, self.axial]
+            .into_iter()
+            .find(|v| !v.is_finite())
+    }
+
+    /// Check both are numbers, naming `field` if not.
+    fn check(&self, field: &str) -> Result<(), JobError> {
+        match self.unusable() {
+            Some(value) => Err(JobError::BadValue {
+                field: field.to_string(),
+                value,
+            }),
+            None => Ok(()),
+        }
+    }
 }
 
 /// How the tool moves between cuts.
@@ -687,6 +931,42 @@ pub struct Linking {
     /// as Fusion's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ramp_feed: Option<f64>,
+    /// The level arcs a 2D profile enters and leaves each ring along, in the
+    /// waste beside it: Fusion's horizontal lead-in and lead-out. None for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leads: Option<Leads>,
+}
+
+/// Level arcs into and out of a cut, tangent to it and in the waste beside it,
+/// the same both ways: Fusion's horizontal lead-in and lead-out, with "same as
+/// lead-in".
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+pub struct Leads {
+    /// The arc's radius, in millimetres: half the tool's diameter when not
+    /// given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f64>,
+    /// How far round the arc turns, in degrees: Fusion's sweep angle.
+    #[serde(default = "default_lead_sweep")]
+    pub sweep: f64,
+    /// A straight run before the arc in and after it out, in millimetres:
+    /// Fusion's linear lead-in distance.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub straight: f64,
+}
+
+impl Default for Leads {
+    fn default() -> Self {
+        Self {
+            radius: None,
+            sweep: default_lead_sweep(),
+            straight: 0.0,
+        }
+    }
+}
+
+fn default_lead_sweep() -> f64 {
+    90.0
 }
 
 impl Default for Linking {
@@ -701,6 +981,7 @@ impl Default for Linking {
             lead_radius: None,
             ramp_angle: default_ramp_angle(),
             ramp_feed: None,
+            leads: None,
         }
     }
 }

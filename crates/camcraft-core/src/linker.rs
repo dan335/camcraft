@@ -588,8 +588,19 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                     if first.z < safe {
                         self.out.rapid_to(*first)?;
                     }
+                    // A ramp rides over what the pass rises over, such as a tab,
+                    // and comes down off it as the pass does: straight down, at
+                    // the plunge feed, not the ramp's.
+                    let mut at = *first;
                     for p in rest {
-                        self.out.feed_to(*p, MoveRole::Ramp, r.feed)?;
+                        let straight_down =
+                            p.z < at.z && p.truncate().distance(at.truncate()) < 1e-9;
+                        if straight_down {
+                            self.out.feed_to(*p, MoveRole::Plunge, self.p.plunge_feed)?;
+                        } else {
+                            self.out.feed_to(*p, MoveRole::Ramp, r.feed)?;
+                        }
+                        at = *p;
                     }
                     self.report.ramps += 1;
                 } else {
@@ -672,17 +683,20 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         let run = (high - to.z) / ramp.angle.tan();
         let closed = flat.first()?.distance(*flat.last()?) < 1e-6;
         // Walk away from the start along the path, as far as the ramp runs.
-        let walk = backwards(&flat, closed, run)?;
-        // Then down it, towards the start.
+        let walk = backwards(pts, closed, run)?;
+        // Then down it, towards the start: never below the pass itself, so it
+        // rides over anything the pass rises over, such as a tab.
         let mut out = Vec::with_capacity(walk.len());
         let mut left = run;
         let mut prev: Option<DVec2> = None;
         for p in walk.iter().rev() {
+            let flat = p.truncate();
             if let Some(q) = prev {
-                left -= q.distance(*p);
+                left -= q.distance(flat);
             }
-            out.push(dvec3(p.x, p.y, to.z + left.max(0.0) * ramp.angle.tan()));
-            prev = Some(*p);
+            let z = (to.z + left.max(0.0) * ramp.angle.tan()).max(p.z);
+            out.push(dvec3(p.x, p.y, z));
+            prev = Some(flat);
         }
         if let Some(last) = out.last_mut() {
             *last = to;
@@ -802,13 +816,14 @@ fn falls_steeply(from: DVec3, way: &[DVec3], max: f64) -> bool {
     false
 }
 
-/// Walk `run` millimetres from the start of `path` away from it: backwards round
-/// it if `closed`, otherwise out along it and back, as often as it takes. The
-/// points passed, from the start (included) to where the walk ends.
-fn backwards(path: &[DVec2], closed: bool, run: f64) -> Option<Vec<DVec2>> {
+/// Walk `run` millimetres, measured from above, from the start of `path` away
+/// from it: backwards round it if `closed`, otherwise out along it and back, as
+/// often as it takes. The points passed, from the start (included) to where the
+/// walk ends, each at the path's own height there.
+fn backwards(path: &[DVec3], closed: bool, run: f64) -> Option<Vec<DVec3>> {
     let start = *path.first()?;
     // The order the walk visits the path's points, one lap or one there and back.
-    let lap: Vec<DVec2> = if closed {
+    let lap: Vec<DVec3> = if closed {
         path.iter().rev().skip(1).copied().collect()
     } else {
         path.iter()
@@ -825,7 +840,7 @@ fn backwards(path: &[DVec2], closed: bool, run: f64) -> Option<Vec<DVec2>> {
     let mut at = start;
     // Bounded: each lap is at least the ramp's minimum length long.
     for p in lap.iter().cycle().take(lap.len().saturating_mul(10_000)) {
-        let d = at.distance(*p);
+        let d = at.truncate().distance(p.truncate());
         if d >= left {
             if d > 1e-12 {
                 out.push(at + (*p - at) * (left / d));
@@ -1457,6 +1472,60 @@ mod tests {
         let (out, report) = link(&ring(), &plane, &mut Air, &NoPart, &ramping).unwrap();
         assert_eq!(report.ramps, 0);
         assert!(roles(&out).contains(&MoveRole::Plunge));
+    }
+
+    /// A ramp rides over a tab on the pass, as the pass does, and comes straight
+    /// down off it as the pass does: at the plunge feed, not the ramp's.
+    #[test]
+    fn a_ramp_comes_down_off_a_tab_at_the_plunge_feed() {
+        let mut t = Toolpath::new();
+        t.feed_to(dvec3(0.0, 0.0, -2.0), MoveRole::Link, 1000.0)
+            .unwrap();
+        for p in [
+            (10.0, 0.0, -2.0),
+            (10.0, 4.0, -2.0),
+            (10.0, 4.0, -0.5),
+            (10.0, 6.0, -0.5),
+            (10.0, 6.0, -2.0),
+            (10.0, 10.0, -2.0),
+            (0.0, 10.0, -2.0),
+            (0.0, 0.0, -2.0),
+        ] {
+            t.feed_to(dvec3(p.0, p.1, p.2), MoveRole::Cut, 1000.0)
+                .unwrap();
+        }
+        let plane = ClearancePlane::new(10.0).unwrap();
+        let ramping = LinkParams {
+            ramp: Some(Ramp {
+                angle: 2f64.to_radians(),
+                feed: 250.0,
+            }),
+            ..params()
+        };
+        let (out, report) = link(&t, &plane, &mut level_material(), &NoPart, &ramping).unwrap();
+        assert_eq!(report.ramps, 1);
+        let entry: Vec<&Move> = out
+            .moves()
+            .iter()
+            .take_while(|m| m.role != MoveRole::Cut)
+            .collect();
+        let mut downs = 0;
+        for w in entry.windows(2) {
+            let (a, b) = (w[0].to, w[1].to);
+            if b.z < a.z - 1e-9
+                && a.truncate().distance(b.truncate()) < 1e-9
+                && w[1].role != MoveRole::Rapid
+            {
+                downs += 1;
+                assert_eq!(
+                    w[1].role,
+                    MoveRole::Plunge,
+                    "straight down in a ramp at {b}"
+                );
+                assert_eq!(w[1].feed, Some(ramping.plunge_feed));
+            }
+        }
+        assert!(downs > 0, "the ramp never came down off the tab");
     }
 
     /// The program does not end with the cutter on the part: after the last cut it

@@ -604,22 +604,29 @@ pub fn tabs(ui: &mut egui::Ui, selected: &mut usize, tabs: &[Tab<'_>]) -> bool {
 }
 
 /// [`tabs`] whose choice is remembered under `id` from frame to frame, starting
-/// on tab `first`, with space after them: the one showing. `forced`, when given,
-/// shows instead and is remembered, as when picking in the view needs the tab
-/// that lists what is picked in sight.
+/// on tab `first`, with space after them: the one showing. `wanted` is shown the
+/// frame it is first given, as when picking in the view starts and the tab that
+/// lists what is picked must be in sight; after that the person may still choose
+/// another, and the caller stops what wanted it.
 pub fn remembered_tabs(
     ui: &mut egui::Ui,
     id: egui::Id,
     list: &[Tab<'_>],
     first: usize,
-    forced: Option<usize>,
+    wanted: Option<usize>,
 ) -> usize {
-    let mut page = forced
+    let asked = id.with("wanted");
+    let before = ui.data(|d| d.get_temp::<Option<usize>>(asked)).flatten();
+    let mut page = wanted
+        .filter(|w| before != Some(*w))
         .or_else(|| ui.data(|d| d.get_temp::<usize>(id)))
         .unwrap_or(first)
         .min(list.len().saturating_sub(1));
     tabs(ui, &mut page, list);
-    ui.data_mut(|d| d.insert_temp(id, page));
+    ui.data_mut(|d| {
+        d.insert_temp(id, page);
+        d.insert_temp(asked, wanted);
+    });
     ui.add_space(theme::SPACE_4);
     page
 }

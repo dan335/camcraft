@@ -699,6 +699,81 @@ impl Topology {
         self.vertices.get(v as usize)
     }
 
+    /// The loop edge `e` goes round at its own height: the edges joined to it end
+    /// to end that stay level with it, taking at each corner the one that turns
+    /// least, back to where `e` starts. How faces are split does not matter, so
+    /// a chamfer cut into strips still gives the outline it runs along. A closed
+    /// edge is a loop by itself.
+    ///
+    /// `points` gives an edge's points, in order, in the frame whose Z is up;
+    /// level is within `tolerance`. `None` for an edge that is not level, or whose
+    /// loop does not close.
+    pub fn level_loop(
+        &self,
+        e: u32,
+        points: impl Fn(u32) -> Vec<DVec3>,
+        tolerance: f64,
+    ) -> Option<Vec<u32>> {
+        let first = self.edge(e)?;
+        if first.closed {
+            return Some(vec![e]);
+        }
+        let height = |n: u32| {
+            let p = points(n);
+            let lo = p.iter().map(|p| p.z).reduce(f64::min)?;
+            let hi = p.iter().map(|p| p.z).reduce(f64::max)?;
+            (hi - lo <= tolerance).then_some((lo + hi) / 2.0)
+        };
+        let z = height(e)?;
+        // Edge `n`'s points in order away from vertex `from`, and the vertex at
+        // its far end.
+        let away = |n: u32, from: u32| {
+            let edge = self.edge(n)?;
+            let [a, b] = edge.ends?;
+            let far = if a == from {
+                b
+            } else if b == from {
+                a
+            } else {
+                return None;
+            };
+            let mut p = points(n);
+            let starts_here = edge.points.first() == Some(&self.vertex(from)?.mesh_vertex);
+            if !starts_here {
+                p.reverse();
+            }
+            Some((p, far))
+        };
+        let [origin, start] = first.ends?;
+        let (p, at) = away(e, origin)?;
+        debug_assert_eq!(at, start);
+        let mut heading = arriving(&p)?;
+        let mut at = start;
+        let mut out = vec![e];
+        while at != origin {
+            let (next, far, arrive) = self
+                .vertex(at)?
+                .edges
+                .iter()
+                .filter(|n| !out.contains(n))
+                .filter(|&&n| height(n).is_some_and(|h| (h - z).abs() <= tolerance))
+                .filter_map(|&n| {
+                    let (p, far) = away(n, at)?;
+                    let turn = turn(heading, leaving(&p)?);
+                    Some((n, far, arriving(&p)?, turn))
+                })
+                .min_by(|a, b| a.3.total_cmp(&b.3))
+                .map(|(n, far, arrive, _)| (n, far, arrive))?;
+            out.push(next);
+            at = far;
+            heading = arrive;
+            if out.len() > self.edges.len() {
+                return None;
+            }
+        }
+        Some(out)
+    }
+
     /// Edge `e`'s points, in order, from `mesh`, the mesh this topology is of. A
     /// closed edge's first point is not repeated.
     pub fn edge_points<'a>(
@@ -770,6 +845,30 @@ impl Topology {
         }
         last.or_else(|| self.edge_points(mesh, e).next())
     }
+}
+
+/// The way a chain of points leaves its first point, seen from above.
+fn leaving(p: &[DVec3]) -> Option<glam::DVec2> {
+    let from = p.first()?.truncate();
+    p.iter()
+        .map(|q| q.truncate() - from)
+        .find(|d| d.length() > 1e-9)
+        .map(glam::DVec2::normalize)
+}
+
+/// The way a chain of points arrives at its last point, seen from above.
+fn arriving(p: &[DVec3]) -> Option<glam::DVec2> {
+    let to = p.last()?.truncate();
+    p.iter()
+        .rev()
+        .map(|q| to - q.truncate())
+        .find(|d| d.length() > 1e-9)
+        .map(glam::DVec2::normalize)
+}
+
+/// How far, in radians either way, heading `from` turns to go `to`.
+fn turn(from: glam::DVec2, to: glam::DVec2) -> f64 {
+    from.perp_dot(to).atan2(from.dot(to)).abs()
 }
 
 fn pair(w: &[DVec3]) -> Option<(DVec3, DVec3)> {

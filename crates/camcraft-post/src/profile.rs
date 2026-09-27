@@ -196,6 +196,12 @@ impl Profile {
                 reason: "must not be empty".into(),
             });
         }
+        if self.comment.0.is_empty() {
+            return Err(ProfileError::BadValue {
+                field: "comment",
+                reason: "a comment needs something to open it".into(),
+            });
+        }
         Ok(())
     }
 
@@ -233,13 +239,23 @@ impl Profile {
     /// a stray open leaves an unbalanced comment that several controllers reject or
     /// swallow the next block into. Square brackets keep the text readable.
     pub fn comment(&self, text: &str) -> String {
-        let safe: String = text
-            .replace(&self.comment.0, "[")
-            .replace(&self.comment.1, "]")
-            .chars()
+        format!("{}{}{}", self.comment.0, self.escaped(text), self.comment.1)
+    }
+
+    /// `text` made safe to stand inside a comment: its delimiters substituted, as
+    /// [`comment`](Self::comment) says, and control characters, a newline above
+    /// all, made spaces. An empty delimiter, as a comment to the line's end has
+    /// for its close, is nothing to substitute.
+    pub fn escaped(&self, text: &str) -> String {
+        let mut safe = text.to_string();
+        for (delimiter, with) in [(&self.comment.0, "["), (&self.comment.1, "]")] {
+            if !delimiter.is_empty() {
+                safe = safe.replace(delimiter.as_str(), with);
+            }
+        }
+        safe.chars()
             .map(|c| if c.is_control() { ' ' } else { c })
-            .collect();
-        format!("{}{}{}", self.comment.0, safe, self.comment.1)
+            .collect()
     }
 }
 
@@ -292,6 +308,15 @@ mod tests {
         let p = Profile::builtin("masso").unwrap().unwrap();
         let c = p.comment(&format!("first{}M3 S30000", char::from(10)));
         assert!(!c.contains(char::from(10)), "newline survived: {c:?}");
+    }
+
+    /// A comment to the line's end has no close to substitute; substituting
+    /// nothing would put a bracket between every character.
+    #[test]
+    fn a_comment_to_the_line_end_reads_as_written() {
+        let mut p = Profile::builtin("grbl").unwrap().unwrap();
+        p.comment = (";".into(), String::new());
+        assert_eq!(p.comment("fit tool 3; then go"), ";fit tool 3[ then go");
     }
 
     #[test]

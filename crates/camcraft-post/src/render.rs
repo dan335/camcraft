@@ -32,14 +32,17 @@ pub struct RenderReport {
 /// Render a stream into G-code.
 pub fn render(ops: &[Op], profile: &Profile, program_name: &str) -> (String, RenderReport) {
     let mut w = Writer::new(profile);
+    // The name goes in the header's comments: made safe to, or a name with a
+    // delimiter in it would end one early.
+    let name = profile.escaped(program_name);
     for line in &profile.header {
-        w.raw(&line.replace("{name}", program_name));
+        w.raw(&line.replace("{name}", &name));
     }
     for op in ops {
         w.op(op);
     }
     for line in &profile.footer {
-        w.raw(&line.replace("{name}", program_name));
+        w.raw(&line.replace("{name}", &name));
     }
     (w.out, w.report)
 }
@@ -349,6 +352,17 @@ impl<'a> Writer<'a> {
 )]
 mod tests {
     use super::*;
+
+    /// A program named with a comment's delimiters in it cannot end the
+    /// header's comment early, nor start a block with a newline.
+    #[test]
+    fn a_program_name_stays_inside_its_comment() {
+        let p = Profile::builtin("masso").unwrap().unwrap();
+        let (text, _) = render(&[], &p, "bracket (rev B)\nM3");
+        let first = text.lines().find(|l| l.contains("bracket")).unwrap();
+        assert!(first.contains("bracket [rev B] M3"), "{first}");
+        assert!(!text.lines().any(|l| l.trim() == "M3"), "{text}");
+    }
     use crate::op::ProgramSpec;
     use camcraft_core::toolpath::{MoveRole, Toolpath};
     use glam::dvec3;

@@ -12,7 +12,7 @@ use camcraft_core::dropcutter::DropCutter;
 use camcraft_core::linker::{ClearancePlane, LinkParams, NoPart, Unchanging, link};
 use camcraft_core::parallel::{ParallelParams, parallel_finish};
 use camcraft_core::simadapt::sim_moves;
-use camcraft_core::tool::{Ball, ToolProfile};
+use camcraft_core::tool::{Ball, Flat, ToolProfile};
 use camcraft_core::toolpath::{MoveRole, Toolpath};
 use camcraft_geom::synthetic;
 use camcraft_sim::stock::{MoveClass, PartSurface, SimMove, Stock};
@@ -199,6 +199,42 @@ fn stock_to_leave_shows_up_in_the_material() {
     // And the finishing tolerance must not call that a gouge.
     let v = stock.verify(&part, 0.05, 1.0);
     assert!(v.is_clean(), "leaving stock is not gouging: {v:?}");
+}
+
+/// Stock left beside must stay beside: the path's points are where the real
+/// tool goes, so the material is cut by the real tool, not the one grown by the
+/// stock. Grown, it would cut the wall to size and leave nothing to finish.
+#[test]
+fn stock_to_leave_beside_stays_on_the_wall() {
+    let (lo, hi) = (dvec2(-10.0, -10.0), dvec2(10.0, 10.0));
+    let leave = 0.5;
+    let tool = EffectiveTool::new(
+        &Flat::new(3.0).unwrap(),
+        Allowance::new(leave, 0.0).unwrap(),
+    )
+    .unwrap();
+    // A wall's centre line: the tool's radius and the stock out from a wall at
+    // x = 3.5, cut down to Z0 in a block topped at Z5.
+    let mut t = Toolpath::new();
+    t.rapid_to(dvec3(0.0, -8.0, 10.0)).unwrap();
+    t.feed_to(dvec3(0.0, -8.0, 0.0), MoveRole::Plunge, 300.0)
+        .unwrap();
+    t.feed_to(dvec3(0.0, 8.0, 0.0), MoveRole::Cut, 900.0)
+        .unwrap();
+    t.feed_to(dvec3(0.0, 8.0, 10.0), MoveRole::Retract, 900.0)
+        .unwrap();
+    let mut stock = Stock::block(lo, hi, 5.0, -5.0, 0.1).unwrap();
+    stock.apply(&sim_moves(&t), &tool);
+
+    assert!(
+        stock.height_at(2.8, 0.0).unwrap() < 0.1,
+        "the tool cuts its width"
+    );
+    assert_eq!(
+        stock.height_at(3.25, 0.0).unwrap(),
+        5.0,
+        "the stock left beside the real tool is still there"
+    );
 }
 
 /// The path the strategy hands over is not machinable, and the simulator says so

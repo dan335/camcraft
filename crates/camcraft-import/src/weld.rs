@@ -10,7 +10,9 @@ use std::collections::HashMap;
 /// Accumulates triangles, welding corners that are bit-for-bit identical.
 ///
 /// The key is the exact bit pattern: welding must never merge two points that are
-/// genuinely distinct, and a tolerance-based weld can do exactly that.
+/// genuinely distinct, and a tolerance-based weld can do exactly that. Negative
+/// zero is zero, though: exporters write `-0` for some corners on an axis and
+/// `0` for others, and two bit patterns there would split the part along it.
 #[derive(Default)]
 pub(crate) struct Welder {
     index: HashMap<[u64; 3], u32>,
@@ -25,6 +27,8 @@ impl Welder {
         if !p.is_finite() {
             return None;
         }
+        // Adding zero makes negative zero positive, and leaves the rest alone.
+        let p = p + DVec3::ZERO;
         let key = [p.x.to_bits(), p.y.to_bits(), p.z.to_bits()];
         if let Some(&i) = self.index.get(&key) {
             return Some(i);
@@ -68,5 +72,22 @@ impl Welder {
     /// The finished mesh.
     pub fn finish(self) -> Result<TriMesh, MeshError> {
         TriMesh::new(self.vertices, self.triangles)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    /// A corner written `-0` on one triangle and `0` on the next is one corner,
+    /// or a part centred on the origin splits along its axes.
+    #[test]
+    fn negative_zero_welds_to_zero() {
+        let mut w = Welder::default();
+        let (a, b) = (DVec3::new(0.0, 0.0, 0.0), DVec3::new(-0.0, 1.0, -0.0));
+        assert!(w.push([a, DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.0, 1.0, 0.0)]));
+        assert!(w.push([DVec3::new(-0.0, -0.0, 0.0), b, DVec3::new(-1.0, 0.0, 0.0)]));
+        assert_eq!(w.vertex_count(), 4);
     }
 }

@@ -3,6 +3,7 @@
 //! out for drawing.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -59,6 +60,15 @@ impl SetupInputs {
             stocks,
             models,
         })
+    }
+
+    /// The paths in these, found from `from`, written from `to`, as a job saved
+    /// in another folder has them ([`super::rebase`]).
+    pub(super) fn rebase(&mut self, from: &Path, to: &Path) {
+        self.setup.post = super::moved_post(&self.setup.post, from, to);
+        for (m, _) in &mut self.models {
+            m.path = super::moved(&m.path, from, to);
+        }
     }
 
     /// The part of this that decides where the part and stock sit: not the
@@ -353,11 +363,21 @@ impl Document {
         seq
     }
 
-    /// Setup `name`'s run `seq` has got to `stage`. Word from a run since
-    /// superseded is dropped.
-    pub fn progressed(&mut self, name: &str, seq: u64, stage: Stage) {
-        if let Some(state) = self.setups.get_mut(name)
-            && state.running.as_ref().is_some_and(|(s, _)| *s == seq)
+    /// The setup whose run is `seq`, by its name now: renamed since it was
+    /// sent, it is found all the same. `None` for a run since superseded, or a
+    /// setup since removed.
+    fn running_as(&self, seq: u64) -> Option<String> {
+        self.setups
+            .iter()
+            .find(|(_, s)| s.running.as_ref().is_some_and(|(r, _)| *r == seq))
+            .map(|(name, _)| name.clone())
+    }
+
+    /// Run `seq` has got to `stage`. Word from a run since superseded is
+    /// dropped.
+    pub fn progressed(&mut self, seq: u64, stage: Stage) {
+        if let Some(name) = self.running_as(seq)
+            && let Some(state) = self.setups.get_mut(&name)
         {
             state.progress = Some((stage, Instant::now()));
         }
@@ -393,23 +413,24 @@ impl Document {
         }
     }
 
-    /// Setup `name`'s run `seq` has finished. A reply for a run since superseded,
-    /// or for a setup since removed, is dropped.
-    pub fn finished(&mut self, name: &str, seq: u64, result: Result<Ran, SessionError>) {
+    /// Run `seq`, sent for setup `sent`, has finished. A reply for a run since
+    /// superseded, or for a setup since removed, is dropped; one for a setup
+    /// renamed since goes to it by its new name.
+    pub fn finished(&mut self, sent: &str, seq: u64, result: Result<Ran, SessionError>) {
+        let Some(name) = self.running_as(seq) else {
+            return;
+        };
+        let name = name.as_str();
         let Some(state) = self.setups.get_mut(name) else {
             return;
         };
-        let job = match state.running.take() {
-            Some((s, job)) if s == seq => job,
-            other => {
-                state.running = other;
-                return;
-            }
+        let Some((_, job)) = state.running.take() else {
+            return;
         };
         state.progress = None;
         // What the run was made from: the job as sent, with the models as they
-        // were loaded then.
-        let Some(index) = job.setups.iter().position(|s| s.name == name) else {
+        // were loaded then, found in it by the name it was sent with.
+        let Some(index) = job.setups.iter().position(|s| s.name == sent) else {
             return;
         };
         let inputs = SetupInputs::of(&job, &self.models, index);

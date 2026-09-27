@@ -45,7 +45,10 @@ cuts each ring all the way down before the next, and never a ring before the
 rings inside it, so a part's holes are cut while it is held; a pocket clears
 from its middle out, the wall last. Both climb unless `conventional = true`, and
 their order is their own, so they are not reordered. A V-bit profiles only on
-the line. Any job with one is version 7.
+the boundary. An additional offset (`margin`) moves the cut out from the
+boundary, or in when negative, as if the boundary were moved; floors are still
+found among the picks on the boundary itself. Any job with one is version 7, or
+8 with an additional offset.
 
 ```toml
 [[setup.operation]]
@@ -54,6 +57,56 @@ strategy = "profile"          # side = "outside" | "inside" | "on"
 stepdown = 3.0
 tool = "quarter-upcut"
 geometry = { bottom = { ref = "stock-bottom", offset = -0.3 } }
+passes = { tabs = { width = 6.0, height = 3.0, spacing = 150.0 } }
+```
+
+**Tabs** (`passes.tabs`) hold what a cut frees: bridges of material left
+standing across it, as Fusion's holding tabs. They go on profiles, as Fusion's
+go only on a 2D contour: every ring a profile cuts is beside what it keeps,
+where a pocket's or a roughing level's clearing rings are in the waste, and
+tabs on them would leave pillars standing there (`camcraft_core::tabs` works on
+any path's closed loops; `StrategySpec::uses` says which strategy has them). A
+pocket or roughing operation given them keeps them, unused. They go evenly
+round each loop cut at the operation's deepest level, about `spacing` apart and at
+least two to a loop, clear of where the loop starts; a loop too short for one
+gets none, with a warning. Each is `width` of material wide along the cut at its
+top and `height` above the floor, and every cutting move over one, at any level,
+rides over it: `shape = "rectangular"` (the default) steps straight up and
+plunges down off it at the plunge feed, `"triangular"` climbs and ramps off at
+45°. They are put on before linking, so links and ramps plan round them. Any job
+with them is version 8.
+
+**Stock to leave** (`passes.stock_to_leave`) is Fusion's radial and axial
+stock to leave, in millimetres: `radial` on the walls, `axial` on the floors,
+and between the two on a slope. Positive leaves material for a later operation
+to finish; negative cuts past the part, for a looser fit. Beside, it must stay
+under the tool's radius; down, in 3D with a ball or bullnose, within its corner
+radius (a flat end, or a 2D floor, may go any depth). Every operation has it,
+and cuts with as much as its strategy uses: a drill none, a profile on the
+boundary only its floor's. New Z-level roughing starts at 0.5 mm each way, as
+Fusion's roughing does; everything else at none, which is not written. The 3D
+strategies grow the tool by it (`camcraft_core::allowance`); a 2D one moves its
+cut out by it and raises its floors by it. The material is cut by the real
+tool, so what is left shows in the simulation, and what was cut past the part
+on purpose is not called a gouge.
+
+```toml
+passes = { stock_to_leave = { radial = 0.5, axial = 0.25 } }
+```
+
+**Leads** (`linking.leads`) are a profile's level arcs on and off each ring, as
+Fusion's horizontal lead-in and lead-out, the same both ways: tangent to the
+ring, in the waste beside it, `radius` (half the tool's diameter unless given)
+turning `sweep` degrees (90), with an optional `straight` run before the arc in
+and after it out. An arc that would leave the waste is tried at half and a
+quarter the radius; a ring that starts at a corner starts instead halfway along
+its longest side, where an arc can join it; a ring with no room for any goes
+without, with a warning. A groove on the boundary has none. The linker ramps
+down to where the lead starts, along the lead and the ring. New profiles have
+them; any job with them is version 8.
+
+```toml
+linking = { leads = { radius = 3.0, sweep = 90.0, straight = 1.0 } }
 ```
 
 **Linking** is how the tool moves between cuts, after Fusion's
@@ -98,6 +151,7 @@ version newer than it reads, by name.
 | 5       | a fixed box placed against the models, rather than at a corner         |
 | 6       | a machining boundary chosen other than picks alone, or an offset that moves one the whole tool is inside inward |
 | 7       | a 2D profile or pocket                                                 |
+| 8       | a 2D profile or pocket with an additional offset, or any operation with tabs, leads or negative stock to leave |
 
 Every version from 1 is read. The old `job.toml` format, from before setups, is
 refused by name; there is no converter.

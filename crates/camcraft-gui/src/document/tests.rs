@@ -143,6 +143,65 @@ fn models_are_added_and_saved_relative() {
     assert_eq!(doc.job.models[0].path, "../../models/part.step");
     let again = camcraft_session::read_job(&dir.join("jobs/deeper/second.camcraft")).unwrap();
     assert_eq!(again, doc.job);
+
+    // A machine profile that is a file moves with it, a built-in one does not,
+    // and so do the edits there are to undo: undone, they still find their
+    // files.
+    std::fs::create_dir_all(dir.join("jobs/machines")).unwrap();
+    std::fs::write(dir.join("jobs/machines/mine.toml"), "").unwrap();
+    doc.job.setups[0].post = "../machines/mine.toml".into();
+    doc.checkpoint();
+    doc.job.setups[0].name = "renamed".into();
+    doc.checkpoint();
+    doc.save_to(&dir.join("jobs/third.camcraft")).unwrap();
+    assert_eq!(doc.job.setups[0].post, "machines/mine.toml");
+    doc.undo();
+    assert_eq!(doc.job.setups[0].post, "machines/mine.toml");
+    doc.undo();
+    assert_eq!(doc.job.models[0].path, "../models/part.step");
+    doc.job.setups[0].post = "masso".into();
+    doc.save_to(&dir.join("jobs/deeper/fourth.camcraft"))
+        .unwrap();
+    assert_eq!(doc.job.setups[0].post, "masso");
+}
+
+/// A setup's rename undone, or redone, keeps what the setup ran, and the
+/// selection on it, as the rename itself does.
+#[test]
+fn a_rename_undone_keeps_the_setup_run() {
+    let mut doc = example();
+    let seq = doc.started("top");
+    doc.checkpoint();
+    doc.rename_setup("top", "side").unwrap();
+    doc.checkpoint();
+    doc.selection = Selection::Setup("side".into());
+    doc.undo();
+    assert_eq!(doc.job.setups[0].name, "top");
+    assert!(
+        doc.setups["top"]
+            .running
+            .as_ref()
+            .is_some_and(|(s, _)| *s == seq)
+    );
+    assert_eq!(doc.selection, Selection::Setup("top".into()));
+    doc.redo();
+    assert!(doc.setups["side"].running.is_some());
+    assert_eq!(doc.active.as_deref(), Some("side"));
+}
+
+/// Another tool keeps an offset chosen as zero: the channel round the part is
+/// made for the first tool only.
+#[test]
+fn another_tool_keeps_a_chosen_offset() {
+    use camcraft_core::job::{Boundary, Containment};
+    let mut doc = example();
+    let g = &mut doc.job.setups[0].operations[0].geometry;
+    g.boundary_kind = Some(Boundary::Silhouette);
+    g.containment = Containment::Outside;
+    g.margin = 0.0;
+    let other = doc.job.setups[0].operations[1].tool.clone().unwrap();
+    doc.use_tool("top", 0, other, None);
+    assert_eq!(doc.job.setups[0].operations[0].geometry.margin, 0.0);
 }
 
 /// Saving drops tools no operation uses.
@@ -198,19 +257,33 @@ fn operations_follow_their_run() {
     assert_eq!(doc.op_status("top", 0), OpStatus::NotRun);
     let seq = doc.started("top");
     assert_eq!(doc.op_status("top", 0), OpStatus::Waiting);
-    doc.progressed("top", seq, Stage::Operation(0));
+    doc.progressed(seq, Stage::Operation(0));
     assert!(matches!(doc.op_status("top", 0), OpStatus::Running(_)));
     assert_eq!(doc.op_status("top", 1), OpStatus::Waiting);
-    doc.progressed("top", seq + 1, Stage::Operation(1));
+    doc.progressed(seq + 1, Stage::Operation(1));
     assert!(matches!(doc.op_status("top", 0), OpStatus::Running(_)));
-    doc.progressed("top", seq, Stage::Operation(1));
+    doc.progressed(seq, Stage::Operation(1));
     assert_eq!(doc.op_status("top", 0), OpStatus::Done);
     assert!(matches!(doc.op_status("top", 1), OpStatus::Running(_)));
-    doc.progressed("top", seq, Stage::Checking);
+    doc.progressed(seq, Stage::Checking);
     assert_eq!(doc.op_status("top", 1), OpStatus::Done);
     doc.finished("top", seq, Err(SessionError::Refused));
     assert_eq!(doc.op_status("top", 0), OpStatus::NotRun);
     assert!(doc.setups["top"].progress.is_none());
+}
+
+/// A setup renamed while it runs keeps its run: word from it, and its end, go
+/// to the setup by its new name, and it is not left running for ever.
+#[test]
+fn a_setup_renamed_while_it_runs_keeps_its_run() {
+    let mut doc = example();
+    let seq = doc.started("top");
+    doc.rename_setup("top", "side").unwrap();
+    doc.progressed(seq, Stage::Operation(0));
+    assert!(matches!(doc.op_status("side", 0), OpStatus::Running(_)));
+    doc.finished("top", seq, Err(SessionError::Refused));
+    assert_ne!(doc.status("side"), Status::Running);
+    assert!(doc.setups["side"].progress.is_none());
 }
 
 /// An operation dragged to a new place takes it, the others close up, and
@@ -509,6 +582,98 @@ fn operations_are_added_moved_and_removed() {
     );
     doc.remove_operation("top", 1);
     assert_eq!(doc.job.setups[0].operations.len(), 2);
+}
+
+/// A new operation starts on the part's silhouette: finishing with the tool's
+/// centre inside it, roughing reaching in from outside with a channel a tool wide,
+/// set once the tool is known. A 2D one is left to follow its picks.
+#[test]
+fn new_operations_start_on_the_silhouette() {
+    use camcraft_core::job::{Boundary, Containment};
+    let mut doc = example();
+    let finish = doc
+        .add_operation("top", StrategySpec::Parallel { angle: 0.0 })
+        .unwrap();
+    let g = &doc.job.setups[0].operations[finish].geometry;
+    assert_eq!(g.boundary(), Boundary::Silhouette);
+    assert_eq!(g.containment, Containment::Center);
+    assert_eq!(g.margin, 0.0);
+
+    let rough = doc
+        .add_operation(
+            "top",
+            StrategySpec::ZlevelRough {
+                stepdown: 2.0,
+                min_ring_length: 3.0,
+            },
+        )
+        .unwrap();
+    let tool = doc.job.setups[0].operations[rough].tool.clone().unwrap();
+    let diameter = doc.job.tools[&tool].diameter;
+    let g = &doc.job.setups[0].operations[rough].geometry;
+    assert_eq!(g.boundary(), Boundary::Silhouette);
+    assert_eq!(g.containment, Containment::Outside);
+    assert_eq!(g.margin, diameter);
+
+    let profile = doc
+        .add_operation(
+            "top",
+            StrategySpec::Profile {
+                side: Default::default(),
+                stepdown: 3.0,
+                conventional: false,
+            },
+        )
+        .unwrap();
+    let g = &doc.job.setups[0].operations[profile].geometry;
+    assert_eq!(g.boundary_kind, None);
+    assert_eq!(g.boundary_2d(), Boundary::Silhouette);
+    // And arcs on and off each ring.
+    assert!(
+        doc.job.setups[0].operations[profile]
+            .linking
+            .leads
+            .is_some()
+    );
+    assert!(doc.job.setups[0].operations[rough].linking.leads.is_none());
+}
+
+/// A new roughing operation leaves half a millimetre for the finish, as Fusion's
+/// does; a new finish or profile cuts to size.
+#[test]
+fn new_roughing_leaves_stock_for_the_finish() {
+    use camcraft_core::job::StockToLeave;
+    let mut doc = example();
+    let rough = doc
+        .add_operation(
+            "top",
+            StrategySpec::ZlevelRough {
+                stepdown: 2.0,
+                min_ring_length: 3.0,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        doc.job.setups[0].operations[rough].passes.stock_to_leave,
+        StockToLeave {
+            radial: 0.5,
+            axial: 0.5
+        }
+    );
+    let profile = doc
+        .add_operation(
+            "top",
+            StrategySpec::Profile {
+                side: Default::default(),
+                stepdown: 3.0,
+                conventional: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        doc.job.setups[0].operations[profile].passes.stock_to_leave,
+        StockToLeave::default()
+    );
 }
 
 /// A library tool is copied in once: picking the same one again reuses it, and

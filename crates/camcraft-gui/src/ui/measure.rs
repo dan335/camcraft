@@ -5,6 +5,7 @@
 //! field. A value is converted when shown, and written back only when the person
 //! changes it, so looking at a job in inches never rounds what is in it.
 
+use camcraft_core::job::{Leave, StockToLeave};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
@@ -185,11 +186,58 @@ impl Measure {
         self.field(ui, mm, speed, -limit, limit, prefix, self.unit(), 4)
     }
 
+    /// Editors for stock to leave, Fusion's radial (wall) and axial (floor), as
+    /// much of it as `leave` says is used, each no lower than `least` has it.
+    /// The floor follows the wall while the two are the same, as Fusion's does
+    /// until the floor is given its own.
+    pub fn stock_to_leave_fields(
+        self,
+        ui: &mut egui::Ui,
+        stock: &mut StockToLeave,
+        leave: Leave,
+        least: StockToLeave,
+    ) {
+        let before = *stock;
+        // Beside, the tool cannot shrink to nothing: a hundredth of a millimetre short.
+        let (radial_min, axial_min) = ((least.radial + 0.01).max(-50.0), least.axial.max(-50.0));
+        if leave == Leave::Both {
+            let min = radial_min.min(stock.radial);
+            self.field(
+                ui,
+                &mut stock.radial,
+                0.01,
+                min,
+                50.0,
+                "wall ",
+                self.unit(),
+                4,
+            )
+            .on_hover_text("Left on the walls: negative cuts past them");
+        }
+        if leave != Leave::None {
+            let min = axial_min.min(stock.axial);
+            self.field(
+                ui,
+                &mut stock.axial,
+                0.01,
+                min,
+                50.0,
+                "floor ",
+                self.unit(),
+                4,
+            )
+            .on_hover_text("Left on the floors: negative cuts below them");
+        }
+        follow_radial(stock, before);
+    }
+
     /// An editor for a feed kept in mm/min, shown in this unit.
     pub fn feed_field(self, ui: &mut egui::Ui, mm_per_min: &mut f64, max: f64) -> egui::Response {
         self.field(ui, mm_per_min, 10.0, 0.0, max, "", self.feed_unit(), 1)
     }
 
+    /// An editor for `mm`, shown to `decimals` places at most, and to exactly
+    /// that many in inches.
     #[allow(clippy::too_many_arguments)]
     fn field(
         self,
@@ -200,32 +248,73 @@ impl Measure {
         max: f64,
         prefix: &str,
         unit: &str,
-        imperial_decimals: usize,
+        decimals: usize,
     ) -> egui::Response {
         let mut shown = self.show(*mm);
         let mut drag = egui::DragValue::new(&mut shown)
             .speed(self.show(speed))
             .range(self.show(min)..=self.show(max))
             .prefix(prefix)
-            .suffix(format!(" {unit}"));
-        // Metric keeps egui's own choice, as before there was a choice.
+            .suffix(format!(" {unit}"))
+            .max_decimals(decimals);
         if self == Self::Imperial {
-            drag = drag
-                .min_decimals(imperial_decimals)
-                .max_decimals(imperial_decimals);
+            drag = drag.min_decimals(decimals);
         }
         let response = ui.add(drag);
-        // Only a change is written back, so showing a value never rounds it.
-        if response.changed() {
+        // Only a change is written back, so showing a value never rounds it. A
+        // field left after being clicked into reads back the text it showed,
+        // which holds only so many places: that is the value as shown, and no
+        // change, or looking at a job in inches would round what is in it.
+        let as_shown = egui::emath::round_to_decimals(self.show(*mm), decimals);
+        if response.changed() && shown.to_bits() != as_shown.to_bits() {
             *mm = self.read(shown);
         }
         response
     }
 }
 
+/// Move the floor's stock to leave with the wall's, when the wall's changed from
+/// `before` and the floor's was the same as it: Fusion's axial follows radial
+/// until given its own.
+pub fn follow_radial(stock: &mut StockToLeave, before: StockToLeave) {
+    // Exactly the same: a value typed, not one worked out.
+    let same = |a: f64, b: f64| a.to_bits() == b.to_bits();
+    if !same(stock.radial, before.radial)
+        && same(before.axial, before.radial)
+        && same(stock.axial, before.axial)
+    {
+        stock.axial = stock.radial;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn the_floor_follows_the_wall_until_given_its_own() {
+        let even = StockToLeave {
+            radial: 0.5,
+            axial: 0.5,
+        };
+        let mut s = StockToLeave {
+            radial: 0.3,
+            ..even
+        };
+        follow_radial(&mut s, even);
+        assert_eq!(s.axial, 0.3);
+        let apart = StockToLeave {
+            radial: 0.5,
+            axial: 0.2,
+        };
+        let mut s = StockToLeave {
+            radial: 0.3,
+            ..apart
+        };
+        follow_radial(&mut s, apart);
+        assert_eq!(s.axial, 0.2, "a floor given its own stays");
+    }
 
     #[test]
     fn lengths_read_in_either_unit() {
@@ -268,5 +357,42 @@ mod tests {
             let mm = 6.35;
             assert!((m.read(m.show(mm)) - mm).abs() < 1e-12);
         }
+    }
+}
+
+#[cfg(all(test, feature = "ui-snapshots"))]
+#[allow(clippy::unwrap_used, clippy::float_cmp)]
+mod field_tests {
+    use super::*;
+    use egui_kittest::Harness;
+
+    fn click(h: &mut Harness<'_, f64>, at: egui::Pos2) {
+        for pressed in [true, false] {
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.run();
+        }
+    }
+
+    /// Clicking into a length and out again, in inches, leaves it as it was:
+    /// the text it re-reads holds only four places, and a hundredth of a
+    /// millimetre is not 0.0004 in.
+    #[test]
+    fn looking_at_a_length_in_inches_does_not_change_it() {
+        let mut h = Harness::new_ui_state(
+            |ui, mm: &mut f64| {
+                Measure::Imperial.length_field(ui, mm, 0.01, 10.0, "");
+            },
+            0.01,
+        );
+        h.run();
+        click(&mut h, egui::pos2(20.0, 12.0));
+        h.hover_at(egui::pos2(400.0, 400.0));
+        click(&mut h, egui::pos2(400.0, 400.0));
+        assert_eq!(*h.state(), 0.01);
     }
 }

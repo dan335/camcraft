@@ -18,7 +18,7 @@ use camcraft_core::features::{self, FeatureError};
 use camcraft_core::job::{
     Boundary, BoxOf, FeatureRef, Geometry, Operation, Origin, Snap, StrategySpec,
 };
-use camcraft_core::planar::centre_offset;
+use camcraft_core::planar::{centre_offset, floored_pieces};
 use camcraft_core::run::cutting_tool;
 use camcraft_core::setup::{Bodies, Prepared};
 use camcraft_core::tool::ToolProfile;
@@ -29,7 +29,7 @@ use glam::{DVec2, DVec3, Vec3};
 
 use crate::document::{Document, Selection};
 use crate::picking::describe::{describe_edge, describe_face, describe_point};
-use crate::picking::ray::{Accept, PickScene, Target};
+use crate::picking::ray::{Accept, PickModel, PickScene, Target};
 use crate::ui::measure::Measure;
 use crate::view::scene::box_edges;
 use crate::view::viewport::{Highlight, Outline, OutlineKind};
@@ -100,7 +100,7 @@ impl Slot {
             }
             Slot::Faces { .. } => "Click faces to add or remove them · Esc or Done to finish",
             Slot::Edges { .. } => {
-                "Click edges to add or remove them; they must close into loops · Esc or Done to finish"
+                "Click an edge to add the loop it goes round, or take it out · Esc or Done to finish"
             }
         }
     }
@@ -169,8 +169,90 @@ pub fn apply(
                 })
             })
         }
+        (Slot::Edges { setup, op }, Target::Loop { model, edges }) => {
+            doc.operation_mut(setup, *op).is_some_and(|o| {
+                toggle_loop(&mut o.geometry.edges, model, edges, |r| {
+                    current(r, Kind::Edge)
+                })
+            })
+        }
         _ => false,
     }
+}
+
+/// What a click on `target` picks into `slot`: for edges, the whole loop the edge
+/// goes round ([`edge_loop`]), as they are only ever cut round in loops.
+pub fn widen(scene: &PickScene, slot: &Slot, target: Target) -> Target {
+    match (slot, target) {
+        (Slot::Edges { .. }, t) => whole_loop(scene, t),
+        (_, t) => t,
+    }
+}
+
+/// An edge as the loop it goes round; anything else as it is.
+pub fn whole_loop(scene: &PickScene, target: Target) -> Target {
+    let Target::Edge { model, edge, at } = target else {
+        return target;
+    };
+    let Some(body) = scene.model(&model).map(PickModel::body) else {
+        return Target::Edge { model, edge, at };
+    };
+    let t = body.topology();
+    let edges = edge_loop(scene, &model, edge)
+        .into_iter()
+        .map(|e| {
+            let on = if e == edge {
+                at
+            } else {
+                t.edge_middle(body.mesh(), e).unwrap_or(at)
+            };
+            (e, on)
+        })
+        .collect();
+    Target::Loop { model, edges }
+}
+
+/// The loop edge `edge` of `model` goes round, in order from it: the edges joined
+/// to it end to end at its height in the setup, turning least at each corner
+/// ([`Topology::level_loop`](camcraft_geom::topology::Topology::level_loop)). So
+/// an edge of a pocket's floor or of the part's outline takes the whole of it,
+/// however its faces are split, and a hole's rim is its own loop. An edge that is
+/// not level, or whose loop does not close, is taken alone.
+pub fn edge_loop(scene: &PickScene, model: &str, edge: u32) -> Vec<u32> {
+    let Some(pm) = scene.model(model) else {
+        return vec![edge];
+    };
+    let t = pm.body().topology();
+    let points = |e: u32| pm.edges.get(e as usize).cloned().unwrap_or_default();
+    t.level_loop(edge, points, t.tolerance())
+        .unwrap_or_else(|| vec![edge])
+}
+
+/// Take a loop out of `list` if all of it is there, or else add what is missing.
+fn toggle_loop(
+    list: &mut Vec<FeatureRef>,
+    model: &str,
+    edges: &[(u32, DVec3)],
+    current: impl Fn(&FeatureRef) -> Option<u32>,
+) -> bool {
+    let has = |list: &[FeatureRef], e: u32| {
+        list.iter()
+            .any(|r| r.model == model && current(r) == Some(e))
+    };
+    if edges.iter().all(|&(e, _)| has(list, e)) {
+        list.retain(|r| !(r.model == model && edges.iter().any(|&(e, _)| current(r) == Some(e))));
+    } else {
+        for &(e, at) in edges {
+            if !has(list, e) {
+                list.push(FeatureRef {
+                    model: model.to_string(),
+                    index: e,
+                    at: at.to_array(),
+                });
+            }
+        }
+    }
+    true
 }
 
 /// Take `name` out of `names` if it is there, or else add it.
@@ -249,6 +331,9 @@ pub struct Shown {
     pub faces: Vec<Result<String, String>>,
     /// Each picked edge, likewise.
     pub edges: Vec<Result<String, String>>,
+    /// The picked edges as the panel lists them: each loop once, as its picks'
+    /// places in the job's order and what it is, and each pick not found alone.
+    pub edge_loops: Vec<(Vec<usize>, Result<String, String>)>,
     /// The boundary the picks make, or why they make none.
     pub boundary: Option<Result<(), String>>,
 }
@@ -312,17 +397,49 @@ pub fn shown(
             describe_face(body, &r.model, face, m)
         }));
     }
-    for r in &g.edges {
-        out.edges.push(find(r, Kind::Edge).map(|(body, edge)| {
+    // Each loop the picked edges go round, by model and its edges, with the picks
+    // on it.
+    type Round<'a> = (&'a str, Vec<u32>);
+    let mut loops: Vec<(Round<'_>, Vec<usize>)> = Vec::new();
+    for (i, r) in g.edges.iter().enumerate() {
+        let found = find(r, Kind::Edge);
+        if let Ok((body, edge)) = &found {
             if let Some(pm) = scene.model(&r.model) {
                 out.highlight.lines.extend(edge_lines(
-                    pm.edges.get(edge as usize),
-                    body.topology().edge(edge).is_some_and(|e| e.closed),
+                    pm.edges.get(*edge as usize),
+                    body.topology().edge(*edge).is_some_and(|e| e.closed),
                     OutlineKind::Selected,
                 ));
             }
-            describe_edge(body, &r.model, edge, m)
-        }));
+            let mut round = edge_loop(scene, &r.model, *edge);
+            round.sort_unstable();
+            let key = (r.model.as_str(), round);
+            match loops.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, picks)) => picks.push(i),
+                None => loops.push((key, vec![i])),
+            }
+        } else {
+            loops.push((("", Vec::new()), vec![i]));
+        }
+        out.edges
+            .push(found.map(|(body, edge)| describe_edge(body, &r.model, edge, m)));
+    }
+    for ((model, round), picks) in loops {
+        let what = match (round.len(), picks.first()) {
+            (0 | 1, Some(&i)) => out.edges.get(i).cloned().unwrap_or(Ok(String::new())),
+            (n, _) if picks.len() < n => Ok(format!(
+                "{} of the {n} edges of a loop · on '{model}'",
+                picks.len()
+            )),
+            (n, _) => Ok(format!(
+                "Loop of {n} edges{} · on '{model}'",
+                scene
+                    .model(model)
+                    .and_then(|pm| loop_size(pm, &round, m))
+                    .unwrap_or_default()
+            )),
+        };
+        out.edge_loops.push((picks, what));
     }
 
     // The boundary, drawn at the stock's top so it reads over everything. Worked
@@ -353,33 +470,74 @@ pub fn shown(
     out
 }
 
-/// A 2D operation's boundary as lines at height `z`, and the rings the tool's
-/// centre follows beside it: for a pocket, its walls. The stock's footprint when
-/// that is the boundary.
+/// " · 31.80 × 15.80 mm", the size of loop `round` of `pm`'s edges seen from above.
+fn loop_size(pm: &PickModel, round: &[u32], m: Measure) -> Option<String> {
+    let mut points = round
+        .iter()
+        .filter_map(|&e| pm.edges.get(e as usize))
+        .flatten();
+    let first = points.next()?.truncate();
+    let (lo, hi) = points.fold((first, first), |(lo, hi), p| {
+        (lo.min(p.truncate()), hi.max(p.truncate()))
+    });
+    let size = hi - lo;
+    Some(format!(
+        " · {} × {}",
+        m.number(size.x, 2),
+        m.length(size.y, 2)
+    ))
+}
+
+/// A 2D operation's boundary as lines, and hatched, what the tool cuts away beside
+/// it: a band along it for a profile, all inside it for a pocket. Each piece of it
+/// is drawn at the height of the picks in it, so it lies on them; with nothing
+/// picked in it, at `top`, the stock's top. The stock's footprint when that is the
+/// boundary. Nothing is hatched without a tool.
 fn outline_lines(
     op: &Operation,
     tool: Option<&EffectiveTool>,
     prepared: &Prepared,
     bodies: &Bodies<'_>,
     tolerance: f64,
-    z: f64,
+    top: f64,
 ) -> Result<Vec<Outline>, FeatureError> {
-    let (shape, _) = features::outline(&op.geometry, prepared, bodies, tolerance)?;
+    let region = |e: camcraft_geom::contour::RegionError| FeatureError::Region(e.to_string());
+    let (shape, floors) = features::outline(&op.geometry, prepared, bodies, tolerance)?;
     let shape = shape.unwrap_or_else(|| {
         let b = prepared.stock_bounds();
         Region::rectangle(b.min.truncate(), b.max.truncate())
     });
-    let mut lines = rings_at(&shape, z, OutlineKind::Boundary);
+    let arc = tolerance / 2.0;
     let radius = tool.map_or(0.0, EffectiveTool::cutter_radius);
     let offset = centre_offset(op, radius);
-    if offset != 0.0 {
-        let centres = shape.offset(offset, tolerance / 2.0);
-        if centres.area() <= 1e-9 {
-            return Err(FeatureError::TooWide {
-                diameter: radius * 2.0,
-            });
+    let pocket = matches!(op.strategy, StrategySpec::Pocket { .. });
+    let mut lines = Vec::new();
+    let mut room = false;
+    for (piece, z) in floored_pieces(&shape, arc, &floors, top) {
+        lines.extend(rings_at(&piece, z, OutlineKind::Boundary));
+        if radius <= 0.0 {
+            room = true;
+            continue;
         }
-        lines.extend(rings_at(&centres, z, OutlineKind::Limit));
+        let centres = piece.offset(offset, arc);
+        if centres.area() <= 1e-9 {
+            continue;
+        }
+        room = true;
+        let reach = centres.offset(radius, arc);
+        let cut = if pocket {
+            reach
+        } else {
+            reach
+                .difference(&centres.offset(-radius, arc))
+                .map_err(region)?
+        };
+        lines.extend(hatched(&cut, z).map_err(region)?);
+    }
+    if !room {
+        return Err(FeatureError::TooWide {
+            diameter: radius * 2.0,
+        });
     }
     Ok(lines)
 }
@@ -420,16 +578,23 @@ fn boundary_lines(
             .offset(radius, arc)
             .difference(&part)
             .map_err(region)?;
-        for line in cut.clip_polylines(&hatch(&cut)).map_err(region)? {
-            lines.extend(line.windows(2).filter_map(|w| match w {
-                [a, b] => Some(Outline {
-                    a: DVec3::new(a.x, a.y, z),
-                    b: DVec3::new(b.x, b.y, z),
-                    kind: OutlineKind::Channel,
-                }),
-                _ => None,
-            }));
-        }
+        lines.extend(hatched(&cut, z).map_err(region)?);
+    }
+    Ok(lines)
+}
+
+/// `region` hatched at height `z`.
+fn hatched(region: &Region, z: f64) -> Result<Vec<Outline>, camcraft_geom::contour::RegionError> {
+    let mut lines = Vec::new();
+    for line in region.clip_polylines(&hatch(region))? {
+        lines.extend(line.windows(2).filter_map(|w| match w {
+            [a, b] => Some(Outline {
+                a: DVec3::new(a.x, a.y, z),
+                b: DVec3::new(b.x, b.y, z),
+                kind: OutlineKind::Channel,
+            }),
+            _ => None,
+        }));
     }
     Ok(lines)
 }
@@ -482,6 +647,18 @@ pub fn hovered(scene: &PickScene, target: &Target) -> Highlight {
             if let Some(pm) = scene.model(model) {
                 let closed = pm.body().topology().edge(*edge).is_some_and(|e| e.closed);
                 h.lines = edge_lines(pm.edges.get(*edge as usize), closed, OutlineKind::Hover);
+            }
+        }
+        Target::Loop { model, edges } => {
+            if let Some(pm) = scene.model(model) {
+                for &(e, _) in edges {
+                    let closed = pm.body().topology().edge(e).is_some_and(|e| e.closed);
+                    h.lines.extend(edge_lines(
+                        pm.edges.get(e as usize),
+                        closed,
+                        OutlineKind::Hover,
+                    ));
+                }
             }
         }
         Target::Point { setup, point } => {
@@ -634,6 +811,42 @@ mod tests {
             at: DVec3::ZERO,
         };
         assert!(!apply(&mut doc, &slot, &edge, same));
+    }
+
+    /// A loop clicked adds the edges of it not yet picked; clicked again with all
+    /// of it picked, takes them all out.
+    #[test]
+    fn edges_toggle_a_loop_at_a_time() {
+        let mut doc = doc_with_op();
+        let setup = doc.job.setups[0].name.clone();
+        let slot = Slot::Edges { setup, op: 0 };
+        let same = |r: &FeatureRef, _| Some(r.index);
+        let round = Target::Loop {
+            model: "p".into(),
+            edges: vec![(4, DVec3::X), (5, DVec3::Y), (6, DVec3::Z)],
+        };
+        let one = Target::Edge {
+            model: "p".into(),
+            edge: 5,
+            at: DVec3::Y,
+        };
+        let picked = |doc: &Document| {
+            doc.job.setups[0].operations[0]
+                .geometry
+                .edges
+                .iter()
+                .map(|r| r.index)
+                .collect::<Vec<_>>()
+        };
+        assert!(apply(&mut doc, &slot, &one, same));
+        assert!(apply(&mut doc, &slot, &round, same));
+        assert_eq!(picked(&doc), [5, 4, 6]);
+        assert_eq!(
+            doc.job.setups[0].operations[0].geometry.edges[2].at,
+            [0.0, 0.0, 1.0]
+        );
+        assert!(apply(&mut doc, &slot, &round, same));
+        assert!(picked(&doc).is_empty());
     }
 
     /// A saved pick found now under another number is still the same face: the

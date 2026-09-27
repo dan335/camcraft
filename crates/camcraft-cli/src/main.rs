@@ -93,8 +93,8 @@ struct PostArgs {
     #[arg(long, default_value_t = 54)]
     wcs: u8,
 
-    /// Tool number.
-    #[arg(long, default_value_t = 1)]
+    /// Tool number, from 1: T0 is no tool on most controllers.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
     tool_number: u32,
 
     /// Write the program even though checks failed.

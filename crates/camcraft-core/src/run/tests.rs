@@ -614,3 +614,299 @@ fn a_pocket_is_cleared_to_its_picked_floor() {
     let err = run_setup(&job, 0, &bodies).unwrap_err().to_string();
     assert!(err.contains("does not fit"), "{err}");
 }
+
+/// An additional offset moves a 2D cut as if the boundary were moved: a profile
+/// out by it, a pocket in when it is negative. The pocket still goes down to the
+/// floor picked on the boundary itself.
+#[test]
+fn an_additional_offset_moves_the_cut() {
+    use crate::features::find_face;
+    use crate::job::{FeatureRef, ProfileSide};
+    let cuts = |result: &SetupResult| -> Vec<DVec3> {
+        result.operations[0]
+            .path
+            .moves()
+            .iter()
+            .filter(|m| m.role == crate::toolpath::MoveRole::Cut)
+            .map(|m| m.to)
+            .collect()
+    };
+
+    let plate = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
+    let profile = StrategySpec::Profile {
+        side: ProfileSide::Outside,
+        stepdown: 2.0,
+        conventional: false,
+    };
+    let (mut job, _) = in_a_sheet(profile, &plate);
+    job.setups[0].operations[0].geometry.margin = 2.0;
+    let bodies: Bodies<'_> = [("dome", &plate)].into_iter().collect();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    // The outline's ring a tool's radius and 2 mm outside it; the hole's, a
+    // radius inside the hole less 2 mm, nearer its middle.
+    let reach = cuts(&result)
+        .iter()
+        .map(|p| p.x.abs().max(p.y.abs()))
+        .fold(0.0, f64::max);
+    assert!((reach - 25.0).abs() < 0.05, "reaches {reach}");
+
+    let step = Body::derived(synthetic::step(5.0, 10.0));
+    let pick = FeatureRef {
+        model: "dome".into(),
+        index: 0,
+        at: [5.0, 0.0, 0.0],
+    };
+    let face = find_face(&step, &pick, 0.01).unwrap().index;
+    let pocket = StrategySpec::Pocket {
+        stepdown: 2.0,
+        conventional: false,
+    };
+    let (mut job, _) = in_a_sheet(pocket, &step);
+    job.stocks[0].spec = crate::job::StockSpec::AroundModels {
+        models: vec![],
+        margin: [0.0, 0.0, 0.0],
+        below: 0.0,
+    };
+    let g = &mut job.setups[0].operations[0].geometry;
+    g.faces.push(FeatureRef {
+        index: face,
+        ..pick
+    });
+    g.margin = -1.0;
+    let bodies: Bodies<'_> = [("dome", &step)].into_iter().collect();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let cuts = cuts(&result);
+    for p in &cuts {
+        assert!(
+            p.x >= 4.0 - 1e-6 && p.x <= 6.0 + 1e-6 && p.y.abs() <= 6.0 + 1e-6,
+            "a cut at {p} is not a millimetre further in"
+        );
+    }
+    assert!(
+        cuts.iter().any(|p| p.z.abs() < 1e-9),
+        "not down to the floor"
+    );
+    assert_eq!(job.required_version(), 8);
+}
+
+/// Tabs hold a part profiled out of a sheet: the deepest cut rides over them at
+/// their top, less is cut, nothing rapids into what they leave, and the result
+/// verifies.
+#[test]
+fn a_profiled_part_is_held_by_tabs() {
+    use crate::job::{ProfileSide, TabShape, Tabs};
+    let plate = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
+    let profile = StrategySpec::Profile {
+        side: ProfileSide::Outside,
+        stepdown: 2.0,
+        conventional: false,
+    };
+    let (mut job, without) = in_a_sheet(profile, &plate);
+    let bodies: Bodies<'_> = [("dome", &plate)].into_iter().collect();
+    for shape in [TabShape::Rectangular, TabShape::Triangular] {
+        job.setups[0].operations[0].passes.tabs = Some(Tabs {
+            shape,
+            width: 4.0,
+            height: 2.0,
+            spacing: 60.0,
+        });
+        assert_eq!(job.required_version(), 8);
+        let with = run_setup(&job, 0, &bodies).unwrap();
+        let op = &with.operations[0];
+        assert!(with.is_clean(), "{shape:?}: {:?}", with.warnings());
+        assert_eq!(with.verify.gouged, 0);
+        assert_eq!(op.sim.rapid_contacts, 0);
+        // The deepest level is 0; the tabs' top 2 mm up, and cut along.
+        let on_top = op
+            .path
+            .moves()
+            .iter()
+            .filter(|m| m.role == crate::toolpath::MoveRole::Cut && (m.to.z - 2.0).abs() < 1e-9)
+            .count();
+        assert!(on_top > 0, "{shape:?}: nothing rides over a tab");
+        let (a, b) = (op.sim.removed_mm3, without.operations[0].sim.removed_mm3);
+        assert!(
+            a < b - 10.0,
+            "{shape:?}: removed {a} against {b} without tabs"
+        );
+    }
+}
+
+/// A profile with leads enters each ring along an arc and leaves along another,
+/// with tabs on it still, and the result verifies: the arcs stay in the waste.
+#[test]
+fn a_profile_leads_on_and_off_each_ring() {
+    use crate::job::{Leads, ProfileSide, Tabs};
+    use crate::toolpath::MoveRole;
+    let plate = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
+    let profile = StrategySpec::Profile {
+        side: ProfileSide::Outside,
+        stepdown: 2.0,
+        conventional: false,
+    };
+    let (mut job, _) = in_a_sheet(profile, &plate);
+    let op = &mut job.setups[0].operations[0];
+    op.linking.leads = Some(Leads::default());
+    op.passes.tabs = Some(Tabs {
+        width: 4.0,
+        height: 2.0,
+        spacing: 60.0,
+        ..Default::default()
+    });
+    assert_eq!(job.required_version(), 8);
+    let bodies: Bodies<'_> = [("dome", &plate)].into_iter().collect();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let op = &result.operations[0];
+    assert!(result.is_clean(), "{:?}", result.warnings());
+    assert_eq!(result.verify.gouged, 0);
+    assert_eq!(op.sim.rapid_contacts, 0);
+    let roles: Vec<MoveRole> = op.path.moves().iter().map(|m| m.role).collect();
+    // Every run of cuts is entered along a lead and left along one. A tab's
+    // step down is part of the run.
+    let mut runs = 0;
+    for (i, w) in roles.windows(2).enumerate() {
+        if w == [MoveRole::Lead, MoveRole::Cut] {
+            runs += 1;
+            let after = roles[i + 1..]
+                .iter()
+                .position(|r| !matches!(r, MoveRole::Cut | MoveRole::Plunge));
+            assert_eq!(
+                after.map(|k| roles[i + 1 + k]),
+                Some(MoveRole::Lead),
+                "a ring left without a lead"
+            );
+        }
+    }
+    // Two rings, three levels each.
+    assert_eq!(runs, 6, "{roles:?}");
+    // Tabs still ride over the deepest.
+    assert!(
+        op.path
+            .moves()
+            .iter()
+            .any(|m| m.role == MoveRole::Cut && (m.to.z - 2.0).abs() < 1e-9)
+    );
+}
+
+/// Stock to leave beside moves a profile out by it, and negative stock in by it,
+/// as Fusion's does; what is cut past the part on purpose is no gouge.
+#[test]
+fn a_profile_leaves_stock_beside_or_cuts_past_the_part() {
+    use crate::job::{ProfileSide, StockToLeave};
+    let plate = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
+    let profile = StrategySpec::Profile {
+        side: ProfileSide::Outside,
+        stepdown: 2.0,
+        conventional: false,
+    };
+    let (mut job, _) = in_a_sheet(profile, &plate);
+    let bodies: Bodies<'_> = [("dome", &plate)].into_iter().collect();
+    for radial in [0.5, -0.5] {
+        job.setups[0].operations[0].passes.stock_to_leave = StockToLeave { radial, axial: 0.0 };
+        let result = run_setup(&job, 0, &bodies).unwrap();
+        let reach = result.operations[0]
+            .path
+            .moves()
+            .iter()
+            .filter(|m| m.role == crate::toolpath::MoveRole::Cut)
+            .map(|m| m.to.x.abs().max(m.to.y.abs()))
+            .fold(0.0, f64::max);
+        assert!(
+            (reach - (23.0 + radial)).abs() < 0.05,
+            "{radial}: reaches {reach}"
+        );
+        assert_eq!(result.verify.gouged, 0, "{radial}");
+    }
+}
+
+/// Stock left beside a pocket's walls stays in the material: the pocket's cut
+/// keeps off them by it, and less is taken out.
+#[test]
+fn a_pocket_leaves_stock_on_its_walls() {
+    use crate::features::find_face;
+    use crate::job::{FeatureRef, StockToLeave};
+    let body = Body::derived(synthetic::step(5.0, 10.0));
+    let pick = FeatureRef {
+        model: "dome".into(),
+        index: 0,
+        at: [5.0, 0.0, 0.0],
+    };
+    let face = find_face(&body, &pick, 0.01).unwrap().index;
+    let pocket = StrategySpec::Pocket {
+        stepdown: 2.0,
+        conventional: false,
+    };
+    let (mut job, _) = in_a_sheet(pocket, &body);
+    job.stocks[0].spec = crate::job::StockSpec::AroundModels {
+        models: vec![],
+        margin: [0.0, 0.0, 0.0],
+        below: 0.0,
+    };
+    job.setups[0].operations[0].geometry.faces.push(FeatureRef {
+        index: face,
+        ..pick
+    });
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let removed = |job: &Job| {
+        let result = run_setup(job, 0, &bodies).unwrap();
+        assert_eq!(result.verify.gouged, 0);
+        let op = &result.operations[0];
+        for m in op.path.moves() {
+            if m.role == crate::toolpath::MoveRole::Cut {
+                let leave = job.setups[0].operations[0].passes.stock_to_leave.radial;
+                assert!(
+                    m.to.x >= 3.0 + leave - 1e-6 && m.to.x <= 7.0 - leave + 1e-6,
+                    "a cut at {} is not {leave} off the walls",
+                    m.to
+                );
+            }
+        }
+        op.sim.removed_mm3
+    };
+    let bare = removed(&job);
+    job.setups[0].operations[0].passes.stock_to_leave = StockToLeave {
+        radial: 0.5,
+        axial: 0.0,
+    };
+    let leaving = removed(&job);
+    assert!(
+        leaving < bare - 50.0,
+        "removed {leaving} leaving stock, {bare} not"
+    );
+}
+
+/// Roughing the same again, leaving the same stock, finds nothing to cut: the
+/// stock left on the walls is the part's to keep, not material for a ring.
+#[test]
+fn roughing_twice_leaves_nothing_for_the_second() {
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    let rough = job.setups[0].operations[0].clone();
+    job.setups[0].operations = vec![
+        rough.clone(),
+        Operation {
+            name: "again".into(),
+            ..rough
+        },
+    ];
+    let result = run_job(&job, &dome()).unwrap();
+    let cut = |o: &OperationResult| -> f64 {
+        let moves = o.path.moves();
+        moves
+            .windows(2)
+            .filter(|w| w[1].role == crate::toolpath::MoveRole::Cut)
+            .map(|w| w[0].to.distance(w[1].to))
+            .sum()
+    };
+    let (first, again) = (&result.operations[0], &result.operations[1]);
+    assert!(
+        again.sim.removed_mm3 < 1.0,
+        "removed {}",
+        again.sim.removed_mm3
+    );
+    assert!(
+        cut(again) < 0.02 * cut(first),
+        "cut {} mm again against {} mm",
+        cut(again),
+        cut(first)
+    );
+}

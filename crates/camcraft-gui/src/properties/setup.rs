@@ -29,7 +29,13 @@ pub(super) fn show(
         return;
     }
     let id = ui.id().with(("setup", name));
-    if let Some(to) = header(ui, "Setup", id, name) {
+    if let Some(to) = header(
+        ui,
+        "Setup",
+        id,
+        name,
+        (doc.id, Selection::Setup(name.into())),
+    ) {
         let r = doc.rename_setup(name, &to);
         renamed(doc, r);
         return;
@@ -65,7 +71,12 @@ pub(super) fn show(
         Some(Slot::WorkZero { .. }) => Some(1),
         _ => None,
     };
-    match widgets::remembered_tabs(ui, egui::Id::new(TAB), &tabs, 0, picking) {
+    let page = widgets::remembered_tabs(ui, egui::Id::new(TAB), &tabs, 0, picking);
+    // Another tab chosen while picking stops it: what is picked is out of sight.
+    if picking.is_some_and(|p| p != page) {
+        actions.push(PropAction::Disarm);
+    }
+    match page {
         0 => {
             names(
                 ui,

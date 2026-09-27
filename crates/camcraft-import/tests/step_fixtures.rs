@@ -216,3 +216,35 @@ fn faces_keep_their_numbers_across_tolerances() {
         }
     }
 }
+
+/// Every level edge round the lego brick's chamfered bottom goes all the way round
+/// it, whichever of the chamfer's strips and corners it runs along: the outline
+/// is eight edges, four straight and four round the corners. A tube's rim is its
+/// own loop.
+#[test]
+fn the_lego_bottom_edges_go_all_the_way_round() {
+    let (body, _) = load_step(fixture("lego_4x2_01.step"), TOLERANCE).unwrap();
+    let t = body.topology();
+    let points = |e: u32| t.edge_points(body.mesh(), e).collect::<Vec<_>>();
+    let mut seen = 0;
+    for e in 0..u32::try_from(t.edges().len()).unwrap() {
+        let p = points(e);
+        let lo = p.iter().map(|p| p.z).fold(f64::MAX, f64::min);
+        let hi = p.iter().map(|p| p.z).fold(f64::MIN, f64::max);
+        if hi > 3.0 || hi - lo > 1e-6 {
+            continue;
+        }
+        seen += 1;
+        let round = t.level_loop(e, points, t.tolerance()).unwrap();
+        let closed = t.edge(e).unwrap().closed;
+        assert_eq!(round.len(), if closed { 1 } else { 8 }, "edge {e}");
+        for &n in &round {
+            assert!(
+                points(n).iter().all(|q| (q.z - lo).abs() < 1e-6),
+                "edge {e}"
+            );
+        }
+    }
+    // Two chamfer lines, outside and in, each at two heights, and six tube rims.
+    assert_eq!(seen, 4 * 8 + 6);
+}

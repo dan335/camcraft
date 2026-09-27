@@ -7,7 +7,7 @@
 
 use camcraft_core::cutting;
 use camcraft_core::job::{
-    Coolant, DRILL_POINT, Holder, HolderSegment, Preset, SpindleDirection, StockToLeave,
+    Coolant, DRILL_POINT, Holder, HolderSegment, Leave, Preset, SpindleDirection, StockToLeave,
     ToolFieldError, ToolKind, ToolMaterial, ToolSpec, free_preset_name,
 };
 use eframe::egui;
@@ -625,8 +625,12 @@ fn preset_fields(
                 StockToLeave::default(),
                 NOT_GIVEN,
                 |ui, s| {
-                    m.length_field(ui, &mut s.radial, 0.01, 100.0, "radial ");
-                    m.length_field(ui, &mut s.axial, 0.01, 100.0, "axial ");
+                    // Whichever operation it is applied to checks it with its tool.
+                    let least = StockToLeave {
+                        radial: -diameter / 2.0,
+                        axial: f64::NEG_INFINITY,
+                    };
+                    m.stock_to_leave_fields(ui, s, Leave::Both, least);
                 },
             );
         },

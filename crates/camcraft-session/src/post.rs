@@ -144,6 +144,9 @@ pub fn plan_posting(
         refused: Vec::new(),
         overwrites: Vec::new(),
     };
+    // Each program's file, by what a file system that ignores case sees, and
+    // whose it is: two names can come to one file.
+    let mut taken: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for (setup, ran) in setups {
         let in_setup = |source| SessionError::InSetup {
             setup: setup.name.clone(),
@@ -164,6 +167,15 @@ pub fn plan_posting(
             let name = program_name(&setup.name, k, &op.name);
             let (text, report) = program(op, setup.wcs, &loaded, &name).map_err(in_setup)?;
             let path = dir.join(format!("{name}.{}", loaded.extension));
+            let whose = format!("setup '{}' operation '{}'", setup.name, op.name);
+            let key = path.display().to_string().to_lowercase();
+            if let Some(first) = taken.insert(key, whose.clone()) {
+                return Err(SessionError::SameProgram {
+                    path: path.display().to_string(),
+                    first,
+                    second: whose,
+                });
+            }
             if path.exists() {
                 out.overwrites.push(path.clone());
             }
@@ -179,16 +191,37 @@ pub fn plan_posting(
     Ok(out)
 }
 
-/// Write every program in `posting`, each whole or not at all. Returns how many
-/// were written.
+/// Write every program in `posting`: each beside its place first, and only once
+/// all are written is each moved into it, so a failure writing any of them
+/// leaves every program as it was, not some of this posting's and some of the
+/// last's. Returns how many were written.
 pub fn write_posting(posting: &Posting) -> Result<usize, SessionError> {
     let failed = |path: &Path| {
         let path = path.display().to_string();
         move |source| SessionError::ProgramWrite { path, source }
     };
     std::fs::create_dir_all(&posting.dir).map_err(failed(&posting.dir))?;
+    let temp = |path: &Path| {
+        let mut t = path.as_os_str().to_owned();
+        t.push(".camcraft-posting");
+        std::path::PathBuf::from(t)
+    };
+    let clean = || {
+        for p in &posting.programs {
+            let _ = std::fs::remove_file(temp(&p.path));
+        }
+    };
     for p in &posting.programs {
-        fs::write_atomically(&p.path, &p.text).map_err(failed(&p.path))?;
+        if let Err(e) = std::fs::write(temp(&p.path), &p.text) {
+            clean();
+            return Err(failed(&p.path)(e));
+        }
+    }
+    for p in &posting.programs {
+        if let Err(e) = std::fs::rename(temp(&p.path), &p.path) {
+            clean();
+            return Err(failed(&p.path)(e));
+        }
     }
     Ok(posting.programs.len())
 }
@@ -251,6 +284,29 @@ mod tests {
         assert_eq!(again.overwrites.len(), 2);
         assert!(again.needs_confirming());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two setups whose names come to the same file name, as "flip 1" and
+    /// "Flip_1" do, are refused before either is written, rather than the second
+    /// silently replacing the first.
+    #[test]
+    fn two_programs_for_one_file_are_refused() {
+        let (job, job_dir, ran) = example();
+        let mut other = job.setups[0].clone();
+        other.name = "TOP".into();
+        let dir = scratch("same");
+        let err = plan_posting(
+            &[(&job.setups[0], &ran), (&other, &ran)],
+            &job_dir,
+            &dir,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("setup 'top'") && err.contains("setup 'TOP'"),
+            "{err}"
+        );
     }
 
     /// A setup that did not pass is named, with what failed, before anything is

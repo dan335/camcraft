@@ -398,6 +398,155 @@ fn drills_drill_and_only_drill() {
     assert!(text.contains(r#"strategy = "drill""#), "{text}");
 }
 
+/// Every operation has stock to leave, and cuts with as much of it as its
+/// strategy uses: a drill none, a profile on the line only its floor's. What
+/// it does not use is not checked, so a drill with some left over still runs.
+#[test]
+fn stock_to_leave_is_what_the_strategy_uses() {
+    let mut j = sample();
+    j.tools.insert(
+        "d".into(),
+        toml::from_str("kind = \"drill\"\ndiameter = 6.0\nnumber = 4\n").unwrap(),
+    );
+    let op = &mut j.setups[0].operations[0];
+    let leave = op.passes.stock_to_leave;
+    assert_eq!(op.stock_to_leave(), leave);
+    op.strategy = StrategySpec::Profile {
+        side: ProfileSide::On,
+        stepdown: 1.0,
+        conventional: false,
+    };
+    assert_eq!(op.strategy.uses().stock_to_leave, Leave::Axial);
+    assert_eq!(op.stock_to_leave().radial, 0.0);
+    assert_eq!(op.stock_to_leave().axial, leave.axial);
+    op.strategy = StrategySpec::Drill {
+        peck: None,
+        dwell: None,
+    };
+    op.tool = Some("d".into());
+    assert_eq!(op.stock_to_leave(), StockToLeave::default());
+    assert_eq!(
+        op.passes.stock_to_leave, leave,
+        "kept, for a strategy that uses it"
+    );
+    j.validate().unwrap();
+}
+
+/// Negative stock to leave cuts past the part, as Fusion's does: by less than
+/// the tool's radius beside, and in 3D by no more than a round end's corner
+/// radius down. Anything but a number is refused.
+#[test]
+fn stock_to_leave_may_be_negative_within_the_tool() {
+    let mut j = sample();
+    // The finish is a 4 mm ball in 3D: radius and corner are both 2 mm.
+    let leave = |j: &mut Job, radial: f64, axial: f64| {
+        j.setups[0].operations[1].passes.stock_to_leave = StockToLeave { radial, axial };
+        j.validate()
+    };
+    leave(&mut j, -0.1, -0.1).unwrap();
+    leave(&mut j, -1.9, -2.0).unwrap();
+    assert!(matches!(
+        leave(&mut j, -2.0, 0.0),
+        Err(JobError::WrongTool { .. })
+    ));
+    assert!(matches!(
+        leave(&mut j, 0.0, -2.1),
+        Err(JobError::WrongTool { .. })
+    ));
+    assert!(matches!(
+        leave(&mut j, f64::NAN, 0.0),
+        Err(JobError::BadValue { .. })
+    ));
+    leave(&mut j, 0.0, 0.0).unwrap();
+    // A flat mill's end is flat, and a 2D floor any depth: down is not limited.
+    let op = &mut j.setups[0].operations[0];
+    op.passes.stock_to_leave = StockToLeave {
+        radial: -0.5,
+        axial: -5.0,
+    };
+    j.validate().unwrap();
+    j.setups[0].operations[1].strategy = StrategySpec::Pocket {
+        stepdown: 1.0,
+        conventional: false,
+    };
+    leave(&mut j, 0.0, -5.0).unwrap();
+    // An older reader refuses it, by version rather than by value.
+    assert_eq!(j.required_version(), 8);
+}
+
+/// A stepover wider than the tool leaves ridges between passes, and is refused;
+/// a profile, which has none, is not held to its.
+#[test]
+fn a_stepover_wider_than_the_tool_is_refused() {
+    let mut j = sample();
+    // The finish is a 4 mm ball.
+    j.setups[0].operations[1].passes.stepover = 4.0;
+    j.validate().unwrap();
+    j.setups[0].operations[1].passes.stepover = 4.5;
+    assert!(matches!(j.validate(), Err(JobError::WrongTool { .. })));
+    j.setups[0].operations[1].strategy = StrategySpec::Profile {
+        side: ProfileSide::Outside,
+        stepdown: 1.0,
+        conventional: false,
+    };
+    j.validate().unwrap();
+}
+
+/// Roughing starts leaving half a millimetre for the finish, as Fusion's does;
+/// the rest cut to size. None written is none left.
+#[test]
+fn roughing_leaves_stock_to_start_and_none_is_not_written() {
+    let rough = StrategySpec::ZlevelRough {
+        stepdown: 1.0,
+        min_ring_length: 3.0,
+    };
+    assert_eq!(
+        rough.default_stock_to_leave(),
+        StockToLeave {
+            radial: 0.5,
+            axial: 0.5
+        }
+    );
+    assert_eq!(
+        StrategySpec::Parallel { angle: 0.0 }.default_stock_to_leave(),
+        StockToLeave::default()
+    );
+    let mut j = sample();
+    j.setups[0].operations[0].passes.stock_to_leave = StockToLeave::default();
+    let text = toml::to_string(&j).unwrap();
+    assert!(!text.contains("stock_to_leave"), "{text}");
+    let again: Job = toml::from_str(&text).unwrap();
+    assert_eq!(again, j);
+}
+
+/// What each strategy uses of the settings every operation has.
+#[test]
+fn each_strategy_says_what_it_uses() {
+    let parallel = StrategySpec::Parallel { angle: 0.0 }.uses();
+    assert!(parallel.lead_radius && !parallel.tabs && !parallel.ramp && !parallel.leads);
+    let pocket = StrategySpec::Pocket {
+        stepdown: 1.0,
+        conventional: false,
+    }
+    .uses();
+    assert!(pocket.stepover && !pocket.tabs && pocket.ramp && !pocket.leads);
+    let profile = StrategySpec::Profile {
+        side: ProfileSide::Outside,
+        stepdown: 1.0,
+        conventional: false,
+    }
+    .uses();
+    assert!(!profile.stepover && profile.tabs && profile.leads);
+    assert_eq!(profile.stock_to_leave, Leave::Both);
+    let drill = StrategySpec::Drill {
+        peck: None,
+        dwell: None,
+    }
+    .uses();
+    assert_eq!(drill.stock_to_leave, Leave::None);
+    assert!(!drill.stepover && !drill.tabs && !drill.stay_down && !drill.ramp);
+}
+
 /// A V-bit finishes, but neither roughs in Z levels nor leaves stock.
 #[test]
 fn a_vbit_is_refused_where_it_cannot_cut() {
@@ -635,6 +784,7 @@ fn tool_checks_name_the_field_at_fault() {
     assert_eq!(with(|t| t.corner = 4.0), ["corner"]);
     assert_eq!(with(|t| t.diameter = 0.0), ["diameter"]);
     assert_eq!(with(|t| t.rpm = 0), ["rpm"]);
+    assert_eq!(with(|t| t.number = 0), ["number"]);
     assert_eq!(with(|t| t.presets[0].feed = Some(0.0)), ["presets.feed"]);
     assert_eq!(with(|t| t.presets[1].rpm = Some(0)), ["presets.rpm"]);
     assert_eq!(with(|t| t.presets[1].name = " ".into()), ["presets.name"]);
@@ -643,7 +793,7 @@ fn tool_checks_name_the_field_at_fault() {
         ["presets.name"]
     );
     assert_eq!(
-        with(|t| t.presets[0].stock_to_leave.as_mut().unwrap().axial = -1.0),
+        with(|t| t.presets[0].stock_to_leave.as_mut().unwrap().axial = f64::NAN),
         ["presets.stock_to_leave"]
     );
     assert_eq!(
@@ -781,7 +931,10 @@ fn only_a_job_with_picks_needs_version_2() {
     seven.validate().unwrap();
     let mut eight = sample();
     eight.version = 8;
-    assert_eq!(eight.validate(), Err(JobError::UnsupportedVersion(8)));
+    eight.validate().unwrap();
+    let mut nine = sample();
+    nine.version = 9;
+    assert_eq!(nine.validate(), Err(JobError::UnsupportedVersion(9)));
 }
 
 /// An older reader would skip an operation's own spindle speed and cut at the
@@ -993,6 +1146,10 @@ fn profiles_and_pockets_are_version_7() {
     assert_eq!(j.required_version(), 7);
     let again: Job = toml::from_str(&toml::to_string(&j).unwrap()).unwrap();
     assert_eq!(again, j);
+    // An additional offset a version 7 reader would cut without.
+    j.setups[0].operations[1].geometry.margin = -0.5;
+    assert_eq!(j.required_version(), 8);
+    j.setups[0].operations[1].geometry.margin = 0.0;
 
     let op = &mut j.setups[0].operations[1];
     op.strategy = StrategySpec::Profile {

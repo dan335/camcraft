@@ -506,9 +506,11 @@ pub fn contour_above(field: &HeightMap, level: f64) -> Region {
             let top = (p01 + p11) * 0.5;
             let left = (p00 + p01) * 0.5;
 
-            // The classic sixteen cases. Ambiguous saddles (5, 10) are resolved by
-            // joining the corners, which keeps a diagonal neck connected rather than
-            // pinching it into two regions the cutter cannot reach between.
+            // The classic sixteen cases, each with what qualifies on its right.
+            // Ambiguous saddles (5, 10) are resolved by joining the corners, which
+            // keeps a diagonal neck connected rather than pinching it into two
+            // regions the cutter cannot reach between: each cuts off the two
+            // corners that do not qualify, as 7 and 13, or 11 and 14, do.
             match code {
                 1 => segs.push((left, bottom)),
                 2 => segs.push((bottom, right)),
@@ -516,7 +518,7 @@ pub fn contour_above(field: &HeightMap, level: f64) -> Region {
                 4 => segs.push((right, top)),
                 5 => {
                     segs.push((left, top));
-                    segs.push((bottom, right));
+                    segs.push((right, bottom));
                 }
                 6 => segs.push((bottom, top)),
                 7 => segs.push((left, top)),
@@ -524,7 +526,7 @@ pub fn contour_above(field: &HeightMap, level: f64) -> Region {
                 9 => segs.push((top, bottom)),
                 10 => {
                     segs.push((top, right));
-                    segs.push((left, bottom));
+                    segs.push((bottom, left));
                 }
                 11 => segs.push((top, right)),
                 12 => segs.push((right, left)),
@@ -874,6 +876,34 @@ mod tests {
             "expected 35.5 from the marching-squares geometry, got {}",
             r.area()
         );
+    }
+
+    /// A rib one cell wide running diagonally either way is one connected
+    /// region of the same area: the saddles where its cells meet corner to
+    /// corner are joined, wound as every other case is, so the rings close on
+    /// themselves rather than across a chord.
+    #[test]
+    fn a_diagonal_rib_contours_the_same_either_way() {
+        let rib = |up: bool| {
+            let mut f = HeightMap::filled(dvec2(0.0, 0.0), 1.0, 12, 12, 0.0).unwrap();
+            for k in 0..7 {
+                let iy = if up { 2 + k } else { 9 - k };
+                f.set(2 + k, iy, 10.0);
+            }
+            contour_above(&f, 5.0)
+        };
+        let (up, down) = (rib(true), rib(false));
+        // Seven cells, each a diamond of half a cell, and six saddles joining
+        // them, each half a cell less its two cut corners' eighths: 7 × 0.5 +
+        // 6 × 0.5.
+        for (r, which) in [(&up, "up"), (&down, "down")] {
+            assert_eq!(r.rings().len(), 1, "{which}: one ring");
+            assert!(
+                (r.area() - 6.5).abs() < 0.01,
+                "{which}: expected 6.5, got {}",
+                r.area()
+            );
+        }
     }
 
     #[test]

@@ -334,9 +334,9 @@ impl App {
                     doc.loaded(&name, &key, result);
                 }
             }
-            (Task::Run { setup, seq }, Reply::Progress(stage)) => {
+            (Task::Run { seq, .. }, Reply::Progress(stage)) => {
                 if let Some(doc) = self.find(id) {
-                    doc.progressed(&setup, seq, stage);
+                    doc.progressed(seq, stage);
                 }
             }
             (Task::Run { setup, seq }, Reply::Ran(ran)) => {
@@ -841,6 +841,14 @@ impl eframe::App for App {
         self.log_window(&ctx);
         self.checks_window(&ctx);
         self.file_dialog_results(&ctx);
+        // A tab set to close once saved closes on that save or not at all: the
+        // save it waits for was cancelled, or failed, once nothing is asking
+        // where to save it.
+        if let Some(id) = self.close_after_save
+            && !self.dialog.saving(id)
+        {
+            self.close_after_save = None;
+        }
         self.tool_picker(&ctx);
         self.prompts(&ctx);
 

@@ -60,6 +60,8 @@ pub mod drilling;
 
 pub mod planar;
 
+pub mod tabs;
+
 pub mod frame;
 
 pub mod setup;

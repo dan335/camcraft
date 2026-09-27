@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
-use egui_file_dialog::{FileDialog, FileDialogStorage, Filter};
+use egui_file_dialog::{DialogState, FileDialog, FileDialogStorage, Filter};
 
 use crate::worker::DocId;
 
@@ -107,6 +107,12 @@ impl AppFileDialog {
         } else {
             self.dialog.pick_file();
         }
+    }
+
+    /// Whether the dialog is open asking where to save job `id`.
+    pub fn saving(&self, id: DocId) -> bool {
+        matches!(self.dialog.state(), DialogState::Open)
+            && matches!(self.dialog.user_data::<FileRequest>(), Some(FileRequest::SaveJob(d)) if *d == id)
     }
 
     /// Draw the dialog, and hand back the paths chosen, once they are, with the

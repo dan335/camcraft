@@ -245,13 +245,30 @@ impl Document {
         let new_dir = job_dir(&path);
         let old_dir = self.dir();
         let mut job = self.job.clone();
-        for m in &mut job.models {
-            let file = resolve(&old_dir, &m.path);
-            m.path = relative_path(&new_dir, &file);
-        }
+        rebase(&mut job, &old_dir, &new_dir);
         let used = self.used_tools();
         job.tools.retain(|name, _| used.contains(name));
         write_job(&path, &job)?;
+        // Everything kept from before finds its files from the new folder too:
+        // the edits to undo and redo, and what each setup ran and was laid out
+        // from, so none reads as changed.
+        if old_dir != new_dir {
+            for j in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+                rebase(j, &old_dir, &new_dir);
+            }
+            for state in self.setups.values_mut() {
+                if let Some(ran) = &mut state.ran {
+                    rebase(&mut ran.job, &old_dir, &new_dir);
+                    ran.inputs.rebase(&old_dir, &new_dir);
+                }
+                if let Some((_, j)) = &mut state.running {
+                    rebase(j, &old_dir, &new_dir);
+                }
+                if let Some(layout) = &mut state.layout {
+                    layout.inputs.0.rebase(&old_dir, &new_dir);
+                }
+            }
+        }
         // The keys are unchanged, since each still resolves to the same file.
         self.job = job.clone();
         self.checkpoint = job.clone();
@@ -287,7 +304,9 @@ impl Document {
     pub fn undo(&mut self) {
         self.checkpoint();
         if let Some(before) = self.undo.pop() {
-            self.redo.push(std::mem::replace(&mut self.job, before));
+            let was = std::mem::replace(&mut self.job, before);
+            self.follow_renames(&was);
+            self.redo.push(was);
             self.checkpoint = self.job.clone();
             self.tidy_selection();
         }
@@ -296,9 +315,45 @@ impl Document {
     /// Redo the last undone edit.
     pub fn redo(&mut self) {
         if let Some(after) = self.redo.pop() {
-            self.undo.push(std::mem::replace(&mut self.job, after));
+            let was = std::mem::replace(&mut self.job, after);
+            self.follow_renames(&was);
+            self.undo.push(was);
             self.checkpoint = self.job.clone();
             self.tidy_selection();
+        }
+    }
+
+    /// Carry each setup's state, the view's and the selection's to its name now,
+    /// when the job has just gone from `was` to what it is by renaming it: a
+    /// rename undone or redone keeps what the setup ran, as the rename did.
+    /// A setup is taken to be renamed where one in the same place has a name the
+    /// other job does not have, so setups reordered keep theirs.
+    fn follow_renames(&mut self, was: &Job) {
+        if was.setups.len() != self.job.setups.len() {
+            return;
+        }
+        let named = |job: &Job, name: &str| job.setups.iter().any(|s| s.name == name);
+        let renames: Vec<(String, String)> = was
+            .setups
+            .iter()
+            .zip(&self.job.setups)
+            .filter(|(from, to)| {
+                from.name != to.name && !named(&self.job, &from.name) && !named(was, &to.name)
+            })
+            .map(|(from, to)| (from.name.clone(), to.name.clone()))
+            .collect();
+        for (from, to) in renames {
+            if let Some(state) = self.setups.remove(&from) {
+                self.setups.insert(to.clone(), state);
+            }
+            if self.active.as_deref() == Some(from.as_str()) {
+                self.active = Some(to.clone());
+            }
+            self.selection = match &self.selection {
+                Selection::Setup(s) if *s == from => Selection::Setup(to),
+                Selection::Operation(s, i) if *s == from => Selection::Operation(to, *i),
+                other => other.clone(),
+            };
         }
     }
 
@@ -320,6 +375,35 @@ impl Document {
         }
         self.setups
             .retain(|name, _| setups.contains(&name.as_str()));
+    }
+}
+
+/// `job`'s paths, found from `from`, written from `to`: its models' files, and
+/// its setups' machine profiles that are files rather than built in.
+fn rebase(job: &mut Job, from: &Path, to: &Path) {
+    for m in &mut job.models {
+        m.path = moved(&m.path, from, to);
+    }
+    for s in &mut job.setups {
+        s.post = moved_post(&s.post, from, to);
+    }
+}
+
+/// `path`, found from `from`, written from `to`.
+fn moved(path: &str, from: &Path, to: &Path) -> String {
+    relative_path(to, &resolve(from, path))
+}
+
+/// A setup's machine profile, `post`, moved as [`moved`] moves a path when it
+/// names a file, and as it is when it names one built in.
+fn moved_post(post: &str, from: &Path, to: &Path) -> String {
+    let builtin = camcraft_session::builtin_posts()
+        .iter()
+        .any(|b| b.eq_ignore_ascii_case(post));
+    if builtin || post.is_empty() {
+        post.to_string()
+    } else {
+        moved(post, from, to)
     }
 }
 

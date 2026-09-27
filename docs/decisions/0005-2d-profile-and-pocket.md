@@ -17,9 +17,12 @@ where does each decision live?
 will follow picked edges". A 2D operation reads the same `boundary` and picks as
 a shape to cut round or clear, not as a limit. With nothing chosen and nothing
 picked, its boundary is the part's silhouette (`Geometry::boundary_2d`), so a new
-profile goes round the part. `containment` and `margin` are for a boundary that
-limits a 3D strategy; a 2D one's tool goes its radius, plus the stock to leave
-sideways, beside the boundary, on the side the strategy says.
+profile goes round the part. `containment` is for a boundary that limits a 3D
+strategy; a 2D one's tool goes its radius, plus the stock to leave sideways,
+beside the boundary, on the side the strategy says. `margin`, the additional
+offset, moves that further out, or in when negative, as if the boundary were
+moved (added 2026-09-26, version 8). It moves the tool, not the boundary, so
+floors are still found among the picks on the boundary.
 
 **A profile's side is the strategy's.** Fusion flips a contour's side with an
 arrow on each chain. We have one `side` for the operation: outside, inside or on.
@@ -47,7 +50,9 @@ orders that matter:
   enters where there is room, every ring after the first cuts one stepover of
   material on its outer side, and the wall is cut last and lightly. Where the tool
   on the innermost ring would leave some of the middle uncut, one more ring is put
-  as near the middle as an offset reaches.
+  as near the middle as an offset reaches. That is judged by the real tool's
+  radius, as are tabs: the stock to leave moves where the centre goes, not how
+  wide the tool cuts (corrected 2026-09-26).
 
 Each ring starts where it comes nearest the tool, so a pocket's rings link a
 stepover apart and stay down.
@@ -74,9 +79,12 @@ a message about an unknown variant. Version 7 makes it refuse by name.
 
 ## Not taken yet
 
-- **Tabs**, or an onion skin, to hold parts cut free from a sheet. Without them
-  a through-cut part is held only by the table.
-- Finishing passes, and a profile's horizontal lead-in and lead-out arcs.
+- An onion skin, to hold parts cut free from a sheet. Tabs are taken
+  (2026-09-26): a `Toolpath -> Toolpath` transform any operation can use, in
+  `camcraft_core::tabs`, on the loops of its deepest cut.
+- Finishing passes. A profile's horizontal lead-in and lead-out arcs are taken
+  (2026-09-26): in the waste, checked against the areas, shrunk or moved to the
+  middle of the longest side to fit.
 - A start point chosen by the person.
 - Chamfering with a V-bit beside an edge: a V-bit profiles only on the line.
 - Rest machining: a pocket cuts its whole area at every level, air included.

@@ -385,6 +385,11 @@ impl ToolSpec {
             };
             bad(field, e.to_string());
         }
+        if self.number == 0 {
+            // Most controllers read T0 as no tool, with no length offset: every
+            // depth would be off by the tool's length.
+            bad("number", "tool numbers start at 1: T0 is no tool".into());
+        }
         if self.rpm == 0 {
             bad("rpm", "spindle speed must be greater than zero".into());
         }
@@ -485,12 +490,10 @@ impl ToolSpec {
                     bad(field, format!("must be greater than zero, got {v}"));
                 }
             }
-            if let Some(s) = p.stock_to_leave
-                && !(s.radial >= 0.0 && s.axial >= 0.0)
-            {
+            if let Some(v) = p.stock_to_leave.and_then(|s| s.unusable()) {
                 bad(
                     "presets.stock_to_leave",
-                    "stock to leave cannot be negative".into(),
+                    format!("stock to leave must be a number, got {v}"),
                 );
             }
         }

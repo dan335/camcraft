@@ -37,6 +37,7 @@ pub fn sim_moves_of(moves: &[Move]) -> Vec<SimMove> {
         .collect()
 }
 
+#[cfg(test)]
 macro_rules! swept {
     ($t:ty) => {
         impl SweptTool for $t {
@@ -50,7 +51,16 @@ macro_rules! swept {
     };
 }
 
-swept!(EffectiveTool);
+/// The material is cut by the real tool: the grown one only finds where its tip
+/// goes, and the stock it leaves stays in the material.
+impl SweptTool for EffectiveTool {
+    fn max_radius(&self) -> f64 {
+        ToolProfile::max_radius(self.base())
+    }
+    fn height_at(&self, d: f64) -> Option<f64> {
+        ToolProfile::height_at(self.base(), d)
+    }
+}
 
 // A run only ever sweeps the effective tool; the bare cutters sweep in tests.
 #[cfg(test)]
@@ -99,14 +109,19 @@ mod tests {
         assert_eq!(sim_moves(&t).first().unwrap().class, MoveClass::Rapid);
     }
 
-    /// The simulator must see the same geometry the drop-cutter used, stock
-    /// included, or it would verify against a different tool than was machined.
+    /// The simulator cuts with the tool that was machined with, not the one grown
+    /// by its stock to leave, or the stock left on a wall would be swept away.
     #[test]
-    fn the_effective_tool_carries_its_stock_into_the_simulator() {
+    fn the_simulator_sweeps_the_real_tool() {
         use crate::allowance::Allowance;
         let bare = Ball::new(3.0).unwrap();
         let with_stock = EffectiveTool::new(&bare, Allowance::isotropic(0.5).unwrap()).unwrap();
-        assert_eq!(SweptTool::max_radius(&with_stock), 3.5);
-        assert_eq!(SweptTool::max_radius(&bare), 3.0);
+        assert_eq!(SweptTool::max_radius(&with_stock), 3.0);
+        for d in [0.0, 1.0, 2.5, 3.0] {
+            assert_eq!(
+                SweptTool::height_at(&with_stock, d),
+                SweptTool::height_at(&bare, d)
+            );
+        }
     }
 }

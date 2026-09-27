@@ -26,7 +26,13 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
         return;
     };
     let id = ui.id().with(("stock", name));
-    if let Some(to) = header(ui, "Stock", id, name) {
+    if let Some(to) = header(
+        ui,
+        "Stock",
+        id,
+        name,
+        (doc.id, Selection::Stock(name.into())),
+    ) {
         let r = doc.rename_stock(name, &to);
         renamed(doc, r);
         return;

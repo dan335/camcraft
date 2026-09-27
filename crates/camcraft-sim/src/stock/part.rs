@@ -97,6 +97,46 @@ impl PartSurface {
         self
     }
 
+    /// The part as an operation that cuts `radial` past its walls and `axial`
+    /// below its floors means to leave it, in the cells of the grid it is judged
+    /// on that `cut` says it cut: each the lowest the part comes within `radial`
+    /// of it, less `axial`, and no part at all where that reaches past the
+    /// part's edge. Negative stock to leave, as asked, is then no gouge, and
+    /// only where the operation that asked for it cut.
+    #[must_use]
+    pub fn cut_past(mut self, radial: f64, axial: f64, cut: impl Fn(u32, u32) -> bool) -> Self {
+        let cells = radial.max(0.0) / self.field.pitch();
+        #[allow(clippy::cast_possible_truncation)]
+        let k = cells.ceil().min(64.0) as i64;
+        let disc: Vec<(i64, i64)> = (-k..=k)
+            .flat_map(|dy| (-k..=k).map(move |dx| (dx, dy)))
+            .filter(|&(dx, dy)| {
+                #[allow(clippy::cast_precision_loss)]
+                let d2 = (dx * dx + dy * dy) as f64;
+                d2 <= cells * cells + 1.0e-9
+            })
+            .collect();
+        let (nx, ny) = (self.field.nx(), self.field.ny());
+        let mut out = self.field.data().to_vec();
+        for wy in 0..ny {
+            for wx in 0..nx {
+                let (gx, gy) = (wx + self.at.0, wy + self.at.1);
+                if self.field.get(wx, wy).is_none() || !cut(gx, gy) {
+                    continue;
+                }
+                let low = disc.iter().try_fold(f64::INFINITY, |low, &(dx, dy)| {
+                    self.at_cell(i64::from(gx) + dx, i64::from(gy) + dy)
+                        .map(|v| low.min(v))
+                });
+                if let Some(slot) = out.get_mut(wy as usize * nx as usize + wx as usize) {
+                    *slot = low.map_or(f32::NAN, |l| narrow(l - axial.max(0.0)));
+                }
+            }
+        }
+        self.field.data_mut().copy_from_slice(&out);
+        self
+    }
+
     /// The part's height at cell `(ix, iy)` of the grid it is judged on, if it
     /// has one there.
     pub(super) fn at_cell(&self, ix: i64, iy: i64) -> Option<f64> {

@@ -544,3 +544,32 @@ fn survives_non_finite_positions_without_panicking() {
     ];
     let _ = s.apply(&moves, &Flat(1.0));
 }
+
+/// Cutting past the part as asked is no gouge where the operation that asked
+/// for it cut, and still one everywhere else; and walls cut back by the radial
+/// amount leave no part beside them.
+#[test]
+fn cutting_past_the_part_as_asked_is_no_gouge_only_where_asked() {
+    let (lo, hi) = (dvec2(-5.0, -5.0), dvec2(5.0, 5.0));
+    let pitch = 0.25;
+    let mesh = synthetic::plane(0.0, 5.0);
+    // Material everywhere half a millimetre under the part.
+    let stock = Stock::block(lo, hi, -0.5, -5.0, pitch).unwrap();
+    let part = PartSurface::from_mesh(&mesh, lo, hi, pitch).unwrap();
+    let half = stock.field().nx() / 2;
+    let all = stock.verify(&part, 0.01, 1.0);
+    assert!(all.gouged > 0);
+    let past = part.cut_past(0.0, 0.5, |ix, _| ix < half);
+    let v = stock.verify(&past, 0.01, 1.0);
+    assert!(
+        v.gouged > 0 && v.gouged < all.gouged / 2 + 50,
+        "{v:?} against {all:?}"
+    );
+    // Cut back a millimetre sideways, the part goes from within a millimetre
+    // of its edge, and stays where it is further in.
+    let back = PartSurface::from_mesh(&mesh, lo, hi, pitch)
+        .unwrap()
+        .cut_past(1.0, 0.0, |_, _| true);
+    assert_eq!(back.height_at(4.8, 0.0), None);
+    assert_eq!(back.height_at(0.0, 0.0), Some(0.0));
+}

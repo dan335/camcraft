@@ -216,8 +216,11 @@ impl Job {
         running().try_for_each(|op| op.check(name, &self.tools))
     }
 
-    /// The oldest file format that holds everything this job says: 7 if an
-    /// operation profiles or pockets, which an older reader has no strategy for;
+    /// The oldest file format that holds everything this job says: 8 if a 2D
+    /// operation has an additional offset, or any has tabs or leads, which a
+    /// version 7 reader would cut without, or negative stock to leave, which it
+    /// would refuse; 7 if an operation profiles or pockets, which an older reader has
+    /// no strategy for;
     /// 6 if a boundary would not read as it did before boundaries could be
     /// chosen; 5 if a fixed box is placed against the models; 4 if an
     /// operation is turned off, which an older reader would cut; 3 if an
@@ -227,6 +230,16 @@ impl Job {
     /// and 1 otherwise.
     pub fn required_version(&self) -> u32 {
         let ops = || self.setups.iter().flat_map(|s| &s.operations);
+        let offset = |op: &crate::job::Operation| op.strategy.is_2d() && op.geometry.margin != 0.0;
+        let past = |op: &crate::job::Operation| {
+            let leave = op.passes.stock_to_leave;
+            leave.radial < 0.0 || leave.axial < 0.0
+        };
+        if ops().any(|op| {
+            offset(op) || op.passes.tabs.is_some() || op.linking.leads.is_some() || past(op)
+        }) {
+            return 8;
+        }
         if ops().any(|op| op.strategy.is_2d()) {
             return 7;
         }

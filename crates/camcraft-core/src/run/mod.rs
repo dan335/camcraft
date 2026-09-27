@@ -33,7 +33,7 @@ use glam::DVec2;
 use crate::allowance::{Allowance, EffectiveTool};
 use crate::dropcutter::DropCutter;
 use crate::features::machining_boundary;
-use crate::job::{HeightContext, Job, JobError, Operation, StrategySpec, ToolSpec};
+use crate::job::{HeightContext, Job, JobError, Operation, Setup, StrategySpec, ToolSpec};
 use crate::setup::{Bodies, Prepared, prepare};
 use crate::simadapt::sim_moves;
 
@@ -172,7 +172,12 @@ pub fn run_prepared_planned(
     // across as well as down, or every vertical wall is a gouge beside it.
     progress(Stage::Verifying);
     let budget = job.tolerance + sim_pitch;
-    let part = Arc::new(PartSurface::from_mesh(mesh, lo, hi, sim_pitch)?.reaching(budget));
+    let part = cut_past(
+        setup,
+        PartSurface::from_mesh(mesh, lo, hi, sim_pitch)?,
+        &keyframes,
+    )?;
+    let part = Arc::new(part.reaching(budget));
     let verify = stock.verify(&part, budget, LEFTOVER_LIMIT);
 
     Ok(SetupResult {
@@ -190,8 +195,35 @@ pub fn run_prepared_planned(
     })
 }
 
-/// The tool an operation cuts with, as the simulator sweeps it: the job's cutter,
-/// grown by the operation's stock to leave.
+/// The part as the setup's operations mean to leave it: cut past where one with
+/// negative stock to leave cut, which is then no gouge there, and nowhere else.
+/// Where each cut is the material it took down, between the stock before it and
+/// after (`keyframes`).
+fn cut_past(
+    setup: &Setup,
+    mut part: PartSurface,
+    keyframes: &[Arc<PackedStock>],
+) -> Result<PartSurface, RunError> {
+    for (i, op) in setup.operations.iter().enumerate() {
+        let leave = op.stock_to_leave();
+        let (radial, axial) = (-leave.radial.min(0.0), -leave.axial.min(0.0));
+        if !op.enabled || (radial == 0.0 && axial == 0.0) {
+            continue;
+        }
+        let (Some(before), Some(after)) = (keyframes.get(i), keyframes.get(i + 1)) else {
+            continue;
+        };
+        let (before, after) = (before.unpack()?, after.unpack()?);
+        let (before, after) = (before.field(), after.field());
+        part = part.cut_past(radial, axial, |ix, iy| {
+            matches!((before.get(ix, iy), after.get(ix, iy)), (Some(b), Some(a)) if a < b - 1e-6)
+        });
+    }
+    Ok(part)
+}
+
+/// The tool an operation cuts with: the job's cutter, grown by the stock to
+/// leave it cuts with to find where the tip goes, and swept as it is.
 ///
 /// The one place this is built, so a replay of the material sweeps exactly the
 /// tool the run did.
@@ -204,10 +236,8 @@ pub fn cutting_tool(job: &Job, op: &Operation) -> Result<EffectiveTool, RunError
 fn tool_of<'j>(job: &'j Job, op: &Operation) -> Result<(&'j ToolSpec, EffectiveTool), RunError> {
     let spec = job.tool_for(op).ok_or_else(|| unknown_tool(op))?;
     let base = spec.build()?;
-    let leave = Allowance::new(
-        op.passes.stock_to_leave.radial,
-        op.passes.stock_to_leave.axial,
-    )?;
+    let leave = op.stock_to_leave();
+    let leave = Allowance::new(leave.radial, leave.axial)?;
     Ok((spec, EffectiveTool::of(&base, leave)?))
 }
 

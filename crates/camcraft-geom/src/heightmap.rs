@@ -245,7 +245,9 @@ impl HeightMap {
             return None;
         }
         let (ix, iy) = (fx.floor(), fy.floor());
-        if ix > f64::from(u32::MAX) || iy > f64::from(u32::MAX) {
+        // Past the grid there is nothing to sample; and a cell's neighbour is
+        // then always one more that fits.
+        if ix >= f64::from(self.nx) || iy >= f64::from(self.ny) {
             return None;
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

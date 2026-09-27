@@ -359,3 +359,41 @@ fn nothing_at_all_has_no_topology() {
     assert!(body.topology().edges().is_empty());
     assert_eq!(body.topology().face_of(0), None);
 }
+
+/// A level edge goes round with the level edges joined to it: the bottom of a
+/// box, its four bottom edges and not the walls' upright ones; the plate's hole,
+/// its rim alone. An upright edge is in no level loop.
+#[test]
+fn a_level_edge_goes_round_at_its_height() {
+    let body = Body::derived(synthetic::cuboid(
+        dvec3(0.0, 0.0, 0.0),
+        dvec3(4.0, 5.0, 6.0),
+    ));
+    let t = body.topology();
+    let points = |e: u32| t.edge_points(body.mesh(), e).collect::<Vec<_>>();
+    let level_at = |e: u32, z: f64| points(e).iter().all(|p| (p.z - z).abs() < 1e-9);
+    let bottom: Vec<u32> = (0..12).filter(|&e| level_at(e, 0.0)).collect();
+    assert_eq!(bottom.len(), 4);
+    for &e in &bottom {
+        let mut round = t.level_loop(e, points, 1e-6).unwrap();
+        assert_eq!(round.first(), Some(&e));
+        round.sort_unstable();
+        assert_eq!(round, bottom);
+    }
+    let upright = (0..12)
+        .find(|&e| !level_at(e, 0.0) && !level_at(e, 6.0))
+        .unwrap();
+    assert_eq!(t.level_loop(upright, points, 1e-6), None);
+
+    let plate = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 32));
+    let t = plate.topology();
+    let (rim, _) = t
+        .edges()
+        .iter()
+        .enumerate()
+        .find(|(_, e)| e.closed)
+        .unwrap();
+    let rim = u32::try_from(rim).unwrap();
+    let points = |e: u32| t.edge_points(plate.mesh(), e).collect::<Vec<_>>();
+    assert_eq!(t.level_loop(rim, points, 1e-6), Some(vec![rim]));
+}

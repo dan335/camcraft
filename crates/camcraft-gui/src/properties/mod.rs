@@ -31,6 +31,7 @@ use crate::tools::drawing::kind_name;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
 use crate::ui::widgets::{self, Icon, Size, Variant, form, hint};
+use crate::worker::DocId;
 
 /// Something the panel asks the app to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,6 +74,18 @@ pub struct Panel {
 pub fn show(ui: &mut egui::Ui, doc: &mut Document, m: Measure, picks: Picks<'_>) -> Panel {
     let mut actions = Vec::new();
     let mut operation_tab = None;
+    // A name being typed when something else was chosen: its field will not be
+    // drawn to say it was left, so it is applied here.
+    if let Some(p) = ui.data(|d| d.get_temp::<PendingName>(pending_id()))
+        && p.doc == doc.id
+        && p.what != doc.selection
+    {
+        ui.data_mut(|d| {
+            d.remove::<PendingName>(pending_id());
+            d.remove::<String>(p.field);
+        });
+        apply_name(doc, &p.what, &p.to);
+    }
     match doc.selection.clone() {
         Selection::Job => job(ui, doc, m),
         Selection::Models => group(
@@ -155,22 +168,65 @@ fn group(
     }
 }
 
+/// A name typed into a field that has it still, and what it renames.
+#[derive(Clone)]
+struct PendingName {
+    doc: DocId,
+    field: egui::Id,
+    what: Selection,
+    to: String,
+}
+
+fn pending_id() -> egui::Id {
+    egui::Id::new("pending-name")
+}
+
+/// Rename `what` of `doc` to `to`, saying why not if it cannot be.
+fn apply_name(doc: &mut Document, what: &Selection, to: &str) {
+    let r = match what {
+        Selection::Model(name) => doc.rename_model(name, to),
+        Selection::Stock(name) => doc.rename_stock(name, to),
+        Selection::Setup(name) => doc.rename_setup(name, to),
+        Selection::Operation(setup, index) => {
+            operation::rename_to(doc, setup, *index, to);
+            return;
+        }
+        _ => return,
+    };
+    renamed(doc, r);
+}
+
 /// The top of an entity's panel: what it is, and its name, applied when editing
 /// finishes. The new name, if it changed.
-fn header(ui: &mut egui::Ui, kind: &str, id: egui::Id, current: &str) -> Option<String> {
+fn header(
+    ui: &mut egui::Ui,
+    kind: &str,
+    id: egui::Id,
+    current: &str,
+    (doc, what): (DocId, Selection),
+) -> Option<String> {
     ui.label(widgets::section_label(kind));
     ui.add_space(theme::SPACE_2);
     let mut rename = None;
     form(ui, id.with("header"), |ui| {
         widgets::field_label(ui, "Name");
-        rename = name_field(ui, id.with("name"), current);
+        rename = name_field(ui, id.with("name"), current, (doc, what));
         ui.end_row();
     });
     rename
 }
 
-/// A name, applied when editing finishes: the new one, if it changed.
-fn name_field(ui: &mut egui::Ui, id: egui::Id, current: &str) -> Option<String> {
+/// A name, applied when editing finishes: the new one, if it changed. Editing
+/// finishes when the field is left, however it is left: while it is typed in,
+/// it is noted as pending ([`PendingName`]), so choosing something else in the
+/// tree, which takes this field away before it can say it was left, applies it
+/// all the same.
+fn name_field(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    current: &str,
+    (doc, what): (DocId, Selection),
+) -> Option<String> {
     let mut buffer = ui
         .data(|d| d.get_temp::<String>(id))
         .unwrap_or_else(|| current.to_string());
@@ -179,12 +235,29 @@ fn name_field(ui: &mut egui::Ui, id: egui::Id, current: &str) -> Option<String> 
             .id(id)
             .desired_width(200.0),
     );
-    if r.lost_focus() {
-        ui.data_mut(|d| d.remove::<String>(id));
+    let pending = ui
+        .data(|d| d.get_temp::<PendingName>(pending_id()))
+        .is_some_and(|p| p.field == id);
+    if r.lost_focus() || (pending && !r.has_focus()) {
+        ui.data_mut(|d| {
+            d.remove::<String>(id);
+            d.remove::<PendingName>(pending_id());
+        });
         return (buffer.trim() != current).then_some(buffer);
     }
     if r.has_focus() {
-        ui.data_mut(|d| d.insert_temp(id, buffer));
+        ui.data_mut(|d| {
+            d.insert_temp(
+                pending_id(),
+                PendingName {
+                    doc,
+                    field: id,
+                    what,
+                    to: buffer.clone(),
+                },
+            );
+            d.insert_temp(id, buffer);
+        });
     } else {
         ui.data_mut(|d| d.remove::<String>(id));
     }
@@ -265,5 +338,54 @@ fn renamed(doc: &mut Document, result: Result<(), String>) -> bool {
             doc.note(Level::Warn, e);
             false
         }
+    }
+}
+
+#[cfg(all(test, feature = "ui-snapshots"))]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable as _;
+
+    /// A name typed into a setup's field, and then another thing chosen in the
+    /// tree before the field is left: the name is kept, though the field is gone
+    /// before it could say it was left.
+    #[test]
+    fn a_name_typed_is_kept_when_something_else_is_chosen() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/rail-jig.camcraft");
+        let job = camcraft_session::read_job(&path).unwrap();
+        let mut doc = Document::opened(1, Some(path), job);
+        doc.selection = Selection::Setup("top".into());
+        // The fonts the panel uses take a frame to arrive.
+        let mut fonts = false;
+        let mut h = Harness::new_ui_state(
+            move |ui, doc: &mut Document| {
+                if !fonts {
+                    theme::apply(ui.ctx());
+                    fonts = true;
+                    return;
+                }
+                show(ui, doc, Measure::Metric, Picks::default());
+            },
+            doc,
+        );
+        h.run();
+        let field = |h: &Harness<'_, Document>| {
+            h.get_by(|n| {
+                n.role() == egui::accesskit::Role::TextInput && n.value().as_deref() == Some("top")
+            })
+            .focus();
+        };
+        field(&h);
+        h.run();
+        h.get_by_role(egui::accesskit::Role::TextInput)
+            .type_text(" side");
+        h.run();
+        // The tree, drawn first, chooses something else.
+        h.state_mut().selection = Selection::Job;
+        h.run();
+        assert_eq!(h.state().job.setups[0].name, "top side");
     }
 }

@@ -426,6 +426,10 @@ fn setup_panel() {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 2_usize));
     h.run_steps(3);
     shoot(&mut h, "operation_heights_rough");
+    // And its passes: stock to leave ticked, the wall's and the floor's.
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 3_usize));
+    h.run_steps(3);
+    shoot(&mut h, "operation_passes_rough");
 
     // A fixed box at a corner, as an old job has it; then one placed against the
     // setup's models the way Fusion places one, with the block it comes to.
@@ -815,6 +819,7 @@ geometry = {{ boundary = "silhouette", containment = "outside", margin = 6.35 }}
 #[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
 fn lego_profile_and_pocket() {
     use crate::document::Selection;
+    use camcraft_core::job::{ProfileSide, StrategySpec};
     let dir = output_dir().join("lego-2d");
     std::fs::create_dir_all(&dir).unwrap();
     let model = repo("fixtures/step/lego_4x2_01.step");
@@ -873,9 +878,51 @@ passes = {{ feed = 1500.0 }}
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 1_usize));
     h.run_steps(4);
     shoot(&mut h, "lego_2d_profile_geometry");
+    // The profile round a loop picked along the brick's bottom, from one click on
+    // one of its edges.
+    assert!(h.state_mut().pick_bottom_loop_for_snapshot(1));
+    h.run_steps(4);
+    shoot(&mut h, "lego_2d_profile_loop");
+    // Choosing what side to cut redraws what the tool cuts away.
+    for (side, name) in [
+        (ProfileSide::Inside, "lego_2d_profile_inside"),
+        (ProfileSide::On, "lego_2d_profile_on"),
+    ] {
+        if let Some(doc) = h.state_mut().doc_for_snapshot()
+            && let Some(o) = doc.operation_mut("top", 1)
+            && let StrategySpec::Profile { side: s, .. } = &mut o.strategy
+        {
+            *s = side;
+        }
+        h.run_steps(4);
+        shoot(&mut h, name);
+    }
+    h.state_mut().picking_disarm_for_snapshot();
+    if let Some(doc) = h.state_mut().doc_for_snapshot()
+        && let Some(o) = doc.operation_mut("top", 1)
+    {
+        o.geometry.boundary_kind = None;
+        o.geometry.edges.clear();
+        if let StrategySpec::Profile { side, .. } = &mut o.strategy {
+            *side = ProfileSide::Outside;
+        }
+    }
+    // Held by tabs, triangular so none is plunged off.
+    if let Some(doc) = h.state_mut().doc_for_snapshot()
+        && let Some(o) = doc.operation_mut("top", 1)
+    {
+        o.passes.tabs = Some(camcraft_core::job::Tabs {
+            shape: camcraft_core::job::TabShape::Triangular,
+            ..Default::default()
+        });
+        o.linking.leads = Some(camcraft_core::job::Leads::default());
+    }
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 3_usize));
     h.run_steps(4);
     shoot(&mut h, "lego_2d_profile_passes");
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 4_usize));
+    h.run_steps(4);
+    shoot(&mut h, "lego_2d_profile_linking");
 
     h.state_mut().start_run(&ctx);
     settle(&mut h);
@@ -890,6 +937,10 @@ passes = {{ feed = 1500.0 }}
     }
     h.run_steps(3);
     shoot(&mut h, "lego_2d_played");
+    // The cut out's paths: leads on and off each ring, and the tabs ridden over.
+    h.state_mut().playback_for_snapshot(true);
+    h.run_steps(3);
+    shoot(&mut h, "lego_2d_paths");
 }
 
 /// The view cube on the lego brick, faced and cut out: the first view, a face of

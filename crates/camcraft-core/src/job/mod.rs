@@ -60,7 +60,10 @@
 //! additional offset that moves a boundary the whole tool is kept inside inward
 //! where it used to move it out, is version 6: an older build would clear the
 //! whole stock, or cut past where it was asked. A 2D profile or pocket is
-//! version 7, which an older build would not know how to cut at all.
+//! version 7, which an older build would not know how to cut at all. One with an
+//! additional offset, or any operation with tabs or leads, is version 8: a
+//! version 7 build would cut it on the boundary, cut the part free, or enter
+//! and leave it where the lead was to keep a mark off it.
 
 mod error;
 mod model;
@@ -86,8 +89,8 @@ use serde::{Deserialize, Serialize};
 pub use error::JobError;
 pub use model::{FixedBox, LengthUnit, ModelDef, Place, StockDef, StockSpec};
 pub use operation::{
-    Boundary, Containment, Geometry, Height, HeightContext, HeightRef, Heights, Linking, Operation,
-    Passes, ProfileSide, StockToLeave, StrategySpec,
+    Boundary, Containment, Geometry, Height, HeightContext, HeightRef, Heights, Leads, Leave,
+    Linking, Operation, Passes, ProfileSide, StockToLeave, StrategySpec, TabShape, Tabs, Uses,
 };
 pub use pick::{FeatureRef, PointRef, Snap};
 pub use setup::{Along, BoxOf, Origin, Setup};
@@ -99,7 +102,7 @@ pub use tool::{
 /// The newest job file format this build reads and writes. It reads every version
 /// from 1, and writes the oldest that holds what a job says
 /// ([`Job::required_version`]).
-pub const JOB_VERSION: u32 = 7;
+pub const JOB_VERSION: u32 = 8;
 
 /// A complete job.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]

@@ -42,6 +42,30 @@
 //! which reduces correctly at every limit: zero stock is the tool itself, isotropic
 //! `s` gives `(R + s, c + s)` raised by `s`, pure axial leaves the shape alone and
 //! only raises it, and pure radial widens it without raising it at all.
+//!
+//! # Negative stock
+//!
+//! Negative stock cuts past the part, as Fusion's does: the same sum with the
+//! stock taken away, so the tool shrinks rather than grows and its tip goes
+//! below the contact rather than above it. A ball shrunk by `s` is a ball of
+//! `r - s`, and a flat mill shrunk stays flat, its corner already as sharp as it
+//! goes: the corner stops at zero,
+//!
+//! ```text
+//! effective = bullnose(R + b, max(c + min(a, b), 0)),   tip offset = a
+//! ```
+//!
+//! Past a round end's corner radius, down, the shrunk end is flat where the real
+//! one is round, so a slope is cut past by less than asked; the job refuses that
+//! in 3D, as Fusion does ([`crate::job::Operation::cannot_use`]). Beside, the
+//! tool cannot shrink past nothing: `R + b` must stay above zero.
+//!
+//! # The tool that cuts
+//!
+//! The grown tool is what the drop-cutter contacts, and every path point is where
+//! the *real* tip goes. So the material is cut by the real tool, at those points:
+//! the simulator sweeps [`EffectiveTool::base`], or the stock left on a wall would
+//! be swept away with the grown tool's extra width.
 
 use crate::dropcutter::DropTest;
 use crate::tool::{Bullnose, BullnoseFamily, Cutter, ToolError, ToolProfile};
@@ -58,9 +82,9 @@ pub struct Allowance {
 /// Stock to leave that was not usable.
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum AllowanceError {
-    /// Stock to leave must be finite and not negative.
-    #[error("stock to leave must be finite and at least zero, got radial {radial}, axial {axial}")]
-    Negative {
+    /// Stock to leave must be a number.
+    #[error("stock to leave must be a number, got radial {radial}, axial {axial}")]
+    NotANumber {
         /// The radial amount given.
         radial: f64,
         /// The axial amount given.
@@ -69,10 +93,11 @@ pub enum AllowanceError {
 }
 
 impl Allowance {
-    /// Leave `radial` perpendicular to the axis and `axial` along it.
+    /// Leave `radial` perpendicular to the axis and `axial` along it; either
+    /// negative to cut past the part.
     pub fn new(radial: f64, axial: f64) -> Result<Self, AllowanceError> {
-        if !radial.is_finite() || !axial.is_finite() || radial < 0.0 || axial < 0.0 {
-            return Err(AllowanceError::Negative { radial, axial });
+        if !radial.is_finite() || !axial.is_finite() {
+            return Err(AllowanceError::NotANumber { radial, axial });
         }
         Ok(Self { radial, axial })
     }
@@ -115,20 +140,25 @@ impl Allowance {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EffectiveTool {
     shape: Cutter,
+    base: Cutter,
     allowance: Allowance,
 }
 
 impl EffectiveTool {
-    /// Dilate `tool` by `stock`.
+    /// Dilate `tool` by `stock`, or shrink it by negative stock.
     ///
     /// Takes anything convertible into the bullnose family: every cutter but a
     /// cone, which [`EffectiveTool::of`] takes as it is.
     pub fn new(tool: &(impl BullnoseFamily + ?Sized), stock: Allowance) -> Result<Self, ToolError> {
         let base = tool.as_bullnose();
         let m = stock.radial.min(stock.axial);
-        let shape = Bullnose::new(base.max_radius() + stock.radial, base.corner() + m)?;
+        let shape = Bullnose::new(
+            base.max_radius() + stock.radial,
+            (base.corner() + m).max(0.0),
+        )?;
         Ok(Self {
             shape: Cutter::Bullnose(shape),
+            base: Cutter::Bullnose(base),
             allowance: stock,
         })
     }
@@ -140,6 +170,7 @@ impl EffectiveTool {
             Cutter::Bullnose(b) => Self::new(b, stock),
             Cutter::Cone(_) if stock.is_none() => Ok(Self {
                 shape: *tool,
+                base: *tool,
                 allowance: stock,
             }),
             Cutter::Cone(_) => Err(ToolError::ConeStock),
@@ -151,6 +182,11 @@ impl EffectiveTool {
         &self.shape
     }
 
+    /// The real tool, which cuts the material at the points the grown one finds.
+    pub fn base(&self) -> &Cutter {
+        &self.base
+    }
+
     /// The stock to leave this was built for.
     pub fn allowance(&self) -> &Allowance {
         &self.allowance
@@ -158,9 +194,9 @@ impl EffectiveTool {
 
     /// The real tool's widest radius, without the stock to leave: what a
     /// machining boundary's containment keeps in or out, since stock is left on
-    /// the part, not on the boundary.
+    /// the part, not on the boundary; and what the material is cut with.
     pub fn cutter_radius(&self) -> f64 {
-        self.shape.max_radius() - self.allowance.radial
+        self.base.max_radius()
     }
 
     /// How far the real tool tip sits above the dilated shape's contact.
@@ -206,13 +242,17 @@ mod tests {
 
     #[test]
     fn rejects_unusable_stock() {
-        assert!(matches!(
-            Allowance::new(-0.1, 0.0),
-            Err(AllowanceError::Negative { .. })
-        ));
+        assert!(
+            Allowance::new(-0.1, 0.0).is_ok(),
+            "negative cuts past the part"
+        );
         assert!(matches!(
             Allowance::new(0.0, f64::NAN),
-            Err(AllowanceError::Negative { .. })
+            Err(AllowanceError::NotANumber { .. })
+        ));
+        assert!(matches!(
+            Allowance::new(f64::INFINITY, 0.0),
+            Err(AllowanceError::NotANumber { .. })
         ));
         assert!(Allowance::new(0.0, 0.0).is_ok());
         assert!(Allowance::none().is_none());
@@ -303,6 +343,52 @@ mod tests {
                 2.0 + axial
             );
         }
+    }
+
+    /// Negative stock shrinks a ball to a smaller ball and puts its tip that far
+    /// below the contact: the same sum, taken away.
+    #[test]
+    fn negative_stock_shrinks_a_ball_to_a_ball() {
+        let e = EffectiveTool::new(
+            &Ball::new(3.0).unwrap(),
+            Allowance::isotropic(-0.5).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(e.shape().max_radius(), 2.5);
+        assert_eq!(e.shape().bullnose().unwrap().corner(), 2.5);
+        assert_eq!(e.tip_offset(), -0.5);
+        assert_eq!(e.cutter_radius(), 3.0, "the real tool is unchanged");
+    }
+
+    /// A flat mill's corner is already sharp: shrunk, it stays flat, and cuts a
+    /// floor exactly the axial amount below it.
+    #[test]
+    fn negative_stock_keeps_a_flat_mill_flat() {
+        let stock = Allowance::isotropic(-0.3).unwrap();
+        let e = EffectiveTool::new(&Flat::new(4.0).unwrap(), stock).unwrap();
+        assert_eq!(e.shape().max_radius(), 3.7);
+        assert_eq!(e.shape().bullnose().unwrap().corner(), 0.0);
+        let mesh = synthetic::plane(2.0, 30.0);
+        let z = DropCutter::new(&mesh).drop_at(&e, 0.0, 0.0).unwrap();
+        assert!((z - 1.7).abs() < 1e-9, "got {z}");
+    }
+
+    /// A tool cannot shrink past nothing beside.
+    #[test]
+    fn negative_stock_cannot_take_the_whole_radius() {
+        let flat = Flat::new(2.0).unwrap();
+        assert!(EffectiveTool::new(&flat, Allowance::new(-2.0, 0.0).unwrap()).is_err());
+        assert!(EffectiveTool::new(&flat, Allowance::new(-1.9, 0.0).unwrap()).is_ok());
+    }
+
+    /// The material is cut by the real tool at the points the grown one found,
+    /// so the stock left on a wall stays in the material.
+    #[test]
+    fn the_real_tool_is_kept() {
+        let ball = Ball::new(3.0).unwrap();
+        let e = EffectiveTool::new(&ball, Allowance::isotropic(0.5).unwrap()).unwrap();
+        assert_eq!(e.base().max_radius(), 3.0);
+        assert_eq!(e.base().bullnose().unwrap().corner(), 3.0);
     }
 
     /// More stock can never put the tool lower. Monotonicity is the cheap sanity
