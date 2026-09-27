@@ -170,8 +170,10 @@ pub struct Highlight {
 /// Where the pointer is over the view, as the picker needs it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PointerEvent {
-    /// From the eye through the pointer: where it starts, and a unit direction.
+    /// Through the pointer: where it starts, and a unit direction.
     pub ray: (DVec3, DVec3),
+    /// Where the view's lines of sight come from, for what can be seen.
+    pub sight: crate::view::camera::Sight,
     /// The pointer, in points.
     pub pos: egui::Pos2,
     /// Whether it clicked this frame: pressed and let go without dragging, so an

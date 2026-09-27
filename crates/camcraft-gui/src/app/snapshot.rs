@@ -192,6 +192,17 @@ impl App {
         }
     }
 
+    /// Where the view cube turns to `region`, on the screen. Only the snapshot
+    /// harness asks.
+    pub fn cube_point_for_snapshot(&self, region: glam::IVec3) -> Option<egui::Pos2> {
+        self.viewport.cube_point_for_snapshot(region)
+    }
+
+    /// The view's camera. Only the snapshot harness asks.
+    pub fn camera_for_snapshot(&self) -> crate::view::camera::Camera {
+        self.viewport.camera()
+    }
+
     /// Bring the camera in on `at`. Only the snapshot harness asks.
     pub fn focus_for_snapshot(&mut self, at: glam::DVec3, radius: f32) {
         self.viewport.focus(at, radius);

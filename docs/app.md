@@ -128,6 +128,16 @@ only after ticking "I know why" and pressing Post anyway.
 The view has two modes for each setup, switched by the **Setup** and **Playback**
 tabs on the bar under it. Each setup keeps its own mode, camera and playhead.
 
+**The view cube**, in its top right corner, after Fusion's, turns the view. Click
+the middle of a face to look straight at it (Top, Bottom, Front, Back, Left,
+Right), a side of one for the edge between two faces, or a corner for the
+corner's isometric view; the view turns there in a fifth of a second. Drag the
+cube to orbit. The house beside it, or R, turns back to the first view. Looking
+straight at a face the view is **orthographic**, a true drawing with nothing
+foreshortened; from anywhere else, **perspective**. Orbiting away from a
+straight view is perspective again at once. Straight down, +Y is up the screen
+and the front at the bottom. Picking works the same in both.
+
 **Setup** is for setting the job up: the part, the stock's outline, and the
 selection's toolpaths in full, coloured by move role (an operation's alone, or
 the whole setup's), as screen-space lines that stay readable on Retina. There is

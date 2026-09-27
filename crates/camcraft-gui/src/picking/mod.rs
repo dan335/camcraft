@@ -332,7 +332,8 @@ impl Picking {
             self.hover = None;
             return changed;
         };
-        let target = event.and_then(|e| scene.pick(e.ray, &e.projector, e.pos, slot.accept()));
+        let target =
+            event.and_then(|e| scene.pick(e.ray, e.sight, &e.projector, e.pos, slot.accept()));
         let changed = target != self.hover;
         self.hover.clone_from(&target);
 

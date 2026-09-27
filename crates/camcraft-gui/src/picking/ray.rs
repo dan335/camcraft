@@ -29,6 +29,8 @@ use camcraft_session::Model;
 use eframe::egui::{Pos2, Rect, pos2};
 use glam::{DVec3, Mat4};
 
+use crate::view::camera::Sight;
+
 /// How near the pointer a point must be to be picked, in points.
 pub const POINT_REACH: f32 = 8.0;
 /// How near the pointer an edge must be to be picked, in points.
@@ -38,6 +40,9 @@ pub const EDGE_REACH: f32 = 6.0;
 pub const STOCK_REACH: f32 = 10.0;
 /// Edges tried, nearest first, before giving up on finding one that is not hidden.
 const EDGE_TRIES: usize = 16;
+/// How close, in points, two things are drawn to count as drawn in the same
+/// place, when the nearer is taken.
+const SAME_PLACE: f32 = 0.5;
 
 /// Where points in the setup's frame are drawn on the screen.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -355,8 +360,10 @@ impl PickScene {
             .min_by(|a, b| a.2.total_cmp(&b.2))
     }
 
-    /// Whether `p` can be seen from `eye`, and is not behind the part.
-    fn visible(&self, eye: DVec3, p: DVec3) -> bool {
+    /// Whether `p` can be seen along its line of `sight`, and is not behind the
+    /// part.
+    fn visible(&self, sight: Sight, p: DVec3) -> bool {
+        let eye = sight.to(p);
         let to = p - eye;
         let dist = to.length();
         if dist <= self.eps {
@@ -366,11 +373,12 @@ impl PickScene {
             .is_none_or(|(_, _, t)| t >= dist - self.eps)
     }
 
-    /// What is under `cursor`, for a ray `(eye, unit direction)` from the eye
-    /// through it, among what `accept` takes.
+    /// What is under `cursor`, for a ray `(start, unit direction)` through it,
+    /// among what `accept` takes, seen along the view's lines of `sight`.
     pub fn pick(
         &self,
         (eye, dir): (DVec3, DVec3),
+        sight: Sight,
         proj: &Projector,
         cursor: Pos2,
         accept: Accept,
@@ -403,10 +411,18 @@ impl PickScene {
             });
         }
 
+        // Of two points drawn in the same place, the nearer: looking straight at
+        // a wall, its top and bottom corners are one.
+        let better = |d: f32, p: DVec3, best: Option<(f32, f64)>| {
+            best.is_none_or(|(b, depth)| {
+                d < b - SAME_PLACE || (d < b + SAME_PLACE && sight.depth(p) < depth - self.eps)
+            })
+        };
+
         if accept.points {
             // The nearest point within reach that can be seen: vertices first on
             // a tie, as the likeliest meant.
-            let mut best: Option<(f32, Target)> = None;
+            let mut best: Option<(f32, f64, Target)> = None;
             for m in &self.models {
                 let kinds = [
                     (
@@ -422,21 +438,22 @@ impl PickScene {
                         let Some(d) = near(p, POINT_REACH) else {
                             continue;
                         };
-                        if best.as_ref().is_some_and(|(b, _)| *b <= d) || !self.visible(eye, p) {
+                        let was = best.as_ref().map(|(b, depth, _)| (*b, *depth));
+                        if !better(d, p, was) || !self.visible(sight, p) {
                             continue;
                         }
                         if let Ok(index) = u32::try_from(i) {
-                            best = Some((d, self.point(m, snap, index, p)));
+                            best = Some((d, sight.depth(p), self.point(m, snap, index, p)));
                         }
                     }
                 }
             }
-            if let Some((_, t)) = best {
+            if let Some((.., t)) = best {
                 return Some(t);
             }
             // Over a round edge, its centre: the usual way to put a work zero on a
             // hole.
-            if let Some((mi, e, _)) = self.nearest_edge(eye, proj, cursor)
+            if let Some((mi, e, _)) = self.nearest_edge(sight, proj, cursor)
                 && let Some(m) = self.models.get(mi)
                 && let Some(Some(c)) = m.centres.get(e as usize)
             {
@@ -447,7 +464,7 @@ impl PickScene {
         if accept.stock
             && let Some(b) = self.stock
         {
-            let mut best: Option<(f32, Target)> = None;
+            let mut best: Option<(f32, f64, Target)> = None;
             for (x, y, z) in box_points() {
                 let p = DVec3::new(
                     x.pick(b.min.x, b.max.x),
@@ -457,17 +474,18 @@ impl PickScene {
                 let Some(d) = near(p, STOCK_REACH) else {
                     continue;
                 };
-                if best.as_ref().is_none_or(|(b, _)| d < *b) && self.visible(eye, p) {
-                    best = Some((d, Target::StockPoint { x, y, z, setup: p }));
+                let was = best.as_ref().map(|(b, depth, _)| (*b, *depth));
+                if better(d, p, was) && self.visible(sight, p) {
+                    best = Some((d, sight.depth(p), Target::StockPoint { x, y, z, setup: p }));
                 }
             }
-            if let Some((_, t)) = best {
+            if let Some((.., t)) = best {
                 return Some(t);
             }
         }
 
         if accept.edges
-            && let Some((mi, edge, at)) = self.nearest_edge(eye, proj, cursor)
+            && let Some((mi, edge, at)) = self.nearest_edge(sight, proj, cursor)
             && let Some(m) = self.models.get(mi)
         {
             return Some(Target::Edge {
@@ -508,7 +526,7 @@ impl PickScene {
     /// setup's frame.
     fn nearest_edge(
         &self,
-        eye: DVec3,
+        sight: Sight,
         proj: &Projector,
         cursor: Pos2,
     ) -> Option<(usize, u32, DVec3)> {
@@ -544,10 +562,19 @@ impl PickScene {
                 }
             }
         }
-        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // Nearest the pointer, and of edges drawn in the same place, the nearer:
+        // a hole's rims, looking straight down it.
+        #[allow(clippy::cast_possible_truncation)]
+        let place = |d: f32| (d / SAME_PLACE).round() as i64;
+        near.sort_by(|a, b| {
+            place(a.0)
+                .cmp(&place(b.0))
+                .then(sight.depth(a.3).total_cmp(&sight.depth(b.3)))
+                .then(a.0.total_cmp(&b.0))
+        });
         near.into_iter()
             .take(EDGE_TRIES)
-            .find(|(_, _, _, p)| self.visible(eye, *p))
+            .find(|(_, _, _, p)| self.visible(sight, *p))
             .map(|(_, mi, e, p)| (mi, e, p))
     }
 }
@@ -645,10 +672,48 @@ mod tests {
         (c, Projector::new(c.view_projection(aspect), rect), aspect)
     }
 
+    /// Looking straight down on the plate, orthographically, as the view cube's
+    /// Top does.
+    fn straight_down() -> (Camera, Projector, f32) {
+        let c = Camera::framing(Vec3::new(0.0, 0.0, 2.5), 40.0).turned_to(Vec3::Z);
+        assert!(c.orthographic());
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let aspect = 800.0 / 600.0;
+        (c, Projector::new(c.view_projection(aspect), rect), aspect)
+    }
+
     fn pick_at(scene: &PickScene, screen: Pos2, accept: Accept) -> Option<Target> {
-        let (c, proj, aspect) = looking_down();
+        pick_from(looking_down(), scene, screen, accept)
+    }
+
+    fn pick_from(
+        (c, proj, aspect): (Camera, Projector, f32),
+        scene: &PickScene,
+        screen: Pos2,
+        accept: Accept,
+    ) -> Option<Target> {
         let ray = c.ray(aspect, proj.ndc(screen));
-        scene.pick(ray, &proj, screen, accept)
+        scene.pick(ray, c.sight(), &proj, screen, accept)
+    }
+
+    /// Looking straight down orthographically, a corner on top is picked, and
+    /// the one straight under it is hidden by the part.
+    #[test]
+    fn picking_works_straight_down() {
+        let (scene, _) = scene();
+        let (c, proj, _) = straight_down();
+        let top = proj.screen(dvec3(20.0, 20.0, 5.0)).unwrap();
+        let Some(Target::Point { point, .. }) =
+            pick_from(straight_down(), &scene, top, Accept::POINTS)
+        else {
+            unreachable!("no point");
+        };
+        let at = DVec3::from(point.at);
+        assert!(at.distance(dvec3(20.0, 20.0, 5.0)) < 1e-9, "{at}");
+        // Under the top face, hidden by it.
+        let under = dvec3(10.0, 12.0, 0.0);
+        assert!(!scene.visible(c.sight(), under));
+        assert!(scene.visible(c.sight(), dvec3(20.0, 20.0, 5.0)));
     }
 
     #[test]
@@ -725,7 +790,7 @@ mod tests {
             .position(|p| (*p - dvec3(-20.0, -20.0, 0.0)).length() < 1e-9)
             .unwrap();
         let (c, _, _) = looking_down();
-        assert!(!scene.visible(c.eye().as_dvec3(), scene.models[0].vertices[v]));
+        assert!(!scene.visible(c.sight(), scene.models[0].vertices[v]));
     }
 
     #[test]

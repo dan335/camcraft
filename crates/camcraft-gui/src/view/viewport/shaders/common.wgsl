@@ -8,6 +8,9 @@ struct Frame {
     colors: array<vec4<f32>, 21>,
     // Where the eye is.
     eye: vec4<f32>,
+    // Looking orthographically, which way the view looks, and how far back from
+    // what it shows a line of sight starts; all zero in perspective.
+    sight: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> f: Frame;
 

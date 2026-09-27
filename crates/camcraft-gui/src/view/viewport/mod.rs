@@ -33,6 +33,7 @@ use crate::picking::ray::Projector;
 use crate::stock::stock_ao;
 use crate::ui::theme;
 use crate::view::camera::Camera;
+use crate::view::viewcube::{self, Action};
 use gpu::Gpu;
 
 pub use content::{
@@ -43,6 +44,9 @@ pub(crate) use stock_gpu::WALL_CELLS;
 
 /// Toolpath width, in points.
 const LINE_WIDTH: f32 = 1.25;
+/// How long the view takes to turn to where the view cube or home sends it, in
+/// seconds: the design system's `--dur-slow`.
+const TURN_SECONDS: f64 = 0.22;
 
 fn v3(p: DVec3) -> [f32; 3] {
     [narrow(p.x), narrow(p.y), narrow(p.z)]
@@ -97,6 +101,18 @@ pub struct Viewport {
     gpu: Option<Gpu>,
     /// The framing key the camera was last framed for.
     framed: Option<u64>,
+    /// A turn under way.
+    turn: Option<Turn>,
+    /// Where the view was last drawn.
+    rect: Option<egui::Rect>,
+}
+
+/// The view turning from one camera to another, since a time in seconds.
+#[derive(Debug, Clone, Copy)]
+struct Turn {
+    from: Camera,
+    to: Camera,
+    start: f64,
 }
 
 impl Default for Viewport {
@@ -105,6 +121,8 @@ impl Default for Viewport {
             camera: Camera::framing(Vec3::ZERO, 50.0),
             gpu: None,
             framed: None,
+            turn: None,
+            rect: None,
         }
     }
 }
@@ -118,6 +136,7 @@ impl Viewport {
     /// Look through `camera`, kept from before, or frame the next part shown under
     /// `framing` afresh when there is none.
     pub fn use_camera(&mut self, camera: Option<Camera>, framing: u64) {
+        self.turn = None;
         match camera {
             Some(c) => {
                 self.camera = c;
@@ -134,7 +153,63 @@ impl Viewport {
 
     /// Bring the view in on `point`, keeping the angle it is seen from.
     pub fn focus(&mut self, point: DVec3, radius: f32) {
+        self.turn = None;
         self.camera.focus(Vec3::from(v3(point)), radius);
+    }
+
+    /// Where on the screen the view cube turns to `region`. Only the snapshot
+    /// harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn cube_point_for_snapshot(&self, region: glam::IVec3) -> Option<egui::Pos2> {
+        viewcube::point_of(self.rect?, &self.camera, viewcube::Region(region))
+    }
+
+    /// Turn the view smoothly to `to`, from where it is.
+    fn turn_to(&mut self, ui: &egui::Ui, to: Camera) {
+        self.turn = Some(Turn {
+            from: self.camera,
+            to,
+            start: ui.input(|i| i.time),
+        });
+        ui.ctx().request_repaint();
+    }
+
+    /// Carry a turn under way on to where it is by now, easing out, and keep
+    /// frames coming until it arrives.
+    fn keep_turning(&mut self, ui: &egui::Ui) {
+        let Some(t) = self.turn else {
+            return;
+        };
+        let now = ui.input(|i| i.time);
+        // A share of a short turn, so it fits.
+        #[allow(clippy::cast_possible_truncation)]
+        let k = ((now - t.start) / TURN_SECONDS).clamp(0.0, 1.0) as f32;
+        let eased = 1.0 - (1.0 - k).powi(3);
+        self.camera = Camera::lerp(&t.from, &t.to, eased);
+        if k >= 1.0 {
+            self.turn = None;
+        } else {
+            ui.ctx().request_repaint();
+        }
+    }
+
+    /// What the view cube asked for.
+    fn act(&mut self, ui: &egui::Ui, action: Action) {
+        match action {
+            Action::Turn(dir) => {
+                let to = self.turn.map_or(self.camera, |t| t.to).turned_to(dir);
+                self.turn_to(ui, to);
+            }
+            Action::Orbit(d) => {
+                self.turn = None;
+                self.camera.orbit(d.x, d.y);
+            }
+            Action::Home => {
+                let mut home = self.camera;
+                home.reset();
+                self.turn_to(ui, home);
+            }
+        }
     }
 
     /// Draw the viewport into the rest of `ui`, and say where the pointer is over
@@ -147,7 +222,9 @@ impl Viewport {
     ) -> Option<PointerEvent> {
         let (rect, response) =
             ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+        self.rect = Some(rect);
         self.handle_input(ui, &response, rect);
+        self.keep_turning(ui);
         let aspect = rect.width() / rect.height().max(1.0);
         let projector = Projector::new(self.camera.view_projection(aspect), rect);
         let event = response
@@ -157,6 +234,7 @@ impl Viewport {
                 let ndc: Vec2 = projector.ndc(pos);
                 PointerEvent {
                     ray: self.camera.ray(aspect, ndc),
+                    sight: self.camera.sight(),
                     pos,
                     clicked: response.clicked(),
                     projector,
@@ -216,6 +294,10 @@ impl Viewport {
             projection: self.camera.projection(aspect),
             reach: narrow(reach),
             eye: self.camera.eye(),
+            sight: self
+                .camera
+                .orthographic()
+                .then(|| (self.camera.basis().0, self.camera.sight_length())),
             pixels: px,
             line_width: LINE_WIDTH * ppp,
             view: content.view,
@@ -232,6 +314,10 @@ impl Viewport {
         );
 
         paint_over(ui, rect, &projector, content);
+        // Over everything, and taking the pointer where it is drawn.
+        if let Some(action) = viewcube::show(ui, rect, &self.camera) {
+            self.act(ui, action);
+        }
         event
     }
 
@@ -240,6 +326,10 @@ impl Viewport {
         let d = response.drag_delta();
         // Pan with the middle or secondary button, or shift-drag: a trackpad has no
         // middle button. Orbit with a plain primary drag.
+        // Moving the view by hand stops a turn under way.
+        if response.dragged() {
+            self.turn = None;
+        }
         if response.dragged_by(egui::PointerButton::Middle)
             || response.dragged_by(egui::PointerButton::Secondary)
             || (shift && response.dragged_by(egui::PointerButton::Primary))
@@ -251,11 +341,12 @@ impl Viewport {
         if response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
+                self.turn = None;
                 self.camera.zoom(scroll);
             }
             let typing = ui.ctx().memory(|m| m.focused().is_some());
             if !typing && ui.input(|i| i.key_pressed(egui::Key::R)) {
-                self.camera.reset();
+                self.act(ui, Action::Home);
             }
         }
     }
@@ -315,7 +406,7 @@ fn paint_over(ui: &egui::Ui, rect: egui::Rect, projector: &Projector, content: &
     ui.painter().text(
         rect.left_bottom() + egui::vec2(12.0, -10.0),
         egui::Align2::LEFT_BOTTOM,
-        "drag to orbit · shift-drag or right-drag to pan · scroll to zoom · R resets",
+        "drag to orbit · shift-drag or right-drag to pan · scroll to zoom · the cube turns · R resets",
         theme::caption(ui.style()),
         faint,
     );
@@ -328,6 +419,9 @@ struct FrameInput {
     /// How far, in millimetres, the part's occlusion reaches.
     reach: f32,
     eye: Vec3,
+    /// Looking orthographically, which way, and how far back a line of sight
+    /// starts from what it shows.
+    sight: Option<(Vec3, f32)>,
     pixels: [f32; 2],
     line_width: f32,
     view: View,

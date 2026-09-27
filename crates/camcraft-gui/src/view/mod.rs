@@ -4,4 +4,5 @@
 pub mod camera;
 pub mod part_ao;
 pub mod scene;
+pub mod viewcube;
 pub mod viewport;

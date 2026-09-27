@@ -27,7 +27,8 @@ struct Ao {
     // The view's size in pixels, then half of it.
     size: vec4<f32>,
     // How far to look, in millimetres; pixels per millimetre at a distance of
-    // one; how strongly to darken.
+    // one, or looking orthographically, anywhere; how strongly to darken; 1 when
+    // the view is orthographic.
     params: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> a: Ao;
@@ -82,12 +83,14 @@ fn gtao(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let d = view_at(px + vec2<i32>(0, 2));
     let dx = select(p - l, r - p, abs(r.z - p.z) < abs(p.z - l.z));
     let dy = select(p - u, d - p, abs(d.z - p.z) < abs(p.z - u.z));
-    let v = normalize(-p);
+    // Towards the eye: along the view everywhere when it is orthographic.
+    let ortho = a.params.w > 0.5;
+    let v = select(normalize(-p), vec3<f32>(0.0, 0.0, 1.0), ortho);
     var n = normalize(cross(dx, dy));
     if (dot(n, v) < 0.0) { n = -n; }
 
     let reach = a.params.x;
-    let reach_px = reach * a.params.y / max(-p.z, 1e-4);
+    let reach_px = select(reach * a.params.y / max(-p.z, 1e-4), reach * a.params.y, ortho);
     if (reach_px < 1.0) { return vec4<f32>(1.0); }
     // What is found counts less over the last share of the reach.
     let fade = 0.615 * reach;
@@ -148,7 +151,10 @@ fn blur(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         for (var dx = -1; dx <= 2; dx++) {
             let q = clamp(h + vec2<i32>(dx, dy), vec2<i32>(0), most);
             if (depth_at(q * 2) >= 1.0) { continue; }
-            if (abs(view_at(q * 2).z - z) > 0.03 * abs(z)) { continue; }
+            // Off the surface: further in depth than a share of the depth, or
+            // looking orthographically, where depth is not distance, of the reach.
+            let off = select(0.03 * abs(z), 0.25 * a.params.x, a.params.w > 0.5);
+            if (abs(view_at(q * 2).z - z) > off) { continue; }
             sum += textureLoad(found, q, 0).r;
             weight += 1.0;
         }
@@ -354,7 +360,7 @@ impl PartAo {
 
     /// Set up for this frame: the view's projection, and how far, in
     /// millimetres, a point looks for what shades it.
-    pub fn frame(&self, queue: &wgpu::Queue, projection: Mat4, reach: f32) {
+    pub fn frame(&self, queue: &wgpu::Queue, projection: Mat4, orthographic: bool, reach: f32) {
         let Some(sized) = &self.sized else {
             return;
         };
@@ -363,7 +369,12 @@ impl PartAo {
         let uniforms = Uniforms {
             inv_proj: projection.inverse().to_cols_array_2d(),
             size: [w, h, (w / 2.0).ceil().max(1.0), (h / 2.0).ceil().max(1.0)],
-            params: [reach, projection.y_axis.y * h / 2.0, STRENGTH, 0.0],
+            params: [
+                reach,
+                projection.y_axis.y * h / 2.0,
+                STRENGTH,
+                if orthographic { 1.0 } else { 0.0 },
+            ],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }

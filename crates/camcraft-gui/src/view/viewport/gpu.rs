@@ -62,6 +62,7 @@ struct FrameUniforms {
     masks: [u32; 4],
     colors: [[f32; 4]; KINDS],
     eye: [f32; 4],
+    sight: [f32; 4],
 }
 
 #[repr(C)]
@@ -765,7 +766,12 @@ impl Gpu {
             }
         }
         if part.is_some() {
-            self.part_ao.frame(&rs.queue, input.projection, input.reach);
+            self.part_ao.frame(
+                &rs.queue,
+                input.projection,
+                input.sight.is_some(),
+                input.reach,
+            );
             self.part_ao.draw(&mut encoder, &targets.msaa);
         }
         {
@@ -847,6 +853,10 @@ impl Gpu {
             masks: [kinds, view.ops, shown, 0],
             colors,
             eye: input.eye.extend(1.0).to_array(),
+            sight: match input.sight {
+                Some((forward, length)) => forward.extend(length).to_array(),
+                None => [0.0; 4],
+            },
         };
         rs.queue
             .write_buffer(&self.frame, 0, bytemuck::bytes_of(&frame));

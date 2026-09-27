@@ -892,6 +892,105 @@ passes = {{ feed = 1500.0 }}
     shoot(&mut h, "lego_2d_played");
 }
 
+/// The view cube on the lego brick, faced and cut out: the first view, a face of
+/// the cube under the pointer, then clicked to Top (orthographic, straight
+/// down), to the edge between Top and Front, and to Front (orthographic again).
+#[test]
+#[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
+fn view_cube() {
+    use glam::IVec3;
+    let dir = output_dir().join("view-cube");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = repo("fixtures/step/lego_4x2_01.step");
+    let job = format!(
+        r#"version = 7
+tolerance = 0.05
+
+[tools.eighth-flat]
+kind = "flat"
+diameter = 3.175
+number = 1
+rpm = 18000
+
+[[model]]
+name = "lego"
+path = "{}"
+
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [8.0, 8.0, 3.0]
+
+[[setup]]
+name = "top"
+models = ["lego"]
+stocks = ["block"]
+
+[[setup.operation]]
+name = "rough"
+strategy = "zlevel-rough"
+stepdown = 3.0
+tool = "eighth-flat"
+passes = {{ feed = 1500.0, stepover = 1.9 }}
+"#,
+        model.display()
+    );
+    let path = dir.join("view-cube.camcraft");
+    std::fs::write(&path, job).unwrap();
+
+    let mut h = harness();
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    h.state_mut().open_job(&ctx, path);
+    settle(&mut h);
+    h.state_mut().start_run(&ctx);
+    settle(&mut h);
+    h.state_mut().playback_for_snapshot(false);
+    h.state_mut().set_view_for_snapshot(0, 1.0, u32::MAX);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    h.run_steps(2);
+    while !h.state_mut().live_caught_up_for_snapshot() {
+        assert!(Instant::now() < deadline, "the material never caught up");
+        std::thread::sleep(Duration::from_millis(20));
+        h.step();
+    }
+    h.run_steps(3);
+    assert!(!h.state().camera_for_snapshot().orthographic());
+    shoot(&mut h, "cube_first_view");
+
+    let top = h.state().cube_point_for_snapshot(IVec3::Z).unwrap();
+    h.hover_at(top);
+    h.run_steps(2);
+    shoot(&mut h, "cube_hover_top");
+
+    let click = |h: &mut Harness<'_, App>, region: IVec3| {
+        let at = h.state().cube_point_for_snapshot(region).unwrap();
+        h.hover_at(at);
+        h.step();
+        h.drag_at(at);
+        h.step();
+        h.drop_at(at);
+        // Long enough for the turn to arrive.
+        h.run_steps(6);
+    };
+    click(&mut h, IVec3::Z);
+    let c = h.state().camera_for_snapshot();
+    assert!(c.orthographic(), "top is orthographic");
+    shoot(&mut h, "cube_top");
+
+    click(&mut h, IVec3::new(0, -1, 1));
+    assert!(!h.state().camera_for_snapshot().orthographic());
+    shoot(&mut h, "cube_top_front_edge");
+
+    click(&mut h, IVec3::NEG_Y);
+    assert!(h.state().camera_for_snapshot().orthographic(), "front");
+    shoot(&mut h, "cube_front");
+
+    click(&mut h, IVec3::new(1, -1, 1));
+    assert!(!h.state().camera_for_snapshot().orthographic());
+    shoot(&mut h, "cube_corner");
+}
+
 /// A full 5 by 12 foot sheet, 8 inches thick, with a sixteenth-inch cutter in the
 /// setup: the largest stock a router here takes, at the finest pitch memory allows
 /// for it, drawn as tiles. Surfaced down to the lego brick with a half-inch end

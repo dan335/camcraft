@@ -150,7 +150,9 @@ fn wall_normal(c: vec2<i32>, z: f32, fallback: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs(i: BoxOut) -> Hit {
     let o = g.origin_pitch_floor;
-    let eye = f.eye.xyz;
+    // Every line of sight runs the same way when the view is orthographic, from
+    // in front of all the stock.
+    let eye = select(f.eye.xyz, i.world - f.sight.xyz * f.sight.w, f.sight.w > 0.0);
     let dir = normalize(i.world - eye);
     // In cells across, millimetres up: cell (i, j) spans [i, i + 1) x [j, j + 1).
     let ro = vec3<f32>((eye.x - o.x) / o.z + 0.5, (eye.y - o.y) / o.z + 0.5, eye.z);
