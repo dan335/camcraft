@@ -1,5 +1,6 @@
 use super::*;
 use crate::fixture::JOB;
+use crate::job::{Boundary, Height, HeightRef, Outline};
 use crate::setup::PrepareError;
 use camcraft_geom::synthetic;
 use camcraft_geom::topology::Body;
@@ -257,12 +258,13 @@ fn kept_to_plateau(keep: &str, containment: crate::job::Containment) -> (Job, Bo
         at: [-5.0, 0.0, 5.0],
     };
     let face = find_face(&body, &pick, 0.01).unwrap().index;
-    let g = &mut job.setups[0].operations[0].geometry;
-    g.faces.push(FeatureRef {
+    let op = &mut job.setups[0].operations[0];
+    op.selection.faces.push(FeatureRef {
         index: face,
         ..pick
     });
-    g.containment = containment;
+    op.boundary.containment = containment;
+    op.boundary.kind = Boundary::Selection;
     (job, body)
 }
 
@@ -289,7 +291,7 @@ fn drilled(peck: Option<f64>) -> (SetupResult, Job) {
         at: [4.0, 0.0, 5.0],
     };
     let edge = find_edge(&body, &pick, 0.01).unwrap().index;
-    op.geometry.edges.push(FeatureRef {
+    op.selection.edges.push(FeatureRef {
         index: edge,
         ..pick
     });
@@ -401,7 +403,8 @@ fn roughing_keeps_to_a_picked_face() {
         );
     }
     let mut whole = job.clone();
-    whole.setups[0].operations[0].geometry.faces.clear();
+    whole.setups[0].operations[0].selection.faces.clear();
+    whole.setups[0].operations[0].boundary.kind = Boundary::Stock;
     let all = run_setup(&whole, 0, &bodies).unwrap();
     assert!(
         kept.operations[0].sim.removed_mm3 < all.operations[0].sim.removed_mm3,
@@ -416,7 +419,7 @@ fn roughing_keeps_to_a_picked_face() {
 /// outside with an offset, a channel that wide is cut round it and no further.
 #[test]
 fn roughing_keeps_to_the_silhouette() {
-    use crate::job::{Boundary, Containment, StockSpec};
+    use crate::job::{Containment, StockSpec};
     let body = Body::derived(synthetic::step(5.0, 10.0));
     let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
     let mut job: Job = toml::from_str(JOB).unwrap();
@@ -428,8 +431,7 @@ fn roughing_keeps_to_the_silhouette() {
     };
     let all = run_setup(&job, 0, &bodies).unwrap();
 
-    let g = &mut job.setups[0].operations[0].geometry;
-    g.boundary_kind = Some(Boundary::Silhouette);
+    job.setups[0].operations[0].boundary.kind = Boundary::Silhouette;
     let inside = run_setup(&job, 0, &bodies).unwrap();
     for p in cuts(&inside) {
         assert!(
@@ -438,9 +440,9 @@ fn roughing_keeps_to_the_silhouette() {
         );
     }
 
-    let g = &mut job.setups[0].operations[0].geometry;
-    g.containment = Containment::Outside;
-    g.margin = 6.0;
+    let b = &mut job.setups[0].operations[0].boundary;
+    b.containment = Containment::Outside;
+    b.margin = 6.0;
     let channel = run_setup(&job, 0, &bodies).unwrap();
     let cuts = cuts(&channel);
     // The step is 20 square; the tool's centre may go its radius and the offset
@@ -470,7 +472,7 @@ fn roughing_keeps_to_the_silhouette() {
 #[test]
 fn a_gone_pick_stops_the_run() {
     let (mut job, body) = kept_to_plateau("finish", crate::job::Containment::Center);
-    job.setups[0].operations[0].geometry.faces[0].at = [40.0, 40.0, 40.0];
+    job.setups[0].operations[0].selection.faces[0].at = [40.0, 40.0, 40.0];
     let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
     let err = run_setup(&job, 0, &bodies).unwrap_err();
     assert!(
@@ -510,6 +512,7 @@ fn in_a_sheet(strategy: StrategySpec, body: &Body) -> (Job, SetupResult) {
     };
     let op = &mut job.setups[0].operations[0];
     op.strategy = strategy;
+    op.passes.stepdown = strategy.default_stepdown();
     op.passes.stock_to_leave = Default::default();
     let bodies: Bodies<'_> = [("dome", body)].into_iter().collect();
     let result = run_setup(&job, 0, &bodies).unwrap();
@@ -525,7 +528,6 @@ fn a_part_is_profiled_out_hole_first() {
     let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
     let profile = StrategySpec::Profile {
         side: ProfileSide::Outside,
-        stepdown: 2.0,
         conventional: false,
     };
     let (_, result) = in_a_sheet(profile, &body);
@@ -568,7 +570,6 @@ fn a_pocket_is_cleared_to_its_picked_floor() {
     };
     let face = find_face(&body, &pick, 0.01).unwrap().index;
     let pocket = StrategySpec::Pocket {
-        stepdown: 2.0,
         conventional: false,
     };
     let (mut job, _) = in_a_sheet(pocket, &body);
@@ -577,10 +578,14 @@ fn a_pocket_is_cleared_to_its_picked_floor() {
         margin: [0.0, 0.0, 0.0],
         below: 0.0,
     };
-    job.setups[0].operations[0].geometry.faces.push(FeatureRef {
-        index: face,
-        ..pick
-    });
+    job.setups[0].operations[0]
+        .selection
+        .faces
+        .push(FeatureRef {
+            index: face,
+            ..pick
+        });
+    job.setups[0].operations[0].outline = Outline::Selection;
     let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
     let result = run_setup(&job, 0, &bodies).unwrap();
     let op = &result.operations[0];
@@ -610,16 +615,47 @@ fn a_pocket_is_cleared_to_its_picked_floor() {
     assert!(result.is_clean(), "{:?}", result.warnings());
     assert_eq!(result.verify.gouged, 0);
 
+    // Measured from the picked floor: from 3 mm above it to half a millimetre
+    // under it, in two even levels.
+    let from_picks = |offset| {
+        Some(Height {
+            reference: HeightRef::Selection,
+            offset,
+        })
+    };
+    let h = &mut job.setups[0].operations[0].heights;
+    h.top = from_picks(3.0);
+    h.bottom = from_picks(-0.5);
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let op = &result.operations[0];
+    let StrategyDetail::Pocket(report) = &op.detail else {
+        panic!("reported {:?}", op.detail);
+    };
+    assert_eq!(report.levels, 2);
+    let zs: Vec<f64> = op
+        .path
+        .moves()
+        .iter()
+        .filter(|m| m.role == crate::toolpath::MoveRole::Cut)
+        .map(|m| m.to.z)
+        .collect();
+    let deepest = zs.iter().copied().fold(f64::MAX, f64::min);
+    let highest = zs.iter().copied().fold(f64::MIN, f64::max);
+    assert!((deepest + 0.5).abs() < 1e-9, "down to {deepest}");
+    assert!((highest - 1.25).abs() < 1e-9, "first level at {highest}");
+    let h = &mut job.setups[0].operations[0].heights;
+    (h.top, h.bottom) = (None, None);
+
     job.tools.get_mut("rough").unwrap().diameter = 25.0;
     let err = run_setup(&job, 0, &bodies).unwrap_err().to_string();
     assert!(err.contains("does not fit"), "{err}");
 }
 
-/// An additional offset moves a 2D cut as if the boundary were moved: a profile
-/// out by it, a pocket in when it is negative. The pocket still goes down to the
-/// floor picked on the boundary itself.
+/// The radial stock to leave moves a 2D cut, and an additional offset, a 3D
+/// machining boundary's, does not: a profile out by it, a pocket in. The pocket
+/// still goes down to the floor picked on the boundary itself.
 #[test]
-fn an_additional_offset_moves_the_cut() {
+fn stock_to_leave_moves_a_2d_cut_and_an_offset_does_not() {
     use crate::features::find_face;
     use crate::job::{FeatureRef, ProfileSide};
     let cuts = |result: &SetupResult| -> Vec<DVec3> {
@@ -635,11 +671,12 @@ fn an_additional_offset_moves_the_cut() {
     let plate = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
     let profile = StrategySpec::Profile {
         side: ProfileSide::Outside,
-        stepdown: 2.0,
         conventional: false,
     };
     let (mut job, _) = in_a_sheet(profile, &plate);
-    job.setups[0].operations[0].geometry.margin = 2.0;
+    let op = &mut job.setups[0].operations[0];
+    op.passes.stock_to_leave.radial = 2.0;
+    op.boundary.margin = 5.0;
     let bodies: Bodies<'_> = [("dome", &plate)].into_iter().collect();
     let result = run_setup(&job, 0, &bodies).unwrap();
     // The outline's ring a tool's radius and 2 mm outside it; the hole's, a
@@ -658,7 +695,6 @@ fn an_additional_offset_moves_the_cut() {
     };
     let face = find_face(&step, &pick, 0.01).unwrap().index;
     let pocket = StrategySpec::Pocket {
-        stepdown: 2.0,
         conventional: false,
     };
     let (mut job, _) = in_a_sheet(pocket, &step);
@@ -667,12 +703,13 @@ fn an_additional_offset_moves_the_cut() {
         margin: [0.0, 0.0, 0.0],
         below: 0.0,
     };
-    let g = &mut job.setups[0].operations[0].geometry;
-    g.faces.push(FeatureRef {
+    let op = &mut job.setups[0].operations[0];
+    op.selection.faces.push(FeatureRef {
         index: face,
         ..pick
     });
-    g.margin = -1.0;
+    op.outline = Outline::Selection;
+    job.setups[0].operations[0].passes.stock_to_leave.radial = 1.0;
     let bodies: Bodies<'_> = [("dome", &step)].into_iter().collect();
     let result = run_setup(&job, 0, &bodies).unwrap();
     let cuts = cuts(&result);
@@ -686,7 +723,6 @@ fn an_additional_offset_moves_the_cut() {
         cuts.iter().any(|p| p.z.abs() < 1e-9),
         "not down to the floor"
     );
-    assert_eq!(job.required_version(), 8);
 }
 
 /// Tabs hold a part profiled out of a sheet: the deepest cut rides over them at
@@ -698,7 +734,6 @@ fn a_profiled_part_is_held_by_tabs() {
     let plate = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
     let profile = StrategySpec::Profile {
         side: ProfileSide::Outside,
-        stepdown: 2.0,
         conventional: false,
     };
     let (mut job, without) = in_a_sheet(profile, &plate);
@@ -710,7 +745,6 @@ fn a_profiled_part_is_held_by_tabs() {
             height: 2.0,
             spacing: 60.0,
         });
-        assert_eq!(job.required_version(), 8);
         let with = run_setup(&job, 0, &bodies).unwrap();
         let op = &with.operations[0];
         assert!(with.is_clean(), "{shape:?}: {:?}", with.warnings());
@@ -741,7 +775,6 @@ fn a_profile_leads_on_and_off_each_ring() {
     let plate = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
     let profile = StrategySpec::Profile {
         side: ProfileSide::Outside,
-        stepdown: 2.0,
         conventional: false,
     };
     let (mut job, _) = in_a_sheet(profile, &plate);
@@ -753,7 +786,6 @@ fn a_profile_leads_on_and_off_each_ring() {
         spacing: 60.0,
         ..Default::default()
     });
-    assert_eq!(job.required_version(), 8);
     let bodies: Bodies<'_> = [("dome", &plate)].into_iter().collect();
     let result = run_setup(&job, 0, &bodies).unwrap();
     let op = &result.operations[0];
@@ -796,7 +828,6 @@ fn a_profile_leaves_stock_beside_or_cuts_past_the_part() {
     let plate = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
     let profile = StrategySpec::Profile {
         side: ProfileSide::Outside,
-        stepdown: 2.0,
         conventional: false,
     };
     let (mut job, _) = in_a_sheet(profile, &plate);
@@ -833,7 +864,6 @@ fn a_pocket_leaves_stock_on_its_walls() {
     };
     let face = find_face(&body, &pick, 0.01).unwrap().index;
     let pocket = StrategySpec::Pocket {
-        stepdown: 2.0,
         conventional: false,
     };
     let (mut job, _) = in_a_sheet(pocket, &body);
@@ -842,10 +872,14 @@ fn a_pocket_leaves_stock_on_its_walls() {
         margin: [0.0, 0.0, 0.0],
         below: 0.0,
     };
-    job.setups[0].operations[0].geometry.faces.push(FeatureRef {
-        index: face,
-        ..pick
-    });
+    job.setups[0].operations[0]
+        .selection
+        .faces
+        .push(FeatureRef {
+            index: face,
+            ..pick
+        });
+    job.setups[0].operations[0].outline = Outline::Selection;
     let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
     let removed = |job: &Job| {
         let result = run_setup(job, 0, &bodies).unwrap();
@@ -909,4 +943,65 @@ fn roughing_twice_leaves_nothing_for_the_second() {
         cut(again),
         cut(first)
     );
+}
+
+/// Facing takes the stock above the part down to its top, all of it and past
+/// its edges, off the stock at both ends of every pass, and nothing of the part:
+/// the result verifies.
+#[test]
+fn facing_takes_the_stock_down_to_the_part() {
+    use crate::job::{FaceDirection, StockSpec};
+    let plate = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    job.setups[0].operations.retain(|op| op.name == "rough");
+    job.stocks[0].spec = StockSpec::AroundModels {
+        models: vec![],
+        margin: [10.0, 10.0, 3.0],
+        below: 0.0,
+    };
+    let op = &mut job.setups[0].operations[0];
+    op.strategy = StrategySpec::Face {
+        angle: 0.0,
+        direction: FaceDirection::BothWays,
+        pass_extension: 1.0,
+        stock_offset: 0.0,
+    };
+    op.passes.stepdown = Some(2.0);
+    op.passes.stock_to_leave = Default::default();
+    let diameter = job.tools[op.tool.as_ref().unwrap()].diameter;
+    op.passes.stepover = 0.9 * diameter;
+    job.validate().unwrap();
+    let bodies: Bodies<'_> = [("dome", &plate)].into_iter().collect();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let op = &result.operations[0];
+    let StrategyDetail::Face(report) = &op.detail else {
+        panic!("reported {:?}", op.detail);
+    };
+    assert_eq!(report.levels, 2);
+    assert_eq!(op.strategy, "face");
+    let top = result.heights.model_top;
+    let cuts: Vec<DVec3> = op
+        .path
+        .moves()
+        .iter()
+        .filter(|m| m.role == crate::toolpath::MoveRole::Cut)
+        .map(|m| m.to)
+        .collect();
+    let deepest = cuts.iter().map(|p| p.z).fold(f64::MAX, f64::min);
+    assert!((deepest - top).abs() < 1e-9, "down to {deepest}, not {top}");
+    // Every pass starts and ends off the stock, a tool's radius and the
+    // extension past it.
+    let reach = diameter / 2.0 + 1.0;
+    for p in &cuts {
+        assert!(p.y.abs() <= 30.0 + 1e-9, "{p}");
+    }
+    assert!(
+        cuts.iter()
+            .all(|p| (p.x.abs() - (30.0 + reach)).abs() < 1e-9)
+    );
+    // 60 by 60 by 3, less the grid's edges.
+    let taken = op.sim.removed_mm3;
+    assert!((taken - 10_800.0).abs() < 400.0, "took {taken}");
+    assert!(result.is_clean(), "{:?}", result.warnings());
+    assert_eq!(result.verify.gouged, 0);
 }

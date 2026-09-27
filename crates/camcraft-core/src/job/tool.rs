@@ -17,7 +17,6 @@ use crate::tool::{Ball, Bullnose, Cone, Cutter, Flat, ToolError};
 ///
 /// Its speeds and feeds are [`Preset`]s: named sets an operation copies from.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-#[serde(from = "ToolSpecFile")]
 pub struct ToolSpec {
     /// Shape.
     pub kind: ToolKind,
@@ -82,113 +81,12 @@ pub struct ToolSpec {
     pub presets: Vec<Preset>,
 }
 
-/// A [`ToolSpec`] as it may be written, including the single `cutting` table that
-/// came before presets, which reads as a preset called "Default".
-#[derive(Deserialize)]
-struct ToolSpecFile {
-    kind: ToolKind,
-    diameter: f64,
-    #[serde(default)]
-    corner: f64,
-    #[serde(default)]
-    angle: Option<f64>,
-    #[serde(default)]
-    tip_diameter: f64,
-    #[serde(default = "one_u32")]
-    number: u32,
-    #[serde(default = "default_rpm")]
-    rpm: u32,
-    #[serde(default)]
-    comment: String,
-    #[serde(default)]
-    flutes: Option<u32>,
-    #[serde(default)]
-    flute_length: Option<f64>,
-    #[serde(default)]
-    shoulder_length: Option<f64>,
-    #[serde(default)]
-    shank_diameter: Option<f64>,
-    #[serde(default)]
-    overall_length: Option<f64>,
-    #[serde(default)]
-    stickout: Option<f64>,
-    #[serde(default)]
-    material: Option<ToolMaterial>,
-    #[serde(default)]
-    vendor: Option<String>,
-    #[serde(default)]
-    product: Option<String>,
-    #[serde(default)]
-    holder: Option<Holder>,
-    #[serde(default)]
-    spindle: SpindleDirection,
-    #[serde(default)]
-    coolant: Coolant,
-    #[serde(default)]
-    presets: Vec<Preset>,
-    #[serde(default)]
-    cutting: Option<CuttingData>,
-}
-
-/// Suggested feeds, as tools kept them before presets.
-#[derive(Deserialize)]
-struct CuttingData {
-    #[serde(default)]
-    feed: Option<f64>,
-    #[serde(default)]
-    plunge_feed: Option<f64>,
-    #[serde(default)]
-    ramp_feed: Option<f64>,
-}
-
-impl From<ToolSpecFile> for ToolSpec {
-    fn from(f: ToolSpecFile) -> Self {
-        let mut presets = f.presets;
-        if let Some(c) = f.cutting
-            && presets.is_empty()
-        {
-            presets.push(Preset {
-                name: "Default".into(),
-                rpm: Some(f.rpm),
-                feed: c.feed,
-                plunge_feed: c.plunge_feed,
-                ramp_feed: c.ramp_feed,
-                ..Preset::default()
-            });
-        }
-        Self {
-            kind: f.kind,
-            diameter: f.diameter,
-            corner: f.corner,
-            angle: f.angle,
-            tip_diameter: f.tip_diameter,
-            number: f.number,
-            rpm: f.rpm,
-            comment: f.comment,
-            flutes: f.flutes,
-            flute_length: f.flute_length,
-            shoulder_length: f.shoulder_length,
-            shank_diameter: f.shank_diameter,
-            overall_length: f.overall_length,
-            stickout: f.stickout,
-            material: f.material,
-            vendor: f.vendor,
-            product: f.product,
-            holder: f.holder,
-            spindle: f.spindle,
-            coolant: f.coolant,
-            presets,
-        }
-    }
-}
-
 /// Named speeds and feeds for a tool: "Roughing", "Finishing", "MDF", whatever
 /// the person calls it. Nothing reads the name; an operation copies the values.
 ///
 /// Every value is optional, and choosing a preset sets only the values it has,
 /// so a "Finishing" preset can hold a stepover and stock to leave and keep the
-/// operation's feeds. The ramp feed is kept for when entries ramp; nothing uses
-/// it yet.
+/// operation's feeds.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct Preset {
     /// What the person calls it.

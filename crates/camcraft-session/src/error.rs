@@ -56,12 +56,6 @@ pub enum SessionError {
         /// Why.
         source: toml::de::Error,
     },
-    /// The job file is from before jobs had setups.
-    #[error(
-        "{0} is in the old job format, from before jobs had models, stocks and \
-         setups; see examples/rail-jig.camcraft for the new one"
-    )]
-    OldJob(String),
     /// The job could not be written.
     #[error("cannot write job {path}: {source}")]
     JobWrite {

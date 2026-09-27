@@ -6,8 +6,6 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use camcraft_core::job::Job;
-
 /// Write `text` beside `path` and move it into place.
 pub fn write_atomically(path: &Path, text: &str) -> std::io::Result<()> {
     let mut temp = path.as_os_str().to_owned();
@@ -89,22 +87,10 @@ pub fn relative_path(from_dir: &Path, to: &Path) -> String {
     parts.join("/")
 }
 
-/// Keep a job's relative model paths pointing at the same files when the job
-/// moves from `old_dir` to `new_dir`, as Save As does.
-pub fn rebase_models(job: &mut Job, old_dir: &Path, new_dir: &Path) {
-    for m in &mut job.models {
-        if Path::new(&m.path).is_absolute() {
-            continue;
-        }
-        m.path = relative_path(new_dir, &old_dir.join(&m.path));
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use camcraft_core::job::ModelDef;
 
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("camcraft-fs-{}-{name}", std::process::id()));
@@ -146,27 +132,5 @@ mod tests {
             with_job_extension(Path::new("part.CAMCRAFT")),
             Path::new("part.CAMCRAFT")
         );
-    }
-
-    /// Saved into another folder, a job still finds its models.
-    #[test]
-    fn save_as_keeps_models_found() {
-        let root = temp("rebase");
-        let mut job = Job::default();
-        job.models.push(ModelDef {
-            name: "m".into(),
-            path: "../models/m.step".into(),
-            units: None,
-        });
-        let abs = root.join("models/m.step").display().to_string();
-        job.models.push(ModelDef {
-            name: "abs".into(),
-            path: abs.clone(),
-            units: None,
-        });
-        rebase_models(&mut job, &root.join("a"), &root.join("a/b"));
-        assert_eq!(job.models[0].path, "../../models/m.step");
-        assert_eq!(job.models[1].path, abs);
-        assert!(resolve(&root.join("a/b"), &job.models[0].path).exists());
     }
 }

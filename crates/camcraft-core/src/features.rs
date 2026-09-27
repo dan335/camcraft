@@ -36,7 +36,10 @@ use camcraft_geom::shadow::shadow_above;
 use camcraft_geom::topology::{Body, EdgeKind, FaceSource};
 use glam::{DVec2, DVec3};
 
-use crate::job::{Boundary, Containment, FeatureRef, Geometry, PointRef, Snap};
+use crate::job::{
+    Boundary, Containment, FeatureRef, MachiningBoundary, Operation, Outline, PointRef, Selection,
+    Snap,
+};
 use crate::setup::{Bodies, Prepared};
 
 /// How a pick was found.
@@ -334,13 +337,13 @@ fn body<'a>(bodies: &Bodies<'a>, model: &str) -> Result<&'a Body, FeatureError> 
 
 /// The picked faces, found, each once.
 pub fn picked_faces(
-    g: &Geometry,
+    selection: &Selection,
     prepared: &Prepared,
     bodies: &Bodies<'_>,
     job_tolerance: f64,
 ) -> Result<Vec<PickedFace>, FeatureError> {
     let mut out: Vec<PickedFace> = Vec::new();
-    for pick in &g.faces {
+    for pick in &selection.faces {
         let body = body(bodies, &pick.model)?;
         let found = find_face(body, pick, tolerance(job_tolerance, body))?;
         if out
@@ -371,13 +374,13 @@ pub fn picked_faces(
 
 /// The picked edges, found, each once, in the setup's frame.
 pub fn picked_chains(
-    g: &Geometry,
+    selection: &Selection,
     prepared: &Prepared,
     bodies: &Bodies<'_>,
     job_tolerance: f64,
 ) -> Result<Vec<Chain>, FeatureError> {
     let mut out: Vec<Chain> = Vec::new();
-    for pick in &g.edges {
+    for pick in &selection.edges {
         let body = body(bodies, &pick.model)?;
         let found = find_edge(body, pick, tolerance(job_tolerance, body))?;
         if out
@@ -460,22 +463,23 @@ pub fn loops(chains: &[Chain]) -> Result<Vec<Vec<DVec3>>, FeatureError> {
     Ok(out)
 }
 
-/// An operation's machining boundary as chosen, before the tool is kept to it, in
-/// the setup's frame; `None` for the stock's footprint, which the strategies keep
-/// to themselves.
+/// A boundary of `kind` as chosen, before the tool is kept to it, in the setup's
+/// frame; `None` for the stock's footprint, which the strategies keep to
+/// themselves.
 ///
 /// The bounding box and silhouette are the setup's models' seen from straight
 /// above. A selection is the picked faces' triangles projected straight down and
 /// joined, dropping any seen edge-on, with the loops the picked edges close read
 /// even-odd, so a loop inside another is a hole.
 pub fn boundary_shape(
-    g: &Geometry,
+    kind: Boundary,
+    selection: &Selection,
     prepared: &Prepared,
     bodies: &Bodies<'_>,
     job_tolerance: f64,
 ) -> Result<Option<Region>, FeatureError> {
     let region_err = |e: RegionError| FeatureError::Region(e.to_string());
-    let area = match g.boundary() {
+    let area = match kind {
         Boundary::Stock => return Ok(None),
         Boundary::BoundingBox => {
             let b = prepared.model_bounds;
@@ -483,10 +487,10 @@ pub fn boundary_shape(
         }
         Boundary::Silhouette => silhouette(&prepared.part).map_err(region_err)?,
         Boundary::Selection => {
-            if !g.picked() {
+            if selection.is_empty() {
                 return Err(FeatureError::NothingPicked);
             }
-            selection(g, prepared, bodies, job_tolerance)?
+            selected_area(selection, prepared, bodies, job_tolerance)?
         }
     };
     if area.area() <= 1e-6 {
@@ -504,8 +508,8 @@ pub fn silhouette(mesh: &TriMesh) -> Result<Region, RegionError> {
 }
 
 /// The area picked faces and edges enclose, seen from above.
-fn selection(
-    g: &Geometry,
+fn selected_area(
+    selection: &Selection,
     prepared: &Prepared,
     bodies: &Bodies<'_>,
     job_tolerance: f64,
@@ -513,7 +517,7 @@ fn selection(
     let region_err = |e: RegionError| FeatureError::Region(e.to_string());
     let flat = |p: &DVec3| DVec2::new(p.x, p.y);
 
-    let faces = picked_faces(g, prepared, bodies, job_tolerance)?;
+    let faces = picked_faces(selection, prepared, bodies, job_tolerance)?;
     // A triangle seen edge-on has no area from above, and a sliver of one only
     // adds points: anything narrower than a micron across is dropped.
     let polygons: Vec<Contour> = faces
@@ -528,7 +532,7 @@ fn selection(
         .collect();
     let from_faces = Region::union_of(&polygons).map_err(region_err)?;
 
-    let chains = picked_chains(g, prepared, bodies, job_tolerance)?;
+    let chains = picked_chains(selection, prepared, bodies, job_tolerance)?;
     let rings: Vec<Contour> = loops(&chains)?
         .into_iter()
         .filter_map(|l| Contour::new(l.iter().map(flat).collect()))
@@ -538,58 +542,69 @@ fn selection(
     from_faces.union(&from_edges).map_err(region_err)
 }
 
-/// A 2D operation's boundary, in the setup's frame, and the picked points its
-/// floors are found among. `None` for the stock's footprint.
+/// A 2D operation's outline, in the setup's frame, and the picked points its
+/// heights are measured from.
 ///
-/// The boundary is [`Geometry::boundary_2d`]. Only picks have floors: every point
-/// of the picked faces and edges.
+/// The points are every point of the picked faces and edges, when they are the
+/// outline or a height is measured from them ([`Operation::levels_2d`]); none
+/// otherwise.
 pub fn outline(
-    g: &Geometry,
+    op: &Operation,
     prepared: &Prepared,
     bodies: &Bodies<'_>,
     job_tolerance: f64,
 ) -> Result<(Option<Region>, Vec<DVec3>), FeatureError> {
-    let mut g = g.clone();
-    g.boundary_kind = Some(g.boundary_2d());
-    let shape = boundary_shape(&g, prepared, bodies, job_tolerance)?;
-    if g.boundary() != Boundary::Selection {
+    let sel = &op.selection;
+    let shape = boundary_shape(op.outline.into(), sel, prepared, bodies, job_tolerance)?;
+    if op.outline != Outline::Selection && !op.heights.measured_from_selection() {
         return Ok((shape, Vec::new()));
     }
-    let faces = picked_faces(&g, prepared, bodies, job_tolerance)?;
-    let chains = picked_chains(&g, prepared, bodies, job_tolerance)?;
-    let floors = faces
+    Ok((shape, picked_points(sel, prepared, bodies, job_tolerance)?))
+}
+
+/// Every point of the picked faces and edges, in the setup's frame.
+pub fn picked_points(
+    selection: &Selection,
+    prepared: &Prepared,
+    bodies: &Bodies<'_>,
+    job_tolerance: f64,
+) -> Result<Vec<DVec3>, FeatureError> {
+    let faces = picked_faces(selection, prepared, bodies, job_tolerance)?;
+    let chains = picked_chains(selection, prepared, bodies, job_tolerance)?;
+    Ok(faces
         .iter()
         .flat_map(|f| f.triangles.iter().flatten().copied())
         .chain(chains.iter().flat_map(|c| c.points.iter().copied()))
-        .collect();
-    Ok((shape, floors))
+        .collect())
 }
 
 /// How far the tool's centre may go past a boundary: Fusion's containment and
 /// additional offset. The offset moves the boundary out, or in when the whole tool
 /// is kept inside it.
-pub fn containment_offset(g: &Geometry, tool_radius: f64) -> f64 {
-    match g.containment {
-        Containment::Center => g.margin,
-        Containment::Inside => -tool_radius - g.margin,
-        Containment::Outside => tool_radius + g.margin,
+pub fn containment_offset(b: &MachiningBoundary, tool_radius: f64) -> f64 {
+    match b.containment {
+        Containment::Center => b.margin,
+        Containment::Inside => -tool_radius - b.margin,
+        Containment::Outside => tool_radius + b.margin,
     }
 }
 
-/// Where the tool's centre may go for an operation, in the setup's frame: its
-/// [`boundary_shape`], offset by [`containment_offset`]. `None` for the stock's
-/// footprint. The arcs err by at most half the tolerance, inward when shrinking.
+/// Where the tool's centre may go for a 3D operation, in the setup's frame: its
+/// boundary's [`boundary_shape`], offset by [`containment_offset`]. `None` for
+/// the stock's footprint. The arcs err by at most half the tolerance, inward when
+/// shrinking.
 pub fn machining_boundary(
-    g: &Geometry,
+    b: &MachiningBoundary,
+    selection: &Selection,
     prepared: &Prepared,
     bodies: &Bodies<'_>,
     tool_radius: f64,
     job_tolerance: f64,
 ) -> Result<Option<Region>, FeatureError> {
-    let Some(area) = boundary_shape(g, prepared, bodies, job_tolerance)? else {
+    let Some(area) = boundary_shape(b.kind, selection, prepared, bodies, job_tolerance)? else {
         return Ok(None);
     };
-    let region = area.offset(containment_offset(g, tool_radius), job_tolerance / 2.0);
+    let region = area.offset(containment_offset(b, tool_radius), job_tolerance / 2.0);
     if region.area() <= 1e-9 {
         return Err(FeatureError::NoRoom {
             diameter: tool_radius * 2.0,
@@ -802,10 +817,24 @@ mod tests {
         crate::setup::prepare(&j, 0, &bodies).unwrap()
     }
 
-    fn boundary(body: &Body, g: &Geometry, radius: f64) -> Result<Option<Region>, FeatureError> {
+    fn boundary(
+        body: &Body,
+        b: &MachiningBoundary,
+        s: &Selection,
+        radius: f64,
+    ) -> Result<Option<Region>, FeatureError> {
         let prepared = laid_out(body);
         let bodies: Bodies<'_> = [("p", body)].into_iter().collect();
-        machining_boundary(g, &prepared, &bodies, radius, 0.01)
+        machining_boundary(b, s, &prepared, &bodies, radius, 0.01)
+    }
+
+    /// A boundary kept to what is picked, and nothing picked yet.
+    fn selection() -> (MachiningBoundary, Selection) {
+        let b = MachiningBoundary {
+            kind: Boundary::Selection,
+            ..MachiningBoundary::default()
+        };
+        (b, Selection::default())
     }
 
     fn face_at(body: &Body, at: [f64; 3]) -> FeatureRef {
@@ -837,7 +866,15 @@ mod tests {
     #[test]
     fn nothing_picked_is_no_boundary() {
         let body = plate();
-        assert_eq!(boundary(&body, &Geometry::default(), 1.0), Ok(None));
+        assert_eq!(
+            boundary(
+                &body,
+                &MachiningBoundary::default(),
+                &Selection::default(),
+                1.0
+            ),
+            Ok(None)
+        );
     }
 
     /// The models' box and outline from above: the plate is 40 square with a
@@ -845,30 +882,35 @@ mod tests {
     #[test]
     fn the_bounding_box_and_silhouette_are_the_part_from_above() {
         let body = plate();
-        let mut g = Geometry {
-            boundary_kind: Some(Boundary::BoundingBox),
-            ..Geometry::default()
+        let mut b = MachiningBoundary {
+            kind: Boundary::BoundingBox,
+            ..MachiningBoundary::default()
         };
-        let b = boundary(&body, &g, 1.0).unwrap().unwrap();
-        assert!((b.area() - 1600.0).abs() < 1e-6, "{}", b.area());
-        assert!(b.contains(dvec2(0.0, 0.0)));
+        let s = Selection::default();
+        let rect = boundary(&body, &b, &s, 1.0).unwrap().unwrap();
+        assert!((rect.area() - 1600.0).abs() < 1e-6, "{}", rect.area());
+        assert!(rect.contains(dvec2(0.0, 0.0)));
 
-        g.boundary_kind = Some(Boundary::Silhouette);
-        let s = boundary(&body, &g, 1.0).unwrap().unwrap();
+        b.kind = Boundary::Silhouette;
+        let shadow = boundary(&body, &b, &s, 1.0).unwrap().unwrap();
         let hole = 0.5 * 32.0 * 16.0 * (std::f64::consts::TAU / 32.0).sin();
-        assert!((s.area() - (1600.0 - hole)).abs() < 1e-3, "{}", s.area());
-        assert!(!s.contains(dvec2(0.0, 0.0)));
-        assert!(s.contains(dvec2(10.0, 10.0)));
+        assert!(
+            (shadow.area() - (1600.0 - hole)).abs() < 1e-3,
+            "{}",
+            shadow.area()
+        );
+        assert!(!shadow.contains(dvec2(0.0, 0.0)));
+        assert!(shadow.contains(dvec2(10.0, 10.0)));
 
         // Kept wholly inside, a positive offset moves it in, as Fusion's does.
-        g.containment = Containment::Inside;
-        g.margin = 1.0;
-        let inside = boundary(&body, &g, 1.0).unwrap().unwrap();
+        b.containment = Containment::Inside;
+        b.margin = 1.0;
+        let inside = boundary(&body, &b, &s, 1.0).unwrap().unwrap();
         assert!(!inside.contains(dvec2(18.5, 0.0)));
         assert!(inside.contains(dvec2(17.5, 0.0)));
         // Reaching in from outside, it moves out.
-        g.containment = Containment::Outside;
-        let outside = boundary(&body, &g, 1.0).unwrap().unwrap();
+        b.containment = Containment::Outside;
+        let outside = boundary(&body, &b, &s, 1.0).unwrap().unwrap();
         assert!(outside.contains(dvec2(21.9, 0.0)));
         assert!(!outside.contains(dvec2(22.1, 0.0)));
     }
@@ -878,17 +920,18 @@ mod tests {
     #[test]
     fn a_selection_needs_picks() {
         let body = plate();
-        let mut g = Geometry {
-            boundary_kind: Some(Boundary::Stock),
-            ..Geometry::default()
-        };
-        assert_eq!(boundary(&body, &g, 1.0), Ok(None));
-        g.boundary_kind = Some(Boundary::Selection);
-        assert_eq!(boundary(&body, &g, 1.0), Err(FeatureError::NothingPicked));
+        let mut b = MachiningBoundary::default();
+        let mut s = Selection::default();
+        assert_eq!(boundary(&body, &b, &s, 1.0), Ok(None));
+        b.kind = Boundary::Selection;
+        assert_eq!(
+            boundary(&body, &b, &s, 1.0),
+            Err(FeatureError::NothingPicked)
+        );
         // Picks with the stock's boundary chosen are kept, and not used.
-        g.faces.push(face_at(&body, [15.0, 15.0, 5.0]));
-        g.boundary_kind = Some(Boundary::Stock);
-        assert_eq!(boundary(&body, &g, 1.0), Ok(None));
+        s.faces.push(face_at(&body, [15.0, 15.0, 5.0]));
+        b.kind = Boundary::Stock;
+        assert_eq!(boundary(&body, &b, &s, 1.0), Ok(None));
     }
 
     /// The step's plateau, seen from above, is a 10 by 20 rectangle; the tool's
@@ -896,15 +939,15 @@ mod tests {
     #[test]
     fn a_picked_face_bounds_by_its_outline_and_the_containment() {
         let body = Body::derived(synthetic::step(5.0, 10.0));
-        let mut g = Geometry::default();
-        g.faces.push(face_at(&body, [-5.0, 0.0, 5.0]));
-        let centre = boundary(&body, &g, 1.0).unwrap().unwrap();
+        let (mut b, mut s) = selection();
+        s.faces.push(face_at(&body, [-5.0, 0.0, 5.0]));
+        let centre = boundary(&body, &b, &s, 1.0).unwrap().unwrap();
         assert!((centre.area() - 200.0).abs() < 0.01, "{}", centre.area());
         assert!(centre.contains(dvec2(-0.1, 9.9)));
         assert!(!centre.contains(dvec2(0.1, 0.0)));
 
-        g.containment = Containment::Inside;
-        let inside = boundary(&body, &g, 1.0).unwrap().unwrap();
+        b.containment = Containment::Inside;
+        let inside = boundary(&body, &b, &s, 1.0).unwrap().unwrap();
         // Shrinking errs inward by the arc tolerance, half the job's 0.01, a side.
         let err = 0.005 * 2.0 * (8.0 + 18.0) * 2.0;
         assert!(
@@ -914,8 +957,8 @@ mod tests {
         );
         assert!(!inside.contains(dvec2(-0.5, 0.0)));
 
-        g.containment = Containment::Outside;
-        let outside = boundary(&body, &g, 1.0).unwrap().unwrap();
+        b.containment = Containment::Outside;
+        let outside = boundary(&body, &b, &s, 1.0).unwrap().unwrap();
         // Growing errs outward by the arc tolerance, so the radius is 1.005.
         let r: f64 = 1.005;
         let rounded = (10.0 + 2.0 * r) * (20.0 + 2.0 * r) - (4.0 - std::f64::consts::PI) * r * r;
@@ -927,16 +970,16 @@ mod tests {
         assert!(outside.contains(dvec2(0.9, 0.0)));
 
         // The margin moves the boundary out on top of the containment.
-        g.containment = Containment::Center;
-        g.margin = 1.0;
-        let margin = boundary(&body, &g, 1.0).unwrap().unwrap();
+        b.containment = Containment::Center;
+        b.margin = 1.0;
+        let margin = boundary(&body, &b, &s, 1.0).unwrap().unwrap();
         assert!((margin.area() - outside.area()).abs() < 0.1);
 
         // A tool too big to fit inside.
-        g.margin = 0.0;
-        g.containment = Containment::Inside;
+        b.margin = 0.0;
+        b.containment = Containment::Inside;
         assert_eq!(
-            boundary(&body, &g, 6.0),
+            boundary(&body, &b, &s, 6.0),
             Err(FeatureError::NoRoom { diameter: 12.0 })
         );
     }
@@ -945,9 +988,9 @@ mod tests {
     #[test]
     fn a_wall_alone_has_no_area() {
         let body = Body::derived(synthetic::step(5.0, 10.0));
-        let mut g = Geometry::default();
-        g.faces.push(face_at(&body, [0.0, 0.0, 2.5]));
-        assert_eq!(boundary(&body, &g, 1.0), Err(FeatureError::NoArea));
+        let (b, mut s) = selection();
+        s.faces.push(face_at(&body, [0.0, 0.0, 2.5]));
+        assert_eq!(boundary(&body, &b, &s, 1.0), Err(FeatureError::NoArea));
     }
 
     /// The four edges round the plate's top and the rim of its hole: a square with
@@ -955,7 +998,7 @@ mod tests {
     #[test]
     fn picked_edges_close_into_loops_with_holes() {
         let body = plate();
-        let mut g = Geometry::default();
+        let (b, mut s) = selection();
         for at in [
             [0.0, -20.0, 5.0],
             [20.0, 0.0, 5.0],
@@ -963,9 +1006,9 @@ mod tests {
             [-20.0, 0.0, 5.0],
             [4.0, 0.0, 5.0],
         ] {
-            g.edges.push(edge_at(&body, at));
+            s.edges.push(edge_at(&body, at));
         }
-        let region = boundary(&body, &g, 1.0).unwrap().unwrap();
+        let region = boundary(&body, &b, &s, 1.0).unwrap().unwrap();
         let hole = 32.0 / 2.0 * 16.0 * (std::f64::consts::TAU / 32.0).sin();
         assert!(
             (region.area() - (1600.0 - hole)).abs() < 0.01,
@@ -975,8 +1018,8 @@ mod tests {
         assert!(!region.contains(dvec2(0.0, 0.0)));
         assert!(region.contains(dvec2(10.0, 10.0)));
 
-        g.edges.remove(3);
-        let err = boundary(&body, &g, 1.0).unwrap_err();
+        s.edges.remove(3);
+        let err = boundary(&body, &b, &s, 1.0).unwrap_err();
         assert!(matches!(err, FeatureError::OpenLoop { .. }), "{err:?}");
         assert!(err.to_string().contains("do not close"), "{err}");
     }
@@ -985,20 +1028,20 @@ mod tests {
     #[test]
     fn a_gone_pick_is_an_error_not_a_smaller_boundary() {
         let body = plate();
-        let mut g = Geometry::default();
-        g.faces.push(face_at(&body, [10.0, 10.0, 5.0]));
-        g.faces.push(FeatureRef {
+        let (b, mut s) = selection();
+        s.faces.push(face_at(&body, [10.0, 10.0, 5.0]));
+        s.faces.push(FeatureRef {
             model: "p".into(),
             index: 0,
             at: [50.0, 50.0, 50.0],
         });
         assert!(matches!(
-            boundary(&body, &g, 1.0),
+            boundary(&body, &b, &s, 1.0),
             Err(FeatureError::Gone { .. })
         ));
-        g.faces[1].model = "elsewhere".into();
+        s.faces[1].model = "elsewhere".into();
         assert!(matches!(
-            boundary(&body, &g, 1.0),
+            boundary(&body, &b, &s, 1.0),
             Err(FeatureError::NotLoaded(_))
         ));
     }

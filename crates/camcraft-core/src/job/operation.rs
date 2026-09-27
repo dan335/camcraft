@@ -1,4 +1,5 @@
-//! An operation, shaped the way Fusion shapes one: its strategy, then Geometry,
+//! An operation, shaped the way Fusion shapes one: its strategy, then what it
+//! machines (Fusion's Geometry tab: a selection, a 3D boundary or a 2D outline),
 //! Heights, Passes and Linking.
 
 use std::collections::BTreeMap;
@@ -8,11 +9,12 @@ use serde::{Deserialize, Serialize};
 use super::validate::positive;
 use super::{FeatureRef, JobError, Preset, ToolKind, ToolSpec, is_default};
 
-/// What an operation is kept to, seen from above: Fusion's machining boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+/// What a 3D operation is kept to, seen from above: Fusion's boundary mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Boundary {
     /// The stock's footprint: the whole part, and everything around it.
+    #[default]
     Stock,
     /// The rectangle around the setup's models.
     BoundingBox,
@@ -20,6 +22,28 @@ pub enum Boundary {
     Silhouette,
     /// The picked faces seen from above, and the loops the picked edges close.
     Selection,
+}
+
+/// What a 2D operation cuts round or clears, seen from above: Fusion's contour
+/// or pocket selection. Unlike a [`MachiningBoundary`] it does not fence the tool
+/// in; the tool runs beside it, on the side the strategy says.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Outline {
+    /// The setup's models' outline: their shadow from straight above.
+    #[default]
+    Silhouette,
+    /// The picked faces seen from above, and the loops the picked edges close.
+    Selection,
+}
+
+impl From<Outline> for Boundary {
+    fn from(o: Outline) -> Self {
+        match o {
+            Outline::Silhouette => Boundary::Silhouette,
+            Outline::Selection => Boundary::Selection,
+        }
+    }
 }
 
 /// Where the tool may go, against the machining boundary.
@@ -53,10 +77,18 @@ pub struct Operation {
     /// operation cuts with its own values, whatever the preset now says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
-    /// What to machine.
+    /// Faces and edges picked on the models, for whatever of it reads them: a
+    /// boundary or outline of the selection, a height measured from it, the holes
+    /// a drill drills.
     #[serde(default, skip_serializing_if = "is_default")]
-    pub geometry: Geometry,
-    /// Where the tool travels.
+    pub selection: Selection,
+    /// Where a 3D operation's tool may go ([`Uses::boundary`]).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub boundary: MachiningBoundary,
+    /// What a 2D operation cuts round or clears ([`Uses::outline`]).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub outline: Outline,
+    /// Where the tool travels, and the levels it cuts between.
     #[serde(default, skip_serializing_if = "is_default")]
     pub heights: Heights,
     /// How the passes are laid out.
@@ -81,10 +113,8 @@ pub enum StrategySpec {
         #[serde(default)]
         angle: f64,
     },
-    /// Z-level clearing.
+    /// Z-level clearing, a slice each stepdown ([`Depths::Required`]).
     ZlevelRough {
-        /// Depth of each slice, in millimetres.
-        stepdown: f64,
         /// Rings shorter than this are not worth the entry.
         #[serde(default = "default_min_ring")]
         min_ring_length: f64,
@@ -95,8 +125,6 @@ pub enum StrategySpec {
         /// Which side of the boundary the tool cuts on.
         #[serde(default, skip_serializing_if = "is_default")]
         side: ProfileSide,
-        /// Depth of each level, in millimetres.
-        stepdown: f64,
         /// Cut conventional rather than climb.
         #[serde(default, skip_serializing_if = "is_default")]
         conventional: bool,
@@ -104,11 +132,28 @@ pub enum StrategySpec {
     /// A 2D pocket: the boundary cleared, from its middle out to its walls, level
     /// by level down to its floor. Fusion's 2D Pocket.
     Pocket {
-        /// Depth of each level, in millimetres.
-        stepdown: f64,
         /// Cut conventional rather than climb.
         #[serde(default, skip_serializing_if = "is_default")]
         conventional: bool,
+    },
+    /// The stock's top cut flat, straight passes side by side across its
+    /// footprint, down to the bottom: the model's top unless another is asked
+    /// for. Fusion's Face.
+    Face {
+        /// Pass direction in degrees; zero runs along +X.
+        #[serde(default, skip_serializing_if = "is_default")]
+        angle: f64,
+        /// Which way the passes cut.
+        #[serde(default, skip_serializing_if = "is_default")]
+        direction: FaceDirection,
+        /// How far each pass runs on once the tool is clear of the stock, in
+        /// millimetres.
+        #[serde(default, skip_serializing_if = "is_default")]
+        pass_extension: f64,
+        /// How far past the stock's footprint is faced, in millimetres: Fusion's
+        /// stock offset.
+        #[serde(default, skip_serializing_if = "is_default")]
+        stock_offset: f64,
     },
     /// Holes, picked by their rims, each drilled straight down.
     Drill {
@@ -130,17 +175,8 @@ impl StrategySpec {
             StrategySpec::ZlevelRough { .. } => "zlevel-rough",
             StrategySpec::Profile { .. } => "profile",
             StrategySpec::Pocket { .. } => "pocket",
+            StrategySpec::Face { .. } => "face",
             StrategySpec::Drill { .. } => "drill",
-        }
-    }
-
-    /// Its depth of each level, for a strategy that cuts in levels.
-    pub fn stepdown(&self) -> Option<f64> {
-        match *self {
-            StrategySpec::ZlevelRough { stepdown, .. }
-            | StrategySpec::Profile { stepdown, .. }
-            | StrategySpec::Pocket { stepdown, .. } => Some(stepdown),
-            StrategySpec::Parallel { .. } | StrategySpec::Drill { .. } => None,
         }
     }
 
@@ -159,8 +195,11 @@ impl StrategySpec {
         // level's clearing rings, they would leave pillars standing in the
         // waste.
         let cuts_loops = Uses {
+            boundary: true,
+            outline: false,
             stepover: true,
             stock_to_leave: Leave::Both,
+            depths: Depths::Optional,
             tabs: false,
             stay_down: true,
             lead_radius: false,
@@ -169,19 +208,29 @@ impl StrategySpec {
             reorder: true,
         };
         match *self {
+            // Down the surface in one pass, as Fusion's 3D finishing.
             StrategySpec::Parallel { .. } => Uses {
+                depths: Depths::None,
                 lead_radius: true,
                 ramp: false,
                 ..cuts_loops
             },
-            StrategySpec::ZlevelRough { .. } => cuts_loops,
+            // Slice by slice is what it is.
+            StrategySpec::ZlevelRough { .. } => Uses {
+                depths: Depths::Required,
+                ..cuts_loops
+            },
             // A 2D operation's order is its own: what is inside before what frees
             // it, a pocket's middle before its walls.
             StrategySpec::Pocket { .. } => Uses {
+                boundary: false,
+                outline: true,
                 reorder: false,
                 ..cuts_loops
             },
             StrategySpec::Profile { side, .. } => Uses {
+                boundary: false,
+                outline: true,
                 stepover: false,
                 // On the line, it has no side to leave anything beside.
                 stock_to_leave: if side == ProfileSide::On {
@@ -194,9 +243,22 @@ impl StrategySpec {
                 reorder: false,
                 ..cuts_loops
             },
+            // Straight passes across the stock, in its own order, with only the
+            // floor to leave anything on.
+            StrategySpec::Face { .. } => Uses {
+                boundary: false,
+                stock_to_leave: Leave::Axial,
+                reorder: false,
+                ..cuts_loops
+            },
+            // Its picks are the holes: no area to keep to or cut round.
             StrategySpec::Drill { .. } => Uses {
+                boundary: false,
+                outline: false,
                 stepover: false,
                 stock_to_leave: Leave::None,
+                // Its pecks are its own.
+                depths: Depths::None,
                 tabs: false,
                 stay_down: false,
                 lead_radius: false,
@@ -219,10 +281,20 @@ impl StrategySpec {
             _ => StockToLeave::default(),
         }
     }
+
+    /// The multiple depths this strategy starts with: roughing and 2D cutting
+    /// 2 mm a level, facing its bottom in one pass.
+    pub fn default_stepdown(&self) -> Option<f64> {
+        match self.uses().depths {
+            Depths::None => None,
+            _ if matches!(self, StrategySpec::Face { .. }) => None,
+            _ => Some(2.0),
+        }
+    }
 }
 
-/// Which of the settings every operation has ([`Passes`], [`Linking`]) its
-/// strategy uses, as [`StrategySpec::uses`] says.
+/// Which of the settings every operation has (its boundary or outline,
+/// [`Passes`], [`Linking`]) its strategy uses, as [`StrategySpec::uses`] says.
 ///
 /// Every operation has them all, so switching strategy keeps what was set; one
 /// its strategy does not use is not shown, not checked and not read. Anything
@@ -230,10 +302,16 @@ impl StrategySpec {
 /// checks and the run always agree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Uses {
+    /// A machining boundary that keeps the tool in: a 3D strategy's.
+    pub boundary: bool,
+    /// An outline it cuts round or clears: a 2D strategy's.
+    pub outline: bool,
     /// The distance between passes.
     pub stepover: bool,
     /// Which stock to leave it cuts with.
     pub stock_to_leave: Leave,
+    /// Whether it cuts in levels a stepdown apart.
+    pub depths: Depths,
     /// Tabs across the deepest cut of the loops it cuts.
     pub tabs: bool,
     /// Links made without lifting.
@@ -259,6 +337,30 @@ pub enum Leave {
     Both,
 }
 
+/// Whether a strategy cuts in levels a stepdown apart: Fusion's multiple depths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Depths {
+    /// Never: it has no levels, or its own way down.
+    None,
+    /// When asked: otherwise straight to the bottom in one.
+    Optional,
+    /// Always: it has no way down without.
+    Required,
+}
+
+/// Which way facing passes cut.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FaceDirection {
+    /// Back and forth, one pass each way. Fusion's default.
+    #[default]
+    BothWays,
+    /// Every pass climbing.
+    Climb,
+    /// Every pass conventional.
+    Conventional,
+}
+
 /// Which side of its boundary a profile cuts on.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -279,112 +381,96 @@ fn default_min_ring() -> f64 {
     3.0
 }
 
-/// What to machine.
+/// Faces and edges picked on the models.
 ///
-/// Fusion's Geometry tab: a machining boundary seen from above, where the tool
-/// may go against it, and how far past it. The stock's footprint, the default,
-/// machines the whole part and everything around it; the models' bounding box or
-/// silhouette keeps the tool near the part; picked faces and edges keep it to their
-/// outline. What else picks mean is the strategy's to say, which is why they live
-/// here and not with it: a pocket will clear a picked floor, a trace will follow
-/// picked edges.
-///
-/// A job from before boundaries had no `boundary`: picks made the boundary, and
-/// with none it was the stock's. [`Geometry::boundary`] reads it so.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-pub struct Geometry {
-    /// The boundary; `None` for what a job from before boundaries meant.
-    #[serde(default, rename = "boundary", skip_serializing_if = "Option::is_none")]
-    pub boundary_kind: Option<Boundary>,
-    /// Fusion's additional offset, in millimetres: how far the boundary moves
-    /// out, or in when the whole tool is kept inside it. Past the stock's
-    /// footprint, with no boundary. A 2D operation's cut moves out from its
-    /// boundary by it, or in when negative.
-    #[serde(default)]
-    pub margin: f64,
-    /// Highest level to cut at.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub top: Option<Height>,
-    /// Lowest level to cut at.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bottom: Option<Height>,
-    /// Faces picked on the models.
+/// What they mean is for the rest of the operation to say, which is why they live
+/// here and not with the strategy: a boundary or outline of the selection is
+/// their outline from above, a height can be measured from them, a drill's are
+/// the rims of its holes.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct Selection {
+    /// Faces picked.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub faces: Vec<FeatureRef>,
-    /// Edges picked on the models.
+    /// Edges picked.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edges: Vec<FeatureRef>,
-    /// Where the tool may go against the boundary.
+}
+
+impl Selection {
+    /// Whether nothing is picked.
+    pub fn is_empty(&self) -> bool {
+        self.faces.is_empty() && self.edges.is_empty()
+    }
+
+    /// Every pick, faces first.
+    pub fn iter(&self) -> impl Iterator<Item = &FeatureRef> {
+        self.faces.iter().chain(&self.edges)
+    }
+}
+
+/// Where a 3D operation's tool may go: Fusion's machining boundary, where the
+/// tool may go against it, and how far past it.
+///
+/// The stock's footprint, the default, machines the whole part and everything
+/// around it; the models' bounding box or silhouette keeps the tool near the
+/// part; the selection keeps it to the picks' outline.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+pub struct MachiningBoundary {
+    /// What the tool is kept to.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub kind: Boundary,
+    /// Where the tool may go against it.
     #[serde(default, skip_serializing_if = "is_default")]
     pub containment: Containment,
+    /// Fusion's additional offset, in millimetres: how far the boundary moves
+    /// out, or in when the whole tool is kept inside it. Past the stock's
+    /// footprint, with no boundary.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub margin: f64,
 }
 
-impl Default for Geometry {
+impl Default for MachiningBoundary {
     fn default() -> Self {
         Self {
-            boundary_kind: None,
-            margin: 0.0,
-            top: None,
-            bottom: None,
-            faces: Vec::new(),
-            edges: Vec::new(),
+            kind: Boundary::Stock,
             containment: Containment::Center,
+            margin: 0.0,
         }
     }
 }
 
-impl Geometry {
-    /// Whether any face or edge is picked.
-    pub fn picked(&self) -> bool {
-        !self.faces.is_empty() || !self.edges.is_empty()
-    }
-
-    /// The machining boundary. One never chosen is what it was before there was a
-    /// choice: the picks', when there are any, or the stock's.
-    pub fn boundary(&self) -> Boundary {
-        self.boundary_kind.unwrap_or(self.legacy_boundary())
-    }
-
-    /// A 2D operation's boundary: what it profiles round or pockets. One never
-    /// chosen is the picks', when there are any, or else the models' silhouette,
-    /// so a profile goes round the part.
-    pub fn boundary_2d(&self) -> Boundary {
-        self.boundary_kind.unwrap_or(if self.picked() {
-            Boundary::Selection
-        } else {
-            Boundary::Silhouette
-        })
-    }
-
-    /// Whether a build from before boundaries would keep the tool where this
-    /// does: the same boundary, and an offset that means the same.
-    pub fn reads_as_before(&self) -> bool {
-        self.boundary() == self.legacy_boundary()
-            && (self.containment != Containment::Inside || self.margin == 0.0)
-    }
-
-    fn legacy_boundary(&self) -> Boundary {
-        if self.picked() {
-            Boundary::Selection
-        } else {
-            Boundary::Stock
-        }
-    }
-}
-
-/// Where the tool travels.
+/// Where the tool travels, and the levels it cuts between: Fusion's Heights tab.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Heights {
     /// Traverse height.
     #[serde(default = "default_clearance")]
     pub clearance: Height,
+    /// Highest level to cut at; the stock's top when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<Height>,
+    /// Lowest level to cut at; the strategy's own when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bottom: Option<Height>,
 }
 
 impl Default for Heights {
     fn default() -> Self {
         Self {
             clearance: default_clearance(),
+            top: None,
+            bottom: None,
         }
+    }
+}
+
+impl Heights {
+    /// Whether its top or bottom is measured from the selection.
+    pub fn measured_from_selection(&self) -> bool {
+        [self.top, self.bottom]
+            .iter()
+            .flatten()
+            .any(Height::from_selection)
     }
 }
 
@@ -424,6 +510,11 @@ pub enum HeightRef {
     ModelBottom,
     /// The offset is the height, in setup coordinates.
     Absolute,
+    /// The operation's picked faces and edges: their highest point for a top,
+    /// their lowest for a bottom. A 2D operation measures each of its areas from
+    /// the picks in it, as Fusion's "selected contours". Only a top or a bottom
+    /// can be, and only with something picked.
+    Selection,
 }
 
 /// What a height resolves against.
@@ -437,23 +528,116 @@ pub struct HeightContext {
     pub model_top: f64,
     /// Lowest point of the model.
     pub model_bottom: f64,
+    /// How high the operation's picks go, when it has any and a height is
+    /// measured from them.
+    pub picked: Option<Picks>,
+}
+
+/// The lowest and highest of some picked points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Picks {
+    /// The lowest.
+    pub lowest: f64,
+    /// The highest.
+    pub highest: f64,
+}
+
+impl Picks {
+    /// How high `zs` go; `None` for none.
+    pub fn of(zs: impl IntoIterator<Item = f64>) -> Option<Picks> {
+        zs.into_iter().fold(None, |p, z| {
+            Some(p.map_or(
+                Picks {
+                    lowest: z,
+                    highest: z,
+                },
+                |p: Picks| Picks {
+                    lowest: p.lowest.min(z),
+                    highest: p.highest.max(z),
+                },
+            ))
+        })
+    }
 }
 
 impl Height {
-    /// Resolve to a height in setup coordinates.
+    /// Resolve to a height in setup coordinates, as a clearance. A clearance is
+    /// never measured from the picks ([`Operation::check`] turns that away); one
+    /// that was would read them as a top.
     pub fn resolve(&self, ctx: &HeightContext) -> f64 {
+        self.resolve_top(ctx)
+    }
+
+    /// Resolve as a top: the picks read by their highest point, or the model's
+    /// top with none.
+    pub fn resolve_top(&self, ctx: &HeightContext) -> f64 {
+        self.measured_from(ctx, ctx.picked.map_or(ctx.model_top, |p| p.highest))
+    }
+
+    /// Resolve as a bottom: the picks read by their lowest point, or the model's
+    /// bottom with none.
+    pub fn resolve_bottom(&self, ctx: &HeightContext) -> f64 {
+        self.measured_from(ctx, ctx.picked.map_or(ctx.model_bottom, |p| p.lowest))
+    }
+
+    fn measured_from(&self, ctx: &HeightContext, picked: f64) -> f64 {
         let base = match self.reference {
             HeightRef::StockTop => ctx.stock_top,
             HeightRef::StockBottom => ctx.stock_bottom,
             HeightRef::ModelTop => ctx.model_top,
             HeightRef::ModelBottom => ctx.model_bottom,
             HeightRef::Absolute => 0.0,
+            HeightRef::Selection => picked,
         };
         base + self.offset
+    }
+
+    /// Whether it is measured from the picks.
+    pub fn from_selection(&self) -> bool {
+        self.reference == HeightRef::Selection
     }
 }
 
 impl Operation {
+    /// Whether what it cuts is its selection: a 2D outline or a 3D boundary of
+    /// it, or a drill's holes.
+    pub fn cuts_selection(&self) -> bool {
+        let uses = self.strategy.uses();
+        matches!(self.strategy, StrategySpec::Drill { .. })
+            || (uses.outline && self.outline == Outline::Selection)
+            || (uses.boundary && self.boundary.kind == Boundary::Selection)
+    }
+
+    /// A 2D operation's top and bottom over one piece of its outline with
+    /// `picks` in it, if any. A height measured from the selection reads the
+    /// piece's picks, or all of them, `ctx.picked`, where it has none. Without a
+    /// top, the stock's; without a bottom, the piece's lowest pick when the picks
+    /// are the outline, or else the models' bottom.
+    pub fn levels_2d(&self, ctx: &HeightContext, picks: Option<Picks>) -> (f64, f64) {
+        let own = HeightContext {
+            picked: picks.or(ctx.picked),
+            ..*ctx
+        };
+        let h = &self.heights;
+        let top = h.top.map_or(ctx.stock_top, |h| h.resolve_top(&own));
+        let bottom = match h.bottom {
+            Some(h) => h.resolve_bottom(&own),
+            None if self.outline == Outline::Selection => {
+                picks.map_or(ctx.model_bottom, |p| p.lowest)
+            }
+            None => ctx.model_bottom,
+        };
+        (top, bottom)
+    }
+
+    /// The deepest each of its levels may be, when it cuts in levels: its own,
+    /// unless its strategy has none. `None` is straight to the bottom in one.
+    pub fn stepdown(&self) -> Option<f64> {
+        self.passes
+            .stepdown
+            .filter(|_| self.strategy.uses().depths != Depths::None)
+    }
+
     /// The stock to leave it cuts with: its own, less what its strategy does not
     /// use. A drill cuts to size; a profile on the line leaves only its floor.
     pub fn stock_to_leave(&self) -> StockToLeave {
@@ -502,6 +686,9 @@ impl Operation {
         if drilling && !matches!(tool.kind, ToolKind::Drill | ToolKind::Flat) {
             return Some("drill holes with a drill, or a flat end mill that plunges");
         }
+        if matches!(self.strategy, StrategySpec::Face { .. }) && tool.kind == ToolKind::Ball {
+            return Some("a ball end mill cannot face flat; use a flat or bull-nose end mill");
+        }
         if self.strategy.uses().stepover && self.passes.stepover > tool.diameter {
             return Some(
                 "the stepover is wider than the tool: it would leave ridges between passes",
@@ -530,6 +717,9 @@ impl Operation {
             StrategySpec::Pocket { .. } => {
                 return Some("a V-bit or chamfer mill cannot clear a pocket's floor flat");
             }
+            StrategySpec::Face { .. } => {
+                return Some("a V-bit or chamfer mill cannot face flat");
+            }
             StrategySpec::Profile { side, .. } if side != ProfileSide::On => {
                 return Some(
                     "a V-bit or chamfer mill profiles only on the line: its width changes \
@@ -544,6 +734,28 @@ impl Operation {
         None
     }
 
+    /// Why a height of this operation cannot be measured from its picks, if one
+    /// is and cannot: a clearance never is, a drill's holes each go to their own
+    /// bottom, and with nothing picked there is nothing to measure from.
+    pub fn cannot_measure_from_picks(&self) -> Option<&'static str> {
+        if self.heights.clearance.from_selection() {
+            return Some("the clearance cannot be measured from the selection");
+        }
+        if !self.heights.measured_from_selection() {
+            return None;
+        }
+        if matches!(self.strategy, StrategySpec::Drill { .. }) {
+            return Some(
+                "a drill's bottom cannot be measured from the selection: each hole goes \
+                 to its own",
+            );
+        }
+        if self.selection.is_empty() {
+            return Some("a height is measured from the selection, but nothing is picked");
+        }
+        None
+    }
+
     /// Check this operation of setup `setup` can run with the job's `tools`: it
     /// names one the job has, the tool can do what it asks, and its values are
     /// usable. Its picks are checked with the setup's.
@@ -553,6 +765,9 @@ impl Operation {
         tools: &BTreeMap<String, ToolSpec>,
     ) -> Result<(), JobError> {
         let at = format!("{setup}/{}", self.name);
+        if let Some(why) = self.cannot_measure_from_picks() {
+            return Err(JobError::BadHeight { op: at, why });
+        }
         let Some(tool) = &self.tool else {
             return Err(JobError::NoTool { op: at });
         };
@@ -615,8 +830,30 @@ impl Operation {
             positive(&format!("{at}.passes.tabs.height"), t.height)?;
             positive(&format!("{at}.passes.tabs.spacing"), t.spacing)?;
         }
-        if let Some(stepdown) = self.strategy.stepdown() {
-            positive(&format!("{at}.stepdown"), stepdown)?;
+        if let Some(stepdown) = self.stepdown() {
+            positive(&format!("{at}.passes.stepdown"), stepdown)?;
+        } else if uses.depths == Depths::Required {
+            return Err(JobError::NoStepdown { op: at });
+        }
+        if let StrategySpec::Face {
+            angle,
+            pass_extension,
+            stock_offset,
+            ..
+        } = self.strategy
+        {
+            for (name, value, least) in [
+                ("angle", angle, f64::NEG_INFINITY),
+                ("pass_extension", pass_extension, 0.0),
+                ("stock_offset", stock_offset, f64::NEG_INFINITY),
+            ] {
+                if !(value.is_finite() && value >= least) {
+                    return Err(JobError::BadValue {
+                        field: format!("{at}.{name}"),
+                        value,
+                    });
+                }
+            }
         }
         if let StrategySpec::Drill { peck, dwell } = self.strategy {
             if let Some(p) = peck {
@@ -638,8 +875,9 @@ impl Operation {
     /// parallel finishing, a quarter of the tool's diameter with a square end, and
     /// with a round one the spacing that leaves a cusp no taller than the
     /// tolerance, `2·√(r² − (r − tol)²) / √2`; for Z-level clearing, 0.6 of the
-    /// diameter, its 3D pocket's, and a 2D pocket's the same. `None` for a profile
-    /// or drilling, which have none.
+    /// diameter, its 3D pocket's, and a 2D pocket's the same; for facing, 95% of
+    /// the flat of the tool's end. `None` for a profile or drilling, which have
+    /// none, and for facing with a tool that has no flat.
     pub fn default_stepover(&self, tool: &ToolSpec, tolerance: f64) -> Option<f64> {
         let d = tool.diameter;
         match self.strategy {
@@ -658,6 +896,12 @@ impl Operation {
                 Some((over * 1000.0).round() / 1000.0)
             }
             StrategySpec::ZlevelRough { .. } | StrategySpec::Pocket { .. } => Some(0.6 * d),
+            // Fusion's: 95% of the flat of the tool's end, less its corners.
+            StrategySpec::Face { .. } => match tool.kind {
+                ToolKind::Flat => Some(0.95 * d),
+                ToolKind::Bullnose => Some(0.95 * (d - 2.0 * tool.corner)),
+                ToolKind::Ball | ToolKind::Cone | ToolKind::Drill => None,
+            },
             StrategySpec::Profile { .. } | StrategySpec::Drill { .. } => None,
         }
     }
@@ -674,85 +918,28 @@ impl Operation {
         if let Some(plunge) = preset.plunge_feed {
             self.linking.plunge_feed = plunge;
         }
+        if let Some(ramp) = preset.ramp_feed {
+            self.linking.ramp_feed = Some(ramp);
+        }
         if let Some(stepover) = preset.stepover {
             self.passes.stepover = stepover;
         }
-        match (preset.stepdown, &mut self.strategy) {
-            (
-                Some(d),
-                StrategySpec::ZlevelRough { stepdown, .. }
-                | StrategySpec::Profile { stepdown, .. }
-                | StrategySpec::Pocket { stepdown, .. },
-            ) => *stepdown = d,
-            (Some(d), StrategySpec::Drill { peck, .. }) => *peck = Some(d),
-            _ => {}
+        if let Some(d) = preset.stepdown {
+            // Multiple depths stay as they were chosen, on or off.
+            let depths = self.strategy.uses().depths;
+            match (&mut self.strategy, depths) {
+                (StrategySpec::Drill { peck, .. }, _) => *peck = Some(d),
+                (_, Depths::Required) => self.passes.stepdown = Some(d),
+                (_, Depths::Optional) if self.passes.stepdown.is_some() => {
+                    self.passes.stepdown = Some(d)
+                }
+                _ => {}
+            }
         }
         if let Some(s) = preset.stock_to_leave {
             self.passes.stock_to_leave = s;
         }
         self.preset = Some(preset.name.clone());
-    }
-
-    /// This operation's speeds and feeds as a preset called `name`: what
-    /// [`apply_preset`](Self::apply_preset) would set them back to.
-    #[cfg(test)]
-    pub(crate) fn as_preset(&self, name: &str) -> Preset {
-        Preset {
-            name: name.to_string(),
-            comment: String::new(),
-            rpm: self.passes.rpm,
-            feed: Some(self.passes.feed),
-            plunge_feed: Some(self.linking.plunge_feed),
-            ramp_feed: None,
-            stepdown: match self.strategy {
-                StrategySpec::Drill { peck, .. } => peck,
-                s => s.stepdown(),
-            },
-            stepover: Some(self.passes.stepover),
-            stock_to_leave: Some(self.passes.stock_to_leave),
-        }
-    }
-
-    /// The values `preset` has that this operation no longer matches, by the name
-    /// a person reads: what has been changed since it was applied.
-    #[cfg(test)]
-    pub(crate) fn differs_from(&self, preset: &Preset) -> Vec<&'static str> {
-        let same = |a: f64, b: f64| (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0);
-        let mut out = Vec::new();
-        if preset.rpm.is_some() && preset.rpm != self.passes.rpm {
-            out.push("spindle speed");
-        }
-        if preset.feed.is_some_and(|f| !same(f, self.passes.feed)) {
-            out.push("feed");
-        }
-        if preset
-            .plunge_feed
-            .is_some_and(|f| !same(f, self.linking.plunge_feed))
-        {
-            out.push("plunge feed");
-        }
-        if preset
-            .stepover
-            .is_some_and(|s| !same(s, self.passes.stepover))
-        {
-            out.push("stepover");
-        }
-        match (preset.stepdown, &self.strategy) {
-            (Some(d), StrategySpec::Drill { peck, .. }) if !peck.is_some_and(|p| same(d, p)) => {
-                out.push("peck");
-            }
-            (Some(d), s) if s.stepdown().is_some_and(|s| !same(d, s)) => {
-                out.push("stepdown");
-            }
-            _ => {}
-        }
-        if let Some(s) = preset.stock_to_leave {
-            let now = self.passes.stock_to_leave;
-            if !same(s.radial, now.radial) || !same(s.axial, now.axial) {
-                out.push("stock to leave");
-            }
-        }
-        out
     }
 }
 
@@ -762,6 +949,11 @@ pub struct Passes {
     /// Distance between neighbouring passes, in millimetres.
     #[serde(default = "default_stepover")]
     pub stepover: f64,
+    /// Deepest each level may be, in millimetres: Fusion's multiple depths, for
+    /// a strategy that cuts in levels ([`Uses::depths`]). Straight to the bottom
+    /// in one when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stepdown: Option<f64>,
     /// Cutting feed, in mm/min.
     #[serde(default = "default_feed")]
     pub feed: f64,
@@ -786,6 +978,7 @@ impl Default for Passes {
     fn default() -> Self {
         Self {
             stepover: default_stepover(),
+            stepdown: None,
             feed: default_feed(),
             stock_to_leave: StockToLeave::default(),
             max_cut_step: default_max_cut_step(),

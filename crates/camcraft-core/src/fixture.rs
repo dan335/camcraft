@@ -36,8 +36,7 @@ stocks = ["block"]
 name = "rough"
 strategy = "zlevel-rough"
 tool = "rough"
-stepdown = 2.5
-passes = { stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.5, axial = 0.5 } }
+passes = { stepdown = 2.5, stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.5, axial = 0.5 } }
 heights = { clearance = { ref = "stock-top", offset = 6.0 } }
 
 [[setup.operation]]

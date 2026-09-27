@@ -12,8 +12,8 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
   name, or the setup's own when none are named) with margins, or a fixed box. A
   fixed box has a size and, on each axis, a place against the same models, as
   Fusion's fixed size box does: centred, offset from the low or high side, or at
-  a coordinate. So it follows the models when they move. A box placed any way
-  but at a corner is a version 5 job. A top and a bottom setup share one block
+  a coordinate. So it follows the models when they move. A top and a bottom
+  setup share one block
   and see it from each side.
 - **Setups**, in the order they are machined: which models and stocks each
   includes (by name), its work offset, post, orientation (the 24 square ways a part
@@ -24,40 +24,58 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
   zero, a run is bit-identical to before setups existed.
 
 An operation has a strategy (parallel finishing, Z-level roughing, a 2D profile,
-a 2D pocket or drilling), a tool, heights, passes and linking. Its machining boundary, as Fusion's, keeps it
-to the stock, the part's bounding box or silhouette, or faces and edges picked on
-a model, with the tool's containment and an additional offset. A job from before
-boundaries reads picks as a selection and no picks as the stock. Any other
-boundary, or a positive offset with the whole tool inside (which now moves the
-boundary in), is version 6. It may be turned off, which leaves it in the job but out of every run,
-check and post.
+a 2D pocket, facing or drilling), a tool, heights, passes and linking. What
+Fusion's Geometry tab holds is three settings, each read only by the strategies
+`StrategySpec::uses` says: `selection`, the faces and edges picked on the
+models; a 3D operation's `boundary`, which, as Fusion's machining boundary, keeps
+it to the stock (the default), the part's bounding box or silhouette, or the
+selection, with the tool's `containment` and an additional offset (`margin`);
+and a 2D operation's `outline`, what it cuts round or clears. `heights` holds
+the clearance and the top and bottom it cuts between. `passes.stepdown` is
+Fusion's multiple depths, shared the same way: Z-level roughing must have one,
+profiles, pockets and facing cut the bottom in one pass without, and parallel
+and drilling never read it. An operation may be
+turned off, which leaves it in the job but out of every run, check and post.
+
+```toml
+[[setup.operation]]
+name = "finish"
+strategy = "parallel"
+tool = "finish-4-ball"
+boundary = { kind = "silhouette", containment = "center", margin = 1.0 }
+heights = { clearance = { ref = "stock-top", offset = 10.0 }, bottom = { ref = "model-bottom" } }
+```
 
 **2D profiles and pockets** are Fusion's 2D Contour and 2D Pocket
-([decision 0005](decisions/0005-2d-profile-and-pocket.md)). Their boundary is what
-they cut round or clear: picked faces and edges, or with nothing picked, the
-part's silhouette. The tool's centre goes its radius, plus the stock to leave
+([decision 0005](decisions/0005-2d-profile-and-pocket.md)). Their `outline` is
+what they cut round or clear: the part's silhouette (the default), or
+`outline = "selection"`, the picked faces and edges. The tool's centre goes its radius, plus the stock to leave
 sideways, beside it: outside (the default, cutting a part out), inside (cutting a
 hole out) or on it for a profile, inside for a pocket. Each is cut from the top
-(the stock's, unless given) down in even levels no deeper than `stepdown`, to its
+(the stock's, unless given) down in even levels no deeper than `passes.stepdown`
+(Fusion's multiple depths; without one, the floor in one pass), to its
 floor: the bottom given, or else the lowest picked point in each area, so pockets
-picked at different depths each go to theirs, or the part's bottom. A profile
+picked at different depths each go to theirs, or the part's bottom. A top or
+bottom measured from the selection (`ref = "selection"`, Fusion's "selected
+contours") is each area's own: the highest or lowest point picked in it, plus the
+offset, so `bottom = { ref = "selection", offset = -0.5 }` cuts half a millimetre
+under every picked loop. A Z-level or facing operation measures one from all its
+picks; a clearance or a drill's bottom never is, and nothing picked is refused. A profile
 cuts each ring all the way down before the next, and never a ring before the
 rings inside it, so a part's holes are cut while it is held; a pocket clears
 from its middle out, the wall last. Both climb unless `conventional = true`, and
 their order is their own, so they are not reordered. A V-bit profiles only on
-the boundary. An additional offset (`margin`) moves the cut out from the
-boundary, or in when negative, as if the boundary were moved; floors are still
-found among the picks on the boundary itself. Any job with one is version 7, or
-8 with an additional offset.
+the outline. The radial stock to leave, negative included, moves the cut out
+from the outline, or in; floors are still found among the picks on the outline
+itself.
 
 ```toml
 [[setup.operation]]
 name = "cut out"
 strategy = "profile"          # side = "outside" | "inside" | "on"
-stepdown = 3.0
 tool = "quarter-upcut"
-geometry = { bottom = { ref = "stock-bottom", offset = -0.3 } }
-passes = { tabs = { width = 6.0, height = 3.0, spacing = 150.0 } }
+heights = { bottom = { ref = "stock-bottom", offset = -0.3 } }
+passes = { stepdown = 3.0, tabs = { width = 6.0, height = 3.0, spacing = 150.0 } }
 ```
 
 **Tabs** (`passes.tabs`) hold what a cut frees: bridges of material left
@@ -73,8 +91,7 @@ gets none, with a warning. Each is `width` of material wide along the cut at its
 top and `height` above the floor, and every cutting move over one, at any level,
 rides over it: `shape = "rectangular"` (the default) steps straight up and
 plunges down off it at the plunge feed, `"triangular"` climbs and ramps off at
-45°. They are put on before linking, so links and ramps plan round them. Any job
-with them is version 8.
+45°. They are put on before linking, so links and ramps plan round them.
 
 **Stock to leave** (`passes.stock_to_leave`) is Fusion's radial and axial
 stock to leave, in millimetres: `radial` on the walls, `axial` on the floors,
@@ -103,7 +120,7 @@ quarter the radius; a ring that starts at a corner starts instead halfway along
 its longest side, where an arc can join it; a ring with no room for any goes
 without, with a warning. A groove on the boundary has none. The linker ramps
 down to where the lead starts, along the lead and the ring. New profiles have
-them; any job with them is version 8.
+them.
 
 ```toml
 linking = { leads = { radius = 3.0, sweep = 90.0, straight = 1.0 } }
@@ -120,8 +137,7 @@ Parallel enters and leaves each pass along a vertical arc (the *lead radius*, a
 tenth of the tool); Z-level and 2D ramp into material along the pass they are about to cut
 (the *ramp angle*, 2°, at the *ramp feed*, a third of the cutting feed). After the
 last cut the tool goes up to the clearance height before the spindle stops. The
-settings are written only when changed, and need no newer version: a build that
-reads the file without them links the old, slower way, and cuts the same.
+settings are written only when changed.
 
 A job's **tools** are its own copies, by name, never links to a library, so the
 job still cuts what was verified after the library changes. A job whose used tools
@@ -135,26 +151,11 @@ The tolerance is a job parameter, never a constant: it drives sampling, grid
 resolution, STEP tessellation and the gouge threshold alike. A job made in the app
 starts at 0.05 mm; a file that leaves it out gets 0.01 mm.
 
-### Versions
+### Format
 
-A build that predates a field would read a job that uses it, skip the field, and
-cut something other than what was asked. So a job is written at the oldest version
-that holds everything it says (`Job::required_version`), and a build refuses a
-version newer than it reads, by name.
-
-| Version | Needed when                                                            |
-|---------|------------------------------------------------------------------------|
-| 1       | nothing below                                                          |
-| 2       | a pick: faces or edges on an operation, or a work zero on a model point |
-| 3       | an operation's own spindle speed, or a tool that turns backwards or wants coolant |
-| 4       | an operation turned off                                                |
-| 5       | a fixed box placed against the models, rather than at a corner         |
-| 6       | a machining boundary chosen other than picks alone, or an offset that moves one the whole tool is inside inward |
-| 7       | a 2D profile or pocket                                                 |
-| 8       | a 2D profile or pocket with an additional offset, or any operation with tabs, leads or negative stock to leave |
-
-Every version from 1 is read. The old `job.toml` format, from before setups, is
-refused by name; there is no converter.
+There is one job format, `version = 1`, and no backwards compatibility while
+camcraft is pre-alpha: a file of any other version is refused by name, and a file
+written before a change may no longer read. There is no converter.
 
 A pick is saved as the model's name, the feature's number and a point on it. The
 point is what the pick *is*: a model tessellated again or re-exported with its

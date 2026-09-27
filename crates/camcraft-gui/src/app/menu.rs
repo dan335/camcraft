@@ -142,7 +142,7 @@ impl App {
     }
 
     /// Add to the showing job: models, a stock, a setup, or an operation to the
-    /// selected setup (or the one showing).
+    /// selected setup (or the one showing), from its group: 2D, 3D or drilling.
     fn add_menu(&mut self, ui: &mut egui::Ui) {
         let Some(doc) = self.docs.get_mut(self.active) else {
             ui.label(widgets::hint_text("Open or start a job first."));
@@ -166,17 +166,13 @@ impl App {
             Selection::Setup(s) | Selection::Operation(s, _) => Some(s.clone()),
             _ => doc.active.clone(),
         };
+        ui.separator();
         let menu = ui.add_enabled_ui(target.is_some(), |ui| {
-            ui.menu_button("Operation", |ui| {
-                for (label, strategy) in browser::new_operations() {
-                    if ui.button(label).clicked()
-                        && let Some(setup) = &target
-                    {
-                        doc.add_operation(setup, strategy);
-                        ui.close();
-                    }
+            browser::operation_menus(ui, |strategy| {
+                if let Some(setup) = &target {
+                    doc.add_operation(setup, strategy);
                 }
-            })
+            });
         });
         match &target {
             Some(setup) => menu.response.on_hover_text(format!("to setup '{setup}'")),

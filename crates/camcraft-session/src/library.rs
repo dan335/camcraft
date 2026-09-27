@@ -477,30 +477,6 @@ mod tests {
         assert!(lib.root.folders.is_empty());
     }
 
-    /// A tool from before presets, with its feeds in one `cutting` table, reads
-    /// with them as a preset, and is saved that way, in a folder as at the top.
-    #[test]
-    fn feeds_from_before_presets_read_as_a_preset() {
-        let old = "[folders.onefinity.tools.quarter-upcut]\nkind = \"flat\"\n\
-                   diameter = 6.35\nrpm = 16000\n\n\
-                   [folders.onefinity.tools.quarter-upcut.cutting]\nfeed = 3810.0\n";
-        let lib: Library = toml::from_str(old).unwrap();
-        let tool = &lib.root.at(&["onefinity".into()]).unwrap().tools["quarter-upcut"];
-        assert_eq!(tool.presets.len(), 1);
-        assert_eq!(tool.presets[0].name, "Default");
-        assert_eq!(tool.presets[0].rpm, Some(16000));
-        assert_eq!(tool.presets[0].feed, Some(3810.0));
-        let path = temp("presets");
-        lib.save(&path).unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert!(
-            text.contains("[[folders.onefinity.tools.quarter-upcut.presets]]"),
-            "{text}"
-        );
-        assert!(!text.contains("cutting"), "{text}");
-        assert_eq!(Library::load(&path).unwrap(), lib);
-    }
-
     #[test]
     fn folders_are_made_renamed_and_removed() {
         let mut root = Folder::default();

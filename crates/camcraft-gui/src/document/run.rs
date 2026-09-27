@@ -458,8 +458,9 @@ impl Document {
                 };
                 let scene = Scene::build(&job, setup, &ran.result);
                 let view = &mut state.view;
-                // A new run starts fully shown, every operation visible.
-                view.at = Playhead::at(scene.segments.len());
+                // A new run plays back from its first move, the stock uncut, with
+                // every operation visible.
+                view.at = Playhead::default();
                 view.transport.playing = false;
                 view.view.ops = u32::MAX;
                 if let Some(inputs) = inputs {

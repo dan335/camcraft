@@ -3,13 +3,13 @@
 //!
 //! # From the model, seen from above
 //!
-//! The boundary is the operation's: picked faces and edges, the models' silhouette
-//! or box, or the stock's footprint. The tool's centre follows it offset by the
-//! tool's radius and the stock to leave, and every ring here is an offset of it,
-//! so every point of a path comes from the model's geometry. Nothing here reads the
-//! stock. Nor the part below the boundary, as Fusion's 2D operations do not: a
-//! part that reaches past its boundary lower down is cut into, and the verifier
-//! says so.
+//! The boundary is the operation's: picked faces and edges, or the models'
+//! silhouette, as Fusion's select what they cut. The tool's centre follows it
+//! offset by the tool's radius and the stock to leave, and every ring here is an
+//! offset of it, so every point of a path comes from the model's geometry.
+//! Nothing here reads the stock. Nor the part below the boundary, as Fusion's 2D
+//! operations do not: a part that reaches past its boundary lower down is cut
+//! into, and the verifier says so.
 //!
 //! # Areas and their floors
 //!
@@ -17,7 +17,9 @@
 //! inside it. Each is cut down to its own floor, the lowest picked point in it, so
 //! pockets picked at different depths are each cut to theirs, as Fusion's
 //! "selected contour" bottom. With nothing picked, or a bottom asked for, every
-//! area goes to the same one.
+//! area goes to the same one; unless the bottom asked for is measured from the
+//! selection, when each is measured from the picks in it. A top measured from the
+//! selection is each area's own the same way.
 //!
 //! # Order
 //!
@@ -37,16 +39,18 @@
 use camcraft_geom::contour::{Contour, Region, RegionError};
 use glam::{DVec2, DVec3, dvec3};
 
-use crate::job::{Operation, ProfileSide, StrategySpec};
+use crate::job::{Operation, Picks, ProfileSide, StrategySpec};
 use crate::strategy::{StrategyError, check};
 use crate::toolpath::{MoveRole, Toolpath};
 
-/// One connected piece of where the tool's centre goes, and the floor it is cut
-/// down to.
+/// One connected piece of where the tool's centre goes, and the levels it is cut
+/// between.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Area {
     /// An outer ring and the holes inside it.
     pub region: Region,
+    /// Where it is cut down from.
+    pub top: f64,
     /// The lowest level it is cut at.
     pub bottom: f64,
 }
@@ -54,15 +58,14 @@ pub struct Area {
 /// How to cut the areas.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlanarParams {
-    /// Deepest a level may be below the one above, in millimetres. The levels are
-    /// spaced evenly, so none is thinner than the rest.
-    pub stepdown: f64,
+    /// Deepest a level may be below the one above, in millimetres: Fusion's
+    /// multiple depths. The levels are spaced evenly, so none is thinner than
+    /// the rest. `None` cuts the bottom alone.
+    pub stepdown: Option<f64>,
     /// Distance between a pocket's rings, in millimetres.
     pub stepover: f64,
     /// Cutting feed, in mm/min.
     pub feed: f64,
-    /// Highest level cut from: every area is cut from here down.
-    pub top: f64,
     /// Chordal tolerance of a pocket's inner rings, which err inward.
     pub arc: f64,
     /// The tool's radius, which a pocket's middle must be within to be cut.
@@ -91,7 +94,7 @@ pub struct LeadArc {
 pub struct PlanarReport {
     /// Areas cut.
     pub areas: u64,
-    /// Areas left alone because their floor is not below the top.
+    /// Areas left alone because their floor is not below their top.
     pub too_shallow: u64,
     /// Rings round each level, counted once however many levels they are cut at.
     pub rings: u64,
@@ -106,15 +109,15 @@ pub struct PlanarReport {
 
 /// How far `op`'s tool's centre stays outside its boundary, inward when
 /// negative: its radius, `cutter_radius`, and the stock to leave beside, on the
-/// side a profile cuts, and inside for a pocket; then the geometry's additional
-/// offset, which moves the cut out from the boundary, or in when negative, as if
-/// the boundary were moved. Zero for anything else.
+/// side a profile cuts, and inside for a pocket. Zero for anything else. The
+/// geometry's additional offset is a 3D machining boundary's, and moves nothing
+/// here: as in Fusion, the stock to leave moves a 2D cut.
 ///
-/// The offset moves the tool and not the boundary, so a floor is still found
-/// among the picks on the boundary itself.
+/// The stock to leave moves the tool and not the boundary, so a floor is still
+/// found among the picks on the boundary itself.
 pub fn centre_offset(op: &Operation, cutter_radius: f64) -> f64 {
     let radius = cutter_radius + op.stock_to_leave().radial;
-    let beside = match op.strategy {
+    match op.strategy {
         StrategySpec::Profile { side, .. } => match side {
             ProfileSide::Outside => radius,
             ProfileSide::Inside => -radius,
@@ -123,72 +126,71 @@ pub fn centre_offset(op: &Operation, cutter_radius: f64) -> f64 {
         StrategySpec::Pocket { .. } => -radius,
         StrategySpec::Parallel { .. }
         | StrategySpec::ZlevelRough { .. }
-        | StrategySpec::Drill { .. } => return 0.0,
-    };
-    beside + op.geometry.margin
+        | StrategySpec::Face { .. }
+        | StrategySpec::Drill { .. } => 0.0,
+    }
 }
 
-/// The areas where the tool's centre goes, with their floors.
+/// The areas where the tool's centre goes, with their levels.
 ///
 /// `shape` is the boundary; `offset` how far the tool's centre stays from it,
-/// outward when positive. Each area's floor is the lowest of `floors` within the
-/// boundary it came from, or `fallback` where none is. Rings err by at most `arc`,
-/// away from the boundary when growing and inside it when shrinking.
+/// outward when positive. Each of the boundary's pieces has its top and bottom
+/// from `levels`, given the `picked` points in it ([`picked_pieces`]); an area is
+/// cut from the highest top of the pieces it came from down to their lowest
+/// bottom. Rings err by at most `arc`, away from the boundary when growing and
+/// inside it when shrinking.
 pub fn areas(
     shape: &Region,
     offset: f64,
     arc: f64,
-    floors: &[DVec3],
-    fallback: f64,
+    picked: &[DVec3],
+    levels: &dyn Fn(Option<Picks>) -> (f64, f64),
 ) -> Result<Vec<Area>, StrategyError> {
-    let (shapes, shape_floors): (Vec<Region>, Vec<f64>) =
-        floored_pieces(shape, arc, floors, fallback)
-            .into_iter()
-            .unzip();
+    let shapes: Vec<(Region, (f64, f64))> = picked_pieces(shape, arc, picked)
+        .into_iter()
+        .map(|(s, picks)| (s, levels(picks)))
+        .collect();
     let centres = shape.offset(offset, arc);
     let mut out = Vec::new();
     for region in pieces(&centres) {
         // A piece grown from the boundary covers the boundary's pieces it took in;
         // one shrunk lies in the one it came from. Either way, the ones it
         // overlaps.
-        let mut bottom: Option<f64> = None;
-        for (s, &floor) in shapes.iter().zip(&shape_floors) {
+        let mut span: Option<(f64, f64)> = None;
+        for (s, (top, bottom)) in &shapes {
             if !overlapping(&region, s) {
                 continue;
             }
             if region.intersection(s).map_err(region_err)?.area() > 1e-9 {
-                bottom = Some(bottom.map_or(floor, |b| b.min(floor)));
+                span = Some(span.map_or((*top, *bottom), |(t, b)| (t.max(*top), b.min(*bottom))));
             }
         }
+        let (top, bottom) = span.unwrap_or_else(|| levels(None));
         out.push(Area {
             region,
-            bottom: bottom.unwrap_or(fallback),
+            top,
+            bottom,
         });
     }
     Ok(out)
 }
 
 /// The boundary's own pieces, each an outer ring with the holes inside it, and
-/// the floor of each: the lowest of `floors` in it, or `fallback` where none is.
-/// A picked edge lies on its piece's boundary, so each is grown by `arc`, or a
-/// micron at least, to take in what lies on it.
-pub fn floored_pieces(
-    shape: &Region,
-    arc: f64,
-    floors: &[DVec3],
-    fallback: f64,
-) -> Vec<(Region, f64)> {
+/// how high the `picked` points in each go, if any are in it. A picked edge lies
+/// on its piece's boundary, so each is grown by `arc`, or a micron at least, to
+/// take in what lies on it.
+pub fn picked_pieces(shape: &Region, arc: f64, picked: &[DVec3]) -> Vec<(Region, Option<Picks>)> {
     pieces(shape)
         .into_iter()
         .map(|s| {
             let near = s.offset(arc.max(1e-3), arc);
-            let floor = floors
-                .iter()
-                .filter(|p| near.contains(p.truncate()))
-                .map(|p| p.z)
-                .reduce(f64::min)
-                .unwrap_or(fallback);
-            (s, floor)
+            let picks = Picks::of(
+                picked
+                    .iter()
+                    .filter(|p| near.contains(p.truncate()))
+                    .map(|p| p.z),
+            );
+            (s, picks)
         })
         .collect()
 }
@@ -200,7 +202,7 @@ pub fn profile(
     side: ProfileSide,
     params: &PlanarParams,
 ) -> Result<(Toolpath, PlanarReport), StrategyError> {
-    check_params(params)?;
+    check_params(params, areas)?;
     let mut report = PlanarReport::default();
     // Outside, what is kept is the side the region is on: the left of a ring as
     // the region winds it. Inside or on it, the right.
@@ -208,7 +210,7 @@ pub fn profile(
     let reverse = kept_left == params.kept_on_right;
     let mut rings: Vec<(Vec<DVec2>, Vec<f64>, usize)> = Vec::new();
     for (i, area) in areas.iter().enumerate() {
-        let levels = levels(params.top, area.bottom, params.stepdown);
+        let levels = levels(area.top, area.bottom, params.stepdown);
         if levels.is_empty() {
             report.too_shallow += 1;
             continue;
@@ -354,7 +356,7 @@ pub fn pocket(
     areas: &[Area],
     params: &PlanarParams,
 ) -> Result<(Toolpath, PlanarReport), StrategyError> {
-    check_params(params)?;
+    check_params(params, areas)?;
     let mut report = PlanarReport::default();
     // The material kept, the wall, is outward of every ring: on the right of a
     // ring as the region winds it.
@@ -362,7 +364,7 @@ pub fn pocket(
     // Each area's rings, from its middle out, with its levels.
     let mut cleared: Vec<(Vec<RingSet>, Vec<f64>)> = Vec::new();
     for area in areas {
-        let levels = levels(params.top, area.bottom, params.stepdown);
+        let levels = levels(area.top, area.bottom, params.stepdown);
         if levels.is_empty() {
             report.too_shallow += 1;
             continue;
@@ -412,30 +414,35 @@ pub fn pocket(
     Ok((path, report))
 }
 
-fn check_params(params: &PlanarParams) -> Result<(), StrategyError> {
-    check("stepdown", params.stepdown)?;
+fn check_params(params: &PlanarParams, areas: &[Area]) -> Result<(), StrategyError> {
+    if let Some(d) = params.stepdown {
+        check("stepdown", d)?;
+    }
     check("stepover", params.stepover)?;
     check("feed", params.feed)?;
     check("arc tolerance", params.arc)?;
     check("tool radius", params.radius)?;
-    if !params.top.is_finite() {
+    if let Some(a) = areas.iter().find(|a| !a.top.is_finite()) {
         return Err(StrategyError::BadParameter {
             name: "top",
-            value: params.top,
+            value: a.top,
         });
     }
     Ok(())
 }
 
 /// The levels from `top` down to `bottom`, evenly spaced no more than `stepdown`
-/// apart, the last at `bottom`. None when `bottom` is not below `top`.
-fn levels(top: f64, bottom: f64, stepdown: f64) -> Vec<f64> {
+/// apart, the last at `bottom`: `bottom` alone with no stepdown. None when
+/// `bottom` is not below `top`.
+pub(crate) fn levels(top: f64, bottom: f64, stepdown: Option<f64>) -> Vec<f64> {
     let span = top - bottom;
     if !(span > 1e-9 && bottom.is_finite()) {
         return Vec::new();
     }
     // Bounded, so a tiny stepdown cannot run away.
-    let count = (span / stepdown - 1e-9).ceil().clamp(1.0, 10_000.0);
+    let count = stepdown
+        .map_or(1.0, |d| (span / d - 1e-9).ceil())
+        .clamp(1.0, 10_000.0);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let count = count as u32;
     (1..=count)
@@ -740,12 +747,17 @@ mod tests {
         .unwrap()
     }
 
+    /// Levels as a 2D operation's are without a top or bottom asked for: from
+    /// zero down to the lowest pick, or to `fallback` with none.
+    fn floor(fallback: f64) -> impl Fn(Option<Picks>) -> (f64, f64) {
+        move |p| (0.0, p.map_or(fallback, |p| p.lowest))
+    }
+
     fn params() -> PlanarParams {
         PlanarParams {
-            stepdown: 2.0,
+            stepdown: Some(2.0),
             stepover: 2.0,
             feed: 1000.0,
-            top: 0.0,
             arc: 0.01,
             radius: 1.5,
             kept_on_right: true,
@@ -791,7 +803,7 @@ mod tests {
             ..params()
         };
         for (side, offset) in [(ProfileSide::Outside, 1.5), (ProfileSide::Inside, -1.5)] {
-            let areas = areas(&part, offset, 0.01, &[], -1.0).unwrap();
+            let areas = areas(&part, offset, 0.01, &[], &floor(-1.0)).unwrap();
             let region = &areas[0].region;
             let (path, report) = profile(&areas, side, &p).unwrap();
             assert_eq!(report.no_room_to_lead, 0, "{side:?}");
@@ -830,12 +842,12 @@ mod tests {
 
         // A 4 mm hole cut from inside: no room for even a 1 mm arc.
         let hole = Region::new(vec![square(0.0, 4.0)]);
-        let small = areas(&hole, -1.5, 0.01, &[], -1.0).unwrap();
+        let small = areas(&hole, -1.5, 0.01, &[], &floor(-1.0)).unwrap();
         let (path, report) = profile(&small, ProfileSide::Inside, &p).unwrap();
         assert_eq!(report.no_room_to_lead, 1);
         assert!(path.moves().iter().all(|m| m.role != MoveRole::Lead));
 
-        let on = areas(&part, 0.0, 0.01, &[], -1.0).unwrap();
+        let on = areas(&part, 0.0, 0.01, &[], &floor(-1.0)).unwrap();
         let (path, report) = profile(&on, ProfileSide::On, &p).unwrap();
         assert_eq!(report.no_room_to_lead, 0);
         assert!(path.moves().iter().all(|m| m.role != MoveRole::Lead));
@@ -843,11 +855,15 @@ mod tests {
 
     #[test]
     fn levels_are_even_and_end_at_the_bottom() {
-        assert_eq!(levels(0.0, -5.0, 2.0), vec![-5.0 / 3.0, -10.0 / 3.0, -5.0]);
-        assert_eq!(levels(0.0, -4.0, 2.0), vec![-2.0, -4.0]);
-        assert_eq!(levels(0.0, -1.0, 2.0), vec![-1.0]);
-        assert!(levels(0.0, 0.0, 2.0).is_empty());
-        assert!(levels(0.0, 1.0, 2.0).is_empty());
+        assert_eq!(
+            levels(0.0, -5.0, Some(2.0)),
+            vec![-5.0 / 3.0, -10.0 / 3.0, -5.0]
+        );
+        assert_eq!(levels(0.0, -4.0, Some(2.0)), vec![-2.0, -4.0]);
+        assert_eq!(levels(0.0, -1.0, Some(2.0)), vec![-1.0]);
+        assert_eq!(levels(0.0, -5.0, None), vec![-5.0], "the bottom alone");
+        assert!(levels(0.0, 0.0, Some(2.0)).is_empty());
+        assert!(levels(0.0, 1.0, None).is_empty());
     }
 
     /// Cutting a part out: its hole first, then its outline, each all the way
@@ -855,7 +871,7 @@ mod tests {
     #[test]
     fn a_profile_cuts_the_holes_before_the_outline() {
         let part = Region::new(vec![square(0.0, 40.0), square(15.0, 25.0)]);
-        let areas = areas(&part, 1.5, 0.01, &[], -3.0).unwrap();
+        let areas = areas(&part, 1.5, 0.01, &[], &floor(-3.0)).unwrap();
         assert_eq!(areas.len(), 1);
         let (path, report) = profile(&areas, ProfileSide::Outside, &params()).unwrap();
         assert_eq!(report.rings, 2);
@@ -883,7 +899,7 @@ mod tests {
     #[test]
     fn conventional_reverses_a_profile() {
         let part = Region::new(vec![square(0.0, 40.0)]);
-        let areas = areas(&part, 1.5, 0.01, &[], -1.0).unwrap();
+        let areas = areas(&part, 1.5, 0.01, &[], &floor(-1.0)).unwrap();
         let p = PlanarParams {
             kept_on_right: false,
             ..params()
@@ -902,6 +918,7 @@ mod tests {
             .iter()
             .map(|r| Area {
                 region: Region::new(vec![r.clone()]),
+                top: 0.0,
                 bottom: -1.0,
             })
             .collect();
@@ -920,8 +937,8 @@ mod tests {
     /// leaves nothing in the middle the tool does not reach.
     #[test]
     fn a_pocket_clears_from_the_middle_out() {
-        let floor = Region::new(vec![square(0.0, 21.0)]);
-        let areas = areas(&floor, -1.5, 0.01, &[], -2.0).unwrap();
+        let shape = Region::new(vec![square(0.0, 21.0)]);
+        let areas = areas(&shape, -1.5, 0.01, &[], &floor(-2.0)).unwrap();
         let (path, report) = pocket(&areas, &params()).unwrap();
         assert_eq!(report.areas, 1);
         let passes = passes(&path);
@@ -955,7 +972,7 @@ mod tests {
     fn each_area_goes_to_its_own_floor() {
         let shape = Region::new(vec![square(0.0, 10.0), square(20.0, 30.0)]);
         let floors = [dvec3(0.0, 0.0, -3.0), dvec3(25.0, 25.0, -6.0)];
-        let areas = areas(&shape, -1.5, 0.01, &floors, -1.0).unwrap();
+        let areas = areas(&shape, -1.5, 0.01, &floors, &floor(-1.0)).unwrap();
         let mut bottoms: Vec<f64> = areas.iter().map(|a| a.bottom).collect();
         bottoms.sort_by(f64::total_cmp);
         assert_eq!(bottoms, vec![-6.0, -3.0]);
@@ -968,7 +985,7 @@ mod tests {
         let shape = Region::new(vec![square(0.0, 10.0), square(11.0, 21.0)]);
         let shape = Region::union_of(shape.rings()).unwrap();
         let floors = [dvec3(0.0, 0.0, -2.0), dvec3(21.0, 21.0, -4.0)];
-        let areas = areas(&shape, 1.5, 0.01, &floors, 0.0).unwrap();
+        let areas = areas(&shape, 1.5, 0.01, &floors, &floor(0.0)).unwrap();
         assert_eq!(areas.len(), 1);
         assert_eq!(areas[0].bottom, -4.0);
     }
@@ -976,7 +993,7 @@ mod tests {
     #[test]
     fn a_floor_above_the_top_cuts_nothing() {
         let shape = Region::new(vec![square(0.0, 10.0)]);
-        let areas = areas(&shape, 1.5, 0.01, &[], 1.0).unwrap();
+        let areas = areas(&shape, 1.5, 0.01, &[], &floor(1.0)).unwrap();
         let (path, report) = profile(&areas, ProfileSide::Outside, &params()).unwrap();
         assert!(path.is_empty());
         assert_eq!(report.too_shallow, 1);

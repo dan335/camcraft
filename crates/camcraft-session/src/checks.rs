@@ -427,7 +427,7 @@ fn operation_findings(
                 ));
             }
         }
-        StrategyDetail::Profile(r) | StrategyDetail::Pocket(r) => {
+        StrategyDetail::Profile(r) | StrategyDetail::Pocket(r) | StrategyDetail::Face(r) => {
             if r.too_shallow > 0 {
                 out.push(finding(
                     Level::Warn,

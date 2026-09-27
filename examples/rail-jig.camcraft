@@ -46,9 +46,8 @@ post = "masso"
 name = "rough"
 strategy = "zlevel-rough"
 tool = "rough-6-flat"
-stepdown = 3.0
 # Leave material for the finishing pass to take off.
-passes = { stepover = 3.0, feed = 2000.0, stock_to_leave = { radial = 0.5, axial = 0.5 } }
+passes = { stepdown = 3.0, stepover = 3.0, feed = 2000.0, stock_to_leave = { radial = 0.5, axial = 0.5 } }
 heights = { clearance = { ref = "stock-top", offset = 8.0 } }
 linking = { retract_feed = 2000.0, plunge_feed = 400.0, reorder = true }
 

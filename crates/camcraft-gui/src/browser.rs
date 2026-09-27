@@ -7,7 +7,7 @@
 
 use std::cell::RefCell;
 
-use camcraft_core::job::{Operation, ProfileSide, Setup, StrategySpec};
+use camcraft_core::job::{FaceDirection, Operation, ProfileSide, Setup, StrategySpec};
 use camcraft_core::run::Stage;
 use eframe::egui;
 
@@ -594,41 +594,85 @@ fn generate_item(
     }
 }
 
-/// The kinds of operation there are to add, each with what a new one starts
+/// A kind of operation to add: its name in the menu and what a new one starts
 /// from.
-pub fn new_operations() -> [(&'static str, StrategySpec); 5] {
+pub type NewOperation = (&'static str, StrategySpec);
+
+/// The kinds of operation there are to add, grouped as Fusion's toolbar groups
+/// them: 2D, 3D and drilling. Each group is sections with a line between, 3D's
+/// roughing above its finishing.
+pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
     [
-        ("parallel finish", StrategySpec::Parallel { angle: 0.0 }),
         (
-            "z-level rough",
-            StrategySpec::ZlevelRough {
-                stepdown: 2.0,
-                min_ring_length: 3.0,
-            },
+            "2D",
+            vec![vec![
+                (
+                    "Face",
+                    StrategySpec::Face {
+                        angle: 0.0,
+                        direction: FaceDirection::BothWays,
+                        pass_extension: 0.0,
+                        stock_offset: 0.0,
+                    },
+                ),
+                (
+                    "Pocket",
+                    StrategySpec::Pocket {
+                        conventional: false,
+                    },
+                ),
+                (
+                    "Profile",
+                    StrategySpec::Profile {
+                        side: ProfileSide::Outside,
+                        conventional: false,
+                    },
+                ),
+            ]],
         ),
         (
-            "2D pocket",
-            StrategySpec::Pocket {
-                stepdown: 2.0,
-                conventional: false,
-            },
+            "3D",
+            vec![
+                vec![(
+                    "Z-level rough",
+                    StrategySpec::ZlevelRough {
+                        min_ring_length: 3.0,
+                    },
+                )],
+                vec![("Parallel", StrategySpec::Parallel { angle: 0.0 })],
+            ],
         ),
         (
-            "2D profile",
-            StrategySpec::Profile {
-                side: ProfileSide::Outside,
-                stepdown: 2.0,
-                conventional: false,
-            },
-        ),
-        (
-            "drilling",
-            StrategySpec::Drill {
-                peck: None,
-                dwell: None,
-            },
+            "Drilling",
+            vec![vec![(
+                "Drill",
+                StrategySpec::Drill {
+                    peck: None,
+                    dwell: None,
+                },
+            )]],
         ),
     ]
+}
+
+/// A submenu for each group of operations, `add` called with what the one
+/// picked starts from. The Add menu and a setup's menu both show them.
+pub fn operation_menus(ui: &mut egui::Ui, mut add: impl FnMut(StrategySpec)) {
+    for (group, sections) in operation_groups() {
+        ui.menu_button(group, |ui| {
+            for (i, section) in sections.into_iter().enumerate() {
+                if i > 0 {
+                    ui.separator();
+                }
+                for (label, strategy) in section {
+                    if ui.button(label).clicked() {
+                        add(strategy);
+                        ui.close();
+                    }
+                }
+            }
+        });
+    }
 }
 
 fn setup_menu(
@@ -640,14 +684,11 @@ fn setup_menu(
 ) {
     generate_item(ui, doc, name, actions);
     ui.separator();
-    for (label, strategy) in new_operations() {
-        if ui.button(format!("New {label}")).clicked() {
-            edits
-                .borrow_mut()
-                .push(Edit::AddOperation(name.to_string(), strategy));
-            ui.close();
-        }
-    }
+    operation_menus(ui, |strategy| {
+        edits
+            .borrow_mut()
+            .push(Edit::AddOperation(name.to_string(), strategy));
+    });
     ui.separator();
     if ui.button("Duplicate").clicked() {
         edits

@@ -28,22 +28,8 @@ pub fn is_system(path: &[String]) -> bool {
     path.first().is_some_and(|f| f == SYSTEM)
 }
 
-/// Put the System library into `root`. A folder of the person's own already
-/// called that is moved aside under a free name first, and saved there.
+/// Put the System library into `root`.
 pub fn add_system(root: &mut Folder) {
-    if let Some(mine) = root.folders.remove(SYSTEM) {
-        let name = (1..)
-            .map(|n| {
-                if n == 1 {
-                    format!("{SYSTEM} (mine)")
-                } else {
-                    format!("{SYSTEM} (mine {n})")
-                }
-            })
-            .find(|n| !root.folders.contains_key(n))
-            .unwrap_or_default();
-        root.folders.insert(name, mine);
-    }
     root.folders.insert(SYSTEM.into(), system_library());
 }
 
@@ -523,17 +509,9 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_of_the_same_name_is_moved_aside() {
+    fn the_system_library_is_added_at_the_top() {
         let mut root = Folder::default();
-        root.create(&[], SYSTEM).unwrap();
-        root.at_mut(&[SYSTEM.into()])
-            .unwrap()
-            .tools
-            .insert("mine".into(), ToolSpec::default());
-        root.create(&[], "System library (mine)").unwrap();
         add_system(&mut root);
-        assert_eq!(root.folders["System library (mine 2)"].tools.len(), 1);
-        assert!(root.folders["System library (mine)"].tools.is_empty());
         assert_eq!(root.folders[SYSTEM], system_library());
         assert!(is_system(&[SYSTEM.into(), "Ball".into()]));
         assert!(!is_system(&["System library (mine)".into()]));

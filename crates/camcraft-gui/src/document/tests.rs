@@ -195,13 +195,13 @@ fn a_rename_undone_keeps_the_setup_run() {
 fn another_tool_keeps_a_chosen_offset() {
     use camcraft_core::job::{Boundary, Containment};
     let mut doc = example();
-    let g = &mut doc.job.setups[0].operations[0].geometry;
-    g.boundary_kind = Some(Boundary::Silhouette);
-    g.containment = Containment::Outside;
-    g.margin = 0.0;
+    let b = &mut doc.job.setups[0].operations[0].boundary;
+    b.kind = Boundary::Silhouette;
+    b.containment = Containment::Outside;
+    b.margin = 0.0;
     let other = doc.job.setups[0].operations[1].tool.clone().unwrap();
     doc.use_tool("top", 0, other, None);
-    assert_eq!(doc.job.setups[0].operations[0].geometry.margin, 0.0);
+    assert_eq!(doc.job.setups[0].operations[0].boundary.margin, 0.0);
 }
 
 /// Saving drops tools no operation uses.
@@ -444,6 +444,11 @@ fn the_view_sets_up_or_plays_back() {
     let whole = doc.setups["top"].ran.as_ref().unwrap().scene.segments.len();
 
     let state = doc.setups.get_mut("top").unwrap();
+    assert_eq!(
+        state.view.at,
+        Playhead::default(),
+        "a new run plays back from its first move, the stock uncut"
+    );
     state.view.at = Playhead::at(3);
     let setup = Selection::Setup("top".into());
     let c = content(state, "top", &setup);
@@ -586,48 +591,46 @@ fn operations_are_added_moved_and_removed() {
 
 /// A new operation starts on the part's silhouette: finishing with the tool's
 /// centre inside it, roughing reaching in from outside with a channel a tool wide,
-/// set once the tool is known. A 2D one is left to follow its picks.
+/// set once the tool is known. A 2D one cuts round the silhouette.
 #[test]
 fn new_operations_start_on_the_silhouette() {
-    use camcraft_core::job::{Boundary, Containment};
+    use camcraft_core::job::{Boundary, Containment, Outline};
     let mut doc = example();
     let finish = doc
         .add_operation("top", StrategySpec::Parallel { angle: 0.0 })
         .unwrap();
-    let g = &doc.job.setups[0].operations[finish].geometry;
-    assert_eq!(g.boundary(), Boundary::Silhouette);
-    assert_eq!(g.containment, Containment::Center);
-    assert_eq!(g.margin, 0.0);
+    let b = &doc.job.setups[0].operations[finish].boundary;
+    assert_eq!(b.kind, Boundary::Silhouette);
+    assert_eq!(b.containment, Containment::Center);
+    assert_eq!(b.margin, 0.0);
 
     let rough = doc
         .add_operation(
             "top",
             StrategySpec::ZlevelRough {
-                stepdown: 2.0,
                 min_ring_length: 3.0,
             },
         )
         .unwrap();
     let tool = doc.job.setups[0].operations[rough].tool.clone().unwrap();
     let diameter = doc.job.tools[&tool].diameter;
-    let g = &doc.job.setups[0].operations[rough].geometry;
-    assert_eq!(g.boundary(), Boundary::Silhouette);
-    assert_eq!(g.containment, Containment::Outside);
-    assert_eq!(g.margin, diameter);
+    let b = &doc.job.setups[0].operations[rough].boundary;
+    assert_eq!(b.kind, Boundary::Silhouette);
+    assert_eq!(b.containment, Containment::Outside);
+    assert_eq!(b.margin, diameter);
 
     let profile = doc
         .add_operation(
             "top",
             StrategySpec::Profile {
                 side: Default::default(),
-                stepdown: 3.0,
                 conventional: false,
             },
         )
         .unwrap();
-    let g = &doc.job.setups[0].operations[profile].geometry;
-    assert_eq!(g.boundary_kind, None);
-    assert_eq!(g.boundary_2d(), Boundary::Silhouette);
+    let o = &doc.job.setups[0].operations[profile];
+    assert_eq!(o.outline, Outline::Silhouette);
+    assert_eq!(o.boundary, Default::default());
     // And arcs on and off each ring.
     assert!(
         doc.job.setups[0].operations[profile]
@@ -636,6 +639,31 @@ fn new_operations_start_on_the_silhouette() {
             .is_some()
     );
     assert!(doc.job.setups[0].operations[rough].linking.leads.is_none());
+
+    // A 2D operation has no additional offset, so a tool never gives it one,
+    // even with a boundary round the part that reaches in from outside.
+    let o = &mut doc.job.setups[0].operations[profile];
+    o.boundary.kind = Boundary::Silhouette;
+    o.boundary.containment = Containment::Outside;
+    o.tool = None;
+    doc.use_tool("top", profile, tool.clone(), None);
+    assert_eq!(doc.job.setups[0].operations[profile].boundary.margin, 0.0);
+
+    // Facing starts both ways at the bottom alone, and with a flat end mill
+    // steps over most of its width.
+    let [(_, two_d), ..] = crate::browser::operation_groups();
+    let (_, face) = two_d[0][0];
+    let face = doc.add_operation("top", face).unwrap();
+    doc.use_tool("top", face, "rough-6-flat".into(), None);
+    let o = &doc.job.setups[0].operations[face];
+    assert_eq!(o.strategy.name(), "face");
+    assert_eq!(o.stepdown(), None);
+    let d = doc.job.tools["rough-6-flat"].diameter;
+    assert!(
+        (o.passes.stepover - 0.95 * d).abs() < 1e-9,
+        "{}",
+        o.passes.stepover
+    );
 }
 
 /// A new roughing operation leaves half a millimetre for the finish, as Fusion's
@@ -648,7 +676,6 @@ fn new_roughing_leaves_stock_for_the_finish() {
         .add_operation(
             "top",
             StrategySpec::ZlevelRough {
-                stepdown: 2.0,
                 min_ring_length: 3.0,
             },
         )
@@ -665,7 +692,6 @@ fn new_roughing_leaves_stock_for_the_finish() {
             "top",
             StrategySpec::Profile {
                 side: Default::default(),
-                stepdown: 3.0,
                 conventional: false,
             },
         )

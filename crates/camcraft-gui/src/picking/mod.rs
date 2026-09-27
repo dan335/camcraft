@@ -23,7 +23,8 @@ pub mod slots;
 use std::borrow::Cow;
 
 use camcraft_core::job::{
-    FeatureRef, Geometry, Operation, Origin, StockToLeave, StrategySpec, ToolSpec,
+    self, FeatureRef, Heights, MachiningBoundary, Operation, Origin, Outline, StockToLeave,
+    StrategySpec, ToolSpec,
 };
 #[cfg(all(test, feature = "ui-snapshots"))]
 use eframe::egui;
@@ -45,8 +46,12 @@ struct ShownFrom<'a> {
     setup: Cow<'a, str>,
     op: Option<usize>,
     origin: Cow<'a, Origin>,
-    geometry: Option<Cow<'a, Geometry>>,
-    /// A 2D operation's boundary is drawn with what its tool cuts, which its
+    selection: Option<Cow<'a, job::Selection>>,
+    boundary: Option<MachiningBoundary>,
+    outline: Option<Outline>,
+    /// A 2D outline is drawn at the heights measured from the picks.
+    heights: Option<Cow<'a, Heights>>,
+    /// A 2D operation's outline is drawn with what its tool cuts, which its
     /// strategy (a profile's side) and the stock it leaves decide.
     strategy: Option<Cow<'a, StrategySpec>>,
     leave: Option<StockToLeave>,
@@ -64,7 +69,10 @@ impl ShownFrom<'_> {
             setup: Cow::Owned(self.setup.into_owned()),
             op: self.op,
             origin: Cow::Owned(self.origin.into_owned()),
-            geometry: self.geometry.map(|g| Cow::Owned(g.into_owned())),
+            selection: self.selection.map(|s| Cow::Owned(s.into_owned())),
+            boundary: self.boundary,
+            outline: self.outline,
+            heights: self.heights.map(|h| Cow::Owned(h.into_owned())),
             strategy: self.strategy.map(|s| Cow::Owned(s.into_owned())),
             leave: self.leave,
             tool: self.tool.map(|t| Cow::Owned(t.into_owned())),
@@ -299,7 +307,10 @@ impl Picking {
                 setup: Cow::Borrowed(setup.as_str()),
                 op,
                 origin: Cow::Borrowed(&s.origin),
-                geometry: operation.map(|o| Cow::Borrowed(&o.geometry)),
+                selection: operation.map(|o| Cow::Borrowed(&o.selection)),
+                boundary: operation.map(|o| o.boundary),
+                outline: operation.map(|o| o.outline),
+                heights: operation.map(|o| Cow::Borrowed(&o.heights)),
                 strategy: operation.map(|o| Cow::Borrowed(&o.strategy)),
                 leave: operation.map(Operation::stock_to_leave),
                 tool: operation
@@ -322,10 +333,10 @@ impl Picking {
         self.shown_row = self.row.take();
         let row = self.shown_row.and_then(|(kind, i)| {
             let (from, ..) = self.shown.as_ref()?;
-            let g = from.geometry.as_ref()?;
+            let sel = from.selection.as_ref()?;
             let r = match kind {
-                Kind::Face => g.faces.get(i),
-                Kind::Edge => g.edges.get(i),
+                Kind::Face => sel.faces.get(i),
+                Kind::Edge => sel.edges.get(i),
             }?;
             row_target(scene, doc, r, kind).map(|t| slots::whole_loop(scene, t))
         });

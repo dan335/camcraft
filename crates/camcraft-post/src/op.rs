@@ -11,13 +11,10 @@
 //! work offset. Posts need those to write headers, tool-change blocks and setup
 //! sheets; a flat list of coordinates leaves every post guessing.
 //!
-//! # Reserved variants
+//! # Arcs
 //!
-//! [`Op::Arc`] and [`Op::CutterComp`] are defined and rendered but nothing emits
-//! them yet. They exist so arc fitting and cutter compensation can arrive as
-//! additions rather than as a change to this type — the same reason strategies emit
-//! toolpaths instead of instructions. [`Op::Cycle`] arrived that way: a drilling
-//! operation posted for a profile that takes canned cycles is one per hole.
+//! [`Op::Arc`] is defined and rendered but nothing emits it yet, so arc fitting
+//! can arrive as an addition rather than as a change to this type.
 
 use camcraft_core::drilling::Hole;
 use camcraft_core::job::{Coolant, SpindleDirection};
@@ -46,17 +43,6 @@ pub enum CycleKind {
     Tap,
     /// Boring (`G85`).
     Bore,
-}
-
-/// Cutter compensation side. Reserved; nothing emits these yet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompSide {
-    /// Left of the path (`G41`).
-    Left,
-    /// Right of the path (`G42`).
-    Right,
-    /// Cancel (`G40`).
-    Off,
 }
 
 /// One machine-independent instruction.
@@ -146,15 +132,6 @@ pub enum Op {
     },
     /// End of a run of canned cycles (`G80`).
     CycleEnd,
-    /// Cutter compensation. Reserved.
-    CutterComp {
-        /// Which side.
-        side: CompSide,
-        /// Offset register.
-        d: u32,
-    },
-    /// Pause for a number of seconds.
-    Dwell(f64),
     /// Text passed through untouched, for manual NC and probe macros.
     Raw(String),
     /// End of program.

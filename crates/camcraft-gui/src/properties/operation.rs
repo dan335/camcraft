@@ -1,10 +1,14 @@
-//! An operation's panel, on Fusion's tabs: the tool it cuts with, the geometry
-//! it is kept to, its heights, its passes, and how its passes are linked.
+//! An operation's panel, on Fusion's tabs: the tool it cuts with, its
+//! geometry (what it is kept to, what it cuts round and what is picked), its
+//! heights, its passes, and how its passes are linked.
 
+use camcraft_core::features;
 use camcraft_core::job::{
-    Boundary, Containment, FeatureRef, Geometry, Height, HeightContext, HeightRef, Leads, Leave,
-    Operation, ProfileSide, StockToLeave, StrategySpec, TabShape, Tabs,
+    self, Boundary, Containment, Depths, FaceDirection, FeatureRef, Height, HeightContext,
+    HeightRef, Leads, Leave, MachiningBoundary, Operation, Outline, ProfileSide, StockToLeave,
+    StrategySpec, TabShape, Tabs,
 };
+use camcraft_core::setup::Bodies;
 use eframe::egui;
 use glam::DVec2;
 
@@ -13,7 +17,7 @@ use crate::document::{Document, Level, Selection};
 use crate::picking::slots::{Kind, Slot};
 use crate::tools::drawing::paint_tool;
 use crate::tools::editor::{chip_load_row, surface_speed_row};
-use crate::ui::measure::Measure;
+use crate::ui::measure::{Measure, follow_radial};
 use crate::ui::theme;
 use crate::ui::widgets::{self, Icon, Size, Tab, Variant, error, form, hint, list_row_background};
 use crate::view::viewport::{Plane, PlaneKind};
@@ -172,6 +176,7 @@ fn strategy_name(s: &StrategySpec) -> &'static str {
         StrategySpec::ZlevelRough { .. } => "z-level rough",
         StrategySpec::Profile { .. } => "2D profile",
         StrategySpec::Pocket { .. } => "2D pocket",
+        StrategySpec::Face { .. } => "face",
         StrategySpec::Drill { .. } => "drilling",
     }
 }
@@ -327,13 +332,17 @@ fn geometry(
     picks: Picks<'_>,
     actions: &mut Vec<PropAction>,
 ) {
+    if matches!(op.strategy, StrategySpec::Face { .. }) {
+        face_form(ui, m, op, picks);
+        return;
+    }
     let drilling = matches!(op.strategy, StrategySpec::Drill { .. });
-    let flat = op.strategy.is_2d();
+    let uses = op.strategy.uses();
+    let flat = uses.outline;
     if flat {
-        outline_form(ui, m, op);
+        outline_form(ui, op);
         ui.add_space(theme::SPACE_3);
     }
-    let g = &mut op.geometry;
     if drilling {
         hint(
             ui,
@@ -341,13 +350,12 @@ fn geometry(
              drill to there; otherwise each hole is drilled to the Bottom height.",
         );
         ui.add_space(theme::SPACE_3);
-    } else if !flat {
-        boundary_form(ui, m, g, diameter);
+    } else if uses.boundary {
+        boundary_form(ui, m, &mut op.boundary, diameter);
         ui.add_space(theme::SPACE_3);
     }
-    let selection = if flat { g.boundary_2d() } else { g.boundary() };
-    if drilling || selection == Boundary::Selection {
-        pick_cards(ui, setup, index, g, picks, actions);
+    if op.cuts_selection() {
+        pick_cards(ui, setup, index, &mut op.selection, picks, actions);
     }
     if drilling {
         return;
@@ -358,7 +366,8 @@ fn geometry(
         }
         Some(Ok(())) if flat => {
             let pocket = matches!(op.strategy, StrategySpec::Pocket { .. });
-            let mut items = vec![(Swatch::Bold(theme::BOUNDARY), "The boundary")];
+            let outline = if pocket { "The pocket" } else { "The contour" };
+            let mut items = vec![(Swatch::Bold(theme::BOUNDARY), outline)];
             if diameter.is_some() {
                 items.push((
                     Swatch::Hatch(theme::CHANNEL),
@@ -374,7 +383,7 @@ fn geometry(
                 ui,
                 if diameter.is_none() {
                     "Select a tool to see what it cuts."
-                } else if g.boundary_2d() == Boundary::Selection {
+                } else if op.outline == Outline::Selection {
                     "Both are drawn at the height of what is picked."
                 } else {
                     "Both are drawn at the stock's top."
@@ -396,7 +405,7 @@ fn geometry(
                 ));
             }
             legend(ui, &items);
-            hint(ui, boundary_hint(g));
+            hint(ui, boundary_hint(&op.boundary));
         }
         None => {}
     }
@@ -448,42 +457,32 @@ fn legend(ui: &mut egui::Ui, items: &[(Swatch, &str)]) {
     ui.add_space(theme::SPACE_2);
 }
 
-/// A 2D operation's boundary, what it profiles round or pockets, and a profile's
-/// side of it: Fusion's 2D Contour and 2D Pocket Geometry tabs. The tool's centre
-/// goes its radius beside the boundary, so there is no containment or offset.
-fn outline_form(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
+/// What a 2D operation cuts, its outline: the part's silhouette or picks, and a
+/// profile's side of it. Fusion's 2D Contour and 2D Pocket Geometry tabs, which
+/// select what is cut rather than fence the tool in. The tool's centre goes its radius and the
+/// stock to leave beside it, so there is no containment or additional offset.
+fn outline_form(ui: &mut egui::Ui, op: &mut Operation) {
+    let pocket = matches!(op.strategy, StrategySpec::Pocket { .. });
     form(ui, "outline", |ui| {
-        let g = &mut op.geometry;
-        widgets::field_label(ui, "Boundary");
-        let name = |b: Boundary| match b {
-            Boundary::Stock => "the stock",
-            Boundary::BoundingBox => "the part's bounding box",
-            Boundary::Silhouette => "the part's silhouette",
-            Boundary::Selection => "picked faces and edges",
+        widgets::field_label(ui, if pocket { "Pocket" } else { "Contour" });
+        let name = |o: Outline| match o {
+            Outline::Silhouette => "the part's silhouette",
+            Outline::Selection => "picked faces and edges",
         };
-        let mut chosen = g.boundary_2d();
         egui::ComboBox::from_id_salt("outline")
-            .selected_text(name(chosen))
+            .selected_text(name(op.outline))
             .show_ui(ui, |ui| {
-                for b in [
-                    Boundary::Stock,
-                    Boundary::BoundingBox,
-                    Boundary::Silhouette,
-                    Boundary::Selection,
-                ] {
-                    ui.selectable_value(&mut chosen, b, name(b));
+                for o in [Outline::Silhouette, Outline::Selection] {
+                    ui.selectable_value(&mut op.outline, o, name(o));
                 }
             });
-        if chosen != g.boundary_2d() {
-            g.boundary_kind = Some(chosen);
-        }
         ui.end_row();
         if let StrategySpec::Profile { side, .. } = &mut op.strategy {
             widgets::field_label(ui, "Cut");
             let name = |s: ProfileSide| match s {
-                ProfileSide::Outside => "outside the boundary",
-                ProfileSide::Inside => "inside the boundary",
-                ProfileSide::On => "on the boundary",
+                ProfileSide::Outside => "outside the contour",
+                ProfileSide::Inside => "inside the contour",
+                ProfileSide::On => "on the contour",
             };
             egui::ComboBox::from_id_salt("side")
                 .selected_text(name(*side))
@@ -494,10 +493,6 @@ fn outline_form(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
                 });
             ui.end_row();
         }
-        widgets::field_label(ui, "Additional offset");
-        m.signed_length_field(ui, &mut op.geometry.margin, 0.1, 1000.0, "")
-            .on_hover_text("Moves the cut out from the boundary, or in when negative");
-        ui.end_row();
     });
     // The side is the area's, not each loop's: a part's holes are cut from
     // inside them, a hole's islands from outside them.
@@ -506,23 +501,49 @@ fn outline_form(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
             ui,
             match side {
                 ProfileSide::Outside => {
-                    "Cuts a part out: the tool runs round outside the boundary, and \
+                    "Cuts a part out: the tool runs round outside the contour, and \
                      inside any hole in it."
                 }
                 ProfileSide::Inside => {
-                    "Cuts a hole out: the tool runs round inside the boundary, and \
+                    "Cuts a hole out: the tool runs round inside the contour, and \
                      outside anything left standing in it."
                 }
-                ProfileSide::On => "Cuts a groove: the tool's centre runs on the boundary.",
+                ProfileSide::On => "Cuts a groove: the tool's centre runs on the contour.",
             },
         );
     }
 }
 
+/// What facing faces: the stock's footprint, and how far past it, Fusion's stock
+/// offset. It has nothing to pick.
+fn face_form(ui: &mut egui::Ui, m: Measure, op: &mut Operation, picks: Picks<'_>) {
+    if let StrategySpec::Face { stock_offset, .. } = &mut op.strategy {
+        form(ui, "face", |ui| {
+            widgets::field_label(ui, "Stock offset");
+            m.signed_length_field(ui, stock_offset, 0.1, 1000.0, "")
+                .on_hover_text("How far past the stock's edges is faced");
+            ui.end_row();
+        });
+    }
+    ui.add_space(theme::SPACE_3);
+    match picks.shown.and_then(|s| s.boundary.as_ref()) {
+        Some(Err(why)) => {
+            error(ui, why);
+        }
+        Some(Ok(())) => legend(ui, &[(Swatch::Bold(theme::BOUNDARY), "What is faced")]),
+        None => {}
+    }
+    hint(
+        ui,
+        "Faces the stock's top flat, down to the Bottom height. The tool reaches a \
+         radius past what is faced, and every pass runs off the stock.",
+    );
+}
+
 /// The machining boundary, where the tool may go against it, and how far past it:
 /// Fusion's Geometry tab.
-fn boundary_form(ui: &mut egui::Ui, m: Measure, g: &mut Geometry, diameter: Option<f64>) {
-    let before = (g.boundary(), g.containment);
+fn boundary_form(ui: &mut egui::Ui, m: Measure, g: &mut MachiningBoundary, diameter: Option<f64>) {
+    let before = (g.kind, g.containment);
     form(ui, "geometry", |ui| {
         widgets::field_label(ui, "Boundary");
         let name = |b: Boundary| match b {
@@ -531,9 +552,8 @@ fn boundary_form(ui: &mut egui::Ui, m: Measure, g: &mut Geometry, diameter: Opti
             Boundary::Silhouette => "the part's silhouette",
             Boundary::Selection => "picked faces and edges",
         };
-        let mut chosen = g.boundary();
         egui::ComboBox::from_id_salt("boundary")
-            .selected_text(name(chosen))
+            .selected_text(name(g.kind))
             .show_ui(ui, |ui| {
                 for b in [
                     Boundary::Stock,
@@ -541,14 +561,11 @@ fn boundary_form(ui: &mut egui::Ui, m: Measure, g: &mut Geometry, diameter: Opti
                     Boundary::Silhouette,
                     Boundary::Selection,
                 ] {
-                    ui.selectable_value(&mut chosen, b, name(b));
+                    ui.selectable_value(&mut g.kind, b, name(b));
                 }
             });
-        if chosen != g.boundary() {
-            g.boundary_kind = Some(chosen);
-        }
         ui.end_row();
-        if g.boundary() != Boundary::Stock {
+        if g.kind != Boundary::Stock {
             widgets::field_label(ui, "Tool");
             let name = |c: Containment| match c {
                 Containment::Center => "centre inside the boundary",
@@ -576,8 +593,8 @@ fn boundary_form(ui: &mut egui::Ui, m: Measure, g: &mut Geometry, diameter: Opti
     // walls: it needs room past them to clear anything. A tool's width is a
     // channel two wide, room for a finishing tool to follow. Set once, as a
     // number, so changing the tool later does not move the boundary.
-    let around_part = matches!(g.boundary(), Boundary::BoundingBox | Boundary::Silhouette);
-    if (g.boundary(), g.containment) != before
+    let around_part = matches!(g.kind, Boundary::BoundingBox | Boundary::Silhouette);
+    if (g.kind, g.containment) != before
         && around_part
         && g.containment == Containment::Outside
         && g.margin == 0.0
@@ -588,8 +605,8 @@ fn boundary_form(ui: &mut egui::Ui, m: Measure, g: &mut Geometry, diameter: Opti
 }
 
 /// What the view shows for an operation's boundary.
-fn boundary_hint(g: &Geometry) -> &'static str {
-    let around_part = matches!(g.boundary(), Boundary::BoundingBox | Boundary::Silhouette);
+fn boundary_hint(g: &MachiningBoundary) -> &'static str {
+    let around_part = matches!(g.kind, Boundary::BoundingBox | Boundary::Silhouette);
     if around_part && g.containment == Containment::Outside && g.margin <= 0.0 {
         "The tool only touches the part's walls: nothing outside them is cut. An \
          additional offset makes room for a channel round the part."
@@ -604,7 +621,7 @@ fn pick_cards(
     ui: &mut egui::Ui,
     setup: &str,
     index: usize,
-    g: &mut Geometry,
+    selection: &mut job::Selection,
     picks: Picks<'_>,
     actions: &mut Vec<PropAction>,
 ) {
@@ -620,8 +637,8 @@ fn pick_cards(
             },
         };
         let list = match kind {
-            Kind::Face => &mut g.faces,
-            Kind::Edge => &mut g.edges,
+            Kind::Face => &mut selection.faces,
+            Kind::Edge => &mut selection.edges,
         };
         // A row for each face, and for each loop of edges; each pick alone, as the
         // job names it, until the view has found them.
@@ -736,40 +753,68 @@ fn pick_list(
     }
 }
 
+/// Where the strategy cuts down to without a Bottom: facing to the part's top,
+/// the rest to its bottom.
+fn default_bottom(strategy: &StrategySpec) -> HeightRef {
+    match strategy {
+        StrategySpec::Face { .. } => HeightRef::ModelTop,
+        _ => HeightRef::ModelBottom,
+    }
+}
+
 /// Which of Top and Bottom the strategy cuts to: the others are not asked for.
 fn uses_top_bottom(strategy: &StrategySpec) -> (bool, bool) {
     match strategy {
         StrategySpec::ZlevelRough { .. }
         | StrategySpec::Profile { .. }
-        | StrategySpec::Pocket { .. } => (true, true),
+        | StrategySpec::Pocket { .. }
+        | StrategySpec::Face { .. } => (true, true),
         StrategySpec::Drill { .. } => (false, true),
         StrategySpec::Parallel { .. } => (false, false),
     }
 }
 
+/// Whether a 2D operation goes down to its picks without a Bottom: it has some,
+/// and they are what it cuts round.
+fn down_to_picks(op: &Operation) -> bool {
+    op.strategy.uses().outline && !op.selection.is_empty() && op.outline == Outline::Selection
+}
+
 fn heights(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
     let (top, bottom) = uses_top_bottom(&op.strategy);
+    // Only a top or a bottom is measured from the picks, with some picked, and
+    // never a drill's, whose holes each go to their own.
+    let picks = !op.selection.is_empty() && !matches!(op.strategy, StrategySpec::Drill { .. });
+    let unset = if down_to_picks(op) {
+        HeightRef::Selection
+    } else {
+        default_bottom(&op.strategy)
+    };
     form(ui, "heights", |ui| {
         widgets::field_label(ui, "Clearance");
-        height_field(ui, m, "clearance", &mut op.heights.clearance);
+        height_field(ui, m, "clearance", &mut op.heights.clearance, false);
         ui.end_row();
         if top {
             widgets::field_label(ui, "Top");
-            optional_height(ui, m, "geo-top", &mut op.geometry.top, HeightRef::StockTop);
+            optional_height(
+                ui,
+                m,
+                "geo-top",
+                &mut op.heights.top,
+                HeightRef::StockTop,
+                picks,
+            );
             ui.end_row();
         }
         if bottom {
             widgets::field_label(ui, "Bottom");
-            optional_height(
-                ui,
-                m,
-                "geo-bottom",
-                &mut op.geometry.bottom,
-                HeightRef::ModelBottom,
-            );
+            optional_height(ui, m, "geo-bottom", &mut op.heights.bottom, unset, picks);
             ui.end_row();
         }
     });
+    if let Some(why) = op.cannot_measure_from_picks() {
+        error(ui, why);
+    }
     ui.add_space(theme::SPACE_3);
     match op.strategy {
         StrategySpec::Parallel { .. } => {
@@ -789,7 +834,15 @@ fn heights(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
             hint(
                 ui,
                 "Without a Bottom, each area is cut down to the lowest point picked in \
-                 it, or to the part's bottom when nothing is picked.",
+                 it, or to the part's bottom when nothing is picked. From the selection, \
+                 each area's Top and Bottom are the highest and lowest points picked in \
+                 it, plus the offset.",
+            );
+        }
+        StrategySpec::Face { .. } => {
+            hint(
+                ui,
+                "Without a Bottom, the stock is faced down to the part's top.",
             );
         }
         StrategySpec::ZlevelRough { .. } => {}
@@ -818,11 +871,26 @@ pub fn height_planes(doc: &Document, m: Measure, tab: Option<OperationTab>) -> V
         return Vec::new();
     };
     let stock = prepared.stock_bounds();
+    // How high the picks go, when a height is measured from them. One that
+    // cannot be found leaves the height where it would be with none.
+    let picked = if op.heights.measured_from_selection() || down_to_picks(op) {
+        let bodies: Bodies<'_> = doc
+            .models
+            .iter()
+            .filter_map(|(n, slot)| Some((n.as_str(), &slot.model()?.body)))
+            .collect();
+        features::picked_points(&op.selection, prepared, &bodies, doc.job.tolerance)
+            .ok()
+            .and_then(|points| job::Picks::of(points.iter().map(|p| p.z)))
+    } else {
+        None
+    };
     let ctx = HeightContext {
         stock_top: stock.max.z,
         stock_bottom: stock.min.z,
         model_top: prepared.model_bounds.max.z,
         model_bottom: prepared.model_bounds.min.z,
+        picked,
     };
     // A little past the stock, so a plane on its top does not hide its edges.
     let grow = 0.04 * (stock.max.x - stock.min.x).max(stock.max.y - stock.min.y);
@@ -831,23 +899,29 @@ pub fn height_planes(doc: &Document, m: Measure, tab: Option<OperationTab>) -> V
         stock.max.truncate() + DVec2::splat(grow),
     );
     let (top, bottom) = uses_top_bottom(&op.strategy);
-    let g = &op.geometry;
+    // A 2D operation's, over all its areas: each area's own are drawn with its
+    // outline.
+    let h = &op.heights;
+    let (top_z, bottom_z) = if op.strategy.uses().outline {
+        op.levels_2d(&ctx, ctx.picked)
+    } else {
+        let unset = match default_bottom(&op.strategy) {
+            HeightRef::ModelTop => ctx.model_top,
+            _ => ctx.model_bottom,
+        };
+        (
+            h.top.map_or(ctx.stock_top, |h| h.resolve_top(&ctx)),
+            h.bottom.map_or(unset, |h| h.resolve_bottom(&ctx)),
+        )
+    };
     [
         (
             PlaneKind::Clearance,
             "Clearance",
             Some(op.heights.clearance.resolve(&ctx)),
         ),
-        (
-            PlaneKind::Top,
-            "Top",
-            top.then(|| g.top.map_or(ctx.stock_top, |h| h.resolve(&ctx))),
-        ),
-        (
-            PlaneKind::Bottom,
-            "Bottom",
-            bottom.then(|| g.bottom.map_or(ctx.model_bottom, |h| h.resolve(&ctx))),
-        ),
+        (PlaneKind::Top, "Top", top.then_some(top_z)),
+        (PlaneKind::Bottom, "Bottom", bottom.then_some(bottom_z)),
     ]
     .into_iter()
     .filter_map(|(kind, name, z)| {
@@ -877,30 +951,12 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave
                 );
                 ui.end_row();
             }
-            StrategySpec::ZlevelRough {
-                stepdown,
-                min_ring_length,
-            } => {
-                widgets::field_label(ui, "Stepdown");
-                m.length_field(ui, stepdown, 0.05, 100.0, "");
-                ui.end_row();
+            StrategySpec::ZlevelRough { min_ring_length } => {
                 widgets::field_label(ui, "Shortest ring");
                 m.length_field(ui, min_ring_length, 0.1, 1000.0, "");
                 ui.end_row();
             }
-            StrategySpec::Profile {
-                stepdown,
-                conventional,
-                ..
-            }
-            | StrategySpec::Pocket {
-                stepdown,
-                conventional,
-            } => {
-                widgets::field_label(ui, "Stepdown");
-                m.length_field(ui, stepdown, 0.05, 100.0, "")
-                    .on_hover_text("The deepest each level may be: they are spaced evenly");
-                ui.end_row();
+            StrategySpec::Profile { conventional, .. } | StrategySpec::Pocket { conventional } => {
                 widgets::field_label(ui, "Direction");
                 let mut climb = !*conventional;
                 ui.horizontal(|ui| {
@@ -908,6 +964,36 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave
                     ui.selectable_value(&mut climb, false, "conventional");
                 });
                 *conventional = !climb;
+                ui.end_row();
+            }
+            StrategySpec::Face {
+                angle,
+                direction,
+                pass_extension,
+                ..
+            } => {
+                widgets::field_label(ui, "Pass angle");
+                ui.add(
+                    egui::DragValue::new(angle)
+                        .speed(1.0)
+                        .range(-360.0..=360.0)
+                        .suffix("°"),
+                );
+                ui.end_row();
+                widgets::field_label(ui, "Direction");
+                ui.horizontal(|ui| {
+                    for (d, name) in [
+                        (FaceDirection::BothWays, "both ways"),
+                        (FaceDirection::Climb, "climb"),
+                        (FaceDirection::Conventional, "conventional"),
+                    ] {
+                        ui.selectable_value(direction, d, name);
+                    }
+                });
+                ui.end_row();
+                widgets::field_label(ui, "Pass extension");
+                m.length_field(ui, pass_extension, 0.1, 1000.0, "")
+                    .on_hover_text("How far each pass runs on once the tool is off the stock");
                 ui.end_row();
             }
             StrategySpec::Drill { peck, dwell } => {
@@ -937,27 +1023,64 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave
             m.length_field(ui, &mut op.passes.stepover, 0.05, 100.0, "");
             ui.end_row();
         }
-        if uses.stock_to_leave != Leave::None {
-            widgets::field_label(ui, "Stock to leave");
-            stock_to_leave(
-                ui,
-                m,
-                &mut op.passes.stock_to_leave,
-                uses.stock_to_leave,
-                least,
-            );
-            ui.end_row();
-        }
         widgets::field_label(ui, "Deepest step cut");
         m.length_field(ui, &mut op.passes.max_cut_step, 0.05, 50.0, "");
         ui.end_row();
     });
+    if uses.depths != Depths::None {
+        ui.add_space(theme::SPACE_4);
+        ui.label(widgets::section_label("Multiple depths"));
+        ui.add_space(theme::SPACE_2);
+        multiple_depths(ui, m, op);
+    }
+    if uses.stock_to_leave != Leave::None {
+        ui.add_space(theme::SPACE_4);
+        ui.label(widgets::section_label("Stock to leave"));
+        ui.add_space(theme::SPACE_2);
+        stock_to_leave(
+            ui,
+            m,
+            &mut op.passes.stock_to_leave,
+            uses.stock_to_leave,
+            least,
+        );
+    }
     if uses.tabs {
         ui.add_space(theme::SPACE_4);
         ui.label(widgets::section_label("Tabs"));
         ui.add_space(theme::SPACE_2);
         tabs(ui, m, &mut op.passes.tabs);
     }
+}
+
+/// Multiple depths, as Fusion's Passes tab has them: ticked to cut in levels,
+/// then the deepest each may be. Unticked is the bottom in one pass. A strategy
+/// that always cuts in levels, as roughing does, cannot be unticked.
+fn multiple_depths(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
+    let required = op.strategy.uses().depths == Depths::Required;
+    let mut on = op.passes.stepdown.is_some();
+    let r = ui
+        .add_enabled(
+            !(required && on),
+            egui::Checkbox::new(&mut on, "Step down in levels"),
+        )
+        .on_disabled_hover_text(format!(
+            "{} always cuts in levels",
+            strategy_name(&op.strategy)
+        ));
+    if r.changed() {
+        op.passes.stepdown = on.then(|| op.strategy.default_stepdown().unwrap_or(2.0));
+    }
+    let Some(stepdown) = &mut op.passes.stepdown else {
+        return;
+    };
+    ui.add_space(theme::SPACE_2);
+    form(ui, "multiple-depths", |ui| {
+        widgets::field_label(ui, "Stepdown");
+        m.length_field(ui, stepdown, 0.05, 100.0, "")
+            .on_hover_text("The deepest each level may be: they are spaced evenly");
+        ui.end_row();
+    });
 }
 
 /// Stock to leave, as Fusion's Passes tab has it: ticked to leave any, then how
@@ -970,22 +1093,36 @@ fn stock_to_leave(
     leave: Leave,
     least: StockToLeave,
 ) {
-    ui.horizontal(|ui| {
-        let mut on = *stock != StockToLeave::default();
-        if ui.checkbox(&mut on, "").changed() {
-            *stock = if on {
-                StockToLeave {
-                    radial: 0.5,
-                    axial: 0.5,
-                }
-            } else {
-                StockToLeave::default()
-            };
+    let mut on = *stock != StockToLeave::default();
+    if ui
+        .checkbox(&mut on, "Leave stock for a finishing pass")
+        .changed()
+    {
+        *stock = if on {
+            StockToLeave {
+                radial: 0.5,
+                axial: 0.5,
+            }
+        } else {
+            StockToLeave::default()
+        };
+    }
+    if !on {
+        return;
+    }
+    ui.add_space(theme::SPACE_2);
+    let before = *stock;
+    form(ui, "stock-to-leave", |ui| {
+        if leave == Leave::Both {
+            widgets::field_label(ui, "Walls");
+            m.wall_to_leave_field(ui, &mut stock.radial, least.radial, "");
+            ui.end_row();
         }
-        if on {
-            m.stock_to_leave_fields(ui, stock, leave, least);
-        }
+        widgets::field_label(ui, "Floors");
+        m.floor_to_leave_field(ui, &mut stock.axial, least.axial, "");
+        ui.end_row();
     });
+    follow_radial(stock, before);
 }
 
 /// Tabs left across the deepest cut to hold what it frees, and their size.
@@ -1166,14 +1303,19 @@ fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f
     });
 }
 
-fn height_field(ui: &mut egui::Ui, m: Measure, id: &str, h: &mut Height) {
+/// A height, an offset from what it is measured from; from the picks too when
+/// `picks`. One measured from them already keeps it on the list either way, so
+/// it reads as what it is until changed.
+fn height_field(ui: &mut egui::Ui, m: Measure, id: &str, h: &mut Height, picks: bool) {
     let name = |r: HeightRef| match r {
         HeightRef::StockTop => "stock top",
         HeightRef::StockBottom => "stock bottom",
         HeightRef::ModelTop => "model top",
         HeightRef::ModelBottom => "model bottom",
         HeightRef::Absolute => "work zero",
+        HeightRef::Selection => "selection",
     };
+    let picks = picks || h.from_selection();
     ui.horizontal(|ui| {
         m.signed_length_field(ui, &mut h.offset, 0.1, 10_000.0, "");
         ui.label("from");
@@ -1186,22 +1328,30 @@ fn height_field(ui: &mut egui::Ui, m: Measure, id: &str, h: &mut Height) {
                     HeightRef::ModelTop,
                     HeightRef::ModelBottom,
                     HeightRef::Absolute,
-                ] {
+                ]
+                .into_iter()
+                .chain(picks.then_some(HeightRef::Selection))
+                {
                     ui.selectable_value(&mut h.reference, r, name(r));
                 }
             });
     });
 }
 
+/// A top or bottom that need not be given: `default` when it is not, which it
+/// starts from when given. `picks` as [`height_field`]'s.
 fn optional_height(
     ui: &mut egui::Ui,
     m: Measure,
     id: &str,
     h: &mut Option<Height>,
     default: HeightRef,
+    picks: bool,
 ) {
     let absent = match default {
         HeightRef::StockTop => "the stock's top",
+        HeightRef::ModelTop => "the part's top",
+        HeightRef::Selection => "the picks",
         _ => "the part's bottom",
     };
     let start = Height {
@@ -1209,6 +1359,8 @@ fn optional_height(
         offset: 0.0,
     };
     ui.horizontal(|ui| {
-        widgets::optional(ui, h, start, absent, |ui, h| height_field(ui, m, id, h));
+        widgets::optional(ui, h, start, absent, |ui, h| {
+            height_field(ui, m, id, h, picks);
+        });
     });
 }

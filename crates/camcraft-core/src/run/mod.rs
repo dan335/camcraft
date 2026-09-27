@@ -43,7 +43,7 @@ pub use pitch::{CELLS_PER_TOOL, FINEST_PITCH, MAX_SIM_CELLS, SIM_CELLS, sim_pitc
 pub use result::{Made, OperationResult, Plan, SetupResult, Stage, StrategyDetail};
 
 use error::in_op;
-use operation::{Target, Work, drill_holes, not_made, planar_areas, run_operation};
+use operation::{Target, Work, drill_holes, heights_of, not_made, planar_areas, run_operation};
 
 /// Material further above the part than this, in millimetres, counts as left over.
 ///
@@ -91,6 +91,7 @@ pub fn run_prepared_planned(
         stock_bottom,
         model_top: bounds.max.z,
         model_bottom: bounds.min.z,
+        picked: None,
     };
 
     let narrowest = setup
@@ -133,6 +134,7 @@ pub fn run_prepared_planned(
             keyframes.push(Arc::new(PackedStock::pack(&stock)));
             continue;
         }
+        let ctx = heights_of(job, op, prepared, bodies, &ctx)?;
         // A drilling operation's picked edges are its holes, and a 2D one's
         // boundary is what it cuts round or clears, not a limit.
         let target = match op.strategy {
@@ -142,9 +144,12 @@ pub fn run_prepared_planned(
             StrategySpec::Profile { .. } | StrategySpec::Pocket { .. } => {
                 Target::Areas(planar_areas(job, op, prepared, bodies, &ctx, &tool)?)
             }
+            // Facing works from the stock alone.
+            StrategySpec::Face { .. } => Target::Limit(None),
             StrategySpec::Parallel { .. } | StrategySpec::ZlevelRough { .. } => Target::Limit(
                 machining_boundary(
-                    &op.geometry,
+                    &op.boundary,
+                    &op.selection,
                     prepared,
                     bodies,
                     tool.cutter_radius(),

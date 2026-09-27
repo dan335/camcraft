@@ -15,14 +15,29 @@ where does each decision live?
 **The boundary is the operation's own Geometry.** Decision 0002 put picks in
 `Geometry`, not the strategy, so "a pocket will clear a picked floor, a trace
 will follow picked edges". A 2D operation reads the same `boundary` and picks as
-a shape to cut round or clear, not as a limit. With nothing chosen and nothing
-picked, its boundary is the part's silhouette (`Geometry::boundary_2d`), so a new
-profile goes round the part. `containment` is for a boundary that limits a 3D
+a shape to cut round or clear, not as a limit. Unless the picks are chosen, its
+boundary is the part's silhouette (`Geometry::boundary_2d`), so a new profile goes
+round the part. `containment` is for a boundary that limits a 3D
 strategy; a 2D one's tool goes its radius, plus the stock to leave sideways,
-beside the boundary, on the side the strategy says. `margin`, the additional
-offset, moves that further out, or in when negative, as if the boundary were
-moved (added 2026-09-26, version 8). It moves the tool, not the boundary, so
-floors are still found among the picks on the boundary.
+beside the boundary, on the side the strategy says.
+
+*Amended 2026-09-27.* Fusion's 2D Contour and Pocket have no machining
+boundary: their Geometry tab selects what is cut. So a 2D operation's boundary is
+only the silhouette or the picks, and the panel calls it the contour or the
+pocket. The additional offset that moved a 2D cut (added 2026-09-26) is
+gone: the radial stock to leave, negative included, moves it, as in
+Fusion, and moves the tool, not the boundary, so floors are still found among the
+picks on the boundary. A pocket over the
+stock was how we faced; facing is now its own strategy, Fusion's Face
+(`crate::face`).
+
+*Amended again 2026-09-27.* One `boundary` field meaning a fence in 3D and a
+shape to cut in 2D needed `boundary_2d` to read one as the other, and left a 3D
+containment and offset on every 2D operation. The two are now separate
+settings: a 2D operation's `outline` (`Outline`: the silhouette or the
+selection) and a 3D one's `boundary` (`MachiningBoundary`), each gated by
+`StrategySpec::uses`, with the picks they share in `selection`. The panel's tab
+is still Fusion's Geometry.
 
 **A profile's side is the strategy's.** Fusion flips a contour's side with an
 arrow on each chain. We have one `side` for the operation: outside, inside or on.
@@ -32,8 +47,10 @@ part with holes means; a part with holes the other way is two operations.
 **Floors come from the picks, area by area.** Fusion's bottom defaults to "the
 selected contour". The boundary falls into areas (an outer ring and its holes),
 and each is cut to the lowest picked point in it: picking two pocket floors at
-different depths cuts each to its own. A bottom given overrides them all. With
-nothing picked, the part's bottom.
+different depths cuts each to its own. A bottom given overrides them all, unless
+it is measured from the selection: then each area is still measured from its own
+picks, plus the offset, and a top measured from the selection likewise from their
+highest. With nothing picked, the part's bottom.
 
 **Levels are even.** Fusion's multiple depths space levels by the maximum
 stepdown, optionally evenly. We always space them evenly, so no level is a
@@ -65,13 +82,14 @@ it leaves on the tool's right. The rings are wound to that, reversed for
 material along the ring about to be cut, wrapping round it as often as the ramp
 needs. A ring too short to ramp along is plunged.
 
-**Version 7.** A build that does not know the strategy would fail to parse it with
-a message about an unknown variant. Version 7 makes it refuse by name.
+**Version 7, since removed.** It was version 7, so an older build would refuse it by
+name. Job versioning was removed on 2026-09-27: there is one format, and no
+backwards compatibility while camcraft is pre-alpha (`docs/jobs.md`, Format).
 
 ## Rules kept
 
 - **Paths from the model** (decision 0003): every ring is an offset of the boundary,
-  which comes from the model's faces and edges, its shadow, or the stock's box.
+  which comes from the model's faces and edges, or its shadow.
   Nothing reads the stock grid.
 - The part below the boundary is not consulted, as Fusion's 2D operations do not
   consult it. A part that reaches past its boundary lower down is cut into, and the

@@ -1,8 +1,8 @@
-//! Checking a job before anything is computed, and the file version it needs.
+//! Checking a job before anything is computed.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{Coolant, FixedBox, JOB_VERSION, Job, JobError, Origin, SpindleDirection, StockSpec};
+use super::{FixedBox, JOB_VERSION, Job, JobError, Origin, StockSpec};
 use crate::is_positive;
 
 impl Job {
@@ -23,7 +23,7 @@ impl Job {
     /// the names, and the stocks. A setup still being written does not fail this,
     /// so another setup can run.
     pub fn check_common(&self) -> Result<(), JobError> {
-        if !(1..=JOB_VERSION).contains(&self.version) {
+        if self.version != JOB_VERSION {
             return Err(JobError::UnsupportedVersion(self.version));
         }
         positive("tolerance", self.tolerance)?;
@@ -208,67 +208,12 @@ impl Job {
             pick(format!("setup '{name}' work zero"), &point.model, &point.at)?;
         }
         for op in running() {
-            for r in op.geometry.faces.iter().chain(&op.geometry.edges) {
+            for r in op.selection.iter() {
                 pick(format!("operation '{name}/{}'", op.name), &r.model, &r.at)?;
             }
         }
 
         running().try_for_each(|op| op.check(name, &self.tools))
-    }
-
-    /// The oldest file format that holds everything this job says: 8 if a 2D
-    /// operation has an additional offset, or any has tabs or leads, which a
-    /// version 7 reader would cut without, or negative stock to leave, which it
-    /// would refuse; 7 if an operation profiles or pockets, which an older reader has
-    /// no strategy for;
-    /// 6 if a boundary would not read as it did before boundaries could be
-    /// chosen; 5 if a fixed box is placed against the models; 4 if an
-    /// operation is turned off, which an older reader would cut; 3 if an
-    /// operation sets its own spindle speed, or a tool turns backwards or wants
-    /// coolant, which an older reader would skip and cut without; 2 if it uses
-    /// picked features, which a version 1 reader would skip and cut the whole part;
-    /// and 1 otherwise.
-    pub fn required_version(&self) -> u32 {
-        let ops = || self.setups.iter().flat_map(|s| &s.operations);
-        let offset = |op: &crate::job::Operation| op.strategy.is_2d() && op.geometry.margin != 0.0;
-        let past = |op: &crate::job::Operation| {
-            let leave = op.passes.stock_to_leave;
-            leave.radial < 0.0 || leave.axial < 0.0
-        };
-        if ops().any(|op| {
-            offset(op) || op.passes.tabs.is_some() || op.linking.leads.is_some() || past(op)
-        }) {
-            return 8;
-        }
-        if ops().any(|op| op.strategy.is_2d()) {
-            return 7;
-        }
-        if ops().any(|op| !op.geometry.reads_as_before()) {
-            return 6;
-        }
-        let placed = self
-            .stocks
-            .iter()
-            .any(|s| matches!(&s.spec, StockSpec::FixedBox(b) if b.placed()));
-        if placed {
-            return 5;
-        }
-        if ops().any(|op| !op.enabled) {
-            return 4;
-        }
-        let turned = self
-            .tools
-            .values()
-            .any(|t| t.spindle != SpindleDirection::default() || t.coolant != Coolant::default());
-        if turned || ops().any(|op| op.passes.rpm.is_some()) {
-            return 3;
-        }
-        let picks = self
-            .setups
-            .iter()
-            .any(|s| matches!(s.origin, Origin::Point { .. }))
-            || ops().any(|op| op.geometry.picked());
-        if picks { 2 } else { 1 }
     }
 }
 

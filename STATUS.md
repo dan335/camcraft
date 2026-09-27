@@ -63,7 +63,8 @@ program went from about 8 h to 4.6 h.
    are helices and tangent arcs.
 2. **Start rapids split XY then Z.** The first move is one G0 in all three axes
    from wherever the tool change left the spindle.
-3. **More strategies**: waterline, adaptive clearing. 2D profile and pocket are
+3. **More strategies**: waterline, adaptive clearing. Facing, as Fusion's Face,
+   is done. 2D profile and pocket are
    done ([decision 0005](docs/decisions/0005-2d-profile-and-pocket.md)), with
    tabs (on profiles, as Fusion's on a 2D contour) and a profile's horizontal
    leads; they lack finishing passes, a pocket's leads, and picked entry points

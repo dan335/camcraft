@@ -15,7 +15,9 @@
 //! An operation is shaped the way Fusion shapes one, **Geometry, Heights, Passes,
 //! Linking**, because that factoring is proven and maps one-to-one onto the
 //! provisions this project was built around. Adopting it means the parameter layer
-//! never needs restructuring as strategies are added.
+//! never needs restructuring as strategies are added. Fusion's Geometry tab is
+//! three settings here, since it means different things to different strategies:
+//! the picks (`selection`), a 3D machining `boundary` and a 2D `outline`.
 //!
 //! # Heights are symbolic
 //!
@@ -46,24 +48,10 @@
 //! pick survives; a model edited so the point is on nothing any more says so, and
 //! nothing is cut until the pick is made again. See `crate::features`.
 //!
-//! # Versions
+//! # Format
 //!
-//! A build that predates picked features would read a job that uses them, skip the
-//! fields it does not know, and machine the whole part where a person had asked for
-//! one face. So a job that uses them is written as version 2, which such a build
-//! refuses by name, and every other job is still written as version 1, which it
-//! reads as before ([`Job::required_version`]). An operation's own spindle speed,
-//! and a tool's spindle direction and coolant, are the same kind of field, so a
-//! job with any of them is version 3. Leaving an operation out is version 4, and
-//! a fixed box placed against the models, rather than at a corner, is version 5.
-//! A machining boundary chosen other than as picks alone would make it, or an
-//! additional offset that moves a boundary the whole tool is kept inside inward
-//! where it used to move it out, is version 6: an older build would clear the
-//! whole stock, or cut past where it was asked. A 2D profile or pocket is
-//! version 7, which an older build would not know how to cut at all. One with an
-//! additional offset, or any operation with tabs or leads, is version 8: a
-//! version 7 build would cut it on the boundary, cut the part free, or enter
-//! and leave it where the lead was to keep a mark off it.
+//! There is one job file format, [`JOB_VERSION`]. A file of any other version is
+//! refused by name rather than read as something it may not mean.
 
 mod error;
 mod model;
@@ -89,8 +77,9 @@ use serde::{Deserialize, Serialize};
 pub use error::JobError;
 pub use model::{FixedBox, LengthUnit, ModelDef, Place, StockDef, StockSpec};
 pub use operation::{
-    Boundary, Containment, Geometry, Height, HeightContext, HeightRef, Heights, Leads, Leave,
-    Linking, Operation, Passes, ProfileSide, StockToLeave, StrategySpec, TabShape, Tabs, Uses,
+    Boundary, Containment, Depths, FaceDirection, Height, HeightContext, HeightRef, Heights, Leads,
+    Leave, Linking, MachiningBoundary, Operation, Outline, Passes, Picks, ProfileSide, Selection,
+    StockToLeave, StrategySpec, TabShape, Tabs, Uses,
 };
 pub use pick::{FeatureRef, PointRef, Snap};
 pub use setup::{Along, BoxOf, Origin, Setup};
@@ -99,10 +88,8 @@ pub use tool::{
     ToolKind, ToolMaterial, ToolSpec, free_preset_name,
 };
 
-/// The newest job file format this build reads and writes. It reads every version
-/// from 1, and writes the oldest that holds what a job says
-/// ([`Job::required_version`]).
-pub const JOB_VERSION: u32 = 8;
+/// The job file format this build reads and writes, and the only one it reads.
+pub const JOB_VERSION: u32 = 1;
 
 /// A complete job.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -167,8 +154,8 @@ impl Job {
                 point.model = to.to_string();
             }
             for op in &mut setup.operations {
-                let g = &mut op.geometry;
-                for r in g.faces.iter_mut().chain(&mut g.edges) {
+                let s = &mut op.selection;
+                for r in s.faces.iter_mut().chain(&mut s.edges) {
                     if r.model == from {
                         r.model = to.to_string();
                     }

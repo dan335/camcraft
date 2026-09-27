@@ -384,44 +384,6 @@ impl Stock {
         r
     }
 
-    /// Make this stock `other` again, in place, on the same grid. Returns the
-    /// cells that differed, or `None` when the grids are not the same.
-    #[cfg(test)]
-    pub(crate) fn restore_from(&mut self, other: &Stock) -> Option<Option<CellRect>> {
-        let (a, b) = (&other.field, &self.field);
-        if a.nx() != b.nx() || a.ny() != b.ny() || a.pitch().to_bits() != b.pitch().to_bits() {
-            return None;
-        }
-        self.floor = other.floor;
-        let nx = a.nx() as usize;
-        let mut changed: Option<CellRect> = None;
-        for (iy, (dst, src)) in (0u32..).zip(
-            self.field
-                .data_mut()
-                .chunks_mut(nx)
-                .zip(other.field.data().chunks(nx)),
-        ) {
-            let same = |(x, y): (&f32, &f32)| x.to_bits() == y.to_bits();
-            let Some(first) = dst.iter().zip(src.iter()).position(|p| !same(p)) else {
-                continue;
-            };
-            let last = dst
-                .iter()
-                .zip(src.iter())
-                .rposition(|p| !same(p))
-                .unwrap_or(first);
-            dst.copy_from_slice(src);
-            let row = CellRect {
-                x0: u32::try_from(first).ok()?,
-                y0: iy,
-                x1: u32::try_from(last).ok()?,
-                y1: iy,
-            };
-            changed = CellRect::join(changed, Some(row));
-        }
-        Some(changed)
-    }
-
     /// Write the field as a 16-bit grayscale PGM, for eyeballing.
     ///
     /// Cheap to produce and worth a great deal when a number looks wrong and the

@@ -79,10 +79,6 @@ fn check_against(profile: &Profile, path: &Toolpath, spec: &ProgramSpec, file: &
     let (got, report) = render(&ops, profile, "golden");
 
     assert!(report.lines > 10, "suspiciously short program");
-    assert_eq!(
-        report.reserved_used, 0,
-        "the fixture should not use reserved instructions"
-    );
 
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden")

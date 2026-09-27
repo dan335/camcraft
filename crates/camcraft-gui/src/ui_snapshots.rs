@@ -431,7 +431,7 @@ fn setup_panel() {
     h.run_steps(3);
     shoot(&mut h, "operation_passes_rough");
 
-    // A fixed box at a corner, as an old job has it; then one placed against the
+    // A fixed box at a corner, wherever the models are; then one placed against the
     // setup's models the way Fusion places one, with the block it comes to.
     if let Some(doc) = h.state_mut().doc_for_snapshot() {
         doc.selection = Selection::Stock("offcut".into());
@@ -681,7 +681,7 @@ stocks = ["block"]
 [[setup.operation]]
 name = "rough"
 strategy = "zlevel-rough"
-stepdown = 2.0
+passes = {{ stepdown = 2.0 }}
 min_ring_length = 3.0
 tool = "rough-6-flat"
 "#,
@@ -749,7 +749,7 @@ fn lego_silhouette_boundary() {
     std::fs::create_dir_all(&dir).unwrap();
     let model = repo("fixtures/step/lego_4x2_01.step");
     let job = format!(
-        r#"version = 6
+        r#"version = 1
 tolerance = 0.05
 
 [tools.rough-6-flat]
@@ -775,10 +775,10 @@ stocks = ["block"]
 [[setup.operation]]
 name = "rough"
 strategy = "zlevel-rough"
-stepdown = 2.0
+passes = {{ stepdown = 2.0 }}
 min_ring_length = 3.0
 tool = "rough-6-flat"
-geometry = {{ boundary = "silhouette", containment = "outside", margin = 6.35 }}
+boundary = {{ kind = "silhouette", containment = "outside", margin = 6.35 }}
 "#,
         model.display()
     );
@@ -812,9 +812,9 @@ geometry = {{ boundary = "silhouette", containment = "outside", margin = 6.35 }}
     shoot(&mut h, "lego_boundary_roughed");
 }
 
-/// The lego brick faced with a 2D pocket and cut out of its block with a 2D
-/// profile: the profile's Geometry tab with its boundary in the view, its Passes
-/// tab, and the brick played back to the end.
+/// The lego brick faced and cut out of its block with a 2D profile: the face's
+/// Geometry and Passes tabs, the profile's Geometry tab with its contour in the
+/// view, its Passes tab, and the brick played back to the end.
 #[test]
 #[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
 fn lego_profile_and_pocket() {
@@ -824,7 +824,7 @@ fn lego_profile_and_pocket() {
     std::fs::create_dir_all(&dir).unwrap();
     let model = repo("fixtures/step/lego_4x2_01.step");
     let job = format!(
-        r#"version = 7
+        r#"version = 1
 tolerance = 0.05
 
 [tools.eighth-flat]
@@ -849,18 +849,15 @@ stocks = ["block"]
 
 [[setup.operation]]
 name = "face"
-strategy = "pocket"
-stepdown = 2.0
+strategy = "face"
 tool = "eighth-flat"
-passes = {{ feed = 1500.0, stepover = 1.9 }}
-geometry = {{ boundary = "stock", bottom = {{ ref = "model-top" }} }}
+passes = {{ stepdown = 2.0, feed = 1500.0, stepover = 3.0 }}
 
 [[setup.operation]]
 name = "cut out"
 strategy = "profile"
-stepdown = 3.0
 tool = "eighth-flat"
-passes = {{ feed = 1500.0 }}
+passes = {{ stepdown = 3.0, feed = 1500.0 }}
 "#,
         model.display()
     );
@@ -872,6 +869,15 @@ passes = {{ feed = 1500.0 }}
     let ctx = h.ctx.clone();
     h.state_mut().open_job(&ctx, path);
     settle(&mut h);
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.selection = Selection::Operation("top".into(), 0);
+    }
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 1_usize));
+    h.run_steps(4);
+    shoot(&mut h, "lego_2d_face_geometry");
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 3_usize));
+    h.run_steps(4);
+    shoot(&mut h, "lego_2d_face_passes");
     if let Some(doc) = h.state_mut().doc_for_snapshot() {
         doc.selection = Selection::Operation("top".into(), 1);
     }
@@ -897,12 +903,33 @@ passes = {{ feed = 1500.0 }}
         h.run_steps(4);
         shoot(&mut h, name);
     }
+    // Its heights, with the loop picked: without a Bottom it goes down to the
+    // picks; then the Bottom measured from them, half a millimetre under, with
+    // the list of what it can be measured from open.
     h.state_mut().picking_disarm_for_snapshot();
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 2_usize));
+    h.run_steps(4);
+    shoot(&mut h, "lego_2d_profile_heights_picks");
     if let Some(doc) = h.state_mut().doc_for_snapshot()
         && let Some(o) = doc.operation_mut("top", 1)
     {
-        o.geometry.boundary_kind = None;
-        o.geometry.edges.clear();
+        o.heights.bottom = Some(camcraft_core::job::Height {
+            reference: camcraft_core::job::HeightRef::Selection,
+            offset: -0.5,
+        });
+    }
+    h.run_steps(4);
+    h.get_by_value("selection").click();
+    h.run_steps(4);
+    shoot(&mut h, "lego_2d_profile_heights_selection");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    if let Some(doc) = h.state_mut().doc_for_snapshot()
+        && let Some(o) = doc.operation_mut("top", 1)
+    {
+        o.heights.bottom = None;
+        o.outline = camcraft_core::job::Outline::Silhouette;
+        o.selection.edges.clear();
         if let StrategySpec::Profile { side, .. } = &mut o.strategy {
             *side = ProfileSide::Outside;
         }
@@ -954,7 +981,7 @@ fn view_cube() {
     std::fs::create_dir_all(&dir).unwrap();
     let model = repo("fixtures/step/lego_4x2_01.step");
     let job = format!(
-        r#"version = 7
+        r#"version = 1
 tolerance = 0.05
 
 [tools.eighth-flat]
@@ -980,9 +1007,8 @@ stocks = ["block"]
 [[setup.operation]]
 name = "rough"
 strategy = "zlevel-rough"
-stepdown = 3.0
 tool = "eighth-flat"
-passes = {{ feed = 1500.0, stepover = 1.9 }}
+passes = {{ stepdown = 3.0, feed = 1500.0, stepover = 1.9 }}
 "#,
         model.display()
     );
@@ -1073,8 +1099,10 @@ path = "{}"
 [[stock]]
 name = "sheet"
 kind = "fixed-box"
-corner = [-700.0, -1800.0, -163.0]
 size = [1524.0, 3658.0, 203.2]
+x = {{ from = "at", coordinate = -700.0 }}
+y = {{ from = "at", coordinate = -1800.0 }}
+z = {{ from = "at", coordinate = -163.0 }}
 
 [[setup]]
 name = "top"
@@ -1084,17 +1112,15 @@ stocks = ["sheet"]
 [[setup.operation]]
 name = "surface"
 strategy = "zlevel-rough"
-stepdown = 20.0
 tool = "half-inch"
-passes = {{ stepover = 6.0, feed = 5000.0 }}
+passes = {{ stepdown = 20.0, stepover = 6.0, feed = 5000.0 }}
 
 [[setup.operation]]
 name = "detail"
 strategy = "zlevel-rough"
-stepdown = 1.0
 tool = "sixteenth"
-geometry = {{ top = {{ ref = "stock-top", offset = 3.0 }}, bottom = {{ ref = "stock-top", offset = 1.0 }} }}
-passes = {{ stepover = 0.8, feed = 1500.0 }}
+heights = {{ top = {{ ref = "stock-top", offset = 3.0 }}, bottom = {{ ref = "stock-top", offset = 1.0 }} }}
+passes = {{ stepdown = 1.0, stepover = 0.8, feed = 1500.0 }}
 "#,
         model.display()
     );

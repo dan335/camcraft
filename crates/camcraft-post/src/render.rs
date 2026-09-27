@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use camcraft_core::job::{Coolant, SpindleDirection};
 use glam::{DVec2, DVec3};
 
-use crate::op::{CompSide, CycleKind, Op, Units};
+use crate::op::{CycleKind, Op, Units};
 use crate::profile::{ArcStyle, Profile, ToolChangeStyle};
 
 /// What rendering produced besides the text.
@@ -22,11 +22,6 @@ pub struct RenderReport {
     pub motion_blocks: u64,
     /// Axis words omitted because the machine already had the value.
     pub suppressed_words: u64,
-    /// Reserved instructions encountered: arcs and cutter compensation.
-    ///
-    /// Non-zero means the stream used something the engine does not emit yet, so
-    /// the output should be read before it is trusted.
-    pub reserved_used: u64,
 }
 
 /// Render a stream into G-code.
@@ -160,10 +155,7 @@ impl<'a> Writer<'a> {
                 centre,
                 clockwise,
                 feed,
-            } => {
-                self.report.reserved_used += 1;
-                self.arc(*to, *centre, *clockwise, *feed);
-            }
+            } => self.arc(*to, *centre, *clockwise, *feed),
             Op::Cycle {
                 kind,
                 at,
@@ -176,24 +168,6 @@ impl<'a> Writer<'a> {
                 self.cycle(*kind, *at, *depth, *retract, *peck, *dwell, *feed);
             }
             Op::CycleEnd => self.raw("G80"),
-            Op::CutterComp { side, d } => {
-                self.report.reserved_used += 1;
-                let g = match side {
-                    CompSide::Left => "G41",
-                    CompSide::Right => "G42",
-                    CompSide::Off => "G40",
-                };
-                let s = match side {
-                    CompSide::Off => g.to_string(),
-                    _ => format!("{g} D{d}"),
-                };
-                self.raw(&s);
-                self.motion = None;
-            }
-            Op::Dwell(secs) => {
-                let s = format!("G4 P{}", self.p.feed(*secs));
-                self.raw(&s);
-            }
             Op::Raw(text) => {
                 // Passed through untouched, by definition. Modal state is unknown
                 // afterwards, so nothing may be suppressed against it.
@@ -468,10 +442,9 @@ mod tests {
         assert!(g.contains("X10 "), "grbl strips trailing zeros:\n{g}");
     }
 
-    /// Reserved instructions still render, and say so, so that using one before its
-    /// feature exists is visible rather than silent.
+    /// Arcs, which nothing emits yet, and canned cycles render.
     #[test]
-    fn reserved_instructions_render_and_are_counted() {
+    fn arcs_and_cycles_render() {
         let ops = vec![
             Op::Units(Units::Millimetres),
             Op::Rapid {
@@ -493,7 +466,7 @@ mod tests {
                 feed: 200.0,
             },
         ];
-        let (g, report) = render(&ops, &masso(), "t");
+        let (g, _) = render(&ops, &masso(), "t");
         assert!(g.contains("G2 "), "arc missing:\n{g}");
         assert!(g.contains("I5.000"), "IJ centre missing:\n{g}");
         assert!(g.contains("G83"), "peck cycle missing:\n{g}");
@@ -502,8 +475,6 @@ mod tests {
             g.contains("X1.000 Y2.000"),
             "the hole's place missing:\n{g}"
         );
-        // A cycle is emitted now, by drilling; only the arc is still reserved.
-        assert_eq!(report.reserved_used, 1);
     }
 
     /// Raw text is a hole in the renderer's knowledge; suppressing against stale

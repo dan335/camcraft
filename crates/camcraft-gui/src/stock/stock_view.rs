@@ -270,13 +270,6 @@ impl StockImage {
     }
 
     /// Classify `stock` against `part`, with the job's gouge `budget`, and
-    /// shade it.
-    #[cfg(test)]
-    pub fn build(stock: &Stock, part: &PartSurface, budget: f64) -> Self {
-        Self::build_shaded(stock, part, budget).0
-    }
-
-    /// Classify `stock` against `part`, with the job's gouge `budget`, and
     /// shade it; with what shaded it, to keep it shaded as it changes.
     pub fn build_shaded(stock: &Stock, part: &PartSurface, budget: f64) -> (Self, Occluder) {
         let field = stock.field();
@@ -333,13 +326,6 @@ impl StockImage {
         }
         let occluder = Occluder::new(&image);
         (image, occluder)
-    }
-
-    /// Classify again the cells of `rect`, which is all that changed in `stock`
-    /// since this image was made from it, keeping the counts.
-    #[cfg(test)]
-    pub fn patch(&mut self, stock: &Stock, part: &PartSurface, budget: f64, rect: CellRect) {
-        self.classify_at(stock, part, budget, rect, (0, 0), false);
     }
 
     /// Classify the cells of `rect` whose height is not the one this image holds
@@ -536,8 +522,7 @@ stocks = ["block"]
 name = "rough"
 strategy = "zlevel-rough"
 tool = "flat"
-stepdown = 4.0
-passes = { stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.3, axial = 0.3 } }
+passes = { stepdown = 4.0, stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.3, axial = 0.3 } }
 "#,
         )
         .unwrap();
@@ -545,7 +530,7 @@ passes = { stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.3, axial
         let result = run_setup_zero(&job, &repo).result;
 
         let finished = result.keyframes.last().unwrap().unpack().unwrap();
-        let image = StockImage::build(&finished, &result.part, result.verify_budget);
+        let image = StockImage::build_shaded(&finished, &result.part, result.verify_budget).0;
         assert_eq!(image.count(Class::Gouge) as u64, result.verify.gouged);
         assert_eq!(image.count(Class::Leftover) as u64, result.verify.leftover);
         assert!(
@@ -607,7 +592,7 @@ passes = { stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.3, axial
         let part = PartSurface::from_mesh(&synthetic::plane(0.0, 12.0), lo, hi, 0.5).unwrap();
         {
             let mut stock = Stock::block(lo, hi, 5.0, -5.0, 0.5).unwrap();
-            let mut image = StockImage::build(&stock, &part, 0.1);
+            let mut image = StockImage::build_shaded(&stock, &part, 0.1).0;
             for (a, b, z) in [
                 ((-8.0, -2.0), (8.0, -2.0), 1.0),
                 ((0.0, -8.0), (0.0, 3.0), -1.0),
@@ -625,11 +610,11 @@ passes = { stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.3, axial
                 let rect = stock.sweep(&moves, &Flat(1.5)).touched.unwrap();
                 // Once as one rectangle, once as tiles in parallel.
                 let mut tiled = image.clone();
-                image.patch(&stock, &part, 0.1, rect);
+                image.patch_many(&stock, &part, 0.1, &[rect]);
                 let mut tiles = crate::stock::dirty::DirtyTiles::new(image.nx, image.ny);
                 tiles.mark(rect);
                 tiled.patch_many(&stock, &part, 0.1, &tiles.rects());
-                let fresh = StockImage::build(&stock, &part, 0.1);
+                let fresh = StockImage::build_shaded(&stock, &part, 0.1).0;
                 for got in [&image, &tiled] {
                     assert_eq!(got.heights, fresh.heights);
                     assert_eq!(got.codes, fresh.codes);

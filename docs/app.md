@@ -20,7 +20,9 @@ the same files.
 The window is the job's tree on the left, the properties panel beside it, the view,
 and the transport under the view. The Add menu adds models, stocks, setups and
 operations; View opens the log and the checks in their own windows; the Setup menu
-posts.
+posts. Operations are grouped as Fusion's toolbar groups them, in the Add menu and
+a setup's right-click menu alike: 2D (face, pocket, profile), 3D (Z-level rough,
+then parallel) and drilling.
 
 ## The tree
 
@@ -64,9 +66,9 @@ it.
 - **Operation**, on tabs: *Tool* (the tool and its feeds and speeds), *Geometry*
   (Fusion's machining boundary: the stock, the part's bounding box or silhouette,
   or picked faces and edges; where the tool goes against it; an additional
-  offset. For a 2D profile or pocket, the boundary it cuts round or clears,
-  whether a profile cuts outside, inside or on it, and an additional offset that
-  moves the cut out from it, or in when negative. New operations start on the
+  offset. For a 2D profile or pocket, the outline it cuts round or clears (the
+  part's silhouette or picked faces and edges) and whether a profile cuts
+  outside, inside or on it. New operations start on the
   part's silhouette: parallel with the tool's centre inside it, Z-level reaching
   in from outside with a channel a tool wide), *Heights* (clearance, top and bottom,
   drawn in the view as planes), *Passes* and *Linking* (retract feed, safe
@@ -76,8 +78,12 @@ it.
   one left out says what the strategy's default comes to for the tool). Choosing a
   tool whose preset gives no stepover sets Fusion's: a quarter of the diameter for
   parallel with a square end, the tolerance's cusp with a round one, and 0.6 of
-  the diameter for Z-level and 2D pockets. A 2D operation's *Passes* has its
-  stepdown and climb or conventional; a profile has no stepover. *Stock to
+  the diameter for Z-level and 2D pockets. A 2D operation's *Passes* has climb
+  or conventional; a profile has no stepover. *Multiple depths*, as Fusion's,
+  is ticked to step down in levels, then the stepdown: unticked cuts the bottom
+  in one pass. Profiles and pockets start ticked at 2 mm, facing unticked, and
+  Z-level roughing always cuts in levels, so cannot be unticked; parallel and
+  drilling have none (a drill has its pecks). *Stock to
   leave*, as Fusion's, is ticked to leave any (starting at 0.5 mm), then its
   wall and floor amounts, negative to cut past the part; the floor follows the
   wall until it is given its own. A drill has none, and a profile on the

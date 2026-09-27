@@ -501,7 +501,7 @@ stocks = ["block"]
 [[setup.operation]]
 name = "rough"
 strategy = "zlevel-rough"
-stepdown = 2.0
+passes = { stepdown = 2.0 }
 min_ring_length = 3.0
 tool = "rough-6-flat"
 "#;

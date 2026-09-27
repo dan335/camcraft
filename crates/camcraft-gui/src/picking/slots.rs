@@ -16,9 +16,9 @@
 use camcraft_core::allowance::EffectiveTool;
 use camcraft_core::features::{self, FeatureError};
 use camcraft_core::job::{
-    Boundary, BoxOf, FeatureRef, Geometry, Operation, Origin, Snap, StrategySpec,
+    self, Boundary, BoxOf, FeatureRef, MachiningBoundary, Operation, Origin, Snap, StrategySpec,
 };
-use camcraft_core::planar::{centre_offset, floored_pieces};
+use camcraft_core::planar::{centre_offset, picked_pieces};
 use camcraft_core::run::cutting_tool;
 use camcraft_core::setup::{Bodies, Prepared};
 use camcraft_core::tool::ToolProfile;
@@ -157,21 +157,21 @@ pub fn apply(
             .is_some_and(|s| toggle_name(&mut s.stocks, stock)),
         (Slot::Faces { setup, op }, Target::Face { model, face, at }) => {
             doc.operation_mut(setup, *op).is_some_and(|o| {
-                toggle(&mut o.geometry.faces, model, *face, *at, |r| {
+                toggle(&mut o.selection.faces, model, *face, *at, |r| {
                     current(r, Kind::Face)
                 })
             })
         }
         (Slot::Edges { setup, op }, Target::Edge { model, edge, at }) => {
             doc.operation_mut(setup, *op).is_some_and(|o| {
-                toggle(&mut o.geometry.edges, model, *edge, *at, |r| {
+                toggle(&mut o.selection.edges, model, *edge, *at, |r| {
                     current(r, Kind::Edge)
                 })
             })
         }
         (Slot::Edges { setup, op }, Target::Loop { model, edges }) => {
             doc.operation_mut(setup, *op).is_some_and(|o| {
-                toggle_loop(&mut o.geometry.edges, model, edges, |r| {
+                toggle_loop(&mut o.selection.edges, model, edges, |r| {
                     current(r, Kind::Edge)
                 })
             })
@@ -380,7 +380,7 @@ pub fn shown(
     let Some(operation) = op.and_then(|i| s.operations.get(i)) else {
         return out;
     };
-    let g = &operation.geometry;
+    let sel = &operation.selection;
     // Each pick found, with the model it is on, or why not.
     let find = |r: &FeatureRef, kind: Kind| {
         let body = bodies
@@ -389,7 +389,7 @@ pub fn shown(
         let index = kind.find(body, r, tolerance).map_err(|e| e.to_string())?;
         Ok::<_, String>((*body, index))
     };
-    for r in &g.faces {
+    for r in &sel.faces {
         out.faces.push(find(r, Kind::Face).map(|(body, face)| {
             out.highlight
                 .faces
@@ -401,7 +401,7 @@ pub fn shown(
     // on it.
     type Round<'a> = (&'a str, Vec<u32>);
     let mut loops: Vec<(Round<'_>, Vec<usize>)> = Vec::new();
-    for (i, r) in g.edges.iter().enumerate() {
+    for (i, r) in sel.edges.iter().enumerate() {
         let found = find(r, Kind::Edge);
         if let Ok((body, edge)) = &found {
             if let Some(pm) = scene.model(&r.model) {
@@ -446,7 +446,26 @@ pub fn shown(
     // out as the run will work it out, with the operation's own tool.
     let found = out.faces.iter().chain(&out.edges).all(Result::is_ok);
     let z = prepared.stock_bounds().max.z;
-    if operation.strategy.is_2d() {
+    // Facing works from the stock alone: what it faces is its footprint and the
+    // stock offset.
+    if let StrategySpec::Face { stock_offset, .. } = operation.strategy {
+        let b = prepared.stock_bounds();
+        let grow = DVec2::splat(stock_offset);
+        let lo = b.min.truncate() - grow;
+        let hi = b.max.truncate() + grow;
+        out.boundary = Some(if hi.x > lo.x && hi.y > lo.y {
+            let area = Region::rectangle(lo, hi);
+            out.highlight
+                .lines
+                .extend(rings_at(&area, z, OutlineKind::Boundary));
+            Ok(())
+        } else {
+            Err("the stock offset leaves nothing to face".into())
+        });
+        return out;
+    }
+    let uses = operation.strategy.uses();
+    if uses.outline {
         if found {
             let tool = cutting_tool(&doc.job, operation).ok();
             out.boundary = Some(
@@ -457,12 +476,11 @@ pub fn shown(
         }
         return out;
     }
-    let bounded = !matches!(operation.strategy, StrategySpec::Drill { .. })
-        && g.boundary() != Boundary::Stock;
-    if bounded && found {
+    let b = &operation.boundary;
+    if uses.boundary && b.kind != Boundary::Stock && found {
         let tool = cutting_tool(&doc.job, operation).ok();
         out.boundary = Some(
-            boundary_lines(g, tool.as_ref(), prepared, &bodies, tolerance, z)
+            boundary_lines(b, sel, tool.as_ref(), prepared, &bodies, tolerance, z)
                 .map(|lines| out.highlight.lines.extend(lines))
                 .map_err(|e| e.to_string()),
         );
@@ -488,9 +506,9 @@ fn loop_size(pm: &PickModel, round: &[u32], m: Measure) -> Option<String> {
     ))
 }
 
-/// A 2D operation's boundary as lines, and hatched, what the tool cuts away beside
+/// A 2D operation's outline as lines, and hatched, what the tool cuts away beside
 /// it: a band along it for a profile, all inside it for a pocket. Each piece of it
-/// is drawn at the height of the picks in it, so it lies on them; with nothing
+/// is drawn at the lowest of the picks in it, so it lies on them; with nothing
 /// picked in it, at `top`, the stock's top. The stock's footprint when that is the
 /// boundary. Nothing is hatched without a tool.
 fn outline_lines(
@@ -502,7 +520,7 @@ fn outline_lines(
     top: f64,
 ) -> Result<Vec<Outline>, FeatureError> {
     let region = |e: camcraft_geom::contour::RegionError| FeatureError::Region(e.to_string());
-    let (shape, floors) = features::outline(&op.geometry, prepared, bodies, tolerance)?;
+    let (shape, picked) = features::outline(op, prepared, bodies, tolerance)?;
     let shape = shape.unwrap_or_else(|| {
         let b = prepared.stock_bounds();
         Region::rectangle(b.min.truncate(), b.max.truncate())
@@ -513,7 +531,8 @@ fn outline_lines(
     let pocket = matches!(op.strategy, StrategySpec::Pocket { .. });
     let mut lines = Vec::new();
     let mut room = false;
-    for (piece, z) in floored_pieces(&shape, arc, &floors, top) {
+    for (piece, picks) in picked_pieces(&shape, arc, &picked) {
+        let z = picks.map_or(top, |p| p.lowest);
         lines.extend(rings_at(&piece, z, OutlineKind::Boundary));
         if radius <= 0.0 {
             room = true;
@@ -548,19 +567,21 @@ fn outline_lines(
 /// outline, so for a wall straight down it is exact, and for one that leans out
 /// it is where the tool reaches at the bottom.
 fn boundary_lines(
-    g: &Geometry,
+    b: &MachiningBoundary,
+    selection: &job::Selection,
     tool: Option<&EffectiveTool>,
     prepared: &Prepared,
     bodies: &Bodies<'_>,
     tolerance: f64,
     z: f64,
 ) -> Result<Vec<Outline>, FeatureError> {
-    let Some(shape) = features::boundary_shape(g, prepared, bodies, tolerance)? else {
+    let Some(shape) = features::boundary_shape(b.kind, selection, prepared, bodies, tolerance)?
+    else {
         return Ok(Vec::new());
     };
     let radius = tool.map_or(0.0, EffectiveTool::cutter_radius);
     let arc = tolerance / 2.0;
-    let limit = shape.offset(features::containment_offset(g, radius), arc);
+    let limit = shape.offset(features::containment_offset(b, radius), arc);
     if limit.area() <= 1e-9 {
         return Err(FeatureError::NoRoom {
             diameter: radius * 2.0,
@@ -799,11 +820,11 @@ mod tests {
         let same = |r: &FeatureRef, _| Some(r.index);
         assert!(apply(&mut doc, &slot, &face(3), same));
         assert!(apply(&mut doc, &slot, &face(5), same));
-        let faces = &doc.job.setups[0].operations[0].geometry.faces;
+        let faces = &doc.job.setups[0].operations[0].selection.faces;
         assert_eq!(faces.iter().map(|r| r.index).collect::<Vec<_>>(), [3, 5]);
         assert_eq!(faces[0].at, [1.0, 2.0, 3.0]);
         assert!(apply(&mut doc, &slot, &face(3), same));
-        let faces = &doc.job.setups[0].operations[0].geometry.faces;
+        let faces = &doc.job.setups[0].operations[0].selection.faces;
         assert_eq!(faces.iter().map(|r| r.index).collect::<Vec<_>>(), [5]);
         let edge = Target::Edge {
             model: "p".into(),
@@ -832,7 +853,7 @@ mod tests {
         };
         let picked = |doc: &Document| {
             doc.job.setups[0].operations[0]
-                .geometry
+                .selection
                 .edges
                 .iter()
                 .map(|r| r.index)
@@ -842,7 +863,7 @@ mod tests {
         assert!(apply(&mut doc, &slot, &round, same));
         assert_eq!(picked(&doc), [5, 4, 6]);
         assert_eq!(
-            doc.job.setups[0].operations[0].geometry.edges[2].at,
+            doc.job.setups[0].operations[0].selection.edges[2].at,
             [0.0, 0.0, 1.0]
         );
         assert!(apply(&mut doc, &slot, &round, same));
@@ -857,7 +878,7 @@ mod tests {
         let setup = doc.job.setups[0].name.clone();
         let slot = Slot::Faces { setup, op: 0 };
         doc.job.setups[0].operations[0]
-            .geometry
+            .selection
             .faces
             .push(FeatureRef {
                 model: "p".into(),
@@ -866,7 +887,7 @@ mod tests {
             });
         let now_seven = |_: &FeatureRef, _| Some(7);
         assert!(apply(&mut doc, &slot, &face(7), now_seven));
-        assert!(doc.job.setups[0].operations[0].geometry.faces.is_empty());
+        assert!(doc.job.setups[0].operations[0].selection.faces.is_empty());
     }
 
     /// A work zero takes one point, and keeps its offset whichever kind it becomes.

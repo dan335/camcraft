@@ -421,8 +421,7 @@ stocks = ["block"]
 name = "rough"
 strategy = "zlevel-rough"
 tool = "flat"
-stepdown = 4.0
-passes = { stepover = 2.0, feed = 1800.0, stock_to_leave = { radial = 0.3, axial = 0.3 } }
+passes = { stepdown = 4.0, stepover = 2.0, feed = 1800.0, stock_to_leave = { radial = 0.3, axial = 0.3 } }
 [[setup.operation]]
 name = "finish"
 strategy = "parallel"

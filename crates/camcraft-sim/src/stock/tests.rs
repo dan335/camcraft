@@ -457,8 +457,7 @@ fn a_plunge_is_the_tool_at_its_lowest() {
 }
 
 /// A packed stock is the stock it came from, bit for bit, small when the
-/// stock is flat; and restoring it, or another stock, in place says which
-/// cells changed.
+/// stock is flat; and restoring it in place says which cells changed.
 #[test]
 fn a_packed_stock_is_the_stock_bit_for_bit() {
     let fresh = block();
@@ -479,14 +478,6 @@ fn a_packed_stock_is_the_stock_bit_for_bit() {
     let touched = block().sweep(&zigzag(), &Ball(1.7)).touched;
     assert_eq!(flat.restore(&mut back), Some(touched));
     assert_eq!(back, fresh);
-    let mut again = fresh.clone();
-    assert_eq!(again.restore_from(&cut), Some(touched));
-    assert_eq!(again, cut);
-    assert_eq!(
-        again.restore_from(&cut),
-        Some(None),
-        "nothing left to change"
-    );
 }
 
 /// Cells read out and written back are the same bits, and only those move.

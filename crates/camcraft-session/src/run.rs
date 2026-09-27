@@ -234,7 +234,7 @@ mod tests {
     /// A real part, finished only on its highest flat face, with its work zero on
     /// a corner of that face: it runs and verifies clean, every cut keeps the
     /// tool's centre over the face, the corner is the setup's zero, and the job
-    /// is written as version 2 and read back the same.
+    /// is written and read back the same.
     #[test]
     fn a_real_part_kept_to_a_picked_face() {
         use camcraft_core::job::{FeatureRef, Origin, PointRef, Snap};
@@ -258,11 +258,15 @@ mod tests {
         let f = t.face(face).unwrap();
         let tri = mesh.triangle(f.triangles[0] as usize).unwrap();
         let at = (tri[0] + tri[1] + tri[2]) / 3.0;
-        job.setups[0].operations[0].geometry.faces.push(FeatureRef {
-            model: "hinge".into(),
-            index: face,
-            at: at.to_array(),
-        });
+        job.setups[0].operations[0]
+            .selection
+            .faces
+            .push(FeatureRef {
+                model: "hinge".into(),
+                index: face,
+                at: at.to_array(),
+            });
+        job.setups[0].operations[0].boundary.kind = camcraft_core::job::Boundary::Selection;
         let corner = t
             .edge(f.edges[0])
             .and_then(|e| e.ends)
@@ -316,13 +320,6 @@ mod tests {
         }
 
         let text = job_text(&job).unwrap();
-        assert!(
-            text.contains(
-                "version = 2
-"
-            ),
-            "{text}"
-        );
         assert_eq!(parse_job(&text, "picked").unwrap(), job);
     }
 

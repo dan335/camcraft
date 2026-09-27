@@ -49,7 +49,7 @@ for chains.
 ## How a pick is saved
 
 ```toml
-[[setup.operation.geometry.faces]]
+[[setup.operation.selection.faces]]
 model = "part"
 index = 12
 at = [30.2, 14.0, 12.7]
@@ -84,7 +84,7 @@ follows the stock when it changes size.
 
 - **Work zero**: `Origin::Point`, a vertex, a round edge's centre, or an open edge's
   middle, resolved in `prepare`.
-- **Operation geometry**: `faces` and `edges` in `Geometry`, not in the strategy,
+- **Operation geometry**: `faces` and `edges` in the operation, not in the strategy,
   because each strategy gives them its own meaning. For Parallel and Z-level rough
   they make a machining boundary: the picked faces seen from above, joined with the
   areas the picked edges close (read even-odd, so an inner loop is a hole). The
@@ -94,7 +94,10 @@ follows the stock when it changes size.
   engrave will read the same fields. Later, picks became one of Fusion's machining
   boundaries (`Geometry::boundary`), beside the stock, the part's bounding box and
   its silhouette. The offset took Fusion's sign (in, for the whole tool inside),
-  and containment the real cutter's radius, without the stock to leave.
+  and containment the real cutter's radius, without the stock to leave. On
+  2026-09-27 `Geometry` was split: the picks are the operation's `selection`,
+  the 3D boundary its `boundary` (`MachiningBoundary`), a 2D operation's shape
+  its `outline`, and the top and bottom moved to `heights`.
 
 ## Versions
 
@@ -106,6 +109,9 @@ picked faces, it would machine the whole part. So:
   that version. Every job without picks stays version 1, byte for byte, and an older
   build still reads it. An older build refuses a job with picks by name rather than
   misreading it.
+
+*Superseded 2026-09-27:* job versioning was removed. There is one format and no
+backwards compatibility while camcraft is pre-alpha (`docs/jobs.md`, Format).
 
 ## Consequences
 

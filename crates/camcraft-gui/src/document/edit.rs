@@ -394,6 +394,7 @@ impl Document {
             StrategySpec::ZlevelRough { .. } => "rough",
             StrategySpec::Profile { .. } => "profile",
             StrategySpec::Pocket { .. } => "pocket",
+            StrategySpec::Face { .. } => "face",
             StrategySpec::Drill { .. } => "drill",
         };
         let name = free(base, s.operations.iter().map(|o| o.name.as_str()));
@@ -407,9 +408,12 @@ impl Document {
             strategy,
             tool,
             preset: None,
-            geometry: Default::default(),
+            selection: Default::default(),
+            boundary: Default::default(),
+            outline: Default::default(),
             heights: Default::default(),
             passes: Passes {
+                stepdown: strategy.default_stepdown(),
                 stock_to_leave: strategy.default_stock_to_leave(),
                 ..Default::default()
             },
@@ -597,18 +601,21 @@ impl Document {
 /// finishing keeps the tool's centre inside it. Z-level roughing reaches in from
 /// outside: kept inside the part's outline, the tool never reaches its walls, as
 /// its centre sits a radius outside them ([`fit_channel`] makes room round them).
-/// A 2D operation's boundary is left unchosen: the silhouette until something is
-/// picked, then the picks.
+/// A 2D operation's outline starts as the silhouette already. Facing and
+/// drilling have no boundary.
 fn start_on_silhouette(op: &mut Operation) {
     let containment = match op.strategy {
         StrategySpec::Parallel { .. } => Containment::Center,
         StrategySpec::ZlevelRough { .. } => Containment::Outside,
-        StrategySpec::Profile { .. } | StrategySpec::Pocket { .. } | StrategySpec::Drill { .. } => {
+        StrategySpec::Profile { .. }
+        | StrategySpec::Pocket { .. }
+        | StrategySpec::Face { .. }
+        | StrategySpec::Drill { .. } => {
             return;
         }
     };
-    op.geometry.boundary_kind = Some(Boundary::Silhouette);
-    op.geometry.containment = containment;
+    op.boundary.kind = Boundary::Silhouette;
+    op.boundary.containment = containment;
 }
 
 /// Room for `tool` round the part, as the Geometry tab gives it: a boundary round
@@ -616,14 +623,18 @@ fn start_on_silhouette(op: &mut Operation) {
 /// by the tool's diameter, a channel two tools wide. Set once, as a number, so
 /// changing the tool later does not move it.
 fn fit_channel(op: &mut Operation, tool: Option<&ToolSpec>) {
-    let g = &mut op.geometry;
-    let around_part = matches!(g.boundary(), Boundary::BoundingBox | Boundary::Silhouette);
+    // Only a 3D boundary has an additional offset to make room with.
+    if !op.strategy.uses().boundary {
+        return;
+    }
+    let b = &mut op.boundary;
+    let around_part = matches!(b.kind, Boundary::BoundingBox | Boundary::Silhouette);
     if around_part
-        && g.containment == Containment::Outside
-        && g.margin == 0.0
+        && b.containment == Containment::Outside
+        && b.margin == 0.0
         && let Some(t) = tool
     {
-        g.margin = t.diameter;
+        b.margin = t.diameter;
     }
 }
 

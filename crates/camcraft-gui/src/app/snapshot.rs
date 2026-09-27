@@ -81,7 +81,7 @@ impl App {
         };
         doc.selection = crate::document::Selection::Operation(setup.clone(), op);
         if let Some(o) = doc.operation_mut(&setup, op) {
-            o.geometry.boundary_kind = Some(camcraft_core::job::Boundary::Selection);
+            cut_selection(o);
         }
         self.picking.arm(doc.id, Slot::Edges { setup, op });
         self.picking.click_edge_for_snapshot(doc, &model, edge)
@@ -134,7 +134,8 @@ impl App {
         let Some(o) = doc.operation_mut(&setup, op) else {
             return faces;
         };
-        o.geometry.faces = up
+        cut_selection(o);
+        o.selection.faces = up
             .iter()
             .take(2)
             .map(|(i, _, at)| FeatureRef {
@@ -334,5 +335,15 @@ impl App {
     pub fn settings_for_snapshot(&mut self, measure: Measure) {
         self.settings.measure = measure;
         self.settings_open = true;
+    }
+}
+
+/// Keep `o` to its picks: a 2D operation's outline, or a 3D one's boundary.
+fn cut_selection(o: &mut camcraft_core::job::Operation) {
+    use camcraft_core::job::{Boundary, Outline};
+    if o.strategy.uses().outline {
+        o.outline = Outline::Selection;
+    } else {
+        o.boundary.kind = Boundary::Selection;
     }
 }

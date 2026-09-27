@@ -76,12 +76,8 @@ impl Default for StockSpec {
 /// A block of a fixed size, as a board bought to size is: on each axis it is
 /// placed against the box of the models, the way Fusion's fixed size box is, so
 /// it follows them when they move.
-///
-/// A job from before placing wrote an absolute `corner`. That reads as [`Place::At`]
-/// on each axis, and a box placed only that way is written back as it was, so
-/// an older build still reads it ([`FixedBox::placed`]).
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-#[serde(try_from = "FixedBoxFile", into = "FixedBoxFile")]
+#[serde(from = "FixedBoxFile", into = "FixedBoxFile")]
 pub struct FixedBox {
     /// Its size along X, Y and Z.
     pub size: [f64; 3],
@@ -162,58 +158,36 @@ impl Place {
     }
 }
 
-/// A fixed box as its file holds it: either the old absolute `corner`, or a
-/// place on each axis.
+/// A fixed box as its file holds it: a place on each axis.
 #[derive(Deserialize, Serialize)]
 struct FixedBoxFile {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     models: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    corner: Option<[f64; 3]>,
     size: [f64; 3],
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    x: Option<Place>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    y: Option<Place>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    z: Option<Place>,
+    x: Place,
+    y: Place,
+    z: Place,
 }
 
-impl TryFrom<FixedBoxFile> for FixedBox {
-    type Error = String;
-
-    fn try_from(f: FixedBoxFile) -> Result<Self, String> {
-        let axes = [f.x, f.y, f.z];
-        let place = match f.corner {
-            Some(_) if axes.iter().any(Option::is_some) => {
-                return Err("a fixed box has a corner or a place on each axis, not both".into());
-            }
-            Some(c) => c.map(|coordinate| Place::At { coordinate }),
-            None => match axes {
-                [Some(x), Some(y), Some(z)] => [x, y, z],
-                _ => return Err("a fixed box needs a corner, or x, y and z".into()),
-            },
-        };
-        Ok(Self {
+impl From<FixedBoxFile> for FixedBox {
+    fn from(f: FixedBoxFile) -> Self {
+        Self {
             size: f.size,
             models: f.models,
-            place,
-        })
+            place: [f.x, f.y, f.z],
+        }
     }
 }
 
 impl From<FixedBox> for FixedBoxFile {
     fn from(b: FixedBox) -> Self {
-        let placed = b.placed();
         let [x, y, z] = b.place;
-        let at = |p: Place| p.value().unwrap_or(0.0);
         Self {
             models: b.models,
-            corner: (!placed).then(|| [at(x), at(y), at(z)]),
             size: b.size,
-            x: placed.then_some(x),
-            y: placed.then_some(y),
-            z: placed.then_some(z),
+            x,
+            y,
+            z,
         }
     }
 }

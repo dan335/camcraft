@@ -8,7 +8,7 @@ use crate::tool::ToolError;
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum JobError {
     /// The file is a format this build does not read.
-    #[error("job format {0} is not one this version reads (it reads 1 to {JOB_VERSION})")]
+    #[error("job format {0} is not this build's ({JOB_VERSION})")]
     UnsupportedVersion(u32),
     /// Something was left without a name.
     #[error("a {what} has no name")]
@@ -70,9 +70,23 @@ pub enum JobError {
         /// Why not.
         why: String,
     },
+    /// An operation's height is measured from something it cannot be.
+    #[error("operation '{op}': {why}")]
+    BadHeight {
+        /// Which operation, as `setup/operation`.
+        op: String,
+        /// Why not.
+        why: &'static str,
+    },
     /// An operation has no tool yet.
     #[error("operation '{op}' has no tool")]
     NoTool {
+        /// Which operation, as `setup/operation`.
+        op: String,
+    },
+    /// An operation's strategy cuts in levels, and it has no stepdown.
+    #[error("operation '{op}' cuts in levels, and has no stepdown")]
+    NoStepdown {
         /// Which operation, as `setup/operation`.
         op: String,
     },

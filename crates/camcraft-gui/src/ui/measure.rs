@@ -198,37 +198,40 @@ impl Measure {
         least: StockToLeave,
     ) {
         let before = *stock;
-        // Beside, the tool cannot shrink to nothing: a hundredth of a millimetre short.
-        let (radial_min, axial_min) = ((least.radial + 0.01).max(-50.0), least.axial.max(-50.0));
         if leave == Leave::Both {
-            let min = radial_min.min(stock.radial);
-            self.field(
-                ui,
-                &mut stock.radial,
-                0.01,
-                min,
-                50.0,
-                "wall ",
-                self.unit(),
-                4,
-            )
-            .on_hover_text("Left on the walls: negative cuts past them");
+            self.wall_to_leave_field(ui, &mut stock.radial, least.radial, "wall ");
         }
         if leave != Leave::None {
-            let min = axial_min.min(stock.axial);
-            self.field(
-                ui,
-                &mut stock.axial,
-                0.01,
-                min,
-                50.0,
-                "floor ",
-                self.unit(),
-                4,
-            )
-            .on_hover_text("Left on the floors: negative cuts below them");
+            self.floor_to_leave_field(ui, &mut stock.axial, least.axial, "floor ");
         }
         follow_radial(stock, before);
+    }
+
+    /// An editor for the stock to leave on the walls, no lower than `least`.
+    pub fn wall_to_leave_field(
+        self,
+        ui: &mut egui::Ui,
+        mm: &mut f64,
+        least: f64,
+        prefix: &str,
+    ) -> egui::Response {
+        // Beside, the tool cannot shrink to nothing: a hundredth of a millimetre short.
+        let min = (least + 0.01).max(-50.0).min(*mm);
+        self.field(ui, mm, 0.01, min, 50.0, prefix, self.unit(), 4)
+            .on_hover_text("Left on the walls: negative cuts past them")
+    }
+
+    /// An editor for the stock to leave on the floors, no lower than `least`.
+    pub fn floor_to_leave_field(
+        self,
+        ui: &mut egui::Ui,
+        mm: &mut f64,
+        least: f64,
+        prefix: &str,
+    ) -> egui::Response {
+        let min = least.max(-50.0).min(*mm);
+        self.field(ui, mm, 0.01, min, 50.0, prefix, self.unit(), 4)
+            .on_hover_text("Left on the floors: negative cuts below them")
     }
 
     /// An editor for a feed kept in mm/min, shown in this unit.

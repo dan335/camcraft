@@ -31,6 +31,8 @@ pub enum StrategyDetail {
     Profile(PlanarReport),
     /// A 2D pocket.
     Pocket(PlanarReport),
+    /// Facing.
+    Face(PlanarReport),
     /// Drilling.
     Drill(DrillReport),
 }

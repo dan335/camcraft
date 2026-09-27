@@ -37,10 +37,9 @@ wcs = 54
 name = "rough"
 strategy = "zlevel-rough"
 tool = "rough-6-flat"
-stepdown = 2.0
-geometry = { margin = 1.0, bottom = { ref = "model-bottom" } }
-heights = { clearance = { ref = "stock-top", offset = 8.0 } }
-passes = { stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.5, axial = 0.2 } }
+boundary = { margin = 1.0 }
+heights = { clearance = { ref = "stock-top", offset = 8.0 }, bottom = { ref = "model-bottom" } }
+passes = { stepdown = 2.0, stepover = 3.0, feed = 1800.0, stock_to_leave = { radial = 0.5, axial = 0.2 } }
 linking = { retract_feed = 1800.0, plunge_feed = 400.0 }
 
 [[setup.operation]]
@@ -163,44 +162,23 @@ fn a_job_round_trips() {
     assert!(!plain.contains("below"), "{plain}");
 }
 
-/// A fixed box from before placing, at a corner, reads as placed at that corner
-/// on each axis and is written back as it was, so an older build still reads it.
+/// A fixed box is written with a place on each axis, and read back the same.
 #[test]
-fn a_fixed_box_at_a_corner_keeps_its_old_form() {
-    let text = "kind = \"fixed-box\"\nname = \"plate\"\ncorner = [1.0, 2.0, 3.0]\nsize = [4.0, 5.0, 6.0]\n";
-    let old: StockDef = toml::from_str(text).unwrap();
-    assert_eq!(
-        old.spec,
-        StockSpec::FixedBox(FixedBox::at([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]))
-    );
-    let again = toml::to_string(&old).unwrap();
-    assert!(again.contains("corner"), "{again}");
-    assert!(!again.contains("from"), "{again}");
-    let mut j = sample();
-    j.stocks.push(old);
-    assert_eq!(j.required_version(), sample().required_version());
-}
-
-/// One placed against the models is written with a place on each axis, as
-/// version 5, which an older build refuses by name.
-#[test]
-fn a_placed_fixed_box_is_version_5() {
+fn a_fixed_box_is_written_with_a_place_on_each_axis() {
     let mut j = sample();
     j.stocks.push(StockDef {
         name: "board".into(),
         spec: StockSpec::FixedBox(FixedBox::centred([10.0, 10.0, 10.0])),
     });
-    assert_eq!(j.required_version(), 5);
     let text = toml::to_string(&j.stocks[1]).unwrap();
     assert!(text.contains("from = \"center\""), "{text}");
-    assert!(!text.contains("corner"), "{text}");
+    let again: StockDef = toml::from_str(&text).unwrap();
+    assert_eq!(again, j.stocks[1]);
 }
 
-/// A corner and a place on an axis say two things; neither is taken.
+/// A fixed box needs a place on every axis.
 #[test]
-fn a_fixed_box_with_a_corner_and_a_place_is_refused() {
-    let text = "kind = \"fixed-box\"\nname = \"p\"\ncorner = [0.0, 0.0, 0.0]\nsize = [1.0, 1.0, 1.0]\nx = { from = \"center\" }\n";
-    assert!(toml::from_str::<StockDef>(text).is_err());
+fn a_fixed_box_without_a_place_on_each_axis_is_refused() {
     let text =
         "kind = \"fixed-box\"\nname = \"p\"\nsize = [1.0, 1.0, 1.0]\nx = { from = \"center\" }\n";
     assert!(
@@ -233,50 +211,28 @@ fn a_fixed_box_is_checked() {
     assert!(matches!(j.validate(), Err(JobError::UnknownModel { .. })));
 }
 
-/// A job from before boundaries has none written: picks are its boundary, and
-/// without them the stock's. One chosen otherwise, or an offset that now moves a
-/// boundary the tool is kept inside inward, is version 6.
+/// A boundary starts as the stock's, and is written only once chosen, and read
+/// back the same.
 #[test]
-fn a_machining_boundary_reads_as_before_or_is_version_6() {
-    let j = sample();
-    let g = &j.setups[0].operations[0].geometry;
-    assert_eq!(g.boundary(), Boundary::Stock);
-    let mut picked = Geometry::default();
-    picked.faces.push(FeatureRef {
-        model: "part".into(),
-        index: 0,
-        at: [0.0; 3],
-    });
-    assert_eq!(picked.boundary(), Boundary::Selection);
-    let base = j.required_version();
-    assert!(base < 6);
-
-    let mut chosen = j.clone();
-    chosen.setups[0].operations[0].geometry.boundary_kind = Some(Boundary::Stock);
-    assert_eq!(chosen.required_version(), base, "the same as before");
-    chosen.setups[0].operations[0].geometry.boundary_kind = Some(Boundary::Silhouette);
-    assert_eq!(chosen.required_version(), 6);
-    let text = toml::to_string(&chosen).unwrap();
-    assert!(text.contains("boundary = \"silhouette\""), "{text}");
+fn a_chosen_boundary_is_written() {
+    let mut j = sample();
+    assert_eq!(j.setups[0].operations[0].boundary.kind, Boundary::Stock);
+    let text = toml::to_string(&j).unwrap();
+    assert!(!text.contains("kind = \"stock\""), "{text}");
+    j.setups[0].operations[0].boundary.kind = Boundary::Silhouette;
+    let text = toml::to_string(&j).unwrap();
+    assert!(text.contains("kind = \"silhouette\""), "{text}");
     let again: Job = toml::from_str(&text).unwrap();
-    assert_eq!(again, chosen);
-
-    let mut inward = j.clone();
-    let g = &mut inward.setups[0].operations[1].geometry;
-    *g = picked;
-    g.containment = Containment::Inside;
-    assert_eq!(inward.required_version(), 2, "picks, and no offset");
-    inward.setups[0].operations[1].geometry.margin = 0.5;
-    assert_eq!(inward.required_version(), 6);
+    assert_eq!(again, j);
 }
 
-/// A file without a version is refused by name, not with a parse error about
+/// A file of another format is refused by name, not with a parse error about
 /// some field.
 #[test]
 fn another_format_is_refused() {
     let mut j = sample();
-    j.version = 9;
-    assert_eq!(j.validate(), Err(JobError::UnsupportedVersion(9)));
+    j.version = 2;
+    assert_eq!(j.validate(), Err(JobError::UnsupportedVersion(2)));
 }
 
 /// The reason heights are symbolic: the same job survives a different block.
@@ -287,6 +243,7 @@ fn heights_resolve_against_the_setup() {
         stock_bottom: -5.0,
         model_top: 18.0,
         model_bottom: 0.0,
+        picked: None,
     };
     let cases = [
         (HeightRef::StockTop, 8.0, 28.0),
@@ -301,6 +258,96 @@ fn heights_resolve_against_the_setup() {
     }
 }
 
+/// A top measured from the picks is their highest point, a bottom their
+/// lowest, each plus the offset; with none found, the model's.
+#[test]
+fn a_height_from_the_selection_reads_the_picks() {
+    let h = Height {
+        reference: HeightRef::Selection,
+        offset: -0.5,
+    };
+    let mut ctx = HeightContext {
+        stock_top: 20.0,
+        stock_bottom: -5.0,
+        model_top: 18.0,
+        model_bottom: 0.0,
+        picked: Picks::of([6.0, 4.0, 9.0]),
+    };
+    assert_eq!(h.resolve_top(&ctx), 8.5);
+    assert_eq!(h.resolve_bottom(&ctx), 3.5);
+    ctx.picked = None;
+    assert_eq!(h.resolve_top(&ctx), 17.5);
+    assert_eq!(h.resolve_bottom(&ctx), -0.5);
+    assert_eq!(Picks::of([]), None);
+}
+
+/// A 2D operation's levels over one piece of its outline: a height from the
+/// selection reads the piece's picks, or all of them where it has none; an
+/// empty bottom is the piece's lowest pick only when the picks are the outline.
+#[test]
+fn a_2d_area_is_measured_from_its_own_picks() {
+    let ctx = HeightContext {
+        stock_top: 20.0,
+        stock_bottom: -5.0,
+        model_top: 18.0,
+        model_bottom: 0.0,
+        picked: Picks::of([2.0, 12.0]),
+    };
+    let own = Picks::of([5.0, 7.0]);
+    let from_picks = |offset| {
+        Some(Height {
+            reference: HeightRef::Selection,
+            offset,
+        })
+    };
+    let mut op = sample().setups[0].operations[0].clone();
+    op.outline = Outline::Selection;
+    op.heights.bottom = None;
+    assert_eq!(op.levels_2d(&ctx, own), (20.0, 5.0));
+    assert_eq!(op.levels_2d(&ctx, None), (20.0, 0.0));
+    op.heights.bottom = from_picks(-0.5);
+    op.heights.top = from_picks(1.0);
+    assert_eq!(op.levels_2d(&ctx, own), (8.0, 4.5));
+    assert_eq!(op.levels_2d(&ctx, None), (13.0, 1.5));
+    op.heights.bottom = None;
+    op.outline = Outline::Silhouette;
+    assert_eq!(op.levels_2d(&ctx, own).1, 0.0);
+}
+
+/// Only a top or a bottom is measured from the picks, only with something
+/// picked, and never a drill's.
+#[test]
+fn heights_from_the_selection_need_picks() {
+    let mut j = sample();
+    let selection = Height {
+        reference: HeightRef::Selection,
+        offset: 0.0,
+    };
+    let op = &mut j.setups[0].operations[0];
+    op.heights.bottom = Some(selection);
+    assert!(matches!(j.validate(), Err(JobError::BadHeight { .. })));
+    let op = &mut j.setups[0].operations[0];
+    op.selection.edges.push(FeatureRef {
+        model: "part".into(),
+        index: 0,
+        at: [0.0; 3],
+    });
+    j.validate().unwrap();
+    let op = &mut j.setups[0].operations[0];
+    op.heights.clearance = selection;
+    assert!(matches!(j.validate(), Err(JobError::BadHeight { .. })));
+    let op = &mut j.setups[0].operations[0];
+    op.heights.clearance = Heights::default().clearance;
+    op.strategy = StrategySpec::Drill {
+        peck: None,
+        dwell: None,
+    };
+    assert!(op.cannot_measure_from_picks().is_some());
+
+    let text = toml::to_string(&j).unwrap();
+    assert!(text.contains(r#"ref = "selection""#), "{text}");
+}
+
 #[test]
 fn a_taller_block_moves_the_clearance_with_it() {
     let h = Height {
@@ -312,6 +359,7 @@ fn a_taller_block_moves_the_clearance_with_it() {
         stock_bottom: 0.0,
         model_top: 8.0,
         model_bottom: 0.0,
+        picked: None,
     };
     let tall = HeightContext {
         stock_top: 50.0,
@@ -413,7 +461,6 @@ fn stock_to_leave_is_what_the_strategy_uses() {
     assert_eq!(op.stock_to_leave(), leave);
     op.strategy = StrategySpec::Profile {
         side: ProfileSide::On,
-        stepdown: 1.0,
         conventional: false,
     };
     assert_eq!(op.strategy.uses().stock_to_leave, Leave::Axial);
@@ -466,12 +513,9 @@ fn stock_to_leave_may_be_negative_within_the_tool() {
     };
     j.validate().unwrap();
     j.setups[0].operations[1].strategy = StrategySpec::Pocket {
-        stepdown: 1.0,
         conventional: false,
     };
     leave(&mut j, 0.0, -5.0).unwrap();
-    // An older reader refuses it, by version rather than by value.
-    assert_eq!(j.required_version(), 8);
 }
 
 /// A stepover wider than the tool leaves ridges between passes, and is refused;
@@ -486,7 +530,6 @@ fn a_stepover_wider_than_the_tool_is_refused() {
     assert!(matches!(j.validate(), Err(JobError::WrongTool { .. })));
     j.setups[0].operations[1].strategy = StrategySpec::Profile {
         side: ProfileSide::Outside,
-        stepdown: 1.0,
         conventional: false,
     };
     j.validate().unwrap();
@@ -497,7 +540,6 @@ fn a_stepover_wider_than_the_tool_is_refused() {
 #[test]
 fn roughing_leaves_stock_to_start_and_none_is_not_written() {
     let rough = StrategySpec::ZlevelRough {
-        stepdown: 1.0,
         min_ring_length: 3.0,
     };
     assert_eq!(
@@ -525,14 +567,12 @@ fn each_strategy_says_what_it_uses() {
     let parallel = StrategySpec::Parallel { angle: 0.0 }.uses();
     assert!(parallel.lead_radius && !parallel.tabs && !parallel.ramp && !parallel.leads);
     let pocket = StrategySpec::Pocket {
-        stepdown: 1.0,
         conventional: false,
     }
     .uses();
     assert!(pocket.stepover && !pocket.tabs && pocket.ramp && !pocket.leads);
     let profile = StrategySpec::Profile {
         side: ProfileSide::Outside,
-        stepdown: 1.0,
         conventional: false,
     }
     .uses();
@@ -692,7 +732,7 @@ fn strategy_parameters_belong_to_their_strategy() {
     let j = sample();
     let ops = &j.setups[0].operations;
     match ops[0].strategy {
-        StrategySpec::ZlevelRough { stepdown, .. } => assert_eq!(stepdown, 2.0),
+        StrategySpec::ZlevelRough { .. } => assert_eq!(ops[0].stepdown(), Some(2.0)),
         _ => panic!("first operation should be roughing"),
     }
     match ops[1].strategy {
@@ -734,6 +774,7 @@ name = "Roughing"
 rpm = 16000
 feed = 2000.0
 plunge_feed = 400.0
+ramp_feed = 700.0
 stepdown = 3.0
 stepover = 2.5
 stock_to_leave = { radial = 0.3, axial = 0.2 }
@@ -866,18 +907,18 @@ fn picked() -> Job {
         },
         offset: [0.0, 0.0, 1.0],
     };
-    let g = &mut s.operations[1].geometry;
-    g.faces.push(FeatureRef {
+    let op = &mut s.operations[1];
+    op.selection.faces.push(FeatureRef {
         model: "part".into(),
         index: 12,
         at: [30.2, 14.0, 12.7],
     });
-    g.edges.push(FeatureRef {
+    op.selection.edges.push(FeatureRef {
         model: "part".into(),
         index: 3,
         at: [1.0, 2.0, 3.0],
     });
-    g.containment = Containment::Inside;
+    op.boundary.containment = Containment::Inside;
     j
 }
 
@@ -894,7 +935,7 @@ fn picks_round_trip() {
     assert!(text.contains(r#"snap = "circle-center""#), "{text}");
     assert!(text.contains(r#"containment = "inside""#), "{text}");
     assert!(
-        text.contains("[[setup.operation.geometry.faces]]"),
+        text.contains("[[setup.operation.selection.faces]]"),
         "{text}"
     );
     // Nothing picked, nothing written.
@@ -903,57 +944,12 @@ fn picks_round_trip() {
     assert!(!plain.contains("containment"), "{plain}");
 }
 
-/// A version 1 reader would skip picks and cut the whole part, so a job with
-/// any is version 2; every other job stays version 1, readable as before.
+/// An operation's own spindle speed is taken, but not a stopped one.
 #[test]
-fn only_a_job_with_picks_needs_version_2() {
-    assert_eq!(sample().required_version(), 1);
-    assert_eq!(picked().required_version(), 2);
-    let mut origin_only = sample();
-    origin_only.setups[0].origin = picked().setups[0].origin.clone();
-    assert_eq!(origin_only.required_version(), 2);
-    let mut faces_only = picked();
-    faces_only.setups[0].origin = Origin::default();
-    faces_only.setups[0].operations[1].geometry.edges.clear();
-    assert_eq!(faces_only.required_version(), 2);
-    // Both versions are read.
-    let mut one = sample();
-    one.version = 1;
-    one.validate().unwrap();
-    let mut two = sample();
-    two.version = 2;
-    two.validate().unwrap();
-    let mut five = sample();
-    five.version = 5;
-    five.validate().unwrap();
-    let mut seven = sample();
-    seven.version = 7;
-    seven.validate().unwrap();
-    let mut eight = sample();
-    eight.version = 8;
-    eight.validate().unwrap();
-    let mut nine = sample();
-    nine.version = 9;
-    assert_eq!(nine.validate(), Err(JobError::UnsupportedVersion(9)));
-}
-
-/// An older reader would skip an operation's own spindle speed and cut at the
-/// tool's, so a job with one is version 3, whatever else it has.
-#[test]
-fn only_a_job_with_an_operation_speed_needs_version_3() {
+fn an_operation_speed_must_turn() {
     let mut j = sample();
     j.setups[0].operations[1].passes.rpm = Some(12000);
-    assert_eq!(j.required_version(), 3);
     j.validate().unwrap();
-    let mut both = picked();
-    both.setups[0].operations[0].passes.rpm = Some(12000);
-    assert_eq!(both.required_version(), 3);
-    let mut mist = sample();
-    mist.tools.get_mut("rough-6-flat").unwrap().coolant = Coolant::Mist;
-    assert_eq!(mist.required_version(), 3);
-    let mut left = sample();
-    left.tools.get_mut("rough-6-flat").unwrap().spindle = SpindleDirection::CounterClockwise;
-    assert_eq!(left.required_version(), 3);
     j.setups[0].operations[1].passes.rpm = Some(0);
     assert!(matches!(j.validate(), Err(JobError::BadValue { .. })));
 }
@@ -981,7 +977,6 @@ fn stepovers_default_as_fusions() {
         Some(0.794)
     );
     op.strategy = StrategySpec::ZlevelRough {
-        stepdown: 3.0,
         min_ring_length: 3.0,
     };
     let clearing = op
@@ -996,18 +991,6 @@ fn stepovers_default_as_fusions() {
         op.default_stepover(&tool(ToolKind::Drill, 6.0, 0.0), 0.05),
         None
     );
-}
-
-/// An older reader would cut an operation turned off, so a job with one is
-/// version 4, whatever else it has.
-#[test]
-fn only_a_job_with_an_operation_off_needs_version_4() {
-    let mut j = picked();
-    j.setups[0].operations[0].passes.rpm = Some(12000);
-    assert_eq!(j.required_version(), 3);
-    j.setups[0].operations[1].enabled = false;
-    assert_eq!(j.required_version(), 4);
-    j.validate().unwrap();
 }
 
 fn preset_tool() -> ToolSpec {
@@ -1025,10 +1008,10 @@ fn a_preset_sets_only_what_it_has() {
     assert_eq!(op.passes.rpm, Some(16000));
     assert_eq!(op.passes.feed, 2000.0);
     assert_eq!(op.linking.plunge_feed, 400.0);
+    assert_eq!(op.linking.ramp_feed, Some(700.0));
     assert_eq!(op.passes.stepover, 2.5);
-    assert!(matches!(op.strategy, StrategySpec::ZlevelRough { stepdown, .. } if stepdown == 3.0));
+    assert_eq!(op.stepdown(), Some(3.0));
     assert_eq!(op.passes.stock_to_leave.radial, 0.3);
-    assert!(op.differs_from(tool.preset("Roughing").unwrap()).is_empty());
 
     op.apply_preset(tool.preset("Finishing").unwrap());
     assert_eq!(op.preset.as_deref(), Some("Finishing"));
@@ -1039,59 +1022,10 @@ fn a_preset_sets_only_what_it_has() {
     assert_eq!(op.passes.rpm, Some(16000));
 }
 
-/// What has been changed since a preset was applied is named, and only that.
-#[test]
-fn changes_from_a_preset_are_named() {
-    let tool = preset_tool();
-    let roughing = tool.preset("Roughing").unwrap();
-    let mut op = sample().setups[0].operations[0].clone();
-    op.apply_preset(roughing);
-    op.passes.feed = 1500.0;
-    op.passes.stepover = 2.0;
-    assert_eq!(op.differs_from(roughing), ["feed", "stepover"]);
-    // A parallel finish has no stepdown, so a preset's is not a change.
-    let mut finish = sample().setups[0].operations[1].clone();
-    finish.apply_preset(roughing);
-    assert!(finish.differs_from(roughing).is_empty());
-}
-
-/// An operation's values saved as a preset set them back exactly.
-#[test]
-fn an_operation_saved_as_a_preset_sets_itself_back() {
-    let op = sample().setups[0].operations[0].clone();
-    let saved = op.as_preset("Mine");
-    let mut other = op.clone();
-    other.passes.feed = 1.0;
-    other.passes.stepover = 1.0;
-    other.apply_preset(&saved);
-    assert!(other.differs_from(&saved).is_empty());
-    assert_eq!(other.passes, op.passes);
-    assert_eq!(other.strategy, op.strategy);
-}
-
-/// A tool from before presets kept one `cutting` table; it reads as a preset
-/// called "Default" at the tool's speed, and is written back as one.
-#[test]
-fn cutting_data_from_before_presets_reads_as_a_preset() {
-    let old = "kind = \"flat\"\ndiameter = 6.35\nrpm = 18000\n\
-               cutting = { feed = 3810.0, plunge_feed = 1354.667 }\n";
-    let tool: ToolSpec = toml::from_str(old).unwrap();
-    assert_eq!(tool.presets.len(), 1);
-    let p = &tool.presets[0];
-    assert_eq!(p.name, "Default");
-    assert_eq!(p.rpm, Some(18000));
-    assert_eq!(p.feed, Some(3810.0));
-    assert_eq!(p.plunge_feed, Some(1354.667));
-    let text = toml::to_string(&tool).unwrap();
-    assert!(!text.contains("cutting"), "{text}");
-    let again: ToolSpec = toml::from_str(&text).unwrap();
-    assert_eq!(again, tool);
-}
-
 #[test]
 fn a_pick_must_be_on_the_setup_and_a_point() {
     let mut j = picked();
-    j.setups[0].operations[1].geometry.faces[0].model = "elsewhere".into();
+    j.setups[0].operations[1].selection.faces[0].model = "elsewhere".into();
     assert!(matches!(
         j.validate(),
         Err(JobError::PickedFromOtherModel { model, .. }) if model == "elsewhere"
@@ -1109,10 +1043,17 @@ fn renaming_a_model_carries_its_picks() {
     j.rename_model_refs("part", "bracket");
     let s = &j.setups[0];
     assert!(matches!(&s.origin, Origin::Point { point, .. } if point.model == "bracket"));
-    let g = &s.operations[1].geometry;
-    assert!(g.faces.iter().chain(&g.edges).all(|r| r.model == "bracket"));
+    assert!(
+        s.operations[1]
+            .selection
+            .iter()
+            .all(|r| r.model == "bracket")
+    );
     j.rename_model_refs("nothing", "else");
-    assert_eq!(j.setups[0].operations[1].geometry.faces[0].model, "bracket");
+    assert_eq!(
+        j.setups[0].operations[1].selection.faces[0].model,
+        "bracket"
+    );
 }
 
 #[test]
@@ -1125,13 +1066,13 @@ fn an_origin_keeps_its_kind_when_its_offset_changes() {
 }
 
 /// A profile and a pocket read from a job as Fusion's 2D operations are set,
-/// take a preset's stepdown, and need version 7. A V-bit profiles only on the
-/// line, and pockets nothing.
+/// take a preset's stepdown, and are written back the same. A V-bit profiles
+/// only on the line, and pockets nothing.
 #[test]
-fn profiles_and_pockets_are_version_7() {
+fn profiles_and_pockets_read_as_fusions() {
     let text = SAMPLE.replace(
         "strategy = \"parallel\"",
-        "strategy = \"profile\"\nside = \"inside\"\nstepdown = 1.5\nconventional = true",
+        "strategy = \"profile\"\nside = \"inside\"\nconventional = true",
     );
     let mut j: Job = toml::from_str(&text).unwrap();
     j.validate().unwrap();
@@ -1139,22 +1080,15 @@ fn profiles_and_pockets_are_version_7() {
         j.setups[0].operations[1].strategy,
         StrategySpec::Profile {
             side: ProfileSide::Inside,
-            stepdown: 1.5,
             conventional: true,
         }
     );
-    assert_eq!(j.required_version(), 7);
     let again: Job = toml::from_str(&toml::to_string(&j).unwrap()).unwrap();
     assert_eq!(again, j);
-    // An additional offset a version 7 reader would cut without.
-    j.setups[0].operations[1].geometry.margin = -0.5;
-    assert_eq!(j.required_version(), 8);
-    j.setups[0].operations[1].geometry.margin = 0.0;
 
     let op = &mut j.setups[0].operations[1];
     op.strategy = StrategySpec::Profile {
         side: ProfileSide::default(),
-        stepdown: 1.5,
         conventional: false,
     };
     let text = toml::to_string(&j).unwrap();
@@ -1163,10 +1097,9 @@ fn profiles_and_pockets_are_version_7() {
 
     let op = &mut j.setups[0].operations[1];
     op.strategy = StrategySpec::Pocket {
-        stepdown: 1.5,
         conventional: false,
     };
-    op.apply_preset(&Preset {
+    let deep = Preset {
         name: "Deep".into(),
         comment: String::new(),
         rpm: None,
@@ -1176,33 +1109,183 @@ fn profiles_and_pockets_are_version_7() {
         stepdown: Some(3.0),
         stepover: None,
         stock_to_leave: None,
-    });
-    assert_eq!(op.strategy.stepdown(), Some(3.0));
-    op.strategy = StrategySpec::Pocket {
-        stepdown: 0.0,
-        conventional: false,
     };
+    // Straight to the bottom stays so; multiple depths take the preset's.
+    op.apply_preset(&deep);
+    assert_eq!(op.stepdown(), None);
+    op.passes.stepdown = Some(1.0);
+    op.apply_preset(&deep);
+    assert_eq!(op.stepdown(), Some(3.0));
+    op.passes.stepdown = Some(0.0);
     assert!(matches!(j.validate(), Err(JobError::BadValue { .. })));
+    j.setups[0].operations[1].passes.stepdown = None;
 
     j.tools.insert("v".into(), vbit());
     let op = &mut j.setups[0].operations[1];
     op.tool = Some("v".into());
     op.passes.stock_to_leave = Default::default();
     op.strategy = StrategySpec::Pocket {
-        stepdown: 1.0,
         conventional: false,
     };
     assert!(matches!(j.validate(), Err(JobError::WrongTool { .. })));
     j.setups[0].operations[1].strategy = StrategySpec::Profile {
         side: ProfileSide::Outside,
-        stepdown: 1.0,
         conventional: false,
     };
     assert!(matches!(j.validate(), Err(JobError::WrongTool { .. })));
     j.setups[0].operations[1].strategy = StrategySpec::Profile {
         side: ProfileSide::On,
-        stepdown: 1.0,
         conventional: false,
     };
     j.validate().unwrap();
+}
+
+/// A 2D operation cuts round an outline, the silhouette unless the picks are
+/// chosen, as Fusion's 2D Contour and Pocket select only what they cut; a 3D one
+/// is kept to a boundary. Each strategy uses one or neither, never both.
+#[test]
+fn a_2d_operation_has_an_outline_and_a_3d_one_a_boundary() {
+    assert_eq!(Outline::default(), Outline::Silhouette);
+    let text = toml::to_string(&sample()).unwrap();
+    assert!(!text.contains("outline"), "{text}");
+    let strategies = [
+        StrategySpec::Parallel { angle: 0.0 },
+        StrategySpec::ZlevelRough {
+            min_ring_length: 3.0,
+        },
+        StrategySpec::Profile {
+            side: ProfileSide::Outside,
+            conventional: false,
+        },
+        StrategySpec::Pocket {
+            conventional: false,
+        },
+        StrategySpec::Face {
+            angle: 0.0,
+            direction: FaceDirection::BothWays,
+            pass_extension: 0.0,
+            stock_offset: 0.0,
+        },
+        StrategySpec::Drill {
+            peck: None,
+            dwell: None,
+        },
+    ];
+    for s in strategies {
+        let u = s.uses();
+        assert!(!(u.boundary && u.outline), "{}", s.name());
+        assert_eq!(u.outline, s.is_2d(), "{}", s.name());
+    }
+}
+
+/// Multiple depths are one setting every operation has, used as its strategy
+/// says: roughing always cuts in levels, and without a stepdown is refused; 2D
+/// cutting and facing go straight to the bottom unless asked; finishing and
+/// drilling have none, whatever is written.
+#[test]
+fn multiple_depths_are_shared_and_used_as_the_strategy_says() {
+    let mut j = sample();
+    let rough = &mut j.setups[0].operations[0];
+    assert_eq!(rough.strategy.uses().depths, Depths::Required);
+    rough.passes.stepdown = None;
+    assert!(matches!(j.validate(), Err(JobError::NoStepdown { .. })));
+
+    let mut j = sample();
+    let finish = &mut j.setups[0].operations[1];
+    assert_eq!(finish.strategy.uses().depths, Depths::None);
+    finish.passes.stepdown = Some(0.0);
+    assert_eq!(finish.stepdown(), None, "not read");
+    j.validate().unwrap();
+
+    for (s, starts) in [
+        (StrategySpec::Parallel { angle: 0.0 }, None),
+        (
+            StrategySpec::ZlevelRough {
+                min_ring_length: 3.0,
+            },
+            Some(2.0),
+        ),
+        (
+            StrategySpec::Pocket {
+                conventional: false,
+            },
+            Some(2.0),
+        ),
+        (
+            StrategySpec::Face {
+                angle: 0.0,
+                direction: FaceDirection::BothWays,
+                pass_extension: 0.0,
+                stock_offset: 0.0,
+            },
+            None,
+        ),
+        (
+            StrategySpec::Drill {
+                peck: None,
+                dwell: None,
+            },
+            None,
+        ),
+    ] {
+        assert_eq!(s.default_stepdown(), starts, "{}", s.name());
+    }
+}
+
+/// Facing reads with Fusion's defaults, both ways at the bottom alone, writes
+/// back only what differs from them. A ball end mill or a
+/// V-bit cannot face flat; a pass extension below zero is refused.
+#[test]
+fn facing_reads_with_fusions_defaults() {
+    let text = SAMPLE
+        .replace(
+            "strategy = \"zlevel-rough\"\ntool = \"rough-6-flat\"",
+            "strategy = \"face\"\ntool = \"rough-6-flat\"",
+        )
+        .replace("passes = { stepdown = 2.0, ", "passes = { ");
+    let mut j: Job = toml::from_str(&text).unwrap();
+    j.validate().unwrap();
+    let face = StrategySpec::Face {
+        angle: 0.0,
+        direction: FaceDirection::BothWays,
+        pass_extension: 0.0,
+        stock_offset: 0.0,
+    };
+    assert_eq!(j.setups[0].operations[0].strategy, face);
+    let written = toml::to_string(&j).unwrap();
+    assert!(!written.contains("direction"), "{written}");
+    assert!(!written.contains("pass_extension"), "{written}");
+    let again: Job = toml::from_str(&written).unwrap();
+    assert_eq!(again, j);
+
+    let op = &mut j.setups[0].operations[0];
+    assert_eq!(op.stepdown(), None);
+    op.strategy = StrategySpec::Face {
+        angle: 0.0,
+        direction: FaceDirection::Climb,
+        pass_extension: 0.0,
+        stock_offset: 0.0,
+    };
+    op.passes.stepdown = Some(1.0);
+    assert_eq!(op.stepdown(), Some(1.0));
+    let written = toml::to_string(&j).unwrap();
+    assert!(written.contains("direction = \"climb\""), "{written}");
+    assert!(written.contains("stepdown = 1.0"), "{written}");
+    assert_eq!(toml::from_str::<Job>(&written).unwrap(), j);
+
+    let rough = j.tools["rough-6-flat"].clone();
+    let op = &mut j.setups[0].operations[0];
+    assert_eq!(
+        op.default_stepover(&rough, 0.01),
+        Some(0.95 * rough.diameter)
+    );
+    let ball = j.tools["finish-4-ball"].clone();
+    assert!(op.cannot_use(&ball).is_some());
+    op.strategy = StrategySpec::Face {
+        angle: 0.0,
+        direction: FaceDirection::BothWays,
+        pass_extension: -1.0,
+        stock_offset: 0.0,
+    };
+    assert!(j.validate().is_err());
 }

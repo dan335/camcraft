@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use camcraft_core::job::{
-    Geometry, Height, HeightRef, Heights, Job, Linking, ModelDef, Operation, Passes, Setup,
-    StockDef, StockSpec, StockToLeave, StrategySpec, ToolKind, ToolSpec,
+    Height, HeightRef, Heights, Job, Linking, ModelDef, Operation, Passes, Setup, StockDef,
+    StockSpec, StockToLeave, StrategySpec, ToolKind, ToolSpec,
 };
 
 /// Cutter shape for a single finishing pass.
@@ -74,15 +74,19 @@ pub fn single_operation(spec: &FinishSpec, model: ModelDef) -> Job {
         strategy: StrategySpec::Parallel { angle: 0.0 },
         tool: Some(TOOL.into()),
         preset: None,
-        geometry: Geometry::default(),
+        selection: Default::default(),
+        boundary: Default::default(),
+        outline: Default::default(),
         heights: Heights {
             clearance: Height {
                 reference: HeightRef::ModelTop,
                 offset: spec.clearance,
             },
+            ..Heights::default()
         },
         passes: Passes {
             stepover: spec.stepover,
+            stepdown: None,
             feed: spec.feed,
             stock_to_leave: StockToLeave {
                 radial: spec.stock_radial,

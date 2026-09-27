@@ -12,8 +12,9 @@ use super::{Made, OperationResult, PLUNGE_RATIO, RunError, StrategyDetail};
 use crate::allowance::EffectiveTool;
 use crate::drilling::{DrillParams, DrillReport, Hole, drill, holes, nearest_first};
 use crate::dropcutter::DropCutter;
-use crate::features::{Chain, FeatureError, outline, picked_chains};
-use crate::job::{HeightContext, Job, Operation, SpindleDirection, StrategySpec, ToolSpec};
+use crate::face::{FaceParams, LevelsAsked, face};
+use crate::features::{Chain, FeatureError, outline, picked_chains, picked_points};
+use crate::job::{HeightContext, Job, Operation, Picks, SpindleDirection, StrategySpec, ToolSpec};
 use crate::linker::{
     ClearanceField, LinkParams, LinkReport, Material, Ramp, StayDown, Surface, highest_under, link,
 };
@@ -56,7 +57,7 @@ impl Work<'_> {
     /// plus whatever extra was asked for.
     fn sweep(&self) -> (DVec2, DVec2) {
         let (lo, hi) = self.bounds;
-        let reach = self.tool.max_radius() + self.op.geometry.margin;
+        let reach = self.tool.max_radius() + self.op.boundary.margin;
         (
             dvec2(lo.x - reach, lo.y - reach),
             dvec2(hi.x + reach, hi.y + reach),
@@ -96,13 +97,13 @@ pub(super) fn run_operation(
     };
     let (raw, passes, detail) = match op.strategy {
         StrategySpec::Parallel { angle } => parallel_paths(work, angle, limit, &mut warnings)?,
-        StrategySpec::ZlevelRough {
-            stepdown,
-            min_ring_length,
-        } => zlevel_paths(work, stepdown, min_ring_length, limit, stock, &mut warnings)?,
+        StrategySpec::ZlevelRough { min_ring_length } => {
+            zlevel_paths(work, min_ring_length, limit, stock, &mut warnings)?
+        }
         StrategySpec::Profile { .. } | StrategySpec::Pocket { .. } => {
             planar_paths(work, found, &mut warnings)?
         }
+        StrategySpec::Face { .. } => face_paths(work, &mut warnings)?,
         StrategySpec::Drill { peck, dwell } => {
             drill_paths(work, peck, dwell, holes, &mut warnings)?
         }
@@ -238,7 +239,8 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         ),
         StrategySpec::ZlevelRough { .. }
         | StrategySpec::Profile { .. }
-        | StrategySpec::Pocket { .. } => (
+        | StrategySpec::Pocket { .. }
+        | StrategySpec::Face { .. } => (
             StayDown::Level {
                 max: linking.stay_down.unwrap_or(5.0 * diameter),
             },
@@ -338,11 +340,10 @@ fn parallel_paths(
     Ok((path, report.passes, StrategyDetail::Parallel(report)))
 }
 
-/// Z-level clearing of the material as it stands, `stepdown` a level, within the
-/// sweep and `limit`.
+/// Z-level clearing of the material as it stands, a level each stepdown, within
+/// the sweep and `limit`.
 fn zlevel_paths(
     work: &Work<'_>,
-    stepdown: f64,
     min_ring_length: f64,
     limit: Option<&Region>,
     stock: &Stock,
@@ -351,14 +352,15 @@ fn zlevel_paths(
     let (job, op, ctx) = (work.job, work.op, work.heights);
     let mut reach = LevelReach::new(work.mesh, work.tool, job.tolerance).map_err(in_op(op))?;
     let params = RoughingParams {
-        stepdown,
+        // Checked with the job: it always has one.
+        stepdown: op.stepdown().unwrap_or(f64::NAN),
         stepover: op.passes.stepover,
         feed: op.passes.feed,
-        top: op.geometry.top.map_or(ctx.stock_top, |h| h.resolve(ctx)),
+        top: op.heights.top.map_or(ctx.stock_top, |h| h.resolve_top(ctx)),
         bottom: op
-            .geometry
+            .heights
             .bottom
-            .map_or(ctx.model_bottom, |h| h.resolve(ctx)),
+            .map_or(ctx.model_bottom, |h| h.resolve_bottom(ctx)),
         min_ring_length,
     };
     let (sweep_lo, sweep_hi) = work.sweep();
@@ -387,7 +389,7 @@ fn planar_paths(
     areas: &[Area],
     warnings: &mut Vec<String>,
 ) -> Result<Paths, RunError> {
-    let (op, ctx) = (work.op, work.heights);
+    let op = work.op;
     let conventional = match op.strategy {
         StrategySpec::Profile { conventional, .. } | StrategySpec::Pocket { conventional, .. } => {
             conventional
@@ -396,10 +398,9 @@ fn planar_paths(
     };
     let clockwise = work.spec.spindle == SpindleDirection::Clockwise;
     let params = PlanarParams {
-        stepdown: op.strategy.stepdown().unwrap_or(f64::NAN),
+        stepdown: op.stepdown(),
         stepover: op.passes.stepover,
         feed: op.passes.feed,
-        top: op.geometry.top.map_or(ctx.stock_top, |h| h.resolve(ctx)),
         arc: work.job.tolerance * 0.5,
         radius: work.tool.cutter_radius(),
         kept_on_right: clockwise != conventional,
@@ -433,18 +434,62 @@ fn planar_paths(
     }
     if report.too_shallow > 0 {
         warnings.push(format!(
-            "{} area(s) have their floor at or above the top, {:.3} mm, and are not cut",
-            report.too_shallow, params.top
+            "{} area(s) have their floor at or above their top, and are not cut",
+            report.too_shallow
         ));
     }
     Ok((path, report.passes, detail(report)))
 }
 
+/// The stock's top faced: its footprint and the stock offset, from the top down
+/// to the bottom, the model's top unless another is asked for, raised by the
+/// stock to leave down.
+fn face_paths(work: &Work<'_>, warnings: &mut Vec<String>) -> Result<Paths, RunError> {
+    let (op, ctx) = (work.op, work.heights);
+    let StrategySpec::Face {
+        angle,
+        direction,
+        pass_extension,
+        stock_offset,
+    } = op.strategy
+    else {
+        return Ok((Toolpath::new(), 0, StrategyDetail::Face(Default::default())));
+    };
+    let (lo, hi) = work.bounds;
+    let grow = DVec2::splat(stock_offset);
+    let params = FaceParams {
+        area: (lo - grow, hi + grow),
+        angle: angle.to_radians(),
+        stepover: op.passes.stepover,
+        extension: pass_extension,
+        radius: work.tool.cutter_radius(),
+        levels: LevelsAsked {
+            top: op.heights.top.map_or(ctx.stock_top, |h| h.resolve_top(ctx)),
+            bottom: op
+                .heights
+                .bottom
+                .map_or(ctx.model_top, |h| h.resolve_bottom(ctx))
+                + op.stock_to_leave().axial,
+            stepdown: op.stepdown(),
+        },
+        direction,
+        clockwise: work.spec.spindle == SpindleDirection::Clockwise,
+        feed: op.passes.feed,
+    };
+    let (path, report) = face(&params).map_err(in_op(op))?;
+    if report.too_shallow > 0 {
+        warnings.push(format!(
+            "the bottom is not below the top, {:.3} mm, so nothing is faced",
+            params.levels.top
+        ));
+    }
+    Ok((path, report.passes, StrategyDetail::Face(report)))
+}
+
 /// A 2D operation's areas: its boundary, which the tool's centre follows its
 /// radius and the stock to leave beside, or inside for a pocket, split into its
-/// pieces, each with its floor. The floor is the one asked for, or else the
-/// lowest point picked in the piece, or the models' bottom; raised by the stock
-/// to leave down.
+/// pieces, each with its top and floor ([`Operation::levels_2d`]); the floor
+/// raised by the stock to leave down.
 pub(super) fn planar_areas(
     job: &Job,
     op: &Operation,
@@ -453,20 +498,16 @@ pub(super) fn planar_areas(
     ctx: &HeightContext,
     tool: &EffectiveTool,
 ) -> Result<Vec<Area>, RunError> {
-    let (shape, floors) =
-        outline(&op.geometry, prepared, bodies, job.tolerance).map_err(in_op(op))?;
+    let (shape, picked) = outline(op, prepared, bodies, job.tolerance).map_err(in_op(op))?;
     let shape = shape.unwrap_or_else(|| {
         let b = prepared.stock_bounds();
         Region::rectangle(b.min.truncate(), b.max.truncate())
     });
     let leave = op.stock_to_leave();
     let offset = centre_offset(op, tool.cutter_radius());
-    let (fallback, floors) = match op.geometry.bottom {
-        Some(h) => (h.resolve(ctx), &[][..]),
-        None => (ctx.model_bottom, floors.as_slice()),
-    };
+    let levels = |picks: Option<Picks>| op.levels_2d(ctx, picks);
     let mut found =
-        areas(&shape, offset, job.tolerance * 0.5, floors, fallback).map_err(in_op(op))?;
+        areas(&shape, offset, job.tolerance * 0.5, &picked, &levels).map_err(in_op(op))?;
     if found.is_empty() {
         return Err(in_op(op)(FeatureError::TooWide {
             diameter: 2.0 * tool.cutter_radius(),
@@ -476,6 +517,26 @@ pub(super) fn planar_areas(
         a.bottom += leave.axial;
     }
     Ok(found)
+}
+
+/// What `op`'s heights resolve against: the setup's `ctx`, and how high its picks
+/// go when a height is measured from them.
+pub(super) fn heights_of(
+    job: &Job,
+    op: &Operation,
+    prepared: &Prepared,
+    bodies: &Bodies<'_>,
+    ctx: &HeightContext,
+) -> Result<HeightContext, RunError> {
+    if !op.heights.measured_from_selection() {
+        return Ok(*ctx);
+    }
+    let points =
+        picked_points(&op.selection, prepared, bodies, job.tolerance).map_err(in_op(op))?;
+    Ok(HeightContext {
+        picked: Picks::of(points.iter().map(|p| p.z)),
+        ..*ctx
+    })
 }
 
 /// Each of `holes` drilled straight down, pecking by `peck` if given; a hole the
@@ -524,7 +585,8 @@ pub(super) fn drill_holes(
     bodies: &Bodies<'_>,
     ctx: &HeightContext,
 ) -> Result<Vec<Hole>, RunError> {
-    let chains = picked_chains(&op.geometry, prepared, bodies, job.tolerance).map_err(in_op(op))?;
+    let chains =
+        picked_chains(&op.selection, prepared, bodies, job.tolerance).map_err(in_op(op))?;
     let circle = |c: &Chain| {
         let body = bodies.get(c.model.as_str())?;
         match body.topology().edge(c.edge)?.kind {
@@ -535,9 +597,9 @@ pub(super) fn drill_holes(
         }
     };
     let bottom = op
-        .geometry
+        .heights
         .bottom
-        .map_or(ctx.model_bottom, |h| h.resolve(ctx));
+        .map_or(ctx.model_bottom, |h| h.resolve_bottom(ctx));
     let found = holes(&chains, circle, bottom, job.tolerance.max(0.01)).map_err(in_op(op))?;
     Ok(nearest_first(&found))
 }
@@ -553,6 +615,7 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
         StrategySpec::ZlevelRough { .. } => StrategyDetail::ZlevelRough(Default::default()),
         StrategySpec::Profile { .. } => StrategyDetail::Profile(Default::default()),
         StrategySpec::Pocket { .. } => StrategyDetail::Pocket(Default::default()),
+        StrategySpec::Face { .. } => StrategyDetail::Face(Default::default()),
         StrategySpec::Drill { peck, dwell } => StrategyDetail::Drill(DrillReport {
             holes: Vec::new(),
             peck,
