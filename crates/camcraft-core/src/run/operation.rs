@@ -547,8 +547,16 @@ pub(super) fn planar_areas(
     let leave = op.stock_to_leave();
     let offset = centre_offset(op, tool.cutter_radius());
     let levels = |picks: Option<Picks>| op.levels_2d(ctx, picks);
-    let mut found =
-        areas(&shape, offset, job.tolerance * 0.5, &picked, &levels).map_err(in_op(op))?;
+    let circles = level_circles(prepared, bodies);
+    let mut found = areas(
+        &shape,
+        &circles,
+        offset,
+        job.tolerance * 0.5,
+        &picked,
+        &levels,
+    )
+    .map_err(in_op(op))?;
     if found.is_empty() {
         return Err(in_op(op)(FeatureError::TooWide {
             diameter: 2.0 * tool.cutter_radius(),
@@ -615,6 +623,35 @@ fn drill_paths(
         feed: params.feed,
     };
     Ok((path, holes.len() as u64, StrategyDetail::Drill(report)))
+}
+
+/// The setup's models' round edges that lie level as the part sits, seen from
+/// above: each a centre and a radius, the model's own, for a 2D cut to follow
+/// exactly.
+fn level_circles(prepared: &Prepared, bodies: &Bodies<'_>) -> Vec<(DVec2, f64)> {
+    let mut out: Vec<(DVec2, f64)> = Vec::new();
+    for piece in &prepared.pieces {
+        let Some(body) = bodies.get(piece.model.as_str()) else {
+            continue;
+        };
+        for edge in body.topology().edges() {
+            let EdgeKind::Circle(c) = edge.kind else {
+                continue;
+            };
+            if prepared.frame.orientation.apply(c.normal).z.abs() < 1.0 - 1e-6 {
+                continue;
+            }
+            let centre = prepared.frame.to_setup(c.center).truncate();
+            // The top and bottom of a round wall are the same circle from above.
+            let known = out
+                .iter()
+                .any(|&(p, r)| p.distance(centre) < 1e-6 && (r - c.radius).abs() < 1e-6);
+            if !known {
+                out.push((centre, c.radius));
+            }
+        }
+    }
+    out
 }
 
 /// The holes a drilling operation's picked rims make, in the setup's frame, in the

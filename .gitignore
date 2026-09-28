@@ -7,6 +7,8 @@
 # ...except the post goldens, which are the test. Ignoring them meant a fresh clone
 # failed the golden tests: the files only ever existed on the machine that made them.
 !/crates/camcraft-post/tests/golden/*.nc
+# ...and the programs other CAM systems posted, which tests compare ours with.
+!/fixtures/nc/*.nc
 
 # Commercial fixtures must never be committed. See fixtures/step/README.md and use
 # CAMCRAFT_FIXTURES for parts that cannot be published.

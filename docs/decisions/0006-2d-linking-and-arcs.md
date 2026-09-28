@@ -48,6 +48,18 @@ operation-level `stepdown` the format had moved to `passes` was silently ignored
   pieces of at most half a turn). The engine makes an arc only about X, Y or Z,
   which a three-axis machine can cut; elsewhere it makes chords within the
   tolerance, so the program is always the path that was simulated.
+- **Rings are exact.** A ring is lines and arcs (`camcraft_geom::ring::Ring`).
+  The outline's points that lie on one of the model's round edges, level as the
+  part sits, become that circle's arc, taking its centre and radius from the
+  model; the ring the tool's centre follows is that outline moved square to
+  every line and arc, a sharp corner opened into an arc about it, and a closed
+  one cut where its sides cross. Nothing is fitted to points. The polygon
+  clipping still decides the shape, as only it handles a neck that closes or a
+  hole that vanishes: a ring is used only where it is the clipping's shape,
+  within twice the tolerance both ways, and otherwise the clipping's polygon is.
+  The circles are the model's topology's, circles through the tessellation's
+  points on a round edge, which lie on the B-rep's curve; reading OpenCascade's
+  own circle is left for later, as it would change nothing measurable.
 - **Leads are Fusion's three pieces,** each a tenth of the tool: vertical arc,
   straight, level arc. The strategy makes the level arc and the straight; the
   linker makes the vertical arc, because only it knows how the tool arrives.
@@ -68,6 +80,10 @@ operation-level `stepdown` the format had moved to `passes` was silently ignored
 ## Result
 
 The lego profile with `entry = "plunge"`, one depth and leads posts, block for
-block, what Fusion's does: `G1` down, `G19 G3`, `G1`, `G17 G3` onto the ring. With
-the default helix and a 6.35 mm stepdown it posts 7 depths, staying down between
-all of them, with no gouges and no rapid contacts.
+block, what Fusion's does, in 39 lines to Fusion's 40: up before the tool change,
+across then down, a plunge beside the ring, a vertical arc, a straight and a
+level arc onto it, four straight sides and four `G2` corners of the model's own
+radius, the lead off mirrored, and home (`crates/camcraft-cli/tests/fusion.rs`
+holds it to that). With the default helix and a 6.35 mm stepdown it posts 7
+depths in 272 lines, staying down between all of them, with no gouges and no
+rapid contacts; it was 1,600.

@@ -75,7 +75,13 @@ from its middle out, the wall last. Both climb unless `conventional = true`, and
 their order is their own, so they are not reordered. A V-bit profiles only on
 the outline. The radial stock to leave, negative included, moves the cut out
 from the outline, or in; floors are still found among the picks on the outline
-itself.
+itself. A ring follows the model: where the outline runs round
+one of the model's round edges that lies level, the ring is that circle's arc,
+and the corner the tool's centre turns round a sharp one is an arc about the
+corner, each posted as one `G2` or `G3`. Rings are checked against the polygon
+clipping, which decides what the shape is (where a narrow neck closes or a small
+hole vanishes), and a ring that is not the same shape, within twice the
+tolerance, follows the polygon instead.
 
 ```toml
 [[setup.operation]]

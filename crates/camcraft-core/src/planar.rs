@@ -37,6 +37,7 @@
 //! puts it on the left.
 
 use camcraft_geom::contour::{Contour, Region, RegionError};
+use camcraft_geom::ring::{Ring, Span};
 use glam::{DVec2, DVec3, dvec3};
 
 use crate::job::{Operation, Picks, ProfileSide, StrategySpec};
@@ -49,10 +50,49 @@ use crate::toolpath::{Arc, MoveRole, Toolpath};
 pub struct Area {
     /// An outer ring and the holes inside it.
     pub region: Region,
+    /// Its rings as the cut follows them, one for each of the region's: lines and
+    /// the model's own arcs where they are the same shape, else the region's.
+    pub rings: Vec<Ring>,
     /// Where it is cut down from.
     pub top: f64,
     /// The lowest level it is cut at.
     pub bottom: f64,
+}
+
+impl Area {
+    /// An area whose rings are its region's, straight lines all.
+    pub fn new(region: Region, top: f64, bottom: f64) -> Self {
+        let rings = region
+            .rings()
+            .iter()
+            .filter_map(|c| Ring::from_points(c.points()))
+            .collect();
+        Self {
+            region,
+            rings,
+            top,
+            bottom,
+        }
+    }
+}
+
+/// The rings of `region`, each one of `sources` moved `delta` to its right
+/// where that is the same shape within `tolerance`, and otherwise the region's
+/// own. The clipping says what the shape is; the sources say it exactly.
+fn exact_rings(region: &Region, sources: &[Ring], delta: f64, tolerance: f64) -> Vec<Ring> {
+    let moved: Vec<Ring> = sources.iter().filter_map(|s| s.offset(delta)).collect();
+    region
+        .rings()
+        .iter()
+        .filter_map(|c| {
+            let points = c.points();
+            moved
+                .iter()
+                .find(|m| m.close_to(points, tolerance))
+                .cloned()
+                .or_else(|| Ring::from_points(points))
+        })
+        .collect()
 }
 
 /// How to cut the areas.
@@ -139,13 +179,28 @@ pub fn centre_offset(op: &Operation, cutter_radius: f64) -> f64 {
 /// cut from the highest top of the pieces it came from down to their lowest
 /// bottom. Rings err by at most `arc`, away from the boundary when growing and
 /// inside it when shrinking.
+///
+/// A run of the boundary's points on one of the model's `circles` (a centre and
+/// a radius each, seen from above) is that circle's arc, and every ring whose
+/// exact offset is the same shape as the clipping's follows it exactly.
 pub fn areas(
     shape: &Region,
+    circles: &[(DVec2, f64)],
     offset: f64,
     arc: f64,
     picked: &[DVec3],
     levels: &dyn Fn(Option<Picks>) -> (f64, f64),
 ) -> Result<Vec<Area>, StrategyError> {
+    // The boundary exactly: its points on the model's circles within a micron,
+    // a tessellation's chords no further from them than the tolerance.
+    let sources: Vec<Ring> = shape
+        .rings()
+        .iter()
+        .filter_map(|c| Ring::snapped(c.points(), circles, 1e-3, 2.0 * arc))
+        .collect();
+    // The clipping's rings are out by up to the tolerance, and their chords in by
+    // up to it again.
+    let close = 2.0 * arc + 1e-3;
     let shapes: Vec<(Region, (f64, f64))> = picked_pieces(shape, arc, picked)
         .into_iter()
         .map(|(s, picks)| (s, levels(picks)))
@@ -166,8 +221,10 @@ pub fn areas(
             }
         }
         let (top, bottom) = span.unwrap_or_else(|| levels(None));
+        let rings = exact_rings(&region, &sources, offset, close);
         out.push(Area {
             region,
+            rings,
             top,
             bottom,
         });
@@ -208,7 +265,7 @@ pub fn profile(
     // the region winds it. Inside or on it, the right.
     let kept_left = side == ProfileSide::Outside;
     let reverse = kept_left == params.kept_on_right;
-    let mut rings: Vec<(Vec<DVec2>, Vec<f64>, usize)> = Vec::new();
+    let mut rings: Vec<(Ring, Vec<f64>, usize)> = Vec::new();
     for (i, area) in areas.iter().enumerate() {
         let levels = levels(area.top, area.bottom, params.stepdown);
         if levels.is_empty() {
@@ -217,7 +274,7 @@ pub fn profile(
         }
         report.areas += 1;
         report.levels = report.levels.max(levels.len() as u64);
-        for ring in area.region.rings() {
+        for ring in &area.rings {
             rings.push((wound(ring, reverse), levels.clone(), i));
         }
     }
@@ -234,24 +291,35 @@ pub fn profile(
 
     let mut path = Toolpath::new();
     let mut at: Option<DVec2> = None;
-    let loops: Vec<&[DVec2]> = rings.iter().map(|(r, _, _)| r.as_slice()).collect();
+    let points: Vec<Vec<DVec2>> = rings.iter().map(|(r, ..)| r.points(params.arc)).collect();
+    let loops: Vec<&[DVec2]> = points.iter().map(Vec::as_slice).collect();
     for i in inside_first(&loops) {
         let Some((ring, levels, area)) = rings.get(i) else {
             continue;
         };
-        let mut ring = starting_near(ring, at);
+        let mut ring = at.map_or_else(|| ring.clone(), |p| ring.starting_near(p));
         report.rings += 1;
         // The waste is on the side away from what is kept: the left, when what
-        // is kept is on the right. A lead needs a straight run to join: where the
-        // ring starts at a corner, it starts instead halfway along its longest
-        // side.
+        // is kept is on the right. A lead joins a ring where it runs smoothly
+        // on: where the ring starts at a corner, or has no room for a lead there,
+        // it starts instead halfway along its longest span.
         let asked = params.leads.filter(|_| side != ProfileSide::On);
-        let fit = |r: &[DVec2]| {
-            asked.and_then(|l| leads_for(r, l, params.kept_on_right, |p| waste(*area, p)))
+        // The region is the clipping's, out by up to the tolerance round the
+        // exact ring: a point on the ring, or that near it, is beside it.
+        let beside = 2.0 * params.arc + 1e-3;
+        let fit = |r: &Ring| {
+            asked.and_then(|l| {
+                leads_for(r, l, params.kept_on_right, |p| {
+                    waste(*area, p) || r.distance_to(p) <= beside
+                })
+            })
         };
+        if asked.is_some() && ring.starts_at_corner() {
+            ring = ring.longest_middle();
+        }
         let mut leads = fit(&ring);
         if asked.is_some() && leads.is_none() {
-            let middle = longest_middle(&ring);
+            let middle = ring.longest_middle();
             leads = fit(&middle);
             if leads.is_some() {
                 ring = middle;
@@ -268,7 +336,7 @@ pub fn profile(
         at = leads
             .as_ref()
             .and_then(RingLeads::end)
-            .or(ring.first().copied());
+            .or(Some(ring.start()));
     }
     Ok((path, report))
 }
@@ -337,31 +405,21 @@ impl RingLeads {
 /// arc's radius, its half and its quarter whose lead stays in the waste, as
 /// `waste` says; `None` where none does.
 fn leads_for(
-    ring: &[DVec2],
+    ring: &Ring,
     lead: LeadArc,
     left: bool,
     waste: impl Fn(DVec2) -> bool,
 ) -> Option<RingLeads> {
-    let start = *ring.first()?;
+    let start = ring.start();
     // The way the ring leaves its start, and the way it comes back to it.
-    let into = ring
-        .iter()
-        .skip(1)
-        .map(|p| *p - start)
-        .find(|d| d.length() > 1e-9)?
-        .normalize();
-    // The ring does not repeat its start at its end.
-    let back = ring
-        .iter()
-        .rev()
-        .map(|p| start - *p)
-        .find(|d| d.length() > 1e-9)?
-        .normalize();
+    let into = ring.start_tangent().try_normalize()?;
+    let back = ring.end_tangent().try_normalize()?;
     let aside = |t: DVec2| if left { t.perp() } else { -t.perp() };
     // Turning towards the waste on the left is turning counter-clockwise.
     let turn = if left { lead.sweep } else { -lead.sweep };
     [1.0, 0.5, 0.25].into_iter().find_map(|k| {
         let r = lead.radius * k;
+        let straight = lead.straight * k;
         // In: round an arc from the waste onto the start, heading along `into`.
         // Angle `a` back from the start is at centre − n·r·cos a − t·r·sin a.
         let n = aside(into);
@@ -372,11 +430,8 @@ fn leads_for(
             centre: start + n * r,
             sweep: turn,
         };
-        let (lead_start, lead_in) = if lead.straight > 0.0 {
-            (
-                far - heading * lead.straight,
-                vec![Piece::Line(far), arc_in],
-            )
+        let (lead_start, lead_in) = if straight > 0.0 {
+            (far - heading * straight, vec![Piece::Line(far), arc_in])
         } else {
             (far, vec![arc_in])
         };
@@ -389,8 +444,8 @@ fn leads_for(
             centre: start + n * r,
             sweep: turn,
         }];
-        if lead.straight > 0.0 {
-            lead_out.push(Piece::Line(far + heading * lead.straight));
+        if straight > 0.0 {
+            lead_out.push(Piece::Line(far + heading * straight));
         }
         let mut samples = vec![lead_start];
         let mut at = lead_start;
@@ -413,23 +468,6 @@ fn leads_for(
             lead_out,
         })
     })
-}
-
-/// Closed `ring` started halfway along its longest side instead.
-fn longest_middle(ring: &[DVec2]) -> Vec<DVec2> {
-    let n = ring.len();
-    let Some((i, _)) = (0..n)
-        .filter_map(|i| Some((i, ring.get(i)?.distance(*ring.get((i + 1) % n)?))))
-        .max_by(|a, b| a.1.total_cmp(&b.1))
-    else {
-        return ring.to_vec();
-    };
-    let (Some(&a), Some(&b)) = (ring.get(i), ring.get((i + 1) % n)) else {
-        return ring.to_vec();
-    };
-    let mut out = vec![(a + b) / 2.0];
-    out.extend((1..=n).filter_map(|k| ring.get((i + k) % n)));
-    out
 }
 
 /// How many chords an arc turning `sweep` radians is drawn in: one every five
@@ -459,7 +497,7 @@ pub fn pocket(
             report.too_shallow += 1;
             continue;
         }
-        let rings = middle_out(&area.region, params, reverse);
+        let rings = middle_out(area, params, reverse);
         if rings.is_empty() {
             continue;
         }
@@ -478,7 +516,7 @@ pub fn pocket(
             cleared
                 .get(i)
                 .and_then(|(rings, _)| rings.first())
-                .map(|set| set.iter().flatten().copied().collect())
+                .map(|set| set.iter().flat_map(|r| r.points(params.arc)).collect())
                 .unwrap_or_default()
         });
         let i = left.remove(pick);
@@ -490,13 +528,13 @@ pub fn pocket(
                 let mut todo: Vec<usize> = (0..set.len()).collect();
                 while !todo.is_empty() {
                     let k = todo.remove(nearest(&todo, at, |&j| {
-                        set.get(j).cloned().unwrap_or_default()
+                        set.get(j).map(|r| r.points(params.arc)).unwrap_or_default()
                     }));
                     let Some(ring) = set.get(k) else { continue };
-                    let ring = starting_near(ring, at);
+                    let ring = at.map_or_else(|| ring.clone(), |p| ring.starting_near(p));
                     emit(&ring, z, params.feed, None, &mut path)?;
                     report.passes += 1;
-                    at = ring.first().copied();
+                    at = Some(ring.start());
                 }
             }
         }
@@ -547,37 +585,47 @@ pub(crate) fn levels(top: f64, bottom: f64, stepdown: Option<f64>) -> Vec<f64> {
 }
 
 /// The rings the same distance in from a pocket's walls.
-type RingSet = Vec<Vec<DVec2>>;
+type RingSet = Vec<Ring>;
 
 /// A pocket's rings, grouped by how far in they are and from the middle out: each
 /// an offset of the area inward by a whole number of stepovers, and where the
 /// tool on the innermost would leave some of the middle, one ring nearer it.
-fn middle_out(area: &Region, params: &PlanarParams, reverse: bool) -> Vec<RingSet> {
-    let mut sets: Vec<Region> = Vec::new();
+/// Each follows the area's own rings exactly where it is the same shape.
+fn middle_out(area: &Area, params: &PlanarParams, reverse: bool) -> Vec<RingSet> {
+    let mut sets: Vec<(Region, f64)> = Vec::new();
     // Bounded: an area cannot take more rings than its extent over the step, and
     // the loop stops as soon as an offset leaves nothing.
     for k in 0..10_000u32 {
-        let inset = area.offset(-f64::from(k) * params.stepover, params.arc);
+        let delta = -f64::from(k) * params.stepover;
+        let inset = area.region.offset(delta, params.arc);
         if inset.is_empty() {
             break;
         }
-        sets.push(inset);
+        sets.push((inset, delta));
     }
-    if let Some(inner) = sets.last()
-        && let Some(middle) = middle(inner, params)
+    if let Some((inner, delta)) = sets.last()
+        && let Some((middle, further)) = middle(inner, params)
     {
-        sets.push(middle);
+        let delta = delta - further;
+        sets.push((middle, delta));
     }
+    let close = 2.0 * params.arc + 1e-3;
     sets.iter()
         .rev()
-        .map(|r| r.rings().iter().map(|c| wound(c, reverse)).collect())
+        .map(|(r, delta)| {
+            exact_rings(r, &area.rings, *delta, close)
+                .iter()
+                .map(|c| wound(c, reverse))
+                .collect()
+        })
         .collect()
 }
 
 /// A ring nearer the middle of `inner`, if the tool round its edge would leave
 /// some of it uncut: an offset inward as far as leaves anything, found by
-/// halving. `None` if the tool round its edge reaches everything in it.
-fn middle(inner: &Region, params: &PlanarParams) -> Option<Region> {
+/// halving, and how far in that is. `None` if the tool round its edge reaches
+/// everything in it.
+fn middle(inner: &Region, params: &PlanarParams) -> Option<(Region, f64)> {
     if inner.offset(-params.radius, params.arc).is_empty() {
         return None;
     }
@@ -590,7 +638,7 @@ fn middle(inner: &Region, params: &PlanarParams) -> Option<Region> {
             hi = mid;
         } else {
             lo = mid;
-            best = Some(r);
+            best = Some((r, mid));
         }
     }
     best
@@ -637,13 +685,13 @@ fn overlapping(a: &Region, b: &Region) -> bool {
     }
 }
 
-/// A ring's points as its region winds it, or the other way round.
-fn wound(ring: &Contour, reverse: bool) -> Vec<DVec2> {
-    let mut points = ring.points().to_vec();
+/// A ring as its region winds it, or the other way round.
+fn wound(ring: &Ring, reverse: bool) -> Ring {
     if reverse {
-        points.reverse();
+        ring.reversed()
+    } else {
+        ring.clone()
     }
-    points
 }
 
 /// The order to cut closed `rings` in: never one before every ring inside it, and
@@ -759,46 +807,17 @@ fn closest_on(ring: &[DVec2], at: DVec2) -> Option<(usize, DVec2)> {
     best.map(|(i, p, _)| (i, p))
 }
 
-/// Closed ring `ring`, starting where it comes nearest `at`: a point put in there
-/// if it is not already one of its own.
-fn starting_near(ring: &[DVec2], at: Option<DVec2>) -> Vec<DVec2> {
-    let Some((i, p)) = at.and_then(|at| closest_on(ring, at)) else {
-        return ring.to_vec();
-    };
-    let n = ring.len();
-    let next = (i + 1) % n;
-    let mut out = Vec::with_capacity(n + 1);
-    let near = |q: Option<&DVec2>| q.is_some_and(|q| q.distance(p) < 1e-6);
-    // Start at p, then round from the segment's far end back to its near one.
-    let start = if near(ring.get(i)) {
-        i
-    } else if near(ring.get(next)) {
-        next
-    } else {
-        out.push(p);
-        next
-    };
-    for k in 0..n {
-        if let Some(&q) = ring.get((start + k) % n) {
-            out.push(q);
-        }
-    }
-    out
-}
-
 /// A closed ring cut at height `z`: a link to its start, then round and back to
 /// it; with leads, a link to where the lead starts, along it onto the ring, round,
 /// and off along the lead out.
 fn emit(
-    ring: &[DVec2],
+    ring: &Ring,
     z: f64,
     feed: f64,
     leads: Option<&RingLeads>,
     path: &mut Toolpath,
 ) -> Result<(), StrategyError> {
-    let Some(first) = ring.first() else {
-        return Ok(());
-    };
+    let first = &ring.start();
     let at = |p: DVec2| dvec3(p.x, p.y, z);
     // The strategy does not plan how to arrive; the linker does. With a lead, it
     // arrives where the lead starts, and goes along it onto the ring.
@@ -823,8 +842,18 @@ fn emit(
     if let Some(l) = leads {
         lead(&l.lead_in, path)?;
     }
-    for p in ring.iter().skip(1).chain(std::iter::once(first)) {
-        path.feed_to(at(*p), MoveRole::Cut, feed)?;
+    for span in ring.spans() {
+        match *span {
+            Span::Line { to } => path.feed_to(at(to), MoveRole::Cut, feed)?,
+            Span::Arc { to, centre, sweep } => {
+                let arc = Arc {
+                    centre: at(centre),
+                    axis: DVec3::Z,
+                    sweep,
+                };
+                path.arc_to(at(to), arc, MoveRole::Cut, feed)?;
+            }
+        }
     }
     if let Some(l) = leads {
         lead(&l.lead_out, path)?;
@@ -892,6 +921,14 @@ mod tests {
             * 0.5
     }
 
+    /// Whether `q` is within `d` of one of `region`'s rings.
+    fn rings_near(region: &Region, q: DVec2, d: f64) -> bool {
+        region
+            .rings()
+            .iter()
+            .any(|c| Ring::from_points(c.points()).is_some_and(|r| r.distance_to(q) <= d))
+    }
+
     /// A profile with leads arrives on each ring along an arc in the waste,
     /// tangent to the ring where it joins it, and leaves along another: outside
     /// a part cut out, inside a hole. Where the waste has no room even for a
@@ -909,7 +946,7 @@ mod tests {
             ..params()
         };
         for (side, offset) in [(ProfileSide::Outside, 1.5), (ProfileSide::Inside, -1.5)] {
-            let areas = areas(&part, offset, 0.01, &[], &floor(-1.0)).unwrap();
+            let areas = areas(&part, &[], offset, 0.01, &[], &floor(-1.0)).unwrap();
             let region = &areas[0].region;
             let (path, report) = profile(&areas, side, &p).unwrap();
             assert_eq!(report.no_room_to_lead, 0, "{side:?}");
@@ -934,6 +971,8 @@ mod tests {
                                 ((q - *a).dot(*b - *a) / b.distance_squared(*a)).clamp(0.0, 1.0);
                             q.distance(*a + (*b - *a) * t) < 1e-9
                         });
+                        // The region is the clipping's, a hair outside the ring.
+                        let on_ring = on_ring || rings_near(region, q, 0.03);
                         let inside = region.contains(q);
                         assert!(
                             on_ring || inside == (side == ProfileSide::Inside),
@@ -944,9 +983,13 @@ mod tests {
                 at = m.to;
             }
             // Joining the ring along it: the lead's arc ends heading the way the
-            // ring's first cut does.
+            // ring's first cut starts.
             let join = moves[first_cut - 1];
-            let along = (moves[first_cut].to - join.to).truncate().normalize();
+            let along = moves[first_cut]
+                .tangent_at(join.to, 0.0)
+                .unwrap()
+                .truncate()
+                .normalize();
             let arriving = join
                 .tangent_at(moves[first_cut - 2].to, 1.0)
                 .unwrap()
@@ -962,12 +1005,12 @@ mod tests {
 
         // A 4 mm hole cut from inside: no room for even a 1 mm arc.
         let hole = Region::new(vec![square(0.0, 4.0)]);
-        let small = areas(&hole, -1.5, 0.01, &[], &floor(-1.0)).unwrap();
+        let small = areas(&hole, &[], -1.5, 0.01, &[], &floor(-1.0)).unwrap();
         let (path, report) = profile(&small, ProfileSide::Inside, &p).unwrap();
         assert_eq!(report.no_room_to_lead, 1);
         assert!(path.moves().iter().all(|m| m.role != MoveRole::Lead));
 
-        let on = areas(&part, 0.0, 0.01, &[], &floor(-1.0)).unwrap();
+        let on = areas(&part, &[], 0.0, 0.01, &[], &floor(-1.0)).unwrap();
         let (path, report) = profile(&on, ProfileSide::On, &p).unwrap();
         assert_eq!(report.no_room_to_lead, 0);
         assert!(path.moves().iter().all(|m| m.role != MoveRole::Lead));
@@ -991,7 +1034,7 @@ mod tests {
     #[test]
     fn a_profile_cuts_the_holes_before_the_outline() {
         let part = Region::new(vec![square(0.0, 40.0), square(15.0, 25.0)]);
-        let areas = areas(&part, 1.5, 0.01, &[], &floor(-3.0)).unwrap();
+        let areas = areas(&part, &[], 1.5, 0.01, &[], &floor(-3.0)).unwrap();
         assert_eq!(areas.len(), 1);
         let (path, report) = profile(&areas, ProfileSide::Outside, &params()).unwrap();
         assert_eq!(report.rings, 2);
@@ -1019,7 +1062,7 @@ mod tests {
     #[test]
     fn conventional_reverses_a_profile() {
         let part = Region::new(vec![square(0.0, 40.0)]);
-        let areas = areas(&part, 1.5, 0.01, &[], &floor(-1.0)).unwrap();
+        let areas = areas(&part, &[], 1.5, 0.01, &[], &floor(-1.0)).unwrap();
         let p = PlanarParams {
             kept_on_right: false,
             ..params()
@@ -1036,11 +1079,7 @@ mod tests {
         let rings = [square(0.0, 100.0), square(20.0, 80.0), square(40.0, 60.0)];
         let areas: Vec<Area> = rings
             .iter()
-            .map(|r| Area {
-                region: Region::new(vec![r.clone()]),
-                top: 0.0,
-                bottom: -1.0,
-            })
+            .map(|r| Area::new(Region::new(vec![r.clone()]), 0.0, -1.0))
             .collect();
         let (path, _) = profile(&areas, ProfileSide::On, &params()).unwrap();
         let widths: Vec<f64> = passes(&path)
@@ -1058,7 +1097,7 @@ mod tests {
     #[test]
     fn a_pocket_clears_from_the_middle_out() {
         let shape = Region::new(vec![square(0.0, 21.0)]);
-        let areas = areas(&shape, -1.5, 0.01, &[], &floor(-2.0)).unwrap();
+        let areas = areas(&shape, &[], -1.5, 0.01, &[], &floor(-2.0)).unwrap();
         let (path, report) = pocket(&areas, &params()).unwrap();
         assert_eq!(report.areas, 1);
         let passes = passes(&path);
@@ -1092,7 +1131,7 @@ mod tests {
     fn each_area_goes_to_its_own_floor() {
         let shape = Region::new(vec![square(0.0, 10.0), square(20.0, 30.0)]);
         let floors = [dvec3(0.0, 0.0, -3.0), dvec3(25.0, 25.0, -6.0)];
-        let areas = areas(&shape, -1.5, 0.01, &floors, &floor(-1.0)).unwrap();
+        let areas = areas(&shape, &[], -1.5, 0.01, &floors, &floor(-1.0)).unwrap();
         let mut bottoms: Vec<f64> = areas.iter().map(|a| a.bottom).collect();
         bottoms.sort_by(f64::total_cmp);
         assert_eq!(bottoms, vec![-6.0, -3.0]);
@@ -1105,7 +1144,7 @@ mod tests {
         let shape = Region::new(vec![square(0.0, 10.0), square(11.0, 21.0)]);
         let shape = Region::union_of(shape.rings()).unwrap();
         let floors = [dvec3(0.0, 0.0, -2.0), dvec3(21.0, 21.0, -4.0)];
-        let areas = areas(&shape, 1.5, 0.01, &floors, &floor(0.0)).unwrap();
+        let areas = areas(&shape, &[], 1.5, 0.01, &floors, &floor(0.0)).unwrap();
         assert_eq!(areas.len(), 1);
         assert_eq!(areas[0].bottom, -4.0);
     }
@@ -1113,7 +1152,7 @@ mod tests {
     #[test]
     fn a_floor_above_the_top_cuts_nothing() {
         let shape = Region::new(vec![square(0.0, 10.0)]);
-        let areas = areas(&shape, 1.5, 0.01, &[], &floor(1.0)).unwrap();
+        let areas = areas(&shape, &[], 1.5, 0.01, &[], &floor(1.0)).unwrap();
         let (path, report) = profile(&areas, ProfileSide::Outside, &params()).unwrap();
         assert!(path.is_empty());
         assert_eq!(report.too_shallow, 1);

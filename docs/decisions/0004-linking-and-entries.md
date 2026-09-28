@@ -138,5 +138,5 @@ beside the cutter, so a ring along a tall wall seemed to start in material as hi
 as the wall, and ramped from its top.
 
 Not taken yet: Fusion's smooth arc transitions (a straight lifted line stands in),
-helical ramps (the profile ramp is the one that always fits a Z-level ring), and
-high feedrate mode.
+helical ramps for Z-level and pockets (a 2D profile has them since
+[decision 0006](0006-2d-linking-and-arcs.md)), and high feedrate mode.

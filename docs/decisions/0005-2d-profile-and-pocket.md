@@ -80,7 +80,8 @@ it leaves on the tool's right. The rings are wound to that, reversed for
 
 **Linking is Z-level's.** Stay down up to 5 × the tool, level only, and ramp into
 material along the ring about to be cut, wrapping round it as often as the ramp
-needs. A ring too short to ramp along is plunged.
+needs. A ring too short to ramp along is plunged. (A profile's is Fusion's 2D
+Contour's since [decision 0006](0006-2d-linking-and-arcs.md).)
 
 **Version 7, since removed.** It was version 7, so an older build would refuse it by
 name. Job versioning was removed on 2026-09-27: there is one format, and no

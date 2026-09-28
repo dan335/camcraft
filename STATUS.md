@@ -58,11 +58,20 @@ ramps, a retract before the spindle stops, and stepovers that follow the tool
 ([decision 0004](docs/decisions/0004-linking-and-entries.md)). The router jig's
 program went from about 8 h to 4.6 h.
 
-1. **Helical ramps and smooth transitions.** Z-level ramps along its own ring and
-   parallel's stay-down links are straight lines lifted over the part; Fusion's
-   are helices and tangent arcs.
-2. **Start rapids split XY then Z.** The first move is one G0 in all three axes
-   from wherever the tool change left the spindle.
+2D linking is Fusion's 2D Contour's
+([decision 0006](docs/decisions/0006-2d-linking-and-arcs.md)): a profile's lead
+is a vertical arc, a straight and a level arc; it goes down by a helix beside
+the lead (or a plunge, or a ramp round the ring in the direction it cuts), stays
+down between depths, and its rings follow the model's round edges as exact
+arcs, posted as `G2`/`G3` in `G17`, `G18` and `G19`. Programs start and end as
+Fusion's post does. The lego contour posts block for block as Fusion's does.
+
+1. **Smooth transitions.** Parallel's stay-down links are straight lines lifted
+   over the part; Fusion's are tangent arcs. A pocket has no helix yet.
+2. **Exact circles from the B-rep.** A ring's arcs take their centres and radii
+   from the model's topology, whose round edges are circles through the
+   tessellation's points, which lie on the B-rep's curves; OpenCascade's own
+   `gp_Circ` is not read yet. Ellipses and splines are followed by lines.
 3. **More strategies**: waterline, adaptive clearing. Facing, as Fusion's Face,
    is done. 2D profile and pocket are
    done ([decision 0005](docs/decisions/0005-2d-profile-and-pocket.md)), with
@@ -71,12 +80,11 @@ program went from about 8 h to 4.6 h.
    and tab positions. Stock to leave is Fusion's, radial and axial, negative
    included, on every operation; which shared settings a strategy uses is one
    table (`StrategySpec::uses`), for a new strategy to fill in.
-4. **Arc fitting**, as a `Toolpath -> Toolpath` transform.
-5. **A volumetric stock**, so what a top setup leaves carries to a flipped bottom
+4. **A volumetric stock**, so what a top setup leaves carries to a flipped bottom
    one.
-6. **Exact slicing of the offset surface** for Z-level work
+5. **Exact slicing of the offset surface** for Z-level work
    ([decision 0003](docs/decisions/0003-grids-only-for-stock.md)).
-7. The work offset manager in the toolbar; Fusion's `.json` tool libraries, which
+6. The work offset manager in the toolbar; Fusion's `.json` tool libraries, which
    carry holders; tapered ball mills.
 
 ## Before the first cut
