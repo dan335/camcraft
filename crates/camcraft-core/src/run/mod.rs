@@ -146,7 +146,9 @@ pub fn run_prepared_planned(
             }
             // Facing works from the stock alone.
             StrategySpec::Face { .. } => Target::Limit(None),
-            StrategySpec::Parallel { .. } | StrategySpec::ZlevelRough { .. } => Target::Limit(
+            StrategySpec::Parallel { .. }
+            | StrategySpec::ZlevelRough { .. }
+            | StrategySpec::Adaptive { .. } => Target::Limit(
                 machining_boundary(
                     &op.boundary,
                     &op.selection,
@@ -167,6 +169,7 @@ pub fn run_prepared_planned(
             mesh,
             cutter: &cutter,
             bounds: (lo, hi),
+            stocks: &prepared.stocks,
         };
         operations.push(run_operation(&work, &target, &mut stock)?);
         keyframes.push(Arc::new(PackedStock::pack(&stock)));

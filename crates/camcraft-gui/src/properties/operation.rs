@@ -4,9 +4,9 @@
 
 use camcraft_core::features;
 use camcraft_core::job::{
-    self, Boundary, Containment, Depths, Entry, FaceDirection, FeatureRef, Height, HeightContext,
-    HeightRef, Leads, Leave, MachiningBoundary, Operation, Outline, ProfileSide, Retraction,
-    StockToLeave, StrategySpec, TabShape, Tabs,
+    self, AdaptiveDirection, Boundary, Containment, Depths, Entry, FaceDirection, FeatureRef,
+    Height, HeightContext, HeightRef, Leads, Leave, MachiningBoundary, Operation, Outline,
+    ProfileSide, Retraction, StockToLeave, StrategySpec, TabShape, Tabs,
 };
 use camcraft_core::setup::Bodies;
 use eframe::egui;
@@ -174,6 +174,7 @@ fn strategy_name(s: &StrategySpec) -> &'static str {
     match s {
         StrategySpec::Parallel { .. } => "parallel",
         StrategySpec::ZlevelRough { .. } => "z-level rough",
+        StrategySpec::Adaptive { .. } => "adaptive clearing",
         StrategySpec::Profile { .. } => "2D profile",
         StrategySpec::Pocket { .. } => "2D pocket",
         StrategySpec::Face { .. } => "face",
@@ -766,6 +767,7 @@ fn default_bottom(strategy: &StrategySpec) -> HeightRef {
 fn uses_top_bottom(strategy: &StrategySpec) -> (bool, bool) {
     match strategy {
         StrategySpec::ZlevelRough { .. }
+        | StrategySpec::Adaptive { .. }
         | StrategySpec::Profile { .. }
         | StrategySpec::Pocket { .. }
         | StrategySpec::Face { .. } => (true, true),
@@ -850,7 +852,7 @@ fn heights(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
                 "Without a Bottom, the stock is faced down to the part's top.",
             );
         }
-        StrategySpec::ZlevelRough { .. } => {}
+        StrategySpec::ZlevelRough { .. } | StrategySpec::Adaptive { .. } => {}
     }
     hint(
         ui,
@@ -969,6 +971,28 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave
                 m.length_field(ui, min_ring_length, 0.1, 1000.0, "");
                 ui.end_row();
             }
+            StrategySpec::Adaptive {
+                direction,
+                flat_areas,
+            } => {
+                widgets::field_label(ui, "Direction");
+                ui.horizontal(|ui| {
+                    for (d, name) in [
+                        (AdaptiveDirection::Climb, "climb"),
+                        (AdaptiveDirection::Conventional, "conventional"),
+                        (AdaptiveDirection::BothWays, "both ways"),
+                    ] {
+                        ui.selectable_value(direction, d, name);
+                    }
+                });
+                ui.end_row();
+                widgets::field_label(ui, "Flat areas");
+                ui.checkbox(flat_areas, "a level on each flat face")
+                    .on_hover_text(
+                        "Floors are left just the stock to leave, not a stepdown's terrace",
+                    );
+                ui.end_row();
+            }
             StrategySpec::Profile { conventional, .. } | StrategySpec::Pocket { conventional } => {
                 widgets::field_label(ui, "Direction");
                 let mut climb = !*conventional;
@@ -1032,8 +1056,15 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave
             }
         }
         if uses.stepover {
-            widgets::field_label(ui, "Stepover");
-            m.length_field(ui, &mut op.passes.stepover, 0.05, 100.0, "");
+            // Adaptive clearing's stepover is the width of cut it holds.
+            if matches!(op.strategy, StrategySpec::Adaptive { .. }) {
+                widgets::field_label(ui, "Optimal load");
+                m.length_field(ui, &mut op.passes.stepover, 0.01, 100.0, "")
+                    .on_hover_text("The width of cut each pass is steered to hold");
+            } else {
+                widgets::field_label(ui, "Stepover");
+                m.length_field(ui, &mut op.passes.stepover, 0.05, 100.0, "");
+            }
             ui.end_row();
         }
         widgets::field_label(ui, "Deepest step cut");

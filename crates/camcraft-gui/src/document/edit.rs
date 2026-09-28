@@ -472,6 +472,7 @@ impl Document {
         let base = match strategy {
             StrategySpec::Parallel { .. } => "finish",
             StrategySpec::ZlevelRough { .. } => "rough",
+            StrategySpec::Adaptive { .. } => "adaptive",
             StrategySpec::Profile { .. } => "profile",
             StrategySpec::Pocket { .. } => "pocket",
             StrategySpec::Face { .. } => "face",
@@ -682,7 +683,7 @@ impl Document {
 fn start_on_silhouette(op: &mut Operation) {
     let containment = match op.strategy {
         StrategySpec::Parallel { .. } => Containment::Center,
-        StrategySpec::ZlevelRough { .. } => Containment::Outside,
+        StrategySpec::ZlevelRough { .. } | StrategySpec::Adaptive { .. } => Containment::Outside,
         StrategySpec::Profile { .. }
         | StrategySpec::Pocket { .. }
         | StrategySpec::Face { .. }
@@ -722,7 +723,10 @@ fn fit_stepover(
     preset: Option<&Preset>,
     tolerance: f64,
 ) {
-    if preset.is_some_and(|p| p.stepover.is_some()) {
+    // A preset's stepover is not an adaptive operation's load, which it keeps.
+    if preset.is_some_and(|p| p.stepover.is_some())
+        && !matches!(op.strategy, StrategySpec::Adaptive { .. })
+    {
         return;
     }
     if let Some(over) = tool.and_then(|t| op.default_stepover(t, tolerance)) {

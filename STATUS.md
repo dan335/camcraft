@@ -72,7 +72,10 @@ Fusion's post does. The lego contour posts block for block as Fusion's does.
    from the model's topology, whose round edges are circles through the
    tessellation's points, which lie on the B-rep's curves; OpenCascade's own
    `gp_Circ` is not read yet. Ellipses and splines are followed by lines.
-3. **More strategies**: waterline, adaptive clearing. Facing, as Fusion's Face,
+3. **More strategies**: waterline. Adaptive clearing, as Fusion's 3D Adaptive,
+   is done ([decision 0007](docs/decisions/0007-adaptive-clearing.md)), without
+   yet rest material from earlier operations, fine stepdown, shallow areas or
+   slot clearing; its stay-down links are straight. Facing, as Fusion's Face,
    is done. 2D profile and pocket are
    done ([decision 0005](docs/decisions/0005-2d-profile-and-pocket.md)), with
    tabs (on profiles, as Fusion's on a 2D contour) and a profile's horizontal

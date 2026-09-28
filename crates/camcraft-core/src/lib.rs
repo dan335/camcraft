@@ -50,6 +50,8 @@ pub mod reach;
 
 pub mod roughing;
 
+pub mod adaptive;
+
 pub mod ordering;
 
 pub mod job;

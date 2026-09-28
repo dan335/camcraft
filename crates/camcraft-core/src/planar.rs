@@ -183,6 +183,7 @@ pub fn centre_offset(op: &Operation, cutter_radius: f64) -> f64 {
         StrategySpec::Pocket { .. } => -radius,
         StrategySpec::Parallel { .. }
         | StrategySpec::ZlevelRough { .. }
+        | StrategySpec::Adaptive { .. }
         | StrategySpec::Face { .. }
         | StrategySpec::Drill { .. } => 0.0,
     }

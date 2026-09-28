@@ -120,6 +120,18 @@ pub enum StrategySpec {
         #[serde(default = "default_min_ring")]
         min_ring_length: f64,
     },
+    /// Z-level clearing with the tool's load held constant: each pass steered
+    /// to keep the arc of the tool in material at the optimal load, the
+    /// stepover ([`Depths::Required`]). Fusion's 3D Adaptive Clearing.
+    Adaptive {
+        /// Which way the passes cut.
+        #[serde(default, skip_serializing_if = "is_default")]
+        direction: AdaptiveDirection,
+        /// Add a level on each flat face, so floors are left just the stock to
+        /// leave down. Fusion's flat area detection.
+        #[serde(default = "yes", skip_serializing_if = "is_yes")]
+        flat_areas: bool,
+    },
     /// A 2D contour: the tool run round the boundary, beside it or on it, level
     /// by level down to its floor. Fusion's 2D Contour.
     Profile {
@@ -174,6 +186,7 @@ impl StrategySpec {
         match self {
             StrategySpec::Parallel { .. } => "parallel",
             StrategySpec::ZlevelRough { .. } => "zlevel-rough",
+            StrategySpec::Adaptive { .. } => "adaptive",
             StrategySpec::Profile { .. } => "profile",
             StrategySpec::Pocket { .. } => "pocket",
             StrategySpec::Face { .. } => "face",
@@ -220,6 +233,15 @@ impl StrategySpec {
             // Slice by slice is what it is.
             StrategySpec::ZlevelRough { .. } => Uses {
                 depths: Depths::Required,
+                ..cuts_loops
+            },
+            // Its stepover is its optimal load. It goes down a helix into what
+            // it cannot reach from the side, and its passes are in the order it
+            // steers them, linked at the level where it has cleared the way.
+            StrategySpec::Adaptive { .. } => Uses {
+                depths: Depths::Required,
+                entry: true,
+                reorder: false,
                 ..cuts_loops
             },
             // A 2D operation's order is its own: what is inside before what frees
@@ -278,7 +300,7 @@ impl StrategySpec {
     /// a millimetre each way for the finish, and the rest cut to size.
     pub fn default_stock_to_leave(&self) -> StockToLeave {
         match self {
-            StrategySpec::ZlevelRough { .. } => StockToLeave {
+            StrategySpec::ZlevelRough { .. } | StrategySpec::Adaptive { .. } => StockToLeave {
                 radial: 0.5,
                 axial: 0.5,
             },
@@ -365,6 +387,20 @@ pub enum FaceDirection {
     Climb,
     /// Every pass conventional.
     Conventional,
+}
+
+/// Which way adaptive clearing's passes cut.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AdaptiveDirection {
+    /// Every pass climbing. Fusion's default.
+    #[default]
+    Climb,
+    /// Every pass conventional.
+    Conventional,
+    /// Climbing, and cutting back conventional where a pass ends beside what
+    /// is left, rather than going back to climb it.
+    BothWays,
 }
 
 /// Which side of its boundary a profile cuts on.
@@ -749,7 +785,7 @@ impl Operation {
             return None;
         }
         match self.strategy {
-            StrategySpec::ZlevelRough { .. } => {
+            StrategySpec::ZlevelRough { .. } | StrategySpec::Adaptive { .. } => {
                 return Some(
                     "a V-bit or chamfer mill cannot rough in Z levels; use a parallel pass",
                 );
@@ -953,6 +989,8 @@ impl Operation {
                 Some((over * 1000.0).round() / 1000.0)
             }
             StrategySpec::ZlevelRough { .. } | StrategySpec::Pocket { .. } => Some(0.6 * d),
+            // Fusion's optimal load: a tenth of the tool, to the micron.
+            StrategySpec::Adaptive { .. } => Some((0.1 * d * 1000.0).round() / 1000.0),
             // Fusion's: 95% of the flat of the tool's end, less its corners.
             StrategySpec::Face { .. } => match tool.kind {
                 ToolKind::Flat => Some(0.95 * d),
@@ -978,7 +1016,11 @@ impl Operation {
         if let Some(ramp) = preset.ramp_feed {
             self.linking.ramp_feed = Some(ramp);
         }
-        if let Some(stepover) = preset.stepover {
+        // A preset's stepover is a slotting or finishing one: an adaptive
+        // operation's is its load, a fraction of it.
+        if let Some(stepover) = preset.stepover
+            && !matches!(self.strategy, StrategySpec::Adaptive { .. })
+        {
             self.passes.stepover = stepover;
         }
         if let Some(d) = preset.stepdown {

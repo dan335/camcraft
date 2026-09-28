@@ -30,8 +30,9 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
   simulator and post never see a rotation. With the default orientation and work
   zero, a run is bit-identical to before setups existed.
 
-An operation has a strategy (parallel finishing, Z-level roughing, a 2D profile,
-a 2D pocket, facing or drilling), a tool, heights, passes and linking. What
+An operation has a strategy (parallel finishing, adaptive clearing, Z-level
+roughing, a 2D profile, a 2D pocket, facing or drilling), a tool, heights, passes
+and linking. What
 Fusion's Geometry tab holds is three settings, each read only by the strategies
 `StrategySpec::uses` says: `selection`, the faces and edges picked on the
 models; a 3D operation's `boundary`, which, as Fusion's machining boundary, keeps
@@ -40,7 +41,7 @@ selection, with the tool's `containment` and an additional offset (`margin`);
 and a 2D operation's `outline`, what it cuts round or clears. `heights` holds
 the clearance (where the tool arrives and leaves, 10 mm over the stock), the
 retract height (Fusion's, 5 mm over it) and the top and bottom it cuts between. `passes.stepdown` is
-Fusion's multiple depths, shared the same way: Z-level roughing must have one,
+Fusion's multiple depths, shared the same way: adaptive and Z-level roughing must have one,
 profiles, pockets and facing cut the bottom in one pass without, and parallel
 and drilling never read it. An operation may be
 turned off, which leaves it in the job but out of every run, check and post.
@@ -107,6 +108,25 @@ rides over it: `shape = "rectangular"` (the default) steps straight up and
 plunges down off it at the plunge feed, `"triangular"` climbs and ramps off at
 45°. They are put on before linking, so links and ramps plan round them.
 
+**Adaptive clearing** (`strategy = "adaptive"`) is Fusion's 3D Adaptive
+Clearing ([decision 0007](decisions/0007-adaptive-clearing.md)): Z levels a
+stepdown apart, each cleared by passes steered step by step to hold the tool's
+engagement at the *optimal load*, which is its `passes.stepover` (a tenth of the
+tool to start). Passes start beside the block where they can, and go down a helix
+(`linking.helix_diameter`, 0.9 of the tool) where they cannot; `direction` is
+`"climb"` (the default), `"conventional"` or `"both-ways"`; `flat_areas` (on by
+default) adds a level on each flat face, raised by the stock to leave down. It
+clears the stock's block as it starts: an operation before it is not yet taken
+into account, so after one it cuts some air.
+
+```toml
+[[setup.operation]]
+name = "adaptive"
+strategy = "adaptive"
+tool = "rough-6-flat"
+passes = { stepover = 0.6, stepdown = 12.0, stock_to_leave = { radial = 0.5, axial = 0.5 } }
+```
+
 **Stock to leave** (`passes.stock_to_leave`) is Fusion's radial and axial
 stock to leave, in millimetres: `radial` on the walls, `axial` on the floors,
 and between the two on a slope. Positive leaves material for a later operation
@@ -114,7 +134,7 @@ to finish; negative cuts past the part, for a looser fit. Beside, it must stay
 under the tool's radius; down, in 3D with a ball or bullnose, within its corner
 radius (a flat end, or a 2D floor, may go any depth). Every operation has it,
 and cuts with as much as its strategy uses: a drill none, a profile on the
-boundary only its floor's. New Z-level roughing starts at 0.5 mm each way, as
+boundary only its floor's. New adaptive and Z-level roughing start at 0.5 mm each way, as
 Fusion's roughing does; everything else at none, which is not written. The 3D
 strategies grow the tool by it (`camcraft_core::allowance`); a 2D one moves its
 cut out by it and raises its floors by it. The material is cut by the real
@@ -178,7 +198,10 @@ way across as the operation found it; `"full"`, the retract height, or higher
 where the material is. A link no longer than the *stay-down*
 distance is made without lifting, at the cutting feed: 50 mm for parallel, riding
 over the part; five times the tool's diameter for Z-level and 2D, straight and
-level, and for a profile down to its ring's next depth.
+level, and for a profile down to its ring's next depth. Adaptive clearing makes
+its own links at the level, only straight across what it has cleared, up to ten
+times the tool's diameter; it goes down its own helix into what it cannot reach
+from the side, and straight down everywhere else, into what it has cleared.
 Parallel enters and leaves each pass along a vertical arc (the *lead radius*, a
 tenth of the tool); Z-level, pockets and facing ramp into material along the pass
 they are about to cut, in the direction it cuts (the *ramp angle*, 2°, at the
@@ -243,6 +266,7 @@ with.
 | CC205 | warn    | roughing found nothing to clear                                  |
 | CC206 | note    | material left more than 1 mm above the part                      |
 | CC207 | warn    | a profile's or pocket's area not cut: its floor is not below the top |
+| CC208 | warn    | adaptive clearing left an area it had no room to go down into    |
 | CC299 | warn    | a warning from reading the model                                 |
 
 A **plunge** is a continuous descent steeper than `PLUNGE_RATIO` (10:1) that falls

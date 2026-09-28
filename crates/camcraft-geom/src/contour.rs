@@ -198,6 +198,36 @@ impl Region {
         inside
     }
 
+    /// Whether the whole segment `a`–`b` lies inside: both ends inside, and no
+    /// edge crossing it.
+    ///
+    /// A segment touching the boundary may go either way, as a point on it does.
+    pub fn contains_segment(&self, a: DVec2, b: DVec2) -> bool {
+        if !self.contains(a) || !self.contains(b) {
+            return false;
+        }
+        let (lo, hi) = (a.min(b), a.max(b));
+        let cross = |o: DVec2, p: DVec2, q: DVec2| (p - o).perp_dot(q - o);
+        for ring in &self.rings {
+            let pts = ring.points();
+            let n = pts.len();
+            for i in 0..n {
+                let (Some(&c), Some(&d)) = (pts.get(i), pts.get((i + 1) % n)) else {
+                    continue;
+                };
+                if c.max(d).cmplt(lo).any() || c.min(d).cmpgt(hi).any() {
+                    continue;
+                }
+                let (d1, d2) = (cross(a, b, c), cross(a, b, d));
+                let (d3, d4) = (cross(c, d, a), cross(c, d, b));
+                if (d1 > 0.0) != (d2 > 0.0) && (d3 > 0.0) != (d4 > 0.0) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Where the line through the region at `v` runs inside it, as intervals of
     /// `u`, in order.
     ///

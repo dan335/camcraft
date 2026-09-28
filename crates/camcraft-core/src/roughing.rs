@@ -28,8 +28,8 @@
 //! are left exactly the stock to leave. Further rings step inward by the stepover
 //! until nothing is left. At the outside of the block, the rings run from the
 //! operation's extent inward, so no ring engages more than a stepover of material
-//! there. Constant-engagement adaptive clearing is a later strategy and a much
-//! larger piece of work.
+//! there. Holding the engagement constant everywhere is adaptive clearing's
+//! ([`crate::adaptive`]).
 
 use camcraft_geom::contour::{Contour, Region, RegionError, contour_above};
 use camcraft_geom::heightmap::HeightMap;

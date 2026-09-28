@@ -7,7 +7,9 @@
 
 use std::cell::RefCell;
 
-use camcraft_core::job::{FaceDirection, Operation, ProfileSide, Setup, StrategySpec};
+use camcraft_core::job::{
+    AdaptiveDirection, FaceDirection, Operation, ProfileSide, Setup, StrategySpec,
+};
 use camcraft_core::run::Stage;
 use eframe::egui;
 
@@ -640,12 +642,21 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
         (
             "3D",
             vec![
-                vec![(
-                    "Z-level rough",
-                    StrategySpec::ZlevelRough {
-                        min_ring_length: 3.0,
-                    },
-                )],
+                vec![
+                    (
+                        "Adaptive clearing",
+                        StrategySpec::Adaptive {
+                            direction: AdaptiveDirection::Climb,
+                            flat_areas: true,
+                        },
+                    ),
+                    (
+                        "Z-level rough",
+                        StrategySpec::ZlevelRough {
+                            min_ring_length: 3.0,
+                        },
+                    ),
+                ],
                 vec![("Parallel", StrategySpec::Parallel { angle: 0.0 })],
             ],
         ),

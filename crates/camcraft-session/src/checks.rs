@@ -427,6 +427,24 @@ fn operation_findings(
                 ));
             }
         }
+        StrategyDetail::Adaptive(r) => {
+            if r.passes == 0 {
+                out.push(finding(
+                    Level::Warn,
+                    "CC205",
+                    "roughing found nothing to clear".into(),
+                    "the stock may already be below this operation's top".into(),
+                ));
+            }
+            if r.no_room > 0 {
+                out.push(finding(
+                    Level::Warn,
+                    "CC208",
+                    format!("{} area(s) left: no room to go down into them", r.no_room),
+                    "a smaller helix, or a smaller tool, would reach them".into(),
+                ));
+            }
+        }
         StrategyDetail::Profile(r) | StrategyDetail::Pocket(r) | StrategyDetail::Face(r) => {
             if r.too_shallow > 0 {
                 out.push(finding(

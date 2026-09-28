@@ -7,6 +7,7 @@ use camcraft_geom::mesh::Aabb;
 use camcraft_sim::stock::{PackedStock, PartSurface, SimReport, VerifyReport};
 use glam::DVec2;
 
+use crate::adaptive::AdaptiveReport;
 use crate::drilling::DrillReport;
 use crate::frame::Frame;
 use crate::job::{Coolant, HeightContext, SpindleDirection};
@@ -27,6 +28,8 @@ pub enum StrategyDetail {
     Parallel(ParallelReport),
     /// Z-level clearing.
     ZlevelRough(RoughingReport),
+    /// Adaptive clearing.
+    Adaptive(AdaptiveReport),
     /// A 2D profile.
     Profile(PlanarReport),
     /// A 2D pocket.

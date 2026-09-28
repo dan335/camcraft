@@ -39,6 +39,8 @@ pub mod heightmap;
 
 pub mod contour;
 
+pub mod engagement;
+
 pub mod ring;
 
 pub mod shadow;

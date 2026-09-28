@@ -2,21 +2,22 @@
 //! as it stands, and cut into it.
 
 use camcraft_geom::contour::Region;
-use camcraft_geom::mesh::TriMesh;
+use camcraft_geom::mesh::{Aabb, TriMesh};
 use camcraft_geom::topology::EdgeKind;
 use camcraft_sim::stock::{SimReport, Stock};
 use glam::{DVec2, DVec3, dvec2};
 
 use super::error::{OperationError, in_op};
 use super::{Made, OperationResult, PLUNGE_RATIO, RunError, StrategyDetail};
+use crate::adaptive::{AdaptiveParams, Direction, adaptive_rough, flat_heights};
 use crate::allowance::{Allowance, EffectiveTool};
 use crate::drilling::{DrillParams, DrillReport, Hole, drill, holes, nearest_first};
 use crate::dropcutter::DropCutter;
 use crate::face::{FaceParams, LevelsAsked, face};
 use crate::features::{Chain, FeatureError, outline, picked_chains, picked_points};
 use crate::job::{
-    Entry, HeightContext, Job, Operation, Picks, Retraction, SpindleDirection, StrategySpec,
-    ToolSpec,
+    AdaptiveDirection, Entry, HeightContext, Job, Operation, Picks, Retraction, SpindleDirection,
+    StrategySpec, ToolSpec,
 };
 use crate::linker::{
     ClearanceField, EntryKind, LinkParams, LinkReport, Material, Ramp, StayDown, Surface,
@@ -54,6 +55,8 @@ pub(super) struct Work<'a> {
     pub(super) cutter: &'a DropCutter<'a>,
     /// The stock's footprint in XY, lower and upper corner.
     pub(super) bounds: (DVec2, DVec2),
+    /// The blocks of material the setup starts from.
+    pub(super) stocks: &'a [Aabb],
 }
 
 impl Work<'_> {
@@ -104,6 +107,10 @@ pub(super) fn run_operation(
         StrategySpec::ZlevelRough { min_ring_length } => {
             zlevel_paths(work, min_ring_length, limit, stock, &mut warnings)?
         }
+        StrategySpec::Adaptive {
+            direction,
+            flat_areas,
+        } => adaptive_paths(work, direction, flat_areas, limit, &mut warnings)?,
         StrategySpec::Profile { .. } | StrategySpec::Pocket { .. } => {
             planar_paths(work, found, &mut warnings)?
         }
@@ -175,7 +182,7 @@ pub(super) fn run_operation(
         rapid_contacts: 0,
         deepest: 0.0,
     };
-    let (path, links) = link(
+    let (path, mut links) = link(
         &ordered,
         &clearance,
         &mut cutting,
@@ -183,6 +190,13 @@ pub(super) fn run_operation(
         &link_params(work, clearance_z),
     )
     .map_err(in_op(op))?;
+    // Adaptive clearing makes its own links at the level, and its own helixes:
+    // they are the operation's as much as the linker's are.
+    if let StrategyDetail::Adaptive(r) = &detail {
+        links.links_resolved += r.stayed_down;
+        links.stayed_down += r.stayed_down;
+        links.helixes += r.helixes;
+    }
     let sim = SimReport {
         removed_mm3: (before - cutting.stock.volume()).max(0.0),
         rapid_contacts: cutting.rapid_contacts,
@@ -263,6 +277,10 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
                 feed: op.ramp_feed(),
             }),
         ),
+        // Adaptive clearing stays down itself, at the level, only where it has
+        // cleared the way, and goes down its own helixes: a link it leaves is
+        // one to lift for, into what it has cleared, straight down.
+        StrategySpec::Adaptive { .. } => (StayDown::Never, 0.0, None),
         StrategySpec::Drill { .. } => (StayDown::Never, 0.0, None),
     };
     let entry = if op.strategy.uses().entry {
@@ -280,6 +298,7 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         StrategySpec::Profile { conventional, .. } | StrategySpec::Pocket { conventional, .. } => {
             conventional
         }
+        StrategySpec::Adaptive { direction, .. } => direction == AdaptiveDirection::Conventional,
         _ => false,
     };
     let clockwise = work.spec.spindle == SpindleDirection::Clockwise;
@@ -444,6 +463,102 @@ fn zlevel_paths(
         );
     }
     Ok((path, report.rings, StrategyDetail::ZlevelRough(report)))
+}
+
+/// Adaptive clearing of the stock's blocks, a level each stepdown and one on
+/// each flat face, within the sweep and `limit`.
+fn adaptive_paths(
+    work: &Work<'_>,
+    direction: AdaptiveDirection,
+    flat_areas: bool,
+    limit: Option<&Region>,
+    warnings: &mut Vec<String>,
+) -> Result<Paths, RunError> {
+    let (job, op, ctx) = (work.job, work.op, work.heights);
+    let mut reach = LevelReach::new(work.mesh, work.tool, job.tolerance).map_err(in_op(op))?;
+    let diameter = work.spec.diameter;
+    let flats = if flat_areas {
+        let axial = op.stock_to_leave().axial;
+        flat_heights(work.mesh, job.tolerance)
+            .into_iter()
+            .map(|z| z + axial)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    // A ramp along a pass would cut what it takes as cleared: into a closed
+    // area it goes down a helix, or straight.
+    let helix_radius = match op.linking.entry.unwrap_or_default() {
+        Entry::Plunge => 0.0,
+        Entry::Helix | Entry::Ramp => op.linking.helix_diameter.unwrap_or(0.9 * diameter) / 2.0,
+    };
+    let params = AdaptiveParams {
+        // Checked with the job: it always has one.
+        stepdown: op.stepdown().unwrap_or(f64::NAN),
+        optimal_load: op.passes.stepover,
+        feed: op.passes.feed,
+        top: op.heights.top.map_or(ctx.stock_top, |h| h.resolve_top(ctx)),
+        bottom: op
+            .heights
+            .bottom
+            .map_or(ctx.model_bottom, |h| h.resolve_bottom(ctx)),
+        tolerance: job.tolerance,
+        climb_right: work.spec.spindle == SpindleDirection::Clockwise,
+        direction: match direction {
+            AdaptiveDirection::Climb => Direction::Climb,
+            AdaptiveDirection::Conventional => Direction::Conventional,
+            AdaptiveDirection::BothWays => Direction::BothWays,
+        },
+        helix_radius,
+        stay_down: op.linking.stay_down.unwrap_or(10.0 * diameter),
+        ramp_angle: op.linking.ramp_angle.to_radians(),
+        ramp_feed: op.ramp_feed(),
+        ramp_stepdown: op.linking.ramp_stepdown.or(op.stepdown()),
+        safe_distance: op.linking.safe_distance,
+        flats,
+    };
+    // Room past the stock's sides for the whole tool, so a pass can start
+    // beside the block rather than going down into it.
+    let (lo, hi) = work.bounds;
+    let room = work.tool.max_radius()
+        + work.tool.cutter_radius()
+        + op.boundary.margin.max(0.0)
+        + job.tolerance;
+    let sweep = Region::rectangle(lo - DVec2::splat(room), hi + DVec2::splat(room));
+    let area = match limit {
+        Some(l) => sweep
+            .intersection(l)
+            .map_err(|e| StrategyError::Region(e.to_string()).named(op.name.clone()))?,
+        None => sweep,
+    };
+    let stocks: Vec<(DVec2, DVec2, f64)> = work
+        .stocks
+        .iter()
+        .map(|b| (b.min.truncate(), b.max.truncate(), b.max.z))
+        .collect();
+    let base = *work.tool.base();
+    let (path, report) =
+        adaptive_rough(&mut reach, &area, &stocks, &base, &params).map_err(in_op(op))?;
+    if report.passes == 0 {
+        warnings.push(
+            "found nothing to clear: the stock may already be below this \
+             operation's top"
+                .into(),
+        );
+    }
+    if report.no_room > 0 {
+        warnings.push(format!(
+            "{} area(s) have no room for the tool to go down into, and are left",
+            report.no_room
+        ));
+    }
+    if report.left_mm2 > 1.0 {
+        warnings.push(format!(
+            "{:.0} mm² the tool could reach was left uncleared",
+            report.left_mm2
+        ));
+    }
+    Ok((path, report.passes, StrategyDetail::Adaptive(report)))
 }
 
 /// A 2D profile or pocket of `areas`.
@@ -731,6 +846,7 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
     let detail = match op.strategy {
         StrategySpec::Parallel { .. } => StrategyDetail::Parallel(Default::default()),
         StrategySpec::ZlevelRough { .. } => StrategyDetail::ZlevelRough(Default::default()),
+        StrategySpec::Adaptive { .. } => StrategyDetail::Adaptive(Default::default()),
         StrategySpec::Profile { .. } => StrategyDetail::Profile(Default::default()),
         StrategySpec::Pocket { .. } => StrategyDetail::Pocket(Default::default()),
         StrategySpec::Face { .. } => StrategyDetail::Face(Default::default()),

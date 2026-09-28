@@ -1005,3 +1005,100 @@ fn facing_takes_the_stock_down_to_the_part() {
     assert!(result.is_clean(), "{:?}", result.warnings());
     assert_eq!(result.verify.gouged, 0);
 }
+
+/// The shared job with its roughing made adaptive: a tenth of the 6 mm flat's
+/// width, the same levels.
+fn adaptive_job() -> Job {
+    use crate::job::AdaptiveDirection;
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    let rough = &mut job.setups[0].operations[0];
+    rough.strategy = StrategySpec::Adaptive {
+        direction: AdaptiveDirection::Climb,
+        flat_areas: true,
+    };
+    rough.passes.stepover = 0.6;
+    job
+}
+
+/// Adaptive clearing roughs the dome, the ball finishes it, and the result is
+/// the part: nothing gouged, no rapid through material, every link resolved.
+#[test]
+fn adaptive_roughing_is_finished_to_the_part() {
+    let job = adaptive_job();
+    let result = run_job(&job, &dome()).unwrap();
+    let rough = &result.operations[0];
+    let StrategyDetail::Adaptive(r) = rough.detail else {
+        panic!("rough reported {:?}", rough.detail);
+    };
+    assert!(r.passes > 0 && r.levels > 0, "{r:?}");
+    assert_eq!(r.no_room, 0, "{r:?}");
+    assert!(r.left_mm2 < 1.0, "{r:?}");
+    assert!(!rough.path.has_unplanned_links());
+    assert!(rough.sim.is_clean(), "{:?}", rough.warnings);
+    assert!(
+        result.is_clean(),
+        "job did not verify: {:?}",
+        result.warnings()
+    );
+}
+
+/// Held to a tenth of the tool, it still takes off what Z-level roughing does,
+/// and more, as its flat levels take the terraces over flats.
+#[test]
+fn adaptive_clears_what_zlevel_roughing_does() {
+    use crate::job::StockSpec;
+    let body = Body::derived(synthetic::step(5.0, 10.0));
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let removed = |mut job: Job| {
+        job.setups[0].operations.retain(|op| op.name == "rough");
+        job.stocks[0].spec = StockSpec::AroundModels {
+            models: vec![],
+            margin: [8.0, 8.0, 2.0],
+            below: 0.0,
+        };
+        let result = run_setup(&job, 0, &bodies).unwrap();
+        assert!(result.is_clean(), "{:?}", result.warnings());
+        result.operations[0].sim.removed_mm3
+    };
+    let zlevel = removed(toml::from_str(JOB).unwrap());
+    let adaptive = removed(adaptive_job());
+    assert!(
+        adaptive > 0.99 * zlevel,
+        "adaptive removed {adaptive} mm3 against {zlevel}"
+    );
+}
+
+/// Kept inside the part's plateau, there is no way in from the side: it goes
+/// down a helix, and the result still verifies.
+#[test]
+fn adaptive_goes_down_a_helix_where_it_cannot_come_from_the_side() {
+    let (mut job, body) = kept_to_plateau("rough", crate::job::Containment::Center);
+    let op = &mut job.setups[0].operations[0];
+    op.strategy = StrategySpec::Adaptive {
+        direction: crate::job::AdaptiveDirection::Climb,
+        flat_areas: true,
+    };
+    op.passes.stepover = 0.6;
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let rough = &result.operations[0];
+    assert!(rough.links.helixes > 0, "{:?}", rough.links);
+    assert!(rough.sim.is_clean(), "{:?}", rough.warnings);
+    assert!(result.is_clean(), "{:?}", result.warnings());
+}
+
+#[test]
+fn adaptive_runs_are_deterministic() {
+    let job = adaptive_job();
+    let body = Body::derived(dome());
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let on = |threads: usize| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| run_setup(&job, 0, &bodies).unwrap())
+    };
+    let (one, eight) = (on(1), on(8));
+    assert_eq!(one.operations[0].path, eight.operations[0].path);
+}
