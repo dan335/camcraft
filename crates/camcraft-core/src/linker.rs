@@ -582,7 +582,8 @@ enum Way {
 struct Helix {
     /// Where it starts.
     start: DVec3,
-    /// Its turns, each at most one, the last ending where it ends.
+    /// Its turns, each at most one, the last a level one at the bottom, ending
+    /// where it ends.
     moves: Vec<(DVec3, Arc)>,
 }
 
@@ -1047,7 +1048,19 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                 };
                 (p, arc)
             })
-            .collect();
+            .collect::<Vec<_>>();
+        // Then once round level at the bottom, as Fusion's helix ends: a helix
+        // leaves its circle cut deeper on one side than the other, by up to a
+        // turn's descent, and the next depth's way in would cut that at feed.
+        let mut moves = moves;
+        moves.push((
+            end,
+            Arc {
+                centre: centre.extend(end.z),
+                axis: DVec3::Z,
+                sweep: turn * TAU,
+            },
+        ));
         Some(Helix { start, moves })
     }
 
@@ -1950,12 +1963,15 @@ mod tests {
             (start.z - 2.0).abs() < 1e-9,
             "from the safe distance: {start}"
         );
-        let mut at = start;
-        let mut turned = 0.0;
-        for m in moves[first..]
+        let helix: Vec<&Move> = moves[first..]
             .iter()
             .take_while(|m| m.role == MoveRole::Ramp)
-        {
+            .collect();
+        let (bottom, down) = helix.split_last().unwrap();
+        let mut at = start;
+        let mut turned = 0.0;
+        let mut before = start;
+        for m in down {
             let MoveKind::Arc(a) = m.kind else {
                 panic!("a helix is arcs: {m:?}");
             };
@@ -1964,21 +1980,19 @@ mod tests {
             assert!(m.to.z < at.z);
             assert_eq!(m.feed, Some(250.0));
             turned += a.sweep.abs();
+            before = at;
             at = m.to;
         }
         assert_eq!(at, dvec3(0.0, 0.0, -2.0), "it ends on the pass");
-        let last = moves[first..]
-            .iter()
-            .take_while(|m| m.role == MoveRole::Ramp)
-            .last()
-            .unwrap();
-        let before = moves[first..]
-            .iter()
-            .take_while(|m| m.role == MoveRole::Ramp)
-            .count();
-        let from = moves[first + before - 2].to;
-        let heading = last.tangent_at(from, 1.0).unwrap().truncate().normalize();
+        let last = down.last().unwrap();
+        let heading = last.tangent_at(before, 1.0).unwrap().truncate().normalize();
         assert!((heading - dvec2(1.0, 0.0)).length() < 1e-6, "{heading}");
+        // Then once round level, clearing its circle to the depth.
+        let MoveKind::Arc(a) = bottom.kind else {
+            panic!("{bottom:?}");
+        };
+        assert_eq!(bottom.to, at);
+        assert!((a.sweep.abs() - TAU).abs() < 1e-12);
         // Four millimetres down at two degrees round a circle of radius two.
         let expected = 4.0 / (2.0 * 2f64.to_radians().tan());
         assert!((turned - expected).abs() < 1e-6, "{turned} vs {expected}");

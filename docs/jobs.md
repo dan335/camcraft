@@ -144,8 +144,10 @@ linking = { leads = { radius = 3.0, sweep = 90.0, straight = 1.0, vertical = 0.6
 A profile's **entry** (`linking.entry`) is how it goes down into material to
 start each ring, beside the lead:
 
-- `"helix"`, the default: down a helix in the waste behind where the lead
-  starts, at the ramp angle, onto the vertical arc's top. Its circle, as the
+- `"helix"`, the default: down a helix in the waste beside where the lead
+  starts (or the ring, without one), at the ramp angle, onto the vertical arc's
+  top, then once round level, as Fusion's helix ends, so its circle is cut to
+  the depth all round and the next depth's way in cuts nothing on the way. Its circle, as the
   tool's centre goes, is `helix_diameter` across (0.9 × the tool's); where the
   part leaves no room for it, or for one half or a quarter the size, the tool
   goes straight down instead.

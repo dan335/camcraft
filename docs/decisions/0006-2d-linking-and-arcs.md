@@ -63,7 +63,8 @@ operation-level `stepdown` the format had moved to `passes` was silently ignored
 - **Leads are Fusion's three pieces,** each a tenth of the tool: vertical arc,
   straight, level arc. The strategy makes the level arc and the straight; the
   linker makes the vertical arc, because only it knows how the tool arrives.
-- **Entry is a choice for a profile:** a helix beside the lead (the default,
+- **Entry is a choice for a profile:** a helix in the waste beside the lead,
+  ending with one level turn that clears its circle to the depth (the default,
   since a router plunging an end mill 38 mm into birch is not what anyone wants),
   a plunge (Fusion's program), or a ramp round the ring in the direction it cuts,
   entered at its start without its lead-in.
