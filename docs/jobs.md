@@ -182,7 +182,7 @@ level, and for a profile down to its ring's next depth.
 Parallel enters and leaves each pass along a vertical arc (the *lead radius*, a
 tenth of the tool); Z-level, pockets and facing ramp into material along the pass
 they are about to cut, in the direction it cuts (the *ramp angle*, 2°, at the
-*ramp feed*, a third of the cutting feed). After the last cut the tool goes up to
+*ramp feed*, 60% of the cutting feed, as Fusion's). After the last cut the tool goes up to
 the clearance height before the spindle stops. The settings are written only when
 changed.
 
@@ -285,12 +285,18 @@ with `--out`, nothing was written).
 
 ## Posts
 
-A setup's `post` names a builtin profile (`masso` or `grbl`, from
+A setup's `post` names a builtin profile (`masso`, `masso-inch` or `grbl`, from
 `crates/camcraft-post/profiles/`) or a TOML profile file, found from the job's
 folder. A profile is a dialect: header and footer, word
-formats, and whether drilling is posted as canned cycles (`drill_cycles`, off in
+formats, units (`units = "inch"` writes `G20` and converts every length and
+feed, as `masso-inch` does), line numbers, and whether drilling is posted as
+canned cycles (`drill_cycles`, off in
 both built-in profiles until cycles have been dry-run on the machine). Golden files
 in `crates/camcraft-post/tests/golden/` hold the output.
+
+The Masso profiles write as Fusion's Masso post does: blocks numbered from `N10`
+in fives, comments not, and numbers without their trailing zeros but with
+their point (`Z2.2`, `I0.`, `F150.`), inches to four places.
 
 A program starts and ends as Fusion's do. Before the tool change the spindle
 stops and the tool goes straight up clear of everything (`safe_retract`: Masso's

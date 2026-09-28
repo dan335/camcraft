@@ -24,7 +24,7 @@ use camcraft_core::job::{Coolant, SpindleDirection};
 use camcraft_core::toolpath::Arc;
 use camcraft_core::toolpath::{MoveRole, Toolpath};
 use camcraft_post::op::{DrillCycles, ProgramSpec, Units, lower};
-use camcraft_post::profile::Profile;
+use camcraft_post::profile::{Profile, ProgramUnits};
 use camcraft_post::render::render;
 use glam::{DVec3, dvec2, dvec3};
 
@@ -105,7 +105,15 @@ fn check(profile_name: &str) {
     let profile = Profile::builtin(profile_name)
         .unwrap_or_else(|| panic!("no builtin profile {profile_name}"))
         .unwrap();
-    check_against(&profile, &fixture(), &spec(), profile_name);
+    // Written in the profile's units, as a session posts it.
+    let spec = ProgramSpec {
+        units: match profile.units {
+            ProgramUnits::Mm => Units::Millimetres,
+            ProgramUnits::Inch => Units::Inches,
+        },
+        ..spec()
+    };
+    check_against(&profile, &fixture(), &spec, profile_name);
 }
 
 /// Render `path` for `profile` and compare with `tests/golden/<file>.nc`.
@@ -154,6 +162,11 @@ fn check_against(profile: &Profile, path: &Toolpath, spec: &ProgramSpec, file: &
 #[test]
 fn masso_output_is_stable() {
     check("masso");
+}
+
+#[test]
+fn masso_inch_output_is_stable() {
+    check("masso-inch");
 }
 
 #[test]

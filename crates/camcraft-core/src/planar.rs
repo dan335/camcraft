@@ -857,27 +857,42 @@ fn emit_spiral(
 ) -> Result<DVec2, StrategyError> {
     let z0 = top + spiral.above;
     let at = |p: DVec2, z: f64| dvec3(p.x, p.y, z);
-    path.feed_to(
-        at(leads.map_or(ring.start(), |l| l.start), z0),
-        MoveRole::Link,
-        feed,
-    )?;
-    if let Some(l) = leads {
-        lead(&l.lead_in, z0, feed, path)?;
-    }
     let lap = ring.length();
     let angle = spiral
         .most
         .filter(|_| lap > 1e-9)
         .map_or(spiral.angle, |d| spiral.angle.min((d / lap).atan()));
     let slope = angle.tan();
+    // As Fusion's: the first full lap starts halfway along the ring's longest
+    // side, the first ramp ends there, and the lead-in is back along the ring
+    // where that ramp starts. Where there is no room for the lead there, the
+    // ring starts where it was going to.
+    let middle = ring.longest_middle().start();
+    let first = levels.first().map_or(0.0, |z| (z0 - z) / slope);
+    let (_, back) = ring.reversed().starting_near(middle).along(first);
+    let from_back = ring.starting_near(back);
+    let (onto, leads) = match (fit(&from_back), leads) {
+        (Some(l), _) => (from_back, Some(l)),
+        (None, None) => (from_back, None),
+        (None, Some(l)) => (ring.clone(), Some(l.clone())),
+    };
+    path.feed_to(
+        at(leads.as_ref().map_or(onto.start(), |l| l.start), z0),
+        MoveRole::Link,
+        feed,
+    )?;
+    if let Some(l) = &leads {
+        lead(&l.lead_in, z0, feed, path)?;
+    }
+    // Each lap is the ring as it is, broken only where that lap starts.
     let whole = ring;
-    let mut ring = ring.clone();
+    let mut ring = onto;
     let mut z_from = z0;
     for &z in levels {
         // Down along the ring from where it is, as far as the slope takes it.
         let run = (z_from - z) / slope;
         let (spans, reached) = ring.along(run);
+        let spans = joined(ring.start(), spans);
         let mut from = ring.start();
         let mut gone = 0.0;
         let count = spans.len();
@@ -908,6 +923,57 @@ fn emit_spiral(
         .as_ref()
         .and_then(RingLeads::end)
         .unwrap_or(ring.start()))
+}
+
+/// `spans`, the first from `from`, with each run of pieces of one line, or of
+/// one arc turning one way, made one: a ring broken where it started, gone
+/// round past there, is whole again.
+fn joined(from: DVec2, spans: Vec<Span>) -> Vec<Span> {
+    let mut out: Vec<Span> = Vec::with_capacity(spans.len());
+    let mut starts: Vec<DVec2> = Vec::with_capacity(spans.len());
+    let mut at = from;
+    for span in spans {
+        let merged = match (out.last_mut(), starts.last(), span) {
+            (Some(Span::Line { to: end }), Some(&start), Span::Line { to }) => {
+                let (a, b) = (
+                    (*end - start).normalize_or_zero(),
+                    (to - *end).normalize_or_zero(),
+                );
+                let straight = a.perp_dot(b).abs() < 1e-9 && a.dot(b) > 0.0;
+                if straight {
+                    *end = to;
+                }
+                straight
+            }
+            (
+                Some(Span::Arc {
+                    to: end,
+                    centre: c1,
+                    sweep: s1,
+                }),
+                _,
+                Span::Arc {
+                    to,
+                    centre: c2,
+                    sweep: s2,
+                },
+            ) if c1.distance(c2) < 1e-9
+                && s1.signum() == s2.signum()
+                && (*s1 + s2).abs() <= std::f64::consts::TAU =>
+            {
+                *end = to;
+                *s1 += s2;
+                true
+            }
+            _ => false,
+        };
+        if !merged {
+            starts.push(at);
+            out.push(span);
+        }
+        at = span.to();
+    }
+    out
 }
 
 /// A span of a ring to height `z` at its end, from where the path is: level, or

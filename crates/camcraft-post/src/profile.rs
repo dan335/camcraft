@@ -47,9 +47,31 @@ pub struct Format {
     pub axis_decimals: u8,
     /// Decimal places for feed words.
     pub feed_decimals: u8,
+    /// Decimal places for axis words in a program written in inches.
+    #[serde(default = "four")]
+    pub inch_axis_decimals: u8,
     /// Whether to drop trailing zeros, so `10.500` becomes `10.5`.
     #[serde(default)]
     pub strip_trailing_zeros: bool,
+    /// Whether a number with its trailing zeros dropped keeps its point: `10.`
+    /// rather than `10`, as Fusion writes them.
+    #[serde(default)]
+    pub keep_point: bool,
+}
+
+fn four() -> u8 {
+    4
+}
+
+/// What units a program is written in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProgramUnits {
+    /// Millimetres (`G21`), as the engine works.
+    #[default]
+    Mm,
+    /// Inches (`G20`): every length and feed converted.
+    Inch,
 }
 
 /// Line numbering.
@@ -100,6 +122,9 @@ pub struct Profile {
     pub modal: Modal,
     /// Arc centre style. Reserved.
     pub arc_style: ArcStyle,
+    /// The units its programs are written in.
+    #[serde(default)]
+    pub units: ProgramUnits,
     /// Tool change style.
     pub tool_change: ToolChangeStyle,
     /// Whether the controller takes canned drilling cycles (`G81`, `G82`, `G83`,
@@ -146,6 +171,9 @@ pub enum ProfileError {
     },
 }
 
+/// Millimetres in an inch.
+const MM_PER_INCH: f64 = 25.4;
+
 /// The Masso profile, compiled in.
 pub const MASSO: &str = include_str!("../profiles/masso.toml");
 /// The GRBL profile, compiled in.
@@ -173,6 +201,11 @@ impl Profile {
     pub fn builtin(name: &str) -> Option<Result<Self, ProfileError>> {
         match name.to_ascii_lowercase().as_str() {
             "masso" => Some(Self::from_toml(MASSO)),
+            "masso-inch" => Some(Self::from_toml(MASSO).map(|p| Self {
+                name: "Masso (inch)".into(),
+                units: ProgramUnits::Inch,
+                ..p
+            })),
             "grbl" => Some(Self::from_toml(GRBL)),
             _ => None,
         }
@@ -180,7 +213,7 @@ impl Profile {
 
     /// Names of the compiled-in profiles.
     pub fn builtin_names() -> &'static [&'static str] {
-        &["masso", "grbl"]
+        &["masso", "masso-inch", "grbl"]
     }
 
     fn validate(&self) -> Result<(), ProfileError> {
@@ -190,6 +223,12 @@ impl Profile {
             return Err(ProfileError::BadValue {
                 field: "format.axis_decimals",
                 reason: format!("{} exceeds 9", self.format.axis_decimals),
+            });
+        }
+        if self.format.inch_axis_decimals > 9 {
+            return Err(ProfileError::BadValue {
+                field: "format.inch_axis_decimals",
+                reason: format!("{} exceeds 9", self.format.inch_axis_decimals),
             });
         }
         if self.format.feed_decimals > 9 {
@@ -224,6 +263,24 @@ impl Profile {
         self.number(v, self.format.axis_decimals)
     }
 
+    /// Format a length in millimetres for an axis word, in inches if `inches`.
+    pub fn length(&self, mm: f64, inches: bool) -> String {
+        if inches {
+            self.number(mm / MM_PER_INCH, self.format.inch_axis_decimals)
+        } else {
+            self.axis(mm)
+        }
+    }
+
+    /// Format a feed in mm/min for a feed word, in in/min if `inches`.
+    pub fn feed_in(&self, mm_per_min: f64, inches: bool) -> String {
+        self.feed(if inches {
+            mm_per_min / MM_PER_INCH
+        } else {
+            mm_per_min
+        })
+    }
+
     /// Format a value for a feed word.
     pub fn feed(&self, v: f64) -> String {
         self.number(v, self.format.feed_decimals)
@@ -239,7 +296,7 @@ impl Profile {
             while s.ends_with('0') {
                 s.pop();
             }
-            if s.ends_with('.') {
+            if s.ends_with('.') && !self.format.keep_point {
                 s.pop();
             }
         }
@@ -288,19 +345,32 @@ mod tests {
         assert!(Profile::builtin("nonesuch").is_none());
     }
 
+    /// Masso as Fusion's post writes it: rounded to the places given, trailing
+    /// zeros dropped and the point kept; inches to four places.
     #[test]
     fn rounds_to_the_stated_precision() {
         let p = Profile::builtin("masso").unwrap().unwrap();
         assert_eq!(p.axis(1.23456789), "1.235");
-        assert_eq!(p.axis(10.0), "10.000");
+        assert_eq!(p.axis(10.0), "10.");
+        assert_eq!(p.axis(2.2), "2.2");
+        assert_eq!(p.feed(150.0), "150.");
+        assert_eq!(p.length(25.4 * 3.46084, true), "3.4608");
+        assert_eq!(p.feed_in(3810.0, true), "150.");
+        let mut plain = p.clone();
+        plain.format.strip_trailing_zeros = false;
+        assert_eq!(plain.axis(10.0), "10.000");
+        let grbl = Profile::builtin("grbl").unwrap().unwrap();
+        assert_eq!(grbl.axis(10.0), "10", "GRBL drops the point too");
+        let inch = Profile::builtin("masso-inch").unwrap().unwrap();
+        assert_eq!(inch.units, ProgramUnits::Inch);
     }
 
     /// A negative zero is the same position as zero and reads like a fault.
     #[test]
     fn never_emits_negative_zero() {
         let p = Profile::builtin("masso").unwrap().unwrap();
-        assert_eq!(p.axis(-0.0), "0.000");
-        assert_eq!(p.axis(-0.0001), "0.000");
+        assert_eq!(p.axis(-0.0), "0.");
+        assert_eq!(p.axis(-0.0001), "0.");
         assert_eq!(p.axis(-0.001), "-0.001");
     }
 

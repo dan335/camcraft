@@ -59,6 +59,8 @@ struct Writer<'a> {
     raised: bool,
     // The plane arcs turn in (`G17`, `G18`, `G19`), once one has been written.
     plane: Option<&'static str>,
+    // Whether lengths and feeds are written in inches: after a `G20`.
+    inches: bool,
 }
 
 impl<'a> Writer<'a> {
@@ -73,6 +75,7 @@ impl<'a> Writer<'a> {
             feed: None,
             raised: false,
             plane: None,
+            inches: false,
         }
     }
 
@@ -119,7 +122,8 @@ impl<'a> Writer<'a> {
         if text.is_empty() {
             return;
         }
-        if self.p.numbering.enabled {
+        // Blocks are numbered, comments not, as Fusion's are.
+        if self.p.numbering.enabled && !text.starts_with(self.p.comment.0.as_str()) {
             let _ = write!(self.out, "N{} ", self.line_no);
             self.line_no = self.line_no.saturating_add(self.p.numbering.increment);
         }
@@ -150,6 +154,7 @@ impl<'a> Writer<'a> {
                     Units::Millimetres => "G21",
                     Units::Inches => "G20",
                 });
+                self.inches = *u == Units::Inches;
                 // Changing units invalidates every remembered coordinate.
                 self.at = None;
                 self.feed = None;
@@ -215,7 +220,7 @@ impl<'a> Writer<'a> {
             Op::CoolantOff => self.raw("M9"),
             Op::Rapid { to } => self.motion_block("G0", *to, None),
             Op::Feed { to, feed, .. } => {
-                let f = self.p.feed(*feed);
+                let f = self.p.feed_in(*feed, self.inches);
                 self.motion_block("G1", *to, Some(f));
             }
             Op::Arc { to, arc, feed, .. } => self.arc(*to, arc, *feed),
@@ -250,7 +255,11 @@ impl<'a> Writer<'a> {
     /// clear of everything since it is the height the path crosses at.
     fn motion_block(&mut self, g: &'static str, to: DVec3, feed: Option<String>) {
         if g == "G0" && self.at.is_none() {
-            let (x, y, z) = (self.p.axis(to.x), self.p.axis(to.y), self.p.axis(to.z));
+            let (x, y, z) = (
+                self.p.length(to.x, self.inches),
+                self.p.length(to.y, self.inches),
+                self.p.length(to.z, self.inches),
+            );
             let again = if self.p.modal.suppress_motion {
                 ""
             } else {
@@ -272,10 +281,18 @@ impl<'a> Writer<'a> {
         self.raised = false;
         // Round first, then compare. Comparing unrounded values while emitting
         // rounded ones can suppress a word the machine would have seen change.
-        let (x, y, z) = (self.p.axis(to.x), self.p.axis(to.y), self.p.axis(to.z));
-        let prev = self
-            .at
-            .map(|p| (self.p.axis(p.x), self.p.axis(p.y), self.p.axis(p.z)));
+        let (x, y, z) = (
+            self.p.length(to.x, self.inches),
+            self.p.length(to.y, self.inches),
+            self.p.length(to.z, self.inches),
+        );
+        let prev = self.at.map(|p| {
+            (
+                self.p.length(p.x, self.inches),
+                self.p.length(p.y, self.inches),
+                self.p.length(p.z, self.inches),
+            )
+        });
 
         let mut block = String::new();
         let motion_changed = self.motion != Some(g);
@@ -340,7 +357,7 @@ impl<'a> Writer<'a> {
         let Some(from) = self.at else {
             // Nothing is known to start it from: straight to its end, rather than
             // round a centre measured from nowhere. The engine never does this.
-            let f = self.p.feed(feed);
+            let f = self.p.feed_in(feed, self.inches);
             self.motion_block("G1", to, Some(f));
             return;
         };
@@ -406,23 +423,27 @@ impl<'a> Writer<'a> {
         // Both of the plane's axes, always, as Fusion writes them; the third only
         // where it moves, which makes a helix.
         for (axis, _, i) in axes {
-            let _ = write!(block, " {axis}{}", self.p.axis(to[i]));
+            let _ = write!(block, " {axis}{}", self.p.length(to[i], self.inches));
         }
         let (axis, i) = normal;
-        if self.p.axis(to[i]) != self.p.axis(from[i]) {
-            let _ = write!(block, " {axis}{}", self.p.axis(to[i]));
+        if self.p.length(to[i], self.inches) != self.p.length(from[i], self.inches) {
+            let _ = write!(block, " {axis}{}", self.p.length(to[i], self.inches));
         }
         match self.p.arc_style {
             ArcStyle::Ij => {
                 for (_, word, i) in axes {
-                    let _ = write!(block, " {word}{}", self.p.axis(centre[i] - from[i]));
+                    let _ = write!(
+                        block,
+                        " {word}{}",
+                        self.p.length(centre[i] - from[i], self.inches)
+                    );
                 }
             }
             ArcStyle::R => {
-                let _ = write!(block, " R{}", self.p.axis(arc.radius(from)));
+                let _ = write!(block, " R{}", self.p.length(arc.radius(from), self.inches));
             }
         }
-        let f = self.p.feed(feed);
+        let f = self.p.feed_in(feed, self.inches);
         if self.feed.as_deref() != Some(f.as_str()) || !self.p.modal.suppress_feed {
             let _ = write!(block, " F{f}");
         }
@@ -456,16 +477,17 @@ impl<'a> Writer<'a> {
         // should say where each hole is and how deep, whatever came before.
         let mut block = format!(
             "{g} X{} Y{} Z{} R{} F{}",
-            self.p.axis(at.x),
-            self.p.axis(at.y),
-            self.p.axis(depth),
-            self.p.axis(retract),
-            self.p.feed(feed)
+            self.p.length(at.x, self.inches),
+            self.p.length(at.y, self.inches),
+            self.p.length(depth, self.inches),
+            self.p.length(retract, self.inches),
+            self.p.feed_in(feed, self.inches)
         );
         if let Some(q) = peck {
-            let _ = write!(block, " Q{}", self.p.axis(q));
+            let _ = write!(block, " Q{}", self.p.length(q, self.inches));
         }
         if let Some(p) = dwell {
+            // Seconds, whatever the units.
             let _ = write!(block, " P{}", self.p.feed(p));
         }
         self.raw(&block);
@@ -499,8 +521,67 @@ mod tests {
     use camcraft_core::toolpath::{MoveRole, Toolpath};
     use glam::dvec3;
 
+    /// The Masso profile written plainly: every digit, no line numbers, so the
+    /// tests read the renderer's decisions rather than its dialect.
     fn masso() -> Profile {
-        Profile::builtin("masso").unwrap().unwrap()
+        let mut p = Profile::builtin("masso").unwrap().unwrap();
+        p.format.strip_trailing_zeros = false;
+        p.numbering.enabled = false;
+        p
+    }
+
+    /// The Masso profile as it is shipped writes as Fusion's Masso post does:
+    /// blocks numbered in fives from N10, comments not, and numbers without
+    /// their trailing zeros but with their point.
+    #[test]
+    fn masso_writes_as_fusions_post_does() {
+        let p = Profile::builtin("masso").unwrap().unwrap();
+        let g = program(&p);
+        let lines: Vec<&str> = g.lines().collect();
+        assert_eq!(lines[0], "(test)", "{g}");
+        assert_eq!(lines[2], "N10 G90 G94 G17", "{g}");
+        assert_eq!(lines[3], "N15 G21", "{g}");
+        assert!(g.contains("G0 X0. Y0."), "{g}");
+        assert!(g.contains(" Z10.\n"), "{g}");
+        assert!(g.contains("X10. F1200."), "{g}");
+        assert!(
+            lines
+                .iter()
+                .filter(|l| l.starts_with('('))
+                .all(|l| !l.contains('N')),
+            "{g}"
+        );
+    }
+
+    /// In inches, every length and feed is converted, and the program says G20.
+    #[test]
+    fn inches_convert_every_length_and_feed() {
+        let p = Profile::builtin("masso-inch").unwrap().unwrap();
+        let spec = ProgramSpec {
+            units: crate::op::Units::Inches,
+            ..ProgramSpec::default()
+        };
+        let mut t = Toolpath::new();
+        t.rapid_to(dvec3(25.4, 50.8, 12.7)).unwrap();
+        t.feed_to(dvec3(25.4, 50.8, 0.0), MoveRole::Plunge, 254.0)
+            .unwrap();
+        t.arc_to(
+            dvec3(25.4 + 12.7, 50.8 + 12.7, 0.0),
+            Arc {
+                centre: dvec3(25.4, 50.8 + 12.7, 0.0),
+                axis: DVec3::Z,
+                sweep: FRAC_PI_2,
+            },
+            MoveRole::Cut,
+            3810.0,
+        )
+        .unwrap();
+        let ops = crate::op::lower(&t, &spec).unwrap();
+        let (g, _) = render(&ops, &p, "t");
+        assert!(g.contains(" G20\n"), "{g}");
+        assert!(g.contains("G0 X1. Y2."), "{g}");
+        assert!(g.contains("G1 Z0. F10."), "{g}");
+        assert!(g.contains("G3 X1.5 Y2.5 I0. J0.5 F150."), "{g}");
     }
 
     fn path() -> Toolpath {

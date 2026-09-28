@@ -258,9 +258,9 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
             leads.map_or(0.0, |l| l.vertical),
             Some(Ramp {
                 angle: linking.ramp_angle.to_radians(),
-                // Fusion's: a ramp moves mostly sideways, so it goes at a third
-                // of the cutting feed rather than a straight plunge's.
-                feed: linking.ramp_feed.unwrap_or(op.passes.feed / 3.0),
+                // A ramp moves mostly sideways, so it goes nearer the cutting
+                // feed than a straight plunge's.
+                feed: op.ramp_feed(),
             }),
         ),
         StrategySpec::Drill { .. } => (StayDown::Never, 0.0, None),
@@ -486,7 +486,7 @@ fn planar_paths(
             .filter(|e| *e == Entry::Ramp)
             .map(|_| Spiral {
                 angle: op.linking.ramp_angle.to_radians(),
-                feed: op.linking.ramp_feed.unwrap_or(op.passes.feed / 3.0),
+                feed: op.ramp_feed(),
                 most: op
                     .linking
                     .ramp_stepdown

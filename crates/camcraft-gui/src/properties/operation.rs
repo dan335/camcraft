@@ -1273,11 +1273,11 @@ fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f
             ui.end_row();
             widgets::field_label(ui, "Ramp feed");
             let absent = format!(
-                "a third of cutting: {} {}",
-                m.feed_number(op.passes.feed / 3.0),
+                "60% of cutting: {} {}",
+                m.feed_number(op.ramp_feed()),
                 m.feed_unit()
             );
-            let start = op.passes.feed / 3.0;
+            let start = op.ramp_feed();
             ui.horizontal(|ui| {
                 widgets::optional(ui, &mut op.linking.ramp_feed, start, &absent, |ui, v| {
                     m.feed_field(ui, v, 50_000.0);

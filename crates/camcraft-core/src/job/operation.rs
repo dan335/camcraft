@@ -662,6 +662,14 @@ impl Operation {
         (top, bottom)
     }
 
+    /// The feed along a ramp or a helix, in mm/min: as given, or 60% of the
+    /// cutting feed, as Fusion's program ramps.
+    pub fn ramp_feed(&self) -> f64 {
+        self.linking
+            .ramp_feed
+            .unwrap_or(RAMP_SHARE * self.passes.feed)
+    }
+
     /// The deepest each of its levels may be, when it cuts in levels: its own,
     /// unless its strategy has none. `None` is straight to the bottom in one.
     pub fn stepdown(&self) -> Option<f64> {
@@ -1173,7 +1181,7 @@ pub struct Linking {
         skip_serializing_if = "is_default_ramp_angle"
     )]
     pub ramp_angle: f64,
-    /// Feed along a ramp, in mm/min: a third of the cutting feed when not given,
+    /// Feed along a ramp, in mm/min: 60% of the cutting feed when not given,
     /// as Fusion's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ramp_feed: Option<f64>,
@@ -1379,6 +1387,10 @@ impl Default for Linking {
         }
     }
 }
+
+/// The share of the cutting feed a ramp goes at unless told otherwise: Fusion's
+/// program for the lego ramps at 90 in/min to its 150.
+const RAMP_SHARE: f64 = 0.6;
 
 fn default_safe_distance() -> f64 {
     2.0

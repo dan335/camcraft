@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use camcraft_core::job::Setup;
 use camcraft_core::run::{OperationResult, StrategyDetail};
 use camcraft_post::op::{DrillCycles, ProgramSpec, Units as PostUnits, lower};
-use camcraft_post::profile::Profile;
+use camcraft_post::profile::{Profile, ProgramUnits};
 use camcraft_post::render::{RenderReport, render};
 
 use crate::{Ran, SessionError, fs};
@@ -76,7 +76,10 @@ pub fn program(
         rpm: op.rpm,
         spin: op.spindle,
         coolant: op.coolant,
-        units: PostUnits::Millimetres,
+        units: match profile.units {
+            ProgramUnits::Mm => PostUnits::Millimetres,
+            ProgramUnits::Inch => PostUnits::Inches,
+        },
         drill: match &op.detail {
             StrategyDetail::Drill(r) if profile.drill_cycles => Some(DrillCycles {
                 holes: r.holes.clone(),
@@ -371,10 +374,7 @@ mod tests {
         assert!(!moves.contains("G83"), "{moves}");
         profile.drill_cycles = true;
         let (cycles, _) = program(&op, 54, &profile, "01-holes").unwrap();
-        assert!(
-            cycles.contains("G83 X3.000 Y4.000 Z0.000 R7.000"),
-            "{cycles}"
-        );
+        assert!(cycles.contains("G83 X3. Y4. Z0. R7."), "{cycles}");
         assert!(cycles.contains("G80"), "{cycles}");
     }
 
