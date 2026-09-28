@@ -9,7 +9,7 @@ use glam::{DVec2, DVec3, dvec2};
 
 use super::error::{OperationError, in_op};
 use super::{Made, OperationResult, PLUNGE_RATIO, RunError, StrategyDetail};
-use crate::allowance::EffectiveTool;
+use crate::allowance::{Allowance, EffectiveTool};
 use crate::drilling::{DrillParams, DrillReport, Hole, drill, holes, nearest_first};
 use crate::dropcutter::DropCutter;
 use crate::face::{FaceParams, LevelsAsked, face};
@@ -168,11 +168,7 @@ pub(super) fn run_operation(
 
     // Linked over the material as each pass leaves it, and cut into it as linked.
     let before = stock.volume();
-    let surface = OnPart {
-        cutter: work.cutter,
-        tool: work.tool,
-        tolerance: work.job.tolerance,
-    };
+    let surface = OnPart::new(work.cutter, work.tool, work.job.tolerance);
     let mut cutting = Cutting {
         stock,
         tool: work.tool,
@@ -333,7 +329,25 @@ impl Material for Cutting<'_> {
 struct OnPart<'a> {
     cutter: &'a DropCutter<'a>,
     tool: &'a EffectiveTool,
+    /// The tool a tolerance narrower: where one only grazing the part rests.
+    slim: EffectiveTool,
     tolerance: f64,
+}
+
+impl<'a> OnPart<'a> {
+    fn new(cutter: &'a DropCutter<'a>, tool: &'a EffectiveTool, tolerance: f64) -> Self {
+        let a = tool.allowance();
+        let slim = Allowance::new(a.radial() - tolerance, a.axial())
+            .ok()
+            .and_then(|a| EffectiveTool::of(tool.base(), a).ok())
+            .unwrap_or(*tool);
+        Self {
+            cutter,
+            tool,
+            slim,
+            tolerance,
+        }
+    }
 }
 
 impl Surface for OnPart<'_> {
@@ -345,6 +359,15 @@ impl Surface for OnPart<'_> {
         // Seeded at a quarter of the tool's width: nothing that narrow is passed over.
         let seed = (self.tool.max_radius() * 0.5).max(self.tolerance);
         follow(self.cutter, self.tool, from, to, self.tolerance, seed)
+    }
+
+    fn grazing_at(&self, p: DVec2) -> Option<f64> {
+        self.cutter.drop_at(&self.slim, p.x, p.y)
+    }
+
+    fn grazing_along(&self, from: DVec2, to: DVec2) -> Vec<DVec3> {
+        let seed = (self.slim.max_radius() * 0.5).max(self.tolerance);
+        follow(self.cutter, &self.slim, from, to, self.tolerance, seed)
     }
 }
 

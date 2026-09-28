@@ -268,6 +268,19 @@ pub trait Surface {
     /// finely enough to follow the part within the tolerance. Only points with
     /// part under them; ends included where there is.
     fn along(&self, from: DVec2, to: DVec2) -> Vec<DVec3>;
+
+    /// [`at`](Self::at), for a tool that may graze the part: one running beside
+    /// a finished wall, as a 2D cut's ring does, touches it without cutting it,
+    /// so contact within the tolerance is not contact. For moves at feed; a rapid
+    /// keeps clear by `at`.
+    fn grazing_at(&self, p: DVec2) -> Option<f64> {
+        self.at(p)
+    }
+
+    /// [`along`](Self::along), for a tool that may graze the part.
+    fn grazing_along(&self, from: DVec2, to: DVec2) -> Vec<DVec3> {
+        self.along(from, to)
+    }
 }
 
 /// No part anywhere.
@@ -545,8 +558,9 @@ enum Way {
     Helix {
         /// Where the helix ends.
         end: DVec3,
-        /// The level direction the pass sets off in, which the helix is behind.
-        ahead: DVec2,
+        /// The level direction into the waste, square to the ring where it
+        /// starts, which the helix is off to.
+        aside: DVec2,
         /// Its radius, as the tool's centre goes.
         radius: f64,
         /// The vertical arc after it.
@@ -695,8 +709,13 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
 
     /// The safe distance above the material under the tool at `p`, or above `z`,
     /// whichever is higher: where rapids stop and feeds start.
+    ///
+    /// The part counts as well as the material: a rapid never comes down, or
+    /// goes up, beside a wall it would touch, such as the one a 2D ring runs
+    /// along.
     fn feed_height(&self, p: DVec2, z: f64) -> f64 {
-        self.top_at(p).map_or(z, |t| t.max(z)) + self.p.safe_distance
+        let part = self.surface.at(p).unwrap_or(f64::MIN);
+        self.top_at(p).map_or(z, |t| t.max(z)).max(part) + self.p.safe_distance
     }
 
     /// Resolve the link from `at` (where the last pass ended, if any) to `to`,
@@ -741,9 +760,9 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
             Way::Plunge => to,
             Way::Lead { top, .. } => *top,
             Way::Helix {
-                end, ahead, radius, ..
+                end, aside, radius, ..
             } => self
-                .helix(*end, *ahead, *radius, None)
+                .helix(*end, *aside, *radius, None)
                 .map_or(*end, |h| h.start),
             Way::Ramp { start, .. } => *start,
         };
@@ -792,8 +811,19 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                 }
             }
             Way::Helix { .. } | Way::Ramp { .. } => {
-                if start.z < safe {
-                    self.out.rapid_to(start)?;
+                // Down at rapid no nearer the part than the safe distance, then
+                // at the plunge feed to where it starts.
+                let stop = self
+                    .surface
+                    .at(start.truncate())
+                    .map_or(start.z, |z| start.z.max(z + self.p.safe_distance))
+                    .min(safe);
+                if stop < safe {
+                    self.out.rapid_to(dvec3(start.x, start.y, stop))?;
+                }
+                if stop > start.z {
+                    self.out
+                        .feed_to(start, MoveRole::Plunge, self.p.plunge_feed)?;
                 }
             }
         }
@@ -814,12 +844,12 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
             }
             Way::Helix {
                 end,
-                ahead,
+                aside,
                 radius,
                 lead,
             } => {
                 let ramp_feed = self.p.ramp.map_or(self.p.plunge_feed, |r| r.feed);
-                match self.helix(*end, *ahead, *radius, Some(at.z)) {
+                match self.helix(*end, *aside, *radius, Some(at.z)) {
                     Some(h) => {
                         self.vertical(at, h.start)?;
                         for (p, arc) in h.moves {
@@ -889,22 +919,41 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
             EntryKind::Plunge => plain(),
             EntryKind::Helix => {
                 let end = lead.map_or(to, |(top, _)| top);
-                let ahead = pass
-                    .first()
-                    .and_then(|m| m.tangent_at(to, 0.0))
+                // The ring where it starts: its first cut, after any lead. The
+                // waste is on the side the helix turns towards, as the cut
+                // climbs, so a helix off that side, touching the ring's line
+                // where it ends, runs on the way the ring does.
+                let mut from = to;
+                let mut ring = None;
+                for m in pass {
+                    if m.role == MoveRole::Cut {
+                        ring = m.tangent_at(from, 0.0);
+                        break;
+                    }
+                    from = m.to;
+                }
+                let Some(along) = ring
+                    .or_else(|| pass.first().and_then(|m| m.tangent_at(to, 0.0)))
                     .map(|t| t.truncate())
                     .and_then(DVec2::try_normalize)
-                    .unwrap_or(DVec2::X);
+                else {
+                    return plain();
+                };
+                let aside = if self.p.helix_ccw {
+                    along.perp()
+                } else {
+                    -along.perp()
+                };
                 // The largest helix clear of the part, if there is material to
                 // go down through at all.
                 let fits = [1.0, 0.5, 0.25]
                     .into_iter()
                     .map(|k| self.p.helix_radius * k)
-                    .find(|&r| r > 1e-6 && self.helix_clear(end, ahead, r));
+                    .find(|&r| r > 1e-6 && self.helix_clear(end, aside, r));
                 match fits {
-                    Some(radius) if self.helix(end, ahead, radius, None).is_some() => Way::Helix {
+                    Some(radius) if self.helix(end, aside, radius, None).is_some() => Way::Helix {
                         end,
-                        ahead,
+                        aside,
                         radius,
                         lead: lead.map(|(_, arc)| arc),
                     },
@@ -940,24 +989,24 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         }
     }
 
-    /// Whether a helix of `radius` behind `end`, as the pass sets off `ahead`,
-    /// keeps clear of the part down to `end`.
-    fn helix_clear(&self, end: DVec3, ahead: DVec2, radius: f64) -> bool {
-        let centre = end.truncate() - ahead * radius;
+    /// Whether a helix of `radius` off to `aside` of `end` keeps clear of the
+    /// part down to `end`, grazing it at most.
+    fn helix_clear(&self, end: DVec3, aside: DVec2, radius: f64) -> bool {
+        let centre = end.truncate() + aside * radius;
         (0..32).all(|k| {
             let p = centre + DVec2::from_angle(f64::from(k) * PI / 16.0) * radius;
-            self.surface.at(p).is_none_or(|z| z <= end.z + 1e-9)
+            self.surface.grazing_at(p).is_none_or(|z| z <= end.z + 1e-9)
         })
     }
 
     /// The helix of `radius` down onto `end`, behind it as the pass sets off
-    /// `ahead`, from the safe distance above the material it goes down through,
+    /// `aside`, from the safe distance above the material it goes down through,
     /// or from `from_z` if that is lower: at the ramp angle, and no steeper than
     /// the ramp's most in one turn. `None` where there is no material above `end`
     /// to go down through.
-    fn helix(&self, end: DVec3, ahead: DVec2, radius: f64, from_z: Option<f64>) -> Option<Helix> {
+    fn helix(&self, end: DVec3, aside: DVec2, radius: f64, from_z: Option<f64>) -> Option<Helix> {
         let ramp = self.p.ramp?;
-        let centre = end.truncate() - ahead * radius;
+        let centre = end.truncate() + aside * radius;
         let material = self
             .material
             .highest(centre, centre, radius + self.p.tool_radius)?;
@@ -1096,7 +1145,7 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
     fn clear_of_part(&self, from: DVec3, way: &[DVec3]) -> bool {
         std::iter::once(&from).chain(way).all(|p| {
             self.surface
-                .at(p.truncate())
+                .grazing_at(p.truncate())
                 .is_none_or(|z| z <= p.z + 1e-9)
         })
     }
@@ -1162,8 +1211,8 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
             Way::Plunge => (to.truncate(), to.z),
             Way::Lead { top, .. } => (top.truncate(), top.z),
             Way::Helix {
-                end, ahead, radius, ..
-            } => match self.helix(*end, *ahead, *radius, Some(off.z)) {
+                end, aside, radius, ..
+            } => match self.helix(*end, *aside, *radius, Some(off.z)) {
                 Some(h) => (h.start.truncate(), end.z),
                 None => (end.truncate(), end.z),
             },
@@ -1174,7 +1223,7 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         }
         let reached = self
             .surface
-            .along(off.truncate(), xy)
+            .grazing_along(off.truncate(), xy)
             .iter()
             .any(|p| p.z > off.z + 1e-6);
         let cuts = self
@@ -1227,7 +1276,11 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                 if span > max || (from.z - to.z).abs() > 1e-6 {
                     return Ok(false);
                 }
-                let reached = self.surface.along(a, b).iter().any(|p| p.z > to.z + 1e-6);
+                let reached = self
+                    .surface
+                    .grazing_along(a, b)
+                    .iter()
+                    .any(|p| p.z > to.z + 1e-6);
                 if reached {
                     return Ok(false);
                 }
@@ -1880,9 +1933,10 @@ mod tests {
         }
     }
 
-    /// Into material down a helix beside where the pass starts, behind it as the
-    /// pass sets off: turns about Z, each at most a whole one, ramp role and
-    /// feed, from the safe distance above the material, ending on the pass.
+    /// Into material down a helix beside where the pass starts, off to the side
+    /// it climbs from and touching its line there: turns about Z, each at most a
+    /// whole one, ramp role and feed, from the safe distance above the material,
+    /// ending on the pass heading the way it runs.
     #[test]
     fn a_helix_goes_down_beside_the_pass() {
         let plane = ClearancePlane::new(10.0).unwrap();
@@ -1905,7 +1959,7 @@ mod tests {
             let MoveKind::Arc(a) = m.kind else {
                 panic!("a helix is arcs: {m:?}");
             };
-            assert!((a.centre.truncate() - dvec2(-2.0, 0.0)).length() < 1e-9);
+            assert!((a.centre.truncate() - dvec2(0.0, 2.0)).length() < 1e-9);
             assert!(a.sweep.abs() <= TAU + 1e-9);
             assert!(m.to.z < at.z);
             assert_eq!(m.feed, Some(250.0));
@@ -1913,6 +1967,18 @@ mod tests {
             at = m.to;
         }
         assert_eq!(at, dvec3(0.0, 0.0, -2.0), "it ends on the pass");
+        let last = moves[first..]
+            .iter()
+            .take_while(|m| m.role == MoveRole::Ramp)
+            .last()
+            .unwrap();
+        let before = moves[first..]
+            .iter()
+            .take_while(|m| m.role == MoveRole::Ramp)
+            .count();
+        let from = moves[first + before - 2].to;
+        let heading = last.tangent_at(from, 1.0).unwrap().truncate().normalize();
+        assert!((heading - dvec2(1.0, 0.0)).length() < 1e-6, "{heading}");
         // Four millimetres down at two degrees round a circle of radius two.
         let expected = 4.0 / (2.0 * 2f64.to_radians().tan());
         assert!((turned - expected).abs() < 1e-6, "{turned} vs {expected}");
@@ -1930,6 +1996,33 @@ mod tests {
                 assert!(per_turn <= 0.1 + 1e-9, "{per_turn}");
             }
             at = m.to;
+        }
+    }
+
+    /// The helix goes into the waste, the side the cut climbs from, never over
+    /// the part it is cutting beside, however low the part is there.
+    #[test]
+    fn a_helix_is_in_the_waste() {
+        // The part is beside the ring, on its right as it runs along X, below
+        // the pass: a helix over it would not touch it at this depth, but
+        // would at the next.
+        struct Right;
+        impl Surface for Right {
+            fn at(&self, p: DVec2) -> Option<f64> {
+                (p.y < -0.01).then_some(-3.0)
+            }
+            fn along(&self, from: DVec2, to: DVec2) -> Vec<DVec3> {
+                vec![from.extend(-3.0), to.extend(-3.0)]
+            }
+        }
+        let plane = ClearancePlane::new(10.0).unwrap();
+        let p = entering(EntryKind::Helix);
+        let (out, report) = link(&ring(), &plane, &mut level_material(), &Right, &p).unwrap();
+        assert_eq!(report.helixes, 1);
+        for m in out.moves() {
+            if let (MoveKind::Arc(a), MoveRole::Ramp) = (m.kind, m.role) {
+                assert!(a.centre.y > 0.0, "the helix is off the waste side: {a:?}");
+            }
         }
     }
 
