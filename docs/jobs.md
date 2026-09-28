@@ -251,3 +251,12 @@ folder. A profile is a dialect: header and footer, word
 formats, and whether drilling is posted as canned cycles (`drill_cycles`, off in
 both built-in profiles until cycles have been dry-run on the machine). Golden files
 in `crates/camcraft-post/tests/golden/` hold the output.
+
+A program starts and ends as Fusion's do. Before the tool change the spindle
+stops and the tool goes straight up clear of everything (`safe_retract`: Masso's
+`G28 G91 Z0`, GRBL's `G53 G0 Z0`); the first move then goes across at that height
+and down to where the path starts, never diagonally from wherever the change left
+the tool. A profile without a safe retract rises (or falls) to the path's crossing
+height first and goes across there. After the last cut the spindle stops, the tool
+goes up again, and the machine goes home across (`end_home`: Masso's `G28 G91 X0
+Y0`; GRBL's stored `G28` position may be anywhere, so it has none).

@@ -18,6 +18,11 @@ header = [
   "G90 G94 G17",
 ]
 
+# Straight up to the top of Z in machine coordinates, which is Z0 once GRBL has
+# homed. Nothing is sent home across: G28's stored position is whatever the
+# machine was given, and may not be clear.
+safe_retract = ["G53 G0 Z0"]
+
 footer = [
   "M30",
 ]

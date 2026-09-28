@@ -51,6 +51,9 @@ struct Writer<'a> {
     motion: Option<&'static str>,
     at: Option<DVec3>,
     feed: Option<String>,
+    // Whether the tool is known to be as high as the machine takes it, where it
+    // is otherwise unknown: after a safe retract, until it next moves.
+    raised: bool,
 }
 
 impl<'a> Writer<'a> {
@@ -63,6 +66,26 @@ impl<'a> Writer<'a> {
             motion: None,
             at: None,
             feed: None,
+            raised: false,
+        }
+    }
+
+    /// Forget where the machine is: something moved it, or may have.
+    fn lost(&mut self) {
+        self.motion = None;
+        self.at = None;
+        self.feed = None;
+        self.raised = false;
+    }
+
+    /// The profile's lines for a step, after which where the machine is is
+    /// unknown.
+    fn lines(&mut self, lines: &[String]) {
+        for line in lines {
+            self.raw(line);
+        }
+        if !lines.is_empty() {
+            self.lost();
         }
     }
 
@@ -108,6 +131,17 @@ impl<'a> Writer<'a> {
             Op::WorkOffset(n) => {
                 let s = format!("G{n}");
                 self.raw(&s);
+                // Another offset puts the same point at other coordinates.
+                self.at = None;
+            }
+            Op::SafeRetract => {
+                let p = self.p;
+                self.lines(&p.safe_retract);
+                self.raised = !p.safe_retract.is_empty();
+            }
+            Op::Home => {
+                let p = self.p;
+                self.lines(&p.end_home);
             }
             Op::ToolChange { tool, comment } => match self.p.tool_change {
                 ToolChangeStyle::M6 => {
@@ -116,6 +150,9 @@ impl<'a> Writer<'a> {
                     }
                     let s = format!("T{tool} M6");
                     self.raw(&s);
+                    // A changer moves the machine; the tool is where the change
+                    // left it. Raised by a safe retract, it is still raised.
+                    self.at = None;
                 }
                 ToolChangeStyle::Pause => {
                     let msg = if comment.is_empty() {
@@ -127,6 +164,8 @@ impl<'a> Writer<'a> {
                     let s = format!("T{tool}");
                     self.raw(&s);
                     self.raw("M0");
+                    // The operator may have jogged anywhere, down included.
+                    self.lost();
                 }
             },
             Op::SpindleOn { rpm, dir } => {
@@ -172,16 +211,40 @@ impl<'a> Writer<'a> {
                 // Passed through untouched, by definition. Modal state is unknown
                 // afterwards, so nothing may be suppressed against it.
                 self.raw(text);
-                self.motion = None;
-                self.at = None;
-                self.feed = None;
+                self.lost();
             }
             Op::ProgramEnd => {}
         }
     }
 
     /// Emit one motion block, suppressing only what the machine already has.
+    ///
+    /// A rapid from nowhere known goes across and down one at a time, never
+    /// diagonally: across first when the tool is known to be raised, as high as
+    /// it can be, and otherwise down (or up) to its height first, which is
+    /// clear of everything since it is the height the path crosses at.
     fn motion_block(&mut self, g: &'static str, to: DVec3, feed: Option<String>) {
+        if g == "G0" && self.at.is_none() {
+            let (x, y, z) = (self.p.axis(to.x), self.p.axis(to.y), self.p.axis(to.z));
+            let again = if self.p.modal.suppress_motion {
+                ""
+            } else {
+                "G0 "
+            };
+            let (first, second) = if self.raised {
+                (format!("G0 X{x} Y{y}"), format!("{again}Z{z}"))
+            } else {
+                (format!("G0 Z{z}"), format!("{again}X{x} Y{y}"))
+            };
+            self.raw(&first);
+            self.raw(&second);
+            self.report.motion_blocks += 2;
+            self.motion = Some(g);
+            self.at = Some(to);
+            self.raised = false;
+            return;
+        }
+        self.raised = false;
         // Round first, then compare. Comparing unrounded values while emitting
         // rounded ones can suppress a word the machine would have seen change.
         let (x, y, z) = (self.p.axis(to.x), self.p.axis(to.y), self.p.axis(to.z));
@@ -246,6 +309,7 @@ impl<'a> Writer<'a> {
     fn arc(&mut self, to: DVec3, centre: DVec3, clockwise: bool, feed: f64) {
         let g = if clockwise { "G2" } else { "G3" };
         let from = self.at.unwrap_or(DVec3::ZERO);
+        self.raised = false;
         let mut block = format!(
             "{g} X{} Y{} Z{}",
             self.p.axis(to.x),
@@ -311,9 +375,7 @@ impl<'a> Writer<'a> {
         }
         self.raw(&block);
         // A cycle leaves the machine in its own modal group and moves the tool.
-        self.motion = None;
-        self.at = None;
-        self.feed = None;
+        self.lost();
     }
 }
 
@@ -374,18 +436,57 @@ mod tests {
         assert!(g.contains("G1"));
     }
 
-    /// The first motion block must carry every word: nothing has been written yet,
-    /// so the machine has no remembered position to suppress against.
+    /// The tool goes up clear before the tool change, and the first move after
+    /// it goes across at that height and then down, as Fusion's does: never
+    /// diagonally from wherever the change left it. It states every word, as the
+    /// machine has no remembered position to suppress against.
     #[test]
-    fn the_first_move_states_everything() {
+    fn the_first_move_goes_across_then_down() {
         let g = program(&masso());
-        let first = g
-            .lines()
-            .find(|l| l.starts_with("G0"))
+        let lines: Vec<&str> = g.lines().collect();
+        let at = |text: &str| lines.iter().position(|l| *l == text);
+        let (Some(up), Some(change)) = (at("G28 G91 Z0"), at("T1 M6")) else {
+            panic!("no safe retract before the tool change:\n{g}");
+        };
+        assert!(up < change, "{g}");
+        let first = lines
+            .iter()
+            .position(|l| l.starts_with("G0"))
             .expect("a rapid should be present");
-        for axis in ['X', 'Y', 'Z'] {
-            assert!(first.contains(axis), "first move omits {axis}: {first}");
-        }
+        assert_eq!(
+            lines.get(first..first + 2),
+            Some(&["G0 X0.000 Y0.000", "Z10.000"][..]),
+            "{g}"
+        );
+    }
+
+    /// Without a safe retract the height is unknown, so the first move rises (or
+    /// falls) to the height the path crosses at before it goes across.
+    #[test]
+    fn unraised_the_first_move_goes_to_its_height_first() {
+        let mut p = masso();
+        p.safe_retract.clear();
+        let g = program(&p);
+        let lines: Vec<&str> = g.lines().collect();
+        let first = lines.iter().position(|l| l.starts_with("G0")).unwrap();
+        assert_eq!(
+            lines.get(first..first + 2),
+            Some(&["G0 Z10.000", "X0.000 Y0.000"][..]),
+            "{g}"
+        );
+    }
+
+    /// The program ends with the tool raised and the machine home across, after
+    /// the spindle stops.
+    #[test]
+    fn the_program_ends_raised_and_home() {
+        let g = program(&masso());
+        let tail: Vec<&str> = g.lines().rev().take(6).collect();
+        assert_eq!(
+            tail,
+            ["M30", "G90", "G28 G91 X0 Y0", "G90", "G28 G91 Z0", "M5"],
+            "{g}"
+        );
     }
 
     /// Suppression is the point of modal output, so it must actually happen.
@@ -491,10 +592,13 @@ mod tests {
             },
         ];
         let (g, _) = render(&ops, &masso(), "t");
-        let rapids: Vec<&str> = g.lines().filter(|l| l.starts_with("G0 ")).collect();
-        assert_eq!(rapids.len(), 2, "both rapids should be present:\n{g}");
-        for r in rapids {
-            assert!(r.contains('X') && r.contains('Y') && r.contains('Z'), "{r}");
+        let after: String = g
+            .lines()
+            .skip_while(|l| *l != "G53 G0 Z0")
+            .skip(1)
+            .collect();
+        for axis in ['X', 'Y', 'Z'] {
+            assert!(after.contains(axis), "{axis} not restated:\n{g}");
         }
     }
 
@@ -510,6 +614,7 @@ mod tests {
             },
         ];
         let (g, report) = render(&ops, &masso(), "t");
-        assert_eq!(report.motion_blocks, 1, "the second move is a no-op:\n{g}");
+        // The first, from nowhere known, is two blocks: down, then across.
+        assert_eq!(report.motion_blocks, 2, "the second move is a no-op:\n{g}");
     }
 }

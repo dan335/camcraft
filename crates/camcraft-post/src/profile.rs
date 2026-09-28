@@ -108,6 +108,16 @@ pub struct Profile {
     pub drill_cycles: bool,
     /// Lines emitted before anything else. `{name}` is replaced.
     pub header: Vec<String>,
+    /// Lines that take the tool straight up clear of everything, as far as the
+    /// machine goes, such as `G28 G91 Z0`: before each tool change and before the
+    /// program ends. Empty, the tool is not sent up, and the first move after a
+    /// tool change rises to its height before it moves across.
+    #[serde(default)]
+    pub safe_retract: Vec<String>,
+    /// Lines that send the machine home across, such as `G28 G91 X0 Y0`, after
+    /// the last safe retract and before the footer.
+    #[serde(default)]
+    pub end_home: Vec<String>,
     /// Lines emitted at the end.
     pub footer: Vec<String>,
 }

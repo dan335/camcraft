@@ -113,13 +113,17 @@ fn at(p: glam::DVec3) -> [f64; 3] {
 }
 
 /// Every motion in a Masso program: `(rapid, position)` per block that moves.
+///
+/// The machine's own moves, up and home (`G28`, `G53`), are not the path's; nor
+/// is a block that leaves the position partly unknown, as the first move goes
+/// across before it goes down, so the path's first move is where both have gone.
 fn motions(program: &str) -> Vec<(bool, [f64; 3])> {
     let mut rapid = true;
     let mut pos = [f64::NAN; 3];
     let mut out = Vec::new();
     for line in program.lines() {
         let line = line.trim();
-        if line.starts_with('(') {
+        if line.starts_with('(') || line.contains("G28") || line.contains("G53") {
             continue;
         }
         let mut moved = false;
@@ -136,7 +140,7 @@ fn motions(program: &str) -> Vec<(bool, [f64; 3])> {
                 _ => {}
             }
         }
-        if moved {
+        if moved && pos.iter().all(|v| v.is_finite()) {
             out.push((rapid, pos));
         }
     }

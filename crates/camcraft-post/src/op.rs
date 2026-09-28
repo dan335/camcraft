@@ -134,6 +134,10 @@ pub enum Op {
     CycleEnd,
     /// Text passed through untouched, for manual NC and probe macros.
     Raw(String),
+    /// Take the tool straight up clear of everything, as the profile does it.
+    SafeRetract,
+    /// Send the machine home across, as the profile does it.
+    Home,
     /// End of program.
     ProgramEnd,
 }
@@ -241,6 +245,10 @@ pub fn lower(path: &Toolpath, spec: &ProgramSpec) -> Result<Vec<Op>, LowerError>
         strategy: spec.strategy.clone(),
         wcs: spec.wcs,
     });
+    // The spindle is stopped and the tool raised before any tool change, whatever
+    // ran before this program.
+    out.push(Op::SpindleOff);
+    out.push(Op::SafeRetract);
     out.push(Op::ToolChange {
         tool: spec.tool,
         comment: spec.tool_comment.clone(),
@@ -265,6 +273,8 @@ pub fn lower(path: &Toolpath, spec: &ProgramSpec) -> Result<Vec<Op>, LowerError>
         out.push(Op::CoolantOff);
     }
     out.push(Op::SpindleOff);
+    out.push(Op::SafeRetract);
+    out.push(Op::Home);
     out.push(Op::SectionEnd);
     out.push(Op::ProgramEnd);
     Ok(out)

@@ -3,13 +3,16 @@
 G90 G94 G17
 G21
 (finish - parallel - T3 G54)
+M5
+G53 G0 Z0
 (fit tool 3: 6mm ball [carbide])
 T3
 M0
 G54
 S18000 M3
 M8
-G0 X0 Y0 Z25
+G0 Z25
+X0 Y0
 X-12.346 Y7.5
 G1 Z1 F250
 Z0
@@ -19,4 +22,5 @@ Z-2.5 F800
 Z25 F900
 M9
 M5
+G53 G0 Z0
 M30
