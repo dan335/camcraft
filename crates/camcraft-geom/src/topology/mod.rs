@@ -28,6 +28,13 @@
 //! A B-rep edge is a curve between two faces. Two of them between the same pair of
 //! faces, meeting smoothly, come out here as one chain; nothing needs them apart.
 //!
+//! # Placement
+//!
+//! A body is where its model is placed in the job ([`Body::placed`]): moved,
+//! turned and scaled from where its file put it. The faces keep their numbers, so
+//! a pick made before a move still names the same face, and its point, saved in
+//! the file's coordinates, is found by [`Body::placement`].
+//!
 //! # Determinism
 //!
 //! Every order is fixed: edges by the faces they separate and then their first
@@ -40,7 +47,7 @@ mod fit;
 pub use derive::DeriveParams;
 
 use crate::mesh::{Aabb, TriMesh, closest_point_on_segment, closest_point_on_triangle};
-use glam::DVec3;
+use glam::{DAffine3, DVec3};
 use std::cmp::Ordering;
 
 /// A chain of edges turning sharper than this, in degrees, is split in two there.
@@ -183,6 +190,7 @@ pub enum TopologyError {
 pub struct Body {
     mesh: TriMesh,
     topology: Topology,
+    placement: DAffine3,
 }
 
 impl Body {
@@ -203,7 +211,11 @@ impl Body {
             });
         }
         let topology = Topology::build(&mesh, labels, count, FaceSource::File);
-        Ok(Self { mesh, topology })
+        Ok(Self {
+            mesh,
+            topology,
+            placement: DAffine3::IDENTITY,
+        })
     }
 
     /// A mesh with no faces of its own, whose faces are found from its triangles.
@@ -217,7 +229,41 @@ impl Body {
         let sides = sides(&mesh);
         let (labels, count) = derive::faces(&mesh, &sides, params, fit_tolerance(size), size);
         let topology = Topology::build(&mesh, labels, count, FaceSource::Derived);
-        Self { mesh, topology }
+        Self {
+            mesh,
+            topology,
+            placement: DAffine3::IDENTITY,
+        }
+    }
+
+    /// The body as its file put it, placed by `placement` instead: every point
+    /// moved by it, and the faces keeping their numbers. A placement that mirrors
+    /// turns the triangles round, so they still face out.
+    pub fn placed(&self, placement: DAffine3) -> Result<Self, crate::mesh::MeshError> {
+        let to = placement * self.placement.inverse();
+        let mut mesh = self.mesh.mapped(|p| to.transform_point3(p))?;
+        if to.matrix3.determinant() < 0.0 {
+            mesh = TriMesh::new(
+                mesh.vertices().to_vec(),
+                mesh.triangles()
+                    .iter()
+                    .map(|&[a, b, c]| [a, c, b])
+                    .collect(),
+            )?;
+        }
+        let t = &self.topology;
+        let count = u32::try_from(t.faces.len()).unwrap_or(u32::MAX);
+        let topology = Topology::build(&mesh, t.tri_face.clone(), count, t.source);
+        Ok(Self {
+            mesh,
+            topology,
+            placement,
+        })
+    }
+
+    /// Where it is placed: from the coordinates of its file to where it is.
+    pub fn placement(&self) -> DAffine3 {
+        self.placement
     }
 
     /// The triangles.

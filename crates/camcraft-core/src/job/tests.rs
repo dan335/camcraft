@@ -116,6 +116,11 @@ fn a_job_round_trips() {
         name: "stl".into(),
         path: "../meshes/other.stl".into(),
         units: Some(LengthUnit::Inch),
+        transform: Transform {
+            position: [10.0, -20.0, 0.5],
+            rotation: [90.0, 0.0, -45.0],
+            scale: [1.0, 1.0, 2.0],
+        },
     });
     let mut bottom = Setup::new("bottom");
     bottom.models = vec!["part".into(), "stl".into()];
@@ -160,6 +165,7 @@ fn a_job_round_trips() {
     let plain = toml::to_string(&sample()).unwrap();
     assert!(!plain.contains("orientation"), "{plain}");
     assert!(!plain.contains("below"), "{plain}");
+    assert!(!plain.contains("transform"), "{plain}");
 }
 
 /// A fixed box is written with a place on each axis, and read back the same.
@@ -699,6 +705,27 @@ fn a_setup_with_no_operations_is_refused() {
     assert_eq!(j.validate(), Err(JobError::NoSetups));
 }
 
+/// A model is placed anywhere, turned any way and scaled by anything more than
+/// nothing; a flattened or mirrored one is refused, by name.
+#[test]
+fn a_model_transform_must_be_a_real_one() {
+    let mut j = sample();
+    j.models[0].transform = Transform {
+        position: [1.0e4, -3.0, 0.0],
+        rotation: [0.0, 180.0, 30.0],
+        scale: [0.5, 0.5, 0.5],
+    };
+    assert_eq!(j.validate(), Ok(()));
+    for scale in [0.0, -1.0, f64::NAN] {
+        j.models[0].transform.scale = [1.0, scale, 1.0];
+        assert!(
+            matches!(&j.validate(), Err(JobError::BadValue { field, .. }) if field == "model 'part'.transform.scale"),
+            "{scale}: {:?}",
+            j.validate()
+        );
+    }
+}
+
 #[test]
 fn a_bad_orientation_is_refused() {
     let mut j = sample();
@@ -717,6 +744,7 @@ fn a_setup_needs_the_models_its_stock_is_around() {
         name: "fixture".into(),
         path: "fixture.step".into(),
         units: None,
+        transform: Default::default(),
     });
     j.stocks[0].spec = StockSpec::AroundModels {
         models: vec!["fixture".into()],

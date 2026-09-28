@@ -112,7 +112,7 @@ impl App {
             return 0;
         };
         let t = loaded.body.topology();
-        let mut up: Vec<(u32, f64, glam::DVec3)> = t
+        let mut up: Vec<(u32, f64, [f64; 3])> = t
             .faces()
             .iter()
             .enumerate()
@@ -123,6 +123,7 @@ impl App {
                         .mesh()
                         .triangle(*f.triangles.first()? as usize)?;
                     let at = (tri[0] + tri[1] + tri[2]) / 3.0;
+                    let at = camcraft_core::features::unplaced(&loaded.body, at);
                     Some((u32::try_from(i).ok()?, f.area, at))
                 }
                 _ => None,
@@ -141,7 +142,7 @@ impl App {
             .map(|(i, _, at)| FeatureRef {
                 model: model.clone(),
                 index: *i,
-                at: at.to_array(),
+                at: *at,
             })
             .collect();
         self.picking.arm(

@@ -397,3 +397,60 @@ fn a_level_edge_goes_round_at_its_height() {
     let points = |e: u32| t.edge_points(plate.mesh(), e).collect::<Vec<_>>();
     assert_eq!(t.level_loop(rim, points, 1e-6), Some(vec![rim]));
 }
+
+/// A placed body is moved, turned and scaled as a whole, keeping its faces'
+/// numbers; mirrored, its faces still face out; and placed again, it is placed
+/// from where its file put it, not from where it was.
+#[test]
+fn a_placed_body_keeps_its_faces() {
+    use glam::{DAffine3, DQuat};
+    let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 32));
+    let turn = DAffine3::from_scale_rotation_translation(
+        DVec3::splat(2.0),
+        DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2),
+        dvec3(100.0, 0.0, 10.0),
+    );
+    let placed = body.placed(turn).unwrap();
+    assert_eq!(placed.placement(), turn);
+    let (a, b) = (body.topology(), placed.topology());
+    assert_eq!(
+        a.triangle_faces(),
+        b.triangle_faces(),
+        "the faces keep their numbers"
+    );
+    assert_eq!(a.edges().len(), b.edges().len());
+    assert!(
+        has_plane(b, dvec3(0.0, 0.0, 1.0), 20.0),
+        "the top, at 2 x 5 + 10"
+    );
+    assert!(has_plane(b, dvec3(0.0, 1.0, 0.0), 40.0), "+X turned to +Y");
+    let rim = b
+        .edges()
+        .iter()
+        .find_map(|e| match e.kind {
+            EdgeKind::Circle(c) if c.center.z > 15.0 => Some(c),
+            _ => None,
+        })
+        .unwrap();
+    assert!((rim.radius - 8.0).abs() < 1e-9, "{}", rim.radius);
+    assert!(
+        rim.center.distance(dvec3(100.0, 0.0, 20.0)) < 1e-9,
+        "{}",
+        rim.center
+    );
+
+    let mirrored = placed
+        .placed(DAffine3::from_scale(dvec3(-1.0, 1.0, 1.0)))
+        .unwrap();
+    let m = mirrored.topology();
+    assert!(
+        has_plane(m, dvec3(0.0, 0.0, 1.0), 5.0),
+        "placed from the file"
+    );
+    assert!(
+        has_plane(m, dvec3(1.0, 0.0, 0.0), 20.0),
+        "-X mirrored, facing out"
+    );
+    assert!(has_plane(m, dvec3(-1.0, 0.0, 0.0), 20.0));
+    assert_eq!(a.triangle_faces(), m.triangle_faces());
+}

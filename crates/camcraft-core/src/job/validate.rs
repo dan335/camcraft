@@ -48,6 +48,27 @@ impl Job {
         }
 
         unique("model", self.models.iter().map(|m| m.name.as_str()))?;
+        for model in &self.models {
+            let t = &model.transform;
+            let field = |f: &str| format!("model '{}'.transform.{f}", model.name);
+            let values = [
+                ("position", &t.position),
+                ("rotation", &t.rotation),
+                ("scale", &t.scale),
+            ];
+            for (f, vs) in values {
+                for &v in vs {
+                    // A scale of nothing flattens the model to a plane, and one
+                    // below it mirrors the part: a left hand cut for a right.
+                    if !v.is_finite() || (f == "scale" && v < 1e-6) {
+                        return Err(JobError::BadValue {
+                            field: field(f),
+                            value: v,
+                        });
+                    }
+                }
+            }
+        }
         unique("stock", self.stocks.iter().map(|s| s.name.as_str()))?;
         unique("setup", self.setups.iter().map(|s| s.name.as_str()))?;
 

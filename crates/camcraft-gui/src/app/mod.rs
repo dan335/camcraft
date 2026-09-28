@@ -25,7 +25,7 @@ use camcraft_session::{Posting, SessionError};
 use eframe::egui;
 
 use crate::browser::{self, BrowserAction};
-use crate::document::{Document, Level, ModelSlot, Selection, Status, next_key};
+use crate::document::{Document, Level, ModelSlot, Selection, Status, Wanted, next_key};
 use crate::file_dialog::{AppFileDialog, FileRequest};
 use crate::picking::Picking;
 use crate::playback;
@@ -367,16 +367,27 @@ impl App {
     fn load_models(&mut self, ctx: &egui::Context) {
         for doc in &mut self.docs {
             let dir = doc.dir();
-            for (def, key) in doc.wanted_loads() {
-                doc.loading(&def.name, key.clone());
-                let task = Task::Load {
-                    name: def.name.clone(),
-                    key,
+            for (def, key, how) in doc.wanted_loads() {
+                let request = match how {
+                    Wanted::Read => {
+                        doc.loading(&def.name, key.clone());
+                        Request::Load {
+                            dir: dir.clone(),
+                            model: def.clone(),
+                            tolerance: doc.job.tolerance,
+                        }
+                    }
+                    Wanted::Place(model) => {
+                        doc.placing(&def.name, key.clone());
+                        Request::Place {
+                            model,
+                            transform: def.transform,
+                        }
+                    }
                 };
-                let request = Request::Load {
-                    dir: dir.clone(),
-                    model: def,
-                    tolerance: doc.job.tolerance,
+                let task = Task::Load {
+                    name: def.name,
+                    key,
                 };
                 self.worker.start(ctx, doc.id, task, request);
             }
@@ -473,7 +484,6 @@ impl App {
                 };
                 let status = doc.status(&name);
                 let state = doc.setups.entry(name.clone()).or_default();
-                ui.label(widgets::section_label(&format!("Setup {name}")));
                 if state.ran.is_some() {
                     if status == Status::Stale {
                         ui.colored_label(
@@ -483,8 +493,6 @@ impl App {
                     }
                     playback::result(ui, state, m);
                     ui.separator();
-                } else if state.running.is_none() {
-                    ui.label(widgets::hint_text("Not generated yet."));
                 }
                 focus = playback::controls(ui, state, m).or(focus);
             });

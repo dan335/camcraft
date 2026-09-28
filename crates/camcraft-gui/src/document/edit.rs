@@ -17,12 +17,23 @@ use super::{
     shift,
 };
 
+/// How a wanted model is to be had.
+#[derive(Debug, Clone)]
+pub enum Wanted {
+    /// Read from its file.
+    Read,
+    /// Placed again: this, loaded from the same file, placed elsewhere.
+    Place(Arc<Model>),
+}
+
 impl Document {
     // ---- models ---------------------------------------------------------------
 
     /// Models that should be loaded and are not, or are loaded from something that
-    /// has since changed: each with what to load it as.
-    pub fn wanted_loads(&self) -> Vec<(ModelDef, ModelKey)> {
+    /// has since changed: each with what to load it as, and how. One being placed
+    /// waits for that to finish, so a model dragged about is placed as often as it
+    /// can be and no more.
+    pub fn wanted_loads(&self) -> Vec<(ModelDef, ModelKey, Wanted)> {
         let dir = self.dir();
         self.job
             .models
@@ -37,7 +48,17 @@ impl Document {
                 if stl && def.units.is_none() {
                     return None;
                 }
-                (current.map(ModelSlot::key) != Some(&key)).then(|| (def.clone(), key))
+                if self.placing.contains_key(&def.name) || current.map(ModelSlot::key) == Some(&key)
+                {
+                    return None;
+                }
+                let how = match current {
+                    Some(ModelSlot::Ready(k, model, _)) if k.same_file(&key) => {
+                        Wanted::Place(model.clone())
+                    }
+                    _ => Wanted::Read,
+                };
+                Some((def.clone(), key, how))
             })
             .collect()
     }
@@ -48,6 +69,12 @@ impl Document {
             .insert(name.to_string(), ModelSlot::Loading(key));
     }
 
+    /// A loaded model has started being placed again, and is shown where it was
+    /// until it is.
+    pub fn placing(&mut self, name: &str, key: ModelKey) {
+        self.placing.insert(name.to_string(), key);
+    }
+
     /// A model has loaded, or failed to. A reply for something since asked for
     /// differently is dropped.
     pub fn loaded(
@@ -56,17 +83,25 @@ impl Document {
         key: &ModelKey,
         result: Result<(Arc<Model>, Arc<MeshBvh>), SessionError>,
     ) {
+        let placed = self.placing.get(name) == Some(key);
+        if placed {
+            self.placing.remove(name);
+        }
         match self.models.get(name) {
             Some(ModelSlot::Loading(k)) if k == key => {}
+            Some(ModelSlot::Ready(..)) if placed => {}
             _ => return,
         }
         let slot = match result {
             Ok((model, bvh)) => {
-                for n in &model.notes {
-                    self.log.push((Level::Info, format!("{name}: {n}")));
-                }
-                for w in &model.warnings {
-                    self.log.push((Level::Warn, format!("{name}: {w}")));
+                // Placed again, it says nothing new of its file.
+                if !placed {
+                    for n in &model.notes {
+                        self.log.push((Level::Info, format!("{name}: {n}")));
+                    }
+                    for w in &model.warnings {
+                        self.log.push((Level::Warn, format!("{name}: {w}")));
+                    }
                 }
                 ModelSlot::Ready(key.clone(), model, bvh)
             }
@@ -120,6 +155,7 @@ impl Document {
                 // An STL says nothing of its units; millimetres is a start the
                 // person sees, and can change, before anything is cut.
                 units: stl.then_some(LengthUnit::Mm),
+                transform: Default::default(),
             });
             names.push(name);
         }
@@ -182,6 +218,50 @@ impl Document {
             self.selection = Selection::Model(to);
         }
         Ok(())
+    }
+
+    /// Copy a model, as another of the same part: the same file, turned and scaled
+    /// the same, beside it along X by its width and a gap, rounded up to a whole
+    /// millimetre, so it is seen as
+    /// another. Every setup and stock that names it names the copy too, so it is
+    /// machined with it. Its picks stay the original's. Loaded, the copy starts
+    /// from the one loaded rather than reading the file again.
+    pub fn duplicate_model(&mut self, name: &str) -> Option<String> {
+        /// Between the original and its copy, millimetres.
+        const GAP: f64 = 10.0;
+        let i = self.job.models.iter().position(|m| m.name == name)?;
+        let mut copy = self.job.models.get(i)?.clone();
+        copy.name = free(
+            &format!("{name} copy"),
+            self.job.models.iter().map(|m| m.name.as_str()),
+        );
+        let new = copy.name.clone();
+        let slot = self.models.get(name).cloned();
+        if let Some(ModelSlot::Ready(_, model, _)) = &slot {
+            // In whole millimetres, so the copy's position reads as typed.
+            copy.transform.position[0] += (model.bounds.extent().x + GAP).ceil();
+        }
+        self.job.models.insert(i + 1, copy);
+        for s in &mut self.job.setups {
+            if s.models.iter().any(|m| m == name) {
+                s.models.push(new.clone());
+            }
+        }
+        for s in &mut self.job.stocks {
+            let models = match &mut s.spec {
+                StockSpec::AroundModels { models, .. } => models,
+                StockSpec::FixedBox(b) => &mut b.models,
+            };
+            if models.iter().any(|m| m == name) {
+                models.push(new.clone());
+            }
+        }
+        // Where the original is: the copy is placed again from it, not read.
+        if let Some(slot @ ModelSlot::Ready(..)) = slot {
+            self.models.insert(new.clone(), slot);
+        }
+        self.selection = Selection::Model(new.clone());
+        Some(new)
     }
 
     /// Remove a model nothing uses.

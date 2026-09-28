@@ -156,28 +156,43 @@ pub fn apply(
             .setup_mut(setup)
             .is_some_and(|s| toggle_name(&mut s.stocks, stock)),
         (Slot::Faces { setup, op }, Target::Face { model, face, at }) => {
+            let at = own(doc, model, *at);
             doc.operation_mut(setup, *op).is_some_and(|o| {
-                toggle(&mut o.selection.faces, model, *face, *at, |r| {
+                toggle(&mut o.selection.faces, model, *face, at, |r| {
                     current(r, Kind::Face)
                 })
             })
         }
         (Slot::Edges { setup, op }, Target::Edge { model, edge, at }) => {
+            let at = own(doc, model, *at);
             doc.operation_mut(setup, *op).is_some_and(|o| {
-                toggle(&mut o.selection.edges, model, *edge, *at, |r| {
+                toggle(&mut o.selection.edges, model, *edge, at, |r| {
                     current(r, Kind::Edge)
                 })
             })
         }
         (Slot::Edges { setup, op }, Target::Loop { model, edges }) => {
+            let edges: Vec<(u32, DVec3)> = edges
+                .iter()
+                .map(|&(e, at)| (e, own(doc, model, at)))
+                .collect();
             doc.operation_mut(setup, *op).is_some_and(|o| {
-                toggle_loop(&mut o.selection.edges, model, edges, |r| {
+                toggle_loop(&mut o.selection.edges, model, &edges, |r| {
                     current(r, Kind::Edge)
                 })
             })
         }
         _ => false,
     }
+}
+
+/// Where `at`, on `model` where the job places it, is in the model's own
+/// coordinates: where a pick is saved, so it moves with its model.
+fn own(doc: &Document, model: &str, at: DVec3) -> DVec3 {
+    doc.models
+        .get(model)
+        .and_then(|s| s.model())
+        .map_or(at, |m| DVec3::from_array(features::unplaced(&m.body, at)))
 }
 
 /// What a click on `target` picks into `slot`: for edges, the whole loop the edge
@@ -792,6 +807,7 @@ mod tests {
             name: "p".into(),
             path: "p.stl".into(),
             units: None,
+            transform: Default::default(),
         });
         let setup = doc.job.setups[0].name.clone();
         doc.job.setups[0].models = vec!["p".into()];

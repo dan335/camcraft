@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
-use camcraft_core::job::{Job, ModelDef};
+use camcraft_core::job::{Job, ModelDef, Transform};
 use camcraft_core::run::{Plan, Stage};
 use camcraft_geom::bvh::MeshBvh;
 use camcraft_session::{
@@ -65,6 +65,13 @@ pub enum Request {
         model: ModelDef,
         /// Tessellation follows from the job's machining tolerance.
         tolerance: f64,
+    },
+    /// Place a loaded model again, without reading its file.
+    Place {
+        /// The model, as loaded.
+        model: Arc<Model>,
+        /// Where it goes.
+        transform: Transform,
     },
     /// Run one setup of a job as it stands, the way `camcraft job` runs it.
     Run {
@@ -120,6 +127,7 @@ impl Worker {
         let what = match request {
             Request::Open { .. } => "opening job",
             Request::Load { .. } => "loading model",
+            Request::Place { .. } => "placing model",
             Request::Run { .. } => "running setup",
         };
         let (tx, rx) = channel();
@@ -172,6 +180,10 @@ fn execute(request: Request, progress: &mut dyn FnMut(Stage)) -> Reply {
             model,
             tolerance,
         } => Reply::Loaded(load_job_model(&dir, &model, tolerance).map(|m| {
+            let bvh = Arc::new(MeshBvh::new(m.mesh()));
+            (Arc::new(m), bvh)
+        })),
+        Request::Place { model, transform } => Reply::Loaded(model.placed(&transform).map(|m| {
             let bvh = Arc::new(MeshBvh::new(m.mesh()));
             (Arc::new(m), bvh)
         })),

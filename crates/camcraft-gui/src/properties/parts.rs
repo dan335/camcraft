@@ -2,7 +2,7 @@
 //! stock) includes, with a way to add more from a filtered list or by clicking
 //! them in the view. The stock panel is in `stock`.
 
-use camcraft_core::job::{LengthUnit, Setup};
+use camcraft_core::job::{LengthUnit, Setup, Transform};
 use eframe::egui;
 
 use super::{Picks, PropAction, header, renamed};
@@ -216,6 +216,8 @@ pub(super) fn model(
                 ui.end_row();
             }
         });
+        ui.add_space(theme::SPACE_3);
+        transform(ui, m, name, &mut def.transform);
     }
 
     ui.add_space(theme::SPACE_3);
@@ -263,6 +265,84 @@ pub(super) fn model(
         "No setup machines it.",
         "Machined by",
     );
+}
+
+/// Where a model sits in the job: its position, its rotation about the job's X,
+/// then Y, then Z, and its scale, uniform unless unlocked, as Fusion's.
+fn transform(ui: &mut egui::Ui, m: Measure, name: &str, t: &mut Transform) {
+    ui.horizontal(|ui| {
+        ui.label(widgets::section_label("Transform"));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let moved = *t != Transform::default();
+            let reset = ui.add_enabled(
+                moved,
+                egui::Button::new(widgets::hint_text("reset")).frame(false),
+            );
+            if reset.on_hover_text("back where its file puts it").clicked() {
+                *t = Transform::default();
+            }
+        });
+    });
+    let id = ui.id().with(("uniform-scale", name));
+    let even = t.scale.iter().all(|&s| s.to_bits() == t.scale[0].to_bits());
+    let mut uniform = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(even);
+    form(ui, "transform", |ui| {
+        widgets::field_label(ui, "Position");
+        ui.horizontal(|ui| {
+            for (axis, v) in ["X ", "Y ", "Z "].into_iter().zip(t.position.iter_mut()) {
+                m.signed_length_field(ui, v, 0.1, 100_000.0, axis);
+            }
+        });
+        ui.end_row();
+        widgets::field_label(ui, "Rotation");
+        ui.horizontal(|ui| {
+            for (axis, v) in ["X ", "Y ", "Z "].into_iter().zip(t.rotation.iter_mut()) {
+                ui.add(
+                    egui::DragValue::new(v)
+                        .speed(1.0)
+                        .range(-360.0..=360.0)
+                        .prefix(axis)
+                        .suffix("°"),
+                )
+                .on_hover_text("turned about the job's X, then Y, then Z");
+            }
+        });
+        ui.end_row();
+        widgets::field_label(ui, "Scale");
+        ui.horizontal(|ui| {
+            let scale = |v: &mut f64, prefix: &str, ui: &mut egui::Ui| {
+                ui.add(
+                    egui::DragValue::new(v)
+                        .speed(0.01)
+                        .range(0.001..=1000.0)
+                        .prefix(prefix)
+                        .suffix("×")
+                        .max_decimals(4),
+                )
+                .changed()
+            };
+            if uniform {
+                let mut s = t.scale[0];
+                if scale(&mut s, "", ui) {
+                    t.scale = [s; 3];
+                }
+            } else {
+                for (axis, v) in ["X ", "Y ", "Z "].into_iter().zip(t.scale.iter_mut()) {
+                    scale(v, axis, ui);
+                }
+            }
+            if ui
+                .checkbox(&mut uniform, "uniform")
+                .on_hover_text("the same along X, Y and Z")
+                .changed()
+                && uniform
+            {
+                t.scale = [t.scale[0]; 3];
+            }
+        });
+        ui.end_row();
+    });
+    ui.data_mut(|d| d.insert_temp(id, uniform));
 }
 
 /// Which setups use a model or stock, those `uses` holds for: "`some` A, B.", or

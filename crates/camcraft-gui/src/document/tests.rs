@@ -23,6 +23,7 @@ fn with_plate() -> (Document, String) {
         name: "p".into(),
         path: "p.stl".into(),
         units: Some(LengthUnit::Mm),
+        transform: Default::default(),
     };
     let body = camcraft_geom::topology::Body::derived(camcraft_geom::synthetic::plate_with_hole(
         20.0, 5.0, 4.0, 32,
@@ -30,13 +31,14 @@ fn with_plate() -> (Document, String) {
     let bvh = Arc::new(MeshBvh::new(body.mesh()));
     let model = Arc::new(Model {
         bounds: body.mesh().bounds().unwrap(),
+        file: Arc::new(body.clone()),
         body,
         path: "p.stl".into(),
         units: "mm".into(),
         notes: Vec::new(),
         warnings: Vec::new(),
     });
-    let key = ModelKey::of(Path::new("."), &def, doc.job.tolerance);
+    let key = ModelKey::of(&doc.dir(), &def, doc.job.tolerance);
     doc.models
         .insert("p".into(), ModelSlot::Ready(key, model, bvh));
     doc.job.models.push(def);
@@ -247,6 +249,51 @@ fn a_stock_is_duplicated() {
     assert_eq!(doc.duplicate_stock("block").unwrap(), "block copy 2");
     doc.remove_stock(&copy).unwrap();
     assert!(doc.duplicate_stock("nothing").is_none());
+}
+
+/// A model duplicated is another of the same part beside it: the same file,
+/// turned and scaled the same, moved along X by its width and a gap, machined
+/// wherever the original is, and placed from the one loaded, not read again.
+#[test]
+fn a_model_is_duplicated_beside_itself() {
+    use camcraft_core::job::Transform;
+    let (mut doc, setup) = with_plate();
+    doc.job.stocks[0].spec = StockSpec::AroundModels {
+        models: vec!["p".into()],
+        margin: [2.0; 3],
+        below: 0.0,
+    };
+    doc.job.models[0].transform = Transform {
+        rotation: [0.0, 0.0, 30.0],
+        ..Transform::default()
+    };
+    let copy = doc.duplicate_model("p").unwrap();
+    assert_eq!(copy, "p copy");
+    assert_eq!(doc.selection, Selection::Model(copy.clone()));
+    let (p, c) = (&doc.job.models[0], &doc.job.models[1]);
+    assert_eq!(
+        (c.name.as_str(), &c.path, c.units),
+        ("p copy", &p.path, p.units)
+    );
+    assert_eq!(c.transform.rotation, p.transform.rotation);
+    assert_eq!(
+        c.transform.position,
+        [50.0, 0.0, 0.0],
+        "40 wide and 10 apart"
+    );
+    assert_eq!(doc.setup(&setup).unwrap().models, ["p", "p copy"]);
+    assert!(matches!(&doc.job.stocks[0].spec,
+        StockSpec::AroundModels { models, .. } if models == &["p", "p copy"]));
+    // The original waits to be turned; the copy is placed from it.
+    let wanted = doc.wanted_loads();
+    assert!(
+        wanted
+            .iter()
+            .any(|(def, _, how)| def.name == "p copy" && matches!(how, Wanted::Place(_))),
+        "{wanted:?}"
+    );
+    assert_eq!(doc.duplicate_model("p").unwrap(), "p copy 2");
+    assert!(doc.duplicate_model("nothing").is_none());
 }
 
 /// While a setup runs, its operations wait, run and are done in turn as
@@ -835,4 +882,60 @@ fn free_names_count_up() {
     assert_eq!(free("Stock", std::iter::empty()), "Stock 1");
     assert_eq!(free("rough", ["rough"].into_iter()), "rough 2");
     assert_eq!(free("part", std::iter::empty()), "part");
+}
+
+/// A model moved is placed again from the one loaded, not read again, and shown
+/// where it was until it is; one placement at a time, the latest winning, and
+/// nothing generated until the model is where the job says.
+#[test]
+fn a_moved_model_is_placed_again_not_read() {
+    use camcraft_core::job::Transform;
+    let (mut doc, setup) = with_plate();
+    doc.job.tools.insert("t".into(), ToolSpec::default());
+    let op = doc
+        .add_operation(&setup, StrategySpec::Parallel { angle: 0.0 })
+        .unwrap();
+    doc.job.setups[0].operations[op].tool = Some("t".into());
+    assert_eq!(doc.cannot_generate(&setup, None), None);
+    assert!(doc.wanted_loads().is_empty());
+    doc.job.models[0].transform = Transform {
+        position: [50.0, 0.0, 0.0],
+        ..Transform::default()
+    };
+    let wanted = doc.wanted_loads();
+    let [(def, key, Wanted::Place(model))] = wanted.as_slice() else {
+        panic!("expected a placement, got {wanted:?}");
+    };
+    doc.placing(&def.name, key.clone());
+    assert!(
+        doc.models["p"].model().is_some(),
+        "still shown where it was"
+    );
+    assert!(
+        doc.cannot_generate(&setup, None)
+            .is_some_and(|why| why.contains("being placed")),
+        "{:?}",
+        doc.cannot_generate(&setup, None)
+    );
+    doc.job.models[0].transform.position[1] = 10.0;
+    assert!(doc.wanted_loads().is_empty(), "one placement at a time");
+
+    let placed = model.placed(&def.transform).unwrap();
+    let bvh = Arc::new(MeshBvh::new(placed.mesh()));
+    let before = doc.log.len();
+    doc.loaded("p", key, Ok((Arc::new(placed), bvh)));
+    let bounds = doc.models["p"].model().unwrap().bounds;
+    assert!((bounds.min.x - 30.0).abs() < 1e-9, "{bounds:?}");
+    assert_eq!(doc.log.len(), before, "nothing new to say of its file");
+    // The later move is placed next.
+    assert!(matches!(
+        doc.wanted_loads().as_slice(),
+        [(_, _, Wanted::Place(_))]
+    ));
+    // Another file is read.
+    doc.job.models[0].path = "q.stl".into();
+    assert!(matches!(
+        doc.wanted_loads().as_slice(),
+        [(_, _, Wanted::Read)]
+    ));
 }

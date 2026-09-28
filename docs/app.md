@@ -48,7 +48,14 @@ until it is generated again, since its checks and program depend on those.
 The properties panel only edits; what the tree and its menus do is not repeated in
 it.
 
-- **Model**: its file, and units for an STL.
+- **Model**: its file, units for an STL, and its transform: position, rotation
+  and scale, uniform unless unticked, with a reset back to where the file puts
+  it. A model moved is placed again from the one loaded, not read again, and
+  shown where it was until it is; a setup waits for it before generating.
+  Right-click a model in the tree to duplicate it: another of the same part,
+  beside it along X by its width and 10 mm (to the next whole millimetre), in
+  every setup and stock that has
+  the original.
 - **Stock**: laid out as the tool library lays out a tool. At the top is a
   drawing of the block (amber) around the models, from the top and the front,
   with its size under each view and its corners in model coordinates below.

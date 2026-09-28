@@ -343,6 +343,7 @@ mod tests {
             name: "m".into(),
             path: "m.stl".into(),
             units: None,
+            transform: Default::default(),
         });
         j.stocks.push(StockDef {
             name: "s".into(),
@@ -435,6 +436,7 @@ mod tests {
             name: "n".into(),
             path: "n.stl".into(),
             units: None,
+            transform: Default::default(),
         });
         let b = prepare(&j, 0, &meshes).unwrap().stocks[0];
         assert_eq!(b.min, dvec3(100.0, 0.0, -1.0));
@@ -612,6 +614,7 @@ mod tests {
             name: "n".into(),
             path: "n.stl".into(),
             units: None,
+            transform: Default::default(),
         });
         j.setups[0].models = vec!["n".into(), "m".into()];
         let p = prepare(&j, 0, &bodies).unwrap();

@@ -21,6 +21,7 @@ fn hinge() -> ModelDef {
         name: "hinge".into(),
         path: fixture("hinge_jig.step").display().to_string(),
         units: None,
+        transform: Default::default(),
     }
 }
 

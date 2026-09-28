@@ -232,8 +232,14 @@ impl Document {
         if let Err(e) = check_runnable(&self.job, index, &runs) {
             return Some(e.to_string());
         }
+        let dir = self.dir();
         for m in self.job.models_for(index) {
             match self.models.get(&m.name) {
+                Some(ModelSlot::Ready(k, ..))
+                    if *k != ModelKey::of(&dir, m, self.job.tolerance) =>
+                {
+                    return Some(format!("'{}' is being placed", m.name));
+                }
                 Some(ModelSlot::Ready(..)) => {}
                 Some(ModelSlot::Loading(_)) => return Some(format!("'{}' is loading", m.name)),
                 Some(ModelSlot::Failed { why, .. }) => return Some(why.clone()),

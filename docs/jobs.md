@@ -7,8 +7,15 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
 
 - **Models**: design files, referenced by path relative to the job file (with `/`
   between folders on every system), never copied in. A STEP file states its own
-  units; an STL needs `units = "mm"` or `"inch"`.
-- **Stocks**: blocks of material in model coordinates, either around models (by
+  units; an STL needs `units = "mm"` or `"inch"`. Each may have a `transform`, as
+  Fusion's position, rotation and scale: `position` where the file's origin goes,
+  `rotation` in degrees about the job's X, then Y, then Z, about that origin, and
+  `scale` along the file's X, Y and Z, more than zero (never mirrored), for
+  example `transform = { position = [60.0, 5.0, 0.0], rotation = [0.0, 0.0, 30.0],
+  scale = [1.5, 1.5, 1.5] }`. Everything past loading sees the model where it is
+  placed; a pick's point stays where the file has it, so picks move with their
+  model.
+- **Stocks**: blocks of material in the job's coordinates, either around models (by
   name, or the setup's own when none are named) with margins, or a fixed box. A
   fixed box has a size and, on each axis, a place against the same models, as
   Fusion's fixed size box does: centred, offset from the low or high side, or at

@@ -334,6 +334,7 @@ fn setup_panel() {
             name: name.into(),
             path: repo(&format!("fixtures/step/{file}")).display().to_string(),
             units: None,
+            transform: Default::default(),
         });
     }
     job.stocks.push(StockDef {
@@ -464,6 +465,120 @@ fn setup_panel() {
 }
 
 /// The file dialog, open on the job filter: drawn inside the app, themed with it.
+/// A model's panel with its transform, and three copies of a part moved, turned
+/// and scaled through the app, one unevenly: each placed again from the one
+/// loaded, the stock around all three, generated clean and played back.
+#[test]
+#[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
+fn model_transform() {
+    use crate::document::Selection;
+    use camcraft_core::job::{ModelDef, Transform};
+
+    let dir = output_dir().join("model-transform");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut job = camcraft_session::read_job(&repo("examples/rail-jig.camcraft")).unwrap();
+    let hinge = ModelDef {
+        path: repo("fixtures/step/hinge_jig.step").display().to_string(),
+        ..job.models[0].clone()
+    };
+    let names = ["a", "b", "c"];
+    job.models = names
+        .iter()
+        .map(|n| ModelDef {
+            name: (*n).into(),
+            ..hinge.clone()
+        })
+        .collect();
+    job.setups[0].models = names.iter().map(|n| (*n).to_string()).collect();
+    let path = dir.join("model-transform.camcraft");
+    camcraft_session::write_job(&path, &job).unwrap();
+
+    let mut h = harness();
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    h.state_mut().open_job(&ctx, path);
+    settle(&mut h);
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.selection = Selection::Model("b".into());
+    }
+    h.run_steps(4);
+    shoot(&mut h, "models_at_file");
+
+    let places = [
+        ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0; 3]),
+        ([60.0, 5.0, 0.0], [0.0, 0.0, 30.0], [1.5; 3]),
+        ([0.0, 60.0, 0.0], [0.0, 0.0, -90.0], [1.2, 1.0, 0.6]),
+    ];
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        for (m, (position, rotation, scale)) in doc.job.models.iter_mut().zip(places) {
+            m.transform = Transform {
+                position,
+                rotation,
+                scale,
+            };
+        }
+    }
+    settle(&mut h);
+    let doc = h.state_mut().doc_for_snapshot().unwrap();
+    assert!(doc.wanted_loads().is_empty(), "placed where the job says");
+    for n in names {
+        println!("{n}: {:?}", doc.models[n].model().unwrap().bounds);
+    }
+    // All three in sight: the box round them.
+    h.state_mut()
+        .focus_for_snapshot(glam::DVec3::new(30.0, 28.0, 5.0), 75.0);
+    h.run_steps(4);
+    shoot(&mut h, "models_placed");
+
+    h.state_mut().start_run(&ctx);
+    settle(&mut h);
+    let outcome = h.state().outcome().expect("the run produced a result");
+    println!(
+        "passes {:?}, clean {}, warnings {:?}",
+        outcome
+            .result
+            .operations
+            .iter()
+            .map(|o| o.passes)
+            .collect::<Vec<_>>(),
+        outcome.result.is_clean(),
+        outcome.warnings
+    );
+    assert!(outcome.result.is_clean());
+    h.run_steps(2);
+    shoot(&mut h, "models_placed_generated");
+    h.state_mut().playback_for_snapshot(false);
+    h.state_mut().set_view_for_snapshot(1, 0.5, u32::MAX);
+    for _ in 0..200 {
+        h.run_steps(1);
+        if h.state_mut().live_caught_up_for_snapshot() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    h.run_steps(2);
+    shoot(&mut h, "models_placed_playback");
+
+    // Duplicated: another beside it, placed from the one loaded.
+    h.state_mut().setup_for_snapshot();
+    let doc = h.state_mut().doc_for_snapshot().unwrap();
+    let copy = doc.duplicate_model("b").unwrap();
+    settle(&mut h);
+    let doc = h.state_mut().doc_for_snapshot().unwrap();
+    assert!(doc.wanted_loads().is_empty(), "the copy is placed");
+    let (b, c) = (
+        doc.models["b"].model().unwrap().bounds,
+        doc.models[&copy].model().unwrap().bounds,
+    );
+    let gap = c.min.x - b.max.x;
+    assert!((10.0..11.0).contains(&gap), "{b:?} {c:?}");
+    assert!(doc.setup("top").unwrap().models.contains(&copy));
+    h.state_mut()
+        .focus_for_snapshot(glam::DVec3::new(60.0, 28.0, 5.0), 100.0);
+    h.run_steps(4);
+    shoot(&mut h, "models_duplicated");
+}
+
 #[test]
 #[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
 fn open_job_dialog() {

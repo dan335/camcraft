@@ -3,8 +3,9 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 
-use camcraft_core::job::{Job, LengthUnit, ModelDef};
+use camcraft_core::job::{Job, LengthUnit, ModelDef, Transform};
 use camcraft_geom::mesh::{Aabb, TriMesh};
 use camcraft_geom::topology::{Body, FaceSource};
 use camcraft_import::step::{FileCheck, load_step};
@@ -12,13 +13,16 @@ use camcraft_import::stl::{Units, load_stl};
 
 use crate::{SessionError, fs};
 
-/// A model, loaded and measured.
+/// A model, loaded, placed and measured.
 #[derive(Debug, Clone)]
 pub struct Model {
-    /// The triangles, in millimetres, and their faces, edges and vertices.
+    /// The triangles, in millimetres, and their faces, edges and vertices, where
+    /// the job places them.
     pub body: Body,
     /// Their bounds.
     pub bounds: Aabb,
+    /// The body where its file put it, to place it again from.
+    pub file: Arc<Body>,
     /// Where it came from.
     pub path: String,
     /// What the model's numbers meant, as a person would say it.
@@ -33,6 +37,17 @@ impl Model {
     /// The triangles, in millimetres.
     pub fn mesh(&self) -> &TriMesh {
         self.body.mesh()
+    }
+
+    /// The model placed by `transform` instead, without reading its file again.
+    pub fn placed(&self, transform: &Transform) -> Result<Model, SessionError> {
+        let body = self.file.placed(transform.matrix())?;
+        let bounds = body.mesh().bounds().ok_or(SessionError::EmptyModel)?;
+        Ok(Model {
+            body,
+            bounds,
+            ..self.clone()
+        })
     }
 }
 
@@ -146,6 +161,7 @@ pub fn load_model(
         extent.x, extent.y, extent.z
     ));
     Ok(Model {
+        file: Arc::new(body.clone()),
         body,
         bounds,
         path: path.display().to_string(),
@@ -177,10 +193,18 @@ pub fn load_job_model(
             path: path.display().to_string(),
         });
     }
-    load_model(&path, units_of(model.units), tolerance).map_err(|e| SessionError::InModel {
-        name: model.name.clone(),
-        source: Box::new(e),
-    })
+    load_model(&path, units_of(model.units), tolerance)
+        .and_then(|m| {
+            if model.transform == Transform::default() {
+                Ok(m)
+            } else {
+                m.placed(&model.transform)
+            }
+        })
+        .map_err(|e| SessionError::InModel {
+            name: model.name.clone(),
+            source: Box::new(e),
+        })
 }
 
 /// A job's models, loaded, by name.
@@ -249,6 +273,39 @@ mod tests {
         assert!(m.notes.iter().any(|n| n.starts_with("read STEP in inch")));
     }
 
+    /// A model is loaded where the job places it, and keeps where its file put it
+    /// to be placed again from.
+    #[test]
+    fn a_model_loads_where_it_is_placed() {
+        let mut def = ModelDef {
+            name: "hinge".into(),
+            path: fixture("hinge_jig.step").display().to_string(),
+            units: None,
+            transform: Transform::default(),
+        };
+        let at_file = load_job_model(Path::new("/"), &def, 0.05).unwrap();
+        def.transform = Transform {
+            position: [100.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 90.0],
+            scale: [2.0; 3],
+        };
+        let placed = load_job_model(Path::new("/"), &def, 0.05).unwrap();
+        let (a, b) = (at_file.bounds.extent(), placed.bounds.extent());
+        assert!(
+            (b.x - 2.0 * a.y).abs() < 1e-6,
+            "turned and doubled: {a} {b}"
+        );
+        assert!(
+            (b.y - 2.0 * a.x).abs() < 1e-6,
+            "turned and doubled: {a} {b}"
+        );
+        assert!((b.z - 2.0 * a.z).abs() < 1e-6, "doubled: {a} {b}");
+        assert_eq!(*placed.file, at_file.body, "the file's body is kept");
+        let back = placed.placed(&Transform::default()).unwrap();
+        assert!(back.bounds.min.distance(at_file.bounds.min) < 1e-9);
+        assert!(back.bounds.max.distance(at_file.bounds.max) < 1e-9);
+    }
+
     /// A model that is not where the job says is named, with where it was looked
     /// for.
     #[test]
@@ -257,6 +314,7 @@ mod tests {
             name: "gone".into(),
             path: "nowhere/part.step".into(),
             units: None,
+            transform: Default::default(),
         };
         match load_job_model(Path::new("/tmp"), &m, 0.05) {
             Err(SessionError::ModelMissing { name, path }) => {

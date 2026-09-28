@@ -40,6 +40,9 @@ pub enum SessionError {
     /// The model had nothing in it.
     #[error("model has no geometry")]
     EmptyModel,
+    /// The model could not be placed where the job says.
+    #[error("the model cannot be placed there: {0}")]
+    Placement(#[from] camcraft_geom::mesh::MeshError),
     /// The job file could not be read.
     #[error("cannot read job {path}: {source}")]
     JobIo {

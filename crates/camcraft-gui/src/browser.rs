@@ -45,6 +45,7 @@ enum Edit {
     /// Turn an operation on or off.
     SetEnabled(String, usize, bool),
     RemoveModel(String),
+    DuplicateModel(String),
     DuplicateStock(String),
     RemoveStock(String),
 }
@@ -324,6 +325,12 @@ fn models(
                         _ => r.on_hover_text(&m.path),
                     };
                     r.context_menu(|ui| {
+                        if ui.button("Duplicate").clicked() {
+                            edits
+                                .borrow_mut()
+                                .push(Edit::DuplicateModel(m.name.clone()));
+                            ui.close();
+                        }
                         if ui.button("Find it elsewhere…").clicked() {
                             actions
                                 .borrow_mut()
@@ -726,6 +733,10 @@ fn apply(doc: &mut Document, edit: Edit) {
         }
         Edit::AddStock => {
             doc.add_stock();
+            Ok(())
+        }
+        Edit::DuplicateModel(n) => {
+            doc.duplicate_model(&n);
             Ok(())
         }
         Edit::DuplicateStock(n) => {

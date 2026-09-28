@@ -20,8 +20,10 @@
 //! The tolerance is the job's: STEP is tessellated to a quarter of it, so two
 //! tessellations of one surface lie within half of it of each other.
 //!
-//! Finding is in model coordinates. The same functions serve the engine and the app,
-//! so what the app highlights is what gets cut.
+//! A pick's point is in its model's own coordinates, where its file put it, so a
+//! pick moves with its model; it is found on the body where the model is placed
+//! ([`placed`]). The same functions serve the engine and the app, so what the app
+//! highlights is what gets cut.
 //!
 //! # Boundaries
 //!
@@ -153,6 +155,16 @@ pub fn tolerance(job_tolerance: f64, body: &Body) -> f64 {
     job_tolerance.abs() + body.topology().tolerance()
 }
 
+/// Where a pick's point, in its model's own coordinates, is on `body`, placed.
+pub fn placed(body: &Body, at: [f64; 3]) -> DVec3 {
+    body.placement().transform_point3(DVec3::from_array(at))
+}
+
+/// A point on `body`, placed, in its model's own coordinates: what a pick saves.
+pub fn unplaced(body: &Body, p: DVec3) -> [f64; 3] {
+    body.placement().inverse().transform_point3(p).to_array()
+}
+
 fn gone(model: &str, what: &'static str, at: [f64; 3]) -> FeatureError {
     FeatureError::Gone {
         model: model.to_string(),
@@ -164,7 +176,7 @@ fn gone(model: &str, what: &'static str, at: [f64; 3]) -> FeatureError {
 /// Find a picked face on `body`.
 pub fn find_face(body: &Body, pick: &FeatureRef, tol: f64) -> Result<Found, FeatureError> {
     let (mesh, t) = (body.mesh(), body.topology());
-    let at = DVec3::from_array(pick.at);
+    let at = placed(body, pick.at);
     let by_index = t.distance_to_face(mesh, pick.index, at);
     if let Some(d) = by_index
         && d <= tol
@@ -207,7 +219,7 @@ pub fn find_face(body: &Body, pick: &FeatureRef, tol: f64) -> Result<Found, Feat
 /// Find a picked edge on `body`.
 pub fn find_edge(body: &Body, pick: &FeatureRef, tol: f64) -> Result<Found, FeatureError> {
     let (mesh, t) = (body.mesh(), body.topology());
-    let at = DVec3::from_array(pick.at);
+    let at = placed(body, pick.at);
     if let Some((_, d)) = t.closest_on_edge(mesh, pick.index, at)
         && d <= tol
     {
@@ -265,9 +277,9 @@ pub fn snap_point(body: &Body, snap: Snap, index: u32) -> Option<DVec3> {
     }
 }
 
-/// Find a picked point on `body`: where it is now, in model coordinates.
+/// Find a picked point on `body`: where it is now, placed.
 pub fn find_point(body: &Body, pick: &PointRef, tol: f64) -> Result<(DVec3, Found), FeatureError> {
-    let at = DVec3::from_array(pick.at);
+    let at = placed(body, pick.at);
     if let Some(p) = snap_point(body, pick.snap, pick.index)
         && p.distance(at) <= tol
     {
@@ -676,6 +688,41 @@ mod tests {
         assert_eq!(found.by, FoundBy::Index);
     }
 
+    /// A pick is saved where the model's file puts it, so it moves with the
+    /// model: placed elsewhere, every pick is still found by its number, and where
+    /// it now is.
+    #[test]
+    fn picks_move_with_their_model() {
+        use crate::job::Transform;
+        let body = plate();
+        let place = Transform {
+            position: [100.0, 50.0, -5.0],
+            rotation: [0.0, 0.0, 90.0],
+            scale: [2.0; 3],
+        };
+        let placed = body.placed(place.matrix()).unwrap();
+        let face = FeatureRef {
+            model: "p".into(),
+            index: top_face(&body),
+            at: [10.0, 10.0, 5.0],
+        };
+        let found = find_face(&placed, &face, 0.01).unwrap();
+        assert_eq!((found.index, found.by), (face.index, FoundBy::Index));
+        let e = rim(&body, 5.0);
+        let centre = PointRef {
+            model: "p".into(),
+            snap: Snap::CircleCenter,
+            index: e,
+            at: [0.0, 0.0, 5.0],
+        };
+        let (p, found) = find_point(&placed, &centre, 0.01).unwrap();
+        assert!(p.distance(dvec3(100.0, 50.0, 5.0)) < 1e-9, "{p}");
+        assert_eq!(found.by, FoundBy::Index);
+        // What a click on the placed model saves is where its file has it.
+        let at = unplaced(&placed, dvec3(80.0, 30.0, 5.0));
+        assert!(DVec3::from_array(at).distance(dvec3(-10.0, 10.0, 5.0)) < 1e-9);
+    }
+
     /// Numbers that now belong to something else: each pick is found again by
     /// where it is.
     #[test]
@@ -804,6 +851,7 @@ mod tests {
             name: "p".into(),
             path: "p.stl".into(),
             units: None,
+            transform: Default::default(),
         });
         j.stocks.push(StockDef {
             name: "s".into(),

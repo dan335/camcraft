@@ -75,7 +75,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 pub use error::JobError;
-pub use model::{FixedBox, LengthUnit, ModelDef, Place, StockDef, StockSpec};
+pub use model::{FixedBox, LengthUnit, ModelDef, Place, StockDef, StockSpec, Transform};
 pub use operation::{
     Boundary, Containment, Depths, FaceDirection, Height, HeightContext, HeightRef, Heights, Leads,
     Leave, Linking, MachiningBoundary, Operation, Outline, Passes, Picks, ProfileSide, Selection,

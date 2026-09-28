@@ -396,6 +396,7 @@ fn flag_job(args: &FlagArgs, wcs: u8, rpm: u32, number: u32) -> Fallible<(JobSpe
         name: "model".into(),
         path: args.model.display().to_string(),
         units: args.units.map(UnitArg::length),
+        transform: Default::default(),
     };
     let job = single_operation(&finish_spec(args, wcs, rpm, number), def);
     Ok((job, model))

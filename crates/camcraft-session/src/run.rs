@@ -323,6 +323,132 @@ mod tests {
         assert_eq!(parse_job(&text, "picked").unwrap(), job);
     }
 
+    /// Three copies of a part, each moved, turned and scaled its own way, one
+    /// unevenly, finished on each one's highest flat face with the work zero on a
+    /// corner of the second: the picks, saved where the file has them, are found
+    /// on each placed copy; every face is cut over where it now is, the work zero
+    /// is the placed corner, and the run verifies clean against all three.
+    #[test]
+    fn several_placed_models_are_cut_where_they_are() {
+        use camcraft_core::job::{
+            Boundary, FeatureRef, ModelDef, Origin, PointRef, Snap, Transform,
+        };
+        use camcraft_core::toolpath::MoveRole;
+        use camcraft_geom::topology::FaceKind;
+        let mut job = small_job();
+        let hinge = job.models[0].clone();
+        let places = [
+            ("a", [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0; 3]),
+            ("b", [90.0, 10.0, 3.0], [0.0, 0.0, 90.0], [0.8; 3]),
+            ("c", [30.0, 90.0, -2.0], [0.0, 0.0, -45.0], [1.2, 1.0, 0.7]),
+        ];
+        job.models = places
+            .iter()
+            .map(|&(name, position, rotation, scale)| ModelDef {
+                name: name.into(),
+                transform: Transform {
+                    position,
+                    rotation,
+                    scale,
+                },
+                ..hinge.clone()
+            })
+            .collect();
+        job.setups[0].models = places.iter().map(|p| p.0.to_string()).collect();
+        let loaded: Vec<_> = job
+            .models
+            .iter()
+            .map(|m| load_job_model(Path::new("."), m, job.tolerance).unwrap())
+            .collect();
+
+        // The highest flat face up, from the file, the same on every copy.
+        let file = &loaded[0].file;
+        let (mesh, t) = (file.mesh(), file.topology());
+        let face = t
+            .faces()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, f)| match f.kind {
+                FaceKind::Plane { normal, offset } if normal.z > 0.99 && f.area > 20.0 => {
+                    Some((u32::try_from(i).ok()?, offset))
+                }
+                _ => None,
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap()
+            .0;
+        let f = t.face(face).unwrap();
+        let tri = mesh.triangle(f.triangles[0] as usize).unwrap();
+        let at = ((tri[0] + tri[1] + tri[2]) / 3.0).to_array();
+        let op = &mut job.setups[0].operations[0];
+        op.selection.faces = places
+            .iter()
+            .map(|p| FeatureRef {
+                model: p.0.into(),
+                index: face,
+                at,
+            })
+            .collect();
+        op.boundary.kind = Boundary::Selection;
+        let corner = t
+            .edge(f.edges[0])
+            .and_then(|e| e.ends)
+            .map(|[a, _]| a)
+            .unwrap();
+        job.setups[0].origin = Origin::Point {
+            point: PointRef {
+                model: "b".into(),
+                snap: Snap::Vertex,
+                index: corner,
+                at: t.vertex(corner).unwrap().position.to_array(),
+            },
+            offset: [0.0; 3],
+        };
+        job.validate().unwrap();
+
+        let models: Models<'_> = places.iter().map(|p| p.0).zip(&loaded).collect();
+        let ran = run_setup(&job, 0, &models).unwrap();
+        assert!(ran.result.is_clean(), "{:?}", ran.warnings);
+        let frame = ran.result.frame;
+        // Corners are numbered by where they are, so the turned copy's differ:
+        // the pick is found by its point.
+        let placed_corner = loaded[1]
+            .body
+            .placement()
+            .transform_point3(t.vertex(corner).unwrap().position);
+        assert!(frame.to_setup(placed_corner).length() < 1e-9);
+
+        let cuts: Vec<_> = ran.result.operations[0]
+            .path
+            .moves()
+            .iter()
+            .filter(|m| m.role == MoveRole::Cut)
+            .map(|m| m.to.truncate())
+            .collect();
+        for (model, (name, ..)) in loaded.iter().zip(&places) {
+            // The placed face's extent in the setup.
+            let body = &model.body;
+            let placed = body.topology().face(face).unwrap();
+            let (lo, hi) = placed
+                .triangles
+                .iter()
+                .filter_map(|&i| body.mesh().triangle(i as usize))
+                .flatten()
+                .map(|p| frame.to_setup(p).truncate())
+                .fold(
+                    (glam::DVec2::splat(f64::MAX), glam::DVec2::splat(f64::MIN)),
+                    |(lo, hi), p| (lo.min(p), hi.max(p)),
+                );
+            let over = cuts
+                .iter()
+                .filter(|p| p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y)
+                .count();
+            assert!(over > 10, "'{name}': only {over} cuts over its face");
+        }
+        let text = job_text(&job).unwrap();
+        assert_eq!(parse_job(&text, "placed").unwrap(), job);
+    }
+
     /// The gate is the one policy both front ends share: a clean job passes, and
     /// an unclean one passes only when forced.
     #[test]

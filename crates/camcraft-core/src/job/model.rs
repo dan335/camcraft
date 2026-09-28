@@ -1,5 +1,6 @@
 //! The models a job machines and the blocks of material it starts from.
 
+use glam::{DAffine3, DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 
 use super::is_default;
@@ -26,6 +27,51 @@ pub struct ModelDef {
     /// guessed. STEP carries its own units.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub units: Option<LengthUnit>,
+    /// Where it sits in the job, from where its file put it.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub transform: Transform,
+}
+
+/// Where a model sits in the job: its file's points scaled, then turned, then
+/// moved, as Fusion's position, rotation and scale. Everything past loading sees
+/// the model where this puts it; only picks keep the file's coordinates, so they
+/// move with it.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Transform {
+    /// Where the file's origin goes, millimetres.
+    pub position: [f64; 3],
+    /// Turns about the job's X, then Y, then Z, in degrees, about the file's
+    /// origin.
+    pub rotation: [f64; 3],
+    /// How much larger along the file's X, Y and Z. Never mirrored: a scale
+    /// must be more than zero.
+    pub scale: [f64; 3],
+}
+
+impl Default for Transform {
+    /// Where the file put it.
+    fn default() -> Self {
+        Self {
+            position: [0.0; 3],
+            rotation: [0.0; 3],
+            scale: [1.0; 3],
+        }
+    }
+}
+
+impl Transform {
+    /// From the file's coordinates to the job's.
+    pub fn matrix(&self) -> DAffine3 {
+        let [x, y, z] = self.rotation.map(f64::to_radians);
+        let turn =
+            DQuat::from_rotation_z(z) * DQuat::from_rotation_y(y) * DQuat::from_rotation_x(x);
+        DAffine3::from_scale_rotation_translation(
+            DVec3::from_array(self.scale),
+            turn,
+            DVec3::from_array(self.position),
+        )
+    }
 }
 
 /// One block of material.

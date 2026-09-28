@@ -36,6 +36,7 @@ use camcraft_session::{Model, SessionError, write_job};
 
 use crate::worker::DocId;
 
+pub use edit::Wanted;
 pub use run::{OpStatus, Status};
 pub use setup_state::{Layout, RanSetup, SetupState, SetupView, Transport, ViewMode};
 
@@ -56,7 +57,8 @@ pub enum Level {
     Error,
 }
 
-/// What a model was loaded from: when this changes, it is loaded again.
+/// What a model was loaded from and where it was placed: when this changes, it is
+/// loaded again, or only placed again when its file is the same.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelKey {
     /// The file.
@@ -65,16 +67,33 @@ pub struct ModelKey {
     pub units: Option<LengthUnit>,
     /// The machining tolerance it was tessellated for, as bits.
     pub tolerance: u64,
+    /// Its position, rotation and scale, as bits.
+    pub transform: [u64; 9],
 }
 
 impl ModelKey {
     /// The key for `def` in a job in `dir`, at `tolerance`.
     pub fn of(dir: &Path, def: &ModelDef, tolerance: f64) -> Self {
+        let t = &def.transform;
+        let mut transform = [0; 9];
+        for (bits, v) in transform
+            .iter_mut()
+            .zip(t.position.iter().chain(&t.rotation).chain(&t.scale))
+        {
+            *bits = v.to_bits();
+        }
         Self {
             path: resolve(dir, &def.path),
             units: def.units,
             tolerance: tolerance.to_bits(),
+            transform,
         }
+    }
+
+    /// Whether `other` is loaded from the same file the same way, wherever it is
+    /// placed.
+    pub fn same_file(&self, other: &ModelKey) -> bool {
+        self.path == other.path && self.units == other.units && self.tolerance == other.tolerance
     }
 }
 
@@ -157,6 +176,9 @@ pub struct Document {
     redo: Vec<Job>,
     /// Its models, by name, as far as loading has got.
     pub models: BTreeMap<String, ModelSlot>,
+    /// Models being placed again, by name, with where to: each still shown where
+    /// it was until it is.
+    placing: BTreeMap<String, ModelKey>,
     /// Its setups' state, by name.
     pub setups: BTreeMap<String, SetupState>,
     /// What is selected in its tree.
@@ -202,6 +224,7 @@ impl Document {
             undo: Vec::new(),
             redo: Vec::new(),
             models: BTreeMap::new(),
+            placing: BTreeMap::new(),
             setups: BTreeMap::new(),
             selection,
             active,

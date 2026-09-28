@@ -18,7 +18,7 @@
 
 use std::sync::Arc;
 
-use camcraft_core::features::snap_point;
+use camcraft_core::features::{snap_point, unplaced};
 use camcraft_core::frame::Frame;
 use camcraft_core::job::{Along, PointRef, Snap};
 use camcraft_core::setup::Prepared;
@@ -156,7 +156,7 @@ pub enum Target {
         model: String,
         /// The face's number.
         face: u32,
-        /// Where on it, in model coordinates.
+        /// Where on it, in the job's coordinates, where the model is placed.
         at: DVec3,
     },
     /// An edge of a model.
@@ -165,7 +165,7 @@ pub enum Target {
         model: String,
         /// The edge's number.
         edge: u32,
-        /// Where on it, in model coordinates.
+        /// Where on it, in the job's coordinates, where the model is placed.
         at: DVec3,
     },
     /// A loop of a model's edges, end to end, as picking edges takes them: the
@@ -173,7 +173,7 @@ pub enum Target {
     Loop {
         /// The model.
         model: String,
-        /// Each edge's number, and where on it, in model coordinates: where the
+        /// Each edge's number, and where on it, in the job's coordinates: where the
         /// pointer is on the one under it, the middle of the others.
         edges: Vec<(u32, DVec3)>,
     },
@@ -524,7 +524,8 @@ impl PickScene {
                 model: m.name.clone(),
                 snap,
                 index,
-                at: self.frame.to_model(setup).to_array(),
+                // Saved where the model's file puts it, so it moves with the model.
+                at: unplaced(m.body(), self.frame.to_model(setup)),
             },
             setup,
         }
@@ -641,6 +642,7 @@ mod tests {
         let model = Arc::new(Model {
             bounds: mesh.bounds().unwrap(),
             body: body.clone(),
+            file: Arc::new(body.clone()),
             path: "p.stl".into(),
             units: "mm".into(),
             notes: Vec::new(),
@@ -652,6 +654,7 @@ mod tests {
             name: "p".into(),
             path: "p.stl".into(),
             units: None,
+            transform: Default::default(),
         });
         j.stocks.push(StockDef {
             name: "s".into(),
@@ -828,6 +831,7 @@ mod tests {
             Arc::new(Model {
                 bounds: mesh.bounds().unwrap(),
                 body: body.clone(),
+                file: Arc::new(body.clone()),
                 path: path.into(),
                 units: "mm".into(),
                 notes: Vec::new(),
@@ -842,6 +846,7 @@ mod tests {
                 name: n.into(),
                 path: format!("{n}.stl"),
                 units: None,
+                transform: Default::default(),
             });
         }
         j.stocks.push(StockDef {
@@ -893,6 +898,123 @@ mod tests {
             })
         );
         assert!(pick_at(&scene, off, Accept::MODELS).is_none());
+    }
+
+    /// Two copies of the plate in one setup, each moved, turned and scaled its
+    /// own way: a face and a rim centre are picked where each copy now is, saved
+    /// where the file has them, and found again on the placed copy where they
+    /// were clicked.
+    #[test]
+    fn picks_on_placed_models_are_saved_where_their_file_has_them() {
+        use camcraft_core::features::{find_face, find_point};
+        use camcraft_core::job::{FeatureRef, Transform};
+        let file = Arc::new(camcraft_geom::topology::Body::derived(
+            synthetic::plate_with_hole(20.0, 5.0, 4.0, 32),
+        ));
+        let at_file = Model {
+            bounds: file.mesh().bounds().unwrap(),
+            body: (*file).clone(),
+            file,
+            path: "p.stl".into(),
+            units: "mm".into(),
+            notes: Vec::new(),
+            warnings: Vec::new(),
+        };
+        // "p" small and turned, to the right; "q" stretched upwards, to the left.
+        let places = [
+            (
+                "p",
+                Transform {
+                    position: [30.0, 0.0, 0.0],
+                    rotation: [0.0, 0.0, 90.0],
+                    scale: [0.5; 3],
+                },
+            ),
+            (
+                "q",
+                Transform {
+                    position: [-30.0, 0.0, 0.0],
+                    rotation: [0.0; 3],
+                    scale: [1.0, 1.0, 2.0],
+                },
+            ),
+        ];
+        let mut j = Job::default();
+        let mut loaded = Vec::new();
+        for (name, transform) in places {
+            j.models.push(ModelDef {
+                name: name.into(),
+                path: format!("{name}.stl"),
+                units: None,
+                transform,
+            });
+            let m = Arc::new(at_file.placed(&transform).unwrap());
+            let bvh = Arc::new(MeshBvh::new(m.mesh()));
+            loaded.push((name.to_string(), m, bvh));
+        }
+        j.stocks.push(StockDef {
+            name: "s".into(),
+            spec: StockSpec::default(),
+        });
+        let mut s = Setup::new("top");
+        s.models = vec!["p".into(), "q".into()];
+        s.stocks = vec!["s".into()];
+        j.setups.push(s);
+        let bodies: Bodies<'_> = loaded
+            .iter()
+            .map(|(n, m, _)| (n.as_str(), &m.body))
+            .collect();
+        let prepared = prepare(&j, 0, &bodies).unwrap();
+        let (p, q) = (loaded[0].1.clone(), loaded[1].1.clone());
+        let scene = PickScene::new(&prepared, loaded, Vec::new());
+        let to_setup = |at: DVec3| prepared.frame.to_setup(at);
+
+        let mut c = Camera::framing(Vec3::new(0.0, 0.0, 5.0), 90.0);
+        c.pitch = 1.5;
+        c.yaw = -std::f32::consts::FRAC_PI_2;
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let aspect = 800.0 / 600.0;
+        let proj = Projector::new(c.view_projection(aspect), rect);
+        let view = (c, proj, aspect);
+
+        // q's top, now at 10.
+        let clicked = dvec3(-18.0, 12.0, 10.0);
+        let screen = proj.screen(to_setup(clicked)).unwrap();
+        let Some(Target::Face { model, face, at }) = pick_from(view, &scene, screen, Accept::FACES)
+        else {
+            unreachable!("no face");
+        };
+        assert_eq!(model, "q");
+        assert!(at.distance(clicked) < 0.05, "{at}");
+        let saved = FeatureRef {
+            model,
+            index: face,
+            at: camcraft_core::features::unplaced(&q.body, at),
+        };
+        assert!(DVec3::from(saved.at).distance(dvec3(12.0, 12.0, 5.0)) < 0.05);
+        assert_eq!(find_face(&q.body, &saved, 0.01).unwrap().index, face);
+
+        // p's rim, turned and halved: its centre is at p's position, 2.5 up.
+        let a = std::f64::consts::TAU / 64.0;
+        let rim = dvec3(30.0 + 2.0 * a.cos(), 2.0 * a.sin(), 2.5);
+        let screen = proj.screen(to_setup(rim)).unwrap();
+        let Some(Target::Point { point, setup }) = pick_from(view, &scene, screen, Accept::POINTS)
+        else {
+            unreachable!("no point");
+        };
+        assert_eq!(
+            (point.model.as_str(), point.snap),
+            ("p", Snap::CircleCenter)
+        );
+        assert!(
+            DVec3::from(point.at).distance(dvec3(0.0, 0.0, 5.0)) < 1e-9,
+            "{:?}",
+            point.at
+        );
+        let centre = dvec3(30.0, 0.0, 2.5);
+        assert!(setup.distance(to_setup(centre)) < 1e-9, "{setup}");
+        let (found, _) = find_point(&p.body, &point, 0.01).unwrap();
+        assert!(found.distance(centre) < 1e-9, "{found}");
     }
 
     #[test]
