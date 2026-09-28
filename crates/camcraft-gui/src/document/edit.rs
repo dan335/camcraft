@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use camcraft_core::job::{
-    Boundary, Containment, Leads, LengthUnit, ModelDef, Operation, Origin, Passes, Preset, Setup,
+    Boundary, Containment, LengthUnit, ModelDef, Operation, Origin, Passes, Preset, Setup,
     StockDef, StockSpec, StrategySpec, ToolSpec,
 };
 use camcraft_geom::bvh::MeshBvh;
@@ -507,10 +507,6 @@ impl Document {
         fit_stepover(&mut op, spec, preset, self.job.tolerance);
         start_on_silhouette(&mut op);
         fit_channel(&mut op, spec);
-        // A profile arcs on and off each ring, as Fusion's 2D contour does.
-        if op.strategy.uses().leads {
-            op.linking.leads = Some(Leads::default());
-        }
         let s = self.setup_mut(setup)?;
         s.operations.push(op);
         let i = s.operations.len() - 1;

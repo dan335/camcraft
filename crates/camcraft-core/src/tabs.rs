@@ -129,7 +129,11 @@ pub fn add_tabs(path: &Toolpath, p: &TabParams) -> Result<(Toolpath, TabReport),
             }
             // A lead runs on from the ring, towards the first tab or from the
             // last, at the ring's depth: it rides over them as the cut does.
-            (MoveRole::Cut | MoveRole::Transition | MoveRole::Lead, Some(from)) => {
+            // A spiral's ramp onto the deepest level rides over them too.
+            (
+                MoveRole::Cut | MoveRole::Transition | MoveRole::Lead | MoveRole::Ramp,
+                Some(from),
+            ) => {
                 let shape = (p.tabs.shape, half);
                 match m.kind {
                     MoveKind::Arc(a) if !level(&a) => {
@@ -384,8 +388,8 @@ fn closest(a: DVec2, b: DVec2, c: DVec2) -> f64 {
     }
 }
 
-/// The closed loops cut at `deepest`: in each pass, its run of cuts, if they are
-/// unbroken, all at that level, and end where they start. Leads on and off it
+/// The closed loops cut at `deepest`: in each pass, each unbroken run of cuts
+/// all at that level that ends where it starts. Leads on and off it
 /// are not part of it. Each as its points seen from above, the first repeated at
 /// the end.
 fn loops(moves: &[Move], deepest: f64) -> Vec<Vec<DVec2>> {
@@ -402,32 +406,40 @@ fn loops(moves: &[Move], deepest: f64) -> Vec<Vec<DVec2>> {
             .map_or(moves.len(), |k| i + 1 + k);
         let pass = moves.get(i..end).unwrap_or(&[]);
         let at_level = |z: f64| (z - deepest).abs() < 1e-6;
-        // The cuts, and where the tool is when they start.
-        let first = pass.iter().position(|n| n.role == MoveRole::Cut);
-        let last = pass.iter().rposition(|n| n.role == MoveRole::Cut);
-        if let (Some(f), Some(l)) = (first, last)
-            && let Some(from) = f.checked_sub(1).and_then(|k| pass.get(k))
-            && let Some(cuts) = pass.get(f..=l)
-        {
-            let start = from.to;
-            let closes = cuts
-                .last()
-                .is_some_and(|c| c.to.truncate().distance(start.truncate()) < 1e-6);
-            let flat = at_level(start.z)
-                && cuts
-                    .iter()
-                    .all(|n| n.role == MoveRole::Cut && at_level(n.to.z));
-            if closes && flat {
-                // Arcs by points close along them, so lengths along the loop are
-                // its own.
-                let mut ring = vec![start.truncate()];
-                let mut at = start;
-                for n in cuts {
-                    ring.extend(n.chords(at, FOLLOW).iter().map(|p| p.truncate()));
-                    at = n.to;
-                }
-                out.push(ring);
+        // Each unbroken run of cuts, and where the tool is when it starts: one
+        // lap of a ring, or each of a spiral's laps, one level to a lap.
+        let mut k = 0;
+        while k < pass.len() {
+            if pass.get(k).is_none_or(|n| n.role != MoveRole::Cut) {
+                k += 1;
+                continue;
             }
+            let run_end = pass
+                .get(k..)
+                .and_then(|rest| rest.iter().position(|n| n.role != MoveRole::Cut))
+                .map_or(pass.len(), |r| k + r);
+            if let (Some(from), Some(cuts)) = (
+                k.checked_sub(1).and_then(|p| pass.get(p)),
+                pass.get(k..run_end),
+            ) {
+                let start = from.to;
+                let closes = cuts
+                    .last()
+                    .is_some_and(|c| c.to.truncate().distance(start.truncate()) < 1e-6);
+                let flat = at_level(start.z) && cuts.iter().all(|n| at_level(n.to.z));
+                if closes && flat {
+                    // Arcs by points close along them, so lengths along the
+                    // loop are its own.
+                    let mut ring = vec![start.truncate()];
+                    let mut at = start;
+                    for n in cuts {
+                        ring.extend(n.chords(at, FOLLOW).iter().map(|p| p.truncate()));
+                        at = n.to;
+                    }
+                    out.push(ring);
+                }
+            }
+            k = run_end;
         }
         i = end;
     }

@@ -305,6 +305,38 @@ impl Ring {
         }
     }
 
+    /// The way round it from its start, `distance` long, as many times round as
+    /// that takes: its spans, the last cut short where the way ends, and where
+    /// that is.
+    pub fn along(&self, distance: f64) -> (Vec<Span>, DVec2) {
+        let mut out = Vec::new();
+        let mut left = distance;
+        let pieces: Vec<(DVec2, Span)> = self.pieces().map(|(f, s)| (f, *s)).collect();
+        let total: f64 = pieces.iter().map(|(f, s)| s.length(*f)).sum();
+        if total <= 1e-12 || left <= 1e-12 {
+            return (out, self.start);
+        }
+        // Bounded: each time round is the ring's whole length.
+        let laps = (left / total).ceil().min(1e4);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let limit = pieces.len().saturating_mul(laps as usize + 1);
+        for &(from, span) in pieces.iter().cycle().take(limit) {
+            let l = span.length(from);
+            if l >= left - 1e-12 {
+                if l - left <= 1e-12 {
+                    out.push(span);
+                    return (out, span.to());
+                }
+                let (head, at, _) = span.split(from, left / l);
+                out.push(head);
+                return (out, at);
+            }
+            left -= l;
+            out.push(span);
+        }
+        (out, self.start)
+    }
+
     /// The same ring, started halfway along its longest span.
     pub fn longest_middle(&self) -> Self {
         let best = self
@@ -737,6 +769,26 @@ mod tests {
         assert!((inside.length() - 24.0).abs() < 1e-9);
         // Too far in, it turns inside out.
         assert!(square.offset(-6.0).is_none());
+    }
+
+    /// Round a ring by a distance, as often as it takes, ends that far on.
+    #[test]
+    fn along_a_ring() {
+        let square = Ring::from_points(&[
+            dvec2(0.0, 0.0),
+            dvec2(10.0, 0.0),
+            dvec2(10.0, 10.0),
+            dvec2(0.0, 10.0),
+        ])
+        .unwrap();
+        let (spans, end) = square.along(15.0);
+        assert_eq!(spans.len(), 2);
+        assert!((end - dvec2(10.0, 5.0)).length() < 1e-12);
+        let (spans, end) = square.along(45.0);
+        assert_eq!(spans.len(), 5, "once round and a quarter more");
+        assert!((end - dvec2(5.0, 0.0)).length() < 1e-12);
+        let (_, end) = square.along(40.0);
+        assert!(end.length() < 1e-12, "exactly round is back at the start");
     }
 
     /// A ring is the same shape as a polygon only where every point of each is

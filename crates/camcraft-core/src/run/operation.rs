@@ -25,7 +25,7 @@ use crate::linker::{
 use crate::ordering::order_passes;
 use crate::parallel::{ParallelParams, follow, parallel_finish_within};
 use crate::planar::{
-    Area, LeadArc, PlanarParams, PlanarReport, areas, centre_offset, pocket, profile,
+    Area, LeadArc, PlanarParams, PlanarReport, Spiral, areas, centre_offset, pocket, profile,
 };
 use crate::reach::LevelReach;
 use crate::roughing::{RoughingParams, zlevel_rough};
@@ -269,7 +269,9 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         match linking.entry.unwrap_or_default() {
             Entry::Helix => EntryKind::Helix,
             Entry::Plunge => EntryKind::Plunge,
-            Entry::Ramp => EntryKind::Ramp,
+            // A profile's ramp is its own path, a spiral down each ring
+            // (`planar_paths`): the linker only brings the tool onto its lead.
+            Entry::Ramp => EntryKind::Plunge,
         }
     } else {
         EntryKind::Ramp
@@ -476,6 +478,21 @@ fn planar_paths(
                     sweep: l.sweep.to_radians(),
                     straight: l.straight,
                 }
+            }),
+        // Ramped into, a profile goes down each ring in one spiral, as Fusion's.
+        spiral: matches!(op.strategy, StrategySpec::Profile { .. })
+            .then_some(op.linking.entry)
+            .flatten()
+            .filter(|e| *e == Entry::Ramp)
+            .map(|_| Spiral {
+                angle: op.linking.ramp_angle.to_radians(),
+                feed: op.linking.ramp_feed.unwrap_or(op.passes.feed / 3.0),
+                most: op
+                    .linking
+                    .ramp_stepdown
+                    .or(op.stepdown())
+                    .or(Some(work.spec.diameter)),
+                above: op.linking.safe_distance,
             }),
     };
     let (path, report, detail): (Toolpath, PlanarReport, fn(PlanarReport) -> StrategyDetail) =

@@ -1178,8 +1178,13 @@ pub struct Linking {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ramp_feed: Option<f64>,
     /// The leads a 2D profile enters and leaves each ring along, in the waste
-    /// beside it: Fusion's lead-in and lead-out. None for none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// beside it: Fusion's lead-in and lead-out, on unless turned off, as
+    /// Fusion's are. `None` for none, written `leads = false`.
+    #[serde(
+        default = "fusion_leads",
+        with = "leads_setting",
+        skip_serializing_if = "is_fusion_leads"
+    )]
     pub leads: Option<Leads>,
     /// How high the tool goes between cuts that are not made staying down.
     #[serde(default, skip_serializing_if = "is_default")]
@@ -1269,6 +1274,55 @@ impl Default for Leads {
     }
 }
 
+/// Fusion's leads, which a profile has unless they are turned off.
+fn fusion_leads() -> Option<Leads> {
+    Some(Leads::default())
+}
+
+// Serde's `skip_serializing_if` hands the field by reference.
+#[allow(clippy::ref_option)]
+fn is_fusion_leads(v: &Option<Leads>) -> bool {
+    *v == fusion_leads()
+}
+
+/// A profile's leads as a job file writes them: a table of their sizes, or
+/// `false` for none (and `true` for Fusion's, though leaving them out says so).
+mod leads_setting {
+    use serde::de::{self, MapAccess, Visitor};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::Leads;
+
+    // Serde's `with` hands the field by reference.
+    #[allow(clippy::ref_option)]
+    pub fn serialize<S: Serializer>(leads: &Option<Leads>, s: S) -> Result<S::Ok, S::Error> {
+        match leads {
+            None => s.serialize_bool(false),
+            Some(l) => l.serialize(s),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Leads>, D::Error> {
+        struct Setting;
+        impl<'de> Visitor<'de> for Setting {
+            type Value = Option<Leads>;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a table of lead sizes, or false for none")
+            }
+
+            fn visit_bool<E: de::Error>(self, on: bool) -> Result<Self::Value, E> {
+                Ok(on.then(Leads::default))
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+                Leads::deserialize(de::value::MapAccessDeserializer::new(map)).map(Some)
+            }
+        }
+        d.deserialize_any(Setting)
+    }
+}
+
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_default_lead_sweep(v: &f64) -> bool {
     v.to_bits() == default_lead_sweep().to_bits()
@@ -1317,7 +1371,7 @@ impl Default for Linking {
             lead_radius: None,
             ramp_angle: default_ramp_angle(),
             ramp_feed: None,
-            leads: None,
+            leads: fusion_leads(),
             retraction: Retraction::Minimum,
             entry: None,
             helix_diameter: None,

@@ -66,8 +66,12 @@ operation-level `stepdown` the format had moved to `passes` was silently ignored
 - **Entry is a choice for a profile:** a helix in the waste beside the lead,
   ending with one level turn that clears its circle to the depth (the default,
   since a router plunging an end mill 38 mm into birch is not what anyone wants),
-  a plunge (Fusion's program), or a ramp round the ring in the direction it cuts,
-  entered at its start without its lead-in.
+  a plunge (Fusion's program), or a ramp: then, as Fusion's program with a ramp
+  and several depths shows, the ring is one spiral: the lead-in once, down along
+  the ring the way it cuts, once round at each depth from where the ramp reached
+  it, straight on down to the next, and the lead-out once, from where the last
+  lap ends. That is the profile's own path, not the linker's.
+- **Leads are on unless turned off,** as Fusion's are (`leads = false`).
 - **Most per lap.** No helix, or ramp round a closed ring, descends more in one
   lap than the stepdown (Fusion's maximum ramp stepdown).
 - **Three heights, as Fusion's.** The tool arrives at the clearance height and

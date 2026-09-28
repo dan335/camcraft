@@ -775,12 +775,8 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
             return Err(LinkError::BadClearance { at: from_xy });
         }
         // Never across lower than the tool came out: it would rapid down on the
-        // way. Nor lower than a helix or ramp starts, which it goes down to.
-        let safe = top.map_or(safe, |t| safe.max(t.z));
-        let safe = match &way {
-            Way::Helix { .. } | Way::Ramp { .. } => safe.max(start.z),
-            _ => safe,
-        };
+        // way. Nor lower than the way in starts, which it goes down to.
+        let safe = top.map_or(safe, |t| safe.max(t.z)).max(start.z);
         if let Some(t) = top
             && safe > t.z
         {
@@ -1081,12 +1077,15 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         let end = pass.last()?.m.to;
         let closed = end.truncate().distance(to.truncate()) < 1e-6;
         // Start above the highest material anywhere along the pass, so the ramp
-        // never begins inside it.
+        // never begins inside it: the material the tool would cut, a tolerance
+        // in from its edge, as an arc's chords stray that far inside it and the
+        // tool on them reaches past the slot the arc cut.
         let mut top = to.z;
+        let reach = (self.p.tool_radius - self.p.tolerance).max(0.0);
         for s in pass {
             let mut a = s.from.truncate();
             for p in s.m.chords(s.from, self.p.tolerance) {
-                if let Some(h) = self.material.highest(a, p.truncate(), self.p.tool_radius) {
+                if let Some(h) = self.material.highest(a, p.truncate(), reach) {
                     top = top.max(h);
                 }
                 a = p.truncate();

@@ -134,8 +134,8 @@ unless given, as Fusion's, and zero leaves that piece out. Every piece is an arc
 or a straight line in the program. A level arc that would leave the waste is
 tried at half and a quarter the radius; a ring that starts at a corner starts
 instead halfway along its longest side, where an arc can join it; a ring with no
-room for any goes without, with a warning. A groove on the boundary has none. New
-profiles have them.
+room for any goes without, with a warning. A groove on the boundary has none.
+A profile has them unless turned off, as Fusion's does: `leads = false`.
 
 ```toml
 linking = { leads = { radius = 3.0, sweep = 90.0, straight = 1.0, vertical = 0.6 } }
@@ -153,14 +153,19 @@ start each ring, beside the lead:
   goes straight down instead.
 - `"plunge"`: straight down at the plunge feed onto the vertical arc's top, as
   Fusion's 2D contour does without a ramp.
-- `"ramp"`: down along the ring itself, in the direction it cuts, onto its start,
-  where it is entered without its lead-in.
+- `"ramp"`: the ring cut as one spiral, as Fusion cuts one: on along the
+  lead-in once, the safe distance above the top; down along the ring, in the
+  direction it cuts, to the first depth; once round there from where the ramp
+  reached it; straight on down to the next depth, and so on; and off along the
+  lead-out once, from where the last lap ends. Never up, nor off and on again,
+  between depths.
 
 Neither a helix nor a ramp round a ring goes down more in one lap than the
 *most per lap* (`ramp_stepdown`, Fusion's maximum ramp stepdown): the
-operation's stepdown, or the tool's diameter without one. From one depth of a
-ring to the next the tool stays down, as Fusion's does: off the ring along the
-lead, across to where the next depth's way in starts, and down it.
+operation's stepdown, or the tool's diameter without one; as Fusion's, the
+lesser of that and the ramp angle holds. With a helix or a plunge, from one
+depth of a ring to the next the tool stays down: off the ring along the lead,
+across to where the next depth's way in starts, and down it.
 
 **Linking** is how the tool moves between cuts, after Fusion's
 ([decision 0004](decisions/0004-linking-and-entries.md), and for 2D

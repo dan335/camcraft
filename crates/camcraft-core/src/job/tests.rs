@@ -248,6 +248,45 @@ fn leads_are_fusions_unless_given() {
     assert_eq!(linking.leads.unwrap().straight, Some(1.0));
 }
 
+/// A profile has Fusion's leads unless they are turned off, as Fusion's does;
+/// off is written, and on at Fusion's sizes is not.
+#[test]
+fn leads_are_on_unless_turned_off() {
+    let profile = |linking: &str| {
+        let text = SAMPLE
+            .replacen(
+                "strategy = \"parallel\"\n",
+                &format!("strategy = \"profile\"\n{linking}"),
+                1,
+            )
+            .replace("angle = 90.0\n", "");
+        let j: Job = toml::from_str(&text).unwrap();
+        j.validate().unwrap();
+        j.setups[0].operations[1].linking.clone()
+    };
+    assert_eq!(profile("").leads, Some(Leads::default()));
+    assert_eq!(profile("linking = { leads = false }\n").leads, None);
+    assert_eq!(
+        profile("linking = { leads = true }\n").leads,
+        Some(Leads::default())
+    );
+    let off = Linking {
+        leads: None,
+        ..Linking::default()
+    };
+    let text = toml::to_string(&off).unwrap();
+    assert!(text.contains("leads = false"), "{text}");
+    assert!(
+        !toml::to_string(&Linking::default())
+            .unwrap()
+            .contains("leads")
+    );
+    let back: Linking = toml::from_str(&text).unwrap();
+    assert_eq!(back, off);
+    // A misspelt size is still refused.
+    assert!(toml::from_str::<Linking>("leads = { radious = 1.0 }").is_err());
+}
+
 /// A fixed box needs a place on every axis.
 #[test]
 fn a_fixed_box_without_a_place_on_each_axis_is_refused() {

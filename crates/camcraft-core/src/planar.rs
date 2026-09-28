@@ -115,6 +115,23 @@ pub struct PlanarParams {
     pub kept_on_right: bool,
     /// The arcs a profile enters and leaves each ring along, if any.
     pub leads: Option<LeadArc>,
+    /// A profile ramped into, cut as one spiral down each ring, as Fusion's is;
+    /// `None` cuts each level as a pass of its own.
+    pub spiral: Option<Spiral>,
+}
+
+/// How a profile ramped into goes down each ring: along it, in the direction it
+/// cuts, from level to level.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Spiral {
+    /// How steeply it goes down, in radians from level.
+    pub angle: f64,
+    /// Feed rate going down, in mm/min.
+    pub feed: f64,
+    /// The most it goes down in once round the ring, in millimetres, if limited.
+    pub most: Option<f64>,
+    /// How far above the ring's top it comes onto the ring, in millimetres.
+    pub above: f64,
 }
 
 /// A level arc a profile enters a ring along and leaves it along, in the waste
@@ -327,6 +344,21 @@ pub fn profile(
         }
         if asked.is_some() && leads.is_none() {
             report.no_room_to_lead += 1;
+        }
+        if let (Some(spiral), Some(area)) = (params.spiral, areas.get(*area)) {
+            let end = emit_spiral(
+                &ring,
+                area.top,
+                levels,
+                params.feed,
+                &spiral,
+                leads.as_ref(),
+                &fit,
+                &mut path,
+            )?;
+            report.passes += levels.len() as u64;
+            at = Some(end);
+            continue;
         }
         for &z in levels {
             emit(&ring, z, params.feed, leads.as_ref(), &mut path)?;
@@ -807,6 +839,118 @@ fn closest_on(ring: &[DVec2], at: DVec2) -> Option<(usize, DVec2)> {
     best.map(|(i, p, _)| (i, p))
 }
 
+/// A ring ramped into cut as Fusion cuts one, as one pass: onto the ring along
+/// the lead-in, `above` its `top`; down along it, in the direction it cuts, to
+/// the first level; once round there, from where the ramp reached it; straight
+/// on down to the next, and so on; and off along a lead from where the last lap
+/// ends, `fit` there. Never up, nor off and on again, between. Where it ends.
+#[allow(clippy::too_many_arguments)]
+fn emit_spiral(
+    ring: &Ring,
+    top: f64,
+    levels: &[f64],
+    feed: f64,
+    spiral: &Spiral,
+    leads: Option<&RingLeads>,
+    fit: &impl Fn(&Ring) -> Option<RingLeads>,
+    path: &mut Toolpath,
+) -> Result<DVec2, StrategyError> {
+    let z0 = top + spiral.above;
+    let at = |p: DVec2, z: f64| dvec3(p.x, p.y, z);
+    path.feed_to(
+        at(leads.map_or(ring.start(), |l| l.start), z0),
+        MoveRole::Link,
+        feed,
+    )?;
+    if let Some(l) = leads {
+        lead(&l.lead_in, z0, feed, path)?;
+    }
+    let lap = ring.length();
+    let angle = spiral
+        .most
+        .filter(|_| lap > 1e-9)
+        .map_or(spiral.angle, |d| spiral.angle.min((d / lap).atan()));
+    let slope = angle.tan();
+    let whole = ring;
+    let mut ring = ring.clone();
+    let mut z_from = z0;
+    for &z in levels {
+        // Down along the ring from where it is, as far as the slope takes it.
+        let run = (z_from - z) / slope;
+        let (spans, reached) = ring.along(run);
+        let mut from = ring.start();
+        let mut gone = 0.0;
+        let count = spans.len();
+        for (i, span) in spans.iter().enumerate() {
+            gone += span.length(from);
+            let h = if i + 1 == count {
+                z
+            } else {
+                (z_from - gone * slope).max(z)
+            };
+            cut(span, h, MoveRole::Ramp, spiral.feed, path)?;
+            from = span.to();
+        }
+        // Then once round at the level, from where the ramp reached it: the
+        // ring started there, broken only there.
+        ring = whole.starting_near(reached);
+        for span in ring.spans() {
+            cut(span, z, MoveRole::Cut, feed, path)?;
+        }
+        z_from = z;
+    }
+    // Off along a lead from where the last lap ends.
+    let off = fit(&ring);
+    if let Some(l) = &off {
+        lead(&l.lead_out, z_from, feed, path)?;
+    }
+    Ok(off
+        .as_ref()
+        .and_then(RingLeads::end)
+        .unwrap_or(ring.start()))
+}
+
+/// A span of a ring to height `z` at its end, from where the path is: level, or
+/// round a helix where it goes down.
+fn cut(
+    span: &Span,
+    z: f64,
+    role: MoveRole,
+    feed: f64,
+    path: &mut Toolpath,
+) -> Result<(), StrategyError> {
+    match *span {
+        Span::Line { to } => path.feed_to(dvec3(to.x, to.y, z), role, feed)?,
+        Span::Arc { to, centre, sweep } => {
+            let arc = Arc {
+                centre: dvec3(centre.x, centre.y, z),
+                axis: DVec3::Z,
+                sweep,
+            };
+            path.arc_to(dvec3(to.x, to.y, z), arc, role, feed)?;
+        }
+    }
+    Ok(())
+}
+
+/// A lead's pieces at height `z`, from where the path is.
+fn lead(pieces: &[Piece], z: f64, feed: f64, path: &mut Toolpath) -> Result<(), StrategyError> {
+    for p in pieces {
+        match *p {
+            Piece::Line(to) => path.feed_to(dvec3(to.x, to.y, z), MoveRole::Lead, feed)?,
+            Piece::Arc { to, centre, sweep } => {
+                let arc = Arc {
+                    centre: dvec3(centre.x, centre.y, z),
+                    axis: DVec3::Z,
+                    sweep,
+                };
+                path.arc_to(dvec3(to.x, to.y, z), arc, MoveRole::Lead, feed)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A closed ring cut at height `z`: a link to its start, then round and back to
 /// it; with leads, a link to where the lead starts, along it onto the ring, round,
 /// and off along the lead out.
@@ -817,46 +961,18 @@ fn emit(
     leads: Option<&RingLeads>,
     path: &mut Toolpath,
 ) -> Result<(), StrategyError> {
-    let first = &ring.start();
-    let at = |p: DVec2| dvec3(p.x, p.y, z);
     // The strategy does not plan how to arrive; the linker does. With a lead, it
     // arrives where the lead starts, and goes along it onto the ring.
-    let arrive = leads.map_or(*first, |l| l.start);
-    path.feed_to(at(arrive), MoveRole::Link, feed)?;
-    let lead = |pieces: &[Piece], path: &mut Toolpath| -> Result<(), StrategyError> {
-        for p in pieces {
-            match *p {
-                Piece::Line(to) => path.feed_to(at(to), MoveRole::Lead, feed)?,
-                Piece::Arc { to, centre, sweep } => {
-                    let arc = Arc {
-                        centre: at(centre),
-                        axis: DVec3::Z,
-                        sweep,
-                    };
-                    path.arc_to(at(to), arc, MoveRole::Lead, feed)?;
-                }
-            }
-        }
-        Ok(())
-    };
+    let arrive = leads.map_or(ring.start(), |l| l.start);
+    path.feed_to(dvec3(arrive.x, arrive.y, z), MoveRole::Link, feed)?;
     if let Some(l) = leads {
-        lead(&l.lead_in, path)?;
+        lead(&l.lead_in, z, feed, path)?;
     }
     for span in ring.spans() {
-        match *span {
-            Span::Line { to } => path.feed_to(at(to), MoveRole::Cut, feed)?,
-            Span::Arc { to, centre, sweep } => {
-                let arc = Arc {
-                    centre: at(centre),
-                    axis: DVec3::Z,
-                    sweep,
-                };
-                path.arc_to(at(to), arc, MoveRole::Cut, feed)?;
-            }
-        }
+        cut(span, z, MoveRole::Cut, feed, path)?;
     }
     if let Some(l) = leads {
-        lead(&l.lead_out, path)?;
+        lead(&l.lead_out, z, feed, path)?;
     }
     Ok(())
 }
@@ -897,6 +1013,7 @@ mod tests {
             radius: 1.5,
             kept_on_right: true,
             leads: None,
+            spiral: None,
         }
     }
 
@@ -1014,6 +1131,85 @@ mod tests {
         let (path, report) = profile(&on, ProfileSide::On, &p).unwrap();
         assert_eq!(report.no_room_to_lead, 0);
         assert!(path.moves().iter().all(|m| m.role != MoveRole::Lead));
+    }
+
+    /// Ramped into, a ring is one pass, as Fusion cuts it: on along the lead at
+    /// the top, down along the ring the way it cuts, once round at each level
+    /// from where the ramp reached it, straight on down to the next, and off
+    /// along the lead at the end. Never up between.
+    #[test]
+    fn a_ramped_ring_is_one_spiral() {
+        let part = Region::new(vec![square(0.0, 40.0)]);
+        let areas = areas(&part, &[], 1.5, 0.01, &[], &floor(-6.0)).unwrap();
+        let p = PlanarParams {
+            stepdown: Some(2.0),
+            leads: Some(LeadArc {
+                radius: 1.0,
+                sweep: 90f64.to_radians(),
+                straight: 0.5,
+            }),
+            spiral: Some(Spiral {
+                angle: 2f64.to_radians(),
+                feed: 300.0,
+                most: Some(2.0),
+                above: 1.0,
+            }),
+            ..params()
+        };
+        let (path, report) = profile(&areas, ProfileSide::Outside, &p).unwrap();
+        assert_eq!(report.passes, 3);
+        let moves = path.moves();
+        assert_eq!(
+            moves.iter().filter(|m| m.role == MoveRole::Link).count(),
+            1,
+            "one pass"
+        );
+        assert!(
+            (moves[0].to.z - 1.0).abs() < 1e-9,
+            "on at the top, above it"
+        );
+        // Leads only at the very start and the very end.
+        let first_ramp = moves.iter().position(|m| m.role == MoveRole::Ramp).unwrap();
+        let last_cut = moves.iter().rposition(|m| m.role == MoveRole::Cut).unwrap();
+        assert!(
+            moves[1..first_ramp]
+                .iter()
+                .all(|m| m.role == MoveRole::Lead)
+        );
+        assert!(
+            moves[first_ramp..=last_cut]
+                .iter()
+                .all(|m| m.role != MoveRole::Lead)
+        );
+        assert!(
+            moves[last_cut + 1..]
+                .iter()
+                .all(|m| m.role == MoveRole::Lead)
+        );
+        // Never up, and every level's lap at its level, round and back.
+        let mut z = f64::INFINITY;
+        for m in moves.iter().skip(1) {
+            assert!(m.to.z <= z + 1e-12, "up at {m:?}");
+            z = m.to.z;
+        }
+        for level in [-2.0, -4.0, -6.0] {
+            let laps = moves
+                .iter()
+                .filter(|m| m.role == MoveRole::Cut && (m.to.z - level).abs() < 1e-9)
+                .count();
+            assert!(laps > 0, "a lap at {level}");
+        }
+        // No steeper than two degrees, nor two millimetres a lap.
+        let lap = 4.0 * 40.0 + std::f64::consts::TAU * 1.5;
+        let mut at = moves[0].to;
+        for m in moves {
+            if m.role == MoveRole::Ramp {
+                let drop = at.z - m.to.z;
+                let run = m.length(at).max(1e-12);
+                assert!(drop / run <= (2.0 / lap).min(2f64.to_radians().tan()) + 1e-9);
+            }
+            at = m.to;
+        }
     }
 
     #[test]

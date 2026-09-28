@@ -685,7 +685,6 @@ fn new_operations_start_on_the_silhouette() {
             .leads
             .is_some()
     );
-    assert!(doc.job.setups[0].operations[rough].linking.leads.is_none());
 
     // A 2D operation has no additional offset, so a tool never gives it one,
     // even with a boundary round the part that reaches in from outside.

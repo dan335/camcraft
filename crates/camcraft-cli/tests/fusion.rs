@@ -1,13 +1,13 @@
 //! A 2D contour round the lego brick, as Fusion posts it and as camcraft does.
 //!
 //! `fixtures/nc/lego_2d_contour_01.nc` is Fusion's 2D Contour round the brick's
-//! outline, posted for a Masso: up before the tool change, across then down, a
-//! plunge beside the ring, Fusion's three-piece lead onto it (a vertical arc, a
-//! straight, a level arc), four straight sides and four arcs round the corners,
-//! the lead off mirrored, and home at the end. camcraft's program for the same
-//! contour must have the same shape, block for block. The two are not in the same
-//! place or units, as their setups differ, so each program is reduced to what
-//! each block does.
+//! outline, ramped into at three depths, posted for a Masso: up before the tool
+//! change, across then down, Fusion's three-piece lead onto the ring once (a
+//! vertical arc, a straight, a level arc), then one spiral: down along the ring
+//! to a depth, once round there, down again, and so on, never lifting; the lead
+//! off once, and home at the end. camcraft's program for the same contour must
+//! have the same shape. The two are not in the same place or units, as their
+//! setups differ, so each program is reduced to what each block does.
 
 #![allow(
     clippy::unwrap_used,
@@ -37,8 +37,12 @@ enum Block {
     Plunge,
     /// A feed straight up.
     Retract,
-    /// A straight feed across.
+    /// A straight feed across, level.
     Line,
+    /// A straight feed across and down: a ramp.
+    Ramp,
+    /// An arc in the level plane going down: a helix.
+    Helix,
     /// An arc in an upright plane.
     UprightArc,
     /// An arc in the level plane.
@@ -102,11 +106,13 @@ fn blocks(program: &str) -> Vec<Block> {
         let block = match motion {
             0 if axes.0 => Block::Across,
             0 => Block::RapidZ,
+            1 if axes.0 && axes.1 => Block::Ramp,
             1 if axes.0 => Block::Line,
             1 => match (z, to_z) {
                 (Some(a), Some(b)) if b > a => Block::Retract,
                 _ => Block::Plunge,
             },
+            _ if plane == 17 && axes.1 => Block::Helix,
             _ if plane == 17 => Block::LevelArc,
             _ => Block::UprightArc,
         };
@@ -120,8 +126,8 @@ fn blocks(program: &str) -> Vec<Block> {
     out
 }
 
-/// The contour, set as Fusion's is: round the brick's outline, outside it, to one
-/// depth, plunged beside the lead, with Fusion's leads.
+/// The contour, set as Fusion's is: round the brick's outline, outside it, at
+/// three depths, ramped into, with Fusion's leads.
 fn job(dir: &Path) -> String {
     let text = format!(
         r#"
@@ -160,8 +166,8 @@ name = "contour"
 strategy = "profile"
 tool = "quarter"
 heights = {{ bottom = {{ ref = "model-bottom", offset = 1.0 }} }}
-passes = {{ feed = 3810.0 }}
-linking = {{ entry = "plunge", leads = {{}} }}
+passes = {{ feed = 3810.0, stepdown = 15.0 }}
+linking = {{ entry = "ramp" }}
 "#,
         fixture("lego_4x2_01.step").replace('\\', "/")
     );
@@ -187,24 +193,38 @@ fn a_contour_is_the_shape_of_fusions() {
     let program = std::fs::read_to_string(out.join("top-01-contour.nc")).unwrap();
 
     use Block::*;
-    let theirs = blocks(&fusion);
-    // camcraft feeds up out of the cut to the safe distance before it rapids,
-    // where Fusion rapids straight out: the one difference kept, on purpose.
-    let ours: Vec<Block> = blocks(&program)
-        .into_iter()
-        .filter(|b| *b != Retract)
-        .collect();
+    // A run of moves going down is ramping, a run of level ones is going round
+    // (the lead's straight and arc onto the ring count with the lap after);
+    // what matters is the order of them, not how many sides each has.
+    let shape = |blocks: Vec<Block>| {
+        let mut out: Vec<Block> = Vec::new();
+        for b in blocks {
+            // camcraft feeds up out of the cut to the safe distance before it
+            // rapids, where Fusion rapids straight out; and it rapids down to
+            // the lead where the lead is clear of the material, where Fusion
+            // feeds the last of the way: the differences kept, on purpose.
+            if matches!(b, Retract | Plunge) {
+                continue;
+            }
+            let b = match b {
+                Ramp | Helix => Ramp,
+                Line | LevelArc => Line,
+                b => b,
+            };
+            if out.last() != Some(&b) || !matches!(b, Ramp | Line | RapidZ) {
+                out.push(b);
+            }
+        }
+        out
+    };
     let expected = [
-        Across, RapidZ, Plunge, // over the start, down beside the ring
-        UprightArc, Line, LevelArc, // Fusion's lead onto it
-        Line, LevelArc, Line, LevelArc, Line, LevelArc, Line, LevelArc, // round
-        LevelArc, Line, UprightArc, // and off
-        RapidZ,     // out
+        Across, RapidZ, // over the start, and down
+        UprightArc, Line, // Fusion's lead onto it
+        Ramp, Line, Ramp, Line, Ramp, Line, // down to each depth, and round
+        UprightArc, RapidZ, // off, once, and out
     ];
-    for (name, got, text) in [
-        ("Fusion's", &theirs, &fusion),
-        ("camcraft's", &ours, &program),
-    ] {
+    for (name, text) in [("Fusion's", &fusion), ("camcraft's", &program)] {
+        let got = shape(blocks(text));
         let start = got.iter().position(|b| *b == Across).unwrap();
         assert_eq!(
             got[start..start + expected.len()],
