@@ -8,7 +8,7 @@
 use std::cell::RefCell;
 
 use camcraft_core::job::{
-    AdaptiveDirection, FaceDirection, Operation, ProfileSide, ScallopDirection, ScallopOrder,
+    ContourOrder, CutDirection, FaceDirection, Operation, PassOrder, ProfileSide, RadialDirection,
     Setup, StrategySpec,
 };
 use camcraft_core::run::Stage;
@@ -647,7 +647,7 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
                     (
                         "Adaptive clearing",
                         StrategySpec::Adaptive {
-                            direction: AdaptiveDirection::Climb,
+                            direction: CutDirection::Climb,
                             flat_areas: true,
                         },
                     ),
@@ -665,8 +665,59 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
                     (
                         "Scallop",
                         StrategySpec::Scallop {
-                            direction: ScallopDirection::BothWays,
-                            order: ScallopOrder::OutsideIn,
+                            direction: CutDirection::BothWays,
+                            order: PassOrder::OutsideIn,
+                            slope_from: 0.0,
+                            slope_to: 90.0,
+                        },
+                    ),
+                    (
+                        "Contour",
+                        StrategySpec::Contour {
+                            direction: CutDirection::Climb,
+                            order: ContourOrder::ByDepth,
+                            slope_from: 0.0,
+                            slope_to: 90.0,
+                        },
+                    ),
+                    (
+                        "Flat",
+                        StrategySpec::Flat {
+                            direction: CutDirection::Climb,
+                            order: PassOrder::OutsideIn,
+                        },
+                    ),
+                    (
+                        "Spiral",
+                        StrategySpec::Spiral {
+                            centre: None,
+                            inner_radius: 0.0,
+                            outer_radius: 0.0,
+                            direction: CutDirection::Climb,
+                            order: PassOrder::OutsideIn,
+                            slope_from: 0.0,
+                            slope_to: 90.0,
+                        },
+                    ),
+                    (
+                        "Radial",
+                        StrategySpec::Radial {
+                            centre: None,
+                            inner_radius: 0.0,
+                            outer_radius: 0.0,
+                            angle_from: 0.0,
+                            angle_to: 360.0,
+                            direction: RadialDirection::BothWays,
+                            slope_from: 0.0,
+                            slope_to: 90.0,
+                        },
+                    ),
+                    (
+                        "Morphed spiral",
+                        StrategySpec::MorphedSpiral {
+                            centre: None,
+                            direction: CutDirection::Climb,
+                            order: PassOrder::OutsideIn,
                             slope_from: 0.0,
                             slope_to: 90.0,
                         },

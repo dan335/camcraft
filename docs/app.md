@@ -22,7 +22,8 @@ and the transport under the view. The Add menu adds models, stocks, setups and
 operations; View opens the log and the checks in their own windows; the Setup menu
 posts. Operations are grouped as Fusion's toolbar groups them, in the Add menu and
 a setup's right-click menu alike: 2D (face, pocket, profile), 3D (adaptive
-clearing, pocket clearing, then parallel and scallop) and drilling.
+clearing, pocket clearing, then parallel, scallop, contour, flat, spiral, radial
+and morphed spiral) and drilling.
 
 ## The tree
 
@@ -89,7 +90,15 @@ it.
   is its *Optimal load*, a tenth of the diameter, which a preset's stepover does
   not change. Scallop's stepover starts as parallel's, and its *Passes* has both
   ways, climb or conventional, outside in or inside out, and the slopes it
-  finishes between. Adaptive's *Passes* has climb, conventional or both ways, and
+  finishes between. Contour's has the same directions, by depth or by area, and
+  the slopes, and it has *Multiple depths*, Top and Bottom but no stepover;
+  flat's climb or conventional and outside in or inside out, with Top and Bottom
+  keeping it to the flats between. Spiral's and radial's have a *Centre* (the
+  boundary's middle unless given), inner and outer radii and the slopes; a
+  spiral climbs or cuts conventional, outside in or inside out, and spokes have
+  their angles and go both ways, outward or inward. A morphed spiral's has a
+  *Centre* (the point furthest inside unless given), climb or conventional, its
+  order and the slopes. Adaptive's *Passes* has climb, conventional or both ways, and
   *Flat areas*; pocket clearing's climb or conventional, *Flat areas* and the
   shortest ring worth cutting. A 2D operation's *Passes* has climb
   or conventional; a profile has no stepover. *Multiple depths*, as Fusion's,

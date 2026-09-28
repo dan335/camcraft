@@ -72,7 +72,15 @@ Fusion's post does. The lego contour posts block for block as Fusion's does.
    from the model's topology, whose round edges are circles through the
    tessellation's points, which lie on the B-rep's curves; OpenCascade's own
    `gp_Circ` is not read yet. Ellipses and splines are followed by lines.
-3. **More strategies**: waterline, which scallop leaves the walls to. Scallop,
+3. **More strategies**. Contour (a waterline, which scallop leaves the walls
+   to) and flat finishing are done, in Z levels from the region the tool may
+   not enter ([decision 0010](docs/decisions/0010-contour-and-flat.md)),
+   without yet a ramp between contour levels or a flat's own depths. Spiral,
+   radial and morphed spiral are done, patterns dropped onto the part through
+   one pipeline with parallel's sampling and scallop's slopes
+   ([decision 0011](docs/decisions/0011-patterns-dropped-onto-the-part.md)),
+   without yet a centre picked on the model. Still to come: steep and shallow,
+   pencil, ramp, and rest machining. Scallop,
    as Fusion's, is done
    ([decision 0009](docs/decisions/0009-scallop-distance-field.md)), without
    yet a limit on its stepovers, rest machining, smoothing or a contact point

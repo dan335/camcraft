@@ -35,8 +35,6 @@ pub struct Seed {
 pub struct Distances {
     /// Each node's distance from the seeds; infinite where none was reached.
     pub d: Vec<f64>,
-    /// Defined nodes no front reached.
-    pub unreached: u64,
 }
 
 impl Distances {
@@ -96,10 +94,7 @@ pub fn march(grid: &TriGrid, seeds: &[Seed], position: impl Fn(u32) -> Option<DV
         }
         let Some(p) = position(node) else { continue };
         let t_node = value(&d, node);
-        for t in grid.triangles_at(node) {
-            let Some(nodes) = grid.triangle(t) else {
-                continue;
-            };
+        for (_, nodes) in grid.triangles_at(node) {
             for &c in &nodes {
                 if c == node || is_known(&known, c) {
                     continue;
@@ -123,10 +118,7 @@ pub fn march(grid: &TriGrid, seeds: &[Seed], position: impl Fn(u32) -> Option<DV
         }
     }
 
-    let unreached = (0..grid.nodes())
-        .filter(|&n| grid.defined(n) && !value(&d, n).is_finite())
-        .count() as u64;
-    Distances { d, unreached }
+    Distances { d }
 }
 
 /// The distance at `c` from a front known at `a` and `b`, the other corners of a
@@ -223,7 +215,7 @@ mod tests {
                 })
                 .collect();
             let field = march(&g, &seeds, |n| g.point(n));
-            assert_eq!(field.unreached, 0);
+            assert!((0..g.nodes()).all(|n| field.at(n).is_some()));
             // Only where the way back to the front stays well inside the grid: a node
             // on its edge is reached from outside it, which no triangle carries, and
             // what it gets wrong is carried a row or two in.
@@ -298,10 +290,9 @@ mod tests {
     }
 
     #[test]
-    fn nodes_no_front_reaches_are_counted() {
+    fn nodes_no_front_reaches_have_no_distance() {
         let g = grid(5, 1.0, |_| 0.0);
         let field = march(&g, &[], |n| g.point(n));
-        assert_eq!(field.unreached, 25);
-        assert!(field.at(0).is_none());
+        assert!((0..g.nodes()).all(|n| field.at(n).is_none()));
     }
 }

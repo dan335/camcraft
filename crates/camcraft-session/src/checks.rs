@@ -389,23 +389,8 @@ fn operation_findings(
         StrategyDetail::Parallel(r) => sampling(r, &mut out),
         StrategyDetail::Scallop(r) => {
             sampling(&r.sweep, &mut out);
-            if r.passes == 0 {
-                out.push(finding(
-                    Level::Warn,
-                    "CC209",
-                    "scallop found nothing to finish".into(),
-                    "nothing within the boundary and the slopes asked for".into(),
-                ));
-            }
-            if r.coarsened {
-                out.push(finding(
-                    Level::Warn,
-                    "CC210",
-                    format!("scallop's grid coarsened to {:.3} mm", r.pitch),
-                    "to stay within its budget: the passes are placed less exactly; keep it to                      a boundary"
-                        .into(),
-                ));
-            }
+            finished(op, r.passes, NOTHING_IN_SLOPES, &mut out);
+            coarsened(op, r.coarsened, r.pitch, &mut out);
             if r.unreached > 0 {
                 out.push(finding(
                     Level::Warn,
@@ -414,14 +399,69 @@ fn operation_findings(
                     "and not finished".into(),
                 ));
             }
-            if r.too_steep > 0 {
+            too_steep(op, r.too_steep, &mut out);
+        }
+        StrategyDetail::Contour(r) => {
+            finished(
+                op,
+                r.passes,
+                "no wall within the boundary, the heights and the slopes asked for",
+                &mut out,
+            );
+            if r.unpulled > 0 {
                 out.push(finding(
                     Level::Note,
-                    "CC211",
-                    format!("{} stretch(es) too steep for scallop left", r.too_steep),
-                    "walls and faces steeper than a plunge: for a waterline pass".into(),
+                    "CC215",
+                    format!("{} contour point(s) not pulled onto the part", r.unpulled),
+                    "left where the tool's reach put them, clear of it and within the tolerance"
+                        .into(),
                 ));
             }
+        }
+        StrategyDetail::Flat(r) => finished(
+            op,
+            r.passes,
+            if r.flats == 0 {
+                "the part has no flat face between the top and the bottom"
+            } else {
+                "no flat within the boundary has room for the tool"
+            },
+            &mut out,
+        ),
+        StrategyDetail::Spiral(r) | StrategyDetail::Radial(r) => {
+            sampling(&r.sweep, &mut out);
+            finished(op, r.passes, NOTHING_IN_SLOPES, &mut out);
+            too_steep(op, r.too_steep, &mut out);
+        }
+        StrategyDetail::MorphedSpiral(r) => {
+            sampling(&r.cut.sweep, &mut out);
+            finished(op, r.cut.passes, NOTHING_IN_SLOPES, &mut out);
+            coarsened(op, r.pattern.coarsened, 0.0, &mut out);
+            if r.pattern.widest > r.pattern.stepover * (1.0 + 1e-6) {
+                out.push(finding(
+                    Level::Warn,
+                    "CC213",
+                    format!(
+                        "morphed spiral's laps up to {:.3} mm apart",
+                        r.pattern.widest
+                    ),
+                    "more than the stepover: the boundary is too far from its centre in \
+                     places for a spiral to reach evenly"
+                        .into(),
+                ));
+            }
+            if r.pattern.in_rings > 0 {
+                out.push(finding(
+                    Level::Note,
+                    "CC214",
+                    format!(
+                        "{} piece(s) of a morphed spiral cut in rings",
+                        r.pattern.in_rings
+                    ),
+                    "too concave for one spiral from its boundary to its centre".into(),
+                ));
+            }
+            too_steep(op, r.cut.too_steep, &mut out);
         }
         StrategyDetail::PocketClearing(r) => {
             if r.rings == 0 {
@@ -573,7 +613,59 @@ fn thousands(n: u64) -> String {
     out
 }
 
-/// What sampling a pass on the part found: parallel finishing's, and scallop's.
+/// Why a finishing pass over a pattern may find nothing: none of it within the
+/// boundary and the slopes.
+const NOTHING_IN_SLOPES: &str = "nothing within the boundary and the slopes asked for";
+
+/// A finishing strategy's name as a finding says it.
+fn said(op: &OperationResult) -> String {
+    op.strategy.replace('-', " ")
+}
+
+/// A finishing pass that cut nothing, and `why`.
+fn finished(op: &OperationResult, passes: u64, why: &str, out: &mut Vec<Finding>) {
+    if passes == 0 {
+        out.push(finding(
+            Level::Warn,
+            "CC209",
+            format!("{} found nothing to finish", said(op)),
+            why.into(),
+        ));
+    }
+}
+
+/// A field's grid coarsened to stay within its budget, to `pitch` if known.
+fn coarsened(op: &OperationResult, coarsened: bool, pitch: f64, out: &mut Vec<Finding>) {
+    if coarsened {
+        out.push(finding(
+            Level::Warn,
+            "CC210",
+            if pitch > 0.0 {
+                format!("{}'s grid coarsened to {pitch:.3} mm", said(op))
+            } else {
+                format!("{}'s grid coarsened", said(op))
+            },
+            "to stay within its budget: the passes are placed less exactly; keep it to \
+             a boundary"
+                .into(),
+        ));
+    }
+}
+
+/// Stretches left out as steeper than a plunge, for a contour pass.
+fn too_steep(op: &OperationResult, stretches: u64, out: &mut Vec<Finding>) {
+    if stretches > 0 {
+        out.push(finding(
+            Level::Note,
+            "CC211",
+            format!("{stretches} stretch(es) too steep for {} left", said(op)),
+            "walls and faces steeper than a plunge: for a contour pass".into(),
+        ));
+    }
+}
+
+/// What sampling a pass on the part found: parallel finishing's, and every
+/// pass dropped onto the part.
 fn sampling(r: &ParallelReport, out: &mut Vec<Finding>) {
     if r.refinement_limited > 0 {
         out.push(finding(

@@ -48,14 +48,14 @@
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
 use camcraft_geom::arc::Arc;
-use camcraft_geom::contour::{Contour, Region, RegionError};
+use camcraft_geom::contour::{Contour, Region};
 use camcraft_geom::engagement::engaged;
 use camcraft_geom::mesh::TriMesh;
 use glam::{DVec2, dvec3};
 use rayon::prelude::*;
 
-use crate::reach::{LevelReach, ReachError};
-use crate::strategy::{StrategyError, check};
+use crate::reach::LevelReach;
+use crate::strategy::{StrategyError, check, slabs};
 use crate::tool::{Cutter, ToolProfile};
 use crate::toolpath::{MoveRole, Toolpath};
 
@@ -237,36 +237,10 @@ pub fn adaptive_rough(
     let radius = reach.cutter_radius();
     check("tool radius", radius)?;
 
-    // Levels from the top down, a stepdown apart. Bounded by construction, and
-    // the count is clamped so a tiny stepdown against a tall part cannot run away.
-    let span = params.top - params.bottom;
-    let count = ((span / params.stepdown).ceil()).clamp(1.0, 10_000.0);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let count = count as u32;
-    let mut rough = Vec::new();
-    for i in 1..=count {
-        let z = (params.top - f64::from(i) * params.stepdown).max(params.bottom);
-        rough.push(z);
-        if z <= params.bottom {
-            break;
-        }
-    }
-
-    // Each flat level belongs to the slab of the rough level just below it, and
-    // is cut after it, from the bottom up.
-    let mut slabs: Vec<(f64, Vec<f64>)> = rough.iter().map(|&z| (z, Vec::new())).collect();
-    for &f in &params.flats {
-        if !(f > params.bottom && f < params.top) || rough.iter().any(|z| (z - f).abs() < 1e-6) {
-            continue;
-        }
-        if let Some(slab) = slabs.iter_mut().find(|(z, _)| *z < f) {
-            slab.1.push(f);
-        }
-    }
-    for slab in &mut slabs {
-        slab.1.sort_by(f64::total_cmp);
-        slab.1.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
-    }
+    // Levels from the top down, a stepdown apart, each flat level in the slab of
+    // the one just below it, cut after it from the bottom up.
+    let slabs = slabs(params.top, params.bottom, params.stepdown, &params.flats);
+    let rough: Vec<f64> = slabs.iter().map(|&(z, _)| z).collect();
 
     // Where the tool may be at every level, from the top: the shadows are
     // cheapest asked for in descending order.
@@ -277,8 +251,8 @@ pub fn adaptive_rough(
     all.sort_by(|a, b| b.total_cmp(a));
     let mut allowed: Vec<(f64, Region)> = Vec::with_capacity(all.len());
     for &z in &all {
-        let forbidden = reach.forbidden(z).map_err(reach_err)?;
-        allowed.push((z, area.difference(&forbidden).map_err(region_err)?));
+        let forbidden = reach.forbidden(z)?;
+        allowed.push((z, area.difference(&forbidden)?));
     }
     let allowed_at = |z: f64| {
         allowed
@@ -333,7 +307,7 @@ pub fn adaptive_rough(
                     }
                     for &(c, r) in discs {
                         if let Some(d) = disc(c, r + wide, level.arc) {
-                            uncut.subtract(&Region::union_of(&[d]).map_err(region_err)?)?;
+                            uncut.subtract(&Region::union_of(&[d])?)?;
                         }
                     }
                 }
@@ -686,17 +660,14 @@ impl Tiles {
         for j in 0..ny {
             // A row at a time, so each tile is cut from a row, not the whole.
             let (y0, y1) = (lo.y + size * j as f64, lo.y + size * (j + 1) as f64);
-            let row = region
-                .intersection(&Region::rectangle(
-                    DVec2::new(lo.x - 1.0, y0),
-                    DVec2::new(hi.x + 1.0, y1),
-                ))
-                .map_err(region_err)?;
+            let row = region.intersection(&Region::rectangle(
+                DVec2::new(lo.x - 1.0, y0),
+                DVec2::new(hi.x + 1.0, y1),
+            ))?;
             for i in 0..nx {
                 let (x0, x1) = (lo.x + size * i as f64, lo.x + size * (i + 1) as f64);
                 cells.push(
-                    row.intersection(&Region::rectangle(DVec2::new(x0, y0), DVec2::new(x1, y1)))
-                        .map_err(region_err)?,
+                    row.intersection(&Region::rectangle(DVec2::new(x0, y0), DVec2::new(x1, y1)))?,
                 );
             }
         }
@@ -741,12 +712,12 @@ impl Tiles {
         }
         Region::union_all(&pieces)
             .and_then(|r| r.intersection(&Region::rectangle(lo, hi)))
-            .map_err(region_err)
+            .map_err(StrategyError::from)
     }
 
     /// The whole region.
     fn whole(&self) -> Result<Region, StrategyError> {
-        Region::union_all(&self.cells).map_err(region_err)
+        Region::union_all(&self.cells).map_err(StrategyError::from)
     }
 
     /// Take `cut` out of every tile it touches.
@@ -760,7 +731,7 @@ impl Tiles {
                 if let Some(c) = self.cells.get_mut(j * self.nx + i)
                     && !c.is_empty()
                 {
-                    *c = c.difference(cut).map_err(region_err)?;
+                    *c = c.difference(cut)?;
                 }
             }
         }
@@ -825,7 +796,7 @@ impl<'a> Clearing<'a> {
     fn new(allowed: &'a Region, uncut: &Region, p: &'a LevelParams) -> Result<Self, StrategyError> {
         // What the tool cannot reach from where it may be, it never touches.
         let reach = allowed.offset(p.radius, p.arc);
-        let uncut = uncut.intersection(&reach).map_err(region_err)?;
+        let uncut = uncut.intersection(&reach)?;
         let size = 16.0 * p.radius;
         Ok(Self {
             p,
@@ -995,9 +966,8 @@ impl<'a> Clearing<'a> {
         // Shrunk, so slivers a rounding error wide are not passes.
         let remaining = uncut.offset(-self.p.sliver, self.p.coarse);
         // A radius clear of the material, grown back by what it was shrunk.
-        let free = allowed
-            .difference(&remaining.offset(self.p.radius + self.p.sliver, self.p.coarse))
-            .map_err(region_err)?;
+        let free =
+            allowed.difference(&remaining.offset(self.p.radius + self.p.sliver, self.p.coarse))?;
         Ok(Situation {
             lo,
             hi,
@@ -1052,7 +1022,7 @@ impl<'a> Clearing<'a> {
                 l
             })
             .collect();
-        let runs = touching.clip_polylines(&loops).map_err(region_err)?;
+        let runs = touching.clip_polylines(&loops)?;
         // Nearer than the edge of what it knows, the nearest it knows is the
         // nearest there is.
         let within = match from {
@@ -1155,15 +1125,14 @@ impl<'a> Clearing<'a> {
             .iter()
             .filter_map(|&d| disc(d, self.p.radius * 0.25, self.p.arc))
             .collect();
-        let dead = Region::union_of(&dead).map_err(region_err)?;
+        let dead = Region::union_of(&dead)?;
         for &k in sizes {
             let r = self.p.helix_radius * k;
             let room = s
                 .allowed
                 .offset(-r, self.p.arc)
                 .intersection(&s.remaining)
-                .and_then(|room| room.difference(&dead))
-                .map_err(region_err)?;
+                .and_then(|room| room.difference(&dead))?;
             let Some(centre) = deepest(&room, self.p.arc) else {
                 continue;
             };
@@ -1177,8 +1146,7 @@ impl<'a> Clearing<'a> {
             };
             let start = centre - aside * r;
             if let Some(d) = disc(centre, r + self.p.radius, self.p.arc) {
-                self.uncut
-                    .subtract(&Region::union_of(&[d]).map_err(region_err)?)?;
+                self.uncut.subtract(&Region::union_of(&[d])?)?;
                 self.window = None;
             }
             self.helixes.push((centre, r));
@@ -1199,7 +1167,7 @@ impl<'a> Clearing<'a> {
             let lines = vec![std::mem::take(&mut self.trail)];
             let swept = Region::around_polylines(&lines, self.p.radius, self.p.swept_arc);
             if let Some(w) = &mut self.window {
-                w.uncut = w.uncut.difference(&swept).map_err(region_err)?;
+                w.uncut = w.uncut.difference(&swept)?;
             }
             self.uncut.subtract(&swept)?;
             self.trail = last.into_iter().collect();
@@ -1508,14 +1476,6 @@ fn deepest(region: &Region, arc: f64) -> Option<DVec2> {
     } else {
         pts.first().copied()
     }
-}
-
-fn region_err(e: RegionError) -> StrategyError {
-    StrategyError::Region(e.to_string())
-}
-
-fn reach_err(e: ReachError) -> StrategyError {
-    StrategyError::Region(e.to_string())
 }
 
 #[cfg(test)]

@@ -445,7 +445,9 @@ impl Region {
                 // Wholly inside: the clipper hands back the line itself.
                 (Some(a), Some(b)) if a == b => {
                     let whole = pieces.get(a).and_then(Option::as_ref).is_some_and(|p| {
-                        (length(p) - length(paths.get(i).map_or(&[][..], Vec::as_slice))).abs()
+                        (polyline_length(p)
+                            - polyline_length(paths.get(i).map_or(&[][..], Vec::as_slice)))
+                        .abs()
                             < 1e-6
                     });
                     if whole {
@@ -721,7 +723,7 @@ fn chain(segs: Vec<(DVec2, DVec2)>, weld: f64) -> Vec<Contour> {
 }
 
 /// The length of an open polyline.
-fn length(points: &[DVec2]) -> f64 {
+pub fn polyline_length(points: &[DVec2]) -> f64 {
     points
         .iter()
         .zip(points.iter().skip(1))

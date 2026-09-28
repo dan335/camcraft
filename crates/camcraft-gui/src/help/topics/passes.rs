@@ -23,7 +23,26 @@ topics! {
     SCALLOP_ORDER: "Order",
         "Outside in cuts from the boundary inward. Inside out cuts each area from its middle, ending on the boundary.";
     SLOPES: "Slopes",
-        "Only finishes where the surface is between these angles from level: 0° is flat, 90° a wall. Faces steeper than a plunge are always left, for a waterline pass.";
+        "Only finishes where the surface is between these angles from level: 0° is flat, 90° a wall. Faces steeper than a plunge are left, for a contour pass.";
+    CONTOUR_ORDER: "Order",
+        "By depth cuts each level all the way round before the next down. By area cuts each piece of the part all the way down first.";
+    DIRECTION_SPIRAL: "Direction",
+        "Which way it turns: climb gives the better finish, conventional can suit a flexible machine.",
+        Figure::Climb;
+    SPIRAL_ORDER: "Order",
+        "Outside in ends at the centre. Inside out starts at the centre and ends on the outside.";
+    CENTRE: "Centre",
+        "Where the pattern turns about, from the work zero. Left empty, the middle of the boundary.";
+    MORPH_CENTRE: "Centre",
+        "Where the spiral turns into, from the work zero. Left empty, the point furthest inside the boundary.";
+    INNER_RADIUS: "Inner radius",
+        "Nothing is cut nearer the centre than this. Spokes crowd together there, so a little saves recutting the middle.";
+    OUTER_RADIUS: "Outer radius",
+        "Nothing is cut further out than this. Left empty, the pattern reaches all of the boundary.";
+    RADIAL_ANGLES: "Angles",
+        "Spokes are laid from the first angle round to the second, anticlockwise from X. 0° to 360° goes all the way round.";
+    RADIAL_DIRECTION: "Direction",
+        "Both ways cuts out along one spoke and back in along the next. Outward or inward cuts every spoke one way.";
     FLAT_AREAS: "Flat areas",
         "Adds a level at each flat face, so floors are left just the stock to leave, not a stepdown's terrace.";
     PASS_EXTENSION: "Pass extension",

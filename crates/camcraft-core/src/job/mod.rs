@@ -77,10 +77,10 @@ use serde::{Deserialize, Serialize};
 pub use error::JobError;
 pub use model::{FixedBox, LengthUnit, ModelDef, Place, StockDef, StockSpec, Transform};
 pub use operation::{
-    AdaptiveDirection, Boundary, Containment, Depths, Entry, FaceDirection, Height, HeightContext,
-    HeightRef, Heights, LeadSizes, Leads, Leave, Linking, MachiningBoundary, Operation, Outline,
-    Passes, Picks, ProfileSide, Retraction, ScallopDirection, ScallopOrder, Selection,
-    StockToLeave, StrategySpec, TabShape, Tabs, Uses,
+    Boundary, Containment, ContourOrder, CutDirection, Depths, Entry, FaceDirection, Height,
+    HeightContext, HeightRef, Heights, LeadSizes, Leads, Leave, Linking, MachiningBoundary,
+    Operation, Outline, PassOrder, Passes, Picks, ProfileSide, RadialDirection, Retraction,
+    Selection, StockToLeave, StrategySpec, TabShape, Tabs, Uses,
 };
 pub use pick::{FeatureRef, PointRef, Snap};
 pub use setup::{Along, BoxOf, Origin, Setup};

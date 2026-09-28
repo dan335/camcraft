@@ -9,34 +9,39 @@ use glam::{DVec2, DVec3, dvec2};
 
 use super::error::{OperationError, in_op};
 use super::{Made, OperationResult, PLUNGE_RATIO, RunError, StrategyDetail};
-use crate::adaptive::{AdaptiveParams, Direction, adaptive_rough, flat_heights};
+use crate::adaptive::{AdaptiveParams, adaptive_rough, flat_heights};
 use crate::allowance::{Allowance, EffectiveTool};
 use crate::drilling::{DrillParams, DrillReport, Hole, drill, holes, nearest_first};
 use crate::dropcutter::DropCutter;
 use crate::face::{FaceParams, LevelsAsked, face};
 use crate::features::{Chain, FeatureError, outline, picked_chains, picked_points};
+use crate::flat::{FlatParams, flat_finish};
 use crate::job::{
-    AdaptiveDirection, Entry, HeightContext, Job, Operation, Picks, Retraction, ScallopDirection,
-    ScallopOrder, SpindleDirection, StrategySpec, ToolSpec,
+    ContourOrder, CutDirection, Entry, HeightContext, Job, Operation, PassOrder, Picks,
+    RadialDirection, Retraction, SpindleDirection, StrategySpec, ToolSpec,
 };
 use crate::linker::{
     ClearanceField, EntryKind, LinkParams, LinkReport, Material, Ramp, StayDown, Surface,
     highest_under, link,
 };
+use crate::morph::{MorphParams, MorphedSpiralReport, morphed_spiral};
 use crate::ordering::order_passes;
-use crate::parallel::{ParallelParams, follow, parallel_finish_within};
+use crate::parallel::{ParallelParams, ParallelReport, follow, parallel_finish_within};
+use crate::patterns::{Centred, radial, reaching, spiral};
 use crate::planar::{
     Area, LeadArc, PlanarParams, PlanarReport, Spiral, areas, centre_offset, pocket, profile,
 };
 use crate::pocket_clearing::{ClearingParams, pocket_clearing};
+use crate::projected::{Curve, ProjectParams, ProjectReport, project};
 use crate::reach::LevelReach;
-use crate::scallop::{Order, ScallopParams, contact_region, scallop_finish};
+use crate::scallop::{ScallopParams, contact_region, scallop_finish};
 use crate::setup::{Bodies, Prepared};
 use crate::simadapt::sim_moves_of;
 use crate::strategy::StrategyError;
 use crate::tabs::{TabParams, add_tabs};
 use crate::tool::ToolProfile;
 use crate::toolpath::{Move, Toolpath};
+use crate::waterline::{WaterlineParams, waterline};
 
 /// One operation, and everything its strategy works from.
 pub(super) struct Work<'a> {
@@ -61,6 +66,25 @@ pub(super) struct Work<'a> {
 }
 
 impl Work<'_> {
+    /// Whether the material being cut is on the tool's right: climbing with a
+    /// clockwise spindle, or conventional with the other.
+    fn kept_on_right(&self) -> bool {
+        (self.spec.spindle == SpindleDirection::Clockwise) != self.op.strategy.conventional()
+    }
+
+    /// The heights of the part's flat faces, raised by the stock to leave down,
+    /// where flat area detection adds a level; none unless `on`.
+    fn flat_levels(&self, on: bool) -> Vec<f64> {
+        if !on {
+            return Vec::new();
+        }
+        let axial = self.op.stock_to_leave().axial;
+        flat_heights(self.mesh, self.job.tolerance)
+            .into_iter()
+            .map(|z| z + axial)
+            .collect()
+    }
+
     /// Where the tool's centre may sweep: the stock's footprint, plus the tool,
     /// plus whatever extra was asked for.
     fn sweep(&self) -> (DVec2, DVec2) {
@@ -105,14 +129,86 @@ pub(super) fn run_operation(
     };
     let (raw, passes, detail) = match op.strategy {
         StrategySpec::Parallel { angle } => parallel_paths(work, angle, limit, &mut warnings)?,
-        StrategySpec::Scallop { .. } => scallop_paths(work, limit, &mut warnings)?,
+        StrategySpec::Scallop {
+            direction,
+            order,
+            slope_from,
+            slope_to,
+        } => scallop_paths(
+            work,
+            (direction, order),
+            (slope_from, slope_to),
+            limit,
+            &mut warnings,
+        )?,
+        StrategySpec::Contour {
+            direction,
+            order,
+            slope_from,
+            slope_to,
+        } => contour_paths(
+            work,
+            (direction, order),
+            (slope_from, slope_to),
+            limit,
+            &mut warnings,
+        )?,
+        StrategySpec::Flat { order, .. } => flat_paths(work, order, limit, &mut warnings)?,
+        StrategySpec::Spiral {
+            centre,
+            inner_radius,
+            outer_radius,
+            order,
+            slope_from,
+            slope_to,
+            ..
+        } => spiral_paths(
+            work,
+            (centre, inner_radius, outer_radius),
+            order,
+            (slope_from, slope_to),
+            limit,
+            &mut warnings,
+        )?,
+        StrategySpec::Radial {
+            centre,
+            inner_radius,
+            outer_radius,
+            angle_from,
+            angle_to,
+            direction,
+            slope_from,
+            slope_to,
+        } => radial_paths(
+            work,
+            (centre, inner_radius, outer_radius),
+            (angle_from, angle_to, direction),
+            (slope_from, slope_to),
+            limit,
+            &mut warnings,
+        )?,
+        StrategySpec::MorphedSpiral {
+            centre,
+            order,
+            slope_from,
+            slope_to,
+            ..
+        } => morphed_spiral_paths(
+            work,
+            centre,
+            order,
+            (slope_from, slope_to),
+            limit,
+            &mut warnings,
+        )?,
         StrategySpec::PocketClearing {
             min_ring_length,
-            conventional,
             flat_areas,
+            ..
         } => pocket_clearing_paths(
             work,
-            (min_ring_length, conventional, flat_areas),
+            min_ring_length,
+            flat_areas,
             limit,
             stock,
             &mut warnings,
@@ -265,7 +361,12 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         .filter(|_| op.strategy.uses().leads)
         .map(|l| l.sizes(diameter));
     let (stay_down, lead_radius, ramp) = match op.strategy {
-        StrategySpec::Parallel { .. } | StrategySpec::Scallop { .. } => (
+        StrategySpec::Parallel { .. }
+        | StrategySpec::Scallop { .. }
+        | StrategySpec::Contour { .. }
+        | StrategySpec::Spiral { .. }
+        | StrategySpec::Radial { .. }
+        | StrategySpec::MorphedSpiral { .. } => (
             StayDown::OverPart {
                 max: linking.stay_down.unwrap_or(50.0),
             },
@@ -273,6 +374,7 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
             None,
         ),
         StrategySpec::PocketClearing { .. }
+        | StrategySpec::Flat { .. }
         | StrategySpec::Profile { .. }
         | StrategySpec::Pocket { .. }
         | StrategySpec::Face { .. } => (
@@ -304,15 +406,6 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
     } else {
         EntryKind::Ramp
     };
-    let conventional = match op.strategy {
-        StrategySpec::Profile { conventional, .. }
-        | StrategySpec::Pocket { conventional, .. }
-        | StrategySpec::PocketClearing { conventional, .. } => conventional,
-        StrategySpec::Adaptive { direction, .. } => direction == AdaptiveDirection::Conventional,
-        StrategySpec::Scallop { direction, .. } => direction == ScallopDirection::Conventional,
-        _ => false,
-    };
-    let clockwise = work.spec.spindle == SpindleDirection::Clockwise;
     LinkParams {
         retract_feed: linking.retract_feed,
         plunge_feed: linking.plunge_feed,
@@ -324,7 +417,7 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         entry,
         helix_radius: linking.helix_diameter.unwrap_or(0.9 * diameter) / 2.0,
         // A helix climbs as the cut does.
-        helix_ccw: clockwise != conventional,
+        helix_ccw: work.kept_on_right(),
         ramp_stepdown: linking.ramp_stepdown.or(op.stepdown()).or(Some(diameter)),
         lead_in_material: leads.is_some(),
         max_cut_step: op.passes.max_cut_step,
@@ -423,6 +516,12 @@ fn parallel_paths(
     let (path, report) =
         parallel_finish_within(work.cutter, work.tool, sweep_lo, sweep_hi, limit, &params)
             .map_err(in_op(op))?;
+    sampling_warnings(&report, warnings);
+    Ok((path, report.passes, StrategyDetail::Parallel(report)))
+}
+
+/// What sampling passes on the part found that the path should say.
+fn sampling_warnings(report: &ParallelReport, warnings: &mut Vec<String>) {
     if !report.is_clean() {
         warnings.push(format!(
             "{} span(s) hit the refinement limit; the path is coarser than the \
@@ -430,56 +529,44 @@ fn parallel_paths(
             report.refinement_limited
         ));
     }
-    Ok((path, report.passes, StrategyDetail::Parallel(report)))
+}
+
+/// Where a 3D finishing strategy may put the tool's centre: the sweep, kept to
+/// `limit`, and, with `contact`, to where the tool touches the part.
+fn finish_area(work: &Work<'_>, limit: Option<&Region>, contact: bool) -> Result<Region, RunError> {
+    let op = work.op;
+    let (sweep_lo, sweep_hi) = work.sweep();
+    let named = |e: camcraft_geom::contour::RegionError| in_op(op)(StrategyError::from(e));
+    let mut area = Region::rectangle(sweep_lo, sweep_hi);
+    if contact {
+        let touched = contact_region(work.mesh, work.tool.max_radius(), work.job.tolerance)
+            .map_err(in_op(op))?;
+        area = area.intersection(&touched).map_err(named)?;
+    }
+    if let Some(l) = limit {
+        area = area.intersection(l).map_err(named)?;
+    }
+    Ok(area)
 }
 
 /// Scallop finishing within the sweep, `limit` and where the tool touches the
 /// part.
 fn scallop_paths(
     work: &Work<'_>,
+    (direction, order): (CutDirection, PassOrder),
+    (slope_from, slope_to): (f64, f64),
     limit: Option<&Region>,
     warnings: &mut Vec<String>,
 ) -> Result<Paths, RunError> {
     let (job, op) = (work.job, work.op);
-    let StrategySpec::Scallop {
-        direction,
-        order,
-        slope_from,
-        slope_to,
-    } = op.strategy
-    else {
-        return Ok((
-            Toolpath::new(),
-            0,
-            StrategyDetail::Scallop(Default::default()),
-        ));
-    };
-    let (sweep_lo, sweep_hi) = work.sweep();
-    let named = |e: camcraft_geom::contour::RegionError| {
-        StrategyError::Region(e.to_string()).named(op.name.clone())
-    };
-    let contact =
-        contact_region(work.mesh, work.tool.max_radius(), job.tolerance).map_err(in_op(op))?;
-    let mut area = Region::rectangle(sweep_lo, sweep_hi)
-        .intersection(&contact)
-        .map_err(named)?;
-    if let Some(l) = limit {
-        area = area.intersection(l).map_err(named)?;
-    }
+    let area = finish_area(work, limit, true)?;
     let params = ScallopParams {
         stepover: op.passes.stepover,
         tolerance: job.tolerance,
         feed: op.passes.feed,
         max_cut_step: op.passes.max_cut_step,
-        order: match order {
-            ScallopOrder::OutsideIn => Order::OutsideIn,
-            ScallopOrder::InsideOut => Order::InsideOut,
-        },
-        direction: match direction {
-            ScallopDirection::BothWays => Direction::BothWays,
-            ScallopDirection::Climb => Direction::Climb,
-            ScallopDirection::Conventional => Direction::Conventional,
-        },
+        order: order.engine(),
+        direction: direction.engine(),
         climb_right: work.spec.spindle == SpindleDirection::Clockwise,
         slope_from: slope_from.to_radians(),
         slope_to: slope_to.to_radians(),
@@ -490,44 +577,265 @@ fn scallop_paths(
     if report.passes == 0 {
         warnings.push("found nothing to finish: nothing within the boundary and slopes".into());
     }
-    if report.sweep.refinement_limited > 0 {
-        warnings.push(format!(
-            "{} span(s) hit the refinement limit; the path is coarser than the              requested tolerance",
-            report.sweep.refinement_limited
-        ));
-    }
+    sampling_warnings(&report.sweep, warnings);
     if report.unreached > 0 {
         warnings.push(format!(
-            "{} point(s) of the area were not reached from its boundary, and are not              finished",
+            "{} point(s) of the area were not reached from its boundary, and are not \
+             finished",
             report.unreached
         ));
     }
     Ok((path, report.passes, StrategyDetail::Scallop(report)))
 }
 
+/// The top and bottom a finishing operation keeps to: its own, or the model's.
+fn finish_heights(work: &Work<'_>) -> (f64, f64) {
+    let (op, ctx) = (work.op, work.heights);
+    (
+        op.heights.top.map_or(ctx.model_top, |h| h.resolve_top(ctx)),
+        op.heights
+            .bottom
+            .map_or(ctx.model_bottom, |h| h.resolve_bottom(ctx)),
+    )
+}
+
+/// Contour finishing: a waterline round the part at each level, within the
+/// sweep and `limit`.
+fn contour_paths(
+    work: &Work<'_>,
+    (direction, order): (CutDirection, ContourOrder),
+    (slope_from, slope_to): (f64, f64),
+    limit: Option<&Region>,
+    warnings: &mut Vec<String>,
+) -> Result<Paths, RunError> {
+    let (job, op) = (work.job, work.op);
+    // The region need only find the walls: every point of a pass is pulled onto
+    // the part exactly. Coarser bands, ten tolerances or a quarter of the tool,
+    // make it an order of magnitude cheaper, and miss only gaps narrower than
+    // that the tool would have squeezed into.
+    let coarse = (10.0 * job.tolerance)
+        .min(work.tool.max_radius() / 4.0)
+        .max(job.tolerance);
+    let mut reach = LevelReach::new(work.mesh, work.tool, coarse).map_err(in_op(op))?;
+    let area = finish_area(work, limit, false)?;
+    let (top, bottom) = finish_heights(work);
+    let params = WaterlineParams {
+        // Checked with the job: it always has one.
+        stepdown: op.stepdown().unwrap_or(f64::NAN),
+        top,
+        bottom,
+        flats: work.flat_levels(true),
+        tolerance: job.tolerance,
+        feed: op.passes.feed,
+        direction: direction.engine(),
+        climb_right: work.spec.spindle == SpindleDirection::Clockwise,
+        order: order.engine(),
+        slope_from: slope_from.to_radians(),
+        slope_to: slope_to.to_radians(),
+    };
+    let (path, report) =
+        waterline(&mut reach, work.cutter, work.tool, &area, &params).map_err(in_op(op))?;
+    if report.passes == 0 {
+        warnings.push(
+            "found nothing to finish: no wall within the boundary, heights and slopes".into(),
+        );
+    }
+    Ok((path, report.passes, StrategyDetail::Contour(report)))
+}
+
+/// Flat finishing: each flat face between the top and bottom cleared at its
+/// height, within the sweep and `limit`.
+fn flat_paths(
+    work: &Work<'_>,
+    order: PassOrder,
+    limit: Option<&Region>,
+    warnings: &mut Vec<String>,
+) -> Result<Paths, RunError> {
+    let (job, op) = (work.job, work.op);
+    let mut reach = LevelReach::new(work.mesh, work.tool, job.tolerance).map_err(in_op(op))?;
+    let area = finish_area(work, limit, false)?;
+    let (top, bottom) = finish_heights(work);
+    let slack = job.tolerance;
+    let params = FlatParams {
+        stepover: op.passes.stepover,
+        tolerance: job.tolerance,
+        feed: op.passes.feed,
+        flats: work
+            .flat_levels(true)
+            .into_iter()
+            .filter(|z| (bottom - slack..=top + slack).contains(z))
+            .collect(),
+        kept_on_right: work.kept_on_right(),
+        order: order.engine(),
+        min_ring_length: 2.0 * job.tolerance,
+    };
+    let (path, report) = flat_finish(&mut reach, &area, &params).map_err(in_op(op))?;
+    if report.passes == 0 {
+        warnings.push(if report.flats == 0 {
+            "found nothing to finish: the part has no flat face between the top and \
+             bottom"
+                .into()
+        } else {
+            "found nothing to finish: no flat within the boundary has room for the tool".into()
+        });
+    }
+    Ok((path, report.passes, StrategyDetail::Flat(report)))
+}
+
+/// A pattern about a centre's centre, and its inner and outer radii: as given,
+/// or the middle of `area` and out to all of it.
+fn centred(area: &Region, (centre, inner, outer): (Option<[f64; 2]>, f64, f64)) -> Option<Centred> {
+    let bounds = area.bounds()?;
+    let centre = centre.map_or((bounds.0 + bounds.1) / 2.0, |[x, y]| dvec2(x, y));
+    let outer = if outer > 0.0 {
+        outer
+    } else {
+        reaching(centre, bounds)
+    };
+    (outer > inner).then_some(Centred {
+        centre,
+        inner,
+        outer,
+    })
+}
+
+/// How a pattern is dropped onto the part, for `work`'s operation.
+fn project_params(work: &Work<'_>, (slope_from, slope_to): (f64, f64)) -> ProjectParams {
+    ProjectParams {
+        stepover: work.op.passes.stepover,
+        tolerance: work.job.tolerance,
+        feed: work.op.passes.feed,
+        max_cut_step: work.op.passes.max_cut_step,
+        slope_from: slope_from.to_radians(),
+        slope_to: slope_to.to_radians(),
+    }
+}
+
+/// `curves` dropped onto the part within `area`, and what that found to say.
+fn projected(
+    work: &Work<'_>,
+    area: &Region,
+    curves: &[Curve],
+    slopes: (f64, f64),
+    warnings: &mut Vec<String>,
+) -> Result<(Toolpath, ProjectReport), RunError> {
+    let (path, report) = project(
+        work.cutter,
+        work.tool,
+        area,
+        curves,
+        &project_params(work, slopes),
+    )
+    .map_err(in_op(work.op))?;
+    if report.passes == 0 {
+        warnings.push("found nothing to finish: nothing within the boundary and slopes".into());
+    }
+    sampling_warnings(&report.sweep, warnings);
+    Ok((path, report))
+}
+
+/// Spiral finishing within the sweep, `limit` and where the tool touches the
+/// part.
+fn spiral_paths(
+    work: &Work<'_>,
+    circle: (Option<[f64; 2]>, f64, f64),
+    order: PassOrder,
+    slopes: (f64, f64),
+    limit: Option<&Region>,
+    warnings: &mut Vec<String>,
+) -> Result<Paths, RunError> {
+    let op = work.op;
+    let area = finish_area(work, limit, true)?;
+    let curves = match centred(&area, circle) {
+        Some(on) => {
+            // Going outward what is still to finish is outside: on the tool's
+            // right going anticlockwise.
+            let outward = order == PassOrder::InsideOut;
+            let ccw = outward == work.kept_on_right();
+            spiral(&on, op.passes.stepover, work.job.tolerance, outward, ccw).map_err(in_op(op))?
+        }
+        None => Vec::new(),
+    };
+    let (path, report) = projected(work, &area, &curves, slopes, warnings)?;
+    Ok((path, report.passes, StrategyDetail::Spiral(report)))
+}
+
+/// Radial finishing within the sweep, `limit` and where the tool touches the
+/// part.
+fn radial_paths(
+    work: &Work<'_>,
+    circle: (Option<[f64; 2]>, f64, f64),
+    (angle_from, angle_to, direction): (f64, f64, RadialDirection),
+    slopes: (f64, f64),
+    limit: Option<&Region>,
+    warnings: &mut Vec<String>,
+) -> Result<Paths, RunError> {
+    let op = work.op;
+    let area = finish_area(work, limit, true)?;
+    let curves = match centred(&area, circle) {
+        Some(on) => radial(
+            &on,
+            op.passes.stepover,
+            (angle_from.to_radians(), angle_to.to_radians()),
+            direction.engine(),
+        )
+        .map_err(in_op(op))?,
+        None => Vec::new(),
+    };
+    let (path, report) = projected(work, &area, &curves, slopes, warnings)?;
+    Ok((path, report.passes, StrategyDetail::Radial(report)))
+}
+
+/// Morphed spiral finishing within the sweep, `limit` and where the tool
+/// touches the part.
+fn morphed_spiral_paths(
+    work: &Work<'_>,
+    centre: Option<[f64; 2]>,
+    order: PassOrder,
+    slopes: (f64, f64),
+    limit: Option<&Region>,
+    warnings: &mut Vec<String>,
+) -> Result<Paths, RunError> {
+    let op = work.op;
+    let area = finish_area(work, limit, true)?;
+    // As a spiral turns: outward, what is still to finish is outside.
+    let outward = order == PassOrder::InsideOut;
+    let params = MorphParams {
+        stepover: op.passes.stepover,
+        centre: centre.map(|[x, y]| dvec2(x, y)),
+        outward,
+        ccw: outward == work.kept_on_right(),
+        ..Default::default()
+    };
+    let (curves, pattern) = morphed_spiral(&area, &params).map_err(in_op(op))?;
+    if pattern.widest > pattern.stepover * (1.0 + 1e-6) {
+        warnings.push(format!(
+            "the laps are up to {:.3} mm apart, more than the stepover: the boundary \
+             is too far from its centre in places for a spiral to reach evenly",
+            pattern.widest
+        ));
+    }
+    let (path, cut) = projected(work, &area, &curves, slopes, warnings)?;
+    Ok((
+        path,
+        cut.passes,
+        StrategyDetail::MorphedSpiral(MorphedSpiralReport { pattern, cut }),
+    ))
+}
+
 /// Pocket clearing of the material as it stands, a level each stepdown and, with
-/// flat areas, one on each flat face, within the sweep and `limit`. `own` is the
-/// strategy's own settings: its shortest ring, whether it cuts conventional, and
-/// whether it finds flat areas.
+/// flat areas, one on each flat face, within the sweep and `limit`, dropping rings
+/// shorter than `min_ring_length`.
 fn pocket_clearing_paths(
     work: &Work<'_>,
-    own: (f64, bool, bool),
+    min_ring_length: f64,
+    flat_areas: bool,
     limit: Option<&Region>,
     stock: &Stock,
     warnings: &mut Vec<String>,
 ) -> Result<Paths, RunError> {
     let (job, op, ctx) = (work.job, work.op, work.heights);
-    let (min_ring_length, conventional, flat_areas) = own;
     let mut reach = LevelReach::new(work.mesh, work.tool, job.tolerance).map_err(in_op(op))?;
-    let flats = if flat_areas {
-        let axial = op.stock_to_leave().axial;
-        flat_heights(work.mesh, job.tolerance)
-            .into_iter()
-            .map(|z| z + axial)
-            .collect()
-    } else {
-        Vec::new()
-    };
     let params = ClearingParams {
         // Checked with the job: it always has one.
         stepdown: op.stepdown().unwrap_or(f64::NAN),
@@ -539,8 +847,8 @@ fn pocket_clearing_paths(
             .bottom
             .map_or(ctx.model_bottom, |h| h.resolve_bottom(ctx)),
         min_ring_length,
-        kept_on_right: (work.spec.spindle == SpindleDirection::Clockwise) != conventional,
-        flats,
+        kept_on_right: work.kept_on_right(),
+        flats: work.flat_levels(flat_areas),
     };
     let (sweep_lo, sweep_hi) = work.sweep();
     let sweep = Region::rectangle(sweep_lo, sweep_hi);
@@ -561,7 +869,7 @@ fn pocket_clearing_paths(
 /// each flat face, within the sweep and `limit`.
 fn adaptive_paths(
     work: &Work<'_>,
-    direction: AdaptiveDirection,
+    direction: CutDirection,
     flat_areas: bool,
     limit: Option<&Region>,
     warnings: &mut Vec<String>,
@@ -569,15 +877,7 @@ fn adaptive_paths(
     let (job, op, ctx) = (work.job, work.op, work.heights);
     let mut reach = LevelReach::new(work.mesh, work.tool, job.tolerance).map_err(in_op(op))?;
     let diameter = work.spec.diameter;
-    let flats = if flat_areas {
-        let axial = op.stock_to_leave().axial;
-        flat_heights(work.mesh, job.tolerance)
-            .into_iter()
-            .map(|z| z + axial)
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let flats = work.flat_levels(flat_areas);
     // A ramp along a pass would cut what it takes as cleared: into a closed
     // area it goes down a helix, or straight.
     let helix_radius = match op.linking.entry.unwrap_or_default() {
@@ -596,11 +896,7 @@ fn adaptive_paths(
             .map_or(ctx.model_bottom, |h| h.resolve_bottom(ctx)),
         tolerance: job.tolerance,
         climb_right: work.spec.spindle == SpindleDirection::Clockwise,
-        direction: match direction {
-            AdaptiveDirection::Climb => Direction::Climb,
-            AdaptiveDirection::Conventional => Direction::Conventional,
-            AdaptiveDirection::BothWays => Direction::BothWays,
-        },
+        direction: direction.engine(),
         helix_radius,
         stay_down: op.linking.stay_down.unwrap_or(10.0 * diameter),
         ramp_angle: op.linking.ramp_angle.to_radians(),
@@ -660,20 +956,13 @@ fn planar_paths(
     warnings: &mut Vec<String>,
 ) -> Result<Paths, RunError> {
     let op = work.op;
-    let conventional = match op.strategy {
-        StrategySpec::Profile { conventional, .. } | StrategySpec::Pocket { conventional, .. } => {
-            conventional
-        }
-        _ => false,
-    };
-    let clockwise = work.spec.spindle == SpindleDirection::Clockwise;
     let params = PlanarParams {
         stepdown: op.stepdown(),
         stepover: op.passes.stepover,
         feed: op.passes.feed,
         arc: work.job.tolerance * 0.5,
         radius: work.tool.cutter_radius(),
-        kept_on_right: clockwise != conventional,
+        kept_on_right: work.kept_on_right(),
         leads: op
             .linking
             .leads
@@ -938,6 +1227,11 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
     let detail = match op.strategy {
         StrategySpec::Parallel { .. } => StrategyDetail::Parallel(Default::default()),
         StrategySpec::Scallop { .. } => StrategyDetail::Scallop(Default::default()),
+        StrategySpec::Contour { .. } => StrategyDetail::Contour(Default::default()),
+        StrategySpec::Flat { .. } => StrategyDetail::Flat(Default::default()),
+        StrategySpec::Spiral { .. } => StrategyDetail::Spiral(Default::default()),
+        StrategySpec::Radial { .. } => StrategyDetail::Radial(Default::default()),
+        StrategySpec::MorphedSpiral { .. } => StrategyDetail::MorphedSpiral(Default::default()),
         StrategySpec::PocketClearing { .. } => StrategyDetail::PocketClearing(Default::default()),
         StrategySpec::Adaptive { .. } => StrategyDetail::Adaptive(Default::default()),
         StrategySpec::Profile { .. } => StrategyDetail::Profile(Default::default()),

@@ -472,6 +472,11 @@ impl Document {
         let base = match strategy {
             StrategySpec::Parallel { .. } => "finish",
             StrategySpec::Scallop { .. } => "scallop",
+            StrategySpec::Contour { .. } => "contour",
+            StrategySpec::Flat { .. } => "flat",
+            StrategySpec::Spiral { .. } => "spiral",
+            StrategySpec::Radial { .. } => "radial",
+            StrategySpec::MorphedSpiral { .. } => "morphed-spiral",
             StrategySpec::PocketClearing { .. } => "rough",
             StrategySpec::Adaptive { .. } => "adaptive",
             StrategySpec::Profile { .. } => "profile",
@@ -675,17 +680,24 @@ impl Document {
     }
 }
 
-/// Start a new 3D operation on the part's silhouette, as Fusion does. Parallel
-/// finishing keeps the tool's centre inside it. Pocket and adaptive clearing
-/// reach in from outside: kept inside the part's outline, the tool never reaches
+/// Start a new 3D operation on the part's silhouette, as Fusion does. Finishing
+/// by a pattern dropped onto the part keeps the tool's centre inside it. Pocket
+/// and adaptive clearing, contour and flat finishing reach in from outside: kept inside the part's outline, the tool never reaches
 /// its walls, as its centre sits a radius outside them ([`fit_channel`] makes
 /// room round them).
 /// A 2D operation's outline starts as the silhouette already. Facing and
 /// drilling have no boundary.
 fn start_on_silhouette(op: &mut Operation) {
     let containment = match op.strategy {
-        StrategySpec::Parallel { .. } | StrategySpec::Scallop { .. } => Containment::Center,
-        StrategySpec::PocketClearing { .. } | StrategySpec::Adaptive { .. } => Containment::Outside,
+        StrategySpec::Parallel { .. }
+        | StrategySpec::Scallop { .. }
+        | StrategySpec::Spiral { .. }
+        | StrategySpec::Radial { .. }
+        | StrategySpec::MorphedSpiral { .. } => Containment::Center,
+        StrategySpec::PocketClearing { .. }
+        | StrategySpec::Adaptive { .. }
+        | StrategySpec::Contour { .. }
+        | StrategySpec::Flat { .. } => Containment::Outside,
         StrategySpec::Profile { .. }
         | StrategySpec::Pocket { .. }
         | StrategySpec::Face { .. }

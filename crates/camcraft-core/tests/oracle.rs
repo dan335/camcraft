@@ -328,3 +328,163 @@ fn an_unlinked_path_reports_its_unplanned_traverses() {
         "an unlinked path drags the tool between passes and must not look clean"
     );
 }
+
+/// `raw`, linked over a block level at `top` and cut from it, verified against
+/// `mesh` within `budget`: no rapid through the stock and no gouge, with real
+/// coverage.
+fn machines_clean(
+    mesh: &camcraft_geom::mesh::TriMesh,
+    tool: &EffectiveTool,
+    raw: &Toolpath,
+    (lo, hi): (glam::DVec2, glam::DVec2),
+    (top, bottom): (f64, f64),
+    budget: f64,
+) {
+    let (path, _) = link(
+        raw,
+        &ClearancePlane::new(top).unwrap(),
+        &mut block(lo, hi, top),
+        &NoPart,
+        &LinkParams::plain(900.0, 250.0, tool.max_radius()),
+    )
+    .unwrap();
+    assert!(!path.has_unplanned_links());
+    let mut stock = Stock::block(lo, hi, top, bottom, PITCH).unwrap();
+    let sim = stock.apply(&sim_moves(&path), tool);
+    assert!(sim.removed_mm3 > 0.0, "nothing was cut");
+    assert!(
+        sim.is_clean(),
+        "a rapid touched stock: {} contact(s), deepest {:.3} mm",
+        sim.rapid_contacts,
+        sim.deepest_rapid_contact_mm
+    );
+    let part = PartSurface::from_mesh(mesh, lo, hi, PITCH).unwrap();
+    let v = stock.verify(&part, budget, 1.0);
+    assert!(v.compared > 1000, "compared {}", v.compared);
+    assert!(
+        v.is_clean(),
+        "gouged {} column(s), deepest {:.3} mm against a {:.3} mm budget",
+        v.gouged,
+        v.deepest_gouge_mm,
+        budget
+    );
+}
+
+/// Spiral, radial and morphed spiral passes over the same dome come out the
+/// dome: a pattern dropped onto the part never cuts into it.
+#[test]
+fn patterns_on_a_dome_match_the_part() {
+    use camcraft_core::morph::{MorphParams, morphed_spiral};
+    use camcraft_core::patterns::{Centred, Spokes, radial, spiral};
+    use camcraft_core::projected::{ProjectParams, project};
+
+    let sphere_r = 12.0;
+    let mesh = synthetic::uv_sphere(sphere_r, 160, 220);
+    let cutter = DropCutter::new(&mesh);
+    let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
+    let (lo, hi) = (dvec2(-7.0, -7.0), dvec2(7.0, 7.0));
+    let area = camcraft_geom::contour::Region::rectangle(lo, hi);
+    let on = Centred {
+        centre: glam::DVec2::ZERO,
+        inner: 0.0,
+        outer: 10.0,
+    };
+    let params = ProjectParams {
+        stepover: 0.5,
+        tolerance: 0.02,
+        ..Default::default()
+    };
+    let patterns = [
+        spiral(&on, 0.5, 0.02, true, true).unwrap(),
+        radial(&on, 0.5, (0.0, std::f64::consts::TAU), Spokes::BothWays).unwrap(),
+        morphed_spiral(
+            &area,
+            &MorphParams {
+                stepover: 0.5,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .0,
+    ];
+    let budget = 0.02 + synthetic::uv_sphere_max_sag(sphere_r, 160, 220) + PITCH;
+    for curves in patterns {
+        let (raw, report) = project(&cutter, &tool, &area, &curves, &params).unwrap();
+        assert!(report.is_clean(), "{report:?}");
+        assert!(report.passes > 0, "{report:?}");
+        machines_clean(
+            &mesh,
+            &tool,
+            &raw,
+            (lo, hi),
+            (sphere_r + 5.0, -sphere_r - 1.0),
+            budget,
+        );
+    }
+}
+
+/// Contour passes round the dome, a level each half millimetre, come out the
+/// dome: every point is where the tool first touches it, never into it.
+#[test]
+fn a_contoured_dome_matches_the_part() {
+    use camcraft_core::reach::LevelReach;
+    use camcraft_core::waterline::{WaterlineParams, waterline};
+
+    let sphere_r = 12.0;
+    let mesh = synthetic::uv_sphere(sphere_r, 160, 220);
+    let cutter = DropCutter::new(&mesh);
+    let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
+    let (lo, hi) = (dvec2(-16.0, -16.0), dvec2(16.0, 16.0));
+    let area = camcraft_geom::contour::Region::rectangle(lo, hi);
+    let mut reach = LevelReach::new(&mesh, &tool, 0.02).unwrap();
+    let (raw, report) = waterline(
+        &mut reach,
+        &cutter,
+        &tool,
+        &area,
+        &WaterlineParams {
+            stepdown: 0.5,
+            top: sphere_r,
+            bottom: 1.0,
+            tolerance: 0.02,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(report.passes > 10, "{report:?}");
+    let budget = 0.02 + synthetic::uv_sphere_max_sag(sphere_r, 160, 220) + PITCH;
+    machines_clean(&mesh, &tool, &raw, (lo, hi), (sphere_r + 5.0, 0.0), budget);
+}
+
+/// Flat passes over a boss on a plate clear both floors to the part and touch
+/// nothing else.
+#[test]
+fn flats_are_cut_to_the_part() {
+    use camcraft_core::adaptive::flat_heights;
+    use camcraft_core::flat::{FlatParams, flat_finish};
+    use camcraft_core::reach::LevelReach;
+    use camcraft_geom::mesh::TriMesh;
+
+    let plate = synthetic::cuboid(dvec3(-12.0, -12.0, 0.0), dvec3(12.0, 12.0, 2.0));
+    // Its walls off the simulator's grid lines, where a column's centre on the
+    // wall itself would be counted as the boss's top, or the plate's.
+    let boss = synthetic::cuboid(dvec3(-4.05, -4.05, 2.0), dvec3(4.05, 4.05, 6.0));
+    let mesh = TriMesh::merged(&[&plate, &boss]).unwrap();
+    let tool = EffectiveTool::new(&Flat::new(1.5).unwrap(), Allowance::none()).unwrap();
+    let (lo, hi) = (dvec2(-12.0, -12.0), dvec2(12.0, 12.0));
+    let area = camcraft_geom::contour::Region::rectangle(lo, hi);
+    let mut reach = LevelReach::new(&mesh, &tool, 0.02).unwrap();
+    let (raw, report) = flat_finish(
+        &mut reach,
+        &area,
+        &FlatParams {
+            stepover: 2.0,
+            tolerance: 0.02,
+            flats: flat_heights(&mesh, 0.02),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(report.cleared, 2, "{report:?}");
+    machines_clean(&mesh, &tool, &raw, (lo, hi), (8.0, -1.0), 0.02 + PITCH);
+}

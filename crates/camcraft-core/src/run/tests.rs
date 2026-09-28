@@ -1009,11 +1009,11 @@ fn facing_takes_the_stock_down_to_the_part() {
 /// The shared job with its roughing made adaptive: a tenth of the 6 mm flat's
 /// width, the same levels.
 fn adaptive_job() -> Job {
-    use crate::job::AdaptiveDirection;
+    use crate::job::CutDirection;
     let mut job: Job = toml::from_str(JOB).unwrap();
     let rough = &mut job.setups[0].operations[0];
     rough.strategy = StrategySpec::Adaptive {
-        direction: AdaptiveDirection::Climb,
+        direction: CutDirection::Climb,
         flat_areas: true,
     };
     rough.passes.stepover = 0.6;
@@ -1075,7 +1075,7 @@ fn adaptive_goes_down_a_helix_where_it_cannot_come_from_the_side() {
     let (mut job, body) = kept_to_plateau("rough", crate::job::Containment::Center);
     let op = &mut job.setups[0].operations[0];
     op.strategy = StrategySpec::Adaptive {
-        direction: crate::job::AdaptiveDirection::Climb,
+        direction: crate::job::CutDirection::Climb,
         flat_areas: true,
     };
     op.passes.stepover = 0.6;

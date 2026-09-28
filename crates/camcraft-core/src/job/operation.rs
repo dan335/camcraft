@@ -120,10 +120,112 @@ pub enum StrategySpec {
     Scallop {
         /// Which way each pass cuts.
         #[serde(default, skip_serializing_if = "is_default")]
-        direction: ScallopDirection,
+        direction: CutDirection,
         /// From the boundary in, or from the middle out.
         #[serde(default, skip_serializing_if = "is_default")]
-        order: ScallopOrder,
+        order: PassOrder,
+        /// Only where the surface is at least this steep, in degrees from level.
+        #[serde(default, skip_serializing_if = "is_default")]
+        slope_from: f64,
+        /// And at most this steep, in degrees from level.
+        #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
+        slope_to: f64,
+    },
+    /// Passes round the part at levels a stepdown apart ([`Depths::Required`]),
+    /// each where the tool touches the walls at its height, and one at the foot
+    /// of every wall standing on a flat. Fusion's Contour: a waterline.
+    Contour {
+        /// Which way each pass cuts; climbing unless asked.
+        #[serde(default = "climb", skip_serializing_if = "is_climb")]
+        direction: CutDirection,
+        /// Level by level, or each piece of the part all the way down.
+        #[serde(default, skip_serializing_if = "is_default")]
+        order: ContourOrder,
+        /// Only where the surface is at least this steep, in degrees from level.
+        #[serde(default, skip_serializing_if = "is_default")]
+        slope_from: f64,
+        /// And at most this steep, in degrees from level.
+        #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
+        slope_to: f64,
+    },
+    /// Each flat face of the part cleared at its own height, rings a stepover
+    /// apart in from its edges, and nothing else. Fusion's Flat.
+    Flat {
+        /// Which way each ring cuts; climbing unless asked.
+        #[serde(default = "climb", skip_serializing_if = "is_climb")]
+        direction: CutDirection,
+        /// From the edges in, or from the middle out.
+        #[serde(default, skip_serializing_if = "is_default")]
+        order: PassOrder,
+    },
+    /// A spiral about a centre, a stepover further out each lap, dropped onto
+    /// the part. Fusion's Spiral.
+    Spiral {
+        /// Its centre, in the setup's frame; the boundary's middle unless given.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        centre: Option<[f64; 2]>,
+        /// Nothing nearer the centre than this, in millimetres.
+        #[serde(default, skip_serializing_if = "is_default")]
+        inner_radius: f64,
+        /// Nothing further out than this, in millimetres; out to the whole
+        /// boundary if zero.
+        #[serde(default, skip_serializing_if = "is_default")]
+        outer_radius: f64,
+        /// Which way it turns: to climb, or to cut conventional.
+        #[serde(default = "climb", skip_serializing_if = "is_climb")]
+        direction: CutDirection,
+        /// In from the outer radius, or out from the inner.
+        #[serde(default, skip_serializing_if = "is_default")]
+        order: PassOrder,
+        /// Only where the surface is at least this steep, in degrees from level.
+        #[serde(default, skip_serializing_if = "is_default")]
+        slope_from: f64,
+        /// And at most this steep, in degrees from level.
+        #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
+        slope_to: f64,
+    },
+    /// Spokes out from a centre, no more than a stepover apart at the outer
+    /// radius, dropped onto the part. Fusion's Radial.
+    Radial {
+        /// Its centre, in the setup's frame; the boundary's middle unless given.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        centre: Option<[f64; 2]>,
+        /// Nothing nearer the centre than this, in millimetres.
+        #[serde(default, skip_serializing_if = "is_default")]
+        inner_radius: f64,
+        /// Nothing further out than this, in millimetres; out to the whole
+        /// boundary if zero.
+        #[serde(default, skip_serializing_if = "is_default")]
+        outer_radius: f64,
+        /// The first spoke's angle, in degrees anticlockwise from +X.
+        #[serde(default, skip_serializing_if = "is_default")]
+        angle_from: f64,
+        /// The last's: a whole turn round unless asked.
+        #[serde(default = "full_turn", skip_serializing_if = "is_full_turn")]
+        angle_to: f64,
+        /// Out and back, or every spoke one way.
+        #[serde(default, skip_serializing_if = "is_default")]
+        direction: RadialDirection,
+        /// Only where the surface is at least this steep, in degrees from level.
+        #[serde(default, skip_serializing_if = "is_default")]
+        slope_from: f64,
+        /// And at most this steep, in degrees from level.
+        #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
+        slope_to: f64,
+    },
+    /// A spiral that turns from the boundary's shape into a centre, its laps a
+    /// stepover apart, dropped onto the part. Fusion's Morphed Spiral.
+    MorphedSpiral {
+        /// Where it turns into, in the setup's frame; the point furthest inside
+        /// the boundary unless given.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        centre: Option<[f64; 2]>,
+        /// Which way it turns: to climb, or to cut conventional.
+        #[serde(default = "climb", skip_serializing_if = "is_climb")]
+        direction: CutDirection,
+        /// In from the boundary, or out from the centre.
+        #[serde(default, skip_serializing_if = "is_default")]
+        order: PassOrder,
         /// Only where the surface is at least this steep, in degrees from level.
         #[serde(default, skip_serializing_if = "is_default")]
         slope_from: f64,
@@ -152,9 +254,9 @@ pub enum StrategySpec {
     /// to keep the arc of the tool in material at the optimal load, the
     /// stepover ([`Depths::Required`]). Fusion's 3D Adaptive Clearing.
     Adaptive {
-        /// Which way the passes cut.
-        #[serde(default, skip_serializing_if = "is_default")]
-        direction: AdaptiveDirection,
+        /// Which way the passes cut; climbing unless asked.
+        #[serde(default = "climb", skip_serializing_if = "is_climb")]
+        direction: CutDirection,
         /// Add a level on each flat face, so floors are left just the stock to
         /// leave down. Fusion's flat area detection.
         #[serde(default = "yes", skip_serializing_if = "is_yes")]
@@ -214,6 +316,11 @@ impl StrategySpec {
         match self {
             StrategySpec::Parallel { .. } => "parallel",
             StrategySpec::Scallop { .. } => "scallop",
+            StrategySpec::Contour { .. } => "contour",
+            StrategySpec::Flat { .. } => "flat",
+            StrategySpec::Spiral { .. } => "spiral",
+            StrategySpec::Radial { .. } => "radial",
+            StrategySpec::MorphedSpiral { .. } => "morphed-spiral",
             StrategySpec::PocketClearing { .. } => "pocket-clearing",
             StrategySpec::Adaptive { .. } => "adaptive",
             StrategySpec::Profile { .. } => "profile",
@@ -223,12 +330,80 @@ impl StrategySpec {
         }
     }
 
+    /// Whether it cuts conventional rather than climb, where that is a setting of
+    /// its own. Facing's direction is its passes' own, and not asked here.
+    pub fn conventional(&self) -> bool {
+        match *self {
+            StrategySpec::Profile { conventional, .. }
+            | StrategySpec::Pocket { conventional }
+            | StrategySpec::PocketClearing { conventional, .. } => conventional,
+            StrategySpec::Adaptive { direction, .. } => direction == CutDirection::Conventional,
+            StrategySpec::Scallop { direction, .. }
+            | StrategySpec::Contour { direction, .. }
+            | StrategySpec::Flat { direction, .. }
+            | StrategySpec::Spiral { direction, .. }
+            | StrategySpec::MorphedSpiral { direction, .. } => {
+                direction == CutDirection::Conventional
+            }
+            StrategySpec::Parallel { .. }
+            | StrategySpec::Radial { .. }
+            | StrategySpec::Face { .. }
+            | StrategySpec::Drill { .. } => false,
+        }
+    }
+
+    /// Whether its passes follow the part down in one, so its links stay down
+    /// over the part rather than level by level: 3D finishing's, but a flat's.
+    pub fn follows_part(&self) -> bool {
+        matches!(
+            self,
+            StrategySpec::Parallel { .. }
+                | StrategySpec::Scallop { .. }
+                | StrategySpec::Contour { .. }
+                | StrategySpec::Spiral { .. }
+                | StrategySpec::Radial { .. }
+                | StrategySpec::MorphedSpiral { .. }
+        )
+    }
+
     /// Whether it is a 2D strategy: flat passes round a boundary, down to a floor.
     pub fn is_2d(&self) -> bool {
         matches!(
             self,
             StrategySpec::Profile { .. } | StrategySpec::Pocket { .. }
         )
+    }
+
+    /// The range of slopes it keeps to, in degrees from level, where it has one.
+    pub fn slopes(&self) -> Option<(f64, f64)> {
+        match *self {
+            StrategySpec::Scallop {
+                slope_from,
+                slope_to,
+                ..
+            }
+            | StrategySpec::Contour {
+                slope_from,
+                slope_to,
+                ..
+            }
+            | StrategySpec::Spiral {
+                slope_from,
+                slope_to,
+                ..
+            }
+            | StrategySpec::Radial {
+                slope_from,
+                slope_to,
+                ..
+            }
+            | StrategySpec::MorphedSpiral {
+                slope_from,
+                slope_to,
+                ..
+            } => Some((slope_from, slope_to)),
+            _ => None,
+        }
     }
 
     /// Which of the settings every operation has this strategy uses.
@@ -249,7 +424,8 @@ impl StrategySpec {
             ramp: true,
             entry: false,
             leads: false,
-            reorder: true,
+            // Only parallel's passes are in no order of their own.
+            reorder: false,
         };
         match *self {
             // Down the surface in one pass, as Fusion's 3D finishing.
@@ -257,22 +433,40 @@ impl StrategySpec {
                 depths: Depths::None,
                 lead_radius: true,
                 ramp: false,
+                reorder: true,
                 ..cuts_loops
             },
-            // As parallel, but its order is its own: reordering would shuffle
-            // and turn round the rings on any flat, which all start level.
-            StrategySpec::Scallop { .. } => Uses {
+            // As parallel, but in its own order: reordering would shuffle and
+            // turn round the rings on any flat, which all start level. A
+            // pattern dropped onto the part is cut in the order it is laid out.
+            StrategySpec::Scallop { .. }
+            | StrategySpec::Spiral { .. }
+            | StrategySpec::Radial { .. }
+            | StrategySpec::MorphedSpiral { .. } => Uses {
                 depths: Depths::None,
                 lead_radius: true,
                 ramp: false,
-                reorder: false,
+                ..cuts_loops
+            },
+            // A level each stepdown is what it is, going round, not over: it
+            // has no stepover. Its order is its own.
+            StrategySpec::Contour { .. } => Uses {
+                stepover: false,
+                depths: Depths::Required,
+                lead_radius: true,
+                ramp: false,
+                ..cuts_loops
+            },
+            // Each flat at its own height, once: rings in from its edges, in
+            // their own order, as a pocket clearing level's are.
+            StrategySpec::Flat { .. } => Uses {
+                depths: Depths::None,
                 ..cuts_loops
             },
             // Slice by slice is what it is. Its order is its own, each level's
             // rings from the middle out, and each the way it cuts.
             StrategySpec::PocketClearing { .. } => Uses {
                 depths: Depths::Required,
-                reorder: false,
                 ..cuts_loops
             },
             // Its stepover is its optimal load. It goes down a helix into what
@@ -281,7 +475,6 @@ impl StrategySpec {
             StrategySpec::Adaptive { .. } => Uses {
                 depths: Depths::Required,
                 entry: true,
-                reorder: false,
                 ..cuts_loops
             },
             // A 2D operation's order is its own: what is inside before what frees
@@ -289,7 +482,6 @@ impl StrategySpec {
             StrategySpec::Pocket { .. } => Uses {
                 boundary: false,
                 outline: true,
-                reorder: false,
                 ..cuts_loops
             },
             StrategySpec::Profile { side, .. } => Uses {
@@ -305,7 +497,6 @@ impl StrategySpec {
                 tabs: true,
                 leads: true,
                 entry: true,
-                reorder: false,
                 ..cuts_loops
             },
             // Straight passes across the stock, in its own order, with only the
@@ -313,7 +504,6 @@ impl StrategySpec {
             StrategySpec::Face { .. } => Uses {
                 boundary: false,
                 stock_to_leave: Leave::Axial,
-                reorder: false,
                 ..cuts_loops
             },
             // Its picks are the holes: no area to keep to or cut round.
@@ -354,6 +544,8 @@ impl StrategySpec {
         match self.uses().depths {
             Depths::None => None,
             _ if matches!(self, StrategySpec::Face { .. }) => None,
+            // A finishing waterline's, as Fusion's Contour.
+            _ if matches!(self, StrategySpec::Contour { .. }) => Some(1.0),
             _ => Some(2.0),
         }
     }
@@ -429,12 +621,18 @@ pub enum FaceDirection {
     Conventional,
 }
 
-/// Which way scallop passes cut.
+/// Which way a strategy's passes cut, where it has the choice: scallop and the
+/// other 3D finishing strategies, and adaptive clearing.
+///
+/// Each strategy says what its default is: finishing goes both ways, as
+/// Fusion's does, and adaptive clearing climbs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum ScallopDirection {
-    /// Closed rings climbing, and an open pass started at whichever end is
-    /// nearer. Fusion's default.
+pub enum CutDirection {
+    /// Both ways. A finishing pass: closed rings climbing, and an open pass
+    /// started at whichever end is nearer. Adaptive clearing: climbing, and
+    /// cutting back conventional where a pass ends beside what is left, rather
+    /// than going back to climb it.
     #[default]
     BothWays,
     /// Every pass climbing.
@@ -443,10 +641,22 @@ pub enum ScallopDirection {
     Conventional,
 }
 
-/// Which way round scallop passes are cut.
+impl CutDirection {
+    /// The generators' own.
+    pub fn engine(self) -> crate::adaptive::Direction {
+        match self {
+            CutDirection::BothWays => crate::adaptive::Direction::BothWays,
+            CutDirection::Climb => crate::adaptive::Direction::Climb,
+            CutDirection::Conventional => crate::adaptive::Direction::Conventional,
+        }
+    }
+}
+
+/// Which way round passes nested one in another are cut: scallop's, a flat's,
+/// a spiral's.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum ScallopOrder {
+pub enum PassOrder {
     /// From the boundary in. Fusion's default.
     #[default]
     OutsideIn,
@@ -454,18 +664,59 @@ pub enum ScallopOrder {
     InsideOut,
 }
 
-/// Which way adaptive clearing's passes cut.
+impl PassOrder {
+    /// The generators' own.
+    pub fn engine(self) -> crate::nesting::Order {
+        match self {
+            PassOrder::OutsideIn => crate::nesting::Order::OutsideIn,
+            PassOrder::InsideOut => crate::nesting::Order::InsideOut,
+        }
+    }
+}
+
+/// Which order a contour's levels are cut in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum AdaptiveDirection {
-    /// Every pass climbing. Fusion's default.
+pub enum ContourOrder {
+    /// Each level all the way round before the next down. Fusion's default.
     #[default]
-    Climb,
-    /// Every pass conventional.
-    Conventional,
-    /// Climbing, and cutting back conventional where a pass ends beside what
-    /// is left, rather than going back to climb it.
+    ByDepth,
+    /// Each piece of the part all the way down before the next.
+    ByArea,
+}
+
+impl ContourOrder {
+    /// The generator's own.
+    pub fn engine(self) -> crate::waterline::Order {
+        match self {
+            ContourOrder::ByDepth => crate::waterline::Order::ByDepth,
+            ContourOrder::ByArea => crate::waterline::Order::ByArea,
+        }
+    }
+}
+
+/// Which way radial spokes are cut.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RadialDirection {
+    /// Out and back in, one after the other. Fusion's default.
+    #[default]
     BothWays,
+    /// Every spoke from the centre out.
+    Outward,
+    /// Every spoke in to the centre.
+    Inward,
+}
+
+impl RadialDirection {
+    /// The generator's own.
+    pub fn engine(self) -> crate::patterns::Spokes {
+        match self {
+            RadialDirection::BothWays => crate::patterns::Spokes::BothWays,
+            RadialDirection::Outward => crate::patterns::Spokes::Outward,
+            RadialDirection::Inward => crate::patterns::Spokes::Inward,
+        }
+    }
 }
 
 /// Which side of its boundary a profile cuts on.
@@ -486,6 +737,58 @@ pub enum ProfileSide {
 
 fn ninety() -> f64 {
     90.0
+}
+
+/// A pattern about a centre's centre and radii, as the operation at `at` has
+/// them: a finite centre, and radii from zero with the inner inside the outer
+/// where the outer is given.
+fn check_centred(
+    at: &str,
+    centre: Option<[f64; 2]>,
+    inner: f64,
+    outer: f64,
+) -> Result<(), JobError> {
+    if let Some([x, y]) = centre
+        && !(x.is_finite() && y.is_finite())
+    {
+        return Err(JobError::BadValue {
+            field: format!("{at}.centre"),
+            value: if x.is_finite() { y } else { x },
+        });
+    }
+    if !(inner.is_finite() && inner >= 0.0) {
+        return Err(JobError::BadValue {
+            field: format!("{at}.inner_radius"),
+            value: inner,
+        });
+    }
+    if !(outer.is_finite() && outer >= 0.0 && (outer == 0.0 || inner < outer)) {
+        return Err(JobError::BadValue {
+            field: format!("{at}.outer_radius"),
+            value: outer,
+        });
+    }
+    Ok(())
+}
+
+fn full_turn() -> f64 {
+    360.0
+}
+
+// A signature serde's `skip_serializing_if` requires.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_full_turn(v: &f64) -> bool {
+    (*v - 360.0).abs() < f64::EPSILON
+}
+
+fn climb() -> CutDirection {
+    CutDirection::Climb
+}
+
+// A signature serde's `skip_serializing_if` requires.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_climb(d: &CutDirection) -> bool {
+    *d == CutDirection::Climb
 }
 
 // A signature serde's `skip_serializing_if` requires.
@@ -865,6 +1168,14 @@ impl Operation {
                     "a V-bit or chamfer mill cannot rough in Z levels; use a parallel pass",
                 );
             }
+            StrategySpec::Contour { .. } => {
+                return Some(
+                    "a V-bit or chamfer mill cannot finish in Z levels; use a parallel pass",
+                );
+            }
+            StrategySpec::Flat { .. } => {
+                return Some("a V-bit or chamfer mill cannot finish a flat");
+            }
             StrategySpec::Pocket { .. } => {
                 return Some("a V-bit or chamfer mill cannot clear a pocket's floor flat");
             }
@@ -1023,11 +1334,7 @@ impl Operation {
                 }
             }
         }
-        if let StrategySpec::Scallop {
-            slope_from,
-            slope_to,
-            ..
-        } = self.strategy
+        if let Some((slope_from, slope_to)) = self.strategy.slopes()
             && !(slope_from.is_finite()
                 && slope_to.is_finite()
                 && (0.0..slope_to).contains(&slope_from)
@@ -1036,6 +1343,47 @@ impl Operation {
             return Err(JobError::BadValue {
                 field: format!("{at}.slope_from"),
                 value: slope_from,
+            });
+        }
+        if let StrategySpec::Spiral {
+            centre,
+            inner_radius,
+            outer_radius,
+            ..
+        }
+        | StrategySpec::Radial {
+            centre,
+            inner_radius,
+            outer_radius,
+            ..
+        } = self.strategy
+        {
+            check_centred(&at, centre, inner_radius, outer_radius)?;
+        }
+        if let StrategySpec::MorphedSpiral {
+            centre: Some([x, y]),
+            ..
+        } = self.strategy
+            && !(x.is_finite() && y.is_finite())
+        {
+            return Err(JobError::BadValue {
+                field: format!("{at}.centre"),
+                value: if x.is_finite() { y } else { x },
+            });
+        }
+        if let StrategySpec::Radial {
+            angle_from,
+            angle_to,
+            ..
+        } = self.strategy
+            && !(angle_from.is_finite()
+                && angle_to.is_finite()
+                && angle_from < angle_to
+                && angle_to <= angle_from + 360.0)
+        {
+            return Err(JobError::BadValue {
+                field: format!("{at}.angle_to"),
+                value: angle_to,
             });
         }
         if let StrategySpec::Drill { peck, dwell } = self.strategy {
@@ -1065,7 +1413,11 @@ impl Operation {
         let d = tool.diameter;
         match self.strategy {
             // A scallop pass is parallel's cusp, kept on a slope too.
-            StrategySpec::Parallel { .. } | StrategySpec::Scallop { .. } => {
+            StrategySpec::Parallel { .. }
+            | StrategySpec::Scallop { .. }
+            | StrategySpec::Spiral { .. }
+            | StrategySpec::Radial { .. }
+            | StrategySpec::MorphedSpiral { .. } => {
                 let r = match tool.kind {
                     ToolKind::Ball => d / 2.0,
                     ToolKind::Bullnose => tool.corner,
@@ -1079,7 +1431,9 @@ impl Operation {
                 // To the micron, as Fusion rounds it.
                 Some((over * 1000.0).round() / 1000.0)
             }
-            StrategySpec::PocketClearing { .. } | StrategySpec::Pocket { .. } => Some(0.6 * d),
+            StrategySpec::PocketClearing { .. }
+            | StrategySpec::Pocket { .. }
+            | StrategySpec::Flat { .. } => Some(0.6 * d),
             // Fusion's optimal load: a tenth of the tool, to the micron.
             StrategySpec::Adaptive { .. } => Some((0.1 * d * 1000.0).round() / 1000.0),
             // Fusion's: 95% of the flat of the tool's end, less its corners.
@@ -1088,7 +1442,9 @@ impl Operation {
                 ToolKind::Bullnose => Some(0.95 * (d - 2.0 * tool.corner)),
                 ToolKind::Ball | ToolKind::Cone | ToolKind::Drill => None,
             },
-            StrategySpec::Profile { .. } | StrategySpec::Drill { .. } => None,
+            StrategySpec::Profile { .. }
+            | StrategySpec::Contour { .. }
+            | StrategySpec::Drill { .. } => None,
         }
     }
 

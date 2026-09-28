@@ -30,16 +30,38 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
   simulator and post never see a rotation. With the default orientation and work
   zero, a run is bit-identical to before setups existed.
 
-An operation has a strategy (parallel or scallop finishing, adaptive clearing,
-pocket clearing, a 2D profile, a 2D pocket, facing or drilling), a tool, heights,
-passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
+An operation has a strategy (parallel, scallop, contour, flat, spiral, radial or
+morphed spiral finishing, adaptive clearing, pocket clearing, a 2D profile, a 2D
+pocket, facing or drilling), a tool, heights, passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
 along the surface, offset in from the boundary and from where the tool stops
 touching the part, so the cusp is the same on a slope as on the flat
 ([decision 0009](decisions/0009-scallop-distance-field.md)). It cuts `direction =
 "both-ways"` (closed rings climbing, open passes from their nearer end) unless
 `"climb"` or `"conventional"`, `order = "outside-in"` unless `"inside-out"`, and
 only where the surface is between `slope_from` and `slope_to` degrees from level
-(0 and 90), never steeper than a plunge. Its stepover starts as parallel's. Pocket clearing (`"pocket-clearing"`, which a job written before
+(0 and 90), never steeper than a plunge. Its stepover starts as parallel's.
+Contour (`"contour"`) is Fusion's: passes round the part at levels a stepdown
+apart (`passes.stepdown`, 1 mm to start), each where the tool touches the walls
+at its height, and one at the foot of every wall standing on a flat, from the
+part's top to its bottom unless `heights` says otherwise
+([decision 0010](decisions/0010-contour-and-flat.md)). It climbs unless
+`direction = "conventional"` or `"both-ways"`, cuts `order = "by-depth"` (each
+level before the next) unless `"by-area"`, and keeps to `slope_from` and
+`slope_to`. Flat (`"flat"`) is Fusion's too: each flat face of the part between
+the top and bottom cleared at its own height, rings a stepover apart in from its
+edges, climbing unless conventional, `order = "outside-in"` unless
+`"inside-out"`; its stepover starts as a pocket's. Spiral (`"spiral"`), radial
+(`"radial"`) and morphed spiral (`"morphed-spiral"`) are patterns laid out seen
+from above and dropped onto the part, as Fusion's
+([decision 0011](decisions/0011-patterns-dropped-onto-the-part.md)), each with
+the slopes and a stepover that starts as parallel's. A spiral and radial spokes
+turn about `centre = [x, y]` (the boundary's middle unless given) from
+`inner_radius` to `outer_radius` (0, and all of the boundary); a spiral climbs
+unless conventional and runs outside in unless `order = "inside-out"`; spokes
+run from `angle_from` to `angle_to` degrees (0 to 360), `direction =
+"both-ways"` unless `"outward"` or `"inward"`. A morphed spiral turns from the
+boundary's shape into its `centre`, the point furthest inside unless given, its
+laps no more than a stepover apart. Pocket clearing (`"pocket-clearing"`, which a job written before
 it had that name calls `"zlevel-rough"`) is Fusion's 3D Pocket Clearing: each
 level's rings a stepover apart in from its edges, cut from the middle out so the
 ring along the walls is last, climbing unless `conventional = true`, with a level
@@ -278,10 +300,13 @@ with.
 | CC206 | note    | material left more than 1 mm above the part                      |
 | CC207 | warn    | a profile's or pocket's area not cut: its floor is not below the top |
 | CC208 | warn    | adaptive clearing left an area it had no room to go down into    |
-| CC209 | warn    | scallop found nothing to finish                                  |
-| CC210 | warn    | scallop's grid coarsened to stay within its budget               |
-| CC211 | note    | stretches too steep for scallop left, for a waterline pass       |
+| CC209 | warn    | a finishing strategy found nothing to finish                     |
+| CC210 | warn    | a scallop's or morphed spiral's grid coarsened to its budget     |
+| CC211 | note    | stretches too steep for a finishing pass left, for a contour pass |
 | CC212 | warn    | points of a scallop's area not reached from its boundary         |
+| CC213 | warn    | a morphed spiral's laps further apart than the stepover          |
+| CC214 | note    | pieces of a morphed spiral cut in rings, too concave for one spiral |
+| CC215 | note    | contour points not pulled onto the part, left clear of it         |
 | CC299 | warn    | a warning from reading the model                                 |
 
 A **plunge** is a continuous descent steeper than `PLUNGE_RATIO` (10:1) that falls

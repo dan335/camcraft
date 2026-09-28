@@ -53,17 +53,12 @@ pub fn crossings(grid: &TriGrid, d: &[f64], step: f64, max_levels: u32) -> Vec<V
     if !(step.is_finite() && step > 0.0) {
         return levels;
     }
-    for t in grid.triangles() {
-        let Some(values) = grid.triangle(t).and_then(|nodes| {
-            nodes
-                .map(|n| value(d, n))
-                .into_iter()
-                .collect::<Option<Vec<f64>>>()
-        }) else {
+    for (t, nodes) in grid.triangles() {
+        let [a, b, c] = nodes.map(|n| value(d, n));
+        let (Some(a), Some(b), Some(c)) = (a, b, c) else {
             continue;
         };
-        let lo = values.iter().copied().fold(f64::INFINITY, f64::min);
-        let hi = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let (lo, hi) = (a.min(b).min(c), a.max(b).max(c));
         // Crossed where lo < k·step ≤ hi; a little wide either side, since a level
         // the triangle does not cross yields nothing.
         let first = ((lo / step) - 1e-9).floor() + 1.0;
@@ -121,13 +116,13 @@ pub fn lines(
 
 /// The piece of the level's line in triangle `t`, higher side on its left.
 fn piece(grid: &TriGrid, d: &[f64], level: f64, t: u32) -> Option<Piece> {
-    let nodes = grid.triangle(t)?;
-    let values = nodes.map(|n| value(d, n));
-    let [va, vb, vc] = values;
-    let values = [va?, vb?, vc?];
-    let above = values.map(|v| v >= level);
-    let count = above.iter().filter(|&&a| a).count();
-    if count == 0 || count == 3 {
+    // Each corner: its node, its value, and whether it is at or above the level.
+    let [a, b, c] = grid
+        .triangle(t)?
+        .map(|n| value(d, n).map(|v| (n, v, v >= level)));
+    let (a, b, c) = (a?, b?, c?);
+    let above = [a, b, c].iter().filter(|corner| corner.2).count();
+    if above == 0 || above == 3 {
         return None;
     }
     // Round the triangle anticlockwise, the piece runs from the edge that goes from
@@ -137,17 +132,7 @@ fn piece(grid: &TriGrid, d: &[f64], level: f64, t: u32) -> Option<Piece> {
     // by interpolation.
     let mut from = None;
     let mut to = None;
-    for (i, j) in [(0usize, 1usize), (1, 2), (2, 0)] {
-        let (Some(&ni), Some(&nj), Some(&vi), Some(&vj), Some(&ai), Some(&aj)) = (
-            nodes.get(i),
-            nodes.get(j),
-            values.get(i),
-            values.get(j),
-            above.get(i),
-            above.get(j),
-        ) else {
-            continue;
-        };
+    for ((ni, vi, ai), (nj, vj, aj)) in [(a, b), (b, c), (c, a)] {
         if ai == aj {
             continue;
         }
@@ -161,11 +146,10 @@ fn piece(grid: &TriGrid, d: &[f64], level: f64, t: u32) -> Option<Piece> {
         }
     }
     let ((from_edge, from), (to_edge, to)) = (from?, to?);
-    let high = nodes
-        .iter()
-        .zip(values)
-        .max_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(&n, _)| n)?;
+    let high = [a, b, c]
+        .into_iter()
+        .max_by(|p, q| p.1.total_cmp(&q.1))
+        .map(|(n, ..)| n)?;
     Some(Piece {
         from_edge,
         to_edge,
@@ -296,9 +280,12 @@ pub fn nest(grid: &TriGrid, d: &[f64], step: f64, lines: &[Vec<IsoLine>]) -> Vec
                 break;
             }
             sets.add(n, v);
-            for m in grid.neighbours(n) {
-                if sets.has(m) {
-                    sets.union(n, m);
+            // A corner met twice is only a cheap find the second time.
+            for (_, corners) in grid.triangles_at(n) {
+                for m in corners {
+                    if m != n && sets.has(m) {
+                        sets.union(n, m);
+                    }
                 }
             }
             next += 1;
@@ -358,7 +345,7 @@ pub fn nest(grid: &TriGrid, d: &[f64], step: f64, lines: &[Vec<IsoLine>]) -> Vec
             let mut triangles: Vec<u32> = sets
                 .members(root)
                 .filter(|&n| value(d, n).is_some_and(|v| v >= crest))
-                .flat_map(|n| grid.triangles_at(n).collect::<Vec<u32>>())
+                .flat_map(|n| grid.triangles_at(n).map(|(t, _)| t))
                 .collect();
             triangles.sort_unstable();
             triangles.dedup();
@@ -545,7 +532,7 @@ mod tests {
     }
 
     fn all(g: &TriGrid) -> Vec<u32> {
-        g.triangles().collect()
+        g.triangles().map(|(t, _)| t).collect()
     }
 
     /// A linear field's line is exactly where it should be, runs with the higher

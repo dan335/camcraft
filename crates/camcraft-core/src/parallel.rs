@@ -32,10 +32,12 @@
 use camcraft_geom::contour::Region;
 use camcraft_geom::steps::bounded_count;
 use glam::{DVec2, DVec3, dvec2, dvec3};
+use rayon::prelude::*;
 
 use crate::dropcutter::{DropCutter, DropTest};
+use crate::projected::Emit;
 use crate::strategy::{StrategyError, check};
-use crate::toolpath::{MoveRole, PLUNGE_RATIO, Toolpath};
+use crate::toolpath::{PLUNGE_RATIO, Toolpath};
 
 /// How to lay out the passes.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -104,6 +106,23 @@ pub struct ParallelReport {
     /// Not a fault. Each one is a plunge that would otherwise have been cut at
     /// feed, and is now a retract and a controlled re-entry.
     pub wall_breaks: u64,
+}
+
+impl std::ops::AddAssign for ParallelReport {
+    fn add_assign(&mut self, other: Self) {
+        let Self {
+            refinement_limited,
+            discontinuities,
+            passes,
+            coverage_breaks,
+            wall_breaks,
+        } = other;
+        self.refinement_limited += refinement_limited;
+        self.discontinuities += discontinuities;
+        self.passes += passes;
+        self.coverage_breaks += coverage_breaks;
+        self.wall_breaks += wall_breaks;
+    }
 }
 
 impl ParallelReport {
@@ -194,7 +213,7 @@ pub fn parallel_finish_within<T: DropTest>(
 
     let lines = bounded_count(((v1 - start) / params.stepover).floor() + 1.0);
 
-    let mut path = Toolpath::new();
+    let mut emit = Emit::new(params.feed);
     let mut report = ParallelReport::default();
     let mut samples = Vec::new();
 
@@ -237,26 +256,20 @@ pub fn parallel_finish_within<T: DropTest>(
                     break_steep(run, params.max_cut_step, &mut report)
                 })
                 .collect();
-            for run in runs {
-                if run.len() < 2 {
+            for points in runs {
+                if points.len() < 2 {
                     continue;
                 }
                 report.passes += 1;
-                let mut first = true;
-                for p in run {
-                    if first {
-                        // The strategy does not plan traverses; the linker does.
-                        path.feed_to(p, MoveRole::Link, params.feed)?;
-                        first = false;
-                    } else {
-                        path.feed_to(p, MoveRole::Cut, params.feed)?;
-                    }
-                }
+                emit.emit(&Run {
+                    points,
+                    closed: false,
+                })?;
             }
         }
     }
 
-    Ok((path, report))
+    Ok((emit.path, report))
 }
 
 /// The tool's tip on the part along the line from `from` to `to`, as a pass
@@ -326,24 +339,77 @@ pub(crate) fn sweep_polyline<T: DropTest>(
     params: &ParallelParams,
     report: &mut ParallelReport,
 ) -> Vec<Run> {
+    let samples = sample_polyline(cutter, tool, points, closed, params, report);
+    runs_of(samples, closed, params, report)
+}
+
+/// Segments of a long open line sampled together, each such stretch on a
+/// thread of its own.
+const CHUNK: usize = 512;
+
+/// As [`sweep_polyline`], for an open line: a long one sampled a stretch of
+/// [`CHUNK`] segments at a time in parallel, each stretch from its first point
+/// afresh, then joined and broken as one. The stretches are the line's own,
+/// whatever the number of cores, so the result is too.
+pub(crate) fn sweep_open_polyline<T: DropTest + Sync>(
+    cutter: &DropCutter<'_>,
+    tool: &T,
+    points: &[DVec2],
+    params: &ParallelParams,
+    report: &mut ParallelReport,
+) -> Vec<Run> {
+    if points.len() <= 2 * CHUNK {
+        return sweep_polyline(cutter, tool, points, false, params, report);
+    }
+    let starts: Vec<usize> = (0..points.len() - 1).step_by(CHUNK).collect();
+    let stretches: Vec<(Vec<Option<DVec3>>, ParallelReport)> = starts
+        .par_iter()
+        .map(|&a| {
+            let b = (a + CHUNK).min(points.len() - 1);
+            let mut found = ParallelReport::default();
+            let stretch = points.get(a..=b).unwrap_or_default();
+            let samples = sample_polyline(cutter, tool, stretch, false, params, &mut found);
+            (samples, found)
+        })
+        .collect();
+    let mut samples = Vec::new();
+    for (k, (some, found)) in stretches.into_iter().enumerate() {
+        *report += found;
+        // Each stretch after the first starts where the last ended, sampled.
+        samples.extend(some.into_iter().skip(usize::from(k > 0)));
+    }
+    runs_of(samples, false, params, report)
+}
+
+/// The tool's tip on the part along `points`, closed back to the first if
+/// `closed`: each segment sampled and refined, `None` where nothing is under
+/// the tool.
+fn sample_polyline<T: DropTest>(
+    cutter: &DropCutter<'_>,
+    tool: &T,
+    points: &[DVec2],
+    closed: bool,
+    params: &ParallelParams,
+    report: &mut ParallelReport,
+) -> Vec<Option<DVec3>> {
     // The drop-cutter's list of triangles, made once for the whole line.
     let scratch = std::cell::RefCell::new(Vec::new());
     let mut samples: Vec<Option<DVec3>> = Vec::new();
-    let mut segment: Vec<Option<DVec3>> = Vec::new();
     let ends = points.iter().zip(
         points
             .iter()
             .skip(1)
             .chain(points.first().filter(|_| closed)),
     );
-    for (i, (&from, &to)) in ends.enumerate() {
+    for (&from, &to) in ends {
         let length = from.distance(to);
         if length < 1e-12 {
             continue;
         }
         let along = (to - from) / length;
-        segment.clear();
-        Line {
+        // Each segment starts where the last ended, already sampled.
+        let start = samples.last().copied();
+        let mut line = Line {
             probe: |u: f64| {
                 let p = from + along * u;
                 cutter
@@ -351,64 +417,84 @@ pub(crate) fn sweep_polyline<T: DropTest>(
                     .map(|z| dvec3(p.x, p.y, z))
             },
             params,
-            out: &mut segment,
+            out: &mut samples,
             report,
+        };
+        match start {
+            Some(first) => line.sweep_on(first, 0.0, length),
+            None => line.sweep(0.0, length),
         }
-        .sweep(0.0, length);
-        // Each segment starts where the last ended.
-        samples.extend(
-            segment
-                .drain(..)
-                .skip(usize::from(i > 0 && !samples.is_empty())),
-        );
     }
 
-    let unbroken = samples.iter().all(Option::is_some);
+    samples
+}
+
+/// A line's samples as runs, broken where it is as a parallel pass is.
+fn runs_of(
+    mut samples: Vec<Option<DVec3>>,
+    closed: bool,
+    params: &ParallelParams,
+    report: &mut ParallelReport,
+) -> Vec<Run> {
     if closed && samples.len() > 2 {
-        // The join is the first point sampled twice: drop the second, and when the
-        // line breaks, start at a break so no run crosses the join.
+        // The join is the first point, sampled again at the end.
         samples.pop();
-        if !unbroken && let Some(at) = samples.iter().position(Option::is_none) {
+        if samples.iter().all(Option::is_some) {
+            return ring(samples.into_iter().flatten().collect(), params, report);
+        }
+        // Broken: started at a break, so no run crosses the join.
+        if let Some(at) = samples.iter().position(Option::is_none) {
             samples.rotate_left(at);
         }
     }
-    let mut runs: Vec<Vec<DVec3>> = samples
-        .split(|p| p.is_none())
-        .flat_map(|run| {
-            let mut run: Vec<DVec3> = run.iter().filter_map(|p| *p).collect();
-            if closed
-                && unbroken
-                && let Some(&first) = run.first()
-            {
-                // Judged steep all the way round.
-                run.push(first);
-            }
-            break_steep(run, params.max_cut_step, report)
-        })
+    open_runs(
+        samples
+            .split(|p| p.is_none())
+            .flat_map(|run| {
+                let run: Vec<DVec3> = run.iter().filter_map(|p| *p).collect();
+                break_steep(run, params.max_cut_step, report)
+            })
+            .collect(),
+    )
+}
+
+/// A closed line sampled all the way round without a break: one closed run, or,
+/// broken down steep stretches, the runs between them, those either side of the
+/// join made one.
+fn ring(mut points: Vec<DVec3>, params: &ParallelParams, report: &mut ParallelReport) -> Vec<Run> {
+    // Judged steep all the way round, back to where it started.
+    if let Some(&first) = points.first() {
+        points.push(first);
+    }
+    let mut runs: Vec<Vec<DVec3>> = break_steep(points, params.max_cut_step, report)
+        .into_iter()
         .filter(|run| run.len() >= 2)
         .collect();
-    if closed && unbroken {
-        if runs.len() == 1 {
-            let mut ring = runs.pop().unwrap_or_default();
-            ring.pop();
-            return vec![Run {
-                points: ring,
-                closed: true,
-            }];
-        }
-        // Broken only down steep stretches: the last and the first meet at the
-        // join, and are one run.
-        if runs.len() > 1
-            && let (Some(last), Some(first)) = (runs.last(), runs.first())
-            && last.last() == first.first()
-        {
-            let head = runs.remove(0);
-            if let Some(last) = runs.last_mut() {
-                last.extend(head.into_iter().skip(1));
-            }
+    if let [whole] = runs.as_mut_slice()
+        && whole.first() == whole.last()
+    {
+        whole.pop();
+        return vec![Run {
+            points: std::mem::take(whole),
+            closed: true,
+        }];
+    }
+    if runs.len() > 1
+        && let (Some(last), Some(first)) = (runs.last(), runs.first())
+        && last.last() == first.first()
+    {
+        let head = runs.remove(0);
+        if let Some(last) = runs.last_mut() {
+            last.extend(head.into_iter().skip(1));
         }
     }
+    open_runs(runs)
+}
+
+/// `runs` as open runs, those of fewer than two points left out.
+fn open_runs(runs: Vec<Vec<DVec3>>) -> Vec<Run> {
     runs.into_iter()
+        .filter(|run| run.len() >= 2)
         .map(|points| Run {
             points,
             closed: false,
@@ -483,11 +569,18 @@ struct Line<'s, F> {
 impl<F: Fn(f64) -> Option<DVec3>> Line<'_, F> {
     /// Sample the line from `a` to `b`.
     fn sweep(&mut self, a: f64, b: f64) {
+        let first = (self.probe)(a);
+        self.out.push(first);
+        self.sweep_on(first, a, b);
+    }
+
+    /// Sample the line from `a` to `b`, whose sample at `a`, `first`, is already
+    /// out.
+    fn sweep_on(&mut self, first: Option<DVec3>, a: f64, b: f64) {
         // Coarse seeding at the stepover, then adaptive refinement between seeds. The
         // seed spacing bounds how small a feature can be missed entirely.
         let steps = bounded_count(((b - a).abs() / self.params.stepover).ceil());
-        let mut prev = (self.probe)(a);
-        self.out.push(prev);
+        let mut prev = first;
 
         for k in 1..=steps {
             let t = f64::from(k) / f64::from(steps);
@@ -551,7 +644,33 @@ impl<F: Fn(f64) -> Option<DVec3>> Line<'_, F> {
 mod tests {
     use super::*;
     use crate::tool::{Ball, Flat};
+    use crate::toolpath::MoveRole;
     use camcraft_geom::synthetic;
+
+    #[test]
+    fn a_long_line_sampled_in_stretches_is_the_line_sampled_whole() {
+        let mesh = synthetic::uv_sphere(10.0, 40, 60);
+        let cutter = DropCutter::new(&mesh);
+        let tool = Ball::new(2.0).unwrap();
+        // A spiral of many short segments, out past the sphere's edge.
+        let points: Vec<DVec2> = (0..3000)
+            .map(|i| {
+                let a = f64::from(i) * 0.02;
+                dvec2(a.cos(), a.sin()) * (0.5 + a * 0.3)
+            })
+            .collect();
+        let (mut whole, mut parts) = (ParallelReport::default(), ParallelReport::default());
+        let one = sweep_polyline(&cutter, &tool, &points, false, &params(), &mut whole);
+        let many = sweep_open_polyline(&cutter, &tool, &points, &params(), &mut parts);
+        assert!(!one.is_empty());
+        assert_eq!(one.len(), many.len());
+        for (a, b) in one.iter().zip(&many) {
+            assert_eq!(a.points.len(), b.points.len());
+            for (p, q) in a.points.iter().zip(&b.points) {
+                assert!(p.distance(*q) < 1e-9, "{p} {q}");
+            }
+        }
+    }
 
     fn params() -> ParallelParams {
         ParallelParams {

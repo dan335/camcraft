@@ -9,14 +9,18 @@ use glam::DVec2;
 
 use crate::adaptive::AdaptiveReport;
 use crate::drilling::DrillReport;
+use crate::flat::FlatReport;
 use crate::frame::Frame;
 use crate::job::{Coolant, HeightContext, SpindleDirection};
 use crate::linker::LinkReport;
+use crate::morph::MorphedSpiralReport;
 use crate::parallel::ParallelReport;
 use crate::planar::PlanarReport;
 use crate::pocket_clearing::ClearingReport;
+use crate::projected::ProjectReport;
 use crate::scallop::ScallopReport;
 use crate::toolpath::Toolpath;
+use crate::waterline::WaterlineReport;
 
 /// What a strategy reported, in its own terms.
 ///
@@ -29,6 +33,16 @@ pub enum StrategyDetail {
     Parallel(ParallelReport),
     /// Scallop finishing.
     Scallop(ScallopReport),
+    /// Contour finishing: a waterline.
+    Contour(WaterlineReport),
+    /// Flat finishing.
+    Flat(FlatReport),
+    /// Spiral finishing.
+    Spiral(ProjectReport),
+    /// Radial finishing.
+    Radial(ProjectReport),
+    /// Morphed spiral finishing.
+    MorphedSpiral(MorphedSpiralReport),
     /// Z-level clearing.
     PocketClearing(ClearingReport),
     /// Adaptive clearing.

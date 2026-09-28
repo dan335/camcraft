@@ -38,8 +38,12 @@ pub mod dropcutter;
 
 pub mod allowance;
 
+mod field;
+mod nesting;
 pub mod parallel;
+pub mod projected;
 pub mod scallop;
+mod slope;
 pub mod strategy;
 pub mod toolpath;
 
@@ -50,6 +54,14 @@ pub mod simadapt;
 pub mod reach;
 
 pub mod pocket_clearing;
+
+pub mod waterline;
+
+pub mod flat;
+
+pub mod patterns;
+
+pub mod morph;
 
 pub mod adaptive;
 

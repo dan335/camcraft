@@ -44,6 +44,8 @@ Invoke-Gate 'determinism' {
         run::tests::bounded_runs_are_deterministic `
         dropcutter::tests::is_deterministic `
         scallop::tests::is_deterministic `
+        waterline::tests::is_deterministic `
+        morph::tests::is_deterministic `
         ordering::tests::ordering_is_deterministic
 }
 

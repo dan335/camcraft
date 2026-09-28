@@ -35,7 +35,7 @@
 //!
 //! The drop-cutter's surface cannot show a wall: the tool goes from its top to its
 //! foot at once. Passes bunch up there; any stretch steeper than a plunge
-//! ([`PLUNGE_RATIO`]) is left out, for a waterline pass, and the slope limits leave
+//! ([`PLUNGE_RATIO`](crate::toolpath::PLUNGE_RATIO)) is left out, for a waterline pass, and the slope limits leave
 //! out what is outside the range asked for.
 //!
 //! # Order and direction
@@ -47,34 +47,29 @@
 //! out. Both ways keeps closed rings climbing, and starts an open pass at whichever
 //! end is nearer.
 
-use camcraft_geom::contour::Region;
+use camcraft_geom::contour::{Region, polyline_length};
 use camcraft_geom::geodesic::{Seed, march};
 use camcraft_geom::isoline::{IsoLine, crossings, lines, nest};
 use camcraft_geom::mesh::TriMesh;
 use camcraft_geom::shadow::shadow_above;
 use camcraft_geom::trigrid::TriGrid;
-use glam::{DVec2, DVec3};
+use glam::DVec2;
 use rayon::prelude::*;
 
 use crate::adaptive::Direction;
 use crate::dropcutter::{DropCutter, DropTest};
+use crate::field::{AreaGrid, count};
+pub use crate::nesting::Order;
+use crate::nesting::{Cuts, Nested, distance, nearest};
 use crate::parallel::{ParallelParams, ParallelReport, Run, sweep_polyline};
 use crate::planar::pieces;
+use crate::projected::{Emit, simplify, start_distance, start_near};
+use crate::slope::{self, SlopeCounts, Sloped};
 use crate::strategy::{StrategyError, check};
-use crate::toolpath::{MoveRole, PLUNGE_RATIO, Toolpath};
+use crate::toolpath::Toolpath;
 
 /// The most levels of passes: far past any real part.
 const MAX_LEVELS: u32 = 100_000;
-
-/// Which way round the passes are cut.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Order {
-    /// From the boundary in. Fusion's default.
-    #[default]
-    OutsideIn,
-    /// Each region's innermost passes first, out to the boundary.
-    InsideOut,
-}
 
 /// How to lay out the passes.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -165,10 +160,10 @@ pub fn contact_region(
     let Some(bounds) = mesh.bounds() else {
         return Ok(Region::default());
     };
-    let shadow = shadow_above(mesh, bounds.min.z - 1.0).map_err(region_err)?;
+    let shadow = shadow_above(mesh, bounds.min.z - 1.0)?;
     shadow
         .grown((max_radius - tolerance).max(tolerance), tolerance * 0.5)
-        .map_err(region_err)
+        .map_err(StrategyError::from)
 }
 
 /// Scallop passes over `area`, where the tool's centre may go and touches the part.
@@ -185,16 +180,7 @@ pub fn scallop_finish<T: DropTest + Sync>(
     check("tolerance", params.tolerance)?;
     check("feed", params.feed)?;
     check("max_cut_step", params.max_cut_step)?;
-    let right = std::f64::consts::FRAC_PI_2 + 1e-9;
-    if !(params.slope_from >= 0.0
-        && params.slope_from < params.slope_to
-        && params.slope_to <= right)
-    {
-        return Err(StrategyError::BadParameter {
-            name: "slope range",
-            value: params.slope_to,
-        });
-    }
+    slope::check_range(params.slope_from, params.slope_to)?;
     let mut report = ScallopReport::default();
     let Some((lo, hi)) = area.bounds() else {
         return Ok((Toolpath::new(), report));
@@ -241,7 +227,7 @@ pub fn scallop_finish<T: DropTest + Sync>(
                     r.lines
                         .iter()
                         .filter_map(|&i| all.get(i))
-                        .map(|l| Sloped::of(grid, l))
+                        .map(|l| sloped(grid, l))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -258,7 +244,7 @@ pub fn scallop_finish<T: DropTest + Sync>(
         }
         let id = nodes.len();
         nodes.push(Plan {
-            lines: r.top_up.iter().map(|l| Sloped::of(grid, l)).collect(),
+            lines: r.top_up.iter().map(|l| sloped(grid, l)).collect(),
             children: Vec::new(),
             root: false,
         });
@@ -271,7 +257,7 @@ pub fn scallop_finish<T: DropTest + Sync>(
         let ring: Vec<Sloped> = piece
             .rings()
             .iter()
-            .map(|c| Sloped::boundary(grid, c.points()))
+            .map(|c| boundary(grid, c.points()))
             .collect();
         report.lines += ring.len() as u64;
         let home = regions
@@ -295,7 +281,7 @@ pub fn scallop_finish<T: DropTest + Sync>(
         max_cut_step: params.max_cut_step,
         ..Default::default()
     };
-    let ceiling = PLUNGE_RATIO.atan().min(params.slope_to);
+    let ceiling = slope::ceiling(params.slope_to);
     let thin = (0.25 * params.tolerance).min(0.05 * grid.pitch());
     let worked: Vec<Result<Worked, StrategyError>> = nodes
         .par_iter()
@@ -303,11 +289,16 @@ pub fn scallop_finish<T: DropTest + Sync>(
             let mut w = Worked::default();
             let mut stretches: Vec<(Vec<DVec2>, bool)> = Vec::new();
             for line in &plan.lines {
-                stretches.extend(line.within(params.slope_from, ceiling, params.slope_to, &mut w));
+                stretches.extend(line.within(
+                    params.slope_from,
+                    ceiling,
+                    params.slope_to,
+                    &mut w.slopes,
+                ));
             }
-            let clipped = area.clip_lines(&stretches).map_err(region_err)?;
+            let clipped = area.clip_lines(&stretches)?;
             for (points, closed) in clipped {
-                if !closed && length(&points) < 2.0 * grid.pitch() {
+                if !closed && polyline_length(&points) < 2.0 * grid.pitch() {
                     w.fragments += 1;
                     continue;
                 }
@@ -324,48 +315,41 @@ pub fn scallop_finish<T: DropTest + Sync>(
             Ok(w)
         })
         .collect();
-    let mut tree = Tree {
-        nodes: Vec::with_capacity(worked.len()),
-        children_first: params.order == Order::InsideOut,
-    };
-    for (plan, w) in nodes.iter().zip(worked) {
+    let mut tree = Nested::new(params.order == Order::InsideOut);
+    let mut roots = Vec::new();
+    let mut nesting = Vec::new();
+    for (i, (plan, w)) in nodes.into_iter().zip(worked).enumerate() {
         let w = w?;
-        report.too_steep += w.too_steep;
-        report.outside_slope += w.outside_slope;
+        report.too_steep += w.slopes.too_steep;
+        report.outside_slope += w.slopes.outside_slope;
         report.fragments += w.fragments;
-        add(&mut report.sweep, &w.sweep);
-        tree.nodes.push(Node {
-            runs: w.runs,
-            children: plan.children.clone(),
-            anchor: None,
-        });
+        report.sweep += w.sweep;
+        tree.push(w.runs);
+        nesting.extend(plan.children.into_iter().map(|c| (i, c)));
+        if plan.root {
+            roots.push(i);
+        }
     }
-    tree.anchor();
+    for (parent, child) in nesting {
+        tree.nest(parent, child);
+    }
+    tree.settle(|r| r.points.first().map(|p| p.truncate()));
 
     // Cut from the roots, the nearest next.
     let conventional = params.direction == Direction::Conventional;
     let mut cut = Cut {
-        path: Toolpath::new(),
-        at: None,
-        feed: params.feed,
+        emit: Emit::new(params.feed),
         // The side still to finish is to the left of a line as found: inward.
         reverse: (params.order == Order::OutsideIn) == (params.climb_right != conventional),
         both_ways: params.direction == Direction::BothWays,
-        passes: 0,
     };
-    let mut roots: Vec<usize> = nodes
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| p.root)
-        .map(|(i, _)| i)
-        .collect();
     while !roots.is_empty() {
-        let at = cut.at;
-        let k = nearest(&roots, |&r| distance(tree.anchor_of(r), at));
-        cut.tree(&mut tree, roots.remove(k))?;
+        let at = cut.emit.at;
+        let k = nearest(&roots, |&r| distance(tree.anchor(r), at));
+        tree.cut(roots.remove(k), &mut cut)?;
     }
-    report.passes = cut.passes;
-    Ok((cut.path, report))
+    report.passes = cut.emit.passes;
+    Ok((cut.emit.path, report))
 }
 
 /// The field of distances along the surface from the boundary, on its grid.
@@ -387,294 +371,69 @@ impl Field {
     ) -> Result<Self, StrategyError> {
         let s = params.stepover;
         // A third of a stepover, and fine enough for the tool's own curvature;
-        // coarsened, if it must be, to stay within the budget.
-        let mut pitch = (s / 3.0).min(tool.max_radius() / 2.0).max(1e-3);
-        let size = |pitch: f64| {
-            let span = hi - lo + DVec2::splat(4.0 * pitch);
-            let nx = count((span.x / pitch).ceil() + 1.0)?;
-            let ny = count((span.y / pitch).ceil() + 1.0)?;
-            Some((nx, ny, u64::from(nx) * u64::from(ny)))
-        };
-        let mut shape = size(pitch);
-        for _ in 0..200 {
-            match shape {
-                Some((_, _, n)) if n <= u64::from(params.max_nodes) => break,
-                _ => {
-                    pitch *= 1.1;
-                    report.coarsened = true;
-                    shape = size(pitch);
-                }
-            }
-        }
-        let Some((nx, ny, total)) = shape.filter(|&(_, _, n)| n <= u64::from(params.max_nodes))
-        else {
-            return Err(StrategyError::FieldTooLarge { pitch });
-        };
-        if pitch > s / 2.0 {
-            return Err(StrategyError::FieldTooLarge { pitch });
-        }
-        report.pitch = pitch;
-        report.nodes = total;
-        let origin = lo - DVec2::splat(2.0 * pitch);
-        let (wide, count_nodes) = (
-            usize::try_from(nx).unwrap_or(0),
-            usize::try_from(total).unwrap_or(0),
-        );
-
-        // Inside the area, a row at a time; and the nodes beside them.
-        let mut inside = vec![false; count_nodes];
-        for iy in 0..ny {
-            let y = origin.y + f64::from(iy) * pitch;
-            for (a, b) in area.spans(DVec2::X, y) {
-                let first = count(((a - origin.x) / pitch).ceil().max(0.0)).unwrap_or(0);
-                let last = count(((b - origin.x) / pitch).floor())
-                    .unwrap_or(0)
-                    .min(nx - 1);
-                for ix in first..=last {
-                    if let Some(cell) =
-                        index(u64::from(iy * nx + ix)).and_then(|i| inside.get_mut(i))
-                    {
-                        *cell = true;
-                    }
-                }
-            }
-        }
-        let is_inside = |ix: i64, iy: i64| {
-            let (Ok(x), Ok(y)) = (u32::try_from(ix), u32::try_from(iy)) else {
-                return false;
-            };
-            x < nx
-                && y < ny
-                && index(u64::from(y * nx + x))
-                    .and_then(|i| inside.get(i))
-                    .copied()
-                    .unwrap_or(false)
-        };
-        let active: Vec<bool> = (0..total)
-            .map(|n| {
-                let (ix, iy) = (
-                    i64::try_from(n % u64::from(nx)).unwrap_or(0),
-                    i64::try_from(n / u64::from(nx)).unwrap_or(0),
-                );
-                (-1..=1).any(|dy| (-1..=1).any(|dx| is_inside(ix + dx, iy + dy)))
-            })
-            .collect();
-
-        // The tool's height at each, dropped exactly, row by row in parallel.
-        let mut z = vec![f32::NAN; count_nodes];
-        z.par_chunks_mut(wide.max(1))
-            .enumerate()
-            .for_each_init(Vec::new, |scratch, (iy, row)| {
-                let y = origin.y + f64::from(u32::try_from(iy).unwrap_or(0)) * pitch;
-                for (ix, cell) in row.iter_mut().enumerate() {
-                    if !active.get(iy * wide + ix).copied().unwrap_or(false) {
-                        continue;
-                    }
-                    let x = origin.x + f64::from(u32::try_from(ix).unwrap_or(0)) * pitch;
-                    if let Some(v) = cutter.drop_at_in(tool, x, y, scratch) {
-                        // Grid storage: f32, as every grid in the workspace.
-                        #[allow(clippy::cast_possible_truncation)]
-                        let v = v as f32;
-                        *cell = v;
-                    }
-                }
-            });
-        let grid = TriGrid::new(origin, pitch, nx, ny, z, active)
-            .ok_or_else(|| StrategyError::Region("the scallop grid could not be made".into()))?;
+        // coarsened, if it must be, to stay within the budget, and no further
+        // than half a stepover. The tool's height at each node, dropped exactly.
+        let pitch = (s / 3.0).min(tool.max_radius() / 2.0).max(1e-3);
+        let on = AreaGrid::over(
+            area,
+            (lo, hi),
+            pitch,
+            s / 2.0,
+            params.max_nodes,
+            |x, y, scratch| cutter.drop_at_in(tool, x, y, scratch),
+        )?;
+        report.pitch = on.pitch;
+        report.nodes = on.nodes;
+        report.coarsened = on.coarsened;
+        let grid = &on.grid;
 
         // The seeds: each node within a cell's diagonal of the boundary, at its
-        // exact distance to the nearest point of it, over the part.
-        let reach = std::f64::consts::SQRT_2 * pitch + 1e-9;
-        let segments: Vec<(DVec2, DVec2)> = area
-            .rings()
-            .iter()
-            .flat_map(|r| {
-                let p = r.points();
-                p.iter()
-                    .copied()
-                    .zip(p.iter().copied().cycle().skip(1))
-                    .take(p.len())
-            })
-            .collect();
-        let near: Vec<Vec<(u32, f64)>> = segments
+        // exact distance to the nearest point of it, over the part, one drop a
+        // node.
+        let seeds: Vec<Seed> = on
+            .boundary_feet(area)
             .par_iter()
-            .map_init(Vec::new, |scratch, &(a, b)| {
-                let mut out = Vec::new();
-                let (min, max) = (
-                    a.min(b) - DVec2::splat(1.5 * pitch),
-                    a.max(b) + DVec2::splat(1.5 * pitch),
-                );
-                let x0 = count(((min.x - origin.x) / pitch).floor().max(0.0)).unwrap_or(0);
-                let y0 = count(((min.y - origin.y) / pitch).floor().max(0.0)).unwrap_or(0);
-                let x1 = count(((max.x - origin.x) / pitch).ceil())
-                    .unwrap_or(0)
-                    .min(nx - 1);
-                let y1 = count(((max.y - origin.y) / pitch).ceil())
-                    .unwrap_or(0)
-                    .min(ny - 1);
-                for iy in y0..=y1 {
-                    for ix in x0..=x1 {
-                        let Some(n) = grid.node(ix, iy) else { continue };
-                        let (Some(p), Some(zn)) = (grid.xy(n), grid.z(n)) else {
-                            continue;
-                        };
-                        let foot = closest_on_segment(p, a, b);
-                        let flat = p.distance(foot);
-                        if flat > reach {
-                            continue;
-                        }
-                        let d = cutter
-                            .drop_at_in(tool, foot.x, foot.y, scratch)
-                            .map_or(flat, |zf| {
-                                DVec3::new(p.x, p.y, zn).distance(foot.extend(zf))
-                            });
-                        out.push((n, d));
-                    }
-                }
-                out
-            })
-            .collect();
-        let mut best = vec![f64::INFINITY; count_nodes];
-        for (n, d) in near.into_iter().flatten() {
-            if let Some(slot) = index(u64::from(n)).and_then(|i| best.get_mut(i))
-                && d < *slot
-            {
-                *slot = d;
-            }
-        }
-        let seeds: Vec<Seed> = best
-            .iter()
             .enumerate()
-            .filter(|(_, d)| d.is_finite())
-            .filter_map(|(n, &d)| {
-                Some(Seed {
-                    node: u32::try_from(n).ok()?,
-                    distance: d,
-                })
+            .filter_map(|(n, foot)| Some((u32::try_from(n).ok()?, (*foot)?)))
+            .map_init(Vec::new, |scratch, (n, (flat, foot))| {
+                let distance = match (
+                    grid.point(n),
+                    cutter.drop_at_in(tool, foot.x, foot.y, scratch),
+                ) {
+                    (Some(p), Some(zf)) => p.distance(foot.extend(zf)),
+                    _ => flat,
+                };
+                Seed { node: n, distance }
             })
             .collect();
 
-        let field = march(&grid, &seeds, |n| grid.point(n));
+        let mut d = march(grid, &seeds, |n| grid.point(n)).d;
+        report.unreached = on.unreached(&d);
         // Outside the area, negative: only the lines inside it are passes.
-        let d: Vec<f64> = field
-            .d
-            .iter()
-            .zip(&inside)
-            .map(|(&d, &inside)| if inside { d } else { -d })
-            .collect();
-        report.unreached = (0..grid.nodes())
-            .filter(|&n| {
-                grid.defined(n)
-                    && index(u64::from(n))
-                        .and_then(|i| inside.get(i))
-                        .copied()
-                        .unwrap_or(false)
-                    && field.at(n).is_none()
-            })
-            .count() as u64;
-        Ok(Self { grid, d })
+        for (d, &inside) in d.iter_mut().zip(&on.inside) {
+            if !inside {
+                *d = -*d;
+            }
+        }
+        Ok(Self { grid: on.grid, d })
     }
 }
 
-/// A line to cut, with the slope under each of its segments.
-struct Sloped {
-    points: Vec<DVec2>,
-    closed: bool,
-    /// One a segment: `points[i]` to the next. `None` where nothing is known.
-    slopes: Vec<Option<f64>>,
+/// A line of the field, with its triangles' slopes.
+fn sloped(grid: &TriGrid, line: &IsoLine) -> Sloped {
+    Sloped {
+        points: line.points.clone(),
+        closed: line.closed,
+        slopes: line.triangles.iter().map(|&t| grid.slope(t)).collect(),
+    }
 }
 
-impl Sloped {
-    /// A line of the field, with its triangles' slopes.
-    fn of(grid: &TriGrid, line: &IsoLine) -> Self {
-        Self {
-            points: line.points.clone(),
-            closed: line.closed,
-            slopes: line.triangles.iter().map(|&t| grid.slope(t)).collect(),
-        }
-    }
-
-    /// A ring of the boundary, split so no segment is longer than the grid's pitch,
-    /// with the slope under the middle of each.
-    fn boundary(grid: &TriGrid, ring: &[DVec2]) -> Self {
-        let pitch = grid.pitch();
-        let mut points = Vec::new();
-        for (&a, &b) in ring
-            .iter()
-            .zip(ring.iter().cycle().skip(1))
-            .take(ring.len())
-        {
-            let pieces = count((a.distance(b) / pitch).ceil()).unwrap_or(1).max(1);
-            for k in 0..pieces {
-                points.push(a.lerp(b, f64::from(k) / f64::from(pieces)));
-            }
-        }
-        let slopes = points
-            .iter()
-            .zip(points.iter().cycle().skip(1))
-            .take(points.len())
-            .map(|(&a, &b)| grid.locate(a.midpoint(b)).and_then(|t| grid.slope(t)))
-            .collect();
-        Self {
-            points,
-            closed: true,
-            slopes,
-        }
-    }
-
-    /// The stretches of it whose slope is in `[from, to]` and not past `ceiling`,
-    /// counting what is left out.
-    fn within(&self, from: f64, ceiling: f64, to: f64, w: &mut Worked) -> Vec<(Vec<DVec2>, bool)> {
-        let keep: Vec<bool> = self
-            .slopes
-            .iter()
-            .map(|s| s.is_none_or(|s| s >= from - 1e-12 && s <= ceiling + 1e-12))
-            .collect();
-        if keep.iter().all(|&k| k) {
-            return vec![(self.points.clone(), self.closed)];
-        }
-        // Each stretch left out, as too steep or out of the range asked for.
-        let mut previous = self.closed && keep.last() == Some(&false);
-        for (k, s) in keep.iter().zip(&self.slopes) {
-            if !k && !previous {
-                match s {
-                    Some(s) if *s > ceiling && *s <= to + 1e-12 => w.too_steep += 1,
-                    _ => w.outside_slope += 1,
-                }
-            }
-            previous = !k;
-        }
-        let segments = self.slopes.len();
-        // A closed line is started just after a stretch left out.
-        let start = if self.closed {
-            keep.iter().position(|&k| !k).map_or(0, |i| i + 1)
-        } else {
-            0
-        };
-        let mut out = Vec::new();
-        let mut run: Vec<DVec2> = Vec::new();
-        for step in 0..segments {
-            let i = (start + step) % segments;
-            let (Some(&a), Some(&b)) = (
-                self.points.get(i),
-                self.points.get((i + 1) % self.points.len()),
-            ) else {
-                continue;
-            };
-            if keep.get(i).copied().unwrap_or(true) {
-                if run.is_empty() {
-                    run.push(a);
-                }
-                run.push(b);
-            } else if !run.is_empty() {
-                out.push((std::mem::take(&mut run), false));
-            }
-        }
-        if run.len() >= 2 {
-            out.push((run, false));
-        }
-        out
-    }
+/// A ring of the boundary, split so no segment is longer than the grid's pitch,
+/// with the slope under the middle of each.
+fn boundary(grid: &TriGrid, ring: &[DVec2]) -> Sloped {
+    Sloped::split(ring, true, grid.pitch(), |m, _| {
+        grid.locate(m).and_then(|t| grid.slope(t))
+    })
 }
 
 /// A node of the tree before its lines are sampled.
@@ -689,124 +448,42 @@ struct Plan {
 struct Worked {
     runs: Vec<Run>,
     sweep: ParallelReport,
-    too_steep: u64,
-    outside_slope: u64,
+    slopes: SlopeCounts,
     fragments: u64,
-}
-
-/// The passes, as the regions they bound nest.
-struct Tree {
-    nodes: Vec<Node>,
-    /// Whether a node's children are cut before it: inside out.
-    children_first: bool,
-}
-
-struct Node {
-    runs: Vec<Run>,
-    children: Vec<usize>,
-    /// Where the node's subtree cuts, to go to the nearest by.
-    anchor: Option<DVec2>,
-}
-
-impl Tree {
-    /// Each node's anchor: its first run's start, or its first child's anchor.
-    fn anchor(&mut self) {
-        // A node's children may come before or after it, so settle them all.
-        for _ in 0..self.nodes.len() {
-            let mut changed = false;
-            for i in 0..self.nodes.len() {
-                if self.nodes.get(i).is_some_and(|n| n.anchor.is_some()) {
-                    continue;
-                }
-                let anchor = self.nodes.get(i).and_then(|n| {
-                    n.runs
-                        .first()
-                        .and_then(|r| r.points.first())
-                        .map(|p| p.truncate())
-                        .or_else(|| n.children.iter().find_map(|&c| self.anchor_of(c)))
-                });
-                if anchor.is_some()
-                    && let Some(n) = self.nodes.get_mut(i)
-                {
-                    n.anchor = anchor;
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-    }
-
-    fn anchor_of(&self, i: usize) -> Option<DVec2> {
-        self.nodes.get(i).and_then(|n| n.anchor)
-    }
 }
 
 /// Cutting the passes into the path, in order, from where the tool is.
 struct Cut {
-    path: Toolpath,
-    at: Option<DVec2>,
-    feed: f64,
+    emit: Emit,
     /// Whether a line as found is reversed to cut the way asked for.
     reverse: bool,
     /// Whether an open pass may be started at either end.
     both_ways: bool,
-    passes: u64,
 }
 
-impl Cut {
-    /// The subtree at `root`, each node's runs before its children or after, and
-    /// of the children the nearest next. Walked with a stack of its own, as a tree
-    /// is as deep as the area is wide over the stepover.
-    fn tree(&mut self, tree: &mut Tree, root: usize) -> Result<(), StrategyError> {
-        let children = |tree: &Tree, n: usize| {
-            tree.nodes
-                .get(n)
-                .map(|node| node.children.clone())
-                .unwrap_or_default()
-        };
-        let mut stack: Vec<(usize, Vec<usize>, bool)> = vec![(root, children(tree, root), false)];
-        while let Some((node, left, cut)) = stack.last_mut() {
-            let node = *node;
-            if !*cut && (!tree.children_first || left.is_empty()) {
-                *cut = true;
-                let runs = tree
-                    .nodes
-                    .get_mut(node)
-                    .map(|n| std::mem::take(&mut n.runs))
-                    .unwrap_or_default();
-                self.runs(runs)?;
-                continue;
-            }
-            if left.is_empty() {
-                stack.pop();
-                continue;
-            }
-            let at = self.at;
-            let k = nearest(left, |&c| distance(tree.anchor_of(c), at));
-            let child = left.remove(k);
-            stack.push((child, children(tree, child), false));
-        }
-        Ok(())
+impl Cuts<Run> for Cut {
+    type Error = StrategyError;
+
+    fn at(&self) -> Option<DVec2> {
+        self.emit.at
     }
 
     /// Runs the same distance in, the nearest next, each the way it cuts.
-    fn runs(&mut self, mut runs: Vec<Run>) -> Result<(), StrategyError> {
+    fn cut(&mut self, mut runs: Vec<Run>) -> Result<(), StrategyError> {
         for run in &mut runs {
             if self.reverse {
                 run.points.reverse();
             }
         }
         while !runs.is_empty() {
-            let at = self.at;
+            let at = self.emit.at;
             let both_ways = self.both_ways;
             let k = nearest(&runs, |r| match at {
                 Some(at) => start_distance(r, at, both_ways),
                 None => 0.0,
             });
             let mut run = runs.remove(k);
-            if let Some(at) = self.at {
+            if let Some(at) = self.emit.at {
                 if run.closed {
                     start_near(&mut run, at);
                 } else if self.both_ways {
@@ -818,189 +495,10 @@ impl Cut {
                     }
                 }
             }
-            self.emit(&run)?;
+            self.emit.emit(&run)?;
         }
         Ok(())
     }
-
-    fn emit(&mut self, run: &Run) -> Result<(), StrategyError> {
-        let Some(&first) = run.points.first() else {
-            return Ok(());
-        };
-        // The strategy does not plan how to arrive; the linker does.
-        self.path.feed_to(first, MoveRole::Link, self.feed)?;
-        for &p in run.points.iter().skip(1) {
-            self.path.feed_to(p, MoveRole::Cut, self.feed)?;
-        }
-        if run.closed {
-            self.path.feed_to(first, MoveRole::Cut, self.feed)?;
-        }
-        self.passes += 1;
-        self.at = Some(if run.closed {
-            first.truncate()
-        } else {
-            run.points.last().map_or(first, |p| *p).truncate()
-        });
-        Ok(())
-    }
-}
-
-/// How far the tool at `at` is from where `run` would start.
-fn start_distance(run: &Run, at: DVec2, both_ways: bool) -> f64 {
-    let d = |p: &DVec3| p.truncate().distance(at);
-    if run.closed {
-        run.points.iter().map(d).fold(f64::MAX, f64::min)
-    } else {
-        let first = run.points.first().map_or(f64::MAX, d);
-        let last = run.points.last().map_or(f64::MAX, d);
-        if both_ways { first.min(last) } else { first }
-    }
-}
-
-/// A closed run started at its point nearest `at`, going the same way.
-fn start_near(run: &mut Run, at: DVec2) {
-    let nearest = run
-        .points
-        .iter()
-        .enumerate()
-        .min_by(|a, b| {
-            a.1.truncate()
-                .distance(at)
-                .total_cmp(&b.1.truncate().distance(at))
-        })
-        .map(|(i, _)| i);
-    if let Some(i) = nearest {
-        run.points.rotate_left(i);
-    }
-}
-
-/// Which of `items` is nearest, by `distance`, ties to the earlier.
-fn nearest<T>(items: &[T], distance: impl Fn(&T) -> f64) -> usize {
-    items
-        .iter()
-        .enumerate()
-        .fold((0, f64::MAX), |best, (i, item)| {
-            let d = distance(item);
-            if d < best.1 { (i, d) } else { best }
-        })
-        .0
-}
-
-/// How far `to` is from `at`: nowhere is as far as can be, and from nowhere
-/// everything is as near.
-fn distance(to: Option<DVec2>, at: Option<DVec2>) -> f64 {
-    match (to, at) {
-        (Some(to), Some(at)) => to.distance(at),
-        (_, None) => 0.0,
-        (None, Some(_)) => f64::MAX,
-    }
-}
-
-/// `line`, thinned: each point dropped that is within `tolerance` of the line
-/// through the ones kept either side of it, seen from above (Douglas and Peucker).
-fn simplify(line: &[DVec2], closed: bool, tolerance: f64) -> Vec<DVec2> {
-    let mut points = line.to_vec();
-    if closed && let Some(&first) = line.first() {
-        points.push(first);
-    }
-    if points.len() < 3 {
-        return line.to_vec();
-    }
-    let mut keep = vec![false; points.len()];
-    if let Some(k) = keep.first_mut() {
-        *k = true;
-    }
-    if let Some(k) = keep.last_mut() {
-        *k = true;
-    }
-    let mut spans = vec![(0usize, points.len() - 1)];
-    // A closed line starts and ends at one point: split it at the point furthest
-    // from there first, so the rest is judged against a real chord.
-    if closed && let Some(&start) = points.first() {
-        let far = points
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.distance(start).total_cmp(&b.1.distance(start)))
-            .map_or(0, |(i, _)| i);
-        if far > 0 && far < points.len() - 1 {
-            if let Some(k) = keep.get_mut(far) {
-                *k = true;
-            }
-            spans = vec![(0, far), (far, points.len() - 1)];
-        }
-    }
-    while let Some((a, b)) = spans.pop() {
-        let (Some(&pa), Some(&pb)) = (points.get(a), points.get(b)) else {
-            continue;
-        };
-        let mut worst = (0usize, 0.0f64);
-        for i in a + 1..b {
-            let Some(&p) = points.get(i) else { continue };
-            let d = closest_on_segment(p, pa, pb).distance(p);
-            if d > worst.1 {
-                worst = (i, d);
-            }
-        }
-        if worst.1 > tolerance {
-            if let Some(k) = keep.get_mut(worst.0) {
-                *k = true;
-            }
-            spans.push((a, worst.0));
-            spans.push((worst.0, b));
-        }
-    }
-    let mut out: Vec<DVec2> = points
-        .iter()
-        .zip(&keep)
-        .filter_map(|(&p, &k)| k.then_some(p))
-        .collect();
-    if closed {
-        out.pop();
-    }
-    out
-}
-
-/// The point of segment `a`–`b` nearest `p`.
-fn closest_on_segment(p: DVec2, a: DVec2, b: DVec2) -> DVec2 {
-    let ab = b - a;
-    let len2 = ab.length_squared();
-    if len2 <= 0.0 {
-        return a;
-    }
-    a + ab * ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
-}
-
-fn length(points: &[DVec2]) -> f64 {
-    points
-        .iter()
-        .zip(points.iter().skip(1))
-        .map(|(a, b)| a.distance(*b))
-        .sum()
-}
-
-/// `a` with `b`'s counts added.
-fn add(a: &mut ParallelReport, b: &ParallelReport) {
-    a.refinement_limited += b.refinement_limited;
-    a.discontinuities += b.discontinuities;
-    a.passes += b.passes;
-    a.coverage_breaks += b.coverage_breaks;
-    a.wall_breaks += b.wall_breaks;
-}
-
-/// A whole, non-negative count that fits a `u32`.
-fn count(v: f64) -> Option<u32> {
-    // Checked in range first, so the narrowing is exact.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    (v.is_finite() && (0.0..=f64::from(u32::MAX)).contains(&v)).then_some(v as u32)
-}
-
-/// `n` as an index.
-fn index(n: u64) -> Option<usize> {
-    usize::try_from(n).ok()
-}
-
-fn region_err(e: camcraft_geom::contour::RegionError) -> StrategyError {
-    StrategyError::Region(e.to_string())
 }
 
 #[cfg(test)]
@@ -1014,9 +512,10 @@ fn region_err(e: camcraft_geom::contour::RegionError) -> StrategyError {
 mod tests {
     use super::*;
     use crate::tool::{Ball, Flat};
+    use crate::toolpath::MoveRole;
     use camcraft_geom::contour::Contour;
     use camcraft_geom::synthetic;
-    use glam::dvec2;
+    use glam::{DVec3, dvec2};
 
     /// Each pass in `path`: its points, in order.
     fn passes(path: &Toolpath) -> Vec<Vec<DVec3>> {

@@ -1490,8 +1490,8 @@ fn scallop_reads_with_fusions_defaults() {
     let mut j: Job = toml::from_str(&text).unwrap();
     j.validate().unwrap();
     let scallop = StrategySpec::Scallop {
-        direction: ScallopDirection::BothWays,
-        order: ScallopOrder::OutsideIn,
+        direction: CutDirection::BothWays,
+        order: PassOrder::OutsideIn,
         slope_from: 0.0,
         slope_to: 90.0,
     };
@@ -1520,8 +1520,8 @@ fn scallop_reads_with_fusions_defaults() {
     );
 
     op.strategy = StrategySpec::Scallop {
-        direction: ScallopDirection::Climb,
-        order: ScallopOrder::InsideOut,
+        direction: CutDirection::Climb,
+        order: PassOrder::InsideOut,
         slope_from: 10.0,
         slope_to: 60.0,
     };
@@ -1532,8 +1532,8 @@ fn scallop_reads_with_fusions_defaults() {
 
     for (from, to) in [(60.0, 10.0), (0.0, 95.0), (-5.0, 30.0)] {
         j.setups[0].operations[1].strategy = StrategySpec::Scallop {
-            direction: ScallopDirection::BothWays,
-            order: ScallopOrder::OutsideIn,
+            direction: CutDirection::BothWays,
+            order: PassOrder::OutsideIn,
             slope_from: from,
             slope_to: to,
         };
@@ -1544,4 +1544,214 @@ fn scallop_reads_with_fusions_defaults() {
         "strategy = \"scallop\"\nangle = 45.0\n",
     );
     assert!(toml::from_str::<Job>(&unknown).is_err());
+}
+
+/// The finishing strategies after Fusion's Contour, Flat, Spiral, Radial and
+/// Morphed Spiral each read with Fusion's defaults and write back only what
+/// differs from them; each refuses another's settings.
+#[test]
+fn more_finishing_strategies_read_with_fusions_defaults() {
+    let with = |strategy: &str, extra: &str, passes: &str| {
+        SAMPLE.replace(
+            "strategy = \"parallel\"\ntool = \"finish-4-ball\"\nangle = 90.0\npasses = { stepover = 0.4, feed = 2400.0 }\n",
+            &format!("strategy = \"{strategy}\"\ntool = \"finish-4-ball\"\n{extra}passes = {{ {passes} }}\n"),
+        )
+    };
+    let cases = [
+        (
+            with("contour", "", "stepdown = 0.5, feed = 2400.0"),
+            StrategySpec::Contour {
+                direction: CutDirection::Climb,
+                order: ContourOrder::ByDepth,
+                slope_from: 0.0,
+                slope_to: 90.0,
+            },
+        ),
+        (
+            with("flat", "", "stepover = 1.5, feed = 2400.0"),
+            StrategySpec::Flat {
+                direction: CutDirection::Climb,
+                order: PassOrder::OutsideIn,
+            },
+        ),
+        (
+            with("spiral", "", "stepover = 0.4, feed = 2400.0"),
+            StrategySpec::Spiral {
+                centre: None,
+                inner_radius: 0.0,
+                outer_radius: 0.0,
+                direction: CutDirection::Climb,
+                order: PassOrder::OutsideIn,
+                slope_from: 0.0,
+                slope_to: 90.0,
+            },
+        ),
+        (
+            with("radial", "", "stepover = 0.4, feed = 2400.0"),
+            StrategySpec::Radial {
+                centre: None,
+                inner_radius: 0.0,
+                outer_radius: 0.0,
+                angle_from: 0.0,
+                angle_to: 360.0,
+                direction: RadialDirection::BothWays,
+                slope_from: 0.0,
+                slope_to: 90.0,
+            },
+        ),
+        (
+            with("morphed-spiral", "", "stepover = 0.4, feed = 2400.0"),
+            StrategySpec::MorphedSpiral {
+                centre: None,
+                direction: CutDirection::Climb,
+                order: PassOrder::OutsideIn,
+                slope_from: 0.0,
+                slope_to: 90.0,
+            },
+        ),
+    ];
+    for (text, spec) in cases {
+        let j: Job = toml::from_str(&text).unwrap();
+        j.validate().unwrap();
+        assert_eq!(j.setups[0].operations[1].strategy, spec);
+        let written = toml::to_string(&j).unwrap();
+        assert!(
+            written.contains(&format!("strategy = \"{}\"", spec.name())),
+            "{written}"
+        );
+        for default in [
+            "direction",
+            "order",
+            "slope_from",
+            "slope_to",
+            "centre",
+            "inner_radius",
+            "outer_radius",
+            "angle_from",
+            "angle_to",
+        ] {
+            assert!(
+                !written.contains(&format!("\n{default} =")),
+                "{default} written: {written}"
+            );
+        }
+        assert_eq!(toml::from_str::<Job>(&written).unwrap(), j);
+        // Scallop's angle is not theirs.
+        let unknown = text.replace(
+            &format!("strategy = \"{}\"\n", spec.name()),
+            &format!("strategy = \"{}\"\nangle = 45.0\n", spec.name()),
+        );
+        assert!(toml::from_str::<Job>(&unknown).is_err(), "{}", spec.name());
+    }
+}
+
+/// What each new finishing strategy uses of the settings every operation has,
+/// and the stepover and stepdown it starts with.
+#[test]
+fn more_finishing_strategies_use_what_fusions_do() {
+    let j = sample();
+    let ball = j.tools["finish-4-ball"].clone();
+    let op = |strategy| Operation {
+        strategy,
+        ..j.setups[0].operations[1].clone()
+    };
+    let contour = op(StrategySpec::Contour {
+        direction: CutDirection::Climb,
+        order: ContourOrder::ByArea,
+        slope_from: 30.0,
+        slope_to: 90.0,
+    });
+    assert_eq!(contour.strategy.uses().depths, Depths::Required);
+    assert!(!contour.strategy.uses().stepover);
+    assert_eq!(contour.strategy.default_stepdown(), Some(1.0));
+    assert_eq!(contour.default_stepover(&ball, 0.01), None);
+    let flat = op(StrategySpec::Flat {
+        direction: CutDirection::Conventional,
+        order: PassOrder::InsideOut,
+    });
+    assert!(flat.strategy.conventional());
+    assert_eq!(flat.strategy.uses().depths, Depths::None);
+    assert_eq!(
+        flat.default_stepover(&ball, 0.01),
+        Some(0.6 * ball.diameter)
+    );
+    let parallel = op(StrategySpec::Parallel { angle: 0.0 });
+    for strategy in [
+        StrategySpec::Spiral {
+            centre: Some([1.0, 2.0]),
+            inner_radius: 1.0,
+            outer_radius: 10.0,
+            direction: CutDirection::Climb,
+            order: PassOrder::InsideOut,
+            slope_from: 0.0,
+            slope_to: 90.0,
+        },
+        StrategySpec::Radial {
+            centre: None,
+            inner_radius: 0.0,
+            outer_radius: 0.0,
+            angle_from: 0.0,
+            angle_to: 180.0,
+            direction: RadialDirection::Outward,
+            slope_from: 0.0,
+            slope_to: 90.0,
+        },
+        StrategySpec::MorphedSpiral {
+            centre: None,
+            direction: CutDirection::Climb,
+            order: PassOrder::OutsideIn,
+            slope_from: 0.0,
+            slope_to: 45.0,
+        },
+    ] {
+        let o = op(strategy);
+        assert_eq!(
+            o.default_stepover(&ball, 0.01),
+            parallel.default_stepover(&ball, 0.01)
+        );
+        assert!(!o.strategy.uses().reorder);
+        assert!(o.strategy.slopes().is_some());
+    }
+}
+
+/// A pattern about a centre is refused a radius or an angle it cannot have.
+#[test]
+fn patterns_about_a_centre_refuse_what_they_cannot_have() {
+    let mut j = sample();
+    let spiral = |inner: f64, outer: f64| StrategySpec::Spiral {
+        centre: None,
+        inner_radius: inner,
+        outer_radius: outer,
+        direction: CutDirection::Climb,
+        order: PassOrder::OutsideIn,
+        slope_from: 0.0,
+        slope_to: 90.0,
+    };
+    for (inner, outer) in [(-1.0, 0.0), (5.0, 5.0), (6.0, 5.0), (0.0, f64::NAN)] {
+        j.setups[0].operations[1].strategy = spiral(inner, outer);
+        assert!(j.validate().is_err(), "{inner}..{outer} accepted");
+    }
+    j.setups[0].operations[1].strategy = spiral(2.0, 0.0);
+    j.validate().unwrap();
+    for (from, to) in [(90.0, 90.0), (0.0, 400.0), (10.0, 5.0)] {
+        j.setups[0].operations[1].strategy = StrategySpec::Radial {
+            centre: None,
+            inner_radius: 0.0,
+            outer_radius: 0.0,
+            angle_from: from,
+            angle_to: to,
+            direction: RadialDirection::BothWays,
+            slope_from: 0.0,
+            slope_to: 90.0,
+        };
+        assert!(j.validate().is_err(), "{from}..{to} accepted");
+    }
+    j.setups[0].operations[1].strategy = StrategySpec::MorphedSpiral {
+        centre: Some([f64::INFINITY, 0.0]),
+        direction: CutDirection::Climb,
+        order: PassOrder::OutsideIn,
+        slope_from: 0.0,
+        slope_to: 90.0,
+    };
+    assert!(j.validate().is_err());
 }

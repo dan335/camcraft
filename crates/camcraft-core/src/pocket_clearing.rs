@@ -53,14 +53,15 @@
 //! as a stepdown. With flat area detection a level is added on each one, cut
 //! after the level below it over what that left, as Fusion's is.
 
-use camcraft_geom::contour::{Contour, Region, RegionError, contour_above};
+use camcraft_geom::contour::{Contour, Region, contour_above, polyline_length};
 use camcraft_geom::heightmap::HeightMap;
 use glam::{DVec2, dvec3};
 use rayon::prelude::*;
 
+use crate::nesting::{Cuts, Nested, distance, nearest};
 use crate::planar::pieces;
-use crate::reach::{LevelReach, ReachError};
-use crate::strategy::{StrategyError, check};
+use crate::reach::LevelReach;
+use crate::strategy::{StrategyError, check, slabs};
 use crate::tool::{Cutter, ToolProfile};
 use crate::toolpath::{MoveRole, Toolpath};
 
@@ -165,7 +166,7 @@ pub fn pocket_clearing(
         });
     }
     let area = match limit {
-        Some(l) => sweep.intersection(l).map_err(region_err)?,
+        Some(l) => sweep.intersection(l)?,
         None => sweep.clone(),
     };
 
@@ -185,19 +186,26 @@ pub fn pocket_clearing(
 
     let levels = levels(params);
 
-    // Where the tool may be at every level, from the top: the shadows are
-    // cheapest asked for in descending order.
+    // Where the tool may not be at every level, from the top: the shadows are
+    // cheapest asked for in descending order. What is left of the area, and what
+    // is kept on the part, each level's own, in parallel.
     let mut all: Vec<f64> = levels.iter().map(|&(z, _)| z).collect();
     all.sort_by(|a, b| b.total_cmp(a));
-    let mut regions: Vec<(f64, Region, Option<Region>)> = Vec::with_capacity(all.len());
+    let mut forbidden = Vec::with_capacity(all.len());
     for &z in &all {
-        let forbidden = reach.forbidden(z).map_err(reach_err)?;
-        let reachable = area.difference(&forbidden).map_err(region_err)?;
-        // The part and the stock left on it: where the tool's centre may not go,
-        // less the real tool's reach, and a cell for the grid.
-        let kept = (leave > 0.0).then(|| forbidden.offset(-(reach.cutter_radius() - slop), arc));
-        regions.push((z, reachable, kept));
+        forbidden.push((z, reach.forbidden(z)?));
     }
+    let radius = reach.cutter_radius();
+    let regions: Vec<(f64, Region, Option<Region>)> = forbidden
+        .into_par_iter()
+        .map(|(z, forbidden)| {
+            let reachable = area.difference(&forbidden)?;
+            // The part and the stock left on it: where the tool's centre may not
+            // go, less the real tool's reach, and a cell for the grid.
+            let kept = (leave > 0.0).then(|| forbidden.offset(-(radius - slop), arc));
+            Ok((z, reachable, kept))
+        })
+        .collect::<Result<_, StrategyError>>()?;
     let regions_at = |z: f64| {
         regions
             .iter()
@@ -227,17 +235,14 @@ pub fn pocket_clearing(
             {
                 let wide = cutter.radius_at(z - b);
                 if wide > 0.0 {
-                    material = material
-                        .difference(&cleared.offset(wide, arc))
-                        .map_err(region_err)?;
+                    material = material.difference(&cleared.offset(wide, arc))?;
                 }
             }
             let material = match kept {
                 // Less what is kept, the slivers the two outlines leave between
                 // them taken back off with a cell's width, and given back after.
                 Some(kept) => material
-                    .difference(kept)
-                    .map_err(region_err)?
+                    .difference(kept)?
                     .offset(-slop, arc)
                     .grow_covering(touch + slop),
                 None => material.grow_covering(touch),
@@ -268,7 +273,7 @@ pub fn pocket_clearing(
         // The nearest piece next, by where it is first cut.
         let mut left = level.pieces;
         while !left.is_empty() {
-            let pick = nearest(&left, tool_at, |tree| distance(tree.anchor(), tool_at));
+            let pick = nearest(&left, |tree| distance(tree.anchor(0), tool_at));
             let mut cut = Cut {
                 z,
                 feed: params.feed,
@@ -276,7 +281,7 @@ pub fn pocket_clearing(
                 at: tool_at,
                 passes: 0,
             };
-            cut.tree(left.remove(pick))?;
+            left.remove(pick).cut(0, &mut cut)?;
             tool_at = cut.at;
             report.rings += cut.passes;
         }
@@ -289,36 +294,9 @@ pub fn pocket_clearing(
 /// a flat one: from the top down a stepdown apart, and each flat level after the
 /// one just below it, from the bottom up.
 fn levels(params: &ClearingParams) -> Vec<(f64, Option<f64>)> {
-    // Bounded by construction, and the count is clamped so a tiny stepdown
-    // against a tall part cannot run away.
-    let span = params.top - params.bottom;
-    let count = ((span / params.stepdown).ceil()).clamp(1.0, 10_000.0);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let count = count as u32;
-    let mut rough = Vec::new();
-    for i in 1..=count {
-        let z = (params.top - f64::from(i) * params.stepdown).max(params.bottom);
-        rough.push(z);
-        if z <= params.bottom {
-            break;
-        }
-    }
-    let mut slabs: Vec<(f64, Vec<f64>)> = rough.iter().map(|&z| (z, Vec::new())).collect();
-    for &f in &params.flats {
-        if !(f > params.bottom && f < params.top)
-            || rough.iter().any(|z| (z - f).abs() < SAME_LEVEL)
-        {
-            continue;
-        }
-        if let Some(slab) = slabs.iter_mut().find(|(z, _)| *z < f) {
-            slab.1.push(f);
-        }
-    }
-    slabs
+    slabs(params.top, params.bottom, params.stepdown, &params.flats)
         .into_iter()
-        .flat_map(|(z, mut flats)| {
-            flats.sort_by(f64::total_cmp);
-            flats.dedup_by(|a, b| (*a - *b).abs() < SAME_LEVEL);
+        .flat_map(|(z, flats)| {
             std::iter::once((z, None)).chain(flats.into_iter().map(move |f| (f, Some(z))))
         })
         .collect()
@@ -326,34 +304,14 @@ fn levels(params: &ClearingParams) -> Vec<(f64, Option<f64>)> {
 
 /// One level's passes, a tree of them for each piece; and what was dropped on
 /// the way.
+///
+/// A piece's rings nest: the piece is the root, and what is further in than each
+/// stepover falls into regions of its own as it narrows, each holding the
+/// stretches of its boundary that cut.
 struct Level {
-    pieces: Vec<Tree>,
+    pieces: Vec<Nested<Pass>>,
     too_short: u64,
     exhausted: bool,
-}
-
-/// A piece's rings, as they nest. The piece is its root; what is further in
-/// than each stepover falls into regions of its own as it narrows, each a node
-/// holding the stretches of its boundary that cut, with the regions a stepover
-/// further in, inside it, as its children.
-struct Tree {
-    nodes: Vec<Node>,
-    /// Whether a node's children are cut before it: from the middle out, the
-    /// ring on the edges last. Otherwise in from the edges.
-    children_first: bool,
-}
-
-struct Node {
-    passes: Vec<Pass>,
-    children: Vec<usize>,
-    /// A point where the node's subtree cuts, to go to the nearest by.
-    anchor: Option<DVec2>,
-}
-
-impl Tree {
-    fn anchor(&self) -> Option<DVec2> {
-        self.nodes.first().and_then(|n| n.anchor)
-    }
 }
 
 /// Each piece of `reachable` cleared by rings a stepover apart in from its
@@ -373,160 +331,140 @@ fn clear_level(
     for piece in pieces(reachable) {
         // What a ring may cut: material, in the piece. Grown a little, so the ring
         // on the walls, which is the piece's own boundary, is inside it.
-        let clip = piece
-            .offset(arc, arc)
-            .intersection(material)
-            .map_err(region_err)?;
+        let clip = piece.offset(arc, arc).intersection(material)?;
         if clip.is_empty() {
             continue;
         }
+        // In material all over, no ring needs clipping.
+        let clip = (!piece.difference(material)?.is_empty()).then_some(&clip);
         // With anything kept beside it, from the middle out; with nothing, in
         // from the sweep's edge, where there is only air.
-        let children_first = !walls_of(&piece, sweep, params.stepover.max(1.0))?.is_empty();
-        let mut tree = Tree {
-            nodes: Vec::new(),
+        let children_first = has_walls(&piece, sweep, params.stepover.max(1.0))?;
+        let rings = Concentric {
+            stepover: params.stepover,
+            arc,
+            min_length: params.min_ring_length,
+            kept_on_right: params.kept_on_right,
             children_first,
         };
-        // The regions a stepover nearer the edges than the ones being found,
-        // each with its node.
-        let mut last: Vec<(usize, Region)> = Vec::new();
-        let mut covered = false;
-        for k in 0..MAX_RINGS {
-            // What is further than `k` stepovers in from the piece's edges.
-            let left = piece.offset(-f64::from(k) * params.stepover, arc);
-            if left.is_empty() {
-                covered = true;
-                break;
-            }
-            let mut next = Vec::new();
-            for region in pieces(&left) {
-                let id = tree.nodes.len();
-                tree.nodes.push(Node {
-                    passes: passes(
-                        region.rings(),
-                        &clip,
-                        params,
-                        !children_first,
-                        &mut level.too_short,
-                    )?,
-                    children: Vec::new(),
-                    anchor: None,
-                });
-                if let Some(parent) = parent_of(&region, &last)?
-                    && let Some(node) = tree.nodes.get_mut(parent)
-                {
-                    node.children.push(id);
-                }
-                next.push((id, region));
-            }
-            last = next;
-        }
+        let (tree, covered) = rings.clear(&piece, clip, &mut level.too_short)?;
         level.exhausted &= covered;
-        // Children come after their parents, so each anchor is known before
-        // its parent's.
-        for i in (0..tree.nodes.len()).rev() {
-            let Some(node) = tree.nodes.get(i) else {
-                continue;
-            };
-            let anchor = node
-                .passes
-                .first()
-                .and_then(|p| p.points.first().copied())
-                .or_else(|| {
-                    node.children
-                        .iter()
-                        .find_map(|&c| tree.nodes.get(c).and_then(|n| n.anchor))
-                });
-            if let Some(node) = tree.nodes.get_mut(i) {
-                node.anchor = anchor;
-            }
-        }
-        if tree.anchor().is_some() {
+        if tree.anchor(0).is_some() {
             level.pieces.push(tree);
         }
     }
     Ok(level)
 }
 
-/// Which of `last`, the regions a stepover nearer the edges, `region` is in. It
-/// is in one of them whole, as it is what is left of that one a stepover in.
-fn parent_of(region: &Region, last: &[(usize, Region)]) -> Result<Option<usize>, StrategyError> {
-    let Some((lo, hi)) = region.bounds() else {
-        return Ok(None);
-    };
-    let slack = DVec2::splat(1e-6);
-    let around: Vec<&(usize, Region)> = last
-        .iter()
-        .filter(|(_, r)| {
-            r.bounds().is_some_and(|(rlo, rhi)| {
-                (rlo - slack).cmple(lo).all() && (rhi + slack).cmpge(hi).all()
-            })
-        })
-        .collect();
-    if let [(id, _)] = around.as_slice() {
-        return Ok(Some(*id));
-    }
-    for (id, r) in around {
-        if r.intersection(region).map_err(region_err)?.area() > 0.0 {
-            return Ok(Some(*id));
+/// Rings a stepover apart in from a region's edges, each the way it cuts: how a
+/// pocket clearing level and a flat are cleared.
+pub(crate) struct Concentric {
+    /// Distance between rings, in millimetres.
+    pub(crate) stepover: f64,
+    /// Arc tolerance for the offsets.
+    pub(crate) arc: f64,
+    /// Stretches shorter than this are not worth the entry.
+    pub(crate) min_length: f64,
+    /// Whether the material cut is on the tool's right.
+    pub(crate) kept_on_right: bool,
+    /// Whether they are cut from the middle out, each region's rings after the
+    /// ones further in; otherwise in from the edges.
+    pub(crate) children_first: bool,
+}
+
+impl Concentric {
+    /// `piece`'s rings, as the regions they bound nest, settled to be cut; only
+    /// what meets `clip`, if given; and whether they run out before the rings do,
+    /// so the piece is covered. Stretches too short are counted in `too_short`.
+    pub(crate) fn clear(
+        &self,
+        piece: &Region,
+        clip: Option<&Region>,
+        too_short: &mut u64,
+    ) -> Result<(Nested<Pass>, bool), StrategyError> {
+        let mut tree = Nested::new(self.children_first);
+        // The regions a stepover nearer the edges than the ones being found,
+        // each with its node and bounds.
+        let mut last: Vec<(usize, Region, Bounds)> = Vec::new();
+        let mut covered = false;
+        for k in 0..MAX_RINGS {
+            // What is further than `k` stepovers in from the piece's edges.
+            let left = piece.offset(-f64::from(k) * self.stepover, self.arc);
+            if left.is_empty() {
+                covered = true;
+                break;
+            }
+            let mut next = Vec::new();
+            for region in pieces(&left) {
+                let rings = passes(
+                    region.rings(),
+                    clip,
+                    self.min_length,
+                    self.kept_on_right,
+                    !self.children_first,
+                    too_short,
+                )?;
+                let id = tree.push(rings);
+                if let Some(parent) = parent_of(&region, &last) {
+                    tree.nest(parent, id);
+                }
+                let Some(bounds) = region.bounds() else {
+                    continue;
+                };
+                next.push((id, region, bounds));
+            }
+            last = next;
         }
+        tree.settle(|p| p.points.first().copied());
+        Ok((tree, covered))
     }
-    Ok(None)
+}
+
+/// A region's lower and upper corners.
+type Bounds = (DVec2, DVec2);
+
+/// Which of `last`, the regions a stepover nearer the edges, `region` is in. It
+/// is in one of them whole, a stepover in from its edges, as it is what is left
+/// of that one: so whichever holds any point of it.
+fn parent_of(region: &Region, last: &[(usize, Region, Bounds)]) -> Option<usize> {
+    let (lo, hi) = region.bounds()?;
+    let slack = DVec2::splat(1e-6);
+    let mut around = last.iter().filter(|(_, _, (rlo, rhi))| {
+        (*rlo - slack).cmple(lo).all() && (*rhi + slack).cmpge(hi).all()
+    });
+    let first = around.next()?;
+    let Some(second) = around.next() else {
+        return Some(first.0);
+    };
+    let p = *region.rings().first()?.points().first()?;
+    std::iter::once(first)
+        .chain(std::iter::once(second))
+        .chain(around)
+        .find(|(_, r, _)| r.contains(p))
+        .map(|(id, ..)| *id)
 }
 
 /// Cutting a level's passes into the path, in order, from where the tool is.
-struct Cut<'a> {
-    z: f64,
-    feed: f64,
-    path: &'a mut Toolpath,
-    at: Option<DVec2>,
-    passes: u64,
+pub(crate) struct Cut<'a> {
+    pub(crate) z: f64,
+    pub(crate) feed: f64,
+    pub(crate) path: &'a mut Toolpath,
+    pub(crate) at: Option<DVec2>,
+    pub(crate) passes: u64,
 }
 
-impl Cut<'_> {
-    /// A piece's rings: each region's children and its own rings, in the tree's
-    /// order, and of the children the nearest next. Walked with a stack of its
-    /// own, as a tree is as deep as the piece is wide over the stepover.
-    fn tree(&mut self, mut tree: Tree) -> Result<(), StrategyError> {
-        let children = |tree: &Tree, n: usize| {
-            tree.nodes
-                .get(n)
-                .map(|node| node.children.clone())
-                .unwrap_or_default()
-        };
-        // Each node on the way down: the children left to cut, and whether its
-        // own rings are cut.
-        let mut stack: Vec<(usize, Vec<usize>, bool)> = vec![(0, children(&tree, 0), false)];
-        while let Some((node, left, cut)) = stack.last_mut() {
-            let node = *node;
-            if !*cut && (!tree.children_first || left.is_empty()) {
-                *cut = true;
-                let passes = tree
-                    .nodes
-                    .get_mut(node)
-                    .map(|n| std::mem::take(&mut n.passes))
-                    .unwrap_or_default();
-                self.passes(passes)?;
-                continue;
-            }
-            if left.is_empty() {
-                stack.pop();
-                continue;
-            }
-            let at = self.at;
-            let k = nearest(left, at, |&c| {
-                distance(tree.nodes.get(c).and_then(|n| n.anchor), at)
-            });
-            let child = left.remove(k);
-            stack.push((child, children(&tree, child), false));
-        }
-        Ok(())
+impl Cuts<Pass> for Cut<'_> {
+    type Error = StrategyError;
+
+    fn at(&self) -> Option<DVec2> {
+        self.at
     }
 
     /// Passes the same distance from the walls, the nearest next.
-    fn passes(&mut self, mut passes: Vec<Pass>) -> Result<(), StrategyError> {
+    fn cut(&mut self, mut passes: Vec<Pass>) -> Result<(), StrategyError> {
         while !passes.is_empty() {
-            let (k, _) = nearest_in(&passes, self.at);
+            let at = self.at;
+            let k = nearest(&passes, |p| at.map_or(0.0, |a| p.distance(a)));
             let mut pass = passes.remove(k);
             if let Some(p) = self.at {
                 pass.start_near(p);
@@ -539,25 +477,17 @@ impl Cut<'_> {
     }
 }
 
-/// How far `to` is from `at`: nowhere is as far as can be.
-fn distance(to: Option<DVec2>, at: Option<DVec2>) -> f64 {
-    match (to, at) {
-        (Some(to), Some(at)) => to.distance(at),
-        _ => f64::MAX,
-    }
-}
-
-/// What is kept beside a piece: everything beside it within the sweep, the part
-/// and what the machining boundary keeps the tool out of. Past the sweep's edge
-/// is only air, so no wall. Only what is within `margin` of the piece is taken.
-fn walls_of(piece: &Region, sweep: &Region, margin: f64) -> Result<Region, StrategyError> {
+/// Whether anything is kept beside a piece, within `margin` of it: the part, or
+/// what the machining boundary keeps the tool out of. Past the sweep's edge is
+/// only air, so no wall. The piece lies within the sweep, so anything of the
+/// sweep near it and not in it is a wall.
+fn has_walls(piece: &Region, sweep: &Region, margin: f64) -> Result<bool, StrategyError> {
     let Some((lo, hi)) = piece.bounds() else {
-        return Ok(Region::default());
+        return Ok(false);
     };
-    Region::rectangle(lo - DVec2::splat(margin), hi + DVec2::splat(margin))
-        .intersection(sweep)
-        .and_then(|near| near.difference(piece))
-        .map_err(region_err)
+    let near = Region::rectangle(lo - DVec2::splat(margin), hi + DVec2::splat(margin))
+        .intersection(sweep)?;
+    Ok(near.area() - piece.area() > 1e-6)
 }
 
 /// The stretches of `rings` that cut `clip`, long enough to be worth the entry,
@@ -566,20 +496,21 @@ fn walls_of(piece: &Region, sweep: &Region, margin: f64) -> Result<Region, Strat
 /// outside, toward the edges, as it is cleared from the middle out.
 fn passes(
     rings: &[Contour],
-    clip: &Region,
-    params: &ClearingParams,
+    clip: Option<&Region>,
+    min_length: f64,
+    kept_on_right: bool,
     inward: bool,
     too_short: &mut u64,
 ) -> Result<Vec<Pass>, StrategyError> {
     let mut out = Vec::new();
     for mut pass in cutting_stretches(rings, clip)? {
-        if length(&pass.points) < params.min_ring_length {
+        if polyline_length(&pass.points) < min_length {
             *too_short += 1;
             continue;
         }
         // A ring has its region on its left: the material it cuts is on its left
         // cleared inward, and on its right cleared outward.
-        if params.kept_on_right == inward {
+        if kept_on_right == inward {
             pass.points.reverse();
         }
         out.push(pass);
@@ -589,9 +520,9 @@ fn passes(
 
 /// A stretch of a ring to cut: the whole ring, closed, or an open piece of it.
 #[derive(Debug, Clone)]
-struct Pass {
-    points: Vec<DVec2>,
-    closed: bool,
+pub(crate) struct Pass {
+    pub(crate) points: Vec<DVec2>,
+    pub(crate) closed: bool,
 }
 
 impl Pass {
@@ -634,56 +565,23 @@ impl Pass {
     }
 }
 
-/// Which of `passes` to cut next from `at`, and how far away it is: the
-/// nearest, ties to the earlier; the first when the tool is nowhere yet.
-fn nearest_in(passes: &[Pass], at: Option<DVec2>) -> (usize, f64) {
-    let Some(at) = at else {
-        return (0, 0.0);
-    };
-    passes
-        .iter()
-        .enumerate()
-        .fold((0, f64::MAX), |best, (i, pass)| {
-            let d = pass.distance(at);
-            if d < best.1 { (i, d) } else { best }
-        })
-}
-
-/// Which of `items` is nearest, by `distance`, ties to the earlier; the first
-/// when the tool is nowhere yet.
-fn nearest<T>(items: &[T], at: Option<DVec2>, distance: impl Fn(&T) -> f64) -> usize {
-    if at.is_none() {
-        return 0;
-    }
-    items
-        .iter()
-        .enumerate()
-        .fold((0, f64::MAX), |best, (i, item)| {
-            let d = distance(item);
-            if d < best.1 { (i, d) } else { best }
-        })
-        .0
-}
-
 /// The parts of `rings` that meet material, as passes: a ring wholly in material
-/// stays one closed pass, and the rest is cut into the open stretches in it.
-fn cutting_stretches(rings: &[Contour], material: &Region) -> Result<Vec<Pass>, StrategyError> {
+/// stays one closed pass, and the rest is cut into the open stretches in it. With
+/// no material to clip to, every ring is in it.
+fn cutting_stretches(
+    rings: &[Contour],
+    material: Option<&Region>,
+) -> Result<Vec<Pass>, StrategyError> {
     let lines: Vec<(Vec<DVec2>, bool)> =
         rings.iter().map(|r| (r.points().to_vec(), true)).collect();
-    Ok(material
-        .clip_lines(&lines)
-        .map_err(region_err)?
+    let lines = match material {
+        Some(material) => material.clip_lines(&lines)?,
+        None => lines,
+    };
+    Ok(lines
         .into_iter()
         .map(|(points, closed)| Pass { points, closed })
         .collect())
-}
-
-fn length(points: &[DVec2]) -> f64 {
-    points
-        .iter()
-        .zip(points.iter().skip(1))
-        .map(|(a, b)| a.distance(*b))
-        .sum()
 }
 
 /// Emit one pass as a link to its start followed by cutting moves.
@@ -700,14 +598,6 @@ fn emit(pass: &Pass, z: f64, feed: f64, path: &mut Toolpath) -> Result<(), Strat
         path.feed_to(dvec3(first.x, first.y, z), MoveRole::Cut, feed)?;
     }
     Ok(())
-}
-
-fn region_err(e: RegionError) -> StrategyError {
-    StrategyError::Region(e.to_string())
-}
-
-fn reach_err(e: ReachError) -> StrategyError {
-    StrategyError::Region(e.to_string())
 }
 
 #[cfg(test)]

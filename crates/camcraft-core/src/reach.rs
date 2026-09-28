@@ -162,6 +162,97 @@ impl<'m> LevelReach<'m> {
         Ok(Region::union_all(&grown)?)
     }
 
+    /// Where the tool tip may not be at each of `levels`, in their order: each
+    /// the same region [`forbidden`](Self::forbidden) gives, if not always the
+    /// same points round it.
+    ///
+    /// A level asks for the shadows above each of its bands, which reach up the
+    /// tool's corner. Asked level by level, the next level down starts above
+    /// where the last one ended whenever the corner is taller than the step
+    /// between them, and the shadows start again from the top. Here every
+    /// height of every level is asked once, highest first, so the shadows are
+    /// built once all the way down; a level's region is put together as soon as
+    /// its lowest band is in.
+    pub fn forbidden_all(&mut self, levels: &[f64]) -> Result<Vec<Region>, ReachError> {
+        // Every band of every level: the height asked, whose it is, and its
+        // radius; highest first, and, as `forbidden` has them, each level's
+        // bands from the top of the tool down.
+        let mut asks: Vec<(f64, usize, f64)> = levels
+            .iter()
+            .enumerate()
+            .flat_map(|(i, &z)| {
+                let tip = z - self.lift;
+                self.bands
+                    .iter()
+                    .rev()
+                    .map(move |band| (tip + band.height, i, band.radius))
+            })
+            .collect();
+        asks.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+        let mut left: Vec<usize> = vec![self.bands.len(); levels.len()];
+        let mut grown: Vec<Vec<Region>> = vec![Vec::new(); levels.len()];
+        let mut out: Vec<Option<Region>> = vec![None; levels.len()];
+        // Grown in parallel a batch at a time, each level's in its order, so the
+        // unions are the same on any number of cores.
+        let mut batch: Vec<(usize, camcraft_geom::shadow::Shadow, f64)> = Vec::new();
+        let mut last: Option<(f64, camcraft_geom::shadow::Shadow)> = None;
+        // Each level's shadow for the band above: a band whose shadow is the same
+        // is grown less, inside what that one was, and adds nothing. Where the
+        // part is walls and flats, most bands are.
+        let mut above: Vec<Option<camcraft_geom::shadow::Shadow>> = vec![None; levels.len()];
+        let flush = |batch: &mut Vec<(usize, camcraft_geom::shadow::Shadow, f64)>,
+                     grown: &mut Vec<Vec<Region>>,
+                     arc: f64|
+         -> Result<(), ReachError> {
+            let regions = batch
+                .par_iter()
+                .map(|(_, shadow, radius)| shadow.grown(*radius, arc))
+                .collect::<Result<Vec<Region>, RegionError>>()?;
+            for ((i, ..), region) in batch.drain(..).zip(regions) {
+                if let Some(list) = grown.get_mut(i) {
+                    list.push(region);
+                }
+            }
+            Ok(())
+        };
+        for (t, i, radius) in asks {
+            let shadow = match &last {
+                // The very same height, another level's: asked once.
+                Some((at, shadow)) if at.to_bits() == t.to_bits() => shadow.clone(),
+                _ => {
+                    let shadow = self.shadows.above(t)?;
+                    last = Some((t, shadow.clone()));
+                    shadow
+                }
+            };
+            let covered = above
+                .get(i)
+                .and_then(Option::as_ref)
+                .is_some_and(|a| *a == shadow);
+            if !shadow.is_empty() && !covered {
+                if let Some(slot) = above.get_mut(i) {
+                    *slot = Some(shadow.clone());
+                }
+                batch.push((i, shadow, radius));
+            }
+            let Some(count) = left.get_mut(i) else {
+                continue;
+            };
+            *count -= 1;
+            if *count == 0 {
+                // The level is complete: its bands grown, then unioned.
+                flush(&mut batch, &mut grown, self.arc_tolerance)?;
+                let mine = grown.get_mut(i).map(std::mem::take).unwrap_or_default();
+                if let Some(slot) = out.get_mut(i) {
+                    *slot = Some(Region::union_all(&mine)?);
+                }
+            } else if batch.len() >= 64 {
+                flush(&mut batch, &mut grown, self.arc_tolerance)?;
+            }
+        }
+        Ok(out.into_iter().map(Option::unwrap_or_default).collect())
+    }
+
     /// The cutter's largest radius.
     pub fn max_radius(&self) -> f64 {
         self.max_radius
@@ -356,6 +447,26 @@ mod tests {
             .unwrap(),
         ] {
             agrees_with_drop_cutter(&mesh, &tool, &[7.0, 3.0], 9.0);
+        }
+    }
+
+    #[test]
+    fn all_levels_at_once_are_each_level_alone() {
+        let mesh = synthetic::uv_sphere(10.0, 40, 60);
+        let tool = EffectiveTool::new(&Ball::new(3.0).unwrap(), Allowance::none()).unwrap();
+        // A step smaller than the ball's corner, so level by level the shadows
+        // would start again.
+        let levels = [9.0, 8.0, 7.0, 7.0, 4.5, 1.0];
+        let all = LevelReach::new(&mesh, &tool, 0.05)
+            .unwrap()
+            .forbidden_all(&levels)
+            .unwrap();
+        let mut one = LevelReach::new(&mesh, &tool, 0.05).unwrap();
+        for (&z, region) in levels.iter().zip(&all) {
+            let alone = one.forbidden(z).unwrap();
+            let apart = alone.difference(region).unwrap().area()
+                + region.difference(&alone).unwrap().area();
+            assert!(apart < 1e-6, "level {z}: {apart} mm² apart");
         }
     }
 

@@ -148,6 +148,11 @@ pub fn run_prepared_planned(
             StrategySpec::Face { .. } => Target::Limit(None),
             StrategySpec::Parallel { .. }
             | StrategySpec::Scallop { .. }
+            | StrategySpec::Contour { .. }
+            | StrategySpec::Flat { .. }
+            | StrategySpec::Spiral { .. }
+            | StrategySpec::Radial { .. }
+            | StrategySpec::MorphedSpiral { .. }
             | StrategySpec::PocketClearing { .. }
             | StrategySpec::Adaptive { .. } => Target::Limit(
                 machining_boundary(

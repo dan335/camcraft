@@ -4,10 +4,10 @@
 
 use camcraft_core::features;
 use camcraft_core::job::{
-    self, AdaptiveDirection, Boundary, Containment, Depths, Entry, FaceDirection, FeatureRef,
-    Height, HeightContext, HeightRef, Leads, Leave, MachiningBoundary, Operation, Outline,
-    ProfileSide, Retraction, ScallopDirection, ScallopOrder, StockToLeave, StrategySpec, TabShape,
-    Tabs,
+    self, Boundary, Containment, ContourOrder, CutDirection, Depths, Entry, FaceDirection,
+    FeatureRef, Height, HeightContext, HeightRef, Leads, Leave, MachiningBoundary, Operation,
+    Outline, PassOrder, ProfileSide, RadialDirection, Retraction, StockToLeave, StrategySpec,
+    TabShape, Tabs,
 };
 use camcraft_core::setup::Bodies;
 use eframe::egui;
@@ -15,8 +15,8 @@ use glam::DVec2;
 
 use super::{Picks, PropAction, cannot_generate, header};
 use crate::document::{Document, Level, Selection};
-use crate::help::Help;
 use crate::help::topics::{feeds, geometry as geo, heights as ht, linking as link, passes as pass};
+use crate::help::{Help, Topic};
 use crate::picking::slots::{Kind, Slot};
 use crate::tools::drawing::paint_tool;
 use crate::tools::editor::{chip_load_row, surface_speed_row};
@@ -177,6 +177,11 @@ fn strategy_name(s: &StrategySpec) -> &'static str {
     match s {
         StrategySpec::Parallel { .. } => "parallel",
         StrategySpec::Scallop { .. } => "scallop",
+        StrategySpec::Contour { .. } => "contour",
+        StrategySpec::Flat { .. } => "flat",
+        StrategySpec::Spiral { .. } => "spiral",
+        StrategySpec::Radial { .. } => "radial",
+        StrategySpec::MorphedSpiral { .. } => "morphed spiral",
         StrategySpec::PocketClearing { .. } => "pocket clearing",
         StrategySpec::Adaptive { .. } => "adaptive clearing",
         StrategySpec::Profile { .. } => "2D profile",
@@ -766,16 +771,31 @@ fn default_bottom(strategy: &StrategySpec) -> HeightRef {
     }
 }
 
+/// Where the strategy cuts down from without a Top: finishing in levels from the
+/// part's top, the rest from the stock's.
+fn default_top(strategy: &StrategySpec) -> HeightRef {
+    match strategy {
+        StrategySpec::Contour { .. } | StrategySpec::Flat { .. } => HeightRef::ModelTop,
+        _ => HeightRef::StockTop,
+    }
+}
+
 /// Which of Top and Bottom the strategy cuts to: the others are not asked for.
 fn uses_top_bottom(strategy: &StrategySpec) -> (bool, bool) {
     match strategy {
         StrategySpec::PocketClearing { .. }
         | StrategySpec::Adaptive { .. }
+        | StrategySpec::Contour { .. }
+        | StrategySpec::Flat { .. }
         | StrategySpec::Profile { .. }
         | StrategySpec::Pocket { .. }
         | StrategySpec::Face { .. } => (true, true),
         StrategySpec::Drill { .. } => (false, true),
-        StrategySpec::Parallel { .. } | StrategySpec::Scallop { .. } => (false, false),
+        StrategySpec::Parallel { .. }
+        | StrategySpec::Scallop { .. }
+        | StrategySpec::Spiral { .. }
+        | StrategySpec::Radial { .. }
+        | StrategySpec::MorphedSpiral { .. } => (false, false),
     }
 }
 
@@ -811,7 +831,7 @@ fn heights(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
                     m,
                     "geo-top",
                     &mut op.heights.top,
-                    HeightRef::StockTop,
+                    default_top(&op.strategy),
                     picks,
                 );
             });
@@ -827,10 +847,28 @@ fn heights(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
     }
     ui.add_space(theme::SPACE_3);
     match op.strategy {
-        StrategySpec::Parallel { .. } | StrategySpec::Scallop { .. } => {
+        StrategySpec::Parallel { .. }
+        | StrategySpec::Scallop { .. }
+        | StrategySpec::Spiral { .. }
+        | StrategySpec::Radial { .. }
+        | StrategySpec::MorphedSpiral { .. } => {
             hint(
                 ui,
                 "It follows the part all the way down, so it has no Top or Bottom.",
+            );
+        }
+        StrategySpec::Contour { .. } => {
+            hint(
+                ui,
+                "Without a Top or Bottom, its levels run from the part's top down to its \
+                 bottom.",
+            );
+        }
+        StrategySpec::Flat { .. } => {
+            hint(
+                ui,
+                "Only the flats between the Top and Bottom are finished; without them, \
+                 every flat of the part.",
             );
         }
         StrategySpec::Drill { .. } => {
@@ -919,8 +957,12 @@ pub fn height_planes(doc: &Document, m: Measure, tab: Option<OperationTab>) -> V
             HeightRef::ModelTop => ctx.model_top,
             _ => ctx.model_bottom,
         };
+        let top = match default_top(&op.strategy) {
+            HeightRef::ModelTop => ctx.model_top,
+            _ => ctx.stock_top,
+        };
         (
-            h.top.map_or(ctx.stock_top, |h| h.resolve_top(&ctx)),
+            h.top.map_or(top, |h| h.resolve_top(&ctx)),
             h.bottom.map_or(unset, |h| h.resolve_bottom(&ctx)),
         )
     };
@@ -968,40 +1010,99 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave
                 slope_from,
                 slope_to,
             } => {
-                widgets::row(ui, &pass::DIRECTION_SCALLOP, |ui| {
-                    for (d, name) in [
-                        (ScallopDirection::BothWays, "both ways"),
-                        (ScallopDirection::Climb, "climb"),
-                        (ScallopDirection::Conventional, "conventional"),
-                    ] {
-                        ui.selectable_value(direction, d, name);
-                    }
+                both_ways_direction(ui, direction);
+                pass_order(ui, &pass::SCALLOP_ORDER, order);
+                slopes(ui, slope_from, slope_to);
+            }
+            StrategySpec::Contour {
+                direction,
+                order,
+                slope_from,
+                slope_to,
+            } => {
+                both_ways_direction(ui, direction);
+                widgets::row(ui, &pass::CONTOUR_ORDER, |ui| {
+                    ui.selectable_value(order, ContourOrder::ByDepth, "by depth");
+                    ui.selectable_value(order, ContourOrder::ByArea, "by area");
                 });
-                widgets::row(ui, &pass::SCALLOP_ORDER, |ui| {
-                    ui.selectable_value(order, ScallopOrder::OutsideIn, "outside in");
-                    ui.selectable_value(order, ScallopOrder::InsideOut, "inside out");
-                });
-                widgets::row(ui, &pass::SLOPES, |ui| {
+                slopes(ui, slope_from, slope_to);
+            }
+            StrategySpec::Flat { direction, order } => {
+                climb_direction(ui, &pass::DIRECTION_2D, direction);
+                pass_order(ui, &pass::SCALLOP_ORDER, order);
+            }
+            StrategySpec::Spiral {
+                centre,
+                inner_radius,
+                outer_radius,
+                direction,
+                order,
+                slope_from,
+                slope_to,
+            } => {
+                centred(ui, m, centre, inner_radius, outer_radius, &pass::CENTRE);
+                climb_direction(ui, &pass::DIRECTION_SPIRAL, direction);
+                pass_order(ui, &pass::SPIRAL_ORDER, order);
+                slopes(ui, slope_from, slope_to);
+            }
+            StrategySpec::Radial {
+                centre,
+                inner_radius,
+                outer_radius,
+                angle_from,
+                angle_to,
+                direction,
+                slope_from,
+                slope_to,
+            } => {
+                centred(ui, m, centre, inner_radius, outer_radius, &pass::CENTRE);
+                widgets::row(ui, &pass::RADIAL_ANGLES, |ui| {
                     ui.add(
-                        egui::DragValue::new(slope_from)
+                        egui::DragValue::new(angle_from)
                             .speed(1.0)
-                            .range(0.0..=89.0)
+                            .range(-360.0..=360.0)
                             .prefix("from ")
                             .suffix("°"),
                     );
                     ui.add(
-                        egui::DragValue::new(slope_to)
+                        egui::DragValue::new(angle_to)
                             .speed(1.0)
-                            .range(1.0..=90.0)
+                            .range(-360.0..=720.0)
                             .prefix("to ")
                             .suffix("°"),
                     );
                 });
                 // A range the job would refuse is put right as it is set.
-                if *slope_from >= *slope_to {
-                    *slope_to = (*slope_from + 1.0).min(90.0);
-                    *slope_from = slope_from.min(*slope_to - 1.0);
+                if *angle_to <= *angle_from {
+                    *angle_to = *angle_from + 1.0;
                 }
+                if *angle_to > *angle_from + 360.0 {
+                    *angle_to = *angle_from + 360.0;
+                }
+                widgets::row(ui, &pass::RADIAL_DIRECTION, |ui| {
+                    for (d, name) in [
+                        (RadialDirection::BothWays, "both ways"),
+                        (RadialDirection::Outward, "outward"),
+                        (RadialDirection::Inward, "inward"),
+                    ] {
+                        ui.selectable_value(direction, d, name);
+                    }
+                });
+                slopes(ui, slope_from, slope_to);
+            }
+            StrategySpec::MorphedSpiral {
+                centre,
+                direction,
+                order,
+                slope_from,
+                slope_to,
+            } => {
+                widgets::row(ui, &pass::MORPH_CENTRE, |ui| {
+                    centre_field(ui, m, centre, "the point furthest inside");
+                });
+                climb_direction(ui, &pass::DIRECTION_SPIRAL, direction);
+                pass_order(ui, &pass::SPIRAL_ORDER, order);
+                slopes(ui, slope_from, slope_to);
             }
             StrategySpec::PocketClearing {
                 min_ring_length,
@@ -1027,9 +1128,9 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave
             } => {
                 widgets::row(ui, &pass::DIRECTION_ADAPTIVE, |ui| {
                     for (d, name) in [
-                        (AdaptiveDirection::Climb, "climb"),
-                        (AdaptiveDirection::Conventional, "conventional"),
-                        (AdaptiveDirection::BothWays, "both ways"),
+                        (CutDirection::Climb, "climb"),
+                        (CutDirection::Conventional, "conventional"),
+                        (CutDirection::BothWays, "both ways"),
                     ] {
                         ui.selectable_value(direction, d, name);
                     }
@@ -1254,15 +1355,123 @@ fn tabs(ui: &mut egui::Ui, m: Measure, tabs: &mut Option<Tabs>) {
     );
 }
 
+/// Which way a finishing pass cuts, both ways among them.
+fn both_ways_direction(ui: &mut egui::Ui, direction: &mut CutDirection) {
+    widgets::row(ui, &pass::DIRECTION_SCALLOP, |ui| {
+        for (d, name) in [
+            (CutDirection::BothWays, "both ways"),
+            (CutDirection::Climb, "climb"),
+            (CutDirection::Conventional, "conventional"),
+        ] {
+            ui.selectable_value(direction, d, name);
+        }
+    });
+}
+
+/// Which way a pass cuts, climb or conventional: both ways, which has no
+/// meaning for it, reads as climb.
+fn climb_direction(ui: &mut egui::Ui, topic: &Topic, direction: &mut CutDirection) {
+    let mut climb = *direction != CutDirection::Conventional;
+    widgets::row(ui, topic, |ui| {
+        ui.selectable_value(&mut climb, true, "climb");
+        ui.selectable_value(&mut climb, false, "conventional");
+    });
+    let chosen = if climb {
+        CutDirection::Climb
+    } else {
+        CutDirection::Conventional
+    };
+    // Left as it was unless changed, so a job's both ways is kept.
+    if (*direction == CutDirection::Conventional) == climb {
+        *direction = chosen;
+    }
+}
+
+/// Outside in or inside out.
+fn pass_order(ui: &mut egui::Ui, topic: &Topic, order: &mut PassOrder) {
+    widgets::row(ui, topic, |ui| {
+        ui.selectable_value(order, PassOrder::OutsideIn, "outside in");
+        ui.selectable_value(order, PassOrder::InsideOut, "inside out");
+    });
+}
+
+/// The range of slopes a finishing pass keeps to, put right as it is set if the
+/// job would refuse it.
+fn slopes(ui: &mut egui::Ui, slope_from: &mut f64, slope_to: &mut f64) {
+    widgets::row(ui, &pass::SLOPES, |ui| {
+        ui.add(
+            egui::DragValue::new(slope_from)
+                .speed(1.0)
+                .range(0.0..=89.0)
+                .prefix("from ")
+                .suffix("°"),
+        );
+        ui.add(
+            egui::DragValue::new(slope_to)
+                .speed(1.0)
+                .range(1.0..=90.0)
+                .prefix("to ")
+                .suffix("°"),
+        );
+    });
+    if *slope_from >= *slope_to {
+        *slope_to = (*slope_from + 1.0).min(90.0);
+        *slope_from = slope_from.min(*slope_to - 1.0);
+    }
+}
+
+/// A pattern's centre, given or `absent`, as X and Y from the work zero.
+fn centre_field(ui: &mut egui::Ui, m: Measure, centre: &mut Option<[f64; 2]>, absent: &str) {
+    widgets::optional(ui, centre, [0.0, 0.0], absent, |ui, c| {
+        let [x, y] = c;
+        ui.label("X");
+        m.signed_length_field(ui, x, 0.1, 10_000.0, "");
+        ui.label("Y");
+        m.signed_length_field(ui, y, 0.1, 10_000.0, "");
+    });
+}
+
+/// A pattern about a centre's centre and radii, the inner kept inside the outer.
+fn centred(
+    ui: &mut egui::Ui,
+    m: Measure,
+    centre: &mut Option<[f64; 2]>,
+    inner: &mut f64,
+    outer: &mut f64,
+    topic: &Topic,
+) {
+    widgets::row(ui, topic, |ui| {
+        centre_field(ui, m, centre, "the boundary's middle");
+    });
+    widgets::row(ui, &pass::INNER_RADIUS, |ui| {
+        m.length_field(ui, inner, 0.1, 10_000.0, "");
+    });
+    // Zero is none given.
+    let mut given = (*outer > 0.0).then_some(*outer);
+    widgets::row(ui, &pass::OUTER_RADIUS, |ui| {
+        widgets::optional(
+            ui,
+            &mut given,
+            *inner + 10.0,
+            "all of the boundary",
+            |ui, r| {
+                m.length_field(ui, r, 0.1, 10_000.0, "");
+            },
+        );
+    });
+    *outer = given.unwrap_or(0.0);
+    if *outer > 0.0 && *inner >= *outer {
+        *outer = *inner + 1.0;
+    }
+}
+
 /// How the operation moves between cuts. A value left out is the strategy's own,
 /// as Fusion's, and says what that comes to for the tool chosen.
 fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f64>) {
     let uses = op.strategy.uses();
-    // Parallel and scallop stay down over the part; the rest level by level.
-    let parallel = matches!(
-        op.strategy,
-        StrategySpec::Parallel { .. } | StrategySpec::Scallop { .. }
-    );
+    // Finishing that follows the part stays down over it; the rest level by
+    // level.
+    let parallel = op.strategy.follows_part();
     let of_tool = |part: f64, what: &str| match diameter {
         Some(d) => format!("{what}: {}", m.length(part * d, 2)),
         None => what.to_string(),

@@ -36,8 +36,8 @@ pub struct TriGrid {
     pitch: f64,
     nx: u32,
     ny: u32,
+    /// Each node's height; NaN where it is not defined, active or not.
     z: Vec<f32>,
-    active: Vec<bool>,
     diagonal: Vec<Diagonal>,
 }
 
@@ -52,7 +52,7 @@ impl TriGrid {
         pitch: f64,
         nx: u32,
         ny: u32,
-        z: Vec<f32>,
+        mut z: Vec<f32>,
         active: Vec<bool>,
     ) -> Option<Self> {
         let nodes = usize::try_from(u64::from(nx) * u64::from(ny)).ok()?;
@@ -66,13 +66,16 @@ impl TriGrid {
         {
             return None;
         }
+        // A node not taking part has no height, so one test says both.
+        for (z, _) in z.iter_mut().zip(&active).filter(|(_, a)| !**a) {
+            *z = f32::NAN;
+        }
         let mut grid = Self {
             origin,
             pitch,
             nx,
             ny,
             z,
-            active,
             diagonal: Vec::new(),
         };
         let cells = (nx - 1) * (ny - 1);
@@ -130,11 +133,7 @@ impl TriGrid {
 
     /// Node `n`'s height, if it is defined.
     pub fn z(&self, n: u32) -> Option<f64> {
-        let i = usize::try_from(n).ok()?;
-        if !*self.active.get(i)? {
-            return None;
-        }
-        let z = f64::from(*self.z.get(i)?);
+        let z = f64::from(*self.z.get(usize::try_from(n).ok()?)?);
         z.is_finite().then_some(z)
     }
 
@@ -156,13 +155,14 @@ impl TriGrid {
         nodes.iter().all(|&n| self.defined(n)).then_some(nodes)
     }
 
-    /// Every triangle that exists, in id order.
-    pub fn triangles(&self) -> impl Iterator<Item = u32> + '_ {
-        (0..self.triangle_slots()).filter(|&t| self.triangle(t).is_some())
+    /// Every triangle that exists, in id order, with its nodes.
+    pub fn triangles(&self) -> impl Iterator<Item = (u32, [u32; 3])> + '_ {
+        (0..self.triangle_slots()).filter_map(|t| self.triangle(t).map(|nodes| (t, nodes)))
     }
 
-    /// The triangles that exist with node `n` a corner of them: at most six.
-    pub fn triangles_at(&self, n: u32) -> impl Iterator<Item = u32> + '_ {
+    /// The triangles that exist with node `n` a corner of them, with their nodes:
+    /// at most six.
+    pub fn triangles_at(&self, n: u32) -> impl Iterator<Item = (u32, [u32; 3])> + '_ {
         let (ix, iy) = self.column_row(n);
         let cells = [(0, 0), (1, 0), (0, 1), (1, 1)]
             .into_iter()
@@ -171,17 +171,18 @@ impl TriGrid {
                 let cy = iy.checked_sub(dy)?;
                 (cx + 1 < self.nx && cy + 1 < self.ny).then(|| cy * (self.nx - 1) + cx)
             });
-        cells
-            .flat_map(|c| [2 * c, 2 * c + 1])
-            .filter(move |&t| self.triangle(t).is_some_and(|nodes| nodes.contains(&n)))
+        cells.flat_map(|c| [2 * c, 2 * c + 1]).filter_map(move |t| {
+            self.triangle(t)
+                .filter(|nodes| nodes.contains(&n))
+                .map(|nodes| (t, nodes))
+        })
     }
 
     /// The nodes joined to `n` by an edge of a triangle that exists.
     pub fn neighbours(&self, n: u32) -> Vec<u32> {
         let mut out: Vec<u32> = self
             .triangles_at(n)
-            .filter_map(|t| self.triangle(t))
-            .flatten()
+            .flat_map(|(_, nodes)| nodes)
             .filter(|&m| m != n)
             .collect();
         out.sort_unstable();
@@ -304,8 +305,8 @@ mod tests {
     fn triangles_wind_anticlockwise_and_cover_each_cell() {
         let g = flat(4, 3);
         let mut area = 0.0;
-        for t in g.triangles() {
-            let [a, b, c] = g.triangle(t).unwrap().map(|n| g.xy(n).unwrap());
+        for (t, nodes) in g.triangles() {
+            let [a, b, c] = nodes.map(|n| g.xy(n).unwrap());
             let signed = (b - a).perp_dot(c - a) / 2.0;
             assert!(signed > 0.0, "triangle {t} winds clockwise");
             area += signed;
@@ -318,9 +319,9 @@ mod tests {
         let mut z = vec![0.0f32; 4];
         z[0] = f32::NAN;
         let g = TriGrid::new(DVec2::ZERO, 1.0, 2, 2, z, vec![true; 4]).unwrap();
-        let tris: Vec<u32> = g.triangles().collect();
+        let tris: Vec<(u32, [u32; 3])> = g.triangles().collect();
         assert_eq!(tris.len(), 1);
-        assert!(!g.triangle(tris[0]).unwrap().contains(&0));
+        assert!(!tris[0].1.contains(&0));
     }
 
     #[test]
@@ -357,7 +358,7 @@ mod tests {
         let n = 9;
         let z: Vec<f32> = (0..n).map(|i| (i % 3) as f32).collect();
         let g = TriGrid::new(DVec2::ZERO, 1.0, 3, 3, z, vec![true; 9]).unwrap();
-        for t in g.triangles() {
+        for (t, _) in g.triangles() {
             assert!((g.slope(t).unwrap() - std::f64::consts::FRAC_PI_4).abs() < 1e-6);
         }
     }

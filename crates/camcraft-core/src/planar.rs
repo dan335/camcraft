@@ -36,7 +36,7 @@
 //! the tool's right; a spindle turning the other way, or conventional cutting,
 //! puts it on the left.
 
-use camcraft_geom::contour::{Contour, Region, RegionError};
+use camcraft_geom::contour::{Contour, Region};
 use camcraft_geom::ring::{Ring, Span};
 use glam::{DVec2, DVec3, dvec3};
 
@@ -183,6 +183,11 @@ pub fn centre_offset(op: &Operation, cutter_radius: f64) -> f64 {
         StrategySpec::Pocket { .. } => -radius,
         StrategySpec::Parallel { .. }
         | StrategySpec::Scallop { .. }
+        | StrategySpec::Contour { .. }
+        | StrategySpec::Flat { .. }
+        | StrategySpec::Spiral { .. }
+        | StrategySpec::Radial { .. }
+        | StrategySpec::MorphedSpiral { .. }
         | StrategySpec::PocketClearing { .. }
         | StrategySpec::Adaptive { .. }
         | StrategySpec::Face { .. }
@@ -235,7 +240,7 @@ pub fn areas(
             if !overlapping(&region, s) {
                 continue;
             }
-            if region.intersection(s).map_err(region_err)?.area() > 1e-9 {
+            if region.intersection(s)?.area() > 1e-9 {
                 span = Some(span.map_or((*top, *bottom), |(t, b)| (t.max(*top), b.min(*bottom))));
             }
         }
@@ -1043,10 +1048,6 @@ fn emit(
         lead(&l.lead_out, z, feed, path)?;
     }
     Ok(())
-}
-
-fn region_err(e: RegionError) -> StrategyError {
-    StrategyError::Region(e.to_string())
 }
 
 #[cfg(test)]
