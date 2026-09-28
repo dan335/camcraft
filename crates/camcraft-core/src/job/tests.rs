@@ -222,6 +222,32 @@ fn unknown_settings_are_refused() {
     toml::from_str::<Job>(&fine).unwrap();
 }
 
+/// A profile's leads are Fusion's: a quarter turn, and every size a tenth of
+/// the tool, unless given; and nothing past the default is written.
+#[test]
+fn leads_are_fusions_unless_given() {
+    let l = Leads::default().sizes(6.35);
+    assert_eq!((l.radius, l.straight, l.vertical), (0.635, 0.635, 0.635));
+    assert_eq!(l.sweep, 90.0);
+    assert_eq!(toml::to_string(&Leads::default()).unwrap(), "");
+    let given = Leads {
+        vertical: Some(0.0),
+        ..Leads::default()
+    };
+    assert_eq!(given.sizes(6.35).vertical, 0.0, "zero for none");
+    let text = SAMPLE.replacen(
+        "strategy = \"parallel\"\n",
+        "strategy = \"profile\"\nlinking = { entry = \"plunge\", leads = { straight = 1.0 } }\n",
+        1,
+    )
+    .replace("angle = 90.0\n", "");
+    let j: Job = toml::from_str(&text).unwrap();
+    j.validate().unwrap();
+    let linking = &j.setups[0].operations[1].linking;
+    assert_eq!(linking.entry, Some(Entry::Plunge));
+    assert_eq!(linking.leads.unwrap().straight, Some(1.0));
+}
+
 /// A fixed box needs a place on every axis.
 #[test]
 fn a_fixed_box_without_a_place_on_each_axis_is_refused() {
@@ -622,7 +648,11 @@ fn each_strategy_says_what_it_uses() {
         conventional: false,
     }
     .uses();
-    assert!(!profile.stepover && profile.tabs && profile.leads);
+    assert!(!profile.stepover && profile.tabs && profile.leads && profile.entry);
+    assert!(
+        !pocket.entry && !parallel.entry,
+        "only a profile chooses its entry"
+    );
     assert_eq!(profile.stock_to_leave, Leave::Both);
     let drill = StrategySpec::Drill {
         peck: None,

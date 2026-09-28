@@ -41,7 +41,7 @@ use glam::{DVec2, DVec3, dvec3};
 
 use crate::job::{Operation, Picks, ProfileSide, StrategySpec};
 use crate::strategy::{StrategyError, check};
-use crate::toolpath::{MoveRole, Toolpath};
+use crate::toolpath::{Arc, MoveRole, Toolpath};
 
 /// One connected piece of where the tool's centre goes, and the levels it is cut
 /// between.
@@ -264,22 +264,84 @@ pub fn profile(
             emit(&ring, z, params.feed, leads.as_ref(), &mut path)?;
             report.passes += 1;
         }
-        at = ring.first().copied();
+        // The next ring starts nearest where this one's lead left the tool.
+        at = leads
+            .as_ref()
+            .and_then(RingLeads::end)
+            .or(ring.first().copied());
     }
     Ok((path, report))
 }
 
-/// The lead-in onto the start of closed `ring` and the lead-out off its end, as
-/// points seen from above, each in the order the tool goes, the ring's start
-/// left out: arcs of `lead` tangent to the ring, on its left when `left`, else
-/// its right. The largest of the lead's radius, its half and its quarter whose
-/// points are all in the waste, as `waste` says; `None` where none is.
+/// One piece of a lead, seen from above: straight to a point, or round a level
+/// arc about `centre` to one, turning `sweep` radians (counter-clockwise when
+/// positive).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Piece {
+    Line(DVec2),
+    Arc {
+        to: DVec2,
+        centre: DVec2,
+        sweep: f64,
+    },
+}
+
+impl Piece {
+    fn to(&self) -> DVec2 {
+        match *self {
+            Piece::Line(to) | Piece::Arc { to, .. } => to,
+        }
+    }
+
+    /// Points along it from `from`, its end last, close enough together to
+    /// say whether it stays in the waste.
+    fn samples(&self, from: DVec2) -> Vec<DVec2> {
+        match *self {
+            Piece::Line(to) => (1..=4).map(|k| from.lerp(to, f64::from(k) / 4.0)).collect(),
+            Piece::Arc { to, centre, sweep } => {
+                let steps = arc_steps(sweep);
+                let r0 = from - centre;
+                let mut out: Vec<DVec2> = (1..steps)
+                    .map(|k| {
+                        let a = sweep * f64::from(k) / f64::from(steps);
+                        centre + DVec2::from_angle(a).rotate(r0)
+                    })
+                    .collect();
+                out.push(to);
+                out
+            }
+        }
+    }
+}
+
+/// How a profile comes onto a ring and goes off it, seen from above: from
+/// `start`, along `lead_in` to the ring's start, and from there along
+/// `lead_out`.
+#[derive(Debug, Clone, PartialEq)]
+struct RingLeads {
+    start: DVec2,
+    lead_in: Vec<Piece>,
+    lead_out: Vec<Piece>,
+}
+
+impl RingLeads {
+    /// Where the lead-out ends.
+    fn end(&self) -> Option<DVec2> {
+        self.lead_out.last().map(Piece::to)
+    }
+}
+
+/// The lead onto the start of closed `ring` and off its end, as Fusion's: a
+/// straight, then a level arc of `lead` tangent to the ring, on its left when
+/// `left`, else its right; and off it the same, mirrored. The largest of the
+/// arc's radius, its half and its quarter whose lead stays in the waste, as
+/// `waste` says; `None` where none does.
 fn leads_for(
     ring: &[DVec2],
     lead: LeadArc,
     left: bool,
     waste: impl Fn(DVec2) -> bool,
-) -> Option<(Vec<DVec2>, Vec<DVec2>)> {
+) -> Option<RingLeads> {
     let start = *ring.first()?;
     // The way the ring leaves its start, and the way it comes back to it.
     let into = ring
@@ -296,32 +358,60 @@ fn leads_for(
         .find(|d| d.length() > 1e-9)?
         .normalize();
     let aside = |t: DVec2| if left { t.perp() } else { -t.perp() };
-    let steps = arc_steps(lead.sweep);
-    let angles = move || (1..=steps).map(move |k| lead.sweep * f64::from(k) / f64::from(steps));
+    // Turning towards the waste on the left is turning counter-clockwise.
+    let turn = if left { lead.sweep } else { -lead.sweep };
     [1.0, 0.5, 0.25].into_iter().find_map(|k| {
         let r = lead.radius * k;
         // In: round an arc from the waste onto the start, heading along `into`.
         // Angle `a` back from the start is at centre − n·r·cos a − t·r·sin a.
         let n = aside(into);
-        let point_in = |a: f64| start + n * r * (1.0 - a.cos()) - into * r * a.sin();
-        let heading_in = |a: f64| (into * a.cos() - n * a.sin()).normalize_or_zero();
-        let mut lead_in: Vec<DVec2> = angles().map(point_in).collect();
-        lead_in.reverse();
-        if lead.straight > 0.0 {
-            let far = point_in(lead.sweep);
-            lead_in.insert(0, far - heading_in(lead.sweep) * lead.straight);
-        }
+        let far = start + n * r * (1.0 - lead.sweep.cos()) - into * r * lead.sweep.sin();
+        let heading = (into * lead.sweep.cos() - n * lead.sweep.sin()).normalize_or_zero();
+        let arc_in = Piece::Arc {
+            to: start,
+            centre: start + n * r,
+            sweep: turn,
+        };
+        let (lead_start, lead_in) = if lead.straight > 0.0 {
+            (
+                far - heading * lead.straight,
+                vec![Piece::Line(far), arc_in],
+            )
+        } else {
+            (far, vec![arc_in])
+        };
         // Out: on along `back`, round an arc away into the waste.
         let n = aside(back);
-        let point_out = |a: f64| start + n * r * (1.0 - a.cos()) + back * r * a.sin();
-        let heading_out = |a: f64| (back * a.cos() + n * a.sin()).normalize_or_zero();
-        let mut lead_out: Vec<DVec2> = angles().map(point_out).collect();
+        let far = start + n * r * (1.0 - lead.sweep.cos()) + back * r * lead.sweep.sin();
+        let heading = (back * lead.sweep.cos() + n * lead.sweep.sin()).normalize_or_zero();
+        let mut lead_out = vec![Piece::Arc {
+            to: far,
+            centre: start + n * r,
+            sweep: turn,
+        }];
         if lead.straight > 0.0 {
-            let far = point_out(lead.sweep);
-            lead_out.push(far + heading_out(lead.sweep) * lead.straight);
+            lead_out.push(Piece::Line(far + heading * lead.straight));
         }
-        let clear = lead_in.iter().chain(&lead_out).all(|p| waste(*p));
-        clear.then_some((lead_in, lead_out))
+        let mut samples = vec![lead_start];
+        let mut at = lead_start;
+        for p in &lead_in {
+            samples.extend(p.samples(at));
+            at = p.to();
+        }
+        for p in &lead_out {
+            samples.extend(p.samples(at));
+            at = p.to();
+        }
+        // The ring's start itself is on the ring, not beside it.
+        let clear = samples
+            .iter()
+            .filter(|p| p.distance(start) > 1e-9)
+            .all(|p| waste(*p));
+        clear.then_some(RingLeads {
+            start: lead_start,
+            lead_in,
+            lead_out,
+        })
     })
 }
 
@@ -696,33 +786,48 @@ fn starting_near(ring: &[DVec2], at: Option<DVec2>) -> Vec<DVec2> {
     out
 }
 
-/// A closed ring cut at height `z`: a link to its start, then round and back to it.
+/// A closed ring cut at height `z`: a link to its start, then round and back to
+/// it; with leads, a link to where the lead starts, along it onto the ring, round,
+/// and off along the lead out.
 fn emit(
     ring: &[DVec2],
     z: f64,
     feed: f64,
-    leads: Option<&(Vec<DVec2>, Vec<DVec2>)>,
+    leads: Option<&RingLeads>,
     path: &mut Toolpath,
 ) -> Result<(), StrategyError> {
     let Some(first) = ring.first() else {
         return Ok(());
     };
-    let (lead_in, lead_out) =
-        leads.map_or((&[][..], &[][..]), |(i, o)| (i.as_slice(), o.as_slice()));
+    let at = |p: DVec2| dvec3(p.x, p.y, z);
     // The strategy does not plan how to arrive; the linker does. With a lead, it
-    // arrives where the lead starts, and goes round it onto the ring.
-    let arrive = lead_in.first().unwrap_or(first);
-    path.feed_to(dvec3(arrive.x, arrive.y, z), MoveRole::Link, feed)?;
-    if !lead_in.is_empty() {
-        for p in lead_in.iter().skip(1).chain(std::iter::once(first)) {
-            path.feed_to(dvec3(p.x, p.y, z), MoveRole::Lead, feed)?;
+    // arrives where the lead starts, and goes along it onto the ring.
+    let arrive = leads.map_or(*first, |l| l.start);
+    path.feed_to(at(arrive), MoveRole::Link, feed)?;
+    let lead = |pieces: &[Piece], path: &mut Toolpath| -> Result<(), StrategyError> {
+        for p in pieces {
+            match *p {
+                Piece::Line(to) => path.feed_to(at(to), MoveRole::Lead, feed)?,
+                Piece::Arc { to, centre, sweep } => {
+                    let arc = Arc {
+                        centre: at(centre),
+                        axis: DVec3::Z,
+                        sweep,
+                    };
+                    path.arc_to(at(to), arc, MoveRole::Lead, feed)?;
+                }
+            }
         }
+        Ok(())
+    };
+    if let Some(l) = leads {
+        lead(&l.lead_in, path)?;
     }
     for p in ring.iter().skip(1).chain(std::iter::once(first)) {
-        path.feed_to(dvec3(p.x, p.y, z), MoveRole::Cut, feed)?;
+        path.feed_to(at(*p), MoveRole::Cut, feed)?;
     }
-    for p in lead_out {
-        path.feed_to(dvec3(p.x, p.y, z), MoveRole::Lead, feed)?;
+    if let Some(l) = leads {
+        lead(&l.lead_out, path)?;
     }
     Ok(())
 }
@@ -735,6 +840,7 @@ fn region_err(e: RegionError) -> StrategyError {
 #[allow(clippy::unwrap_used, clippy::float_cmp, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+    use crate::toolpath::MoveKind;
     use glam::dvec2;
 
     fn square(lo: f64, hi: f64) -> Contour {
@@ -809,31 +915,45 @@ mod tests {
             assert_eq!(report.no_room_to_lead, 0, "{side:?}");
             let moves = path.moves();
             let first_cut = moves.iter().position(|m| m.role == MoveRole::Cut).unwrap();
-            // Link, then the lead in, then the ring.
+            // Link, then the lead in, a straight and a level arc, then the ring.
             assert_eq!(moves[0].role, MoveRole::Link);
             assert!(moves[1..first_cut].iter().all(|m| m.role == MoveRole::Lead));
-            assert!(first_cut > 3, "{side:?}: a lead of several chords");
-            for m in moves.iter().filter(|m| m.role == MoveRole::Lead) {
-                let q = m.to.truncate();
-                let ring = region.rings()[0].points();
-                let on_ring = ring.iter().zip(ring.iter().cycle().skip(1)).any(|(a, b)| {
-                    let t = ((q - *a).dot(*b - *a) / b.distance_squared(*a)).clamp(0.0, 1.0);
-                    q.distance(*a + (*b - *a) * t) < 1e-9
-                });
-                let inside = region.contains(q);
-                assert!(
-                    on_ring || inside == (side == ProfileSide::Inside),
-                    "{side:?}: a lead point at {q} is not in the waste"
-                );
-            }
-            // Joining the ring along it: the lead's last chord heads the way
-            // the ring's first cut does.
-            let join = moves[first_cut - 1].to;
-            let before = moves[first_cut - 2].to;
-            let along = (moves[first_cut].to - join).truncate().normalize();
-            let arriving = (join - before).truncate().normalize();
+            assert_eq!(first_cut, 3, "{side:?}");
+            assert_eq!(moves[1].kind, MoveKind::Linear);
             assert!(
-                along.dot(arriving) > 0.99,
+                matches!(moves[2].kind, MoveKind::Arc(a) if (a.radius(moves[1].to) - 4.0).abs() < 1e-9)
+            );
+            let mut at = moves[0].to;
+            for m in moves.iter() {
+                if m.role == MoveRole::Lead {
+                    for p in m.chords(at, 0.01) {
+                        let q = p.truncate();
+                        let ring = region.rings()[0].points();
+                        let on_ring = ring.iter().zip(ring.iter().cycle().skip(1)).any(|(a, b)| {
+                            let t =
+                                ((q - *a).dot(*b - *a) / b.distance_squared(*a)).clamp(0.0, 1.0);
+                            q.distance(*a + (*b - *a) * t) < 1e-9
+                        });
+                        let inside = region.contains(q);
+                        assert!(
+                            on_ring || inside == (side == ProfileSide::Inside),
+                            "{side:?}: a lead point at {q} is not in the waste"
+                        );
+                    }
+                }
+                at = m.to;
+            }
+            // Joining the ring along it: the lead's arc ends heading the way the
+            // ring's first cut does.
+            let join = moves[first_cut - 1];
+            let along = (moves[first_cut].to - join.to).truncate().normalize();
+            let arriving = join
+                .tangent_at(moves[first_cut - 2].to, 1.0)
+                .unwrap()
+                .truncate()
+                .normalize();
+            assert!(
+                along.dot(arriving) > 1.0 - 1e-9,
                 "{side:?}: {along} vs {arriving}"
             );
             // Left along a lead too, after the ring closes.

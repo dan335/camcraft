@@ -4,7 +4,7 @@
 
 use camcraft_core::features;
 use camcraft_core::job::{
-    self, Boundary, Containment, Depths, FaceDirection, FeatureRef, Height, HeightContext,
+    self, Boundary, Containment, Depths, Entry, FaceDirection, FeatureRef, Height, HeightContext,
     HeightRef, Leads, Leave, MachiningBoundary, Operation, Outline, ProfileSide, StockToLeave,
     StrategySpec, TabShape, Tabs,
 };
@@ -1251,11 +1251,73 @@ fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f
                 });
             });
             ui.end_row();
+            widgets::field_label(ui, "Most per lap");
+            let stepdown = op.stepdown();
+            let absent = match (stepdown, diameter) {
+                (Some(d), _) => format!("the stepdown: {}", m.length(d, 2)),
+                (None, _) => of_tool(1.0, "the tool's diameter"),
+            };
+            let start = stepdown.or(diameter).unwrap_or(6.0);
+            ui.horizontal(|ui| {
+                widgets::optional(
+                    ui,
+                    &mut op.linking.ramp_stepdown,
+                    start,
+                    &absent,
+                    |ui, v| {
+                        m.length_field(ui, v, 0.1, 1000.0, "").on_hover_text(
+                            "The most a helix, or a ramp round a ring, goes down in one lap",
+                        );
+                    },
+                );
+            });
+            ui.end_row();
+        }
+        if uses.entry {
+            widgets::field_label(ui, "Entry");
+            let name = |e: Entry| match e {
+                Entry::Helix => "helix beside the lead",
+                Entry::Plunge => "plunge beside the lead",
+                Entry::Ramp => "ramp along the ring",
+            };
+            let mut entry = op.linking.entry.unwrap_or_default();
+            egui::ComboBox::from_id_salt("entry")
+                .selected_text(name(entry))
+                .show_ui(ui, |ui| {
+                    for e in [Entry::Helix, Entry::Plunge, Entry::Ramp] {
+                        ui.selectable_value(&mut entry, e, name(e));
+                    }
+                })
+                .response
+                .on_hover_text("How the tool goes down into material to start each ring");
+            // The default is written only when changed.
+            op.linking.entry = (entry != Entry::default()).then_some(entry);
+            ui.end_row();
+            if entry == Entry::Helix {
+                widgets::field_label(ui, "Helix diameter");
+                let absent = of_tool(0.9, "0.9 × the tool");
+                let start = 0.9 * diameter.unwrap_or(6.0);
+                ui.horizontal(|ui| {
+                    widgets::optional(
+                        ui,
+                        &mut op.linking.helix_diameter,
+                        start,
+                        &absent,
+                        |ui, v| {
+                            m.length_field(ui, v, 0.1, 1000.0, "").on_hover_text(
+                                "The circle the tool's centre goes round; smaller where the \
+                             waste has no room",
+                            );
+                        },
+                    );
+                });
+                ui.end_row();
+            }
         }
         if uses.leads {
             widgets::field_label(ui, "Leads");
             let mut on = op.linking.leads.is_some();
-            ui.checkbox(&mut on, "arc on and off each ring");
+            ui.checkbox(&mut on, "on and off each ring");
             match (on, op.linking.leads.is_some()) {
                 (true, false) => op.linking.leads = Some(Leads::default()),
                 (false, true) => op.linking.leads = None,
@@ -1263,29 +1325,43 @@ fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f
             }
             ui.end_row();
             if let Some(l) = &mut op.linking.leads {
-                widgets::field_label(ui, "Lead radius");
-                let absent = of_tool(0.5, "half the tool");
-                let start = 0.5 * diameter.unwrap_or(6.0);
-                ui.horizontal(|ui| {
-                    widgets::optional(ui, &mut l.radius, start, &absent, |ui, v| {
-                        m.length_field(ui, v, 0.05, 1000.0, "").on_hover_text(
-                            "The level arc's radius; smaller where the waste has no room",
-                        );
+                let start = 0.1 * diameter.unwrap_or(6.0);
+                let tenth = of_tool(0.1, "a tenth of the tool");
+                let size = |ui: &mut egui::Ui, label: &str, v: &mut Option<f64>, tip: &str| {
+                    widgets::field_label(ui, label);
+                    ui.horizontal(|ui| {
+                        widgets::optional(ui, v, start, &tenth, |ui, v| {
+                            m.length_field(ui, v, 0.05, 1000.0, "").on_hover_text(tip);
+                        });
                     });
-                });
-                ui.end_row();
-                widgets::field_label(ui, "Lead sweep");
+                    ui.end_row();
+                };
+                size(
+                    ui,
+                    "Vertical radius",
+                    &mut l.vertical,
+                    "The arc down onto the lead and up off it; 0 for none",
+                );
+                size(
+                    ui,
+                    "Straight",
+                    &mut l.straight,
+                    "The straight before the level arc in and after it out; 0 for none",
+                );
+                size(
+                    ui,
+                    "Arc radius",
+                    &mut l.radius,
+                    "The level arc onto the ring; smaller where the waste has no room",
+                );
+                widgets::field_label(ui, "Arc sweep");
                 ui.add(
                     egui::DragValue::new(&mut l.sweep)
                         .speed(1.0)
                         .range(1.0..=180.0)
                         .suffix("°"),
                 )
-                .on_hover_text("How far round the arc turns");
-                ui.end_row();
-                widgets::field_label(ui, "Straight lead");
-                m.length_field(ui, &mut l.straight, 0.1, 1000.0, "")
-                    .on_hover_text("A straight run before the arc in and after it out");
+                .on_hover_text("How far round the level arc turns");
                 ui.end_row();
             }
         }

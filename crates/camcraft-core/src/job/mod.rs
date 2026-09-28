@@ -77,9 +77,9 @@ use serde::{Deserialize, Serialize};
 pub use error::JobError;
 pub use model::{FixedBox, LengthUnit, ModelDef, Place, StockDef, StockSpec, Transform};
 pub use operation::{
-    Boundary, Containment, Depths, FaceDirection, Height, HeightContext, HeightRef, Heights, Leads,
-    Leave, Linking, MachiningBoundary, Operation, Outline, Passes, Picks, ProfileSide, Selection,
-    StockToLeave, StrategySpec, TabShape, Tabs, Uses,
+    Boundary, Containment, Depths, Entry, FaceDirection, Height, HeightContext, HeightRef, Heights,
+    LeadSizes, Leads, Leave, Linking, MachiningBoundary, Operation, Outline, Passes, Picks,
+    ProfileSide, Selection, StockToLeave, StrategySpec, TabShape, Tabs, Uses,
 };
 pub use pick::{FeatureRef, PointRef, Snap};
 pub use setup::{Along, BoxOf, Origin, Setup};

@@ -14,9 +14,12 @@ use crate::drilling::{DrillParams, DrillReport, Hole, drill, holes, nearest_firs
 use crate::dropcutter::DropCutter;
 use crate::face::{FaceParams, LevelsAsked, face};
 use crate::features::{Chain, FeatureError, outline, picked_chains, picked_points};
-use crate::job::{HeightContext, Job, Operation, Picks, SpindleDirection, StrategySpec, ToolSpec};
+use crate::job::{
+    Entry, HeightContext, Job, Operation, Picks, SpindleDirection, StrategySpec, ToolSpec,
+};
 use crate::linker::{
-    ClearanceField, LinkParams, LinkReport, Material, Ramp, StayDown, Surface, highest_under, link,
+    ClearanceField, EntryKind, LinkParams, LinkReport, Material, Ramp, StayDown, Surface,
+    highest_under, link,
 };
 use crate::ordering::order_passes;
 use crate::parallel::{ParallelParams, follow, parallel_finish_within};
@@ -229,6 +232,12 @@ pub(super) fn run_operation(
 fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
     let (op, linking) = (work.op, &work.op.linking);
     let diameter = work.spec.diameter;
+    // A profile's vertical lead is part of its leads; a finishing pass's is its
+    // own setting.
+    let leads = linking
+        .leads
+        .filter(|_| op.strategy.uses().leads)
+        .map(|l| l.sizes(diameter));
     let (stay_down, lead_radius, ramp) = match op.strategy {
         StrategySpec::Parallel { .. } => (
             StayDown::OverPart {
@@ -244,7 +253,7 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
             StayDown::Level {
                 max: linking.stay_down.unwrap_or(5.0 * diameter),
             },
-            0.0,
+            leads.map_or(0.0, |l| l.vertical),
             Some(Ramp {
                 angle: linking.ramp_angle.to_radians(),
                 // Fusion's: a ramp moves mostly sideways, so it goes at a third
@@ -254,6 +263,22 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         ),
         StrategySpec::Drill { .. } => (StayDown::Never, 0.0, None),
     };
+    let entry = if op.strategy.uses().entry {
+        match linking.entry.unwrap_or_default() {
+            Entry::Helix => EntryKind::Helix,
+            Entry::Plunge => EntryKind::Plunge,
+            Entry::Ramp => EntryKind::Ramp,
+        }
+    } else {
+        EntryKind::Ramp
+    };
+    let conventional = match op.strategy {
+        StrategySpec::Profile { conventional, .. } | StrategySpec::Pocket { conventional, .. } => {
+            conventional
+        }
+        _ => false,
+    };
+    let clockwise = work.spec.spindle == SpindleDirection::Clockwise;
     LinkParams {
         retract_feed: linking.retract_feed,
         plunge_feed: linking.plunge_feed,
@@ -262,6 +287,12 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         stay_down,
         lead_radius,
         ramp,
+        entry,
+        helix_radius: linking.helix_diameter.unwrap_or(0.9 * diameter) / 2.0,
+        // A helix climbs as the cut does.
+        helix_ccw: clockwise != conventional,
+        ramp_stepdown: linking.ramp_stepdown.or(op.stepdown()).or(Some(diameter)),
+        lead_in_material: leads.is_some(),
         max_cut_step: op.passes.max_cut_step,
         tolerance: work.job.tolerance,
         end_z: Some(clearance_z),
@@ -408,10 +439,13 @@ fn planar_paths(
             .linking
             .leads
             .filter(|_| op.strategy.uses().leads)
-            .map(|l| LeadArc {
-                radius: l.radius.unwrap_or(0.5 * work.spec.diameter),
-                sweep: l.sweep.to_radians(),
-                straight: l.straight,
+            .map(|l| {
+                let l = l.sizes(work.spec.diameter);
+                LeadArc {
+                    radius: l.radius,
+                    sweep: l.sweep.to_radians(),
+                    straight: l.straight,
+                }
             }),
     };
     let (path, report, detail): (Toolpath, PlanarReport, fn(PlanarReport) -> StrategyDetail) =

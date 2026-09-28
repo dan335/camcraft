@@ -118,33 +118,55 @@ on purpose is not called a gouge.
 passes = { stock_to_leave = { radial = 0.5, axial = 0.25 } }
 ```
 
-**Leads** (`linking.leads`) are a profile's level arcs on and off each ring, as
-Fusion's horizontal lead-in and lead-out, the same both ways: tangent to the
-ring, in the waste beside it, `radius` (half the tool's diameter unless given)
-turning `sweep` degrees (90), with an optional `straight` run before the arc in
-and after it out. An arc that would leave the waste is tried at half and a
-quarter the radius; a ring that starts at a corner starts instead halfway along
-its longest side, where an arc can join it; a ring with no room for any goes
-without, with a warning. A groove on the boundary has none. The linker ramps
-down to where the lead starts, along the lead and the ring. New profiles have
-them.
+**Leads** (`linking.leads`) are how a profile comes onto each ring and goes off
+it, in the waste beside it, as Fusion's lead-in and lead-out, the same both ways:
+down a vertical arc (`vertical`), along a straight (`straight`), and round a level
+arc (`radius`, turning `sweep` degrees, 90) onto the ring, tangent to it; and off
+it the mirror image, up at the end. Each size is a tenth of the tool's diameter
+unless given, as Fusion's, and zero leaves that piece out. Every piece is an arc
+or a straight line in the program. A level arc that would leave the waste is
+tried at half and a quarter the radius; a ring that starts at a corner starts
+instead halfway along its longest side, where an arc can join it; a ring with no
+room for any goes without, with a warning. A groove on the boundary has none. New
+profiles have them.
 
 ```toml
-linking = { leads = { radius = 3.0, sweep = 90.0, straight = 1.0 } }
+linking = { leads = { radius = 3.0, sweep = 90.0, straight = 1.0, vertical = 0.6 } }
 ```
 
+A profile's **entry** (`linking.entry`) is how it goes down into material to
+start each ring, beside the lead:
+
+- `"helix"`, the default: down a helix in the waste behind where the lead
+  starts, at the ramp angle, onto the vertical arc's top. Its circle, as the
+  tool's centre goes, is `helix_diameter` across (0.9 × the tool's); where the
+  part leaves no room for it, or for one half or a quarter the size, the tool
+  goes straight down instead.
+- `"plunge"`: straight down at the plunge feed onto the vertical arc's top, as
+  Fusion's 2D contour does without a ramp.
+- `"ramp"`: down along the ring itself, in the direction it cuts, onto its start,
+  where it is entered without its lead-in.
+
+Neither a helix nor a ramp round a ring goes down more in one lap than the
+*most per lap* (`ramp_stepdown`, Fusion's maximum ramp stepdown): the
+operation's stepdown, or the tool's diameter without one. From one depth of a
+ring to the next the tool stays down, as Fusion's does: off the ring along the
+lead, across to where the next depth's way in starts, and down it.
+
 **Linking** is how the tool moves between cuts, after Fusion's
-([decision 0004](decisions/0004-linking-and-entries.md)). It rapids down to the
+([decision 0004](decisions/0004-linking-and-entries.md), and for 2D
+[decision 0006](decisions/0006-2d-linking-and-arcs.md)). It rapids down to the
 *safe distance* (2 mm) above the material under it and feeds from there, and feeds
 out of a cut only that far before rapiding. A link no longer than the *stay-down*
 distance is made without lifting, at the cutting feed: 50 mm for parallel, riding
 over the part; five times the tool's diameter for Z-level and 2D, straight and
-level.
+level, and for a profile down to its ring's next depth.
 Parallel enters and leaves each pass along a vertical arc (the *lead radius*, a
-tenth of the tool); Z-level and 2D ramp into material along the pass they are about to cut
-(the *ramp angle*, 2°, at the *ramp feed*, a third of the cutting feed). After the
-last cut the tool goes up to the clearance height before the spindle stops. The
-settings are written only when changed.
+tenth of the tool); Z-level, pockets and facing ramp into material along the pass
+they are about to cut, in the direction it cuts (the *ramp angle*, 2°, at the
+*ramp feed*, a third of the cutting feed). After the last cut the tool goes up to
+the clearance height before the spindle stops. The settings are written only when
+changed.
 
 A job's **tools** are its own copies, by name, never links to a library, so the
 job still cuts what was verified after the library changes. A job whose used tools

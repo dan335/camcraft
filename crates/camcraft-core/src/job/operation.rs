@@ -205,6 +205,7 @@ impl StrategySpec {
             stay_down: true,
             lead_radius: false,
             ramp: true,
+            entry: false,
             leads: false,
             reorder: true,
         };
@@ -241,6 +242,7 @@ impl StrategySpec {
                 },
                 tabs: true,
                 leads: true,
+                entry: true,
                 reorder: false,
                 ..cuts_loops
             },
@@ -264,6 +266,7 @@ impl StrategySpec {
                 stay_down: false,
                 lead_radius: false,
                 ramp: false,
+                entry: false,
                 leads: false,
                 // Holes are drilled in the order found, nearest first.
                 reorder: false,
@@ -321,6 +324,8 @@ pub struct Uses {
     pub lead_radius: bool,
     /// Ramping into material.
     pub ramp: bool,
+    /// A choice of how each pass is entered: a helix, a plunge or a ramp.
+    pub entry: bool,
     /// Level arcs into and out of each ring.
     pub leads: bool,
     /// Passes reordered, and maybe reversed, to shorten travel.
@@ -823,12 +828,26 @@ impl Operation {
                     value: l.sweep,
                 });
             }
-            if !(l.straight.is_finite() && l.straight >= 0.0) {
-                return Err(JobError::BadValue {
-                    field: format!("{at}.linking.leads.straight"),
-                    value: l.straight,
-                });
+            for (name, v) in [("straight", l.straight), ("vertical", l.vertical)] {
+                if let Some(v) = v
+                    && !(v.is_finite() && v >= 0.0)
+                {
+                    return Err(JobError::BadValue {
+                        field: format!("{at}.linking.leads.{name}"),
+                        value: v,
+                    });
+                }
             }
+        }
+        if uses.entry
+            && let Some(d) = self.linking.helix_diameter
+        {
+            positive(&format!("{at}.linking.helix_diameter"), d)?;
+        }
+        if uses.ramp
+            && let Some(d) = self.linking.ramp_stepdown
+        {
+            positive(&format!("{at}.linking.ramp_stepdown"), d)?;
         }
         if let Some(t) = self.passes.tabs.filter(|_| uses.tabs) {
             positive(&format!("{at}.passes.tabs.width"), t.width)?;
@@ -1133,39 +1152,111 @@ pub struct Linking {
     /// as Fusion's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ramp_feed: Option<f64>,
-    /// The level arcs a 2D profile enters and leaves each ring along, in the
-    /// waste beside it: Fusion's horizontal lead-in and lead-out. None for none.
+    /// The leads a 2D profile enters and leaves each ring along, in the waste
+    /// beside it: Fusion's lead-in and lead-out. None for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leads: Option<Leads>,
+    /// How a pass is entered where it starts in material, for a strategy that
+    /// offers a choice: the strategy's own when not given (a helix for a
+    /// profile).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<Entry>,
+    /// The diameter of a helical entry's circle, as the tool's centre goes, in
+    /// millimetres: 0.9 × the tool's diameter when not given, smaller where the
+    /// waste has no room for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub helix_diameter: Option<f64>,
+    /// The most a helix or a ramp round a ring descends in one lap, in
+    /// millimetres: Fusion's maximum ramp stepdown. The operation's stepdown
+    /// when not given, or the tool's diameter without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ramp_stepdown: Option<f64>,
 }
 
-/// Level arcs into and out of a cut, tangent to it and in the waste beside it,
-/// the same both ways: Fusion's horizontal lead-in and lead-out, with "same as
-/// lead-in".
+/// How a pass that starts in material is entered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Entry {
+    /// Down a helix in the waste beside the lead, at the ramp angle: the
+    /// profile's own.
+    #[default]
+    Helix,
+    /// Straight down beside the lead at the plunge feed, as a 2D contour
+    /// without a ramp does in Fusion.
+    Plunge,
+    /// Down along the pass itself, in the direction it cuts, at the ramp angle.
+    Ramp,
+}
+
+/// How a profile comes onto a ring and off it, in the waste beside it, as
+/// Fusion's lead-in and lead-out, the same both ways: down a vertical arc, along
+/// a straight, and round a level arc onto the ring, tangent to it; and off it the
+/// same, mirrored. Each is a tenth of the tool's diameter when not given, as
+/// Fusion's.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Leads {
-    /// The arc's radius, in millimetres: half the tool's diameter when not
-    /// given.
+    /// The level arc's radius, in millimetres.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radius: Option<f64>,
-    /// How far round the arc turns, in degrees: Fusion's sweep angle.
-    #[serde(default = "default_lead_sweep")]
+    /// How far round the level arc turns, in degrees: Fusion's sweep angle.
+    #[serde(
+        default = "default_lead_sweep",
+        skip_serializing_if = "is_default_lead_sweep"
+    )]
     pub sweep: f64,
-    /// A straight run before the arc in and after it out, in millimetres:
-    /// Fusion's linear lead-in distance.
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub straight: f64,
+    /// The straight before the level arc in and after it out, in millimetres:
+    /// Fusion's linear lead-in distance; zero for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub straight: Option<f64>,
+    /// The vertical arc's radius, in millimetres: Fusion's vertical lead-in
+    /// radius; zero for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical: Option<f64>,
 }
 
 impl Default for Leads {
+    /// Fusion's: every size a tenth of the tool, a quarter turn.
     fn default() -> Self {
         Self {
             radius: None,
             sweep: default_lead_sweep(),
-            straight: 0.0,
+            straight: None,
+            vertical: None,
         }
     }
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_lead_sweep(v: &f64) -> bool {
+    v.to_bits() == default_lead_sweep().to_bits()
+}
+
+impl Leads {
+    /// Fusion's leads for a tool `diameter` across: a quarter turn, and a tenth
+    /// of the diameter each.
+    pub fn sizes(&self, diameter: f64) -> LeadSizes {
+        let tenth = 0.1 * diameter;
+        LeadSizes {
+            radius: self.radius.unwrap_or(tenth),
+            sweep: self.sweep,
+            straight: self.straight.unwrap_or(tenth),
+            vertical: self.vertical.unwrap_or(tenth),
+        }
+    }
+}
+
+/// A profile's leads, sized for its tool.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LeadSizes {
+    /// The level arc's radius, in millimetres.
+    pub radius: f64,
+    /// How far round the level arc turns, in degrees.
+    pub sweep: f64,
+    /// The straight, in millimetres.
+    pub straight: f64,
+    /// The vertical arc's radius, in millimetres.
+    pub vertical: f64,
 }
 
 fn default_lead_sweep() -> f64 {
@@ -1185,6 +1276,9 @@ impl Default for Linking {
             ramp_angle: default_ramp_angle(),
             ramp_feed: None,
             leads: None,
+            entry: None,
+            helix_diameter: None,
+            ramp_stepdown: None,
         }
     }
 }

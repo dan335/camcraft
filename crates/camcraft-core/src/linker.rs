@@ -35,7 +35,7 @@
 //! ([`LinkParams::ramp`]). Each is checked against the part ([`Surface`]) before
 //! it is used, and left out, for the plain move, where it does not fit.
 
-use std::f64::consts::{FRAC_PI_2, PI};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use camcraft_geom::arc::Arc;
 use camcraft_geom::heightmap::{HeightMap, cell_index};
@@ -43,7 +43,7 @@ use camcraft_geom::mesh::distance_to_segment;
 use glam::{DVec2, DVec3, dvec3};
 
 use crate::is_positive;
-use crate::toolpath::{Move, MoveRole, PLUNGE_RATIO, Toolpath, ToolpathError};
+use crate::toolpath::{Move, MoveKind, MoveRole, PLUNGE_RATIO, Toolpath, ToolpathError};
 
 /// How high the tool must be to cross safely.
 pub trait Clearance {
@@ -295,6 +295,20 @@ pub enum StayDown {
     },
 }
 
+/// How a pass that starts in material is entered, where [`LinkParams::ramp`]
+/// gives a ramp angle and feed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    /// Down along the pass itself, in the direction it cuts; a ring with leads
+    /// is entered at its start, without its lead.
+    Ramp,
+    /// Down a helix beside where the pass starts, then along the vertical lead,
+    /// if there is one; straight down where there is no room for one.
+    Helix,
+    /// Straight down at the plunge feed onto the vertical lead, or the pass.
+    Plunge,
+}
+
 /// Ramping into material along the pass about to be cut.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Ramp {
@@ -323,6 +337,20 @@ pub struct LinkParams {
     pub lead_radius: f64,
     /// Ramping into material, where a pass starts in it; `None` plunges.
     pub ramp: Option<Ramp>,
+    /// How a pass that starts in material is entered, with a ramp.
+    pub entry: EntryKind,
+    /// The radius of a helical entry, as the tool's centre goes, in millimetres.
+    pub helix_radius: f64,
+    /// Whether a helix turns counter-clockwise seen from above, which climbs
+    /// with a clockwise spindle.
+    pub helix_ccw: bool,
+    /// The most a helix, or a ramp round a closed pass, descends in one lap, in
+    /// millimetres; `None` for no limit but the ramp angle.
+    pub ramp_stepdown: Option<f64>,
+    /// Whether the vertical lead may go down through material, from a plunge
+    /// onto its top, as a 2D profile's does; otherwise it is left out wherever
+    /// its top is in material, as a finishing pass's is.
+    pub lead_in_material: bool,
     /// Deepest a descent at cutting feed may fall steeply, in millimetres: a
     /// stay-down link that would fall further lifts clear instead.
     pub max_cut_step: f64,
@@ -344,6 +372,11 @@ impl LinkParams {
             stay_down: StayDown::Never,
             lead_radius: 0.0,
             ramp: None,
+            entry: EntryKind::Ramp,
+            helix_radius: 0.0,
+            helix_ccw: true,
+            ramp_stepdown: None,
+            lead_in_material: false,
             max_cut_step: 0.5,
             tolerance: 0.01,
             end_z: None,
@@ -382,6 +415,8 @@ pub struct LinkReport {
     pub stayed_down: u64,
     /// How many passes were ramped into.
     pub ramps: u64,
+    /// How many passes were entered down a helix.
+    pub helixes: u64,
     /// How many plunges start at or below the surface they descend into.
     ///
     /// Always zero for a plane clearance; meaningful once clearance varies.
@@ -453,8 +488,8 @@ pub fn link<C: Clearance, M: Material, S: Surface>(
             .map_or(moves.len(), |k| i + 1 + k);
         let pass = moves.get(i + 1..end).unwrap_or(&[]);
         l.settle();
-        l.link(at, m.to, pass)?;
-        for n in pass {
+        let skip = l.link(at, m.to, pass)?;
+        for n in pass.get(skip..).unwrap_or(&[]) {
             l.out.push(*n)?;
         }
         at = pass.last().map_or(Some(m.to), |n| Some(n.to));
@@ -481,19 +516,137 @@ fn last_feed(moves: &[Move]) -> Option<f64> {
     moves.iter().rev().find_map(|m| m.feed)
 }
 
-/// How a pass is entered.
-enum Entry {
+/// How a pass is entered, planned before the height it starts from is known.
+enum Way {
     /// Straight down onto its start.
     Plunge,
-    /// Down along its own path, through these points, from the top.
-    Ramp(Vec<DVec3>),
-    /// Down onto it along a vertical arc from `top`.
+    /// Straight down onto `top`, then along a vertical arc onto its start.
     Lead {
         /// Where the arc starts.
         top: DVec3,
         /// The arc.
         arc: Arc,
     },
+    /// Down a helix in the waste onto `end`, then along `lead`, a vertical arc
+    /// onto its start, if there is one; otherwise `end` is its start.
+    Helix {
+        /// Where the helix ends.
+        end: DVec3,
+        /// The level direction the pass sets off in, which the helix is behind.
+        ahead: DVec2,
+        /// Its radius, as the tool's centre goes.
+        radius: f64,
+        /// The vertical arc after it.
+        lead: Option<Arc>,
+    },
+    /// Down along the pass itself, from `start`, through `moves`, leaving out
+    /// the pass's first `skip` moves, which it replaces.
+    Ramp {
+        /// Where it starts.
+        start: DVec3,
+        /// Its moves, the last ending where the pass is entered.
+        moves: Vec<Move>,
+        /// How many of the pass's first moves it replaces.
+        skip: usize,
+    },
+}
+
+/// A helix, as the tool goes down it.
+struct Helix {
+    /// Where it starts.
+    start: DVec3,
+    /// Its turns, each at most one, the last ending where it ends.
+    moves: Vec<(DVec3, Arc)>,
+}
+
+/// A piece of a path: where it starts, and the move from there.
+#[derive(Debug, Clone, Copy)]
+struct Seg {
+    from: DVec3,
+    m: Move,
+}
+
+impl Seg {
+    /// How far it runs, seen from above.
+    fn flat_length(&self) -> f64 {
+        match self.m.kind {
+            MoveKind::Linear => self.from.truncate().distance(self.m.to.truncate()),
+            MoveKind::Arc(a) if a.axis.z.abs() > 1.0 - 1e-9 => a.radius(self.from) * a.sweep.abs(),
+            MoveKind::Arc(_) => {
+                let mut at = self.from;
+                let mut length = 0.0;
+                for p in self.m.chords(self.from, 1e-3) {
+                    length += at.truncate().distance(p.truncate());
+                    at = p;
+                }
+                length
+            }
+        }
+    }
+
+    /// It run backwards.
+    fn reversed(&self) -> Self {
+        Seg {
+            from: self.m.to,
+            m: self.m.reversed(self.from),
+        }
+    }
+
+    /// Its first fraction `f`.
+    fn head(&self, f: f64) -> Self {
+        let m = match self.m.kind {
+            MoveKind::Linear => Move {
+                to: self.from.lerp(self.m.to, f),
+                ..self.m
+            },
+            MoveKind::Arc(a) => {
+                let (head, mid, _) = a.split(self.from, self.m.to, f);
+                Move {
+                    to: mid,
+                    kind: MoveKind::Arc(head),
+                    ..self.m
+                }
+            }
+        };
+        Seg { from: self.from, m }
+    }
+}
+
+/// The pieces of `moves`, the first starting at `from`.
+fn segs(from: DVec3, moves: &[Move]) -> Vec<Seg> {
+    let mut at = from;
+    moves
+        .iter()
+        .map(|m| Seg {
+            from: std::mem::replace(&mut at, m.to),
+            m: *m,
+        })
+        .collect()
+}
+
+/// Walk `run` millimetres, seen from above, along `lap`, pieces in the order
+/// walked, round it as often as it takes: the pieces passed, the last cut short
+/// where the walk ends. `None` for a lap with no length.
+fn walk(lap: &[Seg], run: f64) -> Option<Vec<Seg>> {
+    let total: f64 = lap.iter().map(Seg::flat_length).sum();
+    if total.is_nan() || total <= 1e-9 {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut left = run;
+    // Bounded: each lap is at least the ramp's minimum length long.
+    for s in lap.iter().cycle().take(lap.len().saturating_mul(10_000)) {
+        let length = s.flat_length();
+        if length >= left {
+            if left > 1e-12 && length > 1e-12 {
+                out.push(s.head(left / length));
+            }
+            return Some(out);
+        }
+        left -= length;
+        out.push(*s);
+    }
+    None
 }
 
 /// One linking in progress.
@@ -534,8 +687,9 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
     }
 
     /// Resolve the link from `at` (where the last pass ended, if any) to `to`,
-    /// the start of `pass`.
-    fn link(&mut self, at: Option<DVec3>, to: DVec3, pass: &[Move]) -> Result<(), LinkError> {
+    /// the start of `pass`. Returns how many of the pass's first moves the way in
+    /// replaced, which are left out.
+    fn link(&mut self, at: Option<DVec3>, to: DVec3, pass: &[Move]) -> Result<usize, LinkError> {
         let feed = pass
             .first()
             .and_then(|m| m.feed)
@@ -545,23 +699,40 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         {
             self.report.stayed_down += 1;
             self.report.links_resolved += 1;
-            return Ok(());
+            return Ok(0);
         }
 
-        // Where the entry starts: a ramp's top, a lead's top, or the pass itself.
-        let entry = self.entry(to, pass);
-        let start = match &entry {
-            Entry::Plunge => to,
-            Entry::Ramp(pts) => pts.first().copied().unwrap_or(to),
-            Entry::Lead { top, .. } => *top,
+        let way = self.entry(to, pass);
+        let skip = match &way {
+            Way::Ramp { skip, .. } => *skip,
+            _ => 0,
         };
 
         let top = match at {
             Some(from) => {
                 let out_feed = last_feed(self.out.moves()).unwrap_or(feed);
-                Some(self.leave(from, out_feed)?)
+                let off = self.lead_off(from, out_feed)?;
+                // Down to the next level of the same ring without lifting clear,
+                // where the way there is short and clear.
+                if self.down_into(off, &way, to, feed)? {
+                    self.report.stayed_down += 1;
+                    self.report.links_resolved += 1;
+                    return Ok(skip);
+                }
+                Some(self.rise(off)?)
             }
             None => None,
+        };
+        // Where the way in starts, seen from above.
+        let start = match &way {
+            Way::Plunge => to,
+            Way::Lead { top, .. } => *top,
+            Way::Helix {
+                end, ahead, radius, ..
+            } => self
+                .helix(*end, *ahead, *radius, None)
+                .map_or(*end, |h| h.start),
+            Way::Ramp { start, .. } => *start,
         };
         let from_xy = top.map_or(start.truncate(), |t| t.truncate());
         let safe = self
@@ -570,8 +741,13 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         if !safe.is_finite() {
             return Err(LinkError::BadClearance { at: from_xy });
         }
-        // Never across lower than the tool came out: it would rapid down on the way.
+        // Never across lower than the tool came out: it would rapid down on the
+        // way. Nor lower than a helix or ramp starts, which it goes down to.
         let safe = top.map_or(safe, |t| safe.max(t.z));
+        let safe = match &way {
+            Way::Helix { .. } | Way::Ramp { .. } => safe.max(start.z),
+            _ => safe,
+        };
         if let Some(t) = top
             && safe > t.z
         {
@@ -580,58 +756,84 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         // Across at the safe height.
         self.out.rapid_to(dvec3(start.x, start.y, safe))?;
 
-        match (entry, self.p.ramp) {
-            // Down along the pass: from the safe distance above the material it
-            // cuts.
-            (Entry::Ramp(pts), Some(r)) if pts.len() > 2 => {
-                let Some((first, rest)) = pts.split_first() else {
-                    return Err(LinkError::Toolpath(ToolpathError::ArcWithoutStart));
-                };
-                if first.z < safe {
-                    self.out.rapid_to(*first)?;
-                }
-                // A ramp rides over what the pass rises over, such as a tab, and
-                // comes down off it as the pass does: straight down, at the plunge
-                // feed, not the ramp's.
-                let mut at = *first;
-                for p in rest {
-                    let straight_down = p.z < at.z && p.truncate().distance(at.truncate()) < 1e-9;
-                    if straight_down {
-                        self.out.feed_to(*p, MoveRole::Plunge, self.p.plunge_feed)?;
-                    } else {
-                        self.out.feed_to(*p, MoveRole::Ramp, r.feed)?;
-                    }
-                    at = *p;
-                }
-                self.report.ramps += 1;
-            }
-            // A lead: down to its top at rapid, then the plunge feed, then round
-            // it at the pass's feed.
-            (Entry::Lead { top, arc }, _) => {
-                let stop = self.feed_height(top.truncate(), top.z).min(safe);
-                if stop < safe {
-                    self.out.rapid_to(dvec3(top.x, top.y, stop))?;
-                }
-                if stop > top.z {
-                    self.out
-                        .feed_to(top, MoveRole::Plunge, self.p.plunge_feed)?;
-                }
-                self.out
-                    .arc_or_chords_to(to, arc, MoveRole::Lead, feed, self.p.tolerance)?;
-            }
-            // Plunged: down at rapid to the safe distance above the material,
-            // then at the plunge feed.
-            _ => {
+        // Down at rapid to where the way in starts feeding.
+        match &way {
+            Way::Plunge => {
                 let stop = self.feed_height(to.truncate(), to.z).min(safe);
                 if stop <= to.z {
                     self.report.suspicious_plunges += 1;
                 } else if stop < safe {
                     self.out.rapid_to(dvec3(to.x, to.y, stop))?;
                 }
-                self.out.feed_to(to, MoveRole::Plunge, self.p.plunge_feed)?;
+            }
+            Way::Lead { top, .. } => {
+                let stop = self.feed_height(top.truncate(), top.z).min(safe);
+                if stop < safe {
+                    self.out.rapid_to(dvec3(top.x, top.y, stop))?;
+                }
+            }
+            Way::Helix { .. } | Way::Ramp { .. } => {
+                if start.z < safe {
+                    self.out.rapid_to(start)?;
+                }
             }
         }
+        self.descend(&way, to, feed)?;
         self.report.links_resolved += 1;
+        Ok(skip)
+    }
+
+    /// From where the tool is, above where `way` starts, down it onto `to`.
+    fn descend(&mut self, way: &Way, to: DVec3, feed: f64) -> Result<(), LinkError> {
+        let at = self.out.end().unwrap_or(to);
+        match way {
+            Way::Plunge => self.vertical(at, to)?,
+            Way::Lead { top, arc } => {
+                self.vertical(at, *top)?;
+                self.out
+                    .arc_or_chords_to(to, *arc, MoveRole::Lead, feed, self.p.tolerance)?;
+            }
+            Way::Helix {
+                end,
+                ahead,
+                radius,
+                lead,
+            } => {
+                let ramp_feed = self.p.ramp.map_or(self.p.plunge_feed, |r| r.feed);
+                match self.helix(*end, *ahead, *radius, Some(at.z)) {
+                    Some(h) => {
+                        self.vertical(at, h.start)?;
+                        for (p, arc) in h.moves {
+                            self.out.arc_to(p, arc, MoveRole::Ramp, ramp_feed)?;
+                        }
+                        self.report.helixes += 1;
+                    }
+                    None => self.vertical(at, *end)?,
+                }
+                if let Some(arc) = lead {
+                    self.out
+                        .arc_or_chords_to(to, *arc, MoveRole::Lead, feed, self.p.tolerance)?;
+                }
+            }
+            Way::Ramp { moves, .. } => {
+                for m in moves {
+                    self.out.push(*m)?;
+                }
+                self.report.ramps += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Straight up or down from `at` to `to`, which is above or below it: down
+    /// at the plunge feed, up at the retract feed.
+    fn vertical(&mut self, at: DVec3, to: DVec3) -> Result<(), LinkError> {
+        if to.z < at.z - 1e-9 {
+            self.out.feed_to(to, MoveRole::Plunge, self.p.plunge_feed)?;
+        } else if to.z > at.z + 1e-9 {
+            self.out
+                .feed_to(to, MoveRole::Retract, self.p.retract_feed)?;
+        }
         Ok(())
     }
 
@@ -641,81 +843,233 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
     }
 
     /// How `pass`, starting at `to`, is entered.
-    fn entry(&self, to: DVec3, pass: &[Move]) -> Entry {
-        if let Some(r) = self.p.ramp
-            && self.ramped(to)
-        {
-            // Along the pass's own path, arcs by their chords.
-            let mut pts = vec![to];
-            let mut at = to;
-            for m in pass {
-                pts.extend(m.chords(at, self.p.tolerance * 0.1));
-                at = m.to;
+    fn entry(&self, to: DVec3, pass: &[Move]) -> Way {
+        // The vertical lead onto the pass, where it may be used: clear of the
+        // part, and, unless it may go down through material, not in any.
+        let lead = || {
+            let t = pass.first().and_then(|m| m.tangent_at(to, 0.0))?;
+            let (top, arc) = lead_in(to, t, self.p.lead_radius)?;
+            let clear = self.clear_of_part(top, &arc.chords(top, to, self.p.tolerance));
+            let dry =
+                self.p.lead_in_material || self.top_at(top.truncate()).is_none_or(|m| m <= top.z);
+            (clear && dry).then_some((top, arc))
+        };
+        let lead = if self.p.lead_radius > 0.0 {
+            lead()
+        } else {
+            None
+        };
+        let plain = || match lead {
+            Some((top, arc)) => Way::Lead { top, arc },
+            None => Way::Plunge,
+        };
+        let Some(ramp) = self.p.ramp else {
+            return plain();
+        };
+        match self.p.entry {
+            EntryKind::Plunge => plain(),
+            EntryKind::Helix => {
+                let end = lead.map_or(to, |(top, _)| top);
+                let ahead = pass
+                    .first()
+                    .and_then(|m| m.tangent_at(to, 0.0))
+                    .map(|t| t.truncate())
+                    .and_then(DVec2::try_normalize)
+                    .unwrap_or(DVec2::X);
+                // The largest helix clear of the part, if there is material to
+                // go down through at all.
+                let fits = [1.0, 0.5, 0.25]
+                    .into_iter()
+                    .map(|k| self.p.helix_radius * k)
+                    .find(|&r| r > 1e-6 && self.helix_clear(end, ahead, r));
+                match fits {
+                    Some(radius) if self.helix(end, ahead, radius, None).is_some() => Way::Helix {
+                        end,
+                        ahead,
+                        radius,
+                        lead: lead.map(|(_, arc)| arc),
+                    },
+                    _ => plain(),
+                }
             }
-            return self
-                .ramp_down(&pts, r)
-                .filter(|pts| pts.len() > 2 && pts.first().is_some_and(|p| p.z > to.z))
-                .map_or(Entry::Plunge, Entry::Ramp);
+            EntryKind::Ramp => {
+                // A ring with leads is ramped into along the ring itself, from
+                // its start, and entered there without its lead.
+                let lead_in = pass.iter().take_while(|m| m.role == MoveRole::Lead).count();
+                let lead_out = pass
+                    .iter()
+                    .rev()
+                    .take_while(|m| m.role == MoveRole::Lead)
+                    .count();
+                let (onto, ring, skip) =
+                    match pass.get(lead_in..pass.len().saturating_sub(lead_out)) {
+                        Some(ring) if lead_in > 0 && !ring.is_empty() => {
+                            let onto = pass.get(lead_in - 1).map_or(to, |m| m.to);
+                            (onto, segs(onto, ring), lead_in)
+                        }
+                        _ => (to, segs(to, pass), 0),
+                    };
+                if !self.ramped(onto) {
+                    return plain();
+                }
+                match self.ramp_down(onto, &ring, ramp) {
+                    Some((start, moves)) => Way::Ramp { start, moves, skip },
+                    None if skip > 0 => plain(),
+                    None => Way::Plunge,
+                }
+            }
         }
-        if self.p.lead_radius > 0.0
-            && let Some(t) = pass.first().and_then(|m| m.tangent_at(to, 0.0))
-            && let Some((top, arc)) = lead_in(to, t, self.p.lead_radius)
-            && self.clear_of_part(top, &arc.chords(top, to, self.p.tolerance))
-            && self.top_at(top.truncate()).is_none_or(|m| m <= top.z)
-        {
-            return Entry::Lead { top, arc };
-        }
-        Entry::Plunge
     }
 
-    /// A ramp down onto the start of the pass through `pts`, along the pass's own
-    /// path: backwards round it if it closes, back and forth along it if not. The
-    /// pass stays within what may be cut at its height, and so at every height
-    /// above, so the ramp cannot reach the part.
+    /// Whether a helix of `radius` behind `end`, as the pass sets off `ahead`,
+    /// keeps clear of the part down to `end`.
+    fn helix_clear(&self, end: DVec3, ahead: DVec2, radius: f64) -> bool {
+        let centre = end.truncate() - ahead * radius;
+        (0..32).all(|k| {
+            let p = centre + DVec2::from_angle(f64::from(k) * PI / 16.0) * radius;
+            self.surface.at(p).is_none_or(|z| z <= end.z + 1e-9)
+        })
+    }
+
+    /// The helix of `radius` down onto `end`, behind it as the pass sets off
+    /// `ahead`, from the safe distance above the material it goes down through,
+    /// or from `from_z` if that is lower: at the ramp angle, and no steeper than
+    /// the ramp's most in one turn. `None` where there is no material above `end`
+    /// to go down through.
+    fn helix(&self, end: DVec3, ahead: DVec2, radius: f64, from_z: Option<f64>) -> Option<Helix> {
+        let ramp = self.p.ramp?;
+        let centre = end.truncate() - ahead * radius;
+        let material = self
+            .material
+            .highest(centre, centre, radius + self.p.tool_radius)?;
+        if material <= end.z + 1e-6 {
+            return None;
+        }
+        let top = material + self.p.safe_distance;
+        let h0 = from_z.map_or(top, |z| z.min(top));
+        if h0 <= end.z + 1e-9 {
+            return None;
+        }
+        let lap = TAU * radius;
+        let angle = self
+            .p
+            .ramp_stepdown
+            .map_or(ramp.angle, |d| ramp.angle.min((d / lap).atan()));
+        let turn = if self.p.helix_ccw { 1.0 } else { -1.0 };
+        let total = (h0 - end.z) / (radius * angle.tan());
+        let back = end.truncate() - centre;
+        let start = (centre + DVec2::from_angle(-turn * total).rotate(back)).extend(h0);
+        let n = (total / TAU - 1e-9).ceil().max(1.0);
+        let n = camcraft_geom::steps::bounded_count(n);
+        let piece = turn * total / f64::from(n);
+        let moves = (1..=n)
+            .map(|k| {
+                let f = f64::from(k) / f64::from(n);
+                let p = if k == n {
+                    end
+                } else {
+                    let xy = centre
+                        + DVec2::from_angle(turn * total * f).rotate(start.truncate() - centre);
+                    xy.extend(h0 + (end.z - h0) * f)
+                };
+                let arc = Arc {
+                    centre: centre.extend(end.z),
+                    axis: DVec3::Z,
+                    sweep: piece,
+                };
+                (p, arc)
+            })
+            .collect();
+        Some(Helix { start, moves })
+    }
+
+    /// A ramp down onto `to` along `pass`, the pieces of a pass from `to`: in the
+    /// direction it cuts, round it if it closes, back and forth along it if not.
+    /// The pass stays within what may be cut at its height, and so at every
+    /// height above, so the ramp cannot reach the part. It is the pass's own
+    /// shape, arcs as helices, no steeper round a closed pass than the ramp's
+    /// most in one lap. Where it starts, and its moves.
     ///
     /// `None` where the pass is too short to ramp along: under a quarter of the
     /// tool's width round, as Fusion's smallest helix.
-    fn ramp_down(&self, pts: &[DVec3], ramp: Ramp) -> Option<Vec<DVec3>> {
-        let to = *pts.first()?;
-        let flat: Vec<DVec2> = pts.iter().map(|p| p.truncate()).collect();
-        let length: f64 = flat
-            .iter()
-            .zip(flat.iter().skip(1))
-            .map(|(a, b)| a.distance(*b))
-            .sum();
+    fn ramp_down(&self, to: DVec3, pass: &[Seg], ramp: Ramp) -> Option<(DVec3, Vec<Move>)> {
+        let length: f64 = pass.iter().map(Seg::flat_length).sum();
         if length < PI * 0.5 * self.p.tool_radius {
             return None;
         }
+        let end = pass.last()?.m.to;
+        let closed = end.truncate().distance(to.truncate()) < 1e-6;
         // Start above the highest material anywhere along the pass, so the ramp
         // never begins inside it.
-        let top = flat
-            .iter()
-            .zip(flat.iter().skip(1))
-            .filter_map(|(a, b)| self.material.highest(*a, *b, self.p.tool_radius))
-            .fold(to.z, f64::max);
+        let mut top = to.z;
+        for s in pass {
+            let mut a = s.from.truncate();
+            for p in s.m.chords(s.from, self.p.tolerance) {
+                if let Some(h) = self.material.highest(a, p.truncate(), self.p.tool_radius) {
+                    top = top.max(h);
+                }
+                a = p.truncate();
+            }
+        }
         let high = top + self.p.safe_distance;
-        let run = (high - to.z) / ramp.angle.tan();
-        let closed = flat.first()?.distance(*flat.last()?) < 1e-6;
-        // Walk away from the start along the path, as far as the ramp runs.
-        let walk = backwards(pts, closed, run)?;
+        let angle = match self.p.ramp_stepdown {
+            Some(d) if closed => ramp.angle.min((d / length).atan()),
+            _ => ramp.angle,
+        };
+        let run = (high - to.z) / angle.tan();
+        // Walk away from the start: back round a closed pass, out along an open
+        // one and back.
+        let lap: Vec<Seg> = if closed {
+            pass.iter().rev().map(Seg::reversed).collect()
+        } else {
+            pass.iter()
+                .copied()
+                .chain(pass.iter().rev().map(Seg::reversed))
+                .collect()
+        };
+        let walked = walk(&lap, run)?;
         // Then down it, towards the start: never below the pass itself, so it
         // rides over anything the pass rises over, such as a tab.
-        let mut out = Vec::with_capacity(walk.len());
+        let pieces: Vec<Seg> = walked.iter().rev().map(Seg::reversed).collect();
+        let first = pieces.first()?;
+        let start = dvec3(first.from.x, first.from.y, high.max(first.from.z));
         let mut left = run;
-        let mut prev: Option<DVec2> = None;
-        for p in walk.iter().rev() {
-            let flat = p.truncate();
-            if let Some(q) = prev {
-                left -= q.distance(flat);
+        let mut at = start;
+        let mut moves = Vec::with_capacity(pieces.len());
+        let count = pieces.len();
+        for (i, s) in pieces.iter().enumerate() {
+            left -= s.flat_length();
+            let z = (to.z + left.max(0.0) * angle.tan()).max(s.m.to.z);
+            let p = if i + 1 == count {
+                to
+            } else {
+                dvec3(s.m.to.x, s.m.to.y, z)
+            };
+            let straight_down = p.z < at.z && p.truncate().distance(at.truncate()) < 1e-9;
+            let (role, feed) = if straight_down {
+                (MoveRole::Plunge, self.p.plunge_feed)
+            } else {
+                (MoveRole::Ramp, ramp.feed)
+            };
+            match s.m.kind {
+                MoveKind::Arc(a) if a.axis.z.abs() > 1.0 - 1e-9 && !straight_down => {
+                    moves.push(Move {
+                        to: p,
+                        kind: MoveKind::Arc(a),
+                        role,
+                        feed: Some(feed),
+                    });
+                }
+                _ => moves.push(Move {
+                    to: p,
+                    kind: MoveKind::Linear,
+                    role,
+                    feed: Some(feed),
+                }),
             }
-            let z = (to.z + left.max(0.0) * ramp.angle.tan()).max(p.z);
-            out.push(dvec3(p.x, p.y, z));
-            prev = Some(flat);
+            at = p;
         }
-        if let Some(last) = out.last_mut() {
-            *last = to;
-        }
-        Some(out)
+        Some((start, moves))
     }
 
     /// Whether `from` and every point of `way` are at or above the part under
@@ -728,11 +1082,9 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         })
     }
 
-    /// Leave the cut at `from`: the lead-out, where it fits, then up at the
-    /// retract feed until the safe distance above the material. Returns where
-    /// the tool is.
-    fn leave(&mut self, from: DVec3, feed: f64) -> Result<DVec3, LinkError> {
-        let mut at = from;
+    /// Off the cut at `from` along the vertical lead-out, where it fits. Returns
+    /// where the tool is.
+    fn lead_off(&mut self, from: DVec3, feed: f64) -> Result<DVec3, LinkError> {
         if self.p.lead_radius > 0.0 {
             let moves = self.out.moves();
             let last = moves.len().checked_sub(2).and_then(|k| moves.get(k..));
@@ -743,16 +1095,80 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
             {
                 self.out
                     .arc_or_chords_to(end, arc, MoveRole::Lead, feed, self.p.tolerance)?;
-                at = end;
+                self.settle();
+                return Ok(end);
             }
         }
+        Ok(from)
+    }
+
+    /// Up from `at` at the retract feed until the safe distance above the
+    /// material. Returns where the tool is.
+    fn rise(&mut self, at: DVec3) -> Result<DVec3, LinkError> {
         let up = self.feed_height(at.truncate(), at.z);
         if up > at.z {
-            at = dvec3(at.x, at.y, up);
+            let top = dvec3(at.x, at.y, up);
             self.out
-                .feed_to(at, MoveRole::Retract, self.p.retract_feed)?;
+                .feed_to(top, MoveRole::Retract, self.p.retract_feed)?;
+            return Ok(top);
         }
         Ok(at)
+    }
+
+    /// Leave the cut at `from`: the lead-out, where it fits, then up at the
+    /// retract feed until the safe distance above the material. Returns where
+    /// the tool is.
+    fn leave(&mut self, from: DVec3, feed: f64) -> Result<DVec3, LinkError> {
+        let off = self.lead_off(from, feed)?;
+        self.rise(off)
+    }
+
+    /// From `off`, where the tool came off the last cut, across without lifting
+    /// and down `way` onto `to` at a lower level, if the link is short and its
+    /// way clear: as Fusion goes down to a ring's next depth. Across level at
+    /// the height it came off, clear of the part and cutting little more than a
+    /// descent at cutting feed may; then down.
+    fn down_into(
+        &mut self,
+        off: DVec3,
+        way: &Way,
+        to: DVec3,
+        feed: f64,
+    ) -> Result<bool, LinkError> {
+        let StayDown::Level { max } = self.p.stay_down else {
+            return Ok(false);
+        };
+        // Where the way down starts, seen from above, and how low it starts.
+        let (xy, lowest) = match way {
+            Way::Plunge => (to.truncate(), to.z),
+            Way::Lead { top, .. } => (top.truncate(), top.z),
+            Way::Helix {
+                end, ahead, radius, ..
+            } => match self.helix(*end, *ahead, *radius, Some(off.z)) {
+                Some(h) => (h.start.truncate(), end.z),
+                None => (end.truncate(), end.z),
+            },
+            Way::Ramp { .. } => return Ok(false),
+        };
+        if off.z <= lowest + 1e-6 || off.truncate().distance(xy) > max {
+            return Ok(false);
+        }
+        let reached = self
+            .surface
+            .along(off.truncate(), xy)
+            .iter()
+            .any(|p| p.z > off.z + 1e-6);
+        let cuts = self
+            .material
+            .highest(off.truncate(), xy, self.p.tool_radius)
+            .is_some_and(|h| h > off.z + self.p.max_cut_step);
+        if reached || cuts {
+            return Ok(false);
+        }
+        self.out
+            .feed_to(xy.extend(off.z), MoveRole::Transition, feed)?;
+        self.descend(way, to, feed)?;
+        Ok(true)
     }
 
     /// Make the link from `from` to `to` without lifting clear, if it may be.
@@ -829,44 +1245,6 @@ fn falls_steeply(from: DVec3, way: &[DVec3], max: f64) -> bool {
         at = p;
     }
     false
-}
-
-/// Walk `run` millimetres, measured from above, from the start of `path` away
-/// from it: backwards round it if `closed`, otherwise out along it and back, as
-/// often as it takes. The points passed, from the start (included) to where the
-/// walk ends, each at the path's own height there.
-fn backwards(path: &[DVec3], closed: bool, run: f64) -> Option<Vec<DVec3>> {
-    let start = *path.first()?;
-    // The order the walk visits the path's points, one lap or one there and back.
-    let lap: Vec<DVec3> = if closed {
-        path.iter().rev().skip(1).copied().collect()
-    } else {
-        path.iter()
-            .skip(1)
-            .copied()
-            .chain(path.iter().rev().skip(1).copied())
-            .collect()
-    };
-    if lap.is_empty() {
-        return None;
-    }
-    let mut out = vec![start];
-    let mut left = run;
-    let mut at = start;
-    // Bounded: each lap is at least the ramp's minimum length long.
-    for p in lap.iter().cycle().take(lap.len().saturating_mul(10_000)) {
-        let d = at.truncate().distance(p.truncate());
-        if d >= left {
-            if d > 1e-12 {
-                out.push(at + (*p - at) * (left / d));
-            }
-            return Some(out);
-        }
-        left -= d;
-        out.push(*p);
-        at = *p;
-    }
-    None
 }
 
 /// The vertical plane a vertical lead turns in, for a pass running along `t`
@@ -1322,8 +1700,31 @@ mod tests {
         deeper
             .feed_to(dvec3(0.0, 1.0, -1.0), MoveRole::Cut, 1000.0)
             .unwrap();
-        let (_, stepped) = link(&deeper, &plane, &mut Air, &FlatPart(-5.0), &level).unwrap();
-        assert_eq!(stepped.stayed_down, 0, "a level move cannot change level");
+        // Down to a lower level it goes across at the height it is, then down:
+        // as a profile goes to its ring's next depth.
+        let (out, stepped) = link(&deeper, &plane, &mut Air, &FlatPart(-5.0), &level).unwrap();
+        assert_eq!(stepped.stayed_down, 1);
+        assert_eq!(
+            roles(&out)[4..6],
+            [MoveRole::Transition, MoveRole::Plunge],
+            "{:?}",
+            out.moves()
+        );
+        assert_eq!(out.moves()[4].to, dvec3(5.0, 1.0, 0.0), "across, level");
+        // Up to a higher one it lifts clear.
+        let higher = {
+            let mut t = Toolpath::new();
+            for m in deeper.moves() {
+                t.push(Move {
+                    to: dvec3(m.to.x, m.to.y, -m.to.z),
+                    ..*m
+                })
+                .unwrap();
+            }
+            t
+        };
+        let (_, up) = link(&higher, &plane, &mut Air, &FlatPart(-5.0), &level).unwrap();
+        assert_eq!(up.stayed_down, 0, "never across and up");
     }
 
     /// Fusion's vertical lead: a quarter turn of the lead radius from straight
@@ -1404,6 +1805,150 @@ mod tests {
                 .unwrap();
         }
         t
+    }
+
+    fn entering(entry: EntryKind) -> LinkParams {
+        LinkParams {
+            ramp: Some(Ramp {
+                angle: 2f64.to_radians(),
+                feed: 250.0,
+            }),
+            entry,
+            helix_radius: 2.0,
+            ..params()
+        }
+    }
+
+    /// Into material down a helix beside where the pass starts, behind it as the
+    /// pass sets off: turns about Z, each at most a whole one, ramp role and
+    /// feed, from the safe distance above the material, ending on the pass.
+    #[test]
+    fn a_helix_goes_down_beside_the_pass() {
+        let plane = ClearancePlane::new(10.0).unwrap();
+        let p = entering(EntryKind::Helix);
+        let (out, report) = link(&ring(), &plane, &mut level_material(), &NoPart, &p).unwrap();
+        assert_eq!(report.helixes, 1);
+        let moves = out.moves();
+        let first = moves.iter().position(|m| m.role == MoveRole::Ramp).unwrap();
+        let start = moves[first - 1].to;
+        assert!(
+            (start.z - 2.0).abs() < 1e-9,
+            "from the safe distance: {start}"
+        );
+        let mut at = start;
+        let mut turned = 0.0;
+        for m in moves[first..]
+            .iter()
+            .take_while(|m| m.role == MoveRole::Ramp)
+        {
+            let MoveKind::Arc(a) = m.kind else {
+                panic!("a helix is arcs: {m:?}");
+            };
+            assert!((a.centre.truncate() - dvec2(-2.0, 0.0)).length() < 1e-9);
+            assert!(a.sweep.abs() <= TAU + 1e-9);
+            assert!(m.to.z < at.z);
+            assert_eq!(m.feed, Some(250.0));
+            turned += a.sweep.abs();
+            at = m.to;
+        }
+        assert_eq!(at, dvec3(0.0, 0.0, -2.0), "it ends on the pass");
+        // Four millimetres down at two degrees round a circle of radius two.
+        let expected = 4.0 / (2.0 * 2f64.to_radians().tan());
+        assert!((turned - expected).abs() < 1e-6, "{turned} vs {expected}");
+
+        // No steeper than the most a lap may go down.
+        let shallow = LinkParams {
+            ramp_stepdown: Some(0.1),
+            ..p
+        };
+        let (out, _) = link(&ring(), &plane, &mut level_material(), &NoPart, &shallow).unwrap();
+        let mut at = out.moves()[0].to;
+        for m in out.moves() {
+            if let (MoveKind::Arc(a), MoveRole::Ramp) = (m.kind, m.role) {
+                let per_turn = (at.z - m.to.z) / (a.sweep.abs() / TAU);
+                assert!(per_turn <= 0.1 + 1e-9, "{per_turn}");
+            }
+            at = m.to;
+        }
+    }
+
+    /// Where the part leaves no room for a helix beside the pass, even a quarter
+    /// the size, the tool goes straight down instead.
+    #[test]
+    fn no_room_for_a_helix_is_a_plunge() {
+        struct Behind;
+        impl Surface for Behind {
+            fn at(&self, p: DVec2) -> Option<f64> {
+                Some(if p.x < -0.01 { 1.0 } else { -5.0 })
+            }
+            fn along(&self, from: DVec2, to: DVec2) -> Vec<DVec3> {
+                vec![from.extend(-5.0), to.extend(-5.0)]
+            }
+        }
+        let plane = ClearancePlane::new(10.0).unwrap();
+        let p = entering(EntryKind::Helix);
+        let (out, report) = link(&ring(), &plane, &mut level_material(), &Behind, &p).unwrap();
+        assert_eq!(report.helixes, 0);
+        let plunge = out
+            .moves()
+            .iter()
+            .find(|m| m.role == MoveRole::Plunge)
+            .unwrap();
+        assert_eq!(plunge.to, dvec3(0.0, 0.0, -2.0));
+    }
+
+    /// A ring with leads ramped into goes down along the ring itself, in the
+    /// direction it cuts, onto its start, and is entered there without its
+    /// lead-in: never back along it, against the cut.
+    #[test]
+    fn a_ring_with_leads_is_ramped_along_the_way_it_cuts() {
+        let mut t = Toolpath::new();
+        t.feed_to(dvec3(-1.0, -1.0, -2.0), MoveRole::Link, 1000.0)
+            .unwrap();
+        t.feed_to(dvec3(0.0, 0.0, -2.0), MoveRole::Lead, 1000.0)
+            .unwrap();
+        for p in [(10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)] {
+            t.feed_to(dvec3(p.0, p.1, -2.0), MoveRole::Cut, 1000.0)
+                .unwrap();
+        }
+        t.feed_to(dvec3(-1.0, 1.0, -2.0), MoveRole::Lead, 1000.0)
+            .unwrap();
+        let plane = ClearancePlane::new(10.0).unwrap();
+        let p = entering(EntryKind::Ramp);
+        let (out, report) = link(&t, &plane, &mut level_material(), &NoPart, &p).unwrap();
+        assert_eq!(report.ramps, 1);
+        let moves = out.moves();
+        let first_cut = moves.iter().position(|m| m.role == MoveRole::Cut).unwrap();
+        assert!(
+            moves[..first_cut].iter().all(|m| m.role != MoveRole::Lead),
+            "the lead-in is left out: {moves:?}"
+        );
+        // Down onto the ring's start along its last side, as the ring runs.
+        let last = moves[first_cut - 1];
+        let before = moves[first_cut - 2].to;
+        assert_eq!(last.to, dvec3(0.0, 0.0, -2.0));
+        assert!(before.x.abs() < 1e-9 && before.y > 0.0, "{before}");
+        let mut z = f64::INFINITY;
+        for m in &moves[..first_cut] {
+            if m.role == MoveRole::Ramp {
+                assert!(m.to.z <= z + 1e-12);
+                z = m.to.z;
+            }
+        }
+        // Round a lap of 40 mm, no more than the most a lap may go down.
+        let lapped = LinkParams {
+            ramp_stepdown: Some(0.5),
+            ..p
+        };
+        let (out, _) = link(&t, &plane, &mut level_material(), &NoPart, &lapped).unwrap();
+        let mut at = out.moves()[0].to;
+        for m in out.moves() {
+            if m.role == MoveRole::Ramp {
+                let flat = (m.to - at).truncate().length();
+                assert!(at.z - m.to.z <= flat * 0.5 / 40.0 + 1e-9);
+            }
+            at = m.to;
+        }
     }
 
     /// Into material along the pass itself, at the ramp angle and feed, from the
