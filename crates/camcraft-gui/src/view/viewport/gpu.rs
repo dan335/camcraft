@@ -44,8 +44,10 @@ pub(super) const BOTTOM: u32 = 18;
 /// hatching over what it cuts outside the part. Always shown, drawn thin.
 const LIMIT: u32 = 19;
 const CHANNEL: u32 = 20;
+/// Line kind for the edges of an operation's retract plane.
+pub(super) const RETRACT: u32 = 21;
 /// Line kinds in all, and so colours.
-const KINDS: usize = 21;
+const KINDS: usize = 22;
 
 pub(super) const COMMON: &str = include_str!("shaders/common.wgsl");
 
@@ -234,7 +236,7 @@ pub(super) struct Gpu {
     /// The part's occlusion, worked out on the screen.
     part_ao: PartAo,
     /// A tint per kind of height plane: where it is in sight, and where it is not.
-    plane_objects: [(Object, Object); 3],
+    plane_objects: [(Object, Object); 4],
     targets: Option<Targets>,
     texture: Option<egui::TextureId>,
     up: Uploaded,
@@ -872,6 +874,7 @@ impl Gpu {
             (CLEARANCE, PlaneKind::Clearance.color()),
             (TOP, PlaneKind::Top.color()),
             (BOTTOM, PlaneKind::Bottom.color()),
+            (RETRACT, PlaneKind::Retract.color()),
         ] {
             if let Some(slot) = colors.get_mut(kind as usize) {
                 *slot = theme::linear(color).into_rgba();
@@ -889,7 +892,8 @@ impl Gpu {
             | (1 << GHOST)
             | (1 << CLEARANCE)
             | (1 << TOP)
-            | (1 << BOTTOM);
+            | (1 << BOTTOM)
+            | (1 << RETRACT);
         let frame = FrameUniforms {
             view_proj: input.view_proj.to_cols_array_2d(),
             // From the front right and above, where the camera starts.

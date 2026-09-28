@@ -7,7 +7,7 @@ use camcraft_sim::stock::CellRect;
 use eframe::egui;
 use glam::{DVec2, DVec3, Vec3};
 
-use super::gpu::{BOTTOM, CLEARANCE, TOP};
+use super::gpu::{BOTTOM, CLEARANCE, RETRACT, TOP};
 use crate::picking::ray::Projector;
 use crate::stock::stock_view::{ColorMode, StockImage};
 use crate::ui::theme;
@@ -43,8 +43,11 @@ pub enum OutlineKind {
 /// Which of an operation's heights a plane shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaneKind {
-    /// Where it moves between cuts.
+    /// Where it arrives and leaves.
     Clearance,
+    /// Where it goes up to between cuts, at most, or at least with a full
+    /// retraction.
+    Retract,
     /// Where cutting starts.
     Top,
     /// How deep it cuts.
@@ -53,14 +56,20 @@ pub enum PlaneKind {
 
 impl PlaneKind {
     /// All of them, in the order their colours are kept.
-    pub(super) const ALL: [PlaneKind; 3] =
-        [PlaneKind::Clearance, PlaneKind::Top, PlaneKind::Bottom];
+    pub(super) const ALL: [PlaneKind; 4] = [
+        PlaneKind::Clearance,
+        PlaneKind::Retract,
+        PlaneKind::Top,
+        PlaneKind::Bottom,
+    ];
 
     /// Its colour, from the toolpath palette: rapids fly at the clearance, leads
     /// come in at the top, and cuts reach the bottom.
     pub fn color(self) -> [u8; 3] {
         match self {
             PlaneKind::Clearance => theme::PATH_RAPID,
+            // Rapids stop coming down here, and feeds start.
+            PlaneKind::Retract => theme::PATH_PLUNGE,
             PlaneKind::Top => theme::PATH_LEAD,
             PlaneKind::Bottom => theme::PATH_CUT,
         }
@@ -69,6 +78,7 @@ impl PlaneKind {
     pub(super) fn line_kind(self) -> u32 {
         match self {
             PlaneKind::Clearance => CLEARANCE,
+            PlaneKind::Retract => RETRACT,
             PlaneKind::Top => TOP,
             PlaneKind::Bottom => BOTTOM,
         }
@@ -77,8 +87,9 @@ impl PlaneKind {
     pub(super) fn index(self) -> usize {
         match self {
             PlaneKind::Clearance => 0,
-            PlaneKind::Top => 1,
-            PlaneKind::Bottom => 2,
+            PlaneKind::Retract => 1,
+            PlaneKind::Top => 2,
+            PlaneKind::Bottom => 3,
         }
     }
 }

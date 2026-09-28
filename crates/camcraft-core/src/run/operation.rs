@@ -15,7 +15,8 @@ use crate::dropcutter::DropCutter;
 use crate::face::{FaceParams, LevelsAsked, face};
 use crate::features::{Chain, FeatureError, outline, picked_chains, picked_points};
 use crate::job::{
-    Entry, HeightContext, Job, Operation, Picks, SpindleDirection, StrategySpec, ToolSpec,
+    Entry, HeightContext, Job, Operation, Picks, Retraction, SpindleDirection, StrategySpec,
+    ToolSpec,
 };
 use crate::linker::{
     ClearanceField, EntryKind, LinkParams, LinkReport, Material, Ramp, StayDown, Surface,
@@ -152,13 +153,18 @@ pub(super) fn run_operation(
 
     // Traverses clear the material as it stood before the operation: never lower
     // than it will stand, so they are safe whatever the operation cuts first.
+    // Between cuts, the safe distance over it, as Fusion's minimum retraction;
+    // with a full one, the retract height or higher. The clearance height is
+    // where the tool arrives and leaves.
     let clearance_z = op.heights.clearance.resolve(ctx);
-    let clearance = ClearanceField::new(
-        stock.field().clone(),
-        op.heights.clearance.offset,
-        clearance_z,
-    )
-    .map_err(in_op(op))?;
+    let retract_z = op.heights.retract.resolve(ctx);
+    let clearance =
+        ClearanceField::new(stock.field().clone(), op.linking.safe_distance, clearance_z)
+            .map_err(in_op(op))?;
+    let clearance = match op.linking.retraction {
+        Retraction::Minimum => clearance,
+        Retraction::Full => clearance.at_least(retract_z),
+    };
 
     // Linked over the material as each pass leaves it, and cut into it as linked.
     let before = stock.volume();
@@ -296,6 +302,7 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         max_cut_step: op.passes.max_cut_step,
         tolerance: work.job.tolerance,
         end_z: Some(clearance_z),
+        start_z: Some(clearance_z),
     }
 }
 

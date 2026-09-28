@@ -38,7 +38,8 @@ models; a 3D operation's `boundary`, which, as Fusion's machining boundary, keep
 it to the stock (the default), the part's bounding box or silhouette, or the
 selection, with the tool's `containment` and an additional offset (`margin`);
 and a 2D operation's `outline`, what it cuts round or clears. `heights` holds
-the clearance and the top and bottom it cuts between. `passes.stepdown` is
+the clearance (where the tool arrives and leaves, 10 mm over the stock), the
+retract height (Fusion's, 5 mm over it) and the top and bottom it cuts between. `passes.stepdown` is
 Fusion's multiple depths, shared the same way: Z-level roughing must have one,
 profiles, pockets and facing cut the bottom in one pass without, and parallel
 and drilling never read it. An operation may be
@@ -157,7 +158,11 @@ lead, across to where the next depth's way in starts, and down it.
 ([decision 0004](decisions/0004-linking-and-entries.md), and for 2D
 [decision 0006](decisions/0006-2d-linking-and-arcs.md)). It rapids down to the
 *safe distance* (2 mm) above the material under it and feeds from there, and feeds
-out of a cut only that far before rapiding. A link no longer than the *stay-down*
+out of a cut only that far before rapiding. It arrives at the clearance height
+above the first cut, and between cuts it goes across as Fusion's *retraction*
+says: `"minimum"` (the default), the safe distance over the material under the
+way across as the operation found it; `"full"`, the retract height, or higher
+where the material is. A link no longer than the *stay-down*
 distance is made without lifting, at the cutting feed: 50 mm for parallel, riding
 over the part; five times the tool's diameter for Z-level and 2D, straight and
 level, and for a profile down to its ring's next depth.

@@ -98,8 +98,10 @@ pub struct OperationResult {
     pub detail: StrategyDetail,
     /// What linking did.
     pub links: LinkReport,
-    /// The clearance height, resolved. Traverses fly over the material by the
-    /// clearance offset, and never lower than this where the material is unknown.
+    /// The clearance height, resolved: where the tool arrives and leaves. Between
+    /// cuts it flies over the material by the safe distance (or at the retract
+    /// height, with a full retraction), and never lower than this where the
+    /// material is unknown.
     pub clearance_z: f64,
     /// Continuous cutting descents steeper than [`PLUNGE_RATIO`](super::PLUNGE_RATIO).
     pub steep_cut_descents: u64,

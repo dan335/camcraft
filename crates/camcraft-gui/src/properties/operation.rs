@@ -5,8 +5,8 @@
 use camcraft_core::features;
 use camcraft_core::job::{
     self, Boundary, Containment, Depths, Entry, FaceDirection, FeatureRef, Height, HeightContext,
-    HeightRef, Leads, Leave, MachiningBoundary, Operation, Outline, ProfileSide, StockToLeave,
-    StrategySpec, TabShape, Tabs,
+    HeightRef, Leads, Leave, MachiningBoundary, Operation, Outline, ProfileSide, Retraction,
+    StockToLeave, StrategySpec, TabShape, Tabs,
 };
 use camcraft_core::setup::Bodies;
 use eframe::egui;
@@ -794,6 +794,11 @@ fn heights(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
         widgets::field_label(ui, "Clearance");
         height_field(ui, m, "clearance", &mut op.heights.clearance, false);
         ui.end_row();
+        if op.strategy.uses().stay_down {
+            widgets::field_label(ui, "Retract");
+            height_field(ui, m, "retract", &mut op.heights.retract, false);
+            ui.end_row();
+        }
         if top {
             widgets::field_label(ui, "Top");
             optional_height(
@@ -919,6 +924,14 @@ pub fn height_planes(doc: &Document, m: Measure, tab: Option<OperationTab>) -> V
             PlaneKind::Clearance,
             "Clearance",
             Some(op.heights.clearance.resolve(&ctx)),
+        ),
+        (
+            PlaneKind::Retract,
+            "Retract",
+            op.strategy
+                .uses()
+                .stay_down
+                .then(|| op.heights.retract.resolve(&ctx)),
         ),
         (PlaneKind::Top, "Top", top.then_some(top_z)),
         (PlaneKind::Bottom, "Bottom", bottom.then_some(bottom_z)),
@@ -1186,6 +1199,26 @@ fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f
         widgets::field_label(ui, "Retract feed");
         m.feed_field(ui, &mut op.linking.retract_feed, 50_000.0);
         ui.end_row();
+        if uses.stay_down {
+            widgets::field_label(ui, "Retraction");
+            let name = |r: Retraction| match r {
+                Retraction::Minimum => "minimum, clear of the material",
+                Retraction::Full => "full, to the retract height",
+            };
+            egui::ComboBox::from_id_salt("retraction")
+                .selected_text(name(op.linking.retraction))
+                .show_ui(ui, |ui| {
+                    for r in [Retraction::Minimum, Retraction::Full] {
+                        ui.selectable_value(&mut op.linking.retraction, r, name(r));
+                    }
+                })
+                .response
+                .on_hover_text(
+                    "How high the tool goes between cuts it does not stay down for: the \
+                     safe distance over the material, or the retract height",
+                );
+            ui.end_row();
+        }
         widgets::field_label(ui, "Safe distance");
         m.length_field(ui, &mut op.linking.safe_distance, 0.1, 1_000.0, "")
             .on_hover_text(

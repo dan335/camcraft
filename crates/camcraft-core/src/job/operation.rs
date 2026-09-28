@@ -452,9 +452,16 @@ impl Default for MachiningBoundary {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Heights {
-    /// Traverse height.
+    /// The height the tool arrives at the operation and leaves it at.
     #[serde(default = "default_clearance")]
     pub clearance: Height,
+    /// The height it goes up to between cuts with a full retraction, and never
+    /// above with a minimum one: Fusion's retract height.
+    #[serde(
+        default = "default_retract",
+        skip_serializing_if = "is_default_retract"
+    )]
+    pub retract: Height,
     /// Highest level to cut at; the stock's top when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top: Option<Height>,
@@ -467,6 +474,7 @@ impl Default for Heights {
     fn default() -> Self {
         Self {
             clearance: default_clearance(),
+            retract: default_retract(),
             top: None,
             bottom: None,
         }
@@ -488,6 +496,20 @@ fn default_clearance() -> Height {
         reference: HeightRef::StockTop,
         offset: 10.0,
     }
+}
+
+/// Fusion's: 5 mm above the stock.
+fn default_retract() -> Height {
+    Height {
+        reference: HeightRef::StockTop,
+        offset: 5.0,
+    }
+}
+
+// Serde's `skip_serializing_if` hands the field by reference.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_retract(h: &Height) -> bool {
+    *h == default_retract()
 }
 
 /// A height, stated relative to something that can be measured.
@@ -750,6 +772,9 @@ impl Operation {
     pub fn cannot_measure_from_picks(&self) -> Option<&'static str> {
         if self.heights.clearance.from_selection() {
             return Some("the clearance cannot be measured from the selection");
+        }
+        if self.heights.retract.from_selection() {
+            return Some("the retract height cannot be measured from the selection");
         }
         if !self.heights.measured_from_selection() {
             return None;
@@ -1156,6 +1181,9 @@ pub struct Linking {
     /// beside it: Fusion's lead-in and lead-out. None for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leads: Option<Leads>,
+    /// How high the tool goes between cuts that are not made staying down.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub retraction: Retraction,
     /// How a pass is entered where it starts in material, for a strategy that
     /// offers a choice: the strategy's own when not given (a helix for a
     /// profile).
@@ -1171,6 +1199,20 @@ pub struct Linking {
     /// when not given, or the tool's diameter without one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ramp_stepdown: Option<f64>,
+}
+
+/// How high the tool goes between cuts, as Fusion's retraction policy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Retraction {
+    /// Up only as far as clears the material under the way across, and the safe
+    /// distance above it, as the stock stood before the operation; never above
+    /// the retract height unless the material is.
+    #[default]
+    Minimum,
+    /// Up to the retract height, or higher where the material under the way
+    /// across is.
+    Full,
 }
 
 /// How a pass that starts in material is entered.
@@ -1276,6 +1318,7 @@ impl Default for Linking {
             ramp_angle: default_ramp_angle(),
             ramp_feed: None,
             leads: None,
+            retraction: Retraction::Minimum,
             entry: None,
             helix_diameter: None,
             ramp_stepdown: None,

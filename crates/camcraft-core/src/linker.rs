@@ -100,6 +100,7 @@ pub struct ClearanceField {
     field: HeightMap,
     margin: f64,
     fallback: f64,
+    floor: f64,
 }
 
 impl ClearanceField {
@@ -125,7 +126,14 @@ impl ClearanceField {
             field,
             margin,
             fallback,
+            floor: f64::MIN,
         })
+    }
+
+    /// Never lower than `z`: a full retraction, to the retract height, or
+    /// higher where the material is.
+    pub fn at_least(self, z: f64) -> Self {
+        Self { floor: z, ..self }
     }
 }
 
@@ -147,11 +155,12 @@ impl Clearance for ClearanceField {
         let from_field = under.top.map_or(f64::MIN, |t| t + self.margin);
         // Anywhere the field is silent, the fallback governs. Never fly under an
         // unknown.
-        if under.unknown || from_field <= f64::MIN {
+        let z = if under.unknown || from_field <= f64::MIN {
             from_field.max(self.fallback)
         } else {
             from_field
-        }
+        };
+        z.max(self.floor)
     }
 }
 
@@ -358,6 +367,9 @@ pub struct LinkParams {
     pub tolerance: f64,
     /// The height the tool goes up to after the last cut, if any.
     pub end_z: Option<f64>,
+    /// The height the tool arrives at, above the first pass, before it goes down
+    /// to where it starts feeding, if any: the clearance height.
+    pub start_z: Option<f64>,
 }
 
 impl LinkParams {
@@ -380,6 +392,7 @@ impl LinkParams {
             max_cut_step: 0.5,
             tolerance: 0.01,
             end_z: None,
+            start_z: None,
         }
     }
 }
@@ -753,7 +766,13 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         {
             self.out.rapid_to(dvec3(t.x, t.y, safe))?;
         }
-        // Across at the safe height.
+        // Arriving, at the clearance height above the start, then down to the
+        // safe height; otherwise across at it.
+        if let (None, Some(z)) = (top, self.p.start_z)
+            && z > safe
+        {
+            self.out.rapid_to(dvec3(start.x, start.y, z))?;
+        }
         self.out.rapid_to(dvec3(start.x, start.y, safe))?;
 
         // Down at rapid to where the way in starts feeding.
@@ -1805,6 +1824,48 @@ mod tests {
                 .unwrap();
         }
         t
+    }
+
+    /// The tool arrives at the clearance height above the first pass, and only
+    /// then comes down to where it goes across between passes; a full
+    /// retraction never goes across lower than the retract height.
+    #[test]
+    fn arriving_from_the_clearance_and_retracting_fully() {
+        let field = ClearanceField::new(
+            HeightMap::filled(dvec2(-20.0, -20.0), 0.5, 81, 81, 0.0).unwrap(),
+            2.0,
+            30.0,
+        )
+        .unwrap();
+        let arriving = LinkParams {
+            start_z: Some(30.0),
+            ..params()
+        };
+        let (out, _) = link(&zigzag(15.0), &field, &mut Air, &NoPart, &arriving).unwrap();
+        let first: Vec<DVec3> = out.moves()[..2].iter().map(|m| m.to).collect();
+        assert_eq!(first, [dvec3(0.0, 0.0, 30.0), dvec3(0.0, 0.0, 2.0)]);
+        // Across between passes at the material's safe distance, 2 mm up.
+        assert!(
+            out.moves()
+                .iter()
+                .filter(|m| m.role == MoveRole::Rapid)
+                .skip(1)
+                .all(|m| m.to.z <= 2.0 + 1e-9),
+            "{:?}",
+            out.moves()
+        );
+        let full = field.at_least(5.0);
+        let (out, _) = link(&zigzag(15.0), &full, &mut Air, &NoPart, &params()).unwrap();
+        let across: Vec<f64> = out
+            .moves()
+            .windows(2)
+            .filter(|w| w[1].role == MoveRole::Rapid && w[0].to.z == w[1].to.z)
+            .map(|w| w[1].to.z)
+            .collect();
+        assert!(
+            !across.is_empty() && across.iter().all(|z| *z == 5.0),
+            "{across:?}"
+        );
     }
 
     fn entering(entry: EntryKind) -> LinkParams {

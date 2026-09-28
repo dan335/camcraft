@@ -57,6 +57,10 @@ operation-level `stepdown` the format had moved to `passes` was silently ignored
   entered at its start without its lead-in.
 - **Most per lap.** No helix, or ramp round a closed ring, descends more in one
   lap than the stepdown (Fusion's maximum ramp stepdown).
+- **Three heights, as Fusion's.** The tool arrives at the clearance height and
+  leaves at it; between cuts it goes across at the safe distance over the
+  material (Fusion's minimum retraction) or at the retract height (a full one).
+  The traverse used to fly at the clearance offset, 10 mm, over the material.
 - **Down to the next depth without lifting.** Off the ring along the lead, across
   at that height to where the next depth's way in starts, and down it, when that
   is within the stay-down distance, clear of the part, and cuts little on the way.
