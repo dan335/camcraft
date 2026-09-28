@@ -388,6 +388,84 @@ impl Region {
         self.clip_open(ClipType::Intersection, lines)
     }
 
+    /// The stretches of `lines` inside this region, each a line and whether it
+    /// closes on itself.
+    ///
+    /// One clip for them all, since a region can be large. A closed line wholly
+    /// inside comes back whole and closed, as it was given. Otherwise each is cut
+    /// into the open stretches inside, running the way it runs; the stretch through
+    /// a closed line's first point comes back from the clipper as two pieces, and
+    /// is joined again.
+    pub fn clip_lines(
+        &self,
+        lines: &[(Vec<DVec2>, bool)],
+    ) -> Result<Vec<(Vec<DVec2>, bool)>, RegionError> {
+        let paths: Vec<Vec<DVec2>> = lines
+            .iter()
+            .map(|(points, closed)| {
+                let mut path = points.clone();
+                if *closed && let Some(&first) = points.first() {
+                    path.push(first);
+                }
+                path
+            })
+            .collect();
+        let mut pieces: Vec<Option<Vec<DVec2>>> = self
+            .clip_polylines(&paths)?
+            .into_iter()
+            .filter(|p| p.len() >= 2)
+            .map(Some)
+            .collect();
+
+        // A closed line's first point, to the clipper's tick, which is where the
+        // pieces through it come back to exactly.
+        let key = |p: DVec2| (to_tick(p.x), to_tick(p.y));
+        let mut starts: std::collections::HashMap<(i64, i64), usize> =
+            std::collections::HashMap::new();
+        for (i, (points, closed)) in lines.iter().enumerate() {
+            if *closed && let Some(&first) = points.first() {
+                starts.entry(key(first)).or_insert(i);
+            }
+        }
+        let mut starting = std::collections::HashMap::new();
+        let mut ending = std::collections::HashMap::new();
+        for (k, piece) in pieces.iter().enumerate() {
+            let Some(piece) = piece else { continue };
+            if let Some(&i) = piece.first().and_then(|&p| starts.get(&key(p))) {
+                starting.entry(i).or_insert(k);
+            }
+            if let Some(&i) = piece.last().and_then(|&p| starts.get(&key(p))) {
+                ending.entry(i).or_insert(k);
+            }
+        }
+
+        let mut out = Vec::new();
+        for (i, (points, _)) in lines.iter().enumerate() {
+            match (starting.get(&i).copied(), ending.get(&i).copied()) {
+                // Wholly inside: the clipper hands back the line itself.
+                (Some(a), Some(b)) if a == b => {
+                    let whole = pieces.get(a).and_then(Option::as_ref).is_some_and(|p| {
+                        (length(p) - length(paths.get(i).map_or(&[][..], Vec::as_slice))).abs()
+                            < 1e-6
+                    });
+                    if whole {
+                        pieces.get_mut(a).map(Option::take);
+                        out.push((points.clone(), true));
+                    }
+                }
+                (Some(a), Some(b)) => {
+                    let tail = pieces.get_mut(a).and_then(Option::take).unwrap_or_default();
+                    if let Some(Some(head)) = pieces.get_mut(b) {
+                        head.extend(tail.into_iter().skip(1));
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.extend(pieces.into_iter().flatten().map(|p| (p, false)));
+        Ok(out)
+    }
+
     fn clip_open(
         &self,
         kind: ClipType,
@@ -640,6 +718,15 @@ fn chain(segs: Vec<(DVec2, DVec2)>, weld: f64) -> Vec<Contour> {
         }
     }
     rings
+}
+
+/// The length of an open polyline.
+fn length(points: &[DVec2]) -> f64 {
+    points
+        .iter()
+        .zip(points.iter().skip(1))
+        .map(|(a, b)| a.distance(*b))
+        .sum()
 }
 
 #[cfg(test)]
@@ -988,5 +1075,46 @@ mod tests {
 
         let f = HeightMap::filled(dvec2(0.0, 0.0), 1.0, 4, 4, 1.0).unwrap();
         assert!(contour_above(&f, f64::NAN).is_empty());
+    }
+
+    /// A closed line inside comes back whole; one crossing the edge comes back as
+    /// the stretches inside, the one through its start joined again, each running
+    /// the way the line did.
+    #[test]
+    fn clip_lines_keeps_whole_rings_and_rejoins_the_seam() {
+        let region = Region::rectangle(dvec2(0.0, 0.0), dvec2(10.0, 10.0));
+        let inside = vec![
+            dvec2(2.0, 2.0),
+            dvec2(4.0, 2.0),
+            dvec2(4.0, 4.0),
+            dvec2(2.0, 4.0),
+        ];
+        // Starts inside, runs out past x = 10 and back.
+        let across = vec![
+            dvec2(8.0, 5.0),
+            dvec2(8.0, 3.0),
+            dvec2(12.0, 3.0),
+            dvec2(12.0, 7.0),
+            dvec2(8.0, 7.0),
+        ];
+        let open = vec![dvec2(-2.0, 1.0), dvec2(12.0, 1.0)];
+        let out = region
+            .clip_lines(&[(inside.clone(), true), (across, true), (open, false)])
+            .unwrap();
+        assert_eq!(out.len(), 3, "{out:?}");
+        assert!(out.iter().any(|(p, closed)| *closed && *p == inside));
+        let seam = out
+            .iter()
+            .find(|(p, _)| p.iter().any(|q| (q.y - 5.0).abs() < 1e-9))
+            .unwrap();
+        assert!(!seam.1);
+        // From where it comes back in at y = 7, down through its start, out at y = 3.
+        assert!((seam.0.first().unwrap().y - 7.0).abs() < 1e-6, "{seam:?}");
+        assert!((seam.0.last().unwrap().y - 3.0).abs() < 1e-6, "{seam:?}");
+        let cut = out
+            .iter()
+            .find(|(p, _)| p.iter().all(|q| (q.y - 1.0).abs() < 1e-9))
+            .unwrap();
+        assert!(cut.0.first().unwrap().x < cut.0.last().unwrap().x);
     }
 }

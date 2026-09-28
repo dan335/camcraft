@@ -29,6 +29,8 @@ mod view;
 
 // The design system, and lengths in millimetres or inches.
 mod ui;
+// What every input does, shown on hovering it.
+mod help;
 
 #[cfg(test)]
 mod test_jobs;

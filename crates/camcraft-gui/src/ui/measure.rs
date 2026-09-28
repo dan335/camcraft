@@ -218,7 +218,6 @@ impl Measure {
         // Beside, the tool cannot shrink to nothing: a hundredth of a millimetre short.
         let min = (least + 0.01).max(-50.0).min(*mm);
         self.field(ui, mm, 0.01, min, 50.0, prefix, self.unit(), 4)
-            .on_hover_text("Left on the walls: negative cuts past them")
     }
 
     /// An editor for the stock to leave on the floors, no lower than `least`.
@@ -231,7 +230,6 @@ impl Measure {
     ) -> egui::Response {
         let min = least.max(-50.0).min(*mm);
         self.field(ui, mm, 0.01, min, 50.0, prefix, self.unit(), 4)
-            .on_hover_text("Left on the floors: negative cuts below them")
     }
 
     /// An editor for a feed kept in mm/min, shown in this unit.

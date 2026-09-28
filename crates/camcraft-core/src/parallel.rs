@@ -302,6 +302,120 @@ pub(crate) fn follow<T: DropTest>(
     samples.into_iter().flatten().collect()
 }
 
+/// A stretch of cutting on the part: its points, and whether it closes on itself.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Run {
+    /// Each point on the exact surface; a closed run does not repeat its first.
+    pub(crate) points: Vec<DVec3>,
+    /// Whether it closes on itself.
+    pub(crate) closed: bool,
+}
+
+/// The tool's tip on the part along the polyline `points`, closed back to its
+/// first point if `closed`: sampled and refined as a parallel pass is, segment by
+/// segment, and broken where it is as a parallel pass is, where nothing is under
+/// the tool, at a wall, and down a steep stretch.
+///
+/// A closed line unbroken comes back closed. One broken is started where it
+/// breaks, so no run crosses the join.
+pub(crate) fn sweep_polyline<T: DropTest>(
+    cutter: &DropCutter<'_>,
+    tool: &T,
+    points: &[DVec2],
+    closed: bool,
+    params: &ParallelParams,
+    report: &mut ParallelReport,
+) -> Vec<Run> {
+    // The drop-cutter's list of triangles, made once for the whole line.
+    let scratch = std::cell::RefCell::new(Vec::new());
+    let mut samples: Vec<Option<DVec3>> = Vec::new();
+    let mut segment: Vec<Option<DVec3>> = Vec::new();
+    let ends = points.iter().zip(
+        points
+            .iter()
+            .skip(1)
+            .chain(points.first().filter(|_| closed)),
+    );
+    for (i, (&from, &to)) in ends.enumerate() {
+        let length = from.distance(to);
+        if length < 1e-12 {
+            continue;
+        }
+        let along = (to - from) / length;
+        segment.clear();
+        Line {
+            probe: |u: f64| {
+                let p = from + along * u;
+                cutter
+                    .drop_at_in(tool, p.x, p.y, &mut scratch.borrow_mut())
+                    .map(|z| dvec3(p.x, p.y, z))
+            },
+            params,
+            out: &mut segment,
+            report,
+        }
+        .sweep(0.0, length);
+        // Each segment starts where the last ended.
+        samples.extend(
+            segment
+                .drain(..)
+                .skip(usize::from(i > 0 && !samples.is_empty())),
+        );
+    }
+
+    let unbroken = samples.iter().all(Option::is_some);
+    if closed && samples.len() > 2 {
+        // The join is the first point sampled twice: drop the second, and when the
+        // line breaks, start at a break so no run crosses the join.
+        samples.pop();
+        if !unbroken && let Some(at) = samples.iter().position(Option::is_none) {
+            samples.rotate_left(at);
+        }
+    }
+    let mut runs: Vec<Vec<DVec3>> = samples
+        .split(|p| p.is_none())
+        .flat_map(|run| {
+            let mut run: Vec<DVec3> = run.iter().filter_map(|p| *p).collect();
+            if closed
+                && unbroken
+                && let Some(&first) = run.first()
+            {
+                // Judged steep all the way round.
+                run.push(first);
+            }
+            break_steep(run, params.max_cut_step, report)
+        })
+        .filter(|run| run.len() >= 2)
+        .collect();
+    if closed && unbroken {
+        if runs.len() == 1 {
+            let mut ring = runs.pop().unwrap_or_default();
+            ring.pop();
+            return vec![Run {
+                points: ring,
+                closed: true,
+            }];
+        }
+        // Broken only down steep stretches: the last and the first meet at the
+        // join, and are one run.
+        if runs.len() > 1
+            && let (Some(last), Some(first)) = (runs.last(), runs.first())
+            && last.last() == first.first()
+        {
+            let head = runs.remove(0);
+            if let Some(last) = runs.last_mut() {
+                last.extend(head.into_iter().skip(1));
+            }
+        }
+    }
+    runs.into_iter()
+        .map(|points| Run {
+            points,
+            closed: false,
+        })
+        .collect()
+}
+
 /// Break a run wherever it falls, or climbs, further than `max_cut_step` while
 /// steeper than [`PLUNGE_RATIO`].
 ///

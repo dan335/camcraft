@@ -12,6 +12,8 @@ use camcraft_session::checks::Level;
 use eframe::egui;
 
 use crate::document::{SetupState, Transport, ViewMode};
+use crate::help::Help;
+use crate::help::topics::app;
 use crate::playback::{self, finding_segment, playing_back, thousands};
 use crate::ui::measure::Measure;
 use crate::ui::theme;
@@ -417,10 +419,9 @@ pub fn bar(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) {
             let stops = usize::from(t.stop_at_problems) + usize::from(t.stop_at_op_end);
             ui.menu_button(format!("stops ({stops})"), |ui| {
                 ui.checkbox(&mut t.stop_at_problems, "at problems")
-                    .on_hover_text(
-                        "pause on reaching a failed check, a warning or a steep descent",
-                    );
-                ui.checkbox(&mut t.stop_at_op_end, "at the end of each operation");
+                    .help(&app::STOP_AT_PROBLEMS);
+                ui.checkbox(&mut t.stop_at_op_end, "at the end of each operation")
+                    .help(&app::STOP_AT_OPERATION_END);
             })
             .response
             .on_hover_text("where playing pauses by itself");
@@ -433,7 +434,7 @@ pub fn bar(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) {
                     }
                 })
                 .response
-                .on_hover_text("machining time per second: [ and ] to change");
+                .help(&app::SPEED);
         });
     });
     move_readout(ui, state, m);

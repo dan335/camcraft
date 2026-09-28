@@ -14,7 +14,8 @@ use crate::job::{Coolant, HeightContext, SpindleDirection};
 use crate::linker::LinkReport;
 use crate::parallel::ParallelReport;
 use crate::planar::PlanarReport;
-use crate::roughing::RoughingReport;
+use crate::pocket_clearing::ClearingReport;
+use crate::scallop::ScallopReport;
 use crate::toolpath::Toolpath;
 
 /// What a strategy reported, in its own terms.
@@ -26,8 +27,10 @@ use crate::toolpath::Toolpath;
 pub enum StrategyDetail {
     /// Raster finishing.
     Parallel(ParallelReport),
+    /// Scallop finishing.
+    Scallop(ScallopReport),
     /// Z-level clearing.
-    ZlevelRough(RoughingReport),
+    PocketClearing(ClearingReport),
     /// Adaptive clearing.
     Adaptive(AdaptiveReport),
     /// A 2D profile.

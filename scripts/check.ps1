@@ -43,6 +43,7 @@ Invoke-Gate 'determinism' {
     cargo test -p camcraft-core --quiet -- --exact `
         run::tests::bounded_runs_are_deterministic `
         dropcutter::tests::is_deterministic `
+        scallop::tests::is_deterministic `
         ordering::tests::ordering_is_deterministic
 }
 

@@ -28,6 +28,16 @@ pub enum StrategyError {
     /// A move could not be added.
     #[error(transparent)]
     Toolpath(#[from] ToolpathError),
+    /// The area is too large for the field a strategy works out over it: its grid
+    /// would have to be so coarse it no longer places the passes.
+    #[error(
+        "the area is too large to finish at this stepover: its grid would need a pitch of \
+         {pitch:.3} mm; keep it to a boundary, or take a larger stepover"
+    )]
+    FieldTooLarge {
+        /// The pitch the grid would need.
+        pitch: f64,
+    },
     /// A polygon operation failed.
     ///
     /// Propagated rather than swallowed: an empty region reads as "nothing to cut",

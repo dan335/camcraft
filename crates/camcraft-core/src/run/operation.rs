@@ -16,8 +16,8 @@ use crate::dropcutter::DropCutter;
 use crate::face::{FaceParams, LevelsAsked, face};
 use crate::features::{Chain, FeatureError, outline, picked_chains, picked_points};
 use crate::job::{
-    AdaptiveDirection, Entry, HeightContext, Job, Operation, Picks, Retraction, SpindleDirection,
-    StrategySpec, ToolSpec,
+    AdaptiveDirection, Entry, HeightContext, Job, Operation, Picks, Retraction, ScallopDirection,
+    ScallopOrder, SpindleDirection, StrategySpec, ToolSpec,
 };
 use crate::linker::{
     ClearanceField, EntryKind, LinkParams, LinkReport, Material, Ramp, StayDown, Surface,
@@ -28,8 +28,9 @@ use crate::parallel::{ParallelParams, follow, parallel_finish_within};
 use crate::planar::{
     Area, LeadArc, PlanarParams, PlanarReport, Spiral, areas, centre_offset, pocket, profile,
 };
+use crate::pocket_clearing::{ClearingParams, pocket_clearing};
 use crate::reach::LevelReach;
-use crate::roughing::{RoughingParams, zlevel_rough};
+use crate::scallop::{Order, ScallopParams, contact_region, scallop_finish};
 use crate::setup::{Bodies, Prepared};
 use crate::simadapt::sim_moves_of;
 use crate::strategy::StrategyError;
@@ -104,9 +105,18 @@ pub(super) fn run_operation(
     };
     let (raw, passes, detail) = match op.strategy {
         StrategySpec::Parallel { angle } => parallel_paths(work, angle, limit, &mut warnings)?,
-        StrategySpec::ZlevelRough { min_ring_length } => {
-            zlevel_paths(work, min_ring_length, limit, stock, &mut warnings)?
-        }
+        StrategySpec::Scallop { .. } => scallop_paths(work, limit, &mut warnings)?,
+        StrategySpec::PocketClearing {
+            min_ring_length,
+            conventional,
+            flat_areas,
+        } => pocket_clearing_paths(
+            work,
+            (min_ring_length, conventional, flat_areas),
+            limit,
+            stock,
+            &mut warnings,
+        )?,
         StrategySpec::Adaptive {
             direction,
             flat_areas,
@@ -255,14 +265,14 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         .filter(|_| op.strategy.uses().leads)
         .map(|l| l.sizes(diameter));
     let (stay_down, lead_radius, ramp) = match op.strategy {
-        StrategySpec::Parallel { .. } => (
+        StrategySpec::Parallel { .. } | StrategySpec::Scallop { .. } => (
             StayDown::OverPart {
                 max: linking.stay_down.unwrap_or(50.0),
             },
             linking.lead_radius.unwrap_or(0.1 * diameter),
             None,
         ),
-        StrategySpec::ZlevelRough { .. }
+        StrategySpec::PocketClearing { .. }
         | StrategySpec::Profile { .. }
         | StrategySpec::Pocket { .. }
         | StrategySpec::Face { .. } => (
@@ -295,10 +305,11 @@ fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         EntryKind::Ramp
     };
     let conventional = match op.strategy {
-        StrategySpec::Profile { conventional, .. } | StrategySpec::Pocket { conventional, .. } => {
-            conventional
-        }
+        StrategySpec::Profile { conventional, .. }
+        | StrategySpec::Pocket { conventional, .. }
+        | StrategySpec::PocketClearing { conventional, .. } => conventional,
         StrategySpec::Adaptive { direction, .. } => direction == AdaptiveDirection::Conventional,
+        StrategySpec::Scallop { direction, .. } => direction == ScallopDirection::Conventional,
         _ => false,
     };
     let clockwise = work.spec.spindle == SpindleDirection::Clockwise;
@@ -422,18 +433,102 @@ fn parallel_paths(
     Ok((path, report.passes, StrategyDetail::Parallel(report)))
 }
 
-/// Z-level clearing of the material as it stands, a level each stepdown, within
-/// the sweep and `limit`.
-fn zlevel_paths(
+/// Scallop finishing within the sweep, `limit` and where the tool touches the
+/// part.
+fn scallop_paths(
     work: &Work<'_>,
-    min_ring_length: f64,
+    limit: Option<&Region>,
+    warnings: &mut Vec<String>,
+) -> Result<Paths, RunError> {
+    let (job, op) = (work.job, work.op);
+    let StrategySpec::Scallop {
+        direction,
+        order,
+        slope_from,
+        slope_to,
+    } = op.strategy
+    else {
+        return Ok((
+            Toolpath::new(),
+            0,
+            StrategyDetail::Scallop(Default::default()),
+        ));
+    };
+    let (sweep_lo, sweep_hi) = work.sweep();
+    let named = |e: camcraft_geom::contour::RegionError| {
+        StrategyError::Region(e.to_string()).named(op.name.clone())
+    };
+    let contact =
+        contact_region(work.mesh, work.tool.max_radius(), job.tolerance).map_err(in_op(op))?;
+    let mut area = Region::rectangle(sweep_lo, sweep_hi)
+        .intersection(&contact)
+        .map_err(named)?;
+    if let Some(l) = limit {
+        area = area.intersection(l).map_err(named)?;
+    }
+    let params = ScallopParams {
+        stepover: op.passes.stepover,
+        tolerance: job.tolerance,
+        feed: op.passes.feed,
+        max_cut_step: op.passes.max_cut_step,
+        order: match order {
+            ScallopOrder::OutsideIn => Order::OutsideIn,
+            ScallopOrder::InsideOut => Order::InsideOut,
+        },
+        direction: match direction {
+            ScallopDirection::BothWays => Direction::BothWays,
+            ScallopDirection::Climb => Direction::Climb,
+            ScallopDirection::Conventional => Direction::Conventional,
+        },
+        climb_right: work.spec.spindle == SpindleDirection::Clockwise,
+        slope_from: slope_from.to_radians(),
+        slope_to: slope_to.to_radians(),
+        ..Default::default()
+    };
+    let (path, report) =
+        scallop_finish(work.cutter, work.tool, &area, &params).map_err(in_op(op))?;
+    if report.passes == 0 {
+        warnings.push("found nothing to finish: nothing within the boundary and slopes".into());
+    }
+    if report.sweep.refinement_limited > 0 {
+        warnings.push(format!(
+            "{} span(s) hit the refinement limit; the path is coarser than the              requested tolerance",
+            report.sweep.refinement_limited
+        ));
+    }
+    if report.unreached > 0 {
+        warnings.push(format!(
+            "{} point(s) of the area were not reached from its boundary, and are not              finished",
+            report.unreached
+        ));
+    }
+    Ok((path, report.passes, StrategyDetail::Scallop(report)))
+}
+
+/// Pocket clearing of the material as it stands, a level each stepdown and, with
+/// flat areas, one on each flat face, within the sweep and `limit`. `own` is the
+/// strategy's own settings: its shortest ring, whether it cuts conventional, and
+/// whether it finds flat areas.
+fn pocket_clearing_paths(
+    work: &Work<'_>,
+    own: (f64, bool, bool),
     limit: Option<&Region>,
     stock: &Stock,
     warnings: &mut Vec<String>,
 ) -> Result<Paths, RunError> {
     let (job, op, ctx) = (work.job, work.op, work.heights);
+    let (min_ring_length, conventional, flat_areas) = own;
     let mut reach = LevelReach::new(work.mesh, work.tool, job.tolerance).map_err(in_op(op))?;
-    let params = RoughingParams {
+    let flats = if flat_areas {
+        let axial = op.stock_to_leave().axial;
+        flat_heights(work.mesh, job.tolerance)
+            .into_iter()
+            .map(|z| z + axial)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let params = ClearingParams {
         // Checked with the job: it always has one.
         stepdown: op.stepdown().unwrap_or(f64::NAN),
         stepover: op.passes.stepover,
@@ -444,17 +539,14 @@ fn zlevel_paths(
             .bottom
             .map_or(ctx.model_bottom, |h| h.resolve_bottom(ctx)),
         min_ring_length,
+        kept_on_right: (work.spec.spindle == SpindleDirection::Clockwise) != conventional,
+        flats,
     };
     let (sweep_lo, sweep_hi) = work.sweep();
     let sweep = Region::rectangle(sweep_lo, sweep_hi);
-    let area = match limit {
-        Some(l) => sweep
-            .intersection(l)
-            .map_err(|e| StrategyError::Region(e.to_string()).named(op.name.clone()))?,
-        None => sweep,
-    };
-    let (path, report) =
-        zlevel_rough(&mut reach, &area, stock.field(), &params).map_err(in_op(op))?;
+    let base = *work.tool.base();
+    let (path, report) = pocket_clearing(&mut reach, &sweep, limit, stock.field(), &base, &params)
+        .map_err(in_op(op))?;
     if report.rings == 0 {
         warnings.push(
             "found nothing to clear: the stock may already be below this \
@@ -462,7 +554,7 @@ fn zlevel_paths(
                 .into(),
         );
     }
-    Ok((path, report.rings, StrategyDetail::ZlevelRough(report)))
+    Ok((path, report.rings, StrategyDetail::PocketClearing(report)))
 }
 
 /// Adaptive clearing of the stock's blocks, a level each stepdown and one on
@@ -845,7 +937,8 @@ pub(super) fn drill_holes(
 pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> OperationResult {
     let detail = match op.strategy {
         StrategySpec::Parallel { .. } => StrategyDetail::Parallel(Default::default()),
-        StrategySpec::ZlevelRough { .. } => StrategyDetail::ZlevelRough(Default::default()),
+        StrategySpec::Scallop { .. } => StrategyDetail::Scallop(Default::default()),
+        StrategySpec::PocketClearing { .. } => StrategyDetail::PocketClearing(Default::default()),
         StrategySpec::Adaptive { .. } => StrategyDetail::Adaptive(Default::default()),
         StrategySpec::Profile { .. } => StrategyDetail::Profile(Default::default()),
         StrategySpec::Pocket { .. } => StrategyDetail::Pocket(Default::default()),

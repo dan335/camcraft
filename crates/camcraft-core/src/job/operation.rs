@@ -114,11 +114,39 @@ pub enum StrategySpec {
         #[serde(default)]
         angle: f64,
     },
-    /// Z-level clearing, a slice each stepdown ([`Depths::Required`]).
-    ZlevelRough {
+    /// Finishing passes a constant distance apart along the surface, offset in
+    /// from the boundary, so the cusp between them is the same on a slope as on
+    /// the flat. Fusion's Scallop.
+    Scallop {
+        /// Which way each pass cuts.
+        #[serde(default, skip_serializing_if = "is_default")]
+        direction: ScallopDirection,
+        /// From the boundary in, or from the middle out.
+        #[serde(default, skip_serializing_if = "is_default")]
+        order: ScallopOrder,
+        /// Only where the surface is at least this steep, in degrees from level.
+        #[serde(default, skip_serializing_if = "is_default")]
+        slope_from: f64,
+        /// And at most this steep, in degrees from level.
+        #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
+        slope_to: f64,
+    },
+    /// Z-level clearing by offsets, a level each stepdown ([`Depths::Required`]):
+    /// each level's rings a stepover apart in from its edges, cut from the middle
+    /// out, the one along the walls last. Fusion's 3D Pocket Clearing. A job
+    /// written before it had its name calls it Z-level roughing.
+    #[serde(alias = "zlevel-rough")]
+    PocketClearing {
         /// Rings shorter than this are not worth the entry.
         #[serde(default = "default_min_ring")]
         min_ring_length: f64,
+        /// Cut conventional rather than climb.
+        #[serde(default, skip_serializing_if = "is_default")]
+        conventional: bool,
+        /// Add a level on each flat face, so floors are left just the stock to
+        /// leave down. Fusion's flat area detection.
+        #[serde(default = "yes", skip_serializing_if = "is_yes")]
+        flat_areas: bool,
     },
     /// Z-level clearing with the tool's load held constant: each pass steered
     /// to keep the arc of the tool in material at the optimal load, the
@@ -185,7 +213,8 @@ impl StrategySpec {
     pub fn name(&self) -> &'static str {
         match self {
             StrategySpec::Parallel { .. } => "parallel",
-            StrategySpec::ZlevelRough { .. } => "zlevel-rough",
+            StrategySpec::Scallop { .. } => "scallop",
+            StrategySpec::PocketClearing { .. } => "pocket-clearing",
             StrategySpec::Adaptive { .. } => "adaptive",
             StrategySpec::Profile { .. } => "profile",
             StrategySpec::Pocket { .. } => "pocket",
@@ -230,9 +259,20 @@ impl StrategySpec {
                 ramp: false,
                 ..cuts_loops
             },
-            // Slice by slice is what it is.
-            StrategySpec::ZlevelRough { .. } => Uses {
+            // As parallel, but its order is its own: reordering would shuffle
+            // and turn round the rings on any flat, which all start level.
+            StrategySpec::Scallop { .. } => Uses {
+                depths: Depths::None,
+                lead_radius: true,
+                ramp: false,
+                reorder: false,
+                ..cuts_loops
+            },
+            // Slice by slice is what it is. Its order is its own, each level's
+            // rings from the middle out, and each the way it cuts.
+            StrategySpec::PocketClearing { .. } => Uses {
                 depths: Depths::Required,
+                reorder: false,
                 ..cuts_loops
             },
             // Its stepover is its optimal load. It goes down a helix into what
@@ -300,7 +340,7 @@ impl StrategySpec {
     /// a millimetre each way for the finish, and the rest cut to size.
     pub fn default_stock_to_leave(&self) -> StockToLeave {
         match self {
-            StrategySpec::ZlevelRough { .. } | StrategySpec::Adaptive { .. } => StockToLeave {
+            StrategySpec::PocketClearing { .. } | StrategySpec::Adaptive { .. } => StockToLeave {
                 radial: 0.5,
                 axial: 0.5,
             },
@@ -389,6 +429,31 @@ pub enum FaceDirection {
     Conventional,
 }
 
+/// Which way scallop passes cut.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScallopDirection {
+    /// Closed rings climbing, and an open pass started at whichever end is
+    /// nearer. Fusion's default.
+    #[default]
+    BothWays,
+    /// Every pass climbing.
+    Climb,
+    /// Every pass conventional.
+    Conventional,
+}
+
+/// Which way round scallop passes are cut.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScallopOrder {
+    /// From the boundary in. Fusion's default.
+    #[default]
+    OutsideIn,
+    /// Each region's innermost passes first, out to the boundary.
+    InsideOut,
+}
+
 /// Which way adaptive clearing's passes cut.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -417,6 +482,16 @@ pub enum ProfileSide {
     Inside,
     /// The tool's centre on it: a slot or a groove along it.
     On,
+}
+
+fn ninety() -> f64 {
+    90.0
+}
+
+// A signature serde's `skip_serializing_if` requires.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_ninety(v: &f64) -> bool {
+    (*v - 90.0).abs() < f64::EPSILON
 }
 
 fn default_min_ring() -> f64 {
@@ -785,7 +860,7 @@ impl Operation {
             return None;
         }
         match self.strategy {
-            StrategySpec::ZlevelRough { .. } | StrategySpec::Adaptive { .. } => {
+            StrategySpec::PocketClearing { .. } | StrategySpec::Adaptive { .. } => {
                 return Some(
                     "a V-bit or chamfer mill cannot rough in Z levels; use a parallel pass",
                 );
@@ -948,6 +1023,21 @@ impl Operation {
                 }
             }
         }
+        if let StrategySpec::Scallop {
+            slope_from,
+            slope_to,
+            ..
+        } = self.strategy
+            && !(slope_from.is_finite()
+                && slope_to.is_finite()
+                && (0.0..slope_to).contains(&slope_from)
+                && slope_to <= 90.0)
+        {
+            return Err(JobError::BadValue {
+                field: format!("{at}.slope_from"),
+                value: slope_from,
+            });
+        }
         if let StrategySpec::Drill { peck, dwell } = self.strategy {
             if let Some(p) = peck {
                 positive(&format!("{at}.peck"), p)?;
@@ -974,7 +1064,8 @@ impl Operation {
     pub fn default_stepover(&self, tool: &ToolSpec, tolerance: f64) -> Option<f64> {
         let d = tool.diameter;
         match self.strategy {
-            StrategySpec::Parallel { .. } => {
+            // A scallop pass is parallel's cusp, kept on a slope too.
+            StrategySpec::Parallel { .. } | StrategySpec::Scallop { .. } => {
                 let r = match tool.kind {
                     ToolKind::Ball => d / 2.0,
                     ToolKind::Bullnose => tool.corner,
@@ -988,7 +1079,7 @@ impl Operation {
                 // To the micron, as Fusion rounds it.
                 Some((over * 1000.0).round() / 1000.0)
             }
-            StrategySpec::ZlevelRough { .. } | StrategySpec::Pocket { .. } => Some(0.6 * d),
+            StrategySpec::PocketClearing { .. } | StrategySpec::Pocket { .. } => Some(0.6 * d),
             // Fusion's optimal load: a tenth of the tool, to the micron.
             StrategySpec::Adaptive { .. } => Some((0.1 * d * 1000.0).round() / 1000.0),
             // Fusion's: 95% of the flat of the tool's end, less its corners.

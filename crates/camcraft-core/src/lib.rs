@@ -39,6 +39,7 @@ pub mod dropcutter;
 pub mod allowance;
 
 pub mod parallel;
+pub mod scallop;
 pub mod strategy;
 pub mod toolpath;
 
@@ -48,7 +49,7 @@ pub mod simadapt;
 
 pub mod reach;
 
-pub mod roughing;
+pub mod pocket_clearing;
 
 pub mod adaptive;
 

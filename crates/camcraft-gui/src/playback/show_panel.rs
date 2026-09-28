@@ -6,6 +6,8 @@ use glam::DVec3;
 
 use super::{jump_to, playing_back, thousands};
 use crate::document::{RanSetup, SetupState, SetupView};
+use crate::help::Help;
+use crate::help::topics::app;
 use crate::stock::stock_view::{CLASSES, Class, ColorMode, cell_color, class_name};
 use crate::ui::measure::Measure;
 use crate::ui::theme;
@@ -97,22 +99,29 @@ pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option
     let back = playing_back(state);
     let view = &mut state.view;
     ui.label(section_label("Show"));
-    if back {
-        ui.checkbox(&mut view.part_in_playback, "part");
+    let part = if back {
+        &mut view.part_in_playback
     } else {
-        ui.checkbox(&mut view.view.part, "part");
-    }
-    ui.checkbox(&mut view.view.stock, "stock outline");
-    ui.checkbox(&mut view.view.origin, "work zero");
+        &mut view.view.part
+    };
+    ui.checkbox(part, "part").help(&app::SHOW_PART);
+    ui.checkbox(&mut view.view.stock, "stock outline")
+        .help(&app::SHOW_STOCK);
+    ui.checkbox(&mut view.view.origin, "work zero")
+        .help(&app::SHOW_WORK_ZERO);
     let Some(ran) = &state.ran else {
         return None;
     };
     if back {
-        ui.checkbox(&mut view.show_cutter, "cutter");
-        ui.checkbox(&mut view.paths_in_playback, "toolpaths");
-    } else {
-        ui.checkbox(&mut view.show_paths, "toolpaths");
+        ui.checkbox(&mut view.show_cutter, "cutter")
+            .help(&app::SHOW_CUTTER);
     }
+    let paths = if back {
+        &mut view.paths_in_playback
+    } else {
+        &mut view.show_paths
+    };
+    ui.checkbox(paths, "toolpaths").help(&app::SHOW_TOOLPATHS);
     toolpaths(ui, view, &ran.scene, back);
     if back {
         ui.separator();

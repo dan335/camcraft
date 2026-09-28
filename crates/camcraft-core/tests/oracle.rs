@@ -11,6 +11,7 @@ use camcraft_core::allowance::{Allowance, EffectiveTool};
 use camcraft_core::dropcutter::DropCutter;
 use camcraft_core::linker::{ClearancePlane, LinkParams, NoPart, Unchanging, link};
 use camcraft_core::parallel::{ParallelParams, parallel_finish};
+use camcraft_core::scallop::{ScallopParams, scallop_finish};
 use camcraft_core::simadapt::sim_moves;
 use camcraft_core::tool::{Ball, Flat, ToolProfile};
 use camcraft_core::toolpath::{MoveRole, Toolpath};
@@ -86,6 +87,64 @@ fn a_finished_dome_matches_the_part() {
         "expected real coverage, compared {}",
         v.compared
     );
+    assert!(
+        v.is_clean(),
+        "gouged {} column(s), deepest {:.3} mm against a {:.3} mm budget",
+        v.gouged,
+        v.deepest_gouge_mm,
+        budget
+    );
+}
+
+/// Scallop the same dome, from a boundary a stepover's worth of rings down its
+/// side: the passes follow the surface, so it must come out the dome too.
+#[test]
+fn a_scalloped_dome_matches_the_part() {
+    let sphere_r = 12.0;
+    let mesh = synthetic::uv_sphere(sphere_r, 160, 220);
+    let cutter = DropCutter::new(&mesh);
+    let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
+
+    let (lo, hi) = (dvec2(-7.0, -7.0), dvec2(7.0, 7.0));
+    let area = camcraft_geom::contour::Region::rectangle(lo, hi);
+    let (raw, report) = scallop_finish(
+        &cutter,
+        &tool,
+        &area,
+        &ScallopParams {
+            stepover: 0.5,
+            tolerance: 0.02,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(report.is_clean(), "{report:?}");
+    assert!(report.passes > 10, "{report:?}");
+
+    let top = sphere_r + 5.0;
+    let (path, _) = link(
+        &raw,
+        &ClearancePlane::new(top).unwrap(),
+        &mut block(lo, hi, top),
+        &NoPart,
+        &LinkParams::plain(900.0, 250.0, tool.max_radius()),
+    )
+    .unwrap();
+    assert!(!path.has_unplanned_links());
+
+    let mut stock = Stock::block(lo, hi, top, -sphere_r - 1.0, PITCH).unwrap();
+    let sim = stock.apply(&sim_moves(&path), &tool);
+    assert!(
+        sim.is_clean(),
+        "a rapid touched stock: {} contact(s), deepest {:.3} mm",
+        sim.rapid_contacts,
+        sim.deepest_rapid_contact_mm
+    );
+
+    let part = PartSurface::from_mesh(&mesh, lo, hi, PITCH).unwrap();
+    let budget = 0.02 + synthetic::uv_sphere_max_sag(sphere_r, 160, 220) + PITCH;
+    let v = stock.verify(&part, budget, 1.0);
+    assert!(v.compared > 1000, "compared {}", v.compared);
     assert!(
         v.is_clean(),
         "gouged {} column(s), deepest {:.3} mm against a {:.3} mm budget",

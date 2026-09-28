@@ -22,7 +22,7 @@ and the transport under the view. The Add menu adds models, stocks, setups and
 operations; View opens the log and the checks in their own windows; the Setup menu
 posts. Operations are grouped as Fusion's toolbar groups them, in the Add menu and
 a setup's right-click menu alike: 2D (face, pocket, profile), 3D (adaptive
-clearing, Z-level rough, then parallel) and drilling.
+clearing, pocket clearing, then parallel and scallop) and drilling.
 
 ## The tree
 
@@ -76,8 +76,8 @@ it.
   offset. For a 2D profile or pocket, the outline it cuts round or clears (the
   part's silhouette or picked faces and edges) and whether a profile cuts
   outside, inside or on it. New operations start on the
-  part's silhouette: parallel with the tool's centre inside it, adaptive and Z-level reaching
-  in from outside with a channel a tool wide), *Heights* (clearance, top and bottom,
+  part's silhouette: parallel with the tool's centre inside it, adaptive and pocket
+  clearing reaching in from outside with a channel a tool wide), *Heights* (clearance, top and bottom,
   drawn in the view as planes), *Passes* and *Linking* (retract feed, safe
   distance, stay-down distance, and the lead radius or the ramp angle and feed;
   a profile's level lead arcs on and off each ring, their radius, sweep and
@@ -85,14 +85,17 @@ it.
   one left out says what the strategy's default comes to for the tool). Choosing a
   tool whose preset gives no stepover sets Fusion's: a quarter of the diameter for
   parallel with a square end, the tolerance's cusp with a round one, and 0.6 of
-  the diameter for Z-level and 2D pockets; adaptive clearing's stepover is its
-  *Optimal load*, a tenth of the diameter, which a preset's stepover does not
-  change. Adaptive's *Passes* has climb, conventional or both ways, and
-  *Flat areas*. A 2D operation's *Passes* has climb
+  the diameter for pocket clearing and 2D pockets; adaptive clearing's stepover
+  is its *Optimal load*, a tenth of the diameter, which a preset's stepover does
+  not change. Scallop's stepover starts as parallel's, and its *Passes* has both
+  ways, climb or conventional, outside in or inside out, and the slopes it
+  finishes between. Adaptive's *Passes* has climb, conventional or both ways, and
+  *Flat areas*; pocket clearing's climb or conventional, *Flat areas* and the
+  shortest ring worth cutting. A 2D operation's *Passes* has climb
   or conventional; a profile has no stepover. *Multiple depths*, as Fusion's,
   is ticked to step down in levels, then the stepdown: unticked cuts the bottom
   in one pass. Profiles and pockets start ticked at 2 mm, facing unticked, and
-  Z-level roughing always cuts in levels, so cannot be unticked; parallel and
+  pocket and adaptive clearing always cut in levels, so cannot be unticked; parallel and
   drilling have none (a drill has its pecks). *Stock to
   leave*, as Fusion's, is ticked to leave any (starting at 0.5 mm), then its
   wall and floor amounts, negative to cut past the part; the floor follows the
@@ -102,6 +105,19 @@ it.
   strategy shows is the core's to say (`StrategySpec::uses`), as is which
   settings it reads. A Generate button sits at
   the panel's foot. The strategy is fixed once the operation is made.
+
+## Help on hover
+
+As in Fusion, hovering any field, its label or the field itself, pops up its
+name, a sentence or two on what it does, and for many a small sketch with the
+dimension it sets in amber: stepover between two passes, the four heights through
+the stock, a tool's stickout. It covers every panel, the tool library, settings
+and playback's stops. The text lives in `src/help/topics/`, one file per panel,
+with the rules for writing it; the sketches are painted, not pictures, in
+`src/help/figures/`. Every form row goes through `widgets::row` or
+`widgets::field_label`, which take a topic, so a field cannot be added without
+its help. Tests hold each topic to 160 characters and each sketch inside its
+frame; the `help_popups` snapshot lays them all out to look over.
 
 ## Picking in the view
 
@@ -115,7 +131,7 @@ picking. Legends under the picks name what the view draws.
 - The work zero takes a corner, a round edge's centre or an edge's middle on a
   model, or a corner, edge or side of the stock.
 - An operation whose boundary is a selection takes faces and edges, which keep
-  parallel finishing and Z-level roughing to their outline seen from above.
+  parallel finishing and pocket clearing to their outline seen from above.
   Edges are only ever cut round in loops, so a click takes the whole loop the
   edge goes round: the edges joined to it end to end at its height, taking at
   each corner the one that turns least. An edge of a pocket's floor or of the
@@ -243,7 +259,7 @@ chart.
 
 Cutters: flat, ball and bullnose end mills; **V-bits and chamfer mills** (a cone:
 an included angle and an optional flat tip), which finish but are refused for
-Z-level roughing and for stock to leave; and **drills** (a cone point, 118° unless
+pocket and adaptive clearing and for stock to leave; and **drills** (a cone point, 118° unless
 given), which only drill.
 
 **Presets** are named sets of speeds and feeds on a tool ("Roughing", "MDF",

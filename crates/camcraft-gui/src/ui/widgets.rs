@@ -8,6 +8,7 @@
 
 use eframe::egui;
 
+use crate::help::{self, Help, Topic};
 use crate::ui::theme::{self, Tint};
 
 /// The text size of controls at their default size, as `Button.jsx`, `Input.jsx`
@@ -184,9 +185,45 @@ pub fn section_label(text: &str) -> egui::RichText {
         .color(theme::egui_color(theme::TEXT_3))
 }
 
-/// A field's label in a form: `--text-3`, as `KeyValue.jsx` sets its keys.
-pub fn field_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
+/// A key in a form: `--text-3`, as `KeyValue.jsx` sets its keys. For what is
+/// only shown; a field that edits is labelled by [`field_label`] or [`row`],
+/// which give it its help.
+pub fn key_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.label(egui::RichText::new(text).color(theme::egui_color(theme::TEXT_3)))
+}
+
+/// A field's label in a form, named by `topic`, whose help it shows on hover.
+pub fn field_label(ui: &mut egui::Ui, topic: &Topic) -> egui::Response {
+    field_label_as(ui, topic.title, topic)
+}
+
+/// As [`field_label`], reading `text` where the form names the field its own
+/// way, as a row under a column's heading does.
+pub fn field_label_as(ui: &mut egui::Ui, text: &str, topic: &Topic) -> egui::Response {
+    key_label(ui, text).help(topic)
+}
+
+/// A row of a [`form`]: `topic`'s label, then what `add` puts beside it, with
+/// the help shown on hovering either, as Fusion shows it.
+pub fn row<R>(ui: &mut egui::Ui, topic: &Topic, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    row_as(ui, topic.title, topic, add)
+}
+
+/// As [`row`], labelled `text`.
+pub fn row_as<R>(
+    ui: &mut egui::Ui,
+    text: &str,
+    topic: &Topic,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let label = key_label(ui, text);
+    let field = ui.horizontal(add);
+    // Laid over both once they are drawn, so it is hovered over the field's
+    // own widgets too.
+    let id = ui.id().with(("help", text));
+    help::over(ui, label.rect.union(field.response.rect), id, topic);
+    ui.end_row();
+    field.inner
 }
 
 /// Text that explains, quieter than what it explains: `--text-3`, as `readme.md`
@@ -639,13 +676,33 @@ pub fn card<R>(
     actions: impl FnOnce(&mut egui::Ui),
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
+    card_titled(ui, title.map(|t| (t, None)), actions, body)
+}
+
+/// A [`card`] for something the person edits, titled by `topic`, whose help
+/// its title shows on hover.
+pub fn topic_card<R>(
+    ui: &mut egui::Ui,
+    topic: &Topic,
+    actions: impl FnOnce(&mut egui::Ui),
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    card_titled(ui, Some((topic.title, Some(topic))), actions, body)
+}
+
+fn card_titled<R>(
+    ui: &mut egui::Ui,
+    title: Option<(&str, Option<&Topic>)>,
+    actions: impl FnOnce(&mut egui::Ui),
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
     egui::Frame::new()
         .fill(theme::egui_color(theme::SURFACE_2))
         .stroke(egui::Stroke::new(1.0, theme::egui_color(theme::BORDER)))
         .corner_radius(theme::RADIUS_SM)
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            if let Some(title) = title {
+            if let Some((title, topic)) = title {
                 let (rect, _) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), CARD_HEADER),
                     egui::Sense::hover(),
@@ -655,7 +712,10 @@ pub fn card<R>(
                         .max_rect(rect.shrink2(egui::vec2(12.0, 0.0)))
                         .layout(egui::Layout::left_to_right(egui::Align::Center)),
                 );
-                header.label(section_label(title));
+                let label = header.label(section_label(title));
+                if let Some(topic) = topic {
+                    label.help(topic);
+                }
                 header.with_layout(egui::Layout::right_to_left(egui::Align::Center), actions);
                 ui.painter().hline(
                     rect.x_range(),

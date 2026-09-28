@@ -12,8 +12,8 @@ use camcraft_core::dropcutter::DropCutter;
 use camcraft_core::linker::{ClearanceField, LinkParams, NoPart, Unchanging, link};
 use camcraft_core::ordering::order_passes;
 use camcraft_core::parallel::{ParallelParams, parallel_finish};
+use camcraft_core::pocket_clearing::{ClearingParams, pocket_clearing};
 use camcraft_core::reach::LevelReach;
-use camcraft_core::roughing::{RoughingParams, zlevel_rough};
 use camcraft_core::simadapt::sim_moves;
 use camcraft_core::tool::{Ball, Flat, ToolProfile};
 use camcraft_geom::contour::Region;
@@ -44,17 +44,20 @@ fn rough_then_finish_threading_stock_between_them() {
         EffectiveTool::new(&Flat::new(3.0).unwrap(), Allowance::isotropic(0.6).unwrap()).unwrap();
     let mut rough_reach = LevelReach::new(&mesh, &rough_tool, 0.05).unwrap();
 
-    let (rough_raw, rough_report) = zlevel_rough(
+    let (rough_raw, rough_report) = pocket_clearing(
         &mut rough_reach,
         &Region::rectangle(lo, hi),
+        None,
         stock.field(),
-        &RoughingParams {
+        rough_tool.base(),
+        &ClearingParams {
             stepdown: 2.0,
             stepover: 2.0,
             top: block_top,
             bottom: 0.0,
             feed: 1500.0,
             min_ring_length: 3.0,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -174,20 +177,23 @@ fn a_second_roughing_pass_only_targets_the_leftovers() {
 
     let tool = EffectiveTool::new(&Flat::new(3.0).unwrap(), Allowance::none()).unwrap();
     let mut reach = LevelReach::new(&mesh, &tool, 0.05).unwrap();
-    let params = RoughingParams {
+    let params = ClearingParams {
         stepdown: 2.0,
         stepover: 2.5,
         top: 8.0,
         bottom: 0.0,
         feed: 1500.0,
         min_ring_length: 3.0,
+        ..Default::default()
     };
 
     let mut stock = Stock::block(lo, hi, 8.0, -2.0, PITCH).unwrap();
-    let (first, first_report) = zlevel_rough(
+    let (first, first_report) = pocket_clearing(
         &mut reach,
         &Region::rectangle(lo, hi),
+        None,
         stock.field(),
+        tool.base(),
         &params,
     )
     .unwrap();
@@ -204,10 +210,12 @@ fn a_second_roughing_pass_only_targets_the_leftovers() {
     .unwrap();
     stock.apply(&sim_moves(&linked), &tool);
 
-    let (_, second_report) = zlevel_rough(
+    let (_, second_report) = pocket_clearing(
         &mut reach,
         &Region::rectangle(lo, hi),
+        None,
         stock.field(),
+        tool.base(),
         &params,
     )
     .unwrap();

@@ -795,7 +795,7 @@ stocks = ["block"]
 
 [[setup.operation]]
 name = "rough"
-strategy = "zlevel-rough"
+strategy = "pocket-clearing"
 passes = {{ stepdown = 2.0 }}
 min_ring_length = 3.0
 tool = "rough-6-flat"
@@ -889,7 +889,7 @@ stocks = ["block"]
 
 [[setup.operation]]
 name = "rough"
-strategy = "zlevel-rough"
+strategy = "pocket-clearing"
 passes = {{ stepdown = 2.0 }}
 min_ring_length = 3.0
 tool = "rough-6-flat"
@@ -1121,7 +1121,7 @@ stocks = ["block"]
 
 [[setup.operation]]
 name = "rough"
-strategy = "zlevel-rough"
+strategy = "pocket-clearing"
 tool = "eighth-flat"
 passes = {{ stepdown = 3.0, feed = 1500.0, stepover = 1.9 }}
 "#,
@@ -1226,13 +1226,13 @@ stocks = ["sheet"]
 
 [[setup.operation]]
 name = "surface"
-strategy = "zlevel-rough"
+strategy = "pocket-clearing"
 tool = "half-inch"
 passes = {{ stepdown = 20.0, stepover = 6.0, feed = 5000.0 }}
 
 [[setup.operation]]
 name = "detail"
-strategy = "zlevel-rough"
+strategy = "pocket-clearing"
 tool = "sixteenth"
 heights = {{ top = {{ ref = "stock-top", offset = 3.0 }}, bottom = {{ ref = "stock-top", offset = 1.0 }} }}
 passes = {{ stepdown = 1.0, stepover = 0.8, feed = 1500.0 }}
@@ -1289,4 +1289,112 @@ passes = {{ stepdown = 1.0, stepover = 0.8, feed = 1500.0 }}
         .focus_for_snapshot(glam::DVec3::new(62.0, 29.0, 0.0), 2600.0);
     h.run_steps(3);
     shoot(&mut h, "sheet_whole");
+}
+
+/// Every topic's popup laid out side by side, those with a sketch first, to
+/// look over together; then a real one, shown on hovering a field itself
+/// rather than its label, as Fusion shows it.
+#[test]
+#[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
+fn help_popups() {
+    use crate::help::{self, Topic, topics};
+    use crate::ui::widgets;
+
+    let fonts_loaded = |ui: &egui::Ui| {
+        ui.ctx()
+            .fonts(|f| f.definitions().font_data.contains_key("plex"))
+    };
+    let all: Vec<&Topic> = [
+        topics::feeds::ALL,
+        topics::geometry::ALL,
+        topics::heights::ALL,
+        topics::passes::ALL,
+        topics::linking::ALL,
+        topics::library::ALL,
+        topics::stock::ALL,
+        topics::setup::ALL,
+        topics::model::ALL,
+        topics::app::ALL,
+    ]
+    .concat();
+    let (drawn, told): (Vec<&Topic>, Vec<&Topic>) =
+        all.into_iter().partition(|t| t.figure.is_some());
+    let pages = drawn
+        .chunks(16)
+        .map(|c| (4, c))
+        .chain(told.chunks(40).map(|c| (4, c)));
+    for (page, (columns, chunk)) in pages.enumerate() {
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1240.0, 1500.0))
+            .wgpu()
+            .build_ui(|ui| {
+                if !fonts_loaded(ui) {
+                    return;
+                }
+                egui::Grid::new("popups")
+                    .spacing([12.0, 12.0])
+                    .show(ui, |ui| {
+                        for (i, t) in chunk.iter().enumerate() {
+                            ui.vertical(|ui| help::show_in_place(ui, t));
+                            if (i + 1) % columns == 0 {
+                                ui.end_row();
+                            }
+                        }
+                    });
+            });
+        crate::ui::theme::apply(&h.ctx);
+        h.run_steps(3);
+        match h.render() {
+            Ok(image) => {
+                let path = output_dir().join(format!("help-popups-{page}.png"));
+                image.save(&path).unwrap();
+                println!("wrote {}", path.display());
+            }
+            Err(err) => println!("skipped help popups: could not render ({err})"),
+        }
+    }
+
+    // A form's field, hovered over the field rather than its label.
+    struct Form {
+        stepover: f64,
+        stepdown: f64,
+        field: egui::Rect,
+    }
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(560.0, 420.0))
+        .wgpu()
+        .build_ui_state(
+            |ui, f: &mut Form| {
+                if !fonts_loaded(ui) {
+                    return;
+                }
+                ui.add_space(24.0);
+                widgets::form(ui, "help-form", |ui| {
+                    widgets::row(ui, &topics::passes::STEPOVER, |ui| {
+                        f.field = ui.add(egui::DragValue::new(&mut f.stepover)).rect;
+                    });
+                    widgets::row(ui, &topics::passes::STEPDOWN, |ui| {
+                        ui.add(egui::DragValue::new(&mut f.stepdown));
+                    });
+                });
+            },
+            Form {
+                stepover: 3.0,
+                stepdown: 2.0,
+                field: egui::Rect::NOTHING,
+            },
+        );
+    crate::ui::theme::apply(&h.ctx);
+    h.run_steps(3);
+    let at = h.state().field.center();
+    h.input_mut().events.push(egui::Event::PointerMoved(at));
+    h.run_steps(90);
+    match h.render() {
+        Ok(image) => {
+            let path = output_dir().join("help-hover-field.png");
+            image.save(&path).unwrap();
+            println!("wrote {}", path.display());
+        }
+        Err(err) => println!("skipped help hover: could not render ({err})"),
+    }
 }

@@ -72,14 +72,24 @@ Fusion's post does. The lego contour posts block for block as Fusion's does.
    from the model's topology, whose round edges are circles through the
    tessellation's points, which lie on the B-rep's curves; OpenCascade's own
    `gp_Circ` is not read yet. Ellipses and splines are followed by lines.
-3. **More strategies**: waterline. Adaptive clearing, as Fusion's 3D Adaptive,
+3. **More strategies**: waterline, which scallop leaves the walls to. Scallop,
+   as Fusion's, is done
+   ([decision 0009](docs/decisions/0009-scallop-distance-field.md)), without
+   yet a limit on its stepovers, rest machining, smoothing or a contact point
+   boundary; it measures along where the tool's tip rides, not the part itself.
+   Adaptive clearing, as Fusion's 3D Adaptive,
    is done ([decision 0007](docs/decisions/0007-adaptive-clearing.md)), without
    yet rest material from earlier operations, fine stepdown, shallow areas or
-   slot clearing; its stay-down links are straight. Facing, as Fusion's Face,
-   is done. 2D profile and pocket are
-   done ([decision 0005](docs/decisions/0005-2d-profile-and-pocket.md)), with
-   tabs (on profiles, as Fusion's on a 2D contour) and a profile's horizontal
-   leads; they lack finishing passes, a pocket's leads, and picked entry points
+   slot clearing; its stay-down links are straight. Pocket clearing, as
+   Fusion's 3D Pocket Clearing, is Z-level roughing renamed, now cutting each
+   level's rings from the middle out, the ring along the walls last, climb or
+   conventional, with flat areas
+   ([decision 0008](docs/decisions/0008-pocket-clearing.md)); it has no corner
+   smoothing or finishing pass. Facing, as Fusion's Face, is done. 2D profile
+   and pocket are done
+   ([decision 0005](docs/decisions/0005-2d-profile-and-pocket.md)), with tabs
+   (on profiles, as Fusion's on a 2D contour) and a profile's horizontal leads;
+   they lack finishing passes, a pocket's leads, and picked entry points
    and tab positions. Stock to leave is Fusion's, radial and axial, negative
    included, on every operation; which shared settings a strategy uses is one
    table (`StrategySpec::uses`), for a new strategy to fill in.

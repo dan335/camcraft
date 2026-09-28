@@ -26,6 +26,7 @@ pub use operation::{OperationTab, height_planes};
 use eframe::egui;
 
 use crate::document::{Document, Level, Selection};
+use crate::help::topics::app;
 use crate::picking::slots::{Kind, Shown, Slot};
 use crate::tools::drawing::kind_name;
 use crate::ui::measure::Measure;
@@ -209,9 +210,9 @@ fn header(
     ui.add_space(theme::SPACE_2);
     let mut rename = None;
     form(ui, id.with("header"), |ui| {
-        widgets::field_label(ui, "Name");
-        rename = name_field(ui, id.with("name"), current, (doc, what));
-        ui.end_row();
+        rename = widgets::row(ui, &app::NAME, |ui| {
+            name_field(ui, id.with("name"), current, (doc, what))
+        });
     });
     rename
 }
@@ -277,18 +278,15 @@ fn job(ui: &mut egui::Ui, doc: &mut Document, m: Measure) {
     ui.label(widgets::section_label("Job"));
     ui.add_space(theme::SPACE_2);
     form(ui, "job", |ui| {
-        widgets::field_label(ui, "File");
+        widgets::key_label(ui, "File");
         match &doc.path {
             Some(p) => ui.label(widgets::mono(p.display().to_string(), theme::TEXT_SM)),
             None => hint(ui, "not saved yet"),
         };
         ui.end_row();
-        widgets::field_label(ui, "Tolerance");
-        m.length_field(ui, &mut doc.job.tolerance, 0.001, 10.0, "")
-            .on_hover_text(
-                "How closely paths follow the part; STEP models are meshed to a quarter of it.",
-            );
-        ui.end_row();
+        widgets::row(ui, &app::TOLERANCE, |ui| {
+            m.length_field(ui, &mut doc.job.tolerance, 0.001, 10.0, "");
+        });
     });
     if doc.job.tolerance < 0.001 {
         doc.job.tolerance = 0.001;

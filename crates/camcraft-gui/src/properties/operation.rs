@@ -6,7 +6,8 @@ use camcraft_core::features;
 use camcraft_core::job::{
     self, AdaptiveDirection, Boundary, Containment, Depths, Entry, FaceDirection, FeatureRef,
     Height, HeightContext, HeightRef, Leads, Leave, MachiningBoundary, Operation, Outline,
-    ProfileSide, Retraction, StockToLeave, StrategySpec, TabShape, Tabs,
+    ProfileSide, Retraction, ScallopDirection, ScallopOrder, StockToLeave, StrategySpec, TabShape,
+    Tabs,
 };
 use camcraft_core::setup::Bodies;
 use eframe::egui;
@@ -14,6 +15,8 @@ use glam::DVec2;
 
 use super::{Picks, PropAction, cannot_generate, header};
 use crate::document::{Document, Level, Selection};
+use crate::help::Help;
+use crate::help::topics::{feeds, geometry as geo, heights as ht, linking as link, passes as pass};
 use crate::picking::slots::{Kind, Slot};
 use crate::tools::drawing::paint_tool;
 use crate::tools::editor::{chip_load_row, surface_speed_row};
@@ -77,7 +80,7 @@ pub(super) fn show(
     cannot_generate(ui, doc, setup);
     let op = doc.operation_mut(setup, index)?;
     form(ui, id.with("strategy"), |ui| {
-        widgets::field_label(ui, "Strategy");
+        widgets::key_label(ui, "Strategy");
         ui.label(strategy_name(&op.strategy));
         ui.end_row();
     });
@@ -173,7 +176,8 @@ fn rename(doc: &mut Document, setup: &str, index: usize, to: &str, taken: &[Stri
 fn strategy_name(s: &StrategySpec) -> &'static str {
     match s {
         StrategySpec::Parallel { .. } => "parallel",
-        StrategySpec::ZlevelRough { .. } => "z-level rough",
+        StrategySpec::Scallop { .. } => "scallop",
+        StrategySpec::PocketClearing { .. } => "pocket clearing",
         StrategySpec::Adaptive { .. } => "adaptive clearing",
         StrategySpec::Profile { .. } => "2D profile",
         StrategySpec::Pocket { .. } => "2D pocket",
@@ -195,8 +199,7 @@ fn tool(
     actions: &mut Vec<PropAction>,
 ) {
     form(ui, "op-tool", |ui| {
-        widgets::field_label(ui, "Tool");
-        ui.horizontal(|ui| {
+        widgets::row(ui, &feeds::TOOL, |ui| {
             match tool_name {
                 Some(t) => ui.strong(t),
                 None => ui.colored_label(widgets::Level::Warn.color(), "no tool yet"),
@@ -205,7 +208,6 @@ fn tool(
                 actions.push(PropAction::PickTool(setup.to_string(), index));
             }
         });
-        ui.end_row();
         if let Some(t) = tool_name {
             preset_row(ui, doc, setup, index, t);
         }
@@ -255,8 +257,7 @@ fn feed_speed(
     op: &mut Operation,
     (tool_rpm, diameter, flutes): (u32, f64, Option<u32>),
 ) {
-    widgets::field_label(ui, "Spindle");
-    ui.horizontal(|ui| {
+    widgets::row(ui, &feeds::SPINDLE, |ui| {
         let absent = format!("the tool's, {tool_rpm} rev/min");
         widgets::optional(ui, &mut op.passes.rpm, tool_rpm, &absent, |ui, rpm| {
             ui.add(
@@ -266,7 +267,6 @@ fn feed_speed(
             );
         });
     });
-    ui.end_row();
     // What the spindle turns at, the operation's own or the tool's.
     let turning = op.passes.rpm.or(Some(tool_rpm));
     let mut rpm = turning;
@@ -276,18 +276,18 @@ fn feed_speed(
     }
     // Drilling feeds its holes at the plunge feed: it has no cutting feed.
     if !matches!(op.strategy, StrategySpec::Drill { .. }) {
-        widgets::field_label(ui, "Cutting feed");
-        m.feed_field(ui, &mut op.passes.feed, 50_000.0);
-        ui.end_row();
+        widgets::row(ui, &feeds::CUTTING_FEED, |ui| {
+            m.feed_field(ui, &mut op.passes.feed, 50_000.0);
+        });
         let mut feed = Some(op.passes.feed);
         chip_load_row(ui, &mut feed, op.passes.rpm.or(Some(tool_rpm)), flutes, m);
         if let Some(f) = feed {
             op.passes.feed = f;
         }
     }
-    widgets::field_label(ui, "Plunge feed");
-    m.feed_field(ui, &mut op.linking.plunge_feed, 50_000.0);
-    ui.end_row();
+    widgets::row(ui, &feeds::PLUNGE_FEED, |ui| {
+        m.feed_field(ui, &mut op.linking.plunge_feed, 50_000.0);
+    });
 }
 
 /// Which of the tool's presets the operation's values came from: a row of the
@@ -303,23 +303,23 @@ fn preset_row(ui: &mut egui::Ui, doc: &mut Document, setup: &str, index: usize, 
         return;
     };
     let none = "none";
-    widgets::field_label(ui, "Preset");
-    egui::ComboBox::from_id_salt(("op-preset", setup, index))
-        .selected_text(op.preset.as_deref().unwrap_or(none))
-        .show_ui(ui, |ui| {
-            for p in &presets {
-                if ui
-                    .selectable_label(op.preset.as_deref() == Some(p.name.as_str()), &p.name)
-                    .clicked()
-                {
-                    op.apply_preset(p);
+    widgets::row(ui, &feeds::PRESET, |ui| {
+        egui::ComboBox::from_id_salt(("op-preset", setup, index))
+            .selected_text(op.preset.as_deref().unwrap_or(none))
+            .show_ui(ui, |ui| {
+                for p in &presets {
+                    if ui
+                        .selectable_label(op.preset.as_deref() == Some(p.name.as_str()), &p.name)
+                        .clicked()
+                    {
+                        op.apply_preset(p);
+                    }
                 }
-            }
-            if ui.selectable_label(op.preset.is_none(), none).clicked() {
-                op.preset = None;
-            }
-        });
-    ui.end_row();
+                if ui.selectable_label(op.preset.is_none(), none).clicked() {
+                    op.preset = None;
+                }
+            });
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -465,34 +465,38 @@ fn legend(ui: &mut egui::Ui, items: &[(Swatch, &str)]) {
 fn outline_form(ui: &mut egui::Ui, op: &mut Operation) {
     let pocket = matches!(op.strategy, StrategySpec::Pocket { .. });
     form(ui, "outline", |ui| {
-        widgets::field_label(ui, if pocket { "Pocket" } else { "Contour" });
         let name = |o: Outline| match o {
             Outline::Silhouette => "the part's silhouette",
             Outline::Selection => "picked faces and edges",
         };
-        egui::ComboBox::from_id_salt("outline")
-            .selected_text(name(op.outline))
-            .show_ui(ui, |ui| {
-                for o in [Outline::Silhouette, Outline::Selection] {
-                    ui.selectable_value(&mut op.outline, o, name(o));
-                }
-            });
-        ui.end_row();
+        widgets::row(
+            ui,
+            if pocket { &geo::POCKET } else { &geo::CONTOUR },
+            |ui| {
+                egui::ComboBox::from_id_salt("outline")
+                    .selected_text(name(op.outline))
+                    .show_ui(ui, |ui| {
+                        for o in [Outline::Silhouette, Outline::Selection] {
+                            ui.selectable_value(&mut op.outline, o, name(o));
+                        }
+                    });
+            },
+        );
         if let StrategySpec::Profile { side, .. } = &mut op.strategy {
-            widgets::field_label(ui, "Cut");
             let name = |s: ProfileSide| match s {
                 ProfileSide::Outside => "outside the contour",
                 ProfileSide::Inside => "inside the contour",
                 ProfileSide::On => "on the contour",
             };
-            egui::ComboBox::from_id_salt("side")
-                .selected_text(name(*side))
-                .show_ui(ui, |ui| {
-                    for s in [ProfileSide::Outside, ProfileSide::Inside, ProfileSide::On] {
-                        ui.selectable_value(side, s, name(s));
-                    }
-                });
-            ui.end_row();
+            widgets::row(ui, &geo::SIDE, |ui| {
+                egui::ComboBox::from_id_salt("side")
+                    .selected_text(name(*side))
+                    .show_ui(ui, |ui| {
+                        for s in [ProfileSide::Outside, ProfileSide::Inside, ProfileSide::On] {
+                            ui.selectable_value(side, s, name(s));
+                        }
+                    });
+            });
         }
     });
     // The side is the area's, not each loop's: a part's holes are cut from
@@ -520,10 +524,9 @@ fn outline_form(ui: &mut egui::Ui, op: &mut Operation) {
 fn face_form(ui: &mut egui::Ui, m: Measure, op: &mut Operation, picks: Picks<'_>) {
     if let StrategySpec::Face { stock_offset, .. } = &mut op.strategy {
         form(ui, "face", |ui| {
-            widgets::field_label(ui, "Stock offset");
-            m.signed_length_field(ui, stock_offset, 0.1, 1000.0, "")
-                .on_hover_text("How far past the stock's edges is faced");
-            ui.end_row();
+            widgets::row(ui, &geo::STOCK_OFFSET, |ui| {
+                m.signed_length_field(ui, stock_offset, 0.1, 1000.0, "");
+            });
         });
     }
     ui.add_space(theme::SPACE_3);
@@ -546,49 +549,49 @@ fn face_form(ui: &mut egui::Ui, m: Measure, op: &mut Operation, picks: Picks<'_>
 fn boundary_form(ui: &mut egui::Ui, m: Measure, g: &mut MachiningBoundary, diameter: Option<f64>) {
     let before = (g.kind, g.containment);
     form(ui, "geometry", |ui| {
-        widgets::field_label(ui, "Boundary");
         let name = |b: Boundary| match b {
             Boundary::Stock => "the stock",
             Boundary::BoundingBox => "the part's bounding box",
             Boundary::Silhouette => "the part's silhouette",
             Boundary::Selection => "picked faces and edges",
         };
-        egui::ComboBox::from_id_salt("boundary")
-            .selected_text(name(g.kind))
-            .show_ui(ui, |ui| {
-                for b in [
-                    Boundary::Stock,
-                    Boundary::BoundingBox,
-                    Boundary::Silhouette,
-                    Boundary::Selection,
-                ] {
-                    ui.selectable_value(&mut g.kind, b, name(b));
-                }
-            });
-        ui.end_row();
+        widgets::row(ui, &geo::BOUNDARY, |ui| {
+            egui::ComboBox::from_id_salt("boundary")
+                .selected_text(name(g.kind))
+                .show_ui(ui, |ui| {
+                    for b in [
+                        Boundary::Stock,
+                        Boundary::BoundingBox,
+                        Boundary::Silhouette,
+                        Boundary::Selection,
+                    ] {
+                        ui.selectable_value(&mut g.kind, b, name(b));
+                    }
+                });
+        });
         if g.kind != Boundary::Stock {
-            widgets::field_label(ui, "Tool");
             let name = |c: Containment| match c {
                 Containment::Center => "centre inside the boundary",
                 Containment::Inside => "all of it inside",
                 Containment::Outside => "reaching in from outside",
             };
-            egui::ComboBox::from_id_salt("containment")
-                .selected_text(name(g.containment))
-                .show_ui(ui, |ui| {
-                    for c in [
-                        Containment::Center,
-                        Containment::Inside,
-                        Containment::Outside,
-                    ] {
-                        ui.selectable_value(&mut g.containment, c, name(c));
-                    }
-                });
-            ui.end_row();
+            widgets::row(ui, &geo::CONTAINMENT, |ui| {
+                egui::ComboBox::from_id_salt("containment")
+                    .selected_text(name(g.containment))
+                    .show_ui(ui, |ui| {
+                        for c in [
+                            Containment::Center,
+                            Containment::Inside,
+                            Containment::Outside,
+                        ] {
+                            ui.selectable_value(&mut g.containment, c, name(c));
+                        }
+                    });
+            });
         }
-        widgets::field_label(ui, "Additional offset");
-        m.signed_length_field(ui, &mut g.margin, 0.1, 1000.0, "");
-        ui.end_row();
+        widgets::row(ui, &geo::ADDITIONAL_OFFSET, |ui| {
+            m.signed_length_field(ui, &mut g.margin, 0.1, 1000.0, "");
+        });
     });
     // Reaching in from outside the part's own outline, the tool only touches its
     // walls: it needs room past them to clear anything. A tool's width is a
@@ -626,7 +629,7 @@ fn pick_cards(
     picks: Picks<'_>,
     actions: &mut Vec<PropAction>,
 ) {
-    for (kind, title) in [(Kind::Face, "Faces"), (Kind::Edge, "Edges")] {
+    for (kind, topic) in [(Kind::Face, &geo::FACES), (Kind::Edge, &geo::EDGES)] {
         let slot = match kind {
             Kind::Face => Slot::Faces {
                 setup: setup.to_string(),
@@ -660,9 +663,9 @@ fn pick_cards(
         let mut clear = false;
         let mut asked = None;
         let any = !list.is_empty();
-        widgets::card(
+        widgets::topic_card(
             ui,
-            Some(title),
+            topic,
             |ui| {
                 if picks.armed == Some(&slot) {
                     if widgets::button(ui, Variant::Primary, Size::Sm, None, "Done").clicked() {
@@ -766,13 +769,13 @@ fn default_bottom(strategy: &StrategySpec) -> HeightRef {
 /// Which of Top and Bottom the strategy cuts to: the others are not asked for.
 fn uses_top_bottom(strategy: &StrategySpec) -> (bool, bool) {
     match strategy {
-        StrategySpec::ZlevelRough { .. }
+        StrategySpec::PocketClearing { .. }
         | StrategySpec::Adaptive { .. }
         | StrategySpec::Profile { .. }
         | StrategySpec::Pocket { .. }
         | StrategySpec::Face { .. } => (true, true),
         StrategySpec::Drill { .. } => (false, true),
-        StrategySpec::Parallel { .. } => (false, false),
+        StrategySpec::Parallel { .. } | StrategySpec::Scallop { .. } => (false, false),
     }
 }
 
@@ -793,30 +796,30 @@ fn heights(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
         default_bottom(&op.strategy)
     };
     form(ui, "heights", |ui| {
-        widgets::field_label(ui, "Clearance");
-        height_field(ui, m, "clearance", &mut op.heights.clearance, false);
-        ui.end_row();
+        widgets::row(ui, &ht::CLEARANCE, |ui| {
+            height_field(ui, m, "clearance", &mut op.heights.clearance, false);
+        });
         if op.strategy.uses().stay_down {
-            widgets::field_label(ui, "Retract");
-            height_field(ui, m, "retract", &mut op.heights.retract, false);
-            ui.end_row();
+            widgets::row(ui, &ht::RETRACT, |ui| {
+                height_field(ui, m, "retract", &mut op.heights.retract, false);
+            });
         }
         if top {
-            widgets::field_label(ui, "Top");
-            optional_height(
-                ui,
-                m,
-                "geo-top",
-                &mut op.heights.top,
-                HeightRef::StockTop,
-                picks,
-            );
-            ui.end_row();
+            widgets::row(ui, &ht::TOP, |ui| {
+                optional_height(
+                    ui,
+                    m,
+                    "geo-top",
+                    &mut op.heights.top,
+                    HeightRef::StockTop,
+                    picks,
+                );
+            });
         }
         if bottom {
-            widgets::field_label(ui, "Bottom");
-            optional_height(ui, m, "geo-bottom", &mut op.heights.bottom, unset, picks);
-            ui.end_row();
+            widgets::row(ui, &ht::BOTTOM, |ui| {
+                optional_height(ui, m, "geo-bottom", &mut op.heights.bottom, unset, picks);
+            });
         }
     });
     if let Some(why) = op.cannot_measure_from_picks() {
@@ -824,10 +827,10 @@ fn heights(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
     }
     ui.add_space(theme::SPACE_3);
     match op.strategy {
-        StrategySpec::Parallel { .. } => {
+        StrategySpec::Parallel { .. } | StrategySpec::Scallop { .. } => {
             hint(
                 ui,
-                "Parallel follows the part all the way down, so it has no Top or Bottom.",
+                "It follows the part all the way down, so it has no Top or Bottom.",
             );
         }
         StrategySpec::Drill { .. } => {
@@ -852,7 +855,7 @@ fn heights(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
                 "Without a Bottom, the stock is faced down to the part's top.",
             );
         }
-        StrategySpec::ZlevelRough { .. } | StrategySpec::Adaptive { .. } => {}
+        StrategySpec::PocketClearing { .. } | StrategySpec::Adaptive { .. } => {}
     }
     hint(
         ui,
@@ -957,26 +960,72 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave
     form(ui, "passes", |ui| {
         match &mut op.strategy {
             StrategySpec::Parallel { angle } => {
-                widgets::field_label(ui, "Pass angle");
-                ui.add(
-                    egui::DragValue::new(angle)
-                        .speed(1.0)
-                        .range(-360.0..=360.0)
-                        .suffix("°"),
-                );
-                ui.end_row();
+                widgets::row(ui, &pass::PASS_ANGLE, |ui| angle_field(ui, angle));
             }
-            StrategySpec::ZlevelRough { min_ring_length } => {
-                widgets::field_label(ui, "Shortest ring");
-                m.length_field(ui, min_ring_length, 0.1, 1000.0, "");
-                ui.end_row();
+            StrategySpec::Scallop {
+                direction,
+                order,
+                slope_from,
+                slope_to,
+            } => {
+                widgets::row(ui, &pass::DIRECTION_SCALLOP, |ui| {
+                    for (d, name) in [
+                        (ScallopDirection::BothWays, "both ways"),
+                        (ScallopDirection::Climb, "climb"),
+                        (ScallopDirection::Conventional, "conventional"),
+                    ] {
+                        ui.selectable_value(direction, d, name);
+                    }
+                });
+                widgets::row(ui, &pass::SCALLOP_ORDER, |ui| {
+                    ui.selectable_value(order, ScallopOrder::OutsideIn, "outside in");
+                    ui.selectable_value(order, ScallopOrder::InsideOut, "inside out");
+                });
+                widgets::row(ui, &pass::SLOPES, |ui| {
+                    ui.add(
+                        egui::DragValue::new(slope_from)
+                            .speed(1.0)
+                            .range(0.0..=89.0)
+                            .prefix("from ")
+                            .suffix("°"),
+                    );
+                    ui.add(
+                        egui::DragValue::new(slope_to)
+                            .speed(1.0)
+                            .range(1.0..=90.0)
+                            .prefix("to ")
+                            .suffix("°"),
+                    );
+                });
+                // A range the job would refuse is put right as it is set.
+                if *slope_from >= *slope_to {
+                    *slope_to = (*slope_from + 1.0).min(90.0);
+                    *slope_from = slope_from.min(*slope_to - 1.0);
+                }
+            }
+            StrategySpec::PocketClearing {
+                min_ring_length,
+                conventional,
+                flat_areas,
+            } => {
+                let mut climb = !*conventional;
+                widgets::row(ui, &pass::DIRECTION_2D, |ui| {
+                    ui.selectable_value(&mut climb, true, "climb");
+                    ui.selectable_value(&mut climb, false, "conventional");
+                });
+                *conventional = !climb;
+                widgets::row(ui, &pass::FLAT_AREAS, |ui| {
+                    ui.checkbox(flat_areas, "a level on each flat face");
+                });
+                widgets::row(ui, &pass::SHORTEST_RING, |ui| {
+                    m.length_field(ui, min_ring_length, 0.1, 1000.0, "");
+                });
             }
             StrategySpec::Adaptive {
                 direction,
                 flat_areas,
             } => {
-                widgets::field_label(ui, "Direction");
-                ui.horizontal(|ui| {
+                widgets::row(ui, &pass::DIRECTION_ADAPTIVE, |ui| {
                     for (d, name) in [
                         (AdaptiveDirection::Climb, "climb"),
                         (AdaptiveDirection::Conventional, "conventional"),
@@ -985,23 +1034,17 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave
                         ui.selectable_value(direction, d, name);
                     }
                 });
-                ui.end_row();
-                widgets::field_label(ui, "Flat areas");
-                ui.checkbox(flat_areas, "a level on each flat face")
-                    .on_hover_text(
-                        "Floors are left just the stock to leave, not a stepdown's terrace",
-                    );
-                ui.end_row();
+                widgets::row(ui, &pass::FLAT_AREAS, |ui| {
+                    ui.checkbox(flat_areas, "a level on each flat face");
+                });
             }
             StrategySpec::Profile { conventional, .. } | StrategySpec::Pocket { conventional } => {
-                widgets::field_label(ui, "Direction");
                 let mut climb = !*conventional;
-                ui.horizontal(|ui| {
+                widgets::row(ui, &pass::DIRECTION_2D, |ui| {
                     ui.selectable_value(&mut climb, true, "climb");
                     ui.selectable_value(&mut climb, false, "conventional");
                 });
                 *conventional = !climb;
-                ui.end_row();
             }
             StrategySpec::Face {
                 angle,
@@ -1009,16 +1052,8 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave
                 pass_extension,
                 ..
             } => {
-                widgets::field_label(ui, "Pass angle");
-                ui.add(
-                    egui::DragValue::new(angle)
-                        .speed(1.0)
-                        .range(-360.0..=360.0)
-                        .suffix("°"),
-                );
-                ui.end_row();
-                widgets::field_label(ui, "Direction");
-                ui.horizontal(|ui| {
+                widgets::row(ui, &pass::PASS_ANGLE, |ui| angle_field(ui, angle));
+                widgets::row(ui, &pass::DIRECTION_FACE, |ui| {
                     for (d, name) in [
                         (FaceDirection::BothWays, "both ways"),
                         (FaceDirection::Climb, "climb"),
@@ -1027,22 +1062,17 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave
                         ui.selectable_value(direction, d, name);
                     }
                 });
-                ui.end_row();
-                widgets::field_label(ui, "Pass extension");
-                m.length_field(ui, pass_extension, 0.1, 1000.0, "")
-                    .on_hover_text("How far each pass runs on once the tool is off the stock");
-                ui.end_row();
+                widgets::row(ui, &pass::PASS_EXTENSION, |ui| {
+                    m.length_field(ui, pass_extension, 0.1, 1000.0, "");
+                });
             }
             StrategySpec::Drill { peck, dwell } => {
-                widgets::field_label(ui, "Peck");
-                ui.horizontal(|ui| {
+                widgets::row(ui, &pass::PECK, |ui| {
                     widgets::optional(ui, peck, 2.0, "all the way at once", |ui, p| {
                         m.length_field(ui, p, 0.05, 100.0, "");
                     });
                 });
-                ui.end_row();
-                widgets::field_label(ui, "Dwell");
-                ui.horizontal(|ui| {
+                widgets::row(ui, &pass::DWELL, |ui| {
                     widgets::optional(ui, dwell, 0.5, "none", |ui, d| {
                         ui.add(
                             egui::DragValue::new(d)
@@ -1052,24 +1082,23 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave
                         );
                     });
                 });
-                ui.end_row();
             }
         }
         if uses.stepover {
             // Adaptive clearing's stepover is the width of cut it holds.
             if matches!(op.strategy, StrategySpec::Adaptive { .. }) {
-                widgets::field_label(ui, "Optimal load");
-                m.length_field(ui, &mut op.passes.stepover, 0.01, 100.0, "")
-                    .on_hover_text("The width of cut each pass is steered to hold");
+                widgets::row(ui, &pass::OPTIMAL_LOAD, |ui| {
+                    m.length_field(ui, &mut op.passes.stepover, 0.01, 100.0, "");
+                });
             } else {
-                widgets::field_label(ui, "Stepover");
-                m.length_field(ui, &mut op.passes.stepover, 0.05, 100.0, "");
+                widgets::row(ui, &pass::STEPOVER, |ui| {
+                    m.length_field(ui, &mut op.passes.stepover, 0.05, 100.0, "");
+                });
             }
-            ui.end_row();
         }
-        widgets::field_label(ui, "Deepest step cut");
-        m.length_field(ui, &mut op.passes.max_cut_step, 0.05, 50.0, "");
-        ui.end_row();
+        widgets::row(ui, &pass::DEEPEST_STEP, |ui| {
+            m.length_field(ui, &mut op.passes.max_cut_step, 0.05, 50.0, "");
+        });
     });
     if uses.depths != Depths::None {
         ui.add_space(theme::SPACE_4);
@@ -1097,6 +1126,16 @@ fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave
     }
 }
 
+/// The direction passes run, in degrees from X.
+fn angle_field(ui: &mut egui::Ui, angle: &mut f64) {
+    ui.add(
+        egui::DragValue::new(angle)
+            .speed(1.0)
+            .range(-360.0..=360.0)
+            .suffix("°"),
+    );
+}
+
 /// Multiple depths, as Fusion's Passes tab has them: ticked to cut in levels,
 /// then the deepest each may be. Unticked is the bottom in one pass. A strategy
 /// that always cuts in levels, as roughing does, cannot be unticked.
@@ -1108,6 +1147,7 @@ fn multiple_depths(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
             !(required && on),
             egui::Checkbox::new(&mut on, "Step down in levels"),
         )
+        .help(&pass::MULTIPLE_DEPTHS)
         .on_disabled_hover_text(format!(
             "{} always cuts in levels",
             strategy_name(&op.strategy)
@@ -1120,10 +1160,9 @@ fn multiple_depths(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
     };
     ui.add_space(theme::SPACE_2);
     form(ui, "multiple-depths", |ui| {
-        widgets::field_label(ui, "Stepdown");
-        m.length_field(ui, stepdown, 0.05, 100.0, "")
-            .on_hover_text("The deepest each level may be: they are spaced evenly");
-        ui.end_row();
+        widgets::row(ui, &pass::STEPDOWN, |ui| {
+            m.length_field(ui, stepdown, 0.05, 100.0, "");
+        });
     });
 }
 
@@ -1140,6 +1179,7 @@ fn stock_to_leave(
     let mut on = *stock != StockToLeave::default();
     if ui
         .checkbox(&mut on, "Leave stock for a finishing pass")
+        .help(&pass::STOCK_TO_LEAVE)
         .changed()
     {
         *stock = if on {
@@ -1158,13 +1198,13 @@ fn stock_to_leave(
     let before = *stock;
     form(ui, "stock-to-leave", |ui| {
         if leave == Leave::Both {
-            widgets::field_label(ui, "Walls");
-            m.wall_to_leave_field(ui, &mut stock.radial, least.radial, "");
-            ui.end_row();
+            widgets::row(ui, &pass::WALLS, |ui| {
+                m.wall_to_leave_field(ui, &mut stock.radial, least.radial, "");
+            });
         }
-        widgets::field_label(ui, "Floors");
-        m.floor_to_leave_field(ui, &mut stock.axial, least.axial, "");
-        ui.end_row();
+        widgets::row(ui, &pass::FLOORS, |ui| {
+            m.floor_to_leave_field(ui, &mut stock.axial, least.axial, "");
+        });
     });
     follow_radial(stock, before);
 }
@@ -1172,7 +1212,8 @@ fn stock_to_leave(
 /// Tabs left across the deepest cut to hold what it frees, and their size.
 fn tabs(ui: &mut egui::Ui, m: Measure, tabs: &mut Option<Tabs>) {
     let mut on = tabs.is_some();
-    ui.checkbox(&mut on, "Leave tabs to hold the part");
+    ui.checkbox(&mut on, "Leave tabs to hold the part")
+        .help(&pass::TABS);
     match (on, tabs.is_some()) {
         (true, false) => *tabs = Some(Tabs::default()),
         (false, true) => *tabs = None,
@@ -1183,31 +1224,28 @@ fn tabs(ui: &mut egui::Ui, m: Measure, tabs: &mut Option<Tabs>) {
     };
     ui.add_space(theme::SPACE_2);
     form(ui, "tabs", |ui| {
-        widgets::field_label(ui, "Shape");
         let name = |s: TabShape| match s {
             TabShape::Rectangular => "rectangular",
             TabShape::Triangular => "triangular: ramped, no plunge",
         };
-        egui::ComboBox::from_id_salt("tab-shape")
-            .selected_text(name(t.shape))
-            .show_ui(ui, |ui| {
-                for s in [TabShape::Rectangular, TabShape::Triangular] {
-                    ui.selectable_value(&mut t.shape, s, name(s));
-                }
-            });
-        ui.end_row();
-        widgets::field_label(ui, "Width");
-        m.length_field(ui, &mut t.width, 0.1, 1000.0, "")
-            .on_hover_text("Material left along the cut, at the tab's top");
-        ui.end_row();
-        widgets::field_label(ui, "Height");
-        m.length_field(ui, &mut t.height, 0.1, 1000.0, "")
-            .on_hover_text("How far above the bottom of the cut the tab's top is");
-        ui.end_row();
-        widgets::field_label(ui, "Spacing");
-        m.length_field(ui, &mut t.spacing, 1.0, 100_000.0, "about ")
-            .on_hover_text("About how far apart round each loop; at least two to a loop");
-        ui.end_row();
+        widgets::row(ui, &pass::TAB_SHAPE, |ui| {
+            egui::ComboBox::from_id_salt("tab-shape")
+                .selected_text(name(t.shape))
+                .show_ui(ui, |ui| {
+                    for s in [TabShape::Rectangular, TabShape::Triangular] {
+                        ui.selectable_value(&mut t.shape, s, name(s));
+                    }
+                });
+        });
+        widgets::row(ui, &pass::TAB_WIDTH, |ui| {
+            m.length_field(ui, &mut t.width, 0.1, 1000.0, "");
+        });
+        widgets::row(ui, &pass::TAB_HEIGHT, |ui| {
+            m.length_field(ui, &mut t.height, 0.1, 1000.0, "");
+        });
+        widgets::row(ui, &pass::TAB_SPACING, |ui| {
+            m.length_field(ui, &mut t.spacing, 1.0, 100_000.0, "about ");
+        });
     });
     hint(
         ui,
@@ -1220,45 +1258,38 @@ fn tabs(ui: &mut egui::Ui, m: Measure, tabs: &mut Option<Tabs>) {
 /// as Fusion's, and says what that comes to for the tool chosen.
 fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f64>) {
     let uses = op.strategy.uses();
-    // Parallel stays down over the part; the rest level by level.
-    let parallel = matches!(op.strategy, StrategySpec::Parallel { .. });
+    // Parallel and scallop stay down over the part; the rest level by level.
+    let parallel = matches!(
+        op.strategy,
+        StrategySpec::Parallel { .. } | StrategySpec::Scallop { .. }
+    );
     let of_tool = |part: f64, what: &str| match diameter {
         Some(d) => format!("{what}: {}", m.length(part * d, 2)),
         None => what.to_string(),
     };
     form(ui, "linking", |ui| {
-        widgets::field_label(ui, "Retract feed");
-        m.feed_field(ui, &mut op.linking.retract_feed, 50_000.0);
-        ui.end_row();
+        widgets::row(ui, &link::RETRACT_FEED, |ui| {
+            m.feed_field(ui, &mut op.linking.retract_feed, 50_000.0);
+        });
         if uses.stay_down {
-            widgets::field_label(ui, "Retraction");
             let name = |r: Retraction| match r {
                 Retraction::Minimum => "minimum, clear of the material",
                 Retraction::Full => "full, to the retract height",
             };
-            egui::ComboBox::from_id_salt("retraction")
-                .selected_text(name(op.linking.retraction))
-                .show_ui(ui, |ui| {
-                    for r in [Retraction::Minimum, Retraction::Full] {
-                        ui.selectable_value(&mut op.linking.retraction, r, name(r));
-                    }
-                })
-                .response
-                .on_hover_text(
-                    "How high the tool goes between cuts it does not stay down for: the \
-                     safe distance over the material, or the retract height",
-                );
-            ui.end_row();
+            widgets::row(ui, &link::RETRACTION, |ui| {
+                egui::ComboBox::from_id_salt("retraction")
+                    .selected_text(name(op.linking.retraction))
+                    .show_ui(ui, |ui| {
+                        for r in [Retraction::Minimum, Retraction::Full] {
+                            ui.selectable_value(&mut op.linking.retraction, r, name(r));
+                        }
+                    });
+            });
         }
-        widgets::field_label(ui, "Safe distance");
-        m.length_field(ui, &mut op.linking.safe_distance, 0.1, 1_000.0, "")
-            .on_hover_text(
-                "How far above the material the tool stops rapiding down and feeds, \
-                 and feeds up to on the way out",
-            );
-        ui.end_row();
+        widgets::row(ui, &link::SAFE_DISTANCE, |ui| {
+            m.length_field(ui, &mut op.linking.safe_distance, 0.1, 1_000.0, "");
+        });
         if uses.stay_down {
-            widgets::field_label(ui, "Stay down");
             let absent = if parallel {
                 format!("up to {}", m.length(50.0, 0))
             } else {
@@ -1269,176 +1300,137 @@ fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f
             } else {
                 5.0 * diameter.unwrap_or(6.0)
             };
-            ui.horizontal(|ui| {
+            widgets::row(ui, &link::STAY_DOWN, |ui| {
                 widgets::optional(ui, &mut op.linking.stay_down, start, &absent, |ui, v| {
-                    m.length_field(ui, v, 0.5, 10_000.0, "up to ")
-                        .on_hover_text(
-                            "Links this long or shorter are made without lifting; 0 always lifts",
-                        );
+                    m.length_field(ui, v, 0.5, 10_000.0, "up to ");
                 });
             });
-            ui.end_row();
         }
         if uses.lead_radius {
-            widgets::field_label(ui, "Lead radius");
             let absent = of_tool(0.1, "a tenth of the tool");
             let start = 0.1 * diameter.unwrap_or(6.0);
-            ui.horizontal(|ui| {
+            widgets::row(ui, &link::LEAD_RADIUS, |ui| {
                 widgets::optional(ui, &mut op.linking.lead_radius, start, &absent, |ui, v| {
-                    m.length_field(ui, v, 0.05, 100.0, "").on_hover_text(
-                        "The vertical arcs each pass is entered and left along; 0 for none",
-                    );
+                    m.length_field(ui, v, 0.05, 100.0, "");
                 });
             });
-            ui.end_row();
         }
         if uses.ramp {
-            widgets::field_label(ui, "Ramp angle");
-            ui.add(
-                egui::DragValue::new(&mut op.linking.ramp_angle)
-                    .speed(0.1)
-                    .range(0.1..=45.0)
-                    .suffix("°"),
-            )
-            .on_hover_text("How steeply the tool ramps down into material, along the pass");
-            ui.end_row();
-            widgets::field_label(ui, "Ramp feed");
+            widgets::row(ui, &link::RAMP_ANGLE, |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut op.linking.ramp_angle)
+                        .speed(0.1)
+                        .range(0.1..=45.0)
+                        .suffix("°"),
+                );
+            });
             let absent = format!(
                 "60% of cutting: {} {}",
                 m.feed_number(op.ramp_feed()),
                 m.feed_unit()
             );
             let start = op.ramp_feed();
-            ui.horizontal(|ui| {
+            widgets::row(ui, &link::RAMP_FEED, |ui| {
                 widgets::optional(ui, &mut op.linking.ramp_feed, start, &absent, |ui, v| {
                     m.feed_field(ui, v, 50_000.0);
                 });
             });
-            ui.end_row();
-            widgets::field_label(ui, "Most per lap");
             let stepdown = op.stepdown();
             let absent = match (stepdown, diameter) {
                 (Some(d), _) => format!("the stepdown: {}", m.length(d, 2)),
                 (None, _) => of_tool(1.0, "the tool's diameter"),
             };
             let start = stepdown.or(diameter).unwrap_or(6.0);
-            ui.horizontal(|ui| {
+            widgets::row(ui, &link::MOST_PER_LAP, |ui| {
                 widgets::optional(
                     ui,
                     &mut op.linking.ramp_stepdown,
                     start,
                     &absent,
                     |ui, v| {
-                        m.length_field(ui, v, 0.1, 1000.0, "").on_hover_text(
-                            "The most a helix, or a ramp round a ring, goes down in one lap",
-                        );
+                        m.length_field(ui, v, 0.1, 1000.0, "");
                     },
                 );
             });
-            ui.end_row();
         }
         if uses.entry {
-            widgets::field_label(ui, "Entry");
             let name = |e: Entry| match e {
                 Entry::Helix => "helix beside the lead",
                 Entry::Plunge => "plunge beside the lead",
                 Entry::Ramp => "ramp along the ring",
             };
             let mut entry = op.linking.entry.unwrap_or_default();
-            egui::ComboBox::from_id_salt("entry")
-                .selected_text(name(entry))
-                .show_ui(ui, |ui| {
-                    for e in [Entry::Helix, Entry::Plunge, Entry::Ramp] {
-                        ui.selectable_value(&mut entry, e, name(e));
-                    }
-                })
-                .response
-                .on_hover_text("How the tool goes down into material to start each ring");
+            widgets::row(ui, &link::ENTRY, |ui| {
+                egui::ComboBox::from_id_salt("entry")
+                    .selected_text(name(entry))
+                    .show_ui(ui, |ui| {
+                        for e in [Entry::Helix, Entry::Plunge, Entry::Ramp] {
+                            ui.selectable_value(&mut entry, e, name(e));
+                        }
+                    });
+            });
             // The default is written only when changed.
             op.linking.entry = (entry != Entry::default()).then_some(entry);
-            ui.end_row();
             if entry == Entry::Helix {
-                widgets::field_label(ui, "Helix diameter");
                 let absent = of_tool(0.9, "0.9 × the tool");
                 let start = 0.9 * diameter.unwrap_or(6.0);
-                ui.horizontal(|ui| {
+                widgets::row(ui, &link::HELIX_DIAMETER, |ui| {
                     widgets::optional(
                         ui,
                         &mut op.linking.helix_diameter,
                         start,
                         &absent,
                         |ui, v| {
-                            m.length_field(ui, v, 0.1, 1000.0, "").on_hover_text(
-                                "The circle the tool's centre goes round; smaller where the \
-                             waste has no room",
-                            );
+                            m.length_field(ui, v, 0.1, 1000.0, "");
                         },
                     );
                 });
-                ui.end_row();
             }
         }
         if uses.leads {
-            widgets::field_label(ui, "Leads");
             let mut on = op.linking.leads.is_some();
-            ui.checkbox(&mut on, "on and off each ring");
+            widgets::row(ui, &link::LEADS, |ui| {
+                ui.checkbox(&mut on, "on and off each ring");
+            });
             match (on, op.linking.leads.is_some()) {
                 (true, false) => op.linking.leads = Some(Leads::default()),
                 (false, true) => op.linking.leads = None,
                 _ => {}
             }
-            ui.end_row();
             if let Some(l) = &mut op.linking.leads {
                 let start = 0.1 * diameter.unwrap_or(6.0);
                 let tenth = of_tool(0.1, "a tenth of the tool");
-                let size = |ui: &mut egui::Ui, label: &str, v: &mut Option<f64>, tip: &str| {
-                    widgets::field_label(ui, label);
-                    ui.horizontal(|ui| {
+                for (topic, v) in [
+                    (&link::LEAD_VERTICAL, &mut l.vertical),
+                    (&link::LEAD_STRAIGHT, &mut l.straight),
+                    (&link::LEAD_ARC, &mut l.radius),
+                ] {
+                    widgets::row(ui, topic, |ui| {
                         widgets::optional(ui, v, start, &tenth, |ui, v| {
-                            m.length_field(ui, v, 0.05, 1000.0, "").on_hover_text(tip);
+                            m.length_field(ui, v, 0.05, 1000.0, "");
                         });
                     });
-                    ui.end_row();
-                };
-                size(
-                    ui,
-                    "Vertical radius",
-                    &mut l.vertical,
-                    "The arc down onto the lead and up off it; 0 for none",
-                );
-                size(
-                    ui,
-                    "Straight",
-                    &mut l.straight,
-                    "The straight before the level arc in and after it out; 0 for none",
-                );
-                size(
-                    ui,
-                    "Arc radius",
-                    &mut l.radius,
-                    "The level arc onto the ring; smaller where the waste has no room",
-                );
-                widgets::field_label(ui, "Arc sweep");
-                ui.add(
-                    egui::DragValue::new(&mut l.sweep)
-                        .speed(1.0)
-                        .range(1.0..=180.0)
-                        .suffix("°"),
-                )
-                .on_hover_text("How far round the level arc turns");
-                ui.end_row();
+                }
+                widgets::row(ui, &link::LEAD_SWEEP, |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut l.sweep)
+                            .speed(1.0)
+                            .range(1.0..=180.0)
+                            .suffix("°"),
+                    );
+                });
             }
         }
         if uses.reorder {
-            widgets::field_label(ui, "Reorder passes");
-            ui.checkbox(&mut op.linking.reorder, "to shorten travel");
-            ui.end_row();
-            widgets::field_label(ui, "Reverse passes");
-            ui.checkbox(
-                &mut op.linking.allow_reverse,
-                "while reordering (changes climb)",
-            );
-            ui.end_row();
+            widgets::row(ui, &link::REORDER, |ui| {
+                ui.checkbox(&mut op.linking.reorder, "to shorten travel");
+            });
+            widgets::row(ui, &link::REVERSE, |ui| {
+                ui.checkbox(
+                    &mut op.linking.allow_reverse,
+                    "while reordering (changes climb)",
+                );
+            });
         }
     });
 }

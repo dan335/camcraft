@@ -6,6 +6,8 @@ use camcraft_core::job::{Along, BoxOf, Origin};
 use eframe::egui;
 
 use super::{Picks, PropAction};
+use crate::help::Help;
+use crate::help::topics::setup as topics;
 use crate::picking::describe::describe_box_point;
 use crate::picking::slots::Slot;
 use crate::ui::measure::Measure;
@@ -92,7 +94,7 @@ pub(super) fn show(
                                 (Along::Center, "Middle"),
                                 (Along::Min, "Bottom"),
                             ] {
-                                ui.radio_value(z, a, label);
+                                ui.radio_value(z, a, label).help(&topics::WORK_ZERO_HEIGHT);
                             }
                         });
                     });
@@ -122,7 +124,7 @@ fn on_row(ui: &mut egui::Ui, origin: &mut Origin) {
     let on = On::of(origin);
     let offset = origin.offset();
     ui.horizontal(|ui| {
-        widgets::field_label(ui, "On");
+        widgets::field_label(ui, &topics::WORK_ZERO_ON);
         egui::ComboBox::from_id_salt("origin-on")
             .selected_text(on.name())
             .show_ui(ui, |ui| {
@@ -152,7 +154,9 @@ fn on_row(ui: &mut egui::Ui, origin: &mut Origin) {
                         };
                     }
                 }
-            });
+            })
+            .response
+            .help(&topics::WORK_ZERO_ON);
     });
 }
 
@@ -231,9 +235,7 @@ fn box_grid(ui: &mut egui::Ui, x: &mut Along, y: &mut Along) {
         small,
         faint,
     );
-    if response.hovered() {
-        response.on_hover_text("Where the work zero sits, looking down on the part");
-    }
+    response.help(&topics::WORK_ZERO_POINT);
 }
 
 /// A point picked on the part: what it is, or why it cannot be found, and a way
@@ -289,9 +291,9 @@ fn offset(ui: &mut egui::Ui, m: Measure, origin: &mut Origin) {
         .body(|ui| {
             form(ui, "work-zero-offset-fields", |ui| {
                 for (label, v) in ["X", "Y", "Z"].into_iter().zip(offset.iter_mut()) {
-                    widgets::field_label(ui, label);
-                    m.signed_length_field(ui, v, 0.1, 10_000.0, "");
-                    ui.end_row();
+                    widgets::row_as(ui, label, &topics::WORK_ZERO_OFFSET, |ui| {
+                        m.signed_length_field(ui, v, 0.1, 10_000.0, "");
+                    });
                 }
             });
         });

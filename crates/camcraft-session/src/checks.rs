@@ -23,6 +23,7 @@
 use camcraft_core::allowance::{Allowance, EffectiveTool};
 use camcraft_core::dropcutter::{DropCutter, DropTest};
 use camcraft_core::job::Job;
+use camcraft_core::parallel::ParallelReport;
 use camcraft_core::run::{OperationResult, StrategyDetail};
 use camcraft_core::tool::ToolProfile;
 use camcraft_core::toolpath::{MoveRole, PLUNGE_RATIO, Toolpath};
@@ -385,39 +386,44 @@ fn operation_findings(
 
     // Advisories.
     match &op.detail {
-        StrategyDetail::Parallel(r) => {
-            if r.refinement_limited > 0 {
+        StrategyDetail::Parallel(r) => sampling(r, &mut out),
+        StrategyDetail::Scallop(r) => {
+            sampling(&r.sweep, &mut out);
+            if r.passes == 0 {
                 out.push(finding(
                     Level::Warn,
-                    "CC201",
-                    format!("{} span(s) hit the refinement limit", r.refinement_limited),
-                    "the path is coarser than the requested tolerance".into(),
+                    "CC209",
+                    "scallop found nothing to finish".into(),
+                    "nothing within the boundary and the slopes asked for".into(),
                 ));
             }
-            if r.discontinuities > 0 {
+            if r.coarsened {
                 out.push(finding(
-                    Level::Note,
-                    "CC203",
-                    format!(
-                        "{} span(s) stopped at a surface discontinuity",
-                        r.discontinuities
-                    ),
-                    "expected wherever the part has vertical walls".into(),
+                    Level::Warn,
+                    "CC210",
+                    format!("scallop's grid coarsened to {:.3} mm", r.pitch),
+                    "to stay within its budget: the passes are placed less exactly; keep it to                      a boundary"
+                        .into(),
                 ));
             }
-            if r.wall_breaks > 0 {
+            if r.unreached > 0 {
+                out.push(finding(
+                    Level::Warn,
+                    "CC212",
+                    format!("{} point(s) not reached from the boundary", r.unreached),
+                    "and not finished".into(),
+                ));
+            }
+            if r.too_steep > 0 {
                 out.push(finding(
                     Level::Note,
-                    "CC204",
-                    format!(
-                        "{} pass(es) broken at a wall or a steep face",
-                        r.wall_breaks
-                    ),
-                    "each a plunge turned into a retract and a controlled re-entry".into(),
+                    "CC211",
+                    format!("{} stretch(es) too steep for scallop left", r.too_steep),
+                    "walls and faces steeper than a plunge: for a waterline pass".into(),
                 ));
             }
         }
-        StrategyDetail::ZlevelRough(r) => {
+        StrategyDetail::PocketClearing(r) => {
             if r.rings == 0 {
                 out.push(finding(
                     Level::Warn,
@@ -565,6 +571,40 @@ fn thousands(n: u64) -> String {
         out.push(c);
     }
     out
+}
+
+/// What sampling a pass on the part found: parallel finishing's, and scallop's.
+fn sampling(r: &ParallelReport, out: &mut Vec<Finding>) {
+    if r.refinement_limited > 0 {
+        out.push(finding(
+            Level::Warn,
+            "CC201",
+            format!("{} span(s) hit the refinement limit", r.refinement_limited),
+            "the path is coarser than the requested tolerance".into(),
+        ));
+    }
+    if r.discontinuities > 0 {
+        out.push(finding(
+            Level::Note,
+            "CC203",
+            format!(
+                "{} span(s) stopped at a surface discontinuity",
+                r.discontinuities
+            ),
+            "expected wherever the part has vertical walls".into(),
+        ));
+    }
+    if r.wall_breaks > 0 {
+        out.push(finding(
+            Level::Note,
+            "CC204",
+            format!(
+                "{} pass(es) broken at a wall or a steep face",
+                r.wall_breaks
+            ),
+            "each a plunge turned into a retract and a controlled re-entry".into(),
+        ));
+    }
 }
 
 #[cfg(test)]

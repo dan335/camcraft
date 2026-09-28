@@ -67,9 +67,20 @@ impl<'a> DropCutter<'a> {
     /// "Nothing underneath" is a normal answer — over open stock there is simply no
     /// contact — so it is `None` rather than an error.
     pub fn drop_at<T: DropTest>(&self, tool: &T, x: f64, y: f64) -> Option<f64> {
-        let mut scratch = Vec::new();
+        self.drop_at_in(tool, x, y, &mut Vec::new())
+    }
+
+    /// As [`drop_at`](Self::drop_at), with `scratch` for the triangles it looks
+    /// at: for a caller making many drops, which then allocates once.
+    pub fn drop_at_in<T: DropTest>(
+        &self,
+        tool: &T,
+        x: f64,
+        y: f64,
+        scratch: &mut Vec<u32>,
+    ) -> Option<f64> {
         self.bvh
-            .candidates_in_column(x, y, tool.max_radius(), &mut scratch);
+            .candidates_in_column(x, y, tool.max_radius(), scratch);
 
         let mut best: Option<f64> = None;
         for index in scratch.iter() {

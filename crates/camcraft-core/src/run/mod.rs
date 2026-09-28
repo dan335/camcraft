@@ -147,7 +147,8 @@ pub fn run_prepared_planned(
             // Facing works from the stock alone.
             StrategySpec::Face { .. } => Target::Limit(None),
             StrategySpec::Parallel { .. }
-            | StrategySpec::ZlevelRough { .. }
+            | StrategySpec::Scallop { .. }
+            | StrategySpec::PocketClearing { .. }
             | StrategySpec::Adaptive { .. } => Target::Limit(
                 machining_boundary(
                     &op.boundary,

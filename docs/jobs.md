@@ -30,9 +30,20 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
   simulator and post never see a rotation. With the default orientation and work
   zero, a run is bit-identical to before setups existed.
 
-An operation has a strategy (parallel finishing, adaptive clearing, Z-level
-roughing, a 2D profile, a 2D pocket, facing or drilling), a tool, heights, passes
-and linking. What
+An operation has a strategy (parallel or scallop finishing, adaptive clearing,
+pocket clearing, a 2D profile, a 2D pocket, facing or drilling), a tool, heights,
+passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
+along the surface, offset in from the boundary and from where the tool stops
+touching the part, so the cusp is the same on a slope as on the flat
+([decision 0009](decisions/0009-scallop-distance-field.md)). It cuts `direction =
+"both-ways"` (closed rings climbing, open passes from their nearer end) unless
+`"climb"` or `"conventional"`, `order = "outside-in"` unless `"inside-out"`, and
+only where the surface is between `slope_from` and `slope_to` degrees from level
+(0 and 90), never steeper than a plunge. Its stepover starts as parallel's. Pocket clearing (`"pocket-clearing"`, which a job written before
+it had that name calls `"zlevel-rough"`) is Fusion's 3D Pocket Clearing: each
+level's rings a stepover apart in from its edges, cut from the middle out so the
+ring along the walls is last, climbing unless `conventional = true`, with a level
+on each flat face unless `flat_areas = false`. What
 Fusion's Geometry tab holds is three settings, each read only by the strategies
 `StrategySpec::uses` says: `selection`, the faces and edges picked on the
 models; a 3D operation's `boundary`, which, as Fusion's machining boundary, keeps
@@ -41,7 +52,7 @@ selection, with the tool's `containment` and an additional offset (`margin`);
 and a 2D operation's `outline`, what it cuts round or clears. `heights` holds
 the clearance (where the tool arrives and leaves, 10 mm over the stock), the
 retract height (Fusion's, 5 mm over it) and the top and bottom it cuts between. `passes.stepdown` is
-Fusion's multiple depths, shared the same way: adaptive and Z-level roughing must have one,
+Fusion's multiple depths, shared the same way: adaptive and pocket clearing must have one,
 profiles, pockets and facing cut the bottom in one pass without, and parallel
 and drilling never read it. An operation may be
 turned off, which leaves it in the job but out of every run, check and post.
@@ -68,7 +79,7 @@ picked at different depths each go to theirs, or the part's bottom. A top or
 bottom measured from the selection (`ref = "selection"`, Fusion's "selected
 contours") is each area's own: the highest or lowest point picked in it, plus the
 offset, so `bottom = { ref = "selection", offset = -0.5 }` cuts half a millimetre
-under every picked loop. A Z-level or facing operation measures one from all its
+under every picked loop. A pocket clearing or facing operation measures one from all its
 picks; a clearance or a drill's bottom never is, and nothing picked is refused. A profile
 cuts each ring all the way down before the next, and never a ring before the
 rings inside it, so a part's holes are cut while it is held; a pocket clears
@@ -134,7 +145,7 @@ to finish; negative cuts past the part, for a looser fit. Beside, it must stay
 under the tool's radius; down, in 3D with a ball or bullnose, within its corner
 radius (a flat end, or a 2D floor, may go any depth). Every operation has it,
 and cuts with as much as its strategy uses: a drill none, a profile on the
-boundary only its floor's. New adaptive and Z-level roughing start at 0.5 mm each way, as
+boundary only its floor's. New adaptive and pocket clearing start at 0.5 mm each way, as
 Fusion's roughing does; everything else at none, which is not written. The 3D
 strategies grow the tool by it (`camcraft_core::allowance`); a 2D one moves its
 cut out by it and raises its floors by it. The material is cut by the real
@@ -197,13 +208,13 @@ says: `"minimum"` (the default), the safe distance over the material under the
 way across as the operation found it; `"full"`, the retract height, or higher
 where the material is. A link no longer than the *stay-down*
 distance is made without lifting, at the cutting feed: 50 mm for parallel, riding
-over the part; five times the tool's diameter for Z-level and 2D, straight and
+over the part; five times the tool's diameter for pocket clearing and 2D, straight and
 level, and for a profile down to its ring's next depth. Adaptive clearing makes
 its own links at the level, only straight across what it has cleared, up to ten
 times the tool's diameter; it goes down its own helix into what it cannot reach
 from the side, and straight down everywhere else, into what it has cleared.
 Parallel enters and leaves each pass along a vertical arc (the *lead radius*, a
-tenth of the tool); Z-level, pockets and facing ramp into material along the pass
+tenth of the tool); pocket clearing, 2D pockets and facing ramp into material along the pass
 they are about to cut, in the direction it cuts (the *ramp angle*, 2°, at the
 *ramp feed*, 60% of the cutting feed, as Fusion's). After the last cut the tool goes up to
 the clearance height before the spindle stops. The settings are written only when
@@ -267,6 +278,10 @@ with.
 | CC206 | note    | material left more than 1 mm above the part                      |
 | CC207 | warn    | a profile's or pocket's area not cut: its floor is not below the top |
 | CC208 | warn    | adaptive clearing left an area it had no room to go down into    |
+| CC209 | warn    | scallop found nothing to finish                                  |
+| CC210 | warn    | scallop's grid coarsened to stay within its budget               |
+| CC211 | note    | stretches too steep for scallop left, for a waterline pass       |
+| CC212 | warn    | points of a scallop's area not reached from its boundary         |
 | CC299 | warn    | a warning from reading the model                                 |
 
 A **plunge** is a continuous descent steeper than `PLUNGE_RATIO` (10:1) that falls

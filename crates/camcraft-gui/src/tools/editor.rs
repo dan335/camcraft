@@ -12,6 +12,8 @@ use camcraft_core::job::{
 };
 use eframe::egui;
 
+use crate::help::topics::{feeds, library as lib, passes as pass};
+use crate::help::{Help, Topic};
 use crate::tools::drawing::kind_name;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
@@ -89,51 +91,63 @@ pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, editable:
 }
 
 fn general(ui: &mut egui::Ui, tool: &mut ToolSpec) {
-    widgets::field_label(ui, "Description");
-    ui.add(egui::TextEdit::singleline(&mut tool.comment).desired_width(220.0));
-    ui.end_row();
-    opt_text(ui, "Vendor", &mut tool.vendor, "e.g. Amana");
-    opt_text(ui, "Product", &mut tool.product, "the maker's part number");
-    widgets::field_label(ui, "Material");
-    egui::ComboBox::from_id_salt("material")
-        .selected_text(match tool.material {
-            None => "not given",
-            Some(ToolMaterial::Carbide) => "carbide",
-            Some(ToolMaterial::Hss) => "HSS",
-        })
-        .show_ui(ui, |ui| {
-            ui.selectable_value(&mut tool.material, None, "not given");
-            ui.selectable_value(&mut tool.material, Some(ToolMaterial::Carbide), "carbide");
-            ui.selectable_value(&mut tool.material, Some(ToolMaterial::Hss), "HSS");
-        });
-    ui.end_row();
+    widgets::row(ui, &lib::DESCRIPTION, |ui| {
+        ui.add(egui::TextEdit::singleline(&mut tool.comment).desired_width(220.0));
+    });
+    opt_text(ui, &lib::VENDOR, &mut tool.vendor, "e.g. Amana");
+    opt_text(
+        ui,
+        &lib::PRODUCT,
+        &mut tool.product,
+        "the maker's part number",
+    );
+    widgets::row(ui, &lib::MATERIAL, |ui| {
+        egui::ComboBox::from_id_salt("material")
+            .selected_text(match tool.material {
+                None => "not given",
+                Some(ToolMaterial::Carbide) => "carbide",
+                Some(ToolMaterial::Hss) => "HSS",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut tool.material, None, "not given");
+                ui.selectable_value(&mut tool.material, Some(ToolMaterial::Carbide), "carbide");
+                ui.selectable_value(&mut tool.material, Some(ToolMaterial::Hss), "HSS");
+            });
+    });
 }
 
 fn cutter(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFieldError]) {
-    widgets::field_label(ui, "Type");
-    egui::ComboBox::from_id_salt("kind")
-        .selected_text(kind_name(tool.kind))
-        .show_ui(ui, |ui| {
-            for k in [
-                ToolKind::Flat,
-                ToolKind::Ball,
-                ToolKind::Bullnose,
-                ToolKind::Cone,
-                ToolKind::Drill,
-            ] {
-                ui.selectable_value(&mut tool.kind, k, kind_name(k));
-            }
-        });
-    ui.end_row();
+    widgets::row(ui, &lib::KIND, |ui| {
+        egui::ComboBox::from_id_salt("kind")
+            .selected_text(kind_name(tool.kind))
+            .show_ui(ui, |ui| {
+                for k in [
+                    ToolKind::Flat,
+                    ToolKind::Ball,
+                    ToolKind::Bullnose,
+                    ToolKind::Cone,
+                    ToolKind::Drill,
+                ] {
+                    ui.selectable_value(&mut tool.kind, k, kind_name(k));
+                }
+            });
+    });
     if tool.kind == ToolKind::Cone && tool.angle.is_none() {
         tool.angle = Some(90.0);
     }
-    length(ui, m, "Diameter", &mut tool.diameter, errors, "diameter");
+    length(
+        ui,
+        m,
+        &lib::DIAMETER,
+        &mut tool.diameter,
+        errors,
+        "diameter",
+    );
     if tool.kind == ToolKind::Bullnose {
-        length(ui, m, "Corner radius", &mut tool.corner, errors, "corner");
+        length(ui, m, &lib::CORNER, &mut tool.corner, errors, "corner");
     }
     if tool.kind == ToolKind::Drill {
-        row(ui, "Point angle", errors, "angle", |ui| {
+        row(ui, &lib::POINT_ANGLE, errors, "angle", |ui| {
             let mut a = tool.angle.unwrap_or(DRILL_POINT);
             if ui
                 .add(
@@ -149,7 +163,7 @@ fn cutter(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
         });
     }
     if tool.kind == ToolKind::Cone {
-        row(ui, "Angle", errors, "angle", |ui| {
+        row(ui, &lib::ANGLE, errors, "angle", |ui| {
             if let Some(a) = tool.angle.as_mut() {
                 ui.add(
                     egui::DragValue::new(a)
@@ -162,13 +176,13 @@ fn cutter(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
         length(
             ui,
             m,
-            "Tip diameter",
+            &lib::TIP_DIAMETER,
             &mut tool.tip_diameter,
             errors,
             "tip_diameter",
         );
     }
-    row(ui, "Flutes", errors, "flutes", |ui| {
+    row(ui, &lib::FLUTES, errors, "flutes", |ui| {
         widgets::optional(ui, &mut tool.flutes, 2, NOT_GIVEN, |ui, f| {
             ui.add(egui::DragValue::new(f).range(0..=16));
         });
@@ -176,7 +190,7 @@ fn cutter(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
     opt_length(
         ui,
         m,
-        "Flute length",
+        &lib::FLUTE_LENGTH,
         &mut tool.flute_length,
         2.0 * tool.diameter,
         errors,
@@ -185,7 +199,7 @@ fn cutter(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
     opt_length(
         ui,
         m,
-        "Shoulder length",
+        &lib::SHOULDER,
         &mut tool.shoulder_length,
         2.5 * tool.diameter,
         errors,
@@ -198,7 +212,7 @@ fn holder(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
         opt_length(
             ui,
             m,
-            "Shank diameter",
+            &lib::SHANK,
             &mut tool.shank_diameter,
             tool.diameter,
             errors,
@@ -207,7 +221,7 @@ fn holder(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
         opt_length(
             ui,
             m,
-            "Stickout",
+            &lib::STICKOUT,
             &mut tool.stickout,
             4.0 * tool.diameter,
             errors,
@@ -216,13 +230,13 @@ fn holder(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
         opt_length(
             ui,
             m,
-            "Overall length",
+            &lib::OVERALL,
             &mut tool.overall_length,
             8.0 * tool.diameter,
             errors,
             "overall_length",
         );
-        row(ui, "Holder", errors, "holder", |ui| {
+        row(ui, &lib::HOLDER, errors, "holder", |ui| {
             let default = Holder {
                 name: String::new(),
                 segments: vec![HolderSegment {
@@ -245,7 +259,8 @@ fn holder(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
     // The holder's segments, from the collet up: a small table of their own.
     ui.add_space(theme::SPACE_5);
     ui.horizontal(|ui| {
-        ui.label(widgets::section_label("Holder segments"));
+        ui.label(widgets::section_label("Holder segments"))
+            .help(&lib::HOLDER_SEGMENT);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if widgets::button(
                 ui,
@@ -273,8 +288,10 @@ fn holder(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
                     widgets::mono(format!("{}", i + 1), theme::TEXT_SM)
                         .color(theme::egui_color(theme::TEXT_4)),
                 );
-                m.length_field(ui, &mut seg.diameter, 0.1, 1000.0, "Ø ");
-                m.length_field(ui, &mut seg.length, 0.1, 1000.0, "L ");
+                m.length_field(ui, &mut seg.diameter, 0.1, 1000.0, "Ø ")
+                    .help(&lib::HOLDER_SEGMENT);
+                m.length_field(ui, &mut seg.length, 0.1, 1000.0, "L ")
+                    .help(&lib::HOLDER_SEGMENT);
                 if widgets::icon_button(ui, Icon::X, "remove this segment").clicked() {
                     remove = Some(i);
                 }
@@ -298,13 +315,12 @@ fn speeds(
 ) {
     ui.add_enabled_ui(editable, |ui| {
         form(ui, "spindle", |ui| {
-            row(ui, "Spindle", errors, "rpm", |ui| {
+            row(ui, &lib::TOOL_SPINDLE, errors, "rpm", |ui| {
                 ui.add(
                     egui::DragValue::new(&mut tool.rpm)
                         .range(0..=60000)
                         .suffix(" rev/min"),
-                )
-                .on_hover_text("An operation cuts at this speed unless its preset gives one.");
+                );
             });
             let mut rpm = Some(tool.rpm);
             surface_speed_row(ui, &mut rpm, tool.diameter, m);
@@ -318,45 +334,45 @@ fn speeds(
 }
 
 fn post(ui: &mut egui::Ui, tool: &mut ToolSpec) {
-    widgets::field_label(ui, "Tool number");
-    ui.add(
-        egui::DragValue::new(&mut tool.number)
-            .range(1..=9999)
-            .prefix("T"),
-    );
-    ui.end_row();
-    widgets::field_label(ui, "Spindle turns");
-    egui::ComboBox::from_id_salt("spindle")
-        .selected_text(match tool.spindle {
-            SpindleDirection::Clockwise => "clockwise (M3)",
-            SpindleDirection::CounterClockwise => "counter-clockwise (M4)",
-        })
-        .show_ui(ui, |ui| {
-            ui.selectable_value(
-                &mut tool.spindle,
-                SpindleDirection::Clockwise,
-                "clockwise (M3)",
-            );
-            ui.selectable_value(
-                &mut tool.spindle,
-                SpindleDirection::CounterClockwise,
-                "counter-clockwise (M4), for a left-hand cutter",
-            );
-        });
-    ui.end_row();
-    widgets::field_label(ui, "Coolant");
-    egui::ComboBox::from_id_salt("coolant")
-        .selected_text(match tool.coolant {
-            Coolant::Off => "off",
-            Coolant::Flood => "flood (M8)",
-            Coolant::Mist => "mist (M7)",
-        })
-        .show_ui(ui, |ui| {
-            ui.selectable_value(&mut tool.coolant, Coolant::Off, "off");
-            ui.selectable_value(&mut tool.coolant, Coolant::Flood, "flood (M8)");
-            ui.selectable_value(&mut tool.coolant, Coolant::Mist, "mist (M7)");
-        });
-    ui.end_row();
+    widgets::row(ui, &lib::NUMBER, |ui| {
+        ui.add(
+            egui::DragValue::new(&mut tool.number)
+                .range(1..=9999)
+                .prefix("T"),
+        );
+    });
+    widgets::row(ui, &lib::SPINDLE_TURNS, |ui| {
+        egui::ComboBox::from_id_salt("spindle")
+            .selected_text(match tool.spindle {
+                SpindleDirection::Clockwise => "clockwise (M3)",
+                SpindleDirection::CounterClockwise => "counter-clockwise (M4)",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut tool.spindle,
+                    SpindleDirection::Clockwise,
+                    "clockwise (M3)",
+                );
+                ui.selectable_value(
+                    &mut tool.spindle,
+                    SpindleDirection::CounterClockwise,
+                    "counter-clockwise (M4), for a left-hand cutter",
+                );
+            });
+    });
+    widgets::row(ui, &lib::COOLANT, |ui| {
+        egui::ComboBox::from_id_salt("coolant")
+            .selected_text(match tool.coolant {
+                Coolant::Off => "off",
+                Coolant::Flood => "flood (M8)",
+                Coolant::Mist => "mist (M7)",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut tool.coolant, Coolant::Off, "off");
+                ui.selectable_value(&mut tool.coolant, Coolant::Flood, "flood (M8)");
+                ui.selectable_value(&mut tool.coolant, Coolant::Mist, "mist (M7)");
+            });
+    });
 }
 
 /// The tool's presets: a list with a way to add, copy, reorder and remove them,
@@ -557,17 +573,17 @@ fn preset_fields(
     m: Measure,
     errors: &[ToolFieldError],
 ) {
-    row(ui, "Name", errors, "presets.name", |ui| {
+    row(ui, &lib::PRESET_NAME, errors, "presets.name", |ui| {
         ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(180.0));
     });
-    widgets::field_label(ui, "Note");
-    ui.add(
-        egui::TextEdit::singleline(&mut p.comment)
-            .hint_text("e.g. from the maker's chart")
-            .desired_width(180.0),
-    );
-    ui.end_row();
-    row(ui, "Spindle", errors, "presets.rpm", |ui| {
+    widgets::row(ui, &lib::NOTE, |ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut p.comment)
+                .hint_text("e.g. from the maker's chart")
+                .desired_width(180.0),
+        );
+    });
+    row(ui, &lib::PRESET_SPINDLE, errors, "presets.rpm", |ui| {
         widgets::optional(ui, &mut p.rpm, tool_rpm, NOT_GIVEN, |ui, rpm| {
             ui.add(
                 egui::DragValue::new(rpm)
@@ -577,12 +593,19 @@ fn preset_fields(
         });
     });
     surface_speed_row(ui, &mut p.rpm, diameter, m);
-    opt_feed(ui, m, "Cutting feed", &mut p.feed, errors, "presets.feed");
+    opt_feed(
+        ui,
+        m,
+        &feeds::CUTTING_FEED,
+        &mut p.feed,
+        errors,
+        "presets.feed",
+    );
     chip_load_row(ui, &mut p.feed, p.rpm, flutes, m);
     opt_feed(
         ui,
         m,
-        "Plunge feed",
+        &feeds::PLUNGE_FEED,
         &mut p.plunge_feed,
         errors,
         "presets.plunge_feed",
@@ -590,7 +613,7 @@ fn preset_fields(
     opt_feed(
         ui,
         m,
-        "Ramp feed",
+        &lib::PRESET_RAMP_FEED,
         &mut p.ramp_feed,
         errors,
         "presets.ramp_feed",
@@ -598,7 +621,7 @@ fn preset_fields(
     opt_length(
         ui,
         m,
-        "Stepdown",
+        &pass::STEPDOWN,
         &mut p.stepdown,
         0.5 * diameter,
         errors,
@@ -607,7 +630,7 @@ fn preset_fields(
     opt_length(
         ui,
         m,
-        "Stepover",
+        &pass::STEPOVER,
         &mut p.stepover,
         0.4 * diameter,
         errors,
@@ -615,7 +638,7 @@ fn preset_fields(
     );
     row(
         ui,
-        "Stock to leave",
+        &lib::PRESET_STOCK_TO_LEAVE,
         errors,
         "presets.stock_to_leave",
         |ui| {
@@ -640,8 +663,7 @@ fn preset_fields(
 /// The surface speed at `rpm`, which sets `rpm` when edited. Makers chart
 /// cutters in this, and it holds across diameters.
 pub fn surface_speed_row(ui: &mut egui::Ui, rpm: &mut Option<u32>, diameter: f64, m: Measure) {
-    widgets::field_label(ui, "Surface speed").on_hover_text("Setting it sets the spindle speed.");
-    ui.horizontal(|ui| match *rpm {
+    widgets::row(ui, &feeds::SURFACE_SPEED, |ui| match *rpm {
         Some(r) if diameter > 0.0 => {
             let vc = cutting::surface_speed(diameter, f64::from(r));
             let mut shown = m.show_surface(vc);
@@ -660,7 +682,6 @@ pub fn surface_speed_row(ui: &mut egui::Ui, rpm: &mut Option<u32>, diameter: f64
             widgets::hint(ui, "needs a spindle speed");
         }
     });
-    ui.end_row();
 }
 
 /// The chip load at `feed` and `rpm`, which sets the feed when edited.
@@ -671,8 +692,7 @@ pub fn chip_load_row(
     flutes: Option<u32>,
     m: Measure,
 ) {
-    widgets::field_label(ui, "Chip load").on_hover_text("Setting it sets the cutting feed.");
-    ui.horizontal(|ui| match (*feed, rpm, flutes) {
+    widgets::row(ui, &feeds::CHIP_LOAD, |ui| match (*feed, rpm, flutes) {
         (Some(now), Some(rpm), Some(z)) if rpm > 0 && z > 0 => {
             let fz = cutting::chip_load(now, f64::from(rpm), z);
             let mut shown = m.show(fz);
@@ -695,7 +715,6 @@ pub fn chip_load_row(
             widgets::hint(ui, "needs a spindle speed and cutting feed");
         }
     });
-    ui.end_row();
 }
 
 /// A spindle speed worked out from a surface speed, to the nearest rev/min and
@@ -707,22 +726,22 @@ fn whole_rpm(rpm: f64) -> u32 {
     whole
 }
 
-/// One row of a form: the label, then what `add` puts in, bordered in red when
-/// the checks find `field` wrong, with why on the line under it.
+/// One row of a form, [`widgets::row`]: the label, then what `add` puts in,
+/// bordered in red when the checks find `field` wrong, with why on the line
+/// under it.
 fn row(
     ui: &mut egui::Ui,
-    label: &str,
+    topic: &Topic,
     errors: &[ToolFieldError],
     field: &str,
     add: impl FnOnce(&mut egui::Ui),
 ) {
-    widgets::field_label(ui, label);
     let why: Vec<&str> = errors
         .iter()
         .filter(|e| e.field == field)
         .map(|e| e.why.as_str())
         .collect();
-    ui.horizontal(|ui| {
+    widgets::row(ui, topic, |ui| {
         if !why.is_empty() {
             // The system's `invalid` field: an `--err` border, nothing louder.
             let err = egui::Stroke::new(1.0, widgets::Level::Err.color());
@@ -733,7 +752,6 @@ fn row(
         }
         add(ui);
     });
-    ui.end_row();
     for why in why {
         ui.label("");
         ui.add(egui::Label::new(widgets::error_text(why).size(theme::TEXT_SM)).wrap());
@@ -744,12 +762,12 @@ fn row(
 fn length(
     ui: &mut egui::Ui,
     m: Measure,
-    label: &str,
+    topic: &Topic,
     value: &mut f64,
     errors: &[ToolFieldError],
     field: &str,
 ) {
-    row(ui, label, errors, field, |ui| {
+    row(ui, topic, errors, field, |ui| {
         m.length_field(ui, value, 0.05, 1000.0, "");
     });
 }
@@ -757,13 +775,13 @@ fn length(
 fn opt_length(
     ui: &mut egui::Ui,
     m: Measure,
-    label: &str,
+    topic: &Topic,
     value: &mut Option<f64>,
     default: f64,
     errors: &[ToolFieldError],
     field: &str,
 ) {
-    row(ui, label, errors, field, |ui| {
+    row(ui, topic, errors, field, |ui| {
         widgets::optional(ui, value, default, NOT_GIVEN, |ui, v| {
             m.length_field(ui, v, 0.1, 1000.0, "");
         });
@@ -773,30 +791,30 @@ fn opt_length(
 fn opt_feed(
     ui: &mut egui::Ui,
     m: Measure,
-    label: &str,
+    topic: &Topic,
     value: &mut Option<f64>,
     errors: &[ToolFieldError],
     field: &str,
 ) {
-    row(ui, label, errors, field, |ui| {
+    row(ui, topic, errors, field, |ui| {
         widgets::optional(ui, value, 1000.0, NOT_GIVEN, |ui, v| {
             m.feed_field(ui, v, 50000.0);
         });
     });
 }
 
-fn opt_text(ui: &mut egui::Ui, label: &str, value: &mut Option<String>, hint: &str) {
-    widgets::field_label(ui, label);
-    let mut text = value.clone().unwrap_or_default();
-    if ui
-        .add(
-            egui::TextEdit::singleline(&mut text)
-                .hint_text(hint)
-                .desired_width(220.0),
-        )
-        .changed()
-    {
-        *value = (!text.trim().is_empty()).then_some(text);
-    }
-    ui.end_row();
+fn opt_text(ui: &mut egui::Ui, topic: &Topic, value: &mut Option<String>, hint: &str) {
+    widgets::row(ui, topic, |ui| {
+        let mut text = value.clone().unwrap_or_default();
+        if ui
+            .add(
+                egui::TextEdit::singleline(&mut text)
+                    .hint_text(hint)
+                    .desired_width(220.0),
+            )
+            .changed()
+        {
+            *value = (!text.trim().is_empty()).then_some(text);
+        }
+    });
 }

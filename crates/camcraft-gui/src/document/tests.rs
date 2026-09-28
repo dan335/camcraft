@@ -654,8 +654,10 @@ fn new_operations_start_on_the_silhouette() {
     let rough = doc
         .add_operation(
             "top",
-            StrategySpec::ZlevelRough {
+            StrategySpec::PocketClearing {
                 min_ring_length: 3.0,
+                conventional: false,
+                flat_areas: true,
             },
         )
         .unwrap();
@@ -721,8 +723,10 @@ fn new_roughing_leaves_stock_for_the_finish() {
     let rough = doc
         .add_operation(
             "top",
-            StrategySpec::ZlevelRough {
+            StrategySpec::PocketClearing {
                 min_ring_length: 3.0,
+                conventional: false,
+                flat_areas: true,
             },
         )
         .unwrap();

@@ -48,3 +48,9 @@ pub mod shadow;
 pub mod steps;
 
 pub mod topology;
+
+pub mod trigrid;
+
+pub mod geodesic;
+
+pub mod isoline;

@@ -87,7 +87,7 @@ fn results_carry_what_the_run_reported() {
         panic!("expected two operations");
     };
 
-    let StrategyDetail::ZlevelRough(r) = rough.detail else {
+    let StrategyDetail::PocketClearing(r) = rough.detail else {
         panic!("rough reported {:?}", rough.detail);
     };
     assert_eq!(r.rings, rough.passes);

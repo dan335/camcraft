@@ -8,7 +8,8 @@
 use std::cell::RefCell;
 
 use camcraft_core::job::{
-    AdaptiveDirection, FaceDirection, Operation, ProfileSide, Setup, StrategySpec,
+    AdaptiveDirection, FaceDirection, Operation, ProfileSide, ScallopDirection, ScallopOrder,
+    Setup, StrategySpec,
 };
 use camcraft_core::run::Stage;
 use eframe::egui;
@@ -651,13 +652,26 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
                         },
                     ),
                     (
-                        "Z-level rough",
-                        StrategySpec::ZlevelRough {
+                        "Pocket clearing",
+                        StrategySpec::PocketClearing {
                             min_ring_length: 3.0,
+                            conventional: false,
+                            flat_areas: true,
                         },
                     ),
                 ],
-                vec![("Parallel", StrategySpec::Parallel { angle: 0.0 })],
+                vec![
+                    ("Parallel", StrategySpec::Parallel { angle: 0.0 }),
+                    (
+                        "Scallop",
+                        StrategySpec::Scallop {
+                            direction: ScallopDirection::BothWays,
+                            order: ScallopOrder::OutsideIn,
+                            slope_from: 0.0,
+                            slope_to: 90.0,
+                        },
+                    ),
+                ],
             ],
         ),
         (

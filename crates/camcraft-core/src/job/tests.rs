@@ -35,7 +35,7 @@ wcs = 54
 
 [[setup.operation]]
 name = "rough"
-strategy = "zlevel-rough"
+strategy = "pocket-clearing"
 tool = "rough-6-flat"
 boundary = { margin = 1.0 }
 heights = { clearance = { ref = "stock-top", offset = 8.0 }, bottom = { ref = "model-bottom" } }
@@ -198,8 +198,8 @@ fn unknown_settings_are_refused() {
     // An operation's stepdown belongs under its passes.
     refused("angle = 90.0\n", "angle = 90.0\nstepdown = 2.0\n");
     refused(
-        "strategy = \"zlevel-rough\"\n",
-        "strategy = \"zlevel-rough\"\nstepdwon = 2.0\n",
+        "strategy = \"pocket-clearing\"\n",
+        "strategy = \"pocket-clearing\"\nstepdwon = 2.0\n",
     );
     refused("plunge_feed = 400.0 }", "plunge_feed = 400.0, leeds = {} }");
     refused(
@@ -650,8 +650,10 @@ fn a_stepover_wider_than_the_tool_is_refused() {
 /// the rest cut to size. None written is none left.
 #[test]
 fn roughing_leaves_stock_to_start_and_none_is_not_written() {
-    let rough = StrategySpec::ZlevelRough {
+    let rough = StrategySpec::PocketClearing {
         min_ring_length: 3.0,
+        conventional: false,
+        flat_areas: true,
     };
     assert_eq!(
         rough.default_stock_to_leave(),
@@ -869,7 +871,7 @@ fn strategy_parameters_belong_to_their_strategy() {
     let j = sample();
     let ops = &j.setups[0].operations;
     match ops[0].strategy {
-        StrategySpec::ZlevelRough { .. } => assert_eq!(ops[0].stepdown(), Some(2.0)),
+        StrategySpec::PocketClearing { .. } => assert_eq!(ops[0].stepdown(), Some(2.0)),
         _ => panic!("first operation should be roughing"),
     }
     match ops[1].strategy {
@@ -1113,8 +1115,10 @@ fn stepovers_default_as_fusions() {
         op.default_stepover(&tool(ToolKind::Ball, 6.35, 0.0), 0.05),
         Some(0.794)
     );
-    op.strategy = StrategySpec::ZlevelRough {
+    op.strategy = StrategySpec::PocketClearing {
         min_ring_length: 3.0,
+        conventional: false,
+        flat_areas: true,
     };
     let clearing = op
         .default_stepover(&tool(ToolKind::Flat, 6.35, 0.0), 0.05)
@@ -1289,8 +1293,10 @@ fn a_2d_operation_has_an_outline_and_a_3d_one_a_boundary() {
     assert!(!text.contains("outline"), "{text}");
     let strategies = [
         StrategySpec::Parallel { angle: 0.0 },
-        StrategySpec::ZlevelRough {
+        StrategySpec::PocketClearing {
             min_ring_length: 3.0,
+            conventional: false,
+            flat_areas: true,
         },
         StrategySpec::Profile {
             side: ProfileSide::Outside,
@@ -1339,8 +1345,10 @@ fn multiple_depths_are_shared_and_used_as_the_strategy_says() {
     for (s, starts) in [
         (StrategySpec::Parallel { angle: 0.0 }, None),
         (
-            StrategySpec::ZlevelRough {
+            StrategySpec::PocketClearing {
                 min_ring_length: 3.0,
+                conventional: false,
+                flat_areas: true,
             },
             Some(2.0),
         ),
@@ -1378,7 +1386,7 @@ fn multiple_depths_are_shared_and_used_as_the_strategy_says() {
 fn facing_reads_with_fusions_defaults() {
     let text = SAMPLE
         .replace(
-            "strategy = \"zlevel-rough\"\ntool = \"rough-6-flat\"",
+            "strategy = \"pocket-clearing\"\ntool = \"rough-6-flat\"",
             "strategy = \"face\"\ntool = \"rough-6-flat\"",
         )
         .replace("passes = { stepdown = 2.0, ", "passes = { ");
@@ -1427,4 +1435,113 @@ fn facing_reads_with_fusions_defaults() {
         stock_offset: 0.0,
     };
     assert!(j.validate().is_err());
+}
+
+/// Pocket clearing was Z-level roughing: a job written then still reads, and is
+/// written back by the new name, its defaults left out.
+#[test]
+fn pocket_clearing_reads_by_its_old_name_too() {
+    let old = SAMPLE.replace("\"pocket-clearing\"", "\"zlevel-rough\"");
+    let j: Job = toml::from_str(&old).unwrap();
+    let clearing = StrategySpec::PocketClearing {
+        min_ring_length: 3.0,
+        conventional: false,
+        flat_areas: true,
+    };
+    assert_eq!(j.setups[0].operations[0].strategy, clearing);
+    let written = toml::to_string(&j).unwrap();
+    assert!(
+        written.contains("strategy = \"pocket-clearing\""),
+        "{written}"
+    );
+    assert!(!written.contains("zlevel"), "{written}");
+    assert!(!written.contains("conventional"), "{written}");
+    assert!(!written.contains("flat_areas"), "{written}");
+    assert_eq!(toml::from_str::<Job>(&written).unwrap(), j);
+
+    let set = SAMPLE.replace(
+        "strategy = \"pocket-clearing\"\n",
+        "strategy = \"pocket-clearing\"\nconventional = true\nflat_areas = false\n",
+    );
+    let j: Job = toml::from_str(&set).unwrap();
+    assert_eq!(
+        j.setups[0].operations[0].strategy,
+        StrategySpec::PocketClearing {
+            min_ring_length: 3.0,
+            conventional: true,
+            flat_areas: false,
+        }
+    );
+    assert_eq!(
+        toml::from_str::<Job>(&toml::to_string(&j).unwrap()).unwrap(),
+        j
+    );
+}
+
+/// Scallop reads with Fusion's defaults, both ways from the boundary in on
+/// every slope, and writes back only what differs; its stepover is parallel's,
+/// its order its own, and a slope range that is no range is refused.
+#[test]
+fn scallop_reads_with_fusions_defaults() {
+    let text = SAMPLE.replace(
+        "strategy = \"parallel\"\ntool = \"finish-4-ball\"\nangle = 90.0\n",
+        "strategy = \"scallop\"\ntool = \"finish-4-ball\"\n",
+    );
+    let mut j: Job = toml::from_str(&text).unwrap();
+    j.validate().unwrap();
+    let scallop = StrategySpec::Scallop {
+        direction: ScallopDirection::BothWays,
+        order: ScallopOrder::OutsideIn,
+        slope_from: 0.0,
+        slope_to: 90.0,
+    };
+    assert_eq!(j.setups[0].operations[1].strategy, scallop);
+    let written = toml::to_string(&j).unwrap();
+    assert!(written.contains("strategy = \"scallop\""), "{written}");
+    for default in ["direction", "order", "slope_from", "slope_to"] {
+        let key = format!(
+            "
+{default} ="
+        );
+        assert!(!written.contains(&key), "{default} written: {written}");
+    }
+    assert_eq!(toml::from_str::<Job>(&written).unwrap(), j);
+
+    let op = &mut j.setups[0].operations[1];
+    assert!(!op.strategy.uses().reorder);
+    let ball = j.tools["finish-4-ball"].clone();
+    let parallel = Operation {
+        strategy: StrategySpec::Parallel { angle: 0.0 },
+        ..op.clone()
+    };
+    assert_eq!(
+        op.default_stepover(&ball, 0.01),
+        parallel.default_stepover(&ball, 0.01)
+    );
+
+    op.strategy = StrategySpec::Scallop {
+        direction: ScallopDirection::Climb,
+        order: ScallopOrder::InsideOut,
+        slope_from: 10.0,
+        slope_to: 60.0,
+    };
+    let written = toml::to_string(&j).unwrap();
+    assert!(written.contains("direction = \"climb\""), "{written}");
+    assert!(written.contains("order = \"inside-out\""), "{written}");
+    assert_eq!(toml::from_str::<Job>(&written).unwrap(), j);
+
+    for (from, to) in [(60.0, 10.0), (0.0, 95.0), (-5.0, 30.0)] {
+        j.setups[0].operations[1].strategy = StrategySpec::Scallop {
+            direction: ScallopDirection::BothWays,
+            order: ScallopOrder::OutsideIn,
+            slope_from: from,
+            slope_to: to,
+        };
+        assert!(j.validate().is_err(), "{from}..{to} accepted");
+    }
+    let unknown = text.replace(
+        "strategy = \"scallop\"\n",
+        "strategy = \"scallop\"\nangle = 45.0\n",
+    );
+    assert!(toml::from_str::<Job>(&unknown).is_err());
 }

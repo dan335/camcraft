@@ -182,7 +182,8 @@ pub fn centre_offset(op: &Operation, cutter_radius: f64) -> f64 {
         },
         StrategySpec::Pocket { .. } => -radius,
         StrategySpec::Parallel { .. }
-        | StrategySpec::ZlevelRough { .. }
+        | StrategySpec::Scallop { .. }
+        | StrategySpec::PocketClearing { .. }
         | StrategySpec::Adaptive { .. }
         | StrategySpec::Face { .. }
         | StrategySpec::Drill { .. } => 0.0,
@@ -678,7 +679,7 @@ fn middle(inner: &Region, params: &PlanarParams) -> Option<(Region, f64)> {
 }
 
 /// `region`'s connected pieces: each outer ring with the holes directly inside it.
-fn pieces(region: &Region) -> Vec<Region> {
+pub(crate) fn pieces(region: &Region) -> Vec<Region> {
     let rings = region.rings();
     let outers: Vec<(usize, Region, f64)> = rings
         .iter()

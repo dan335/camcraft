@@ -471,7 +471,8 @@ impl Document {
         let s = self.job.setups.iter_mut().find(|s| s.name == setup)?;
         let base = match strategy {
             StrategySpec::Parallel { .. } => "finish",
-            StrategySpec::ZlevelRough { .. } => "rough",
+            StrategySpec::Scallop { .. } => "scallop",
+            StrategySpec::PocketClearing { .. } => "rough",
             StrategySpec::Adaptive { .. } => "adaptive",
             StrategySpec::Profile { .. } => "profile",
             StrategySpec::Pocket { .. } => "pocket",
@@ -675,15 +676,16 @@ impl Document {
 }
 
 /// Start a new 3D operation on the part's silhouette, as Fusion does. Parallel
-/// finishing keeps the tool's centre inside it. Z-level roughing reaches in from
-/// outside: kept inside the part's outline, the tool never reaches its walls, as
-/// its centre sits a radius outside them ([`fit_channel`] makes room round them).
+/// finishing keeps the tool's centre inside it. Pocket and adaptive clearing
+/// reach in from outside: kept inside the part's outline, the tool never reaches
+/// its walls, as its centre sits a radius outside them ([`fit_channel`] makes
+/// room round them).
 /// A 2D operation's outline starts as the silhouette already. Facing and
 /// drilling have no boundary.
 fn start_on_silhouette(op: &mut Operation) {
     let containment = match op.strategy {
-        StrategySpec::Parallel { .. } => Containment::Center,
-        StrategySpec::ZlevelRough { .. } | StrategySpec::Adaptive { .. } => Containment::Outside,
+        StrategySpec::Parallel { .. } | StrategySpec::Scallop { .. } => Containment::Center,
+        StrategySpec::PocketClearing { .. } | StrategySpec::Adaptive { .. } => Containment::Outside,
         StrategySpec::Profile { .. }
         | StrategySpec::Pocket { .. }
         | StrategySpec::Face { .. }

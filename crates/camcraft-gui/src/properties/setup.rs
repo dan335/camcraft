@@ -7,6 +7,7 @@ use eframe::egui;
 use super::parts::{Names, names};
 use super::{Picks, PropAction, cannot_generate, header, renamed, work_zero};
 use crate::document::{Document, Selection};
+use crate::help::topics::setup as topics;
 use crate::picking::slots::Slot;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
@@ -133,17 +134,16 @@ pub(super) fn show(
         }
         _ => {
             form(ui, "setup-post", |ui| {
-                widgets::field_label(ui, "Work offset");
-                egui::ComboBox::from_id_salt("wcs")
-                    .selected_text(format!("G{}", s.wcs))
-                    .show_ui(ui, |ui| {
-                        for w in 54..=59 {
-                            ui.selectable_value(&mut s.wcs, w, format!("G{w}"));
-                        }
-                    });
-                ui.end_row();
-                widgets::field_label(ui, "Post");
-                ui.horizontal(|ui| {
+                widgets::row(ui, &topics::WCS, |ui| {
+                    egui::ComboBox::from_id_salt("wcs")
+                        .selected_text(format!("G{}", s.wcs))
+                        .show_ui(ui, |ui| {
+                            for w in 54..=59 {
+                                ui.selectable_value(&mut s.wcs, w, format!("G{w}"));
+                            }
+                        });
+                });
+                widgets::row(ui, &topics::POST, |ui| {
                     egui::ComboBox::from_id_salt("post")
                         .selected_text(&s.post)
                         .show_ui(ui, |ui| {
@@ -158,7 +158,6 @@ pub(super) fn show(
                         actions.push(PropAction::ProfileFile(name.to_string()));
                     }
                 });
-                ui.end_row();
             });
         }
     }
@@ -184,13 +183,13 @@ fn orientation(ui: &mut egui::Ui, o: &mut Orientation) {
         },
         |ui| {
             form(ui, "orientation", |ui| {
-                widgets::field_label(ui, "Up (Z)");
-                axis_combo(ui, "orient-z", &mut o.z, None);
-                ui.end_row();
-                widgets::field_label(ui, "Along X");
+                widgets::row(ui, &topics::UP_Z, |ui| {
+                    axis_combo(ui, "orient-z", &mut o.z, None);
+                });
                 let z = o.z;
-                axis_combo(ui, "orient-x", &mut o.x, Some(z));
-                ui.end_row();
+                widgets::row(ui, &topics::ALONG_X, |ui| {
+                    axis_combo(ui, "orient-x", &mut o.x, Some(z));
+                });
             });
         },
     );

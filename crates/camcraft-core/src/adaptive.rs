@@ -1,6 +1,6 @@
 //! Adaptive clearing: roughing in Z levels with the cutter's load held constant.
 //!
-//! Z-level roughing ([`crate::roughing`]) offsets the reachable region inward by
+//! Z-level roughing ([`crate::pocket_clearing`]) offsets the reachable region inward by
 //! the stepover, so the first ring into full material is a full slot, and every
 //! inside corner buries the tool. Adaptive clearing, after Fusion's (Freesteel's
 //! Adaptive Clearing, 2004, and Stori and Wright's constant-engagement paths,

@@ -7,6 +7,8 @@ use eframe::egui;
 
 use super::{Picks, PropAction, header, renamed};
 use crate::document::{Document, ModelSlot, Selection};
+use crate::help::Help;
+use crate::help::topics::model as topics;
 use crate::picking::slots::Slot;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
@@ -200,20 +202,17 @@ pub(super) fn model(
     let failed = matches!(doc.models.get(name), Some(ModelSlot::Failed { .. }));
     if let Some(def) = doc.job.models.get_mut(i) {
         form(ui, "model", |ui| {
-            widgets::field_label(ui, "File");
+            widgets::key_label(ui, "File");
             ui.add(egui::Label::new(widgets::mono(&def.path, theme::TEXT_SM)).wrap());
             ui.end_row();
             let stl = std::path::Path::new(&def.path)
                 .extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("stl"));
             if stl {
-                widgets::field_label(ui, "Units");
-                ui.horizontal(|ui| {
+                widgets::row(ui, &topics::UNITS, |ui| {
                     ui.radio_value(&mut def.units, Some(LengthUnit::Mm), "mm");
-                    ui.radio_value(&mut def.units, Some(LengthUnit::Inch), "inch")
-                        .on_hover_text("An STL does not say; check before cutting.");
+                    ui.radio_value(&mut def.units, Some(LengthUnit::Inch), "inch");
                 });
-                ui.end_row();
             }
         });
         ui.add_space(theme::SPACE_3);
@@ -287,15 +286,12 @@ fn transform(ui: &mut egui::Ui, m: Measure, name: &str, t: &mut Transform) {
     let even = t.scale.iter().all(|&s| s.to_bits() == t.scale[0].to_bits());
     let mut uniform = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(even);
     form(ui, "transform", |ui| {
-        widgets::field_label(ui, "Position");
-        ui.horizontal(|ui| {
+        widgets::row(ui, &topics::POSITION, |ui| {
             for (axis, v) in ["X ", "Y ", "Z "].into_iter().zip(t.position.iter_mut()) {
                 m.signed_length_field(ui, v, 0.1, 100_000.0, axis);
             }
         });
-        ui.end_row();
-        widgets::field_label(ui, "Rotation");
-        ui.horizontal(|ui| {
+        widgets::row(ui, &topics::ROTATION, |ui| {
             for (axis, v) in ["X ", "Y ", "Z "].into_iter().zip(t.rotation.iter_mut()) {
                 ui.add(
                     egui::DragValue::new(v)
@@ -303,13 +299,10 @@ fn transform(ui: &mut egui::Ui, m: Measure, name: &str, t: &mut Transform) {
                         .range(-360.0..=360.0)
                         .prefix(axis)
                         .suffix("°"),
-                )
-                .on_hover_text("turned about the job's X, then Y, then Z");
+                );
             }
         });
-        ui.end_row();
-        widgets::field_label(ui, "Scale");
-        ui.horizontal(|ui| {
+        widgets::row(ui, &topics::SCALE, |ui| {
             let scale = |v: &mut f64, prefix: &str, ui: &mut egui::Ui| {
                 ui.add(
                     egui::DragValue::new(v)
@@ -333,14 +326,13 @@ fn transform(ui: &mut egui::Ui, m: Measure, name: &str, t: &mut Transform) {
             }
             if ui
                 .checkbox(&mut uniform, "uniform")
-                .on_hover_text("the same along X, Y and Z")
+                .help(&topics::UNIFORM)
                 .changed()
                 && uniform
             {
                 t.scale = [t.scale[0]; 3];
             }
         });
-        ui.end_row();
     });
     ui.data_mut(|d| d.insert_temp(id, uniform));
 }
