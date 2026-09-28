@@ -37,6 +37,7 @@
 
 use std::f64::consts::{FRAC_PI_2, PI};
 
+use camcraft_geom::arc::Arc;
 use camcraft_geom::heightmap::{HeightMap, cell_index};
 use camcraft_geom::mesh::distance_to_segment;
 use glam::{DVec2, DVec3, dvec3};
@@ -480,10 +481,19 @@ fn last_feed(moves: &[Move]) -> Option<f64> {
     moves.iter().rev().find_map(|m| m.feed)
 }
 
-/// Where a path heads: the unit direction from `from` to `to`, if they differ.
-fn heading(from: DVec3, to: DVec3) -> Option<DVec3> {
-    let d = to - from;
-    (d.length() > 1e-9).then(|| d.normalize())
+/// How a pass is entered.
+enum Entry {
+    /// Straight down onto its start.
+    Plunge,
+    /// Down along its own path, through these points, from the top.
+    Ramp(Vec<DVec3>),
+    /// Down onto it along a vertical arc from `top`.
+    Lead {
+        /// Where the arc starts.
+        top: DVec3,
+        /// The arc.
+        arc: Arc,
+    },
 }
 
 /// One linking in progress.
@@ -540,7 +550,11 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
 
         // Where the entry starts: a ramp's top, a lead's top, or the pass itself.
         let entry = self.entry(to, pass);
-        let start = entry.first().copied().unwrap_or(to);
+        let start = match &entry {
+            Entry::Plunge => to,
+            Entry::Ramp(pts) => pts.first().copied().unwrap_or(to),
+            Entry::Lead { top, .. } => *top,
+        };
 
         let top = match at {
             Some(from) => {
@@ -566,10 +580,48 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         // Across at the safe height.
         self.out.rapid_to(dvec3(start.x, start.y, safe))?;
 
-        match entry.as_slice() {
-            // Plunged: down at rapid to the safe distance above the material, then
-            // at the plunge feed.
-            [] | [_] => {
+        match (entry, self.p.ramp) {
+            // Down along the pass: from the safe distance above the material it
+            // cuts.
+            (Entry::Ramp(pts), Some(r)) if pts.len() > 2 => {
+                let Some((first, rest)) = pts.split_first() else {
+                    return Err(LinkError::Toolpath(ToolpathError::ArcWithoutStart));
+                };
+                if first.z < safe {
+                    self.out.rapid_to(*first)?;
+                }
+                // A ramp rides over what the pass rises over, such as a tab, and
+                // comes down off it as the pass does: straight down, at the plunge
+                // feed, not the ramp's.
+                let mut at = *first;
+                for p in rest {
+                    let straight_down = p.z < at.z && p.truncate().distance(at.truncate()) < 1e-9;
+                    if straight_down {
+                        self.out.feed_to(*p, MoveRole::Plunge, self.p.plunge_feed)?;
+                    } else {
+                        self.out.feed_to(*p, MoveRole::Ramp, r.feed)?;
+                    }
+                    at = *p;
+                }
+                self.report.ramps += 1;
+            }
+            // A lead: down to its top at rapid, then the plunge feed, then round
+            // it at the pass's feed.
+            (Entry::Lead { top, arc }, _) => {
+                let stop = self.feed_height(top.truncate(), top.z).min(safe);
+                if stop < safe {
+                    self.out.rapid_to(dvec3(top.x, top.y, stop))?;
+                }
+                if stop > top.z {
+                    self.out
+                        .feed_to(top, MoveRole::Plunge, self.p.plunge_feed)?;
+                }
+                self.out
+                    .arc_or_chords_to(to, arc, MoveRole::Lead, feed, self.p.tolerance)?;
+            }
+            // Plunged: down at rapid to the safe distance above the material,
+            // then at the plunge feed.
+            _ => {
                 let stop = self.feed_height(to.truncate(), to.z).min(safe);
                 if stop <= to.z {
                     self.report.suspicious_plunges += 1;
@@ -577,47 +629,6 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                     self.out.rapid_to(dvec3(to.x, to.y, stop))?;
                 }
                 self.out.feed_to(to, MoveRole::Plunge, self.p.plunge_feed)?;
-            }
-            [first, rest @ ..] => {
-                let ramp = self
-                    .p
-                    .ramp
-                    .filter(|_| first.z > to.z && rest.len() > 1 && self.ramped(to));
-                if let Some(r) = ramp {
-                    // A ramp starts the safe distance above the material it cuts.
-                    if first.z < safe {
-                        self.out.rapid_to(*first)?;
-                    }
-                    // A ramp rides over what the pass rises over, such as a tab,
-                    // and comes down off it as the pass does: straight down, at
-                    // the plunge feed, not the ramp's.
-                    let mut at = *first;
-                    for p in rest {
-                        let straight_down =
-                            p.z < at.z && p.truncate().distance(at.truncate()) < 1e-9;
-                        if straight_down {
-                            self.out.feed_to(*p, MoveRole::Plunge, self.p.plunge_feed)?;
-                        } else {
-                            self.out.feed_to(*p, MoveRole::Ramp, r.feed)?;
-                        }
-                        at = *p;
-                    }
-                    self.report.ramps += 1;
-                } else {
-                    // A lead: down to its top at rapid, then the plunge feed, then
-                    // around it at the pass's feed.
-                    let stop = self.feed_height(first.truncate(), first.z).min(safe);
-                    if stop < safe {
-                        self.out.rapid_to(dvec3(first.x, first.y, stop))?;
-                    }
-                    if stop > first.z {
-                        self.out
-                            .feed_to(*first, MoveRole::Plunge, self.p.plunge_feed)?;
-                    }
-                    for p in rest {
-                        self.out.feed_to(*p, MoveRole::Lead, feed)?;
-                    }
-                }
             }
         }
         self.report.links_resolved += 1;
@@ -629,29 +640,32 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         self.top_at(to.truncate()).is_some_and(|t| t > to.z + 1e-6)
     }
 
-    /// How `pass`, starting at `to`, is entered: the points of a ramp or a lead,
-    /// from its top down to `to`; empty for a plain plunge.
-    fn entry(&self, to: DVec3, pass: &[Move]) -> Vec<DVec3> {
-        let pts: Vec<DVec3> = std::iter::once(to)
-            .chain(pass.iter().map(|m| m.to))
-            .collect();
+    /// How `pass`, starting at `to`, is entered.
+    fn entry(&self, to: DVec3, pass: &[Move]) -> Entry {
         if let Some(r) = self.p.ramp
             && self.ramped(to)
         {
-            return self.ramp_down(&pts, r).unwrap_or_default();
+            // Along the pass's own path, arcs by their chords.
+            let mut pts = vec![to];
+            let mut at = to;
+            for m in pass {
+                pts.extend(m.chords(at, self.p.tolerance * 0.1));
+                at = m.to;
+            }
+            return self
+                .ramp_down(&pts, r)
+                .filter(|pts| pts.len() > 2 && pts.first().is_some_and(|p| p.z > to.z))
+                .map_or(Entry::Plunge, Entry::Ramp);
         }
         if self.p.lead_radius > 0.0
-            && let Some(next) = pass.first()
-            && let Some(t) = heading(to, next.to)
-            && let Some(arc) = lead_in(to, t, self.p.lead_radius, self.p.tolerance)
-            && self.clear_of_part(&arc)
-            && arc
-                .first()
-                .is_some_and(|s| self.top_at(s.truncate()).is_none_or(|m| m <= s.z))
+            && let Some(t) = pass.first().and_then(|m| m.tangent_at(to, 0.0))
+            && let Some((top, arc)) = lead_in(to, t, self.p.lead_radius)
+            && self.clear_of_part(top, &arc.chords(top, to, self.p.tolerance))
+            && self.top_at(top.truncate()).is_none_or(|m| m <= top.z)
         {
-            return arc;
+            return Entry::Lead { top, arc };
         }
-        Vec::new()
+        Entry::Plunge
     }
 
     /// A ramp down onto the start of the pass through `pts`, along the pass's own
@@ -704,9 +718,10 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         Some(out)
     }
 
-    /// Whether every point of `arc` is at or above the part under it.
-    fn clear_of_part(&self, arc: &[DVec3]) -> bool {
-        arc.iter().all(|p| {
+    /// Whether `from` and every point of `way` are at or above the part under
+    /// them.
+    fn clear_of_part(&self, from: DVec3, way: &[DVec3]) -> bool {
+        std::iter::once(&from).chain(way).all(|p| {
             self.surface
                 .at(p.truncate())
                 .is_none_or(|z| z <= p.z + 1e-9)
@@ -719,16 +734,16 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
     fn leave(&mut self, from: DVec3, feed: f64) -> Result<DVec3, LinkError> {
         let mut at = from;
         if self.p.lead_radius > 0.0 {
-            let before = self.out.moves().iter().rev().nth(1).map(|m| m.to);
-            if let Some(prev) = before
-                && let Some(t) = heading(prev, from)
-                && let Some(arc) = lead_out(from, t, self.p.lead_radius, self.p.tolerance)
-                && self.clear_of_part(&arc)
+            let moves = self.out.moves();
+            let last = moves.len().checked_sub(2).and_then(|k| moves.get(k..));
+            if let Some([before, m]) = last
+                && let Some(t) = m.tangent_at(before.to, 1.0)
+                && let Some((end, arc)) = lead_out(from, t, self.p.lead_radius)
+                && self.clear_of_part(from, &arc.chords(from, end, self.p.tolerance))
             {
-                for p in &arc {
-                    self.out.feed_to(*p, MoveRole::Lead, feed)?;
-                }
-                at = arc.last().copied().unwrap_or(from);
+                self.out
+                    .arc_or_chords_to(end, arc, MoveRole::Lead, feed, self.p.tolerance)?;
+                at = end;
             }
         }
         let up = self.feed_height(at.truncate(), at.z);
@@ -854,66 +869,37 @@ fn backwards(path: &[DVec3], closed: bool, run: f64) -> Option<Vec<DVec3>> {
     None
 }
 
-/// Chords of an arc about `centre` of `radius` in the vertical plane along `u`,
-/// from angle `a0` to `a1` (radians, measured from `u` towards up), within
-/// `tolerance` of it. Excludes the start.
-fn arc(centre: DVec3, u: DVec3, radius: f64, a0: f64, a1: f64, tolerance: f64) -> Vec<DVec3> {
-    let sweep = a1 - a0;
-    let step = 2.0 * (1.0 - (tolerance / radius).min(1.0)).acos();
-    let n = if step > 1e-9 {
-        (sweep.abs() / step).ceil().max(4.0)
-    } else {
-        4.0
-    };
-    let n = camcraft_geom::steps::bounded_count(n);
-    (1..=n)
-        .map(|k| {
-            let a = a0 + sweep * f64::from(k) / f64::from(n);
-            centre + radius * (a.cos() * u + a.sin() * DVec3::Z)
-        })
-        .collect()
+/// The vertical plane a vertical lead turns in, for a pass running along `t`
+/// at `p`: the level direction `u` it runs in, the axis the lead turns about,
+/// and the lead's centre, `radius` above the pass square to its slope.
+fn lead_plane(p: DVec3, t: DVec3, radius: f64) -> Option<(DVec3, DVec3, DVec3)> {
+    let flat = t.truncate();
+    if flat.length() < 1e-9 || radius.is_nan() || radius <= 0.0 {
+        return None;
+    }
+    let u = flat.normalize().extend(0.0);
+    let theta = t.z.atan2(flat.length());
+    let normal = -theta.sin() * u + theta.cos() * DVec3::Z;
+    Some((u, DVec3::Z.cross(u), p + radius * normal))
 }
 
 /// The vertical lead into a pass starting at `to` along `t`, as Fusion's: an arc
 /// of `radius` in the pass's vertical plane, from straight down to the pass's own
-/// slope. Its points from its top (first) to `to` (last).
-fn lead_in(to: DVec3, t: DVec3, radius: f64, tolerance: f64) -> Option<Vec<DVec3>> {
-    let flat = t.truncate();
-    if flat.length() < 1e-9 {
-        return None;
-    }
-    let u = flat.normalize().extend(0.0);
-    let theta = t.z.atan2(flat.length());
-    let normal = -theta.sin() * u + theta.cos() * DVec3::Z;
-    let centre = to + radius * normal;
+/// slope. Where it starts, and the arc from there to `to`.
+fn lead_in(to: DVec3, t: DVec3, radius: f64) -> Option<(DVec3, Arc)> {
+    let (u, axis, centre) = lead_plane(to, t, radius)?;
     let top = centre - radius * u;
-    let mut pts = vec![top];
-    pts.extend(arc(centre, u, radius, PI, 1.5 * PI + theta, tolerance));
-    if let Some(last) = pts.last_mut() {
-        *last = to;
-    }
-    Some(pts)
+    let arc = Arc::about(centre, axis, top, to, false, radius * 1e-9)?;
+    Some((top, arc))
 }
 
 /// The vertical lead out of a pass ending at `from` along `t`: the lead in,
-/// mirrored. Its points after `from`, to its top.
-fn lead_out(from: DVec3, t: DVec3, radius: f64, tolerance: f64) -> Option<Vec<DVec3>> {
-    let flat = t.truncate();
-    if flat.length() < 1e-9 {
-        return None;
-    }
-    let u = flat.normalize().extend(0.0);
-    let theta = t.z.atan2(flat.length());
-    let normal = -theta.sin() * u + theta.cos() * DVec3::Z;
-    let centre = from + radius * normal;
-    Some(arc(
-        centre,
-        u,
-        radius,
-        1.5 * PI + theta,
-        2.0 * PI,
-        tolerance,
-    ))
+/// mirrored. Where it ends, and the arc from `from` to there.
+fn lead_out(from: DVec3, t: DVec3, radius: f64) -> Option<(DVec3, Arc)> {
+    let (u, axis, centre) = lead_plane(from, t, radius)?;
+    let end = centre + radius * u;
+    let arc = Arc::about(centre, axis, from, end, false, radius * 1e-9)?;
+    Some((end, arc))
 }
 
 fn check(name: &'static str, value: f64) -> Result<(), LinkError> {
@@ -1340,34 +1326,30 @@ mod tests {
         assert_eq!(stepped.stayed_down, 0, "a level move cannot change level");
     }
 
-    /// Fusion's vertical lead: an arc of the lead radius from straight down to the
-    /// pass, in the pass's vertical plane, ending on it.
+    /// Fusion's vertical lead: a quarter turn of the lead radius from straight
+    /// down to the pass, in the pass's vertical plane, ending on it level.
     #[test]
     fn a_lead_in_arcs_down_onto_the_pass() {
         let r = 0.6;
-        let arc = lead_in(dvec3(1.0, 2.0, 3.0), DVec3::X, r, 0.001).unwrap();
-        let first = arc[0];
+        let to = dvec3(1.0, 2.0, 3.0);
+        let (top, arc) = lead_in(to, DVec3::X, r).unwrap();
         assert!(
-            (first - dvec3(1.0 - r, 2.0, 3.0 + r)).length() < 1e-12,
-            "{first:?}"
+            (top - dvec3(1.0 - r, 2.0, 3.0 + r)).length() < 1e-12,
+            "{top:?}"
         );
-        assert_eq!(*arc.last().unwrap(), dvec3(1.0, 2.0, 3.0));
-        let centre = dvec3(1.0, 2.0, 3.0 + r);
-        for p in &arc {
-            assert!(
-                ((*p - centre).length() - r).abs() < 1e-9,
-                "{p:?} is off the arc"
-            );
-            assert_eq!(p.y, 2.0, "the arc is in the pass's plane");
-        }
-        // It ends level, as the pass runs.
-        let n = arc.len();
-        let tangent = arc[n - 1] - arc[n - 2];
-        // Within half a chord's turn of level.
-        assert!(tangent.z.abs() < 0.1 * tangent.length(), "{tangent:?}");
+        assert!(arc.ends_at(top, to, 1e-12));
+        assert!((arc.centre - dvec3(1.0, 2.0, 3.0 + r)).length() < 1e-12);
+        assert!((arc.sweep.abs() - FRAC_PI_2).abs() < 1e-12);
+        // In the pass's plane: about Y, so every point keeps its Y.
+        assert_eq!(arc.axis, DVec3::Y);
+        // Straight down at the top, level as the pass runs at the bottom.
+        assert!((arc.tangent_at(top, to, 0.0) + DVec3::Z).length() < 1e-9);
+        assert!((arc.tangent_at(top, to, 1.0) - DVec3::X).length() < 1e-9);
 
-        let out = lead_out(dvec3(1.0, 2.0, 3.0), DVec3::X, r, 0.001).unwrap();
-        assert!((*out.last().unwrap() - dvec3(1.0 + r, 2.0, 3.0 + r)).length() < 1e-12);
+        let (end, out) = lead_out(to, DVec3::X, r).unwrap();
+        assert!((end - dvec3(1.0 + r, 2.0, 3.0 + r)).length() < 1e-12);
+        assert!((out.tangent_at(to, end, 0.0) - DVec3::X).length() < 1e-9);
+        assert!((out.tangent_at(to, end, 1.0) - DVec3::Z).length() < 1e-9);
     }
 
     /// Entered along a lead where one fits; straight down where the part rises

@@ -110,17 +110,33 @@ fn mesh_triangles(mesh: &TriMesh) -> impl Iterator<Item = [Vec3; 3]> + '_ {
         .map(|t| t.map(|p| Vec3::from(v3(p))))
 }
 
-fn line_instances(scene: &Scene) -> Vec<LineInstance> {
-    scene
-        .segments
-        .iter()
-        .map(|s| LineInstance {
-            a: v3(s.a),
-            b: v3(s.b),
-            kind: theme::role_index(s.role),
-            op: s.op,
-        })
-        .collect()
+/// The scene's moves as lines, in machine order, an arc as several; and how many
+/// lines the moves up to and including each one make, so the playhead, which
+/// counts moves, can say how many lines are showing.
+fn line_instances(scene: &Scene) -> (Vec<LineInstance>, Vec<u32>) {
+    let mut lines = Vec::with_capacity(scene.segments.len());
+    let mut ends = Vec::with_capacity(scene.segments.len());
+    for s in &scene.segments {
+        for (a, b) in s.pieces() {
+            lines.push(LineInstance {
+                a: v3(a),
+                b: v3(b),
+                kind: theme::role_index(s.role),
+                op: s.op,
+            });
+        }
+        ends.push(u32::try_from(lines.len()).unwrap_or(u32::MAX));
+    }
+    (lines, ends)
+}
+
+/// How many lines are showing when `shown` moves are.
+fn lines_shown(ends: &[u32], shown: usize) -> u32 {
+    shown
+        .checked_sub(1)
+        .and_then(|i| ends.get(i).or(ends.last()))
+        .copied()
+        .unwrap_or(0)
 }
 
 fn outline_instances(outline: &[Outline]) -> Vec<LineInstance> {
@@ -181,6 +197,8 @@ struct Uploaded {
 struct SceneGpu {
     key: u64,
     moves: Option<(wgpu::Buffer, u32)>,
+    /// How many lines the moves up to each one make.
+    ends: Vec<u32>,
     /// One per operation; `None` where the job named no tool that could be drawn.
     cutters: Vec<Option<(wgpu::Buffer, u32)>>,
 }
@@ -642,9 +660,11 @@ impl Gpu {
             |s| s.key,
             content.scene,
             |key, scene| {
+                let (lines, ends) = line_instances(scene);
                 Some(SceneGpu {
                     key,
-                    moves: vertex_buffer_of(rs, "camcraft moves", &line_instances(scene)),
+                    moves: vertex_buffer_of(rs, "camcraft moves", &lines),
+                    ends,
                     cutters: scene
                         .ops
                         .iter()
@@ -737,7 +757,11 @@ impl Gpu {
         let targets = self.targets.as_ref()?;
         let view = input.view;
 
-        let shown = u32::try_from(view.shown).unwrap_or(u32::MAX);
+        // The playhead counts moves; the GPU draws lines, several to an arc.
+        let shown = match self.up.scene.as_ref() {
+            Some(s) => lines_shown(&s.ends, view.shown),
+            None => u32::try_from(view.shown).unwrap_or(u32::MAX),
+        };
         self.write_uniforms(rs, input, shown);
 
         let bg = theme::linear(theme::BG);
@@ -1117,6 +1141,54 @@ mod tests {
         }
     }
 
+    /// An arc is drawn as lines along it, all of them belonging to its move: the
+    /// playhead, which counts moves, shows them together or not at all.
+    #[test]
+    fn an_arc_is_drawn_as_lines_along_it() {
+        use crate::view::scene::{Scene, Segment};
+        use camcraft_core::toolpath::{Arc, MoveKind, MoveRole};
+        let straight = Segment {
+            a: DVec3::new(-1.0, 0.0, 0.0),
+            b: DVec3::new(0.0, 0.0, 0.0),
+            kind: MoveKind::Linear,
+            role: MoveRole::Cut,
+            op: 0,
+            feed: Some(600.0),
+            ends_at: 0.0,
+        };
+        let half = Segment {
+            a: DVec3::ZERO,
+            b: DVec3::new(10.0, 0.0, 0.0),
+            kind: MoveKind::Arc(Arc {
+                centre: DVec3::new(5.0, 0.0, 0.0),
+                axis: DVec3::Z,
+                sweep: -std::f64::consts::PI,
+            }),
+            ..straight
+        };
+        let scene = Scene {
+            segments: vec![straight, half, straight],
+            ..Scene::default()
+        };
+        let (lines, ends) = line_instances(&scene);
+        let arc = (ends[1] - ends[0]) as usize;
+        assert!(arc > 8, "{arc} lines for a half turn");
+        for l in &lines[1..=arc] {
+            for p in [l.a, l.b] {
+                let r = ((p[0] - 5.0).powi(2) + p[1].powi(2)).sqrt();
+                assert!((r - 5.0).abs() < 1e-4, "{p:?} is off the arc");
+            }
+        }
+        assert_eq!(lines_shown(&ends, 0), 0);
+        assert_eq!(lines_shown(&ends, 1), 1);
+        assert_eq!(lines_shown(&ends, 2), ends[1]);
+        assert_eq!(lines_shown(&ends, 9), ends[2]);
+        // Half way along in time is half way round.
+        let mid = half.point_at(0.5);
+        assert!((mid - DVec3::new(5.0, 5.0, 0.0)).length() < 1e-9, "{mid}");
+        assert!((half.length() - 5.0 * std::f64::consts::PI).abs() < 1e-9);
+    }
+
     /// The instance buffer is the scene in order, so the GPU's instance index is
     /// the move's place in the program, which is what the playhead compares against.
     #[test]
@@ -1126,6 +1198,7 @@ mod tests {
         let seg = |x: f64, role, op| Segment {
             a: DVec3::new(x, 0.0, 0.0),
             b: DVec3::new(x + 1.0, 0.0, 0.0),
+            kind: camcraft_core::toolpath::MoveKind::Linear,
             role,
             op,
             feed: None,
@@ -1139,9 +1212,10 @@ mod tests {
             ],
             ..Scene::default()
         };
-        let moves = line_instances(&scene);
+        let (moves, ends) = line_instances(&scene);
         let got: Vec<(f32, u32, u32)> = moves.iter().map(|m| (m.a[0], m.kind, m.op)).collect();
         assert_eq!(got, vec![(0.0, 1, 0), (1.0, 0, 0), (2.0, 2, 1)]);
+        assert_eq!(ends, [1, 2, 3]);
         let outline = outline_instances(&[
             Outline {
                 a: DVec3::ZERO,

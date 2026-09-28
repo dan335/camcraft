@@ -7,7 +7,10 @@
 
 use std::fmt::Write as _;
 
+use std::f64::consts::{FRAC_PI_2, PI};
+
 use camcraft_core::job::{Coolant, SpindleDirection};
+use camcraft_core::toolpath::Arc;
 use glam::{DVec2, DVec3};
 
 use crate::op::{CycleKind, Op, Units};
@@ -54,6 +57,8 @@ struct Writer<'a> {
     // Whether the tool is known to be as high as the machine takes it, where it
     // is otherwise unknown: after a safe retract, until it next moves.
     raised: bool,
+    // The plane arcs turn in (`G17`, `G18`, `G19`), once one has been written.
+    plane: Option<&'static str>,
 }
 
 impl<'a> Writer<'a> {
@@ -67,6 +72,27 @@ impl<'a> Writer<'a> {
             at: None,
             feed: None,
             raised: false,
+            plane: None,
+        }
+    }
+
+    /// Select `plane` for arcs, unless it is in force.
+    fn plane(&mut self, plane: &'static str) -> &'static str {
+        if self.plane == Some(plane) {
+            ""
+        } else {
+            self.plane = Some(plane);
+            plane
+        }
+    }
+
+    /// Back to the XY plane, if an arc left another in force: a canned cycle
+    /// drills along the selected plane's normal, and the next program expects
+    /// `G17`.
+    fn level_plane(&mut self) {
+        if matches!(self.plane, Some(p) if p != "G17") {
+            self.raw("G17");
+            self.plane = Some("G17");
         }
     }
 
@@ -176,7 +202,10 @@ impl<'a> Writer<'a> {
                 let s = format!("S{rpm} {m}");
                 self.raw(&s);
             }
-            Op::SpindleOff => self.raw("M5"),
+            Op::SpindleOff => {
+                self.level_plane();
+                self.raw("M5");
+            }
             Op::CoolantOn(c) => self.raw(match c {
                 Coolant::Flood => "M8",
                 Coolant::Mist => "M7",
@@ -189,12 +218,7 @@ impl<'a> Writer<'a> {
                 let f = self.p.feed(*feed);
                 self.motion_block("G1", *to, Some(f));
             }
-            Op::Arc {
-                to,
-                centre,
-                clockwise,
-                feed,
-            } => self.arc(*to, *centre, *clockwise, *feed),
+            Op::Arc { to, arc, feed, .. } => self.arc(*to, arc, *feed),
             Op::Cycle {
                 kind,
                 at,
@@ -204,6 +228,7 @@ impl<'a> Writer<'a> {
                 dwell,
                 feed,
             } => {
+                self.level_plane();
                 self.cycle(*kind, *at, *depth, *retract, *peck, *dwell, *feed);
             }
             Op::CycleEnd => self.raw("G80"),
@@ -306,37 +331,107 @@ impl<'a> Writer<'a> {
         self.at = Some(to);
     }
 
-    fn arc(&mut self, to: DVec3, centre: DVec3, clockwise: bool, feed: f64) {
-        let g = if clockwise { "G2" } else { "G3" };
-        let from = self.at.unwrap_or(DVec3::ZERO);
-        self.raised = false;
-        let mut block = format!(
-            "{g} X{} Y{} Z{}",
-            self.p.axis(to.x),
-            self.p.axis(to.y),
-            self.p.axis(to.z)
-        );
+    /// An arc, or a helix, from where the tool is, in the plane it turns in,
+    /// written in pieces no longer than the profile's arcs may be: a half turn
+    /// with centre offsets, which cannot be misread even as a full circle, and a
+    /// quarter with a radius, whose sign would otherwise have to choose the long
+    /// way round.
+    fn arc(&mut self, to: DVec3, arc: &Arc, feed: f64) {
+        let Some(from) = self.at else {
+            // Nothing is known to start it from: straight to its end, rather than
+            // round a centre measured from nowhere. The engine never does this.
+            let f = self.p.feed(feed);
+            self.motion_block("G1", to, Some(f));
+            return;
+        };
+        let most = match self.p.arc_style {
+            ArcStyle::Ij => PI,
+            ArcStyle::R => FRAC_PI_2,
+        };
+        let pieces = (arc.sweep.abs() / most - 1e-9).ceil().max(1.0);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let n = pieces.min(8.0) as u32;
+        let mut at = from;
+        for k in 1..=n {
+            let end = if k == n {
+                to
+            } else {
+                arc.point_at(from, to, f64::from(k) / f64::from(n))
+            };
+            let piece = Arc {
+                sweep: arc.sweep / f64::from(n),
+                ..*arc
+            };
+            self.arc_block(at, end, &piece, feed);
+            at = end;
+        }
+    }
+
+    /// One block of an arc no more than a half turn long.
+    fn arc_block(&mut self, from: DVec3, to: DVec3, arc: &Arc, feed: f64) {
+        // Which plane, its two axes, the axis along its normal, and whether the
+        // arc turns counter-clockwise seen from that axis's positive end.
+        let a = arc.axis;
+        let (plane, axes, normal, ccw) = if a.z.abs() >= a.x.abs().max(a.y.abs()) {
+            (
+                "G17",
+                [('X', 'I', 0), ('Y', 'J', 1)],
+                ('Z', 2),
+                arc.sweep * a.z > 0.0,
+            )
+        } else if a.y.abs() >= a.x.abs() {
+            (
+                "G18",
+                [('X', 'I', 0), ('Z', 'K', 2)],
+                ('Y', 1),
+                arc.sweep * a.y > 0.0,
+            )
+        } else {
+            (
+                "G19",
+                [('Y', 'J', 1), ('Z', 'K', 2)],
+                ('X', 0),
+                arc.sweep * a.x > 0.0,
+            )
+        };
+        let g = if ccw { "G3" } else { "G2" };
+        let centre = arc.centre + a * (from - arc.centre).dot(a);
+        let mut block = String::new();
+        let plane = self.plane(plane);
+        if !plane.is_empty() {
+            block.push_str(plane);
+            block.push(' ');
+        }
+        block.push_str(g);
+        // Both of the plane's axes, always, as Fusion writes them; the third only
+        // where it moves, which makes a helix.
+        for (axis, _, i) in axes {
+            let _ = write!(block, " {axis}{}", self.p.axis(to[i]));
+        }
+        let (axis, i) = normal;
+        if self.p.axis(to[i]) != self.p.axis(from[i]) {
+            let _ = write!(block, " {axis}{}", self.p.axis(to[i]));
+        }
         match self.p.arc_style {
             ArcStyle::Ij => {
-                let _ = write!(
-                    block,
-                    " I{} J{}",
-                    self.p.axis(centre.x - from.x),
-                    self.p.axis(centre.y - from.y)
-                );
+                for (_, word, i) in axes {
+                    let _ = write!(block, " {word}{}", self.p.axis(centre[i] - from[i]));
+                }
             }
             ArcStyle::R => {
-                let r = (centre.truncate() - from.truncate()).length();
-                let _ = write!(block, " R{}", self.p.axis(r));
+                let _ = write!(block, " R{}", self.p.axis(arc.radius(from)));
             }
         }
         let f = self.p.feed(feed);
-        let _ = write!(block, " F{f}");
+        if self.feed.as_deref() != Some(f.as_str()) || !self.p.modal.suppress_feed {
+            let _ = write!(block, " F{f}");
+        }
         self.raw(&block);
         self.report.motion_blocks += 1;
         self.motion = Some(g);
         self.at = Some(to);
         self.feed = Some(f);
+        self.raised = false;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -384,7 +479,8 @@ impl<'a> Writer<'a> {
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::float_cmp,
-    clippy::panic
+    clippy::panic,
+    clippy::indexing_slicing
 )]
 mod tests {
     use super::*;
@@ -543,19 +639,13 @@ mod tests {
         assert!(g.contains("X10 "), "grbl strips trailing zeros:\n{g}");
     }
 
-    /// Arcs, which nothing emits yet, and canned cycles render.
+    /// Canned cycles render every word.
     #[test]
-    fn arcs_and_cycles_render() {
+    fn cycles_render() {
         let ops = vec![
             Op::Units(Units::Millimetres),
             Op::Rapid {
                 to: dvec3(0.0, 0.0, 0.0),
-            },
-            Op::Arc {
-                to: dvec3(10.0, 0.0, 0.0),
-                centre: dvec3(5.0, 0.0, 0.0),
-                clockwise: true,
-                feed: 600.0,
             },
             Op::Cycle {
                 kind: CycleKind::Peck,
@@ -568,13 +658,149 @@ mod tests {
             },
         ];
         let (g, _) = render(&ops, &masso(), "t");
-        assert!(g.contains("G2 "), "arc missing:\n{g}");
-        assert!(g.contains("I5.000"), "IJ centre missing:\n{g}");
         assert!(g.contains("G83"), "peck cycle missing:\n{g}");
         assert!(g.contains("Q1.000"));
         assert!(
             g.contains("X1.000 Y2.000"),
             "the hole's place missing:\n{g}"
+        );
+    }
+
+    /// After a rapid to `from`, each arc, or a straight feed where there is none.
+    fn arc_program(p: &Profile, from: DVec3, arcs: &[(DVec3, Option<Arc>)]) -> String {
+        let role = camcraft_core::toolpath::MoveRole::Cut;
+        let mut ops = vec![Op::Rapid { to: from }];
+        for (to, arc) in arcs {
+            ops.push(match arc {
+                Some(arc) => Op::Arc {
+                    to: *to,
+                    arc: *arc,
+                    feed: 600.0,
+                    role,
+                },
+                None => Op::Feed {
+                    to: *to,
+                    feed: 600.0,
+                    role,
+                },
+            });
+        }
+        ops.push(Op::SpindleOff);
+        let (g, _) = render(&ops, p, "t");
+        g.lines()
+            .skip_while(|l| !l.starts_with("G0"))
+            .skip(2)
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Fusion's lead into its lego contour, in inches as Fusion wrote it and
+    /// written here in the same words: down a quarter turn in the YZ plane,
+    /// then along the XY plane, which is selected again.
+    #[test]
+    fn a_vertical_lead_is_written_as_fusion_writes_it() {
+        let down = Arc {
+            centre: dvec3(4.86, 0.825, 0.065),
+            axis: DVec3::X,
+            sweep: FRAC_PI_2,
+        };
+        let on = Arc {
+            centre: dvec3(4.835, 0.85, 0.04),
+            axis: DVec3::Z,
+            sweep: FRAC_PI_2,
+        };
+        let g = arc_program(
+            &masso(),
+            dvec3(4.86, 0.8, 0.065),
+            &[
+                (dvec3(4.86, 0.825, 0.04), Some(down)),
+                (dvec3(4.86, 0.85, 0.04), None),
+                (dvec3(4.835, 0.875, 0.04), Some(on)),
+            ],
+        );
+        let lines: Vec<&str> = g.lines().collect();
+        assert_eq!(
+            lines[..3],
+            [
+                "G19 G3 Y0.825 Z0.040 J0.025 K0.000 F600.0",
+                "G1 Y0.850",
+                "G17 G3 X4.835 Y0.875 I-0.025 J0.000",
+            ],
+            "{g}"
+        );
+    }
+
+    /// A helix is an arc in the XY plane that moves along Z; a full turn is
+    /// written as two halves, which cannot be misread as no turn at all.
+    #[test]
+    fn a_helix_is_written_in_halves() {
+        let turn = Arc {
+            centre: dvec3(0.0, 0.0, 5.0),
+            axis: DVec3::Z,
+            sweep: -std::f64::consts::TAU,
+        };
+        let g = arc_program(
+            &masso(),
+            dvec3(2.0, 0.0, 5.0),
+            &[(dvec3(2.0, 0.0, 4.0), Some(turn))],
+        );
+        let lines: Vec<&str> = g.lines().collect();
+        assert_eq!(
+            lines[..2],
+            [
+                "G17 G2 X-2.000 Y0.000 Z4.500 I-2.000 J0.000 F600.0",
+                "G2 X2.000 Y0.000 Z4.000 I2.000 J0.000",
+            ],
+            "{g}"
+        );
+    }
+
+    /// An arc about Y is in the XZ plane, and one that left another plane in
+    /// force is put back to XY before the spindle stops.
+    #[test]
+    fn the_xz_plane_and_back() {
+        // Clockwise about +Y from above the centre to its +X side: +Z turns to
+        // +X under a positive turn about Y, so this is counter-clockwise, G3.
+        let a = Arc {
+            centre: DVec3::ZERO,
+            axis: DVec3::Y,
+            sweep: FRAC_PI_2,
+        };
+        let g = arc_program(
+            &masso(),
+            dvec3(0.0, 0.0, 1.0),
+            &[(dvec3(1.0, 0.0, 0.0), Some(a))],
+        );
+        let lines: Vec<&str> = g.lines().collect();
+        assert_eq!(
+            lines[0], "G18 G3 X1.000 Z0.000 I0.000 K-1.000 F600.0",
+            "{g}"
+        );
+        assert_eq!(lines[1..3], ["G17", "M5"], "{g}");
+    }
+
+    /// With radii, no piece is over a quarter turn, whose radius would need a
+    /// sign to say which way round.
+    #[test]
+    fn radius_arcs_are_quarter_turns_at_most() {
+        let mut p = masso();
+        p.arc_style = ArcStyle::R;
+        let half = Arc {
+            centre: DVec3::ZERO,
+            axis: DVec3::Z,
+            sweep: PI,
+        };
+        let g = arc_program(
+            &p,
+            dvec3(3.0, 0.0, 0.0),
+            &[(dvec3(-3.0, 0.0, 0.0), Some(half))],
+        );
+        let arcs: Vec<&str> = g.lines().filter(|l| l.contains("G3")).collect();
+        assert_eq!(arcs.len(), 2, "{g}");
+        assert!(
+            arcs[0].contains("X0.000 Y3.000") && arcs[0].ends_with("R3.000 F600.0"),
+            "{g}"
         );
     }
 

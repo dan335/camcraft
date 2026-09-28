@@ -601,10 +601,12 @@ passes = { stepdown = 4.0, stepover = 3.0, feed = 1800.0, stock_to_leave = { rad
                     SimMove {
                         to: dvec3(a.0, a.1, z),
                         class: MoveClass::MayCut,
+                        arc: None,
                     },
                     SimMove {
                         to: dvec3(b.0, b.1, z),
                         class: MoveClass::MayCut,
+                        arc: None,
                     },
                 ];
                 let rect = stock.sweep(&moves, &Flat(1.5)).touched.unwrap();

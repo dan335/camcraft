@@ -29,6 +29,7 @@
 //! Collapsing these into one would leave the entire 2D half of a CAM system with
 //! nowhere to live.
 
+pub mod arc;
 pub mod mesh;
 pub mod synthetic;
 

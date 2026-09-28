@@ -260,3 +260,14 @@ the tool. A profile without a safe retract rises (or falls) to the path's crossi
 height first and goes across there. After the last cut the spindle stops, the tool
 goes up again, and the machine goes home across (`end_home`: Masso's `G28 G91 X0
 Y0`; GRBL's stored `G28` position may be anywhere, so it has none).
+
+A path's arcs are arcs in the program, not strings of short moves: `G2` or `G3`
+in the plane they turn in (`G17` level, `G18` or `G19` for an arc in an upright
+plane, such as a lead), a helix with the third axis moving, the plane put back to
+`G17` before the spindle stops. The engine makes an arc only where a three-axis
+machine can cut one, about X, Y or Z; elsewhere, as a lead on a pass running
+across the part at an angle, it makes short straight moves within the tolerance,
+so the program is always the path that was simulated. With centre offsets
+(`arc_style = "ij"`) no block turns more than half a turn, and with a radius
+(`"r"`) no more than a quarter, whose sign would otherwise have to say which way
+round.

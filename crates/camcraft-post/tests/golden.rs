@@ -21,11 +21,12 @@
 
 use camcraft_core::drilling::Hole;
 use camcraft_core::job::{Coolant, SpindleDirection};
+use camcraft_core::toolpath::Arc;
 use camcraft_core::toolpath::{MoveRole, Toolpath};
 use camcraft_post::op::{DrillCycles, ProgramSpec, Units, lower};
 use camcraft_post::profile::Profile;
 use camcraft_post::render::render;
-use glam::{dvec2, dvec3};
+use glam::{DVec3, dvec2, dvec3};
 
 /// A path exercising every move role the engine currently produces, plus the
 /// coordinate cases that formatting gets wrong: negatives, a value that rounds, and
@@ -42,6 +43,41 @@ fn fixture() -> Toolpath {
         .unwrap();
     t.feed_to(dvec3(10.0, 9.5, -0.0001), MoveRole::Cut, 1200.0)
         .unwrap();
+    // A quarter turn round a corner, level; a full turn of helix down; and a
+    // quarter turn in a vertical plane, as a lead.
+    t.arc_to(
+        dvec3(12.0, 11.5, -0.0001),
+        Arc {
+            centre: dvec3(12.0, 9.5, -0.0001),
+            axis: DVec3::Z,
+            sweep: -std::f64::consts::FRAC_PI_2,
+        },
+        MoveRole::Cut,
+        1200.0,
+    )
+    .unwrap();
+    t.arc_to(
+        dvec3(12.0, 11.5, -1.0),
+        Arc {
+            centre: dvec3(12.0, 9.5, 0.0),
+            axis: DVec3::Z,
+            sweep: std::f64::consts::TAU,
+        },
+        MoveRole::Ramp,
+        400.0,
+    )
+    .unwrap();
+    t.arc_to(
+        dvec3(13.0, 11.5, -2.0),
+        Arc {
+            centre: dvec3(13.0, 11.5, -1.0),
+            axis: DVec3::Y,
+            sweep: -std::f64::consts::FRAC_PI_2,
+        },
+        MoveRole::Lead,
+        1200.0,
+    )
+    .unwrap();
     t.feed_to(dvec3(10.0, 9.5, -2.5), MoveRole::Cut, 800.0)
         .unwrap();
     t.feed_to(dvec3(10.0, 9.5, 25.0), MoveRole::Retract, 900.0)

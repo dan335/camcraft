@@ -28,10 +28,15 @@
 //! climbs and descends at 45°, so the tab is `width` wide at its top and wider
 //! below.
 
+use camcraft_geom::arc::Arc;
 use glam::{DVec2, DVec3, dvec3};
 
 use crate::job::{TabShape, Tabs};
 use crate::toolpath::{Move, MoveKind, MoveRole, PLUNGE_RATIO, Toolpath, ToolpathError};
+
+/// How closely a loop's arcs are followed when measuring along it, and an arc
+/// that does not turn about Z is followed when lifted over a tab, in millimetres.
+const FOLLOW: f64 = 1.0e-3;
 
 /// Tabs to put on a path, and the tool that cuts round them.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -124,11 +129,24 @@ pub fn add_tabs(path: &Toolpath, p: &TabParams) -> Result<(Toolpath, TabReport),
             }
             // A lead runs on from the ring, towards the first tab or from the
             // last, at the ring's depth: it rides over them as the cut does.
-            (MoveRole::Cut | MoveRole::Transition | MoveRole::Lead, Some(from))
-                if m.kind == MoveKind::Linear =>
-            {
+            (MoveRole::Cut | MoveRole::Transition | MoveRole::Lead, Some(from)) => {
                 let shape = (p.tabs.shape, half);
-                over(&mut out, from, m, &tabs, shape, &lift, p.plunge_feed)?;
+                match m.kind {
+                    MoveKind::Arc(a) if !level(&a) => {
+                        // Not turning about Z, it is followed by its chords.
+                        let mut at = from;
+                        for q in m.chords(from, FOLLOW) {
+                            let piece = Move {
+                                to: q,
+                                kind: MoveKind::Linear,
+                                ..*m
+                            };
+                            over(&mut out, at, &piece, &tabs, shape, &lift, p.plunge_feed)?;
+                            at = q;
+                        }
+                    }
+                    _ => over(&mut out, from, m, &tabs, shape, &lift, p.plunge_feed)?,
+                }
             }
             _ => out.push(*m)?,
         }
@@ -158,9 +176,77 @@ fn surface(tabs: &[Tab], shape: TabShape, half: f64, q: DVec2) -> Option<f64> {
         .reduce(f64::max)
 }
 
+/// Whether an arc turns about Z, so runs level or as a helix about a vertical
+/// axis.
+fn level(a: &Arc) -> bool {
+    a.axis.z.abs() > 1.0 - 1e-9
+}
+
+/// Where along move `m`, from `from`, as fractions of it, it is exactly `r`
+/// from `c` seen from above: its crossings of that circle, in order.
+fn crossings(from: DVec3, m: &Move, c: DVec2, r: f64) -> Vec<f64> {
+    match m.kind {
+        MoveKind::Linear => crossing(from.truncate(), m.to.truncate(), c, r)
+            .map(|(t0, t1)| vec![t0, t1])
+            .unwrap_or_default(),
+        MoveKind::Arc(a) => arc_crossings(from, &a, c, r),
+    }
+}
+
+/// Where along a level arc from `from`, as fractions of it, it is `r` from `c`.
+fn arc_crossings(from: DVec3, a: &Arc, c: DVec2, r: f64) -> Vec<f64> {
+    let centre = a.centre.truncate();
+    let radius = a.radius(from);
+    let d = c.distance(centre);
+    if r <= 0.0 || d < 1e-12 || d > radius + r || d < (radius - r).abs() {
+        return Vec::new();
+    }
+    let along = (radius * radius - r * r + d * d) / (2.0 * d);
+    let h = (radius * radius - along * along).max(0.0).sqrt();
+    let u = (c - centre) / d;
+    let mid = centre + u * along;
+    let mut ts: Vec<f64> = [mid + u.perp() * h, mid - u.perp() * h]
+        .into_iter()
+        .filter_map(|p| fraction_at(from, a, p))
+        .collect();
+    ts.sort_by(f64::total_cmp);
+    ts
+}
+
+/// How far round a level arc from `from` it passes over `p`, seen from above,
+/// as a fraction of it, if it does.
+fn fraction_at(from: DVec3, a: &Arc, p: DVec2) -> Option<f64> {
+    let centre = a.centre.truncate();
+    let (r0, v) = (from.truncate() - centre, p - centre);
+    // Counter-clockwise seen from above, whichever way up the axis is.
+    let mut angle = r0.perp_dot(v).atan2(r0.dot(v)) * a.axis.z.signum();
+    let tau = std::f64::consts::TAU;
+    if a.sweep > 0.0 {
+        angle = angle.rem_euclid(tau);
+    } else {
+        angle = -(-angle).rem_euclid(tau);
+    }
+    let t = angle / a.sweep;
+    (0.0..=1.0).contains(&t).then_some(t)
+}
+
+/// The fraction along move `m`, from `from`, nearest `c` seen from above.
+fn nearest(from: DVec3, m: &Move, c: DVec2) -> Option<f64> {
+    match m.kind {
+        MoveKind::Linear => Some(closest(from.truncate(), m.to.truncate(), c)),
+        MoveKind::Arc(a) => {
+            let centre = a.centre.truncate();
+            (c.distance(centre) > 1e-12)
+                .then(|| fraction_at(from, &a, centre + (c - centre).normalize() * a.radius(from)))
+                .flatten()
+        }
+    }
+}
+
 /// Move `m`, from `from`, lifted over any tab it crosses below its top, the tabs
 /// being `shape` and their flat tops `half` across the tool's centre either side.
-/// Where it steps down off a rectangular tab, that step is a plunge.
+/// Where it steps down off a rectangular tab, that step is a plunge. An arc,
+/// which turns about Z, is cut into arcs between the tabs' edges.
 fn over(
     out: &mut Toolpath,
     from: DVec3,
@@ -170,7 +256,6 @@ fn over(
     lift: &impl Fn(DVec2) -> Option<f64>,
     plunge_feed: f64,
 ) -> Result<(), ToolpathError> {
-    let (a, b) = (from.truncate(), m.to.truncate());
     let lowest = from.z.min(m.to.z);
     // Where along the move a tab's foot, the edge of its top, or its middle is:
     // the only places the height over it bends. A triangular tab's flank crossed
@@ -181,13 +266,26 @@ fn over(
             TabShape::Rectangular => half,
             TabShape::Triangular => half + (t.top - lowest),
         };
-        let Some((t0, t1)) = crossing(a, b, t.centre, foot) else {
+        let feet = crossings(from, m, t.centre, foot);
+        // Where the move is within the tab's foot, from the first crossing (or its
+        // start, if it starts within) to the last (or its end).
+        let within = |f: f64| m.point_at(from, f).truncate().distance(t.centre) < foot;
+        let t0 = if within(0.0) {
+            Some(0.0)
+        } else {
+            feet.first().copied()
+        };
+        let t1 = if within(1.0) {
+            Some(1.0)
+        } else {
+            feet.last().copied()
+        };
+        let (Some(t0), Some(t1)) = (t0, t1) else {
             continue;
         };
-        ts.extend([t0, t1, closest(a, b, t.centre)]);
-        if let Some((e0, e1)) = crossing(a, b, t.centre, half) {
-            ts.extend([e0, e1]);
-        }
+        ts.extend(feet);
+        ts.extend(nearest(from, m, t.centre));
+        ts.extend(crossings(from, m, t.centre, half));
         if shape == TabShape::Triangular {
             for k in 1..8 {
                 ts.push(t0 + (t1 - t0) * f64::from(k) / 8.0);
@@ -195,16 +293,17 @@ fn over(
         }
     }
     ts.retain(|t| *t > 1e-9 && *t < 1.0 - 1e-9);
-    if ts.is_empty() && lift(b).is_none_or(|h| h <= m.to.z) {
+    if ts.is_empty() && lift(m.to.truncate()).is_none_or(|h| h <= m.to.z) {
         return out.push(*m);
     }
     ts.sort_by(f64::total_cmp);
     ts.dedup_by(|x, y| (*x - *y).abs() < 1e-9);
     ts.push(1.0);
 
-    let span = a.distance(b);
-    let point = |t: f64| from + (m.to - from) * t;
+    let span = m.length(from);
+    let point = |t: f64| m.point_at(from, t);
     let mut at = from;
+    let mut done = 0.0;
     for t in ts {
         let base = point(t);
         // Either side of the breakpoint: a rectangular tab's edge is a step.
@@ -230,13 +329,23 @@ fn over(
             }
             let drop = at.z - q.z;
             let flat = (q.truncate() - at.truncate()).length();
-            if drop > 0.0 && drop > flat * PLUNGE_RATIO {
+            // Along the move's own shape between breakpoints; straight up or down
+            // at a step.
+            let kind = match m.kind {
+                MoveKind::Arc(a) if flat > 1e-9 => MoveKind::Arc(Arc {
+                    sweep: a.sweep * (t - done),
+                    ..a
+                }),
+                _ => MoveKind::Linear,
+            };
+            if drop > 0.0 && drop > flat * PLUNGE_RATIO && kind == MoveKind::Linear {
                 out.feed_to(q, MoveRole::Plunge, plunge_feed)?;
             } else {
-                out.push(Move { to: q, ..*m })?;
+                out.push(Move { to: q, kind, ..*m })?;
             }
             at = q;
         }
+        done = t;
     }
     Ok(())
 }
@@ -292,7 +401,7 @@ fn loops(moves: &[Move], deepest: f64) -> Vec<Vec<DVec2>> {
             .and_then(|rest| rest.iter().position(|n| n.role == MoveRole::Link))
             .map_or(moves.len(), |k| i + 1 + k);
         let pass = moves.get(i..end).unwrap_or(&[]);
-        let level = |z: f64| (z - deepest).abs() < 1e-6;
+        let at_level = |z: f64| (z - deepest).abs() < 1e-6;
         // The cuts, and where the tool is when they start.
         let first = pass.iter().position(|n| n.role == MoveRole::Cut);
         let last = pass.iter().rposition(|n| n.role == MoveRole::Cut);
@@ -304,16 +413,20 @@ fn loops(moves: &[Move], deepest: f64) -> Vec<Vec<DVec2>> {
             let closes = cuts
                 .last()
                 .is_some_and(|c| c.to.truncate().distance(start.truncate()) < 1e-6);
-            let flat = level(start.z)
+            let flat = at_level(start.z)
                 && cuts
                     .iter()
-                    .all(|n| n.role == MoveRole::Cut && level(n.to.z));
+                    .all(|n| n.role == MoveRole::Cut && at_level(n.to.z));
             if closes && flat {
-                out.push(
-                    std::iter::once(start.truncate())
-                        .chain(cuts.iter().map(|n| n.to.truncate()))
-                        .collect(),
-                );
+                // Arcs by points close along them, so lengths along the loop are
+                // its own.
+                let mut ring = vec![start.truncate()];
+                let mut at = start;
+                for n in cuts {
+                    ring.extend(n.chords(at, FOLLOW).iter().map(|p| p.truncate()));
+                    at = n.to;
+                }
+                out.push(ring);
             }
         }
         i = end;
@@ -381,6 +494,62 @@ mod tests {
             .filter(|m| m.to.truncate().distance(c) <= r)
             .map(|m| m.to.z)
             .fold(f64::MIN, f64::max)
+    }
+
+    /// A round ring, one full turn about the origin at `z`, as a single arc.
+    fn circle(radius: f64, z: f64) -> Toolpath {
+        let mut p = Toolpath::new();
+        let start = dvec3(radius, 0.0, z);
+        p.feed_to(start, MoveRole::Link, 1000.0).unwrap();
+        let turn = Arc {
+            centre: dvec3(0.0, 0.0, z),
+            axis: DVec3::Z,
+            sweep: std::f64::consts::TAU,
+        };
+        p.arc_to(start, turn, MoveRole::Cut, 1000.0).unwrap();
+        p
+    }
+
+    /// An arc is lifted over a tab and stays an arc: the ring comes back as arcs
+    /// on the same circle, on the floor and over each tab, joined by steps
+    /// straight up and down, and goes all the way round.
+    #[test]
+    fn an_arc_is_lifted_over_a_tab_as_arcs() {
+        let (radius, z) = (20.0, -2.0);
+        let (out, report) =
+            add_tabs(&circle(radius, z), &params(TabShape::Rectangular, 60.0)).unwrap();
+        assert_eq!(report.tabs, 3, "{report:?}");
+        let mut at = out.moves()[0].to;
+        let mut turned = 0.0;
+        let (mut floor, mut top) = (0, 0);
+        for m in &out.moves()[1..] {
+            match m.kind {
+                MoveKind::Arc(a) => {
+                    assert!((a.radius(at) - radius).abs() < 1e-9, "{m:?}");
+                    assert!(a.centre.truncate().length() < 1e-9);
+                    assert!((m.to.z - at.z).abs() < 1e-9, "level over a rectangular tab");
+                    turned += a.sweep;
+                    if (m.to.z - z).abs() < 1e-9 {
+                        floor += 1;
+                    } else {
+                        assert!((m.to.z - (z + 2.0)).abs() < 1e-9, "{m:?}");
+                        top += 1;
+                    }
+                }
+                MoveKind::Linear => {
+                    assert!(
+                        m.to.truncate().distance(at.truncate()) < 1e-9,
+                        "a step: {m:?}"
+                    );
+                }
+            }
+            at = m.to;
+        }
+        assert!((turned - std::f64::consts::TAU).abs() < 1e-9, "{turned}");
+        // Over each tab, in two halves either side of its middle.
+        assert_eq!(top, 2 * report.tabs, "{report:?}");
+        assert_eq!(floor, report.tabs + 1, "between them, and on to the end");
+        assert!(at.distance(dvec3(radius, 0.0, z)) < 1e-9);
     }
 
     /// A lead runs on from the ring towards the first tab, at the ring's depth:

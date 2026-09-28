@@ -112,10 +112,12 @@ fn a_deliberate_gouge_is_detected() {
         moves.push(SimMove {
             to: dvec3(-5.0, y, -1.0),
             class: MoveClass::MayCut,
+            arc: None,
         });
         moves.push(SimMove {
             to: dvec3(5.0, y, -1.0),
             class: MoveClass::MayCut,
+            arc: None,
         });
         y += 0.5;
     }

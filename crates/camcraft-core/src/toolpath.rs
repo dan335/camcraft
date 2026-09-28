@@ -24,9 +24,21 @@
 //! replaces them with real retracts, rapids and plunges. A finished program contains
 //! no links, and that is a checkable property rather than a convention.
 
+pub use camcraft_geom::arc::Arc;
 use glam::DVec3;
 
 use crate::is_positive;
+
+/// How far, in millimetres, an arc's end may be from where its shape says it
+/// ends: rounding, and nothing more.
+const ARC_END: f64 = 1.0e-6;
+
+/// Whether a three-axis machine cuts an arc about `axis` as one: it turns only
+/// about X, Y or Z (`G19`, `G18`, `G17`).
+pub fn principal(axis: DVec3) -> bool {
+    let a = axis.abs();
+    a.max_element() > 1.0 - 1.0e-9
+}
 
 /// Descent-to-advance ratio past which a cutting move is falling rather than
 /// cutting along.
@@ -99,17 +111,10 @@ impl MoveRole {
 pub enum MoveKind {
     /// A straight line to the target.
     Linear,
-    /// A circular arc to the target about `centre`.
-    ///
-    /// Reserved: nothing emits arcs yet. It exists so that arc fitting can be
-    /// added as a `Toolpath -> Toolpath` transform without changing this type, which
-    /// is the whole reason strategies emit toolpaths rather than instructions.
-    Arc {
-        /// Arc centre.
-        centre: DVec3,
-        /// Whether the arc turns clockwise seen from +Z.
-        clockwise: bool,
-    },
+    /// A circular arc, or a helix, to the target, from where the move before it
+    /// ended. Only a feeding move follows one: a rapid, plunge or retract is
+    /// straight by definition.
+    Arc(Arc),
 }
 
 /// One move of the tool.
@@ -123,6 +128,55 @@ pub struct Move {
     pub role: MoveRole,
     /// Feed rate in mm/min, or `None` for a rapid.
     pub feed: Option<f64>,
+}
+
+impl Move {
+    /// The point a fraction `t` of the way along it, from `from`.
+    pub fn point_at(&self, from: DVec3, t: f64) -> DVec3 {
+        match self.kind {
+            MoveKind::Linear => from.lerp(self.to, t),
+            MoveKind::Arc(a) => a.point_at(from, self.to, t),
+        }
+    }
+
+    /// The direction it runs a fraction `t` of the way along, from `from`, or
+    /// `None` for a move that goes nowhere.
+    pub fn tangent_at(&self, from: DVec3, t: f64) -> Option<DVec3> {
+        match self.kind {
+            MoveKind::Linear => (self.to - from).try_normalize(),
+            MoveKind::Arc(a) => Some(a.tangent_at(from, self.to, t)),
+        }
+    }
+
+    /// Its length, from `from`.
+    pub fn length(&self, from: DVec3) -> f64 {
+        match self.kind {
+            MoveKind::Linear => from.distance(self.to),
+            MoveKind::Arc(a) => a.length(from, self.to),
+        }
+    }
+
+    /// Points along it within `tolerance` of it, from `from`, the start left out
+    /// and its end last: a straight move's is its end alone.
+    pub fn chords(&self, from: DVec3, tolerance: f64) -> Vec<DVec3> {
+        match self.kind {
+            MoveKind::Linear => vec![self.to],
+            MoveKind::Arc(a) => a.chords(from, self.to, tolerance),
+        }
+    }
+
+    /// The same move run backwards, from its end to `from`, with the same role
+    /// and feed.
+    pub fn reversed(&self, from: DVec3) -> Self {
+        Self {
+            to: from,
+            kind: match self.kind {
+                MoveKind::Linear => MoveKind::Linear,
+                MoveKind::Arc(a) => MoveKind::Arc(a.reversed()),
+            },
+            ..*self
+        }
+    }
 }
 
 /// A move that could not be added.
@@ -142,6 +196,15 @@ pub enum ToolpathError {
         /// Whether a feed was expected.
         expected: bool,
     },
+    /// An arc was the first move, so had nowhere to start from.
+    #[error("an arc cannot be a path's first move")]
+    ArcWithoutStart,
+    /// An arc's shape was unusable, or it does not end where the move does.
+    #[error("the arc to {0:?} is not a usable arc from where the path is")]
+    BadArc(DVec3),
+    /// A move that must be straight was given an arc.
+    #[error("{0:?} moves are straight")]
+    CurvedMove(MoveRole),
 }
 
 /// An ordered sequence of moves.
@@ -185,10 +248,17 @@ impl Toolpath {
         if !m.to.is_finite() {
             return Err(ToolpathError::NonFiniteTarget(m.to));
         }
-        if let MoveKind::Arc { centre, .. } = m.kind
-            && !centre.is_finite()
-        {
-            return Err(ToolpathError::NonFiniteTarget(centre));
+        if let MoveKind::Arc(a) = m.kind {
+            if matches!(
+                m.role,
+                MoveRole::Rapid | MoveRole::Plunge | MoveRole::Retract | MoveRole::Link
+            ) {
+                return Err(ToolpathError::CurvedMove(m.role));
+            }
+            let from = self.end().ok_or(ToolpathError::ArcWithoutStart)?;
+            if !a.is_usable(from, ARC_END) || !a.ends_at(from, m.to, ARC_END) {
+                return Err(ToolpathError::BadArc(m.to));
+            }
         }
         let wants_feed = m.role != MoveRole::Rapid;
         match (wants_feed, m.feed) {
@@ -226,6 +296,43 @@ impl Toolpath {
         })
     }
 
+    /// Append an arc, or a helix, from where the path is.
+    pub fn arc_to(
+        &mut self,
+        to: DVec3,
+        arc: Arc,
+        role: MoveRole,
+        feed: f64,
+    ) -> Result<(), ToolpathError> {
+        self.push(Move {
+            to,
+            kind: MoveKind::Arc(arc),
+            role,
+            feed: Some(feed),
+        })
+    }
+
+    /// Append an arc, as one move where a three-axis machine can cut it as one
+    /// ([`principal`]), and otherwise as its chords within `tolerance`, so the
+    /// path is what the program will be.
+    pub fn arc_or_chords_to(
+        &mut self,
+        to: DVec3,
+        arc: Arc,
+        role: MoveRole,
+        feed: f64,
+        tolerance: f64,
+    ) -> Result<(), ToolpathError> {
+        if principal(arc.axis) {
+            return self.arc_to(to, arc, role, feed);
+        }
+        let from = self.end().ok_or(ToolpathError::ArcWithoutStart)?;
+        for p in arc.chords(from, to, tolerance) {
+            self.feed_to(p, role, feed)?;
+        }
+        Ok(())
+    }
+
     /// Whether any move still needs the linker's attention.
     ///
     /// A finished program must answer `false`. This is the checkable form of "links
@@ -256,7 +363,19 @@ impl Toolpath {
         let mut current: Option<Descent> = None;
         for (i, m) in self.moves.iter().enumerate() {
             let drop = at.z - m.to.z;
-            let flat = (m.to.truncate() - at.truncate()).length();
+            let flat = match m.kind {
+                MoveKind::Linear => (m.to.truncate() - at.truncate()).length(),
+                // Seen from above, an arc runs further than its chord.
+                MoveKind::Arc(_) => {
+                    let mut p = at;
+                    let mut run = 0.0;
+                    for q in m.chords(at, 1.0e-3) {
+                        run += (q.truncate() - p.truncate()).length();
+                        p = q;
+                    }
+                    run
+                }
+            };
             // A transition runs at the cutting feed too, so a steep one is the
             // same plunge.
             let cutting = matches!(m.role, MoveRole::Cut | MoveRole::Transition);
@@ -286,15 +405,13 @@ impl Toolpath {
     }
 
     /// Total length of moves whose role cuts, in millimetres.
-    ///
-    /// Arcs are measured by their chord, since nothing emits them yet.
     #[cfg(test)]
     pub(crate) fn cutting_length(&self, from: DVec3) -> f64 {
         let mut at = from;
         let mut total = 0.0;
         for m in &self.moves {
             if m.role.cuts() {
-                total += (m.to - at).length();
+                total += m.length(at);
             }
             at = m.to;
         }
@@ -479,32 +596,69 @@ mod tests {
         assert_eq!(t.steep_cut_descents(dvec3(0.0, 0.0, 10.0), 1.0), (0, 0.0));
     }
 
-    /// Arcs are reserved but must already be representable, or arc fitting would
-    /// have nowhere to put its output and this type would need changing.
+    /// An arc starts where the path is and must end where its move does; it is
+    /// never a rapid, plunge or retract, and never a path's first move.
     #[test]
-    fn arcs_are_representable_though_unused() {
+    fn arcs_are_checked_against_where_the_path_is() {
+        let quarter = Arc {
+            centre: dvec3(1.0, 0.0, 0.0),
+            axis: DVec3::Z,
+            sweep: -std::f64::consts::FRAC_PI_2,
+        };
         let mut t = Toolpath::new();
-        let arc = Move {
-            to: dvec3(1.0, 1.0, 0.0),
-            kind: MoveKind::Arc {
+        assert_eq!(
+            t.arc_to(dvec3(1.0, 1.0, 0.0), quarter, MoveRole::Cut, 400.0),
+            Err(ToolpathError::ArcWithoutStart)
+        );
+        t.feed_to(DVec3::ZERO, MoveRole::Cut, 400.0).unwrap();
+        // Clockwise from the origin about (1, 0) is up to (1, 1).
+        t.arc_to(dvec3(1.0, 1.0, 0.0), quarter, MoveRole::Cut, 400.0)
+            .unwrap();
+        let m = t.moves()[1];
+        let length = m.length(DVec3::ZERO);
+        assert!((length - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        assert_eq!(t.cutting_length(DVec3::ZERO), length);
+        // It does not end there.
+        assert_eq!(
+            t.arc_to(dvec3(3.0, 0.0, 0.0), quarter, MoveRole::Cut, 400.0),
+            Err(ToolpathError::BadArc(dvec3(3.0, 0.0, 0.0)))
+        );
+        let broken = Arc {
+            centre: dvec3(f64::INFINITY, 0.0, 0.0),
+            ..quarter
+        };
+        assert!(
+            t.arc_to(dvec3(2.0, 0.0, 0.0), broken, MoveRole::Cut, 400.0)
+                .is_err()
+        );
+        let plunge = Move {
+            to: dvec3(2.0, 0.0, 0.0),
+            kind: MoveKind::Arc(quarter),
+            role: MoveRole::Plunge,
+            feed: Some(100.0),
+        };
+        assert_eq!(
+            t.push(plunge),
+            Err(ToolpathError::CurvedMove(MoveRole::Plunge))
+        );
+    }
+
+    /// Run backwards, an arc passes the same points the other way.
+    #[test]
+    fn a_reversed_arc_runs_back_over_itself() {
+        let from = DVec3::ZERO;
+        let m = Move {
+            to: dvec3(2.0, 0.0, 0.0),
+            kind: MoveKind::Arc(Arc {
                 centre: dvec3(1.0, 0.0, 0.0),
-                clockwise: true,
-            },
+                axis: DVec3::Z,
+                sweep: std::f64::consts::PI,
+            }),
             role: MoveRole::Cut,
             feed: Some(400.0),
         };
-        assert!(t.push(arc).is_ok());
-
-        let broken = Move {
-            kind: MoveKind::Arc {
-                centre: dvec3(f64::INFINITY, 0.0, 0.0),
-                clockwise: false,
-            },
-            ..arc
-        };
-        assert!(matches!(
-            t.push(broken),
-            Err(ToolpathError::NonFiniteTarget(_))
-        ));
+        let back = m.reversed(from);
+        assert_eq!(back.to, from);
+        assert!(back.point_at(m.to, 0.25).distance(m.point_at(from, 0.75)) < 1e-12);
     }
 }

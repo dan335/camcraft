@@ -77,13 +77,17 @@ impl Pass {
     }
 
     fn reversed(&self) -> Self {
-        let mut moves: Vec<Move> = self.moves.clone();
-        // Targets shift by one when a polyline is walked backwards: the new first
-        // point is the old last, and so on.
-        let mut pts: Vec<DVec3> = moves.iter().map(|m| m.to).collect();
-        pts.reverse();
-        for (m, p) in moves.iter_mut().zip(pts) {
-            m.to = p;
+        // The pass's first move is its link, to where it starts; walked backwards
+        // the link goes to where it ended, and each move after runs back over the
+        // one it was, arcs turning the other way.
+        let mut moves = Vec::with_capacity(self.moves.len());
+        if let (Some(link), Some(end)) = (self.moves.first(), self.end()) {
+            moves.push(Move { to: end, ..*link });
+        }
+        for pair in self.moves.windows(2).rev() {
+            if let [before, m] = pair {
+                moves.push(m.reversed(before.to));
+            }
         }
         Self {
             moves,

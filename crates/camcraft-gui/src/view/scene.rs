@@ -13,7 +13,7 @@
 use camcraft_core::job::{Job, Setup, ToolSpec};
 use camcraft_core::replay::Position;
 use camcraft_core::run::{PLUNGE_RATIO, SetupResult};
-use camcraft_core::toolpath::MoveRole;
+use camcraft_core::toolpath::{MoveKind, MoveRole};
 use camcraft_geom::heightmap::narrow;
 use camcraft_geom::mesh::Aabb;
 use glam::{DVec3, Vec3};
@@ -21,13 +21,16 @@ use glam::{DVec3, Vec3};
 use crate::tools::drawing::tip_profile;
 use crate::ui::theme;
 
-/// One move, drawn as a line from where the tool was to where it went.
+/// One move, drawn from where the tool was to where it went: straight, or
+/// round an arc.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Segment {
     /// Where the tool was.
     pub a: DVec3,
     /// Where the move took it.
     pub b: DVec3,
+    /// Straight, or the arc it follows.
+    pub kind: MoveKind,
     /// Why the move exists.
     pub role: MoveRole,
     /// Which operation, from zero.
@@ -36,6 +39,42 @@ pub struct Segment {
     pub feed: Option<f64>,
     /// Machining time at the end of this move, in seconds from the start.
     pub ends_at: f64,
+}
+
+/// How closely an arc is drawn, in millimetres: finer than a pixel at any zoom
+/// a part is looked at.
+pub const ARC_DRAWN: f64 = 0.005;
+
+impl Segment {
+    /// Where the tool is a fraction `t` of the way along.
+    pub fn point_at(&self, t: f64) -> DVec3 {
+        match self.kind {
+            MoveKind::Linear => self.a.lerp(self.b, t),
+            MoveKind::Arc(arc) => arc.point_at(self.a, self.b, t),
+        }
+    }
+
+    /// How far the tool goes.
+    pub fn length(&self) -> f64 {
+        match self.kind {
+            MoveKind::Linear => self.a.distance(self.b),
+            MoveKind::Arc(arc) => arc.length(self.a, self.b),
+        }
+    }
+
+    /// The straight pieces it is drawn as, end to end from `a` to `b`.
+    pub fn pieces(&self) -> Vec<(DVec3, DVec3)> {
+        match self.kind {
+            MoveKind::Linear => vec![(self.a, self.b)],
+            MoveKind::Arc(arc) => {
+                let mut at = self.a;
+                arc.chords(self.a, self.b, ARC_DRAWN)
+                    .into_iter()
+                    .map(|p| (std::mem::replace(&mut at, p), p))
+                    .collect()
+            }
+        }
+    }
 }
 
 /// Rapid rate assumed for machining time until a machine profile supplies one, in
@@ -130,15 +169,19 @@ impl Scene {
                 .map_or(f64::INFINITY, |o| o.passes.max_cut_step);
             for pair in run.path.moves().windows(2) {
                 let [from, to] = pair else { continue };
-                let (a, b) = (from.to, to.to);
-                clock += duration(a, b, to.feed);
-                scene.segments.push(Segment {
-                    a,
-                    b,
+                let segment = Segment {
+                    a: from.to,
+                    b: to.to,
+                    kind: to.kind,
                     role: to.role,
                     op,
                     feed: to.feed,
+                    ends_at: 0.0,
+                };
+                clock += duration(segment.length(), to.feed);
+                scene.segments.push(Segment {
                     ends_at: clock,
+                    ..segment
                 });
                 let r = theme::role_index(to.role) as usize;
                 if let Some(c) = scene.role_counts.get_mut(r) {
@@ -255,7 +298,7 @@ impl Scene {
     /// The cutter at `p`: its operation and where its tip is.
     pub fn cutter_at(&self, p: Playhead) -> Option<(usize, DVec3)> {
         match self.segments.get(p.shown) {
-            Some(s) => Some((s.op as usize, s.a.lerp(s.b, p.fraction))),
+            Some(s) => Some((s.op as usize, s.point_at(p.fraction))),
             None => self.segments.last().map(|s| (s.op as usize, s.b)),
         }
     }
@@ -294,10 +337,11 @@ impl Scene {
     }
 }
 
-/// How long a move takes, in seconds: at its feed, or the assumed rapid rate.
-fn duration(a: DVec3, b: DVec3, feed: Option<f64>) -> f64 {
+/// How long a move `length` long takes, in seconds: at its feed, or the
+/// assumed rapid rate.
+fn duration(length: f64, feed: Option<f64>) -> f64 {
     let rate = feed.filter(|f| *f > 0.0).unwrap_or(ASSUMED_RAPID);
-    (b - a).length() / rate * 60.0
+    length / rate * 60.0
 }
 
 /// Seconds as `m:ss`, or `h:mm:ss` past an hour.
@@ -546,10 +590,8 @@ passes = { stepover = 2.0, feed = 2000.0 }
 
     #[test]
     fn machining_time_is_length_over_feed() {
-        assert!(
-            (duration(DVec3::ZERO, DVec3::new(100.0, 0.0, 0.0), Some(1000.0)) - 6.0).abs() < 1e-12
-        );
-        let rapid = duration(DVec3::ZERO, DVec3::new(0.0, 0.0, 50.0), None);
+        assert!((duration(100.0, Some(1000.0)) - 6.0).abs() < 1e-12);
+        let rapid = duration(50.0, None);
         assert!((rapid - 50.0 / ASSUMED_RAPID * 60.0).abs() < 1e-12);
         let (_, _, scene) = scene();
         let mut last = 0.0;

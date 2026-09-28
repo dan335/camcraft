@@ -11,7 +11,7 @@ use crate::allowance::EffectiveTool;
 use crate::tool::ToolProfile;
 #[cfg(test)]
 use crate::tool::{Ball, Bullnose, Flat};
-use crate::toolpath::{Move, MoveRole, Toolpath};
+use crate::toolpath::{Move, MoveKind, MoveRole, Toolpath};
 
 /// Reduce a toolpath to what the simulator needs.
 ///
@@ -32,6 +32,10 @@ pub fn sim_moves_of(moves: &[Move]) -> Vec<SimMove> {
             class: match m.role {
                 MoveRole::Rapid | MoveRole::Link => MoveClass::Rapid,
                 _ => MoveClass::MayCut,
+            },
+            arc: match m.kind {
+                MoveKind::Linear => None,
+                MoveKind::Arc(a) => Some(a),
             },
         })
         .collect()

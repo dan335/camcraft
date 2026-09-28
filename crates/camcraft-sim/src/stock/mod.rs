@@ -36,6 +36,7 @@ mod sweep;
 #[allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
 mod tests;
 
+use camcraft_geom::arc::Arc;
 use camcraft_geom::heightmap::{HeightMap, HeightMapError};
 use glam::{DVec2, DVec3};
 use rayon::prelude::*;
@@ -70,6 +71,46 @@ pub struct SimMove {
     pub to: DVec3,
     /// Whether it may be in material.
     pub class: MoveClass,
+    /// The arc it follows there from where the move before it ended, or `None`
+    /// for a straight move.
+    pub arc: Option<Arc>,
+}
+
+impl SimMove {
+    /// The point a fraction `t` of the way along it, from `from`.
+    pub fn point_at(&self, from: DVec3, t: f64) -> DVec3 {
+        match self.arc {
+            None => from.lerp(self.to, t),
+            Some(a) => a.point_at(from, self.to, t),
+        }
+    }
+
+    /// The first `t` of it, from `from`, as a move of its own.
+    pub fn part(&self, from: DVec3, t: f64) -> Self {
+        match self.arc {
+            None => Self {
+                to: from.lerp(self.to, t),
+                ..*self
+            },
+            Some(a) => {
+                let (first, to, _) = a.split(from, self.to, t);
+                Self {
+                    to,
+                    arc: Some(first),
+                    ..*self
+                }
+            }
+        }
+    }
+
+    /// Points along it within `tolerance` of it, from `from`, the start left out
+    /// and its end last.
+    pub fn chords(&self, from: DVec3, tolerance: f64) -> Vec<DVec3> {
+        match self.arc {
+            None => vec![self.to],
+            Some(a) => a.chords(from, self.to, tolerance),
+        }
+    }
 }
 
 /// A block of material, as a height field.

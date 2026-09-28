@@ -89,10 +89,12 @@ fn a_flat_cut_leaves_a_flat_floor() {
         SimMove {
             to: dvec3(-8.0, 0.0, 1.0),
             class: MoveClass::MayCut,
+            arc: None,
         },
         SimMove {
             to: dvec3(8.0, 0.0, 1.0),
             class: MoveClass::MayCut,
+            arc: None,
         },
     ];
     let r = s.apply(&moves, &Flat(2.0));
@@ -118,10 +120,12 @@ fn a_ball_leaves_a_round_bottom() {
         SimMove {
             to: dvec3(0.0, 0.0, 0.0),
             class: MoveClass::MayCut,
+            arc: None,
         },
         SimMove {
             to: dvec3(0.0, 0.0, 0.0),
             class: MoveClass::MayCut,
+            arc: None,
         },
     ];
     s.apply(&moves, &Ball(3.0));
@@ -145,10 +149,12 @@ fn a_rapid_through_material_is_caught() {
         SimMove {
             to: dvec3(-8.0, 0.0, 1.0),
             class: MoveClass::Rapid,
+            arc: None,
         },
         SimMove {
             to: dvec3(8.0, 0.0, 1.0),
             class: MoveClass::Rapid,
+            arc: None,
         },
     ];
     let r = s.apply(&moves, &Flat(2.0));
@@ -172,10 +178,12 @@ fn a_rapid_above_the_stock_is_fine() {
         SimMove {
             to: dvec3(-8.0, 0.0, 20.0),
             class: MoveClass::Rapid,
+            arc: None,
         },
         SimMove {
             to: dvec3(8.0, 0.0, 20.0),
             class: MoveClass::Rapid,
+            arc: None,
         },
     ];
     let r = s.apply(&moves, &Flat(2.0));
@@ -252,10 +260,12 @@ fn verify_distinguishes_a_gouge_from_a_good_cut() {
             moves.push(SimMove {
                 to: dvec3(-5.0, y, z),
                 class: MoveClass::MayCut,
+                arc: None,
             });
             moves.push(SimMove {
                 to: dvec3(5.0, y, z),
                 class: MoveClass::MayCut,
+                arc: None,
             });
             y += 1.0;
         }
@@ -298,6 +308,7 @@ fn a_wall_is_judged_across_as_well_as_down() {
                 moves.push(SimMove {
                     to: dvec3(x, y, 0.0),
                     class: MoveClass::MayCut,
+                    arc: None,
                 });
             }
         }
@@ -345,6 +356,7 @@ fn zigzag() -> Vec<SimMove> {
     let mut moves = vec![SimMove {
         to: dvec3(-9.0, -9.0, 8.0),
         class: MoveClass::Rapid,
+        arc: None,
     }];
     let (mut y, mut z, mut sign) = (-7.0, 3.0, 1.0);
     while y <= 7.0 {
@@ -352,6 +364,7 @@ fn zigzag() -> Vec<SimMove> {
             moves.push(SimMove {
                 to: dvec3(x * sign, y, z),
                 class: MoveClass::MayCut,
+                arc: None,
             });
         }
         y += 2.3;
@@ -410,10 +423,12 @@ fn a_level_move_is_swept_exactly() {
             SimMove {
                 to: from,
                 class: MoveClass::MayCut,
+                arc: None,
             },
             SimMove {
                 to,
                 class: MoveClass::MayCut,
+                arc: None,
             },
         ];
         let mut exact = block();
@@ -444,10 +459,12 @@ fn a_plunge_is_the_tool_at_its_lowest() {
         SimMove {
             to: dvec3(1.0, 1.0, 8.0),
             class: MoveClass::MayCut,
+            arc: None,
         },
         SimMove {
             to: dvec3(1.0, 1.0, 0.5),
             class: MoveClass::MayCut,
+            arc: None,
         },
     ];
     plunged.sweep(&down, &Ball(2.0));
@@ -527,10 +544,12 @@ fn survives_non_finite_positions_without_panicking() {
         SimMove {
             to: dvec3(0.0, 0.0, 0.0),
             class: MoveClass::MayCut,
+            arc: None,
         },
         SimMove {
             to: dvec3(f64::NAN, 0.0, 0.0),
             class: MoveClass::MayCut,
+            arc: None,
         },
     ];
     let _ = s.apply(&moves, &Flat(1.0));
@@ -563,4 +582,49 @@ fn cutting_past_the_part_as_asked_is_no_gouge_only_where_asked() {
         .cut_past(1.0, 0.0, |_, _| true);
     assert_eq!(back.height_at(4.8, 0.0), None);
     assert_eq!(back.height_at(0.0, 0.0), Some(0.0));
+}
+
+/// An arc is swept along itself, not along its chord: a level half turn clears a
+/// curved trench, and leaves standing the middle it turns round.
+#[test]
+fn an_arc_is_swept_along_itself() {
+    let mut s = block();
+    let (from, to) = (dvec3(-6.0, 0.0, 1.0), dvec3(6.0, 0.0, 1.0));
+    // Clockwise from -X, over +Y, to +X.
+    let arc = Arc {
+        centre: dvec3(0.0, 0.0, 1.0),
+        axis: DVec3::Z,
+        sweep: -std::f64::consts::PI,
+    };
+    let moves = [
+        SimMove {
+            to: from,
+            class: MoveClass::MayCut,
+            arc: None,
+        },
+        SimMove {
+            to,
+            class: MoveClass::MayCut,
+            arc: Some(arc),
+        },
+    ];
+    s.sweep(&moves, &Flat(1.0));
+    for deg in [30.0f64, 90.0, 150.0] {
+        let (y, x) = deg.to_radians().sin_cos();
+        let h = s.height_at(6.0 * x, 6.0 * y).unwrap();
+        assert!((h - 1.0).abs() < 1e-6, "on the arc at {deg}: {h}");
+    }
+    assert_eq!(s.height_at(0.0, 0.0), Some(5.0), "the chord is not cut");
+    assert_eq!(s.height_at(0.0, -3.0), Some(5.0));
+    // Half of it, as playback sweeps a move in pieces, stops at its quarter.
+    let mut half = block();
+    let part = moves[1].part(from, 0.5);
+    assert!(
+        part.to.distance(dvec3(0.0, 6.0, 1.0)) < 1e-9,
+        "{:?}",
+        part.to
+    );
+    half.sweep(&[moves[0], part], &Flat(1.0));
+    assert_eq!(half.height_at(4.2, 4.2), Some(5.0));
+    assert!((half.height_at(-4.2, 4.2).unwrap() - 1.0).abs() < 1e-6);
 }

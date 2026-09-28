@@ -13,6 +13,10 @@ use super::{CellRect, MoveClass, SimMove, SimReport, Stock, Swept, SweptTool};
 /// up or down, in millimetres: both are then swept exactly.
 const STRAIGHT: f64 = 1.0e-9;
 
+/// How far an arc's chords may stray from it, as a fraction of a cell: an arc is
+/// swept as its chords, which cut this much inside it at most.
+const ARC_CHORD: f64 = 0.1;
+
 /// Cells a level move's footprint must span before its rows are cut in parallel.
 const PARALLEL_CELLS: u64 = 100_000;
 
@@ -139,19 +143,17 @@ impl Stock {
                     continue;
                 }
             };
-            let rise = (m.to.z - from.z).abs();
-            let run = (m.to - from).truncate().length();
-            let (worst, touched) = if rise <= STRAIGHT {
-                // Level: exact, however long the move.
-                self.stamp_level(from, m.to, tool)
-            } else if run <= STRAIGHT {
-                // Straight up or down: the tool is lowest at one end, and that end
-                // cuts everything the rest of the move could.
-                self.stamp(if from.z < m.to.z { from } else { m.to }, tool)
-            } else {
-                self.stamp_along(from, m.to, tool, step, first)
-            };
-            first = false;
+            // An arc is swept as chords within a tenth of a cell of it.
+            let mut worst = 0.0f64;
+            let mut touched = None;
+            let mut a = from;
+            for b in m.chords(from, pitch * ARC_CHORD) {
+                let (w, t) = self.stamp_segment(a, b, tool, step, first);
+                worst = worst.max(w);
+                touched = CellRect::join(touched, t);
+                first = false;
+                a = b;
+            }
             report.touched = CellRect::join(report.touched, touched);
             if m.class == MoveClass::Rapid && worst > pitch * 0.01 {
                 report.rapid_contacts += 1;
@@ -160,6 +162,29 @@ impl Stock {
             at = Some(m.to);
         }
         report
+    }
+
+    /// Sweep one straight piece of a move, from `from` to `to`.
+    fn stamp_segment<T: SweptTool>(
+        &mut self,
+        from: DVec3,
+        to: DVec3,
+        tool: &T,
+        step: f64,
+        first: bool,
+    ) -> (f64, Option<CellRect>) {
+        let rise = (to.z - from.z).abs();
+        let run = (to - from).truncate().length();
+        if rise <= STRAIGHT {
+            // Level: exact, however long the move.
+            self.stamp_level(from, to, tool)
+        } else if run <= STRAIGHT {
+            // Straight up or down: the tool is lowest at one end, and that end
+            // cuts everything the rest of the move could.
+            self.stamp(if from.z < to.z { from } else { to }, tool)
+        } else {
+            self.stamp_along(from, to, tool, step, first)
+        }
     }
 
     /// Sweep a move that climbs or descends as it goes, sampled at no more than

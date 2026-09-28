@@ -13,12 +13,13 @@
 //!
 //! # Arcs
 //!
-//! [`Op::Arc`] is defined and rendered but nothing emits it yet, so arc fitting
-//! can arrive as an addition rather than as a change to this type.
+//! An arc of the path is an [`Op::Arc`], in whichever of the three planes it
+//! turns in. The engine only makes arcs a three-axis machine can cut
+//! ([`principal`]), and one that is not is refused rather than guessed at.
 
 use camcraft_core::drilling::Hole;
 use camcraft_core::job::{Coolant, SpindleDirection};
-use camcraft_core::toolpath::{MoveKind, MoveRole, Toolpath};
+use camcraft_core::toolpath::{Arc, MoveKind, MoveRole, Toolpath, principal};
 use glam::{DVec2, DVec3, dvec3};
 
 /// Which unit the program is written in.
@@ -102,16 +103,17 @@ pub enum Op {
         /// Why this move exists, so a profile can vary its output by role.
         role: MoveRole,
     },
-    /// Circular interpolation. Reserved.
+    /// Circular interpolation, from where the tool is: an arc, or a helix,
+    /// about X, Y or Z.
     Arc {
         /// Target position.
         to: DVec3,
-        /// Arc centre.
-        centre: DVec3,
-        /// Turning clockwise seen from +Z.
-        clockwise: bool,
+        /// The arc.
+        arc: Arc,
         /// Feed in mm/min.
         feed: f64,
+        /// Why this move exists.
+        role: MoveRole,
     },
     /// Canned cycle: one hole.
     Cycle {
@@ -215,6 +217,10 @@ pub enum LowerError {
     /// A work offset outside the usual range.
     #[error("work offset {0} is not in the range 54..=59")]
     BadWorkOffset(u8),
+    /// An arc turns about something other than X, Y or Z, which no three-axis
+    /// machine can cut as an arc.
+    #[error("the arc to {0:?} is not in the XY, XZ or YZ plane")]
+    ArcOutOfPlane(DVec3),
 }
 
 /// Turn a linked toolpath into an instruction stream.
@@ -233,6 +239,13 @@ pub fn lower(path: &Toolpath, spec: &ProgramSpec) -> Result<Vec<Op>, LowerError>
     }
     if !(54..=59).contains(&spec.wcs) {
         return Err(LowerError::BadWorkOffset(spec.wcs));
+    }
+    if let Some(m) = path
+        .moves()
+        .iter()
+        .find(|m| matches!(m.kind, MoveKind::Arc(a) if !principal(a.axis)))
+    {
+        return Err(LowerError::ArcOutOfPlane(m.to));
     }
 
     // The profile header owns the program name via `{name}`; repeating it here
@@ -322,11 +335,11 @@ fn moves(path: &Toolpath, out: &mut Vec<Op>) {
                 feed,
                 role,
             }),
-            (MoveKind::Arc { centre, clockwise }, _, Some(feed)) => out.push(Op::Arc {
+            (MoveKind::Arc(arc), role, Some(feed)) => out.push(Op::Arc {
                 to: m.to,
-                centre,
-                clockwise,
+                arc,
                 feed,
+                role,
             }),
             // A feeding move with no feed cannot be constructed: Toolpath::push
             // rejects it. Skipping is unreachable, and silently emitting a rapid

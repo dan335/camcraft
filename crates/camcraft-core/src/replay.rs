@@ -147,12 +147,15 @@ impl Replay {
         let next = sweep.moves.get(made)?;
         let tool = sweep.tool.as_ref()?;
         let r = tool.max_radius();
-        let rect = CellRect::join(stock.footprint(from.to, r), stock.footprint(next.to, r))?;
+        let part = next.part(from.to, fraction.clamp(0.0, 1.0));
+        // An arc bulges past its ends, so its footprint is its chords'.
+        let rect = part
+            .chords(from.to, stock.field().pitch())
+            .into_iter()
+            .fold(stock.footprint(from.to, r), |rect, p| {
+                CellRect::join(rect, stock.footprint(p, r))
+            })?;
         let saved = stock.read_cells(rect);
-        let part = SimMove {
-            to: from.to.lerp(next.to, fraction.clamp(0.0, 1.0)),
-            class: next.class,
-        };
         stock.sweep(&[*from, part], tool);
         Some((rect, saved))
     }
