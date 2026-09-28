@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 /// coordinates, where the person clicked. `index` is the feature's number when it
 /// was picked, which finds it at once while the model is unchanged.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct FeatureRef {
     /// The model, by name.
     pub model: String,
@@ -35,6 +36,7 @@ pub enum Snap {
 /// coordinates. `index` is the vertex's number for [`Snap::Vertex`], and the edge's
 /// otherwise.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PointRef {
     /// The model, by name.
     pub model: String,

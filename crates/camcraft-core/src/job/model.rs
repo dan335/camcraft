@@ -17,6 +17,7 @@ pub enum LengthUnit {
 
 /// One design file.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelDef {
     /// Name, unique in the job; setups and stocks refer to it by this.
     pub name: String,
@@ -37,6 +38,7 @@ pub struct ModelDef {
 /// the model where this puts it; only picks keep the file's coordinates, so they
 /// move with it.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct Transform {
     /// Where the file's origin goes, millimetres.
@@ -86,6 +88,7 @@ pub struct StockDef {
 
 /// The shape of a block, in model coordinates, millimetres.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum StockSpec {
     /// A box around models, grown by a margin.
@@ -141,7 +144,11 @@ impl FixedBox {
         Self {
             size,
             models: Vec::new(),
-            place: [Place::Center, Place::Center, Place::Max { offset: 0.0 }],
+            place: [
+                Place::Center {},
+                Place::Center {},
+                Place::Max { offset: 0.0 },
+            ],
         }
     }
 
@@ -162,10 +169,11 @@ impl FixedBox {
 
 /// Where a fixed box sits along one axis, against the models' box.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[serde(tag = "from", rename_all = "kebab-case")]
 pub enum Place {
     /// Centred on the models.
-    Center,
+    Center {},
     /// Its low side (left, front or bottom) `offset` beyond the models'.
     Min {
         /// How far beyond; less than zero is inside.
@@ -187,7 +195,7 @@ impl Place {
     /// Where a block `size` long goes, against the models' `lo..hi`: its low end.
     pub fn low(self, lo: f64, hi: f64, size: f64) -> f64 {
         match self {
-            Place::Center => (lo + hi - size) * 0.5,
+            Place::Center {} => (lo + hi - size) * 0.5,
             Place::Min { offset } => lo - offset,
             Place::Max { offset } => hi + offset - size,
             Place::At { coordinate } => coordinate,
@@ -197,7 +205,7 @@ impl Place {
     /// Its offset or coordinate; none when centred.
     pub fn value(self) -> Option<f64> {
         match self {
-            Place::Center => None,
+            Place::Center {} => None,
             Place::Min { offset } | Place::Max { offset } => Some(offset),
             Place::At { coordinate } => Some(coordinate),
         }
@@ -206,6 +214,7 @@ impl Place {
 
 /// A fixed box as its file holds it: a place on each axis.
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct FixedBoxFile {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     models: Vec<String>,

@@ -105,6 +105,7 @@ pub struct Operation {
 
 /// Strategy and the parameters only it has.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[serde(tag = "strategy", rename_all = "kebab-case")]
 pub enum StrategySpec {
     /// Raster finishing.
@@ -388,6 +389,7 @@ fn default_min_ring() -> f64 {
 /// their outline from above, a height can be measured from them, a drill's are
 /// the rims of its holes.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Selection {
     /// Faces picked.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -416,6 +418,7 @@ impl Selection {
 /// around it; the models' bounding box or silhouette keeps the tool near the
 /// part; the selection keeps it to the picks' outline.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MachiningBoundary {
     /// What the tool is kept to.
     #[serde(default, skip_serializing_if = "is_default")]
@@ -442,6 +445,7 @@ impl Default for MachiningBoundary {
 
 /// Where the tool travels, and the levels it cuts between: Fusion's Heights tab.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Heights {
     /// Traverse height.
     #[serde(default = "default_clearance")]
@@ -483,6 +487,7 @@ fn default_clearance() -> Height {
 
 /// A height, stated relative to something that can be measured.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Height {
     /// What the offset is measured from.
     #[serde(rename = "ref", default = "default_ref")]
@@ -945,6 +950,7 @@ impl Operation {
 
 /// How the passes are laid out.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Passes {
     /// Distance between neighbouring passes, in millimetres.
     #[serde(default = "default_stepover")]
@@ -991,6 +997,7 @@ impl Default for Passes {
 /// Tabs: bridges of material left standing across the deepest cut, so a part cut
 /// free of its sheet stays held in it. Fusion's holding tabs, placed by distance.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Tabs {
     /// Square-sided, or with sides at 45°.
     #[serde(default, skip_serializing_if = "is_default")]
@@ -1046,6 +1053,7 @@ fn default_max_cut_step() -> f64 {
 /// part, and negative cuts past it, for a looser fit. Where a surface is neither
 /// wall nor floor, what is left is between the two.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct StockToLeave {
     /// Perpendicular to the tool axis: on the walls.
     #[serde(default)]
@@ -1081,6 +1089,7 @@ impl StockToLeave {
 /// What each setting does, and why its default is Fusion's, is in
 /// `docs/decisions/0004-linking-and-entries.md`.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Linking {
     /// Feed for coming up out of a cut.
     #[serde(default = "default_retract_feed")]
@@ -1134,6 +1143,7 @@ pub struct Linking {
 /// the same both ways: Fusion's horizontal lead-in and lead-out, with "same as
 /// lead-in".
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Leads {
     /// The arc's radius, in millimetres: half the tool's diameter when not
     /// given.

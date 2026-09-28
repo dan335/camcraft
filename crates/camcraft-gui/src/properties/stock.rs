@@ -194,7 +194,7 @@ fn axes(ui: &mut egui::Ui, m: Measure, b: &mut FixedBox) {
                 m.length_field(ui, size, 0.1, 10_000.0, "");
                 place_choice(ui, axis, place);
                 match place {
-                    Place::Center => {
+                    Place::Center {} => {
                         ui.label("");
                     }
                     Place::Min { offset: v } | Place::Max { offset: v } => {
@@ -214,7 +214,7 @@ fn axes(ui: &mut egui::Ui, m: Measure, b: &mut FixedBox) {
 fn place_choice(ui: &mut egui::Ui, axis: &Axis, p: &mut Place) {
     let at = format!("at {}", axis.letter);
     let text = |p: &Place| match p {
-        Place::Center => "centred",
+        Place::Center {} => "centred",
         Place::Min { .. } => axis.low,
         Place::Max { .. } => axis.high,
         Place::At { .. } => at.as_str(),
@@ -225,7 +225,7 @@ fn place_choice(ui: &mut egui::Ui, axis: &Axis, p: &mut Place) {
         .selected_text(text(p))
         .show_ui(ui, |ui| {
             for (choice, why) in [
-                (Place::Center, "Centred on the models"),
+                (Place::Center {}, "Centred on the models"),
                 (Place::Min { offset: keep }, axis.low_hint),
                 (Place::Max { offset: keep }, axis.high_hint),
                 (

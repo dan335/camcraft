@@ -41,6 +41,7 @@ pub enum ArcStyle {
 
 /// Number formatting.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Format {
     /// Decimal places for axis words.
     pub axis_decimals: u8,
@@ -53,6 +54,7 @@ pub struct Format {
 
 /// Line numbering.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Numbering {
     /// Whether to number lines at all.
     pub enabled: bool,
@@ -70,6 +72,7 @@ fn one() -> u32 {
 
 /// Modal behaviour.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Modal {
     /// Omit `G0`/`G1` when the motion mode has not changed.
     pub suppress_motion: bool,
@@ -81,6 +84,7 @@ pub struct Modal {
 
 /// One machine dialect.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Profile {
     /// Display name.
     pub name: String,

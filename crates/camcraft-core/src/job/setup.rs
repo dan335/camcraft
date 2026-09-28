@@ -8,6 +8,7 @@ use crate::frame::Orientation;
 
 /// How a part is held and machined from one side.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Setup {
     /// Name, unique in the job. Programs are named after it.
     pub name: String,
@@ -60,6 +61,7 @@ fn default_post() -> String {
 
 /// Where a setup's work zero is.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Origin {
     /// The design's own zero, turned with the part, moved by `offset` along the

@@ -451,7 +451,7 @@ fn setup_panel() {
         if let Some(s) = doc.job.stocks.iter_mut().find(|s| s.name == "offcut") {
             s.spec = StockSpec::FixedBox(FixedBox {
                 place: [
-                    camcraft_core::job::Place::Center,
+                    camcraft_core::job::Place::Center {},
                     camcraft_core::job::Place::Min { offset: 5.0 },
                     camcraft_core::job::Place::Max { offset: 1.5 },
                 ],

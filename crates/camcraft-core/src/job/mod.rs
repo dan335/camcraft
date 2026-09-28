@@ -93,6 +93,7 @@ pub const JOB_VERSION: u32 = 1;
 
 /// A complete job.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Job {
     /// The file format; [`JOB_VERSION`].
     pub version: u32,

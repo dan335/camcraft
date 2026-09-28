@@ -164,6 +164,12 @@ There is one job format, `version = 1`, and no backwards compatibility while
 camcraft is pre-alpha: a file of any other version is refused by name, and a file
 written before a change may no longer read. There is no converter.
 
+A setting the format does not have is refused, never ignored: a misspelt key, or
+one moved since the file was written, would otherwise leave the job cutting
+without it. One of an operation's `passes`, `heights` or `linking` written
+directly in the operation is named with the section it belongs in. Tool
+libraries and machine profiles are read the same way.
+
 A pick is saved as the model's name, the feature's number and a point on it. The
 point is what the pick *is*: a model tessellated again or re-exported with its
 faces in another order still has a face through that point. A model edited so the

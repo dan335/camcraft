@@ -17,6 +17,7 @@ use crate::tool::{Ball, Bullnose, Cone, Cutter, Flat, ToolError};
 ///
 /// Its speeds and feeds are [`Preset`]s: named sets an operation copies from.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ToolSpec {
     /// Shape.
     pub kind: ToolKind,
@@ -88,6 +89,7 @@ pub struct ToolSpec {
 /// so a "Finishing" preset can hold a stepover and stock to leave and keep the
 /// operation's feeds.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Preset {
     /// What the person calls it.
     pub name: String,
@@ -198,6 +200,7 @@ pub enum ToolMaterial {
 
 /// A tool holder, as a stack of cylinders from the holder face upward.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Holder {
     /// Its name, e.g. "ER20 collet chuck".
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -209,6 +212,7 @@ pub struct Holder {
 
 /// One cylinder of a holder.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HolderSegment {
     /// Diameter, in millimetres.
     pub diameter: f64,

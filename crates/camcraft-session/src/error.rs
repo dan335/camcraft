@@ -59,6 +59,22 @@ pub enum SessionError {
         /// Why.
         source: toml::de::Error,
     },
+    /// An operation in the job file has a setting of one of its sections, such as
+    /// `passes`, written directly in it: in the file format this build refuses,
+    /// or simply in the wrong place.
+    #[error(
+        "job {path} is not valid: `{key}` belongs under `[{section}]` in its operation ({source})"
+    )]
+    JobMisplaced {
+        /// Which file.
+        path: String,
+        /// The setting.
+        key: String,
+        /// The section it belongs in.
+        section: &'static str,
+        /// What the parser said.
+        source: Box<toml::de::Error>,
+    },
     /// The job could not be written.
     #[error("cannot write job {path}: {source}")]
     JobWrite {

@@ -403,7 +403,11 @@ mod tests {
             prepare(&job(spec), 0, &meshes).unwrap().stocks[0]
         };
         // The brick is (0, 0, 0) to (10, 20, 5).
-        let b = block([Place::Center, Place::Center, Place::Max { offset: 0.0 }]);
+        let b = block([
+            Place::Center {},
+            Place::Center {},
+            Place::Max { offset: 0.0 },
+        ]);
         assert_eq!(b.min, dvec3(-2.0, -5.0, -3.0));
         assert_eq!(b.max, dvec3(12.0, 25.0, 5.0));
         let b = block([
@@ -416,7 +420,7 @@ mod tests {
         let b = block([
             Place::At { coordinate: 7.0 },
             Place::Min { offset: -1.0 },
-            Place::Center,
+            Place::Center {},
         ]);
         assert_eq!(b.min, dvec3(7.0, 1.0, -1.5));
         assert_eq!(b.max, dvec3(21.0, 31.0, 6.5));

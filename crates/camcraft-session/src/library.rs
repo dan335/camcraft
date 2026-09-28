@@ -104,6 +104,7 @@ pub fn folder_label(path: &[String]) -> String {
 
 /// Tools, and folders of more.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Folder {
     /// The tools here, by name; names are unique within a folder.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

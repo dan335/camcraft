@@ -103,6 +103,7 @@ impl Axis {
 /// The two setup axes given as model directions: `z` points up the spindle, away
 /// from the table, and `x` along the machine's X. Y follows, as `z × x`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Orientation {
     /// The model direction that becomes the setup's +Z.
     pub z: Axis,

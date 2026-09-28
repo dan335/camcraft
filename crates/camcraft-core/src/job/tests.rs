@@ -144,7 +144,7 @@ fn a_job_round_trips() {
             size: [300.0, 200.0, 19.0],
             models: vec!["part".into()],
             place: [
-                Place::Center,
+                Place::Center {},
                 Place::Min { offset: 5.0 },
                 Place::At { coordinate: -1.0 },
             ],
@@ -182,6 +182,46 @@ fn a_fixed_box_is_written_with_a_place_on_each_axis() {
     assert_eq!(again, j.stocks[1]);
 }
 
+/// A setting the format does not have is refused, wherever it is written: an
+/// operation's own settings and its strategy's are one table in the file, and a
+/// stock's kind and its settings another, so those are checked too.
+#[test]
+fn unknown_settings_are_refused() {
+    let refused = |from: &str, to: &str| {
+        assert!(SAMPLE.contains(from), "{from}");
+        let text = SAMPLE.replacen(from, to, 1);
+        match toml::from_str::<Job>(&text) {
+            Err(e) => assert!(e.to_string().contains("unknown field"), "{to}: {e}"),
+            Ok(_) => panic!("read: {to}"),
+        }
+    };
+    // An operation's stepdown belongs under its passes.
+    refused("angle = 90.0\n", "angle = 90.0\nstepdown = 2.0\n");
+    refused(
+        "strategy = \"zlevel-rough\"\n",
+        "strategy = \"zlevel-rough\"\nstepdwon = 2.0\n",
+    );
+    refused("plunge_feed = 400.0 }", "plunge_feed = 400.0, leeds = {} }");
+    refused(
+        "margin = [2.0, 2.0, 1.0]\n",
+        "margin = [2.0, 2.0, 1.0]\nsize = 3.0\n",
+    );
+    refused("version = 1\n", "version = 1\nunits = \"mm\"\n");
+    refused("number = 2\n", "number = 2\nflute = 2\n");
+    refused(
+        "wcs = 54\n",
+        "wcs = 54\norigin = { kind = \"model-origin\", x = 1.0 }\n",
+    );
+    refused(
+        "margin = [2.0, 2.0, 1.0]\n",
+        "margin = [2.0, 2.0, 1.0]\n[[stock]]\nname = \"b\"\nkind = \"fixed-box\"\nsize = [1.0, 1.0, 1.0]\n\
+         x = { from = \"center\", offset = 3.0 }\ny = { from = \"center\" }\nz = { from = \"center\" }\n",
+    );
+    // What is written where it belongs still reads.
+    let fine = SAMPLE.replacen("angle = 90.0\n", "angle = 90.0\nenabled = true\n", 1);
+    toml::from_str::<Job>(&fine).unwrap();
+}
+
 /// A fixed box needs a place on every axis.
 #[test]
 fn a_fixed_box_without_a_place_on_each_axis_is_refused() {
@@ -203,8 +243,8 @@ fn a_fixed_box_is_checked() {
         spec: StockSpec::FixedBox(FixedBox {
             place: [
                 Place::Min { offset: f64::NAN },
-                Place::Center,
-                Place::Center,
+                Place::Center {},
+                Place::Center {},
             ],
             ..FixedBox::centred([10.0, 10.0, 10.0])
         }),
@@ -1102,6 +1142,8 @@ fn profiles_and_pockets_read_as_fusions() {
         "strategy = \"parallel\"",
         "strategy = \"profile\"\nside = \"inside\"\nconventional = true",
     );
+    // A profile has no angle.
+    let text = text.replace("angle = 90.0\n", "");
     let mut j: Job = toml::from_str(&text).unwrap();
     j.validate().unwrap();
     assert_eq!(
