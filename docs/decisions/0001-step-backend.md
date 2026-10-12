@@ -134,10 +134,33 @@ Accepted costs, all of which were actually hit and resolved during the spike:
   Apache-2.0. A static LGPL link in a distributed binary brings obligations, such as
   letting users relink against a modified library, that a permissive project does
   not otherwise have. The options include dynamic linking, shipping object files, a
-  feature flag, or accepting the obligations. None of this blocks a private
-  repository.
-- **Revisit if** a pure-Rust B-rep tessellator matures. The prize is dropping the C++
-  toolchain requirement. `truck` is not close today on curved surfaces.
+  feature flag, or accepting the obligations. None of this blocks publishing the
+  source.
+- **2026-10-12: re-tested, still no.** solidcraft (bherbruck/solidcraft at 07e263d)
+  reads STEP with its own reader and meshes with a truck-meshalgo patched against
+  runaway B-spline searches. `scripts/kernel-trial.sh` put it, upstream truck and
+  OpenCascade through camcraft's import checks and measured each against a 0.001 mm
+  OpenCascade mesh, on every fixture and the sculpted panel at 0.0125, 0.05, 0.1 and
+  0.5 mm. The trial has since become its own project,
+  [step-conformance](https://github.com/dan335/step-conformance), which scores any
+  STEP reader that way, and the checks their own crate, `step-check`. A reader passes when the checks pass and it lands within four times the
+  tolerance, since OpenCascade itself reaches 3.4 times on the bowl.
+
+  | reader | passes | where it fails |
+  |---|---|---|
+  | OpenCascade | 32 of 32 | |
+  | solidcraft | 29 of 32 | sculpted panel at 0.05, 0.1 and 0.5 mm: surface 39 to 108 mm off, on a B-spline face closed round the part |
+  | truck 0.3/0.4 | 23 of 32 | bowl, sled base and panel: 60 s timeouts, or surface 5 to 77 mm off |
+
+  solidcraft matches OpenCascade on everything else, gives the same bytes every run
+  and needs no cmake, so it is the reader to switch to once it holds on the panel.
+  The run also showed two gaps in the checks, both closed: they skipped any file with
+  a placement, the panel among them, and they relied on the kernel to refuse a face
+  it could not mesh, where truck hands one back empty. They still cannot see surface
+  that is wrong inside the part's box, like truck's bowl, 53 mm off, which only the
+  trial's distance catches.
+- **Revisit when** solidcraft's reader passes `scripts/kernel-trial.sh` everywhere.
+  The prize is dropping the C++ toolchain requirement and settling the licence.
 
 ## Implemented (0.1-d, 2026-09-22)
 

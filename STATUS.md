@@ -125,9 +125,10 @@ actually break cutters on the day:
 ## Open questions
 
 - **Licensing of distributed binaries.** STEP import links OpenCascade statically
-  through LGPL-2.1 crates, while camcraft is MIT or Apache-2.0. This doesn't matter
-  while the repo is private, but it has to be settled before anyone ships a binary.
-  See [decision 0001](docs/decisions/0001-step-backend.md).
+  through LGPL-2.1 crates, while camcraft is MIT or Apache-2.0. Publishing the source
+  is fine, but this has to be settled before anyone ships a binary. Replacing
+  OpenCascade with solidcraft's pure-Rust reader would settle it; `scripts/kernel-trial.sh`
+  says when that reader is ready. See [decision 0001](docs/decisions/0001-step-backend.md).
 - **One unexplained STEP read failure.** During a full gate run on 2026-09-23, two
   session tests reading `hinge_jig.step` failed with OpenCascade's "failed to read
   STEP file". The same tests passed 80 times since, with and without a lock that
@@ -137,16 +138,18 @@ actually break cutters on the day:
 
 ## Standing cautions
 
-- **`fixtures/step/` holds real shop jigs.** They are not customer work, but they are
-  not public either. Decide before making the repo public — deleting them later does
-  not remove them from history. One commercial part was already removed and
-  scrubbed; parts that cannot be published belong in `CAMCRAFT_FIXTURES`.
+- **`fixtures/step/` holds real shop jigs,** published with the repository by choice.
+  Parts that cannot be published belong in `CAMCRAFT_FIXTURES`, never in a commit.
+- **The STEP import checks are boxes.** They catch surface thrown outside the part, a
+  dropped face or a unit error, but not surface that is wrong inside the part's box.
+  `scripts/kernel-trial.sh` measures that for a candidate kernel; nothing measures it
+  on every import.
 - **The public fixture set cannot reproduce the bug that disqualified
   `truck-stepio`.** The part that exposed it is private. A synthetic
   sculpted-surface fixture should replace it.
 - **`vendor/` patches opencascade** (the MSVC fix, and each B-rep face's triangle
   count, which picking needs). Delete it and its `[patch.crates-io]` block only once
   a release includes both.
-- **There is no CI while the repo is private**, so `scripts/check.sh` is the only
+- **There is no CI yet**, so `scripts/check.sh` is the only
   thing between a mistake and `main`. Run it unpiped: piping through `tail` buffers
   the whole run and hides progress.

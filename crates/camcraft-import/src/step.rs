@@ -7,8 +7,12 @@
 //! file it came from, using facts read from the file's text independently of the
 //! kernel (see [`crate::part21`]):
 //!
-//! - **Every face arrives.** The file's face count against the kernel's. The
-//!   tessellator separately refuses any face it could not triangulate.
+//! The checks are [`step_check`]'s, kept free of camcraft so any importer can use them:
+//!
+//! - **Every face arrives, with triangles.** The file's face count against the
+//!   kernel's, and then every face the kernel gave must have at least one triangle.
+//!   OpenCascade refuses a face it cannot triangulate, but a kernel that hands one
+//!   back empty would pass the count.
 //! - **Nothing lands outside the file's own geometry.** A NURBS surface lies within
 //!   the convex hull of its control points, and a circle within its radius of its
 //!   centre, so the mesh must fit inside the bounding box of every point in the file,
@@ -19,9 +23,13 @@
 //!   error which makes the part too *small*, which the hull check alone cannot: a
 //!   shrunken part still sits inside the hull.
 //!
-//! The two geometric checks need the file's raw coordinates to be in the frame of
-//! the result. When geometry is placed by transforms, as in an assembly, they are
-//! not, and the checks are reported as skipped rather than passed.
+//! The two geometric checks are made where the file's assembly puts each component
+//! ([`step_check::part21`] follows its placements). Only geometry placed in a way that
+//! cannot be followed, such as a mapped item, leaves them reported as skipped rather
+//! than passed.
+//!
+//! Another kernel's mesh can be put through the same checks with
+//! [`load_step_with`], which is where a replacement for OpenCascade plugs in.
 //!
 //! # Faces
 //!
@@ -33,11 +41,13 @@
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 
-use camcraft_geom::mesh::{MeshError, TriMesh};
+use camcraft_geom::mesh::MeshError;
 use camcraft_geom::topology::{Body, TopologyError};
 use glam::{DVec3, dvec3};
+use step_check::Problem;
+use step_check::part21::{self, LengthUnit, Part21Error};
+pub use step_check::{FileCheck, KernelMesh};
 
-use crate::part21::{self, LengthUnit, Part21Error};
 use crate::weld::Welder;
 
 /// Serialises every call into OpenCascade. See [`load_step`].
@@ -63,51 +73,22 @@ pub enum StepError {
         source: Part21Error,
     },
     /// The kernel could not read the file.
-    #[error("{path}: OpenCascade could not read it ({detail})")]
+    #[error("{path}: {kernel} could not read it ({detail})")]
     Kernel {
         /// Which file.
         path: String,
+        /// Which kernel.
+        kernel: &'static str,
         /// What the kernel said.
         detail: String,
     },
-    /// Fewer faces came out of the kernel than the file defines.
-    #[error(
-        "{path}: the file defines {in_file} face(s) but only {meshed} arrived; \
-         a missing face is a hole the cutter would drop into"
-    )]
-    DroppedFaces {
+    /// The mesh does not match the file it came from.
+    #[error("{path}: {source}")]
+    Check {
         /// Which file.
         path: String,
-        /// Faces the file defines.
-        in_file: u64,
-        /// Faces the kernel produced.
-        meshed: u64,
-    },
-    /// The mesh extends beyond anything the file describes.
-    #[error(
-        "{path}: the mesh reaches {by:.3} mm outside the file's own geometry on {axis}; \
-         the surfaces were evaluated wrongly or the units are not what the file says"
-    )]
-    OutsideFile {
-        /// Which file.
-        path: String,
-        /// Which axis and side.
-        axis: &'static str,
-        /// How far, in millimetres.
-        by: f64,
-    },
-    /// The mesh falls short of the file's own vertices.
-    #[error(
-        "{path}: the mesh stops {by:.3} mm short of the file's vertices on {axis}; \
-         the part is smaller than the file says, which is what a unit error looks like"
-    )]
-    ShortOfVertices {
-        /// Which file.
-        path: String,
-        /// Which axis and side.
-        axis: &'static str,
-        /// How far, in millimetres.
-        by: f64,
+        /// How it does not match.
+        source: Problem,
     },
     /// The mesh was not usable.
     #[error("{path} is not a usable mesh: {source}")]
@@ -136,15 +117,6 @@ pub enum StepError {
     BadTolerance(f64),
 }
 
-/// Whether the mesh was checked against the file's own geometry.
-#[derive(Debug, Clone, PartialEq)]
-pub enum FileCheck {
-    /// Both geometric checks ran and passed.
-    Passed,
-    /// They could not run, and why. Worth telling a person about.
-    Skipped(&'static str),
-}
-
 /// What loading found, beyond the mesh itself.
 #[derive(Debug, Clone)]
 pub struct StepReport {
@@ -171,6 +143,38 @@ pub struct StepReport {
 /// It is error the simulator cannot see, because the simulator checks against this
 /// mesh, so it should be a small part of the machining tolerance.
 pub fn load_step(path: impl AsRef<Path>, tolerance: f64) -> Result<(Body, StepReport), StepError> {
+    load_step_with(path, tolerance, "OpenCascade", |path, _facts| {
+        // One kernel call at a time, across every thread. OpenCascade's data
+        // exchange keeps its settings in process-wide statics, so this does not
+        // rely on every caller happening to read on one thread. A read once failed
+        // during a full gate run with "failed to read STEP file" on a fixture that
+        // reads fine alone; that was never reproduced (0 of 80 runs, with and
+        // without this lock), so this is a precaution, not a proven fix. The shape
+        // is declared after the guard, so it is dropped while the lock is held.
+        let _kernel = KERNEL.lock().unwrap_or_else(PoisonError::into_inner);
+        let shape = opencascade::primitives::Shape::read_step(path).map_err(|e| e.to_string())?;
+        // Refuses outright if any face could not be triangulated.
+        let mesh = shape
+            .mesh_with_tolerance(tolerance)
+            .map_err(|e| e.to_string())?;
+        Ok(KernelMesh {
+            vertices: mesh.vertices.iter().map(|v| dvec3(v.x, v.y, v.z)).collect(),
+            indices: mesh.indices,
+            face_triangles: mesh.face_triangles,
+        })
+    })
+}
+
+/// [`load_step`] with the kernel's half supplied: `kernel` reads the file at
+/// `path` and tessellates it to within `tolerance` millimetres, given what the
+/// file says independently (its unit, for a kernel that ignores units). The result
+/// faces the same checks OpenCascade's does, and comes back as camcraft uses it.
+pub fn load_step_with(
+    path: impl AsRef<Path>,
+    tolerance: f64,
+    kernel_name: &'static str,
+    kernel: impl FnOnce(&Path, &part21::StepFacts) -> Result<KernelMesh, String>,
+) -> Result<(Body, StepReport), StepError> {
     if !(tolerance.is_finite() && tolerance > 0.0) {
         return Err(StepError::BadTolerance(tolerance));
     }
@@ -189,46 +193,20 @@ pub fn load_step(path: impl AsRef<Path>, tolerance: f64) -> Result<(Body, StepRe
         source,
     })?;
 
-    let kernel = |detail: String| StepError::Kernel {
+    let soup = kernel(path, &facts).map_err(|detail| StepError::Kernel {
         path: name.clone(),
+        kernel: kernel_name,
         detail,
-    };
-    let soup = {
-        // One kernel call at a time, across every thread. OpenCascade's data
-        // exchange keeps its settings in process-wide statics, so this does not
-        // rely on every caller happening to read on one thread. A read once failed
-        // during a full gate run with "failed to read STEP file" on a fixture that
-        // reads fine alone; that was never reproduced (0 of 80 runs, with and
-        // without this lock), so this is a precaution, not a proven fix. The shape
-        // is declared after the guard, so it is dropped while the lock is held.
-        let _kernel = KERNEL.lock().unwrap_or_else(PoisonError::into_inner);
-        let shape =
-            opencascade::primitives::Shape::read_step(path).map_err(|e| kernel(e.to_string()))?;
-        let meshed = shape.faces().count() as u64;
-        if meshed < facts.faces {
-            return Err(StepError::DroppedFaces {
-                path: name,
-                in_file: facts.faces,
-                meshed,
-            });
-        }
-        // Refuses outright if any face could not be triangulated.
-        shape
-            .mesh_with_tolerance(tolerance)
-            .map_err(|e| kernel(e.to_string()))?
-    };
+    })?;
+    let check = step_check::check(&facts, &soup, tolerance).map_err(|source| StepError::Check {
+        path: name.clone(),
+        source,
+    })?;
 
     let faces = |detail: String| StepError::Faces {
         path: name.clone(),
         detail,
     };
-    let counted: usize = soup.face_triangles.iter().sum();
-    if counted * 3 != soup.indices.len() {
-        return Err(faces(format!(
-            "the faces account for {counted} triangles but the kernel gave {}",
-            soup.indices.len() / 3
-        )));
-    }
     let face_count = u32::try_from(soup.face_triangles.len())
         .map_err(|_| faces(format!("{} faces is too many", soup.face_triangles.len())))?;
     // The face of each triangle, in the kernel's order.
@@ -246,7 +224,7 @@ pub fn load_step(path: impl AsRef<Path>, tolerance: f64) -> Result<(Body, StepRe
         let mut corners = [DVec3::NAN; 3];
         for (slot, &i) in corners.iter_mut().zip(tri) {
             if let Some(v) = soup.vertices.get(i) {
-                *slot = dvec3(v.x, v.y, v.z);
+                *slot = *v;
             }
         }
         // A triangle the weld drops takes its label with it.
@@ -264,7 +242,6 @@ pub fn load_step(path: impl AsRef<Path>, tolerance: f64) -> Result<(Body, StepRe
         source,
     })?;
 
-    let check = check_against_file(&mesh, &facts, tolerance, &name)?;
     let body = Body::with_faces(mesh, labels, face_count)
         .map_err(|e: TopologyError| faces(e.to_string()))?;
     Ok((
@@ -281,84 +258,44 @@ pub fn load_step(path: impl AsRef<Path>, tolerance: f64) -> Result<(Body, StepRe
     ))
 }
 
-/// The two geometric checks described in the module documentation.
-fn check_against_file(
-    mesh: &TriMesh,
-    facts: &part21::StepFacts,
-    tolerance: f64,
-    name: &str,
-) -> Result<FileCheck, StepError> {
-    if facts.transformed {
-        return Ok(FileCheck::Skipped(
-            "geometry is placed by transforms, so the file's raw coordinates bound nothing",
-        ));
-    }
-    let (Some(extent), Some(on_part), Some(got)) = (
-        facts.extent,
-        part21::bounds(&facts.vertices),
-        mesh.bounds().map(|b| (b.min, b.max)),
-    ) else {
-        return Ok(FileCheck::Skipped(
-            "the file has no vertices to check against",
-        ));
-    };
-
-    // Room for the tessellation itself and for float noise on a large part.
-    let size = (extent.1 - extent.0).max_element().max(1.0);
-    let slack = tolerance + size * 1e-9;
-
-    let (lo, hi) = (
-        extent.0 - DVec3::splat(slack),
-        extent.1 + DVec3::splat(slack),
-    );
-    if let Some((axis, by)) = worst_excess(got, (lo, hi)) {
-        return Err(StepError::OutsideFile {
-            path: name.to_string(),
-            axis,
-            by,
-        });
-    }
-
-    let (lo, hi) = (got.0 - DVec3::splat(slack), got.1 + DVec3::splat(slack));
-    if let Some((axis, by)) = worst_excess(on_part, (lo, hi)) {
-        return Err(StepError::ShortOfVertices {
-            path: name.to_string(),
-            axis,
-            by,
-        });
-    }
-    Ok(FileCheck::Passed)
-}
-
-/// How far `inner` sticks out of `outer`, at worst, and where.
-fn worst_excess(inner: (DVec3, DVec3), outer: (DVec3, DVec3)) -> Option<(&'static str, f64)> {
-    let candidates = [
-        ("-X", outer.0.x - inner.0.x),
-        ("-Y", outer.0.y - inner.0.y),
-        ("-Z", outer.0.z - inner.0.z),
-        ("+X", inner.1.x - outer.1.x),
-        ("+Y", inner.1.y - outer.1.y),
-        ("+Z", inner.1.z - outer.1.z),
-    ];
-    candidates
-        .into_iter()
-        .filter(|(_, by)| *by > 0.0)
-        .max_by(|a, b| a.1.total_cmp(&b.1))
-}
-
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 mod tests {
     use super::*;
 
+    const HINGE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/step/hinge_jig.step"
+    );
+
+    /// OpenCascade's mesh of the hinge jig, handed back as another kernel would.
+    fn hinge_from_another_kernel() -> KernelMesh {
+        let (body, _) = load_step(HINGE, 0.01).unwrap();
+        let mesh = body.mesh();
+        let mut out = KernelMesh {
+            vertices: mesh.vertices().to_vec(),
+            ..KernelMesh::default()
+        };
+        for face in body.topology().faces() {
+            out.face_triangles.push(face.triangles.len());
+            for &t in &face.triangles {
+                out.indices
+                    .extend(mesh.triangles()[t as usize].map(|i| i as usize));
+            }
+        }
+        out
+    }
+
     #[test]
-    fn excess_names_the_worst_side() {
-        let outer = (dvec3(0.0, 0.0, 0.0), dvec3(2.0, 2.0, 2.0));
-        // Out by 1.0 on -X and by 1.5 on +Y: the worse one is reported.
-        let inner = (dvec3(-1.0, 0.0, 0.0), dvec3(1.0, 3.5, 1.0));
-        assert_eq!(worst_excess(inner, outer), Some(("+Y", 1.5)));
-        let inside = (dvec3(0.5, 0.5, 0.5), dvec3(1.5, 1.5, 1.5));
-        assert_eq!(worst_excess(inside, outer), None);
+    fn another_kernel_faces_the_same_checks() {
+        let soup = hinge_from_another_kernel();
+        let (_, report) = load_step_with(HINGE, 0.01, "test", |_, _| Ok(soup)).unwrap();
+        assert_eq!(report.check, FileCheck::Passed);
     }
 
     /// Both unit-error directions, against a real part: a mesh 25.4 times too small
@@ -366,31 +303,66 @@ mod tests {
     /// file's geometry. Neither may pass.
     #[test]
     fn a_mesh_at_the_wrong_scale_is_refused_either_way() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/step/hinge_jig.step"
-        );
-        let text = std::fs::read_to_string(path).unwrap();
-        let facts = part21::facts(&text).unwrap();
-        let (body, _) = load_step(path, 0.01).unwrap();
-        let mesh = body.mesh();
-        assert_eq!(
-            check_against_file(mesh, &facts, 0.01, "hinge").unwrap(),
-            FileCheck::Passed
-        );
-
         let scaled = |k: f64| {
-            let v = mesh.vertices().iter().map(|p| *p * k).collect();
-            TriMesh::new(v, mesh.triangles().to_vec()).unwrap()
+            let mut soup = hinge_from_another_kernel();
+            soup.vertices.iter_mut().for_each(|v| *v *= k);
+            load_step_with(HINGE, 0.01, "test", |_, _| Ok(soup))
         };
         assert!(matches!(
-            check_against_file(&scaled(1.0 / 25.4), &facts, 0.01, "hinge"),
-            Err(StepError::ShortOfVertices { .. })
+            scaled(1.0 / 25.4),
+            Err(StepError::Check {
+                source: Problem::ShortOfVertices { .. },
+                ..
+            })
         ));
         assert!(matches!(
-            check_against_file(&scaled(25.4), &facts, 0.01, "hinge"),
-            Err(StepError::OutsideFile { .. })
+            scaled(25.4),
+            Err(StepError::Check {
+                source: Problem::OutsideFile { .. },
+                ..
+            })
         ));
+    }
+
+    /// A kernel that gives up on a face but still counts it is refused, which
+    /// OpenCascade's own refusal made unnecessary to check until now.
+    #[test]
+    fn a_face_handed_back_empty_is_refused() {
+        let mut soup = hinge_from_another_kernel();
+        let dropped = soup.face_triangles[3];
+        let start: usize = soup.face_triangles[..3].iter().sum();
+        soup.indices.drain(start * 3..(start + dropped) * 3);
+        soup.face_triangles[3] = 0;
+        assert!(matches!(
+            load_step_with(HINGE, 0.01, "test", |_, _| Ok(soup)),
+            Err(StepError::Check {
+                source: Problem::EmptyFace { face: 3 },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_face_left_out_is_refused() {
+        let mut soup = hinge_from_another_kernel();
+        let last = soup.face_triangles.pop().unwrap();
+        soup.indices.truncate(soup.indices.len() - last * 3);
+        assert!(matches!(
+            load_step_with(HINGE, 0.01, "test", |_, _| Ok(soup)),
+            Err(StepError::Check {
+                source: Problem::DroppedFaces { .. },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_kernel_that_fails_is_named() {
+        let err = load_step_with(HINGE, 0.01, "truck", |_, _| Err("no".into())).unwrap_err();
+        assert!(
+            err.to_string().contains("truck could not read it (no)"),
+            "{err}"
+        );
     }
 
     #[test]

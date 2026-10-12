@@ -1,6 +1,6 @@
 //! Just enough of STEP's text format (ISO 10303-21) to check the kernel's answer.
 //!
-//! OpenCascade reads the geometry and converts it to millimetres. That conversion is
+//! The kernel reads the geometry and converts it to millimetres. That conversion is
 //! the single most expensive thing to get wrong -- an inch part read as millimetres
 //! is 25.4 times too small -- so the unit is not taken on trust. This reads the
 //! unit context from the file independently, along with the raw points and the
@@ -8,11 +8,16 @@
 //! came from.
 //!
 //! This is not a STEP reader. It resolves entity references only as far as the
-//! length unit needs, and treats everything else as text.
+//! length unit and an assembly's placements need, and treats everything else as
+//! text.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use glam::DVec3;
+use glam::{DAffine3, DVec3};
+
+/// Most placements of one representation followed before giving up, so a file
+/// that instances a sub-assembly many times over cannot run away.
+const MAX_PLACEMENTS: usize = 100_000;
 
 /// Something in the file that this cannot make sense of.
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -49,6 +54,10 @@ pub struct LengthUnit {
 }
 
 /// What the file says, independently of any kernel.
+///
+/// Points are where the kernel puts them: in millimetres, and where the file's
+/// assembly places them, each component's points moved by its placement and a
+/// component used twice counted twice.
 #[derive(Debug, Clone)]
 pub struct StepFacts {
     /// The length unit the geometry is stated in.
@@ -61,13 +70,15 @@ pub struct StepFacts {
     /// Not simply the box around the points. A circle leaves that box by up to its
     /// radius; a surface of revolution can land on the far side of its axis from
     /// every point in the file; an extrusion reaches as far as its vector. Each is
-    /// bounded here by the geometry that defines it.
+    /// bounded here by the geometry that defines it. Points that only place a
+    /// representation or a component are not geometry, and are left out.
     pub extent: Option<(DVec3, DVec3)>,
     /// `ADVANCED_FACE` and `FACE_SURFACE` entities.
     pub faces: u64,
-    /// Whether geometry is placed by transforms, as in an assembly. Raw points are
-    /// then in local frames and bound nothing.
-    pub transformed: bool,
+    /// Whether some geometry is placed in a way this cannot follow: a mapped item,
+    /// or a transform not tied to an assembly's product structure. Raw points
+    /// then bound nothing.
+    pub unplaced: bool,
 }
 
 /// Read the facts out of a STEP file's text.
@@ -75,18 +86,20 @@ pub fn facts(text: &str) -> Result<StepFacts, Part21Error> {
     let entities = entities(text)?;
     let unit = length_unit(&entities)?;
     let s = unit.mm;
+    let placements = Placements::read(&entities, s);
 
-    let mut points = BTreeMap::new();
+    let mut points: BTreeMap<u64, Vec<DVec3>> = BTreeMap::new();
     let mut max_radius: f64 = 0.0;
     let mut sweep: f64 = 0.0;
     let mut revolved: Vec<(DVec3, f64)> = Vec::new();
     let mut faces = 0;
-    let mut transformed = false;
     for (&id, body) in &entities {
         match kind(body) {
             "CARTESIAN_POINT" => {
-                if let Some(p) = point(body) {
-                    points.insert(id, p * s);
+                if !placements.placing.contains(&id)
+                    && let Some(p) = point(body)
+                {
+                    points.insert(id, placements.place(id, p * s));
                 }
             }
             "ADVANCED_FACE" | "FACE_SURFACE" => faces += 1,
@@ -106,16 +119,18 @@ pub fn facts(text: &str) -> Result<StepFacts, Part21Error> {
                 if let (Some(&curve), Some(&axis)) = (r.first(), r.get(1)) {
                     let centre = refs(entities.get(&axis).map_or("", String::as_str))
                         .first()
-                        .and_then(|c| entities.get(c))
-                        .and_then(|c| point(c));
-                    if let Some(a) = centre {
+                        .and_then(|&c| Some((c, point(entities.get(&c)?)?)));
+                    if let Some((c, a)) = centre {
                         let a = a * s;
                         let (profile, curve_radius) = reach(&entities, curve);
                         let far = profile
                             .iter()
                             .map(|p| (*p * s - a).length())
                             .fold(0.0, f64::max);
-                        revolved.push((a, far + curve_radius * s));
+                        // The ball is about the axis wherever the surface is placed.
+                        for a in placements.place(c, a) {
+                            revolved.push((a, far + curve_radius * s));
+                        }
                     }
                 }
             }
@@ -125,19 +140,11 @@ pub fn facts(text: &str) -> Result<StepFacts, Part21Error> {
                     sweep = sweep.max(numbers(v).last().map_or(0.0, |m| m.abs()) * s);
                 }
             }
-            "ITEM_DEFINED_TRANSFORMATION"
-            | "MAPPED_ITEM"
-            | "CARTESIAN_TRANSFORMATION_OPERATOR_3D" => {
-                transformed = true;
-            }
             _ => {}
-        }
-        if body.contains("REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION") {
-            transformed = true;
         }
     }
 
-    let extent = bounds(points.values()).map(|(lo, hi)| {
+    let extent = bounds(points.values().flatten()).map(|(lo, hi)| {
         let grow = DVec3::splat(max_radius + sweep);
         revolved
             .iter()
@@ -152,7 +159,7 @@ pub fn facts(text: &str) -> Result<StepFacts, Part21Error> {
             && let Some(id) = refs(body).first()
             && let Some(p) = points.get(id)
         {
-            vertices.push(*p);
+            vertices.extend(p);
         }
     }
 
@@ -161,8 +168,293 @@ pub fn facts(text: &str) -> Result<StepFacts, Part21Error> {
         vertices,
         extent,
         faces,
-        transformed,
+        unplaced: placements.unplaced,
     })
+}
+
+/// Where the file puts each piece of its geometry.
+///
+/// An assembly states each component's geometry in the component's own frame, and
+/// places the component in its parent with a pair of axis placements
+/// (`ITEM_DEFINED_TRANSFORMATION`): the one in the component's frame is moved onto
+/// the one in the parent's. Which representation is the component is read from the
+/// product structure (`NEXT_ASSEMBLY_USAGE_OCCURRENCE`), not from the order the
+/// relationship happens to list them in. A plain relationship between two
+/// representations keeps them in one frame.
+#[derive(Debug, Default)]
+struct Placements {
+    /// The frames an entity is reached from, by index into `world`. An entity in
+    /// none is in the root frame.
+    owners: BTreeMap<u64, Vec<usize>>,
+    /// Every transform taking a frame to the root, in millimetres: one for a
+    /// component used once, more for one used several times.
+    world: Vec<Vec<DAffine3>>,
+    /// Points that only place a representation or a component.
+    placing: BTreeSet<u64>,
+    /// Some geometry is placed in a way this cannot follow.
+    unplaced: bool,
+}
+
+impl Placements {
+    fn read(entities: &BTreeMap<u64, String>, s: f64) -> Self {
+        let mut out = Self::default();
+        let mut frames = Frames::default();
+        let mut shape_reps = BTreeSet::new();
+        // (relationship, first representation, second, transformation)
+        let mut transformed = Vec::new();
+        let mut reps_of: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+        let mut usage_of: BTreeMap<u64, u64> = BTreeMap::new();
+        let mut transformations = BTreeSet::new();
+
+        for (&id, body) in entities {
+            let k = kind(body);
+            let r = refs(body);
+            if body.contains("REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION") {
+                if let [a, b, t] = r[..] {
+                    transformed.push((id, a, b, t));
+                    shape_reps.extend([a, b]);
+                } else {
+                    out.unplaced = true;
+                }
+            } else if (k.ends_with("REPRESENTATION_RELATIONSHIP")
+                || (k.is_empty() && body.contains("REPRESENTATION_RELATIONSHIP(")))
+                && let [a, b, ..] = r[..]
+            {
+                frames.join(a, b);
+                shape_reps.extend([a, b]);
+            }
+            match k {
+                "SHAPE_DEFINITION_REPRESENTATION" => {
+                    if let [pds, rep, ..] = r[..]
+                        && let Some(pd) = entities.get(&pds).and_then(|b| refs(b).first().copied())
+                    {
+                        reps_of.entry(pd).or_default().push(rep);
+                        shape_reps.insert(rep);
+                    }
+                }
+                "CONTEXT_DEPENDENT_SHAPE_REPRESENTATION" => {
+                    if let [rel, pds, ..] = r[..] {
+                        usage_of.insert(rel, pds);
+                    }
+                }
+                "ITEM_DEFINED_TRANSFORMATION" => {
+                    transformations.insert(id);
+                }
+                "MAPPED_ITEM" | "CARTESIAN_TRANSFORMATION_OPERATOR_3D" => out.unplaced = true,
+                _ => {}
+            }
+        }
+
+        // A representation's own axis placements place it, and are not geometry.
+        for rep in &shape_reps {
+            let items = entities.get(rep).map(|b| refs(b)).unwrap_or_default();
+            for item in items {
+                out.placing.extend(location(entities, item));
+            }
+        }
+
+        // Each placed component: child frame -> (parent frame, transform).
+        let mut up: BTreeMap<u64, Vec<(u64, DAffine3)>> = BTreeMap::new();
+        for &(rel, a, b, t) in &transformed {
+            let edge = (|| {
+                let usage = refs(entities.get(usage_of.get(&rel)?)?).first().copied()?;
+                let [parent, child, ..] = refs(entities.get(&usage)?)[..] else {
+                    return None;
+                };
+                let frame_of = |pd: u64| -> BTreeSet<u64> {
+                    reps_of
+                        .get(&pd)
+                        .into_iter()
+                        .flatten()
+                        .map(|&r| frames.find(r))
+                        .collect()
+                };
+                let (children, parents) = (frame_of(child), frame_of(parent));
+                let (fa, fb) = (frames.find(a), frames.find(b));
+                let [item_a, item_b] = refs(entities.get(&t)?)[..] else {
+                    return None;
+                };
+                let (pa, pb) = (
+                    placement(entities, item_a, s)?,
+                    placement(entities, item_b, s)?,
+                );
+                out.placing.extend(location(entities, item_a));
+                out.placing.extend(location(entities, item_b));
+                if fa != fb && children.contains(&fa) && parents.contains(&fb) {
+                    Some((fa, fb, pb * pa.inverse()))
+                } else if fa != fb && children.contains(&fb) && parents.contains(&fa) {
+                    Some((fb, fa, pa * pb.inverse()))
+                } else {
+                    None
+                }
+            })();
+            match edge {
+                Some((child, parent, moved)) => {
+                    up.entry(child).or_default().push((parent, moved));
+                    transformations.remove(&t);
+                }
+                None => out.unplaced = true,
+            }
+        }
+        // A transformation that places nothing this could follow.
+        out.unplaced |= !transformations.is_empty();
+        if up.is_empty() {
+            return out;
+        }
+
+        // Every frame's ways to the root, then which frame each entity is in.
+        let every_frame: BTreeSet<u64> = shape_reps.iter().map(|&r| frames.find(r)).collect();
+        let mut memo = BTreeMap::new();
+        for frame in every_frame {
+            let Some(world) = to_root(frame, &up, &mut memo, 0) else {
+                out.unplaced = true;
+                return out;
+            };
+            let index = out.world.len();
+            out.world.push(world);
+            let mut seen = BTreeSet::new();
+            let mut stack: Vec<u64> = shape_reps
+                .iter()
+                .copied()
+                .filter(|&r| frames.find(r) == frame)
+                .collect();
+            while let Some(id) = stack.pop() {
+                if !seen.insert(id) {
+                    continue;
+                }
+                out.owners.entry(id).or_default().push(index);
+                if let Some(body) = entities.get(&id) {
+                    stack.extend(refs(body));
+                }
+            }
+        }
+        out
+    }
+
+    /// Where the point `p` of entity `id`, in millimetres, ends up: once for each
+    /// placement of the frames it is in.
+    fn place(&self, id: u64, p: DVec3) -> Vec<DVec3> {
+        match self.owners.get(&id) {
+            None => vec![p],
+            Some(frames) => frames
+                .iter()
+                .filter_map(|&f| self.world.get(f))
+                .flatten()
+                .map(|w| w.transform_point3(p))
+                .collect(),
+        }
+    }
+}
+
+/// Every transform taking `frame` to the root, or `None` if the placements loop,
+/// nest too deeply or multiply past [`MAX_PLACEMENTS`].
+fn to_root(
+    frame: u64,
+    up: &BTreeMap<u64, Vec<(u64, DAffine3)>>,
+    memo: &mut BTreeMap<u64, Vec<DAffine3>>,
+    depth: u32,
+) -> Option<Vec<DAffine3>> {
+    if let Some(w) = memo.get(&frame) {
+        return Some(w.clone());
+    }
+    if depth > 64 {
+        return None;
+    }
+    let mut out = Vec::new();
+    match up.get(&frame) {
+        None => out.push(DAffine3::IDENTITY),
+        Some(parents) => {
+            for &(parent, moved) in parents {
+                for w in to_root(parent, up, memo, depth + 1)? {
+                    out.push(w * moved);
+                }
+                if out.len() > MAX_PLACEMENTS {
+                    return None;
+                }
+            }
+        }
+    }
+    memo.insert(frame, out.clone());
+    Some(out)
+}
+
+/// Representations kept in one frame by plain relationships.
+#[derive(Debug, Default)]
+struct Frames(BTreeMap<u64, u64>);
+
+impl Frames {
+    fn find(&self, mut id: u64) -> u64 {
+        // Bounded: joins only ever point a root at a root.
+        for _ in 0..self.0.len() + 1 {
+            match self.0.get(&id) {
+                Some(&up) if up != id => id = up,
+                _ => break,
+            }
+        }
+        id
+    }
+
+    fn join(&mut self, a: u64, b: u64) {
+        let (a, b) = (self.find(a), self.find(b));
+        if a != b {
+            self.0.insert(a.max(b), a.min(b));
+        }
+    }
+}
+
+/// The point an `AXIS2_PLACEMENT_3D` is at, if `id` is one.
+fn location(entities: &BTreeMap<u64, String>, id: u64) -> Option<u64> {
+    let body = entities.get(&id)?;
+    (kind(body) == "AXIS2_PLACEMENT_3D").then(|| refs(body).first().copied())?
+}
+
+/// The frame an `AXIS2_PLACEMENT_3D` stands for, with its origin in millimetres.
+/// An axis or reference direction left out (`$`) is the standard one.
+fn placement(entities: &BTreeMap<u64, String>, id: u64, s: f64) -> Option<DAffine3> {
+    let body = entities.get(&id)?;
+    if kind(body) != "AXIS2_PLACEMENT_3D" {
+        return None;
+    }
+    let a = args(body);
+    let at = |i: usize| {
+        a.get(i)
+            .and_then(|arg| refs(arg).first().copied())
+            .and_then(|r| point(entities.get(&r)?))
+    };
+    let origin = at(1)? * s;
+    let z = at(2).unwrap_or(DVec3::Z).try_normalize()?;
+    let x = at(3).unwrap_or(DVec3::X);
+    let x = (x - z * x.dot(z))
+        .try_normalize()
+        .unwrap_or_else(|| z.any_orthonormal_vector());
+    Some(DAffine3::from_cols(x, z.cross(x), z, origin))
+}
+
+/// The top-level arguments of a simple instance, as text.
+fn args(body: &str) -> Vec<&str> {
+    let Some(open) = body.find('(') else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let (mut depth, mut start, mut in_string) = (0usize, open + 1, false);
+    for (i, c) in body.char_indices().skip_while(|&(i, _)| i <= open) {
+        match c {
+            '\'' => in_string = !in_string,
+            _ if in_string => {}
+            '(' => depth += 1,
+            ')' if depth == 0 => {
+                out.push(body[start..i].trim());
+                break;
+            }
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(body[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// The box around some points.
@@ -451,5 +743,10 @@ fn resolve(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 mod tests;

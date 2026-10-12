@@ -31,8 +31,14 @@ backend from an unusable one — see `docs/decisions/0001-step-backend.md`.
 
 ## Invariants every importer must satisfy
 
-Both are checked on every STEP import, not only in tests (`crates/camcraft-import/src/step.rs`).
+All three are checked on every STEP import, not only in tests (`crates/step-check`,
+which any importer can use).
 
+- **Every face arrives, with triangles.** The kernel must give at least as many faces
+  as the file defines, and every one of them must have triangles. A kernel that gives
+  up on a face may hand it back empty instead of refusing, and the count alone then
+  passes a part with a hole in it: upstream truck's plain mesher did exactly that to
+  half the sculpted panel.
 - **Nothing lands outside the file's own geometry.** A NURBS surface lies within the
   convex hull of its control points, so the mesh must fit inside the box around the
   raw `CARTESIAN_POINT` values, after unit conversion. The box has to be grown for
@@ -45,6 +51,19 @@ Both are checked on every STEP import, not only in tests (`crates/camcraft-impor
   extend at least as far as they do. The first check cannot catch a unit error that
   makes the part too *small*, because a shrunken mesh still sits inside the box. This
   one does.
+
+Both geometric checks are made where an assembly puts each component: the file's
+points are moved by each component's placement, read from the product structure, and
+the points that only place things are left out of the box. Before that, any file with
+a placement skipped the checks, the sculpted panel among them: solidcraft's mesh of it
+at 0.05 mm, with surface 108 mm off the part, passed them then and is refused now.
+Only placements that cannot be followed, such as mapped items, still skip them.
+`crates/camcraft-import/tests/assembly.rs` wraps the hinge jig in an assembly and
+holds the placement to OpenCascade's.
+
+The geometric checks are boxes, so they catch surface thrown outside the part, not
+surface that is wrong inside it: upstream truck's bowl, 53 mm off at 0.05 mm, passes
+them. `scripts/kernel-trial.sh` measures that, against a fine OpenCascade mesh.
 
 ## Private fixtures: `CAMCRAFT_FIXTURES`
 

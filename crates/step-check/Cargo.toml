@@ -1,0 +1,19 @@
+[package]
+name        = "step-check"
+description = "Check a STEP import against the file it came from: its unit, its faces, its assembly's placements and the bounds of its geometry, read from the file's text independently of any CAD kernel."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+readme     = "README.md"
+keywords   = ["step", "iso-10303", "cad", "mesh", "validation"]
+categories = ["parser-implementations"]
+
+[dependencies]
+glam.workspace      = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

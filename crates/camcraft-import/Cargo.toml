@@ -12,6 +12,7 @@ authors.workspace      = true
 camcraft-geom.workspace = true
 glam.workspace          = true
 opencascade.workspace   = true
+step-check.workspace    = true
 stl_io.workspace        = true
 thiserror.workspace     = true
 

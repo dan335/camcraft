@@ -19,6 +19,8 @@ authors      = ["dan335"]
 # internal — the dependency DAG is enforced per-crate, see README
 camcraft-geom   = { path = "crates/camcraft-geom",   version = "0.1.0" }
 camcraft-import = { path = "crates/camcraft-import", version = "0.1.0" }
+# Kept free of camcraft, for any STEP importer to use; see its crate docs.
+step-check      = { path = "crates/step-check",      version = "0.1.0" }
 camcraft-sim    = { path = "crates/camcraft-sim",    version = "0.1.0" }
 camcraft-core   = { path = "crates/camcraft-core",   version = "0.1.0" }
 camcraft-post   = { path = "crates/camcraft-post",   version = "0.1.0" }

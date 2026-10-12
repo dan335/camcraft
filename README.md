@@ -101,8 +101,9 @@ cargo run --release -p camcraft-cli -- job examples/rail-jig.camcraft --out out 
 The crates depend on each other in one direction only:
 
 ```
+step-check        a STEP import checked against its own file       (leaf, no camcraft)
 camcraft-geom     BVH, height maps, contours, shadows, topology     (leaf)
-camcraft-import   STL and STEP to meshes, checked against the file -> geom
+camcraft-import   STL and STEP to meshes, checked against the file -> geom, step-check
 camcraft-sim      material removal: stock updater + gouge oracle   -> geom
 camcraft-core     tools, jobs, strategies, toolpaths, linking, run -> geom, sim
 camcraft-post     Op IR, TOML-driven dialect renderers             -> core
@@ -122,7 +123,8 @@ Arc fitting, tabs, leads, feed optimisation and cutter compensation are each a
 `Toolpath -> Toolpath` transform, so no strategy ever emits instructions directly.
 
 Only the two binaries reach `import`, through `session`, so work on `geom`, `sim`,
-`core` and `post` never waits for OpenCascade to build.
+`core` and `post` never waits for OpenCascade to build. `step-check` depends on
+nothing of camcraft's, so any STEP importer can check its own output with it.
 
 ### Conventions
 

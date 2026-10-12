@@ -722,6 +722,7 @@ dependencies = [
  "camcraft-geom",
  "glam 0.33.9",
  "opencascade",
+ "step-check",
  "stl_io",
  "thiserror 2.0.20",
 ]
@@ -3949,6 +3950,14 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "step-check"
+version = "0.1.0"
+dependencies = [
+ "glam 0.33.9",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "stl_io"
