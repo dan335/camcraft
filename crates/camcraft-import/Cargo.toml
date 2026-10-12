@@ -23,6 +23,7 @@ ogeom-math.workspace    = true
 ogeom-mesh.workspace    = true
 ogeom-topo.workspace    = true
 opencascade             = { workspace = true, optional = true }
+spade.workspace         = true
 step-check.workspace    = true
 stl_io.workspace        = true
 thiserror.workspace     = true

@@ -51,6 +51,7 @@ opencascade        = "0.3"
 parry3d-f64        = "0.31"
 proptest           = "1.11"
 rayon              = "1.12"
+spade              = "2.15"
 serde              = { version = "1.0", features = ["derive"] }
 stl_io             = "0.11"
 thiserror          = "2.0"

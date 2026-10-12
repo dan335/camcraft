@@ -140,6 +140,11 @@ actually break cutters on the day:
   gilbertorconde/ogeom-rs#216; `the_bowl_is_refused_finer_than_ogeom_meshes_it`
   fails when it is fixed. OpenCascade did not meet such tolerances either (0.009
   mm off at 0.0025), but nothing measured it.
+- **Pocket clearing's time grows with the part's triangles.** Profiling the
+  example job, its roughing took 5.7 s on 33,824 triangles and 41.3 s on 206,058,
+  where finishing, which drop-cuts through a BVH, went from 0.67 s to 0.83 s.
+  Something in clearing visits every triangle where an index would visit few. Not
+  yet found; the ruled-face rebuild (decision 0001) hides most of it for now.
 - **ogeom's corners.** ogeom can place a B-rep vertex up to 1e-14 mm apart on the
   faces meeting there, which would leave the welded solid open, so the importer
   joins faces' points within 1e-9 mm (gilbertorconde/ogeom-rs#217).

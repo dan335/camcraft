@@ -219,9 +219,29 @@ pub fn ogeom(path: &Path, tolerance: f64) -> Result<KernelMesh, String> {
             .map_err(|e| e.to_string())?;
         for (shape, piece) in faces {
             let face = out.face_triangles.len();
-            let mesh = piece.map_err(|e| format!("face {face} would not mesh: {e}"))?;
-            let off = stand_off(model, &shape, &mesh, tolerance)
-                .map_err(|e| format!("face {face} could not be measured: {e}"))?;
+            let mut mesh = piece.map_err(|e| format!("face {face} would not mesh: {e}"))?;
+            let measured = |mesh: &Triangulation| {
+                stand_off(model, &shape, mesh, tolerance)
+                    .map_err(|e| format!("face {face} could not be measured: {e}"))
+            };
+            // A ruled face in fewer triangles, where they hold to the surface.
+            let fewer = is_ruled(model, &shape)
+                .then(|| crate::ruled::from_boundary(&mesh))
+                .flatten()
+                .map(|triangles| Triangulation {
+                    triangles,
+                    ..mesh.clone()
+                });
+            let off = match fewer {
+                Some(fewer) => match measured(&fewer)? {
+                    off if off <= tolerance => {
+                        mesh = fewer;
+                        off
+                    }
+                    _ => measured(&mesh)?,
+                },
+                None => measured(&mesh)?,
+            };
             if off > tolerance {
                 return Err(format!(
                     "face {face} lies {off:.4} mm off its surface, more than {tolerance} mm"
@@ -351,6 +371,18 @@ fn stand_off(
         worst = worst.max(off((a + b + c) / 3.0, middle)?);
     }
     Ok(worst)
+}
+
+/// Whether `face` lies on a cylinder or a cone, ruled by straight lines: see
+/// [`crate::ruled`].
+fn is_ruled(model: &Model, face: &Shape) -> bool {
+    let Some(NodeData::Face(data)) = model.node(face).map(|n| n.data()) else {
+        return false;
+    };
+    model
+        .geometry()
+        .surface(data.surface)
+        .is_some_and(|s| matches!(s.kind(), SurfaceKind::Cylinder | SurfaceKind::Cone))
 }
 
 fn faces_of(model: &Model, shape: &Shape) -> Result<Vec<Shape>, String> {

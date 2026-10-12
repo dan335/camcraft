@@ -200,11 +200,23 @@ Accepted costs, all of which were actually hit and resolved during the spike:
     vertex as 0.0399999999999995 in and the line through it from 0.04, and ogeom
     takes a face's corner from the curve, so faces meeting there disagree by
     1.3e-14 mm and the exact-bit weld left the solid open (ogeom-rs#217).
+  - **Cylinders and cones are triangulated again from their boundaries.** At a
+    third of the tolerance ogeom gave `sled_base` 206,058 triangles where
+    OpenCascade gave 33,824, 83 percent of them on cylinders and cones, in rows
+    along the rulings that hold no part of the tolerance (ogeom-rs#213). The
+    example job's roughing, which scales with the triangles, took it from 7.5 s
+    to 43.6 s. `camcraft_import::ruled` lays such a face again on its boundary
+    points alone, constrained Delaunay in its parameters, and keeps ogeom's
+    triangles for any face whose new ones measure past the tolerance (2 faces of
+    `sled_base`, none elsewhere). `sled_base` comes to 46,680 triangles, the lego
+    to 9,780 (OpenCascade 9,064), and the job to 9.5 s, with the same passes.
   - **The bowl's file has a hole.** Its inner floor is bounded by a circle
     4.7e-6 mm across on the axis that no face closes. ogeom meshes it as written;
     OpenCascade's mesh of it came out closed.
 - **Revisit when** ogeom-rs#216 is fixed: move the bowl's fixture test back to
-  0.01 mm. Delete the `opencascade` feature and `vendor/` once ogeom has run on
+  0.01 mm. When ogeom meshes ruled faces without the rows (ogeom-rs#213), delete
+  `ruled`; when its faces hold to their chord (ogeom-rs#212), mesh at the
+  tolerance rather than a third of it. Delete the `opencascade` feature and `vendor/` once ogeom has run on
   real jobs.
 
 ## Implemented (0.1-d, 2026-09-22)

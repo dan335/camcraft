@@ -728,6 +728,7 @@ dependencies = [
  "ogeom-mesh",
  "ogeom-topo",
  "opencascade",
+ "spade",
  "step-check",
  "stl_io",
  "thiserror 2.0.20",
