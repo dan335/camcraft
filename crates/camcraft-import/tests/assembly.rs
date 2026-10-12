@@ -3,7 +3,7 @@
 //! The file's checks have to be made where the assembly puts the part, or they
 //! either pass a mesh that is somewhere else or refuse one that is right. So the
 //! hinge jig is wrapped in an assembly that turns it a quarter about Z and moves
-//! it, and OpenCascade, which places it, is the judge of where it goes: the checks
+//! it, and the kernel, which places it, is the judge of where it goes: the checks
 //! must pass, and the mesh must be the plain part's, moved.
 
 #![allow(

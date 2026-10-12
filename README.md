@@ -60,11 +60,10 @@ You need:
 
 - **Rust**, installed with [rustup](https://rustup.rs). The repository pins the
   version it needs, and rustup fetches it on the first build.
-- **cmake and a C++ compiler.** STEP import builds OpenCascade from source, so
-  the first build takes several minutes; later builds reuse it.
 
-It is developed on macOS and builds on Windows. On Windows, build from an MSVC
-developer prompt so cmake can find `cl.exe`. Other platforms have not been tried.
+That is all: STEP import is [ogeom](https://github.com/gilbertorconde/ogeom-rs),
+pure Rust. It is developed on macOS and builds on Windows. Other platforms have
+not been tried.
 
 Open the example job in the app:
 
@@ -123,7 +122,7 @@ Arc fitting, tabs, leads, feed optimisation and cutter compensation are each a
 `Toolpath -> Toolpath` transform, so no strategy ever emits instructions directly.
 
 Only the two binaries reach `import`, through `session`, so work on `geom`, `sim`,
-`core` and `post` never waits for OpenCascade to build. `step-check` depends on
+`core` and `post` never waits for a STEP kernel to build. `step-check` depends on
 nothing of camcraft's, so any STEP importer can check its own output with it.
 
 ### Conventions
@@ -171,9 +170,14 @@ Windows, `.\scripts\check.ps1` (and `-Full`) checks every crate.
 Plain `cargo build` and `cargo test` cover only the app, so that `cargo run`
 opens it. Add `--workspace` to build or test everything.
 
-`vendor/` holds OpenCascade's Rust bindings, patched to build with MSVC and to
-report each B-rep face's triangle count, which picking needs. The reasoning is
-in [docs/decisions/0001-step-backend.md](docs/decisions/0001-step-backend.md).
+`camcraft-import`'s `opencascade` feature keeps OpenCascade, the STEP kernel
+before ogeom, to cross-check ogeom against
+(`cargo test -p camcraft-import --features opencascade --test opencascade`). It
+needs cmake and a C++ compiler, and on Windows an MSVC developer prompt so cmake
+can find `cl.exe`; the first build takes several minutes. `vendor/` holds
+OpenCascade's Rust bindings for it, patched to build with MSVC and to report each
+B-rep face's triangle count. The reasoning is in
+[docs/decisions/0001-step-backend.md](docs/decisions/0001-step-backend.md).
 
 ## License
 
@@ -181,8 +185,7 @@ Dual licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
 option. Third-party code and assets keep their own licences: `vendor/` is
 LGPL-2.1, and [NOTICE](NOTICE) lists the rest.
 
-**Not yet settled for distributed binaries.** STEP import links OpenCascade
-statically, through the `opencascade` and `occt-sys` crates, and both are
-LGPL-2.1 (OpenCascade adds its own exception). The source here stays MIT or
-Apache-2.0, but a `camcraft` binary carries LGPL obligations until that is
-resolved. See [docs/decisions/0001-step-backend.md](docs/decisions/0001-step-backend.md).
+A `camcraft` binary links no LGPL code: ogeom is MIT or Apache-2.0. Only a build
+with `camcraft-import`'s `opencascade` feature, for cross-checking, links
+OpenCascade statically, through LGPL-2.1 crates; such a build is not for
+distribution. See [docs/decisions/0001-step-backend.md](docs/decisions/0001-step-backend.md).

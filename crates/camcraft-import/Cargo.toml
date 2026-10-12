@@ -8,10 +8,21 @@ license.workspace      = true
 repository.workspace   = true
 authors.workspace      = true
 
+[features]
+# OpenCascade, the STEP kernel before ogeom, as `step::opencascade`, to cross-check
+# ogeom against. Builds OpenCascade from source: needs cmake and a C++ toolchain.
+opencascade = ["dep:opencascade"]
+
 [dependencies]
 camcraft-geom.workspace = true
 glam.workspace          = true
-opencascade.workspace   = true
+ogeom-core.workspace    = true
+ogeom-geom.workspace    = true
+ogeom-io.workspace      = true
+ogeom-math.workspace    = true
+ogeom-mesh.workspace    = true
+ogeom-topo.workspace    = true
+opencascade             = { workspace = true, optional = true }
 step-check.workspace    = true
 stl_io.workspace        = true
 thiserror.workspace     = true

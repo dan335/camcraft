@@ -6,7 +6,8 @@ Licensed under the MIT License or the Apache License, Version 2.0, at your optio
 Third-party material
 
 vendor/opencascade and vendor/opencascade-sys are the opencascade and opencascade-sys 0.3.0
-crates by Brian Schwind (https://github.com/bschwind/opencascade-rs). They are licensed under
+crates by Brian Schwind (https://github.com/bschwind/opencascade-rs), built only by
+camcraft-import's `opencascade` feature, for cross-checking. They are licensed under
 the GNU Lesser General Public License 2.1, not under camcraft's licences, and their licence is
 in vendor/opencascade/LICENSE and vendor/opencascade-sys/LICENSE. camcraft modifies them: fixes
 so they build and link with MSVC, and each B-rep face's triangle count, which picking needs.
@@ -14,8 +15,10 @@ Diffing either crate against the published 0.3.0 shows every change.
 
 Through the occt-sys crate they build Open CASCADE Technology (https://dev.opencascade.org)
 from source and link it statically. It is licensed under the LGPL 2.1 with the Open CASCADE
-exception. What that means for distributed binaries is not settled: see the README's License
-section and docs/decisions/0001-step-backend.md.
+exception. A build without that feature contains none of it; see the README's License section
+and docs/decisions/0001-step-backend.md.
+
+STEP import is ogeom (https://github.com/gilbertorconde/ogeom-rs), MIT or Apache-2.0.
 
 The app's fonts are IBM Plex Sans and Fira Code, under the SIL Open Font License 1.1, and a
 subset of Lucide's icons, under the ISC licence. crates/camcraft-gui/assets/fonts/ holds each

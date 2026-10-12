@@ -11,6 +11,9 @@
 #   bash scripts/check.sh --all         every crate: before pushing
 #   bash scripts/check.sh --full        every crate, plus benchmarks (slow)
 #   bash scripts/check.sh --dry-run     say what would be checked, and stop
+#   bash scripts/check.sh --opencascade also lint camcraft-import's `opencascade`
+#                                       feature and cross-check ogeom with it
+#                                       (builds OpenCascade: needs cmake, C++)
 #
 # By default it checks what the uncommitted changes can affect: the crates they
 # touch, and every crate that depends on one of those, found from `cargo metadata`.
@@ -30,12 +33,14 @@ SCOPE=changed
 SINCE=HEAD
 BENCH=0
 DRY=0
+OCCT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --all) SCOPE=all ;;
     --full) SCOPE=all; BENCH=1 ;;
     --since) SINCE="${2:?--since needs a git ref}"; shift ;;
     --dry-run) DRY=1 ;;
+    --opencascade) OCCT=1 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -157,6 +162,11 @@ if [ ${#SELECT[@]} -gt 0 ]; then
       morph::tests::is_deterministic \
       ordering::tests::ordering_is_deterministic
   fi
+fi
+
+if [ "$OCCT" = "1" ]; then
+  run "opencascade clippy" cargo clippy -p camcraft-import --features opencascade --all-targets -- -D warnings
+  run "opencascade cross-check" cargo test -p camcraft-import --features opencascade --test opencascade
 fi
 
 if [ "$BENCH" = "1" ]; then

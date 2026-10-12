@@ -3,7 +3,7 @@
 //! Each must arrive whole, in the right unit, at the right size, and pass the
 //! checks against its own file. Sizes are the extent of the file's own B-rep
 //! vertices, measured independently of any kernel, so they are ground truth rather
-//! than a recording of whatever OpenCascade happened to say.
+//! than a recording of whatever the kernel happened to say.
 //!
 //! Parts that cannot be committed are swept from `CAMCRAFT_FIXTURES` when it is
 //! set. See `fixtures/step/README.md`.
@@ -18,8 +18,8 @@
 use std::path::{Path, PathBuf};
 
 use camcraft_geom::topology::{Body, EdgeKind, FaceKind, FaceSource};
-use camcraft_import::step::{FileCheck, KernelMesh, StepError, load_step, load_step_with};
-use glam::{DVec2, dvec3};
+use camcraft_import::step::{FileCheck, StepError, load_step, load_step_with, ogeom};
+use glam::DVec2;
 use step_check::Problem;
 
 /// Tessellation tolerance, in millimetres. The spike's figure.
@@ -31,9 +31,13 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-fn check(name: &str, unit: &str, faces: u64, size: [f64; 3]) {
+fn check(name: &str, unit: &str, faces: u64, size: [f64; 3], open: usize) {
+    check_at(TOLERANCE, name, unit, faces, size, open);
+}
+
+fn check_at(tolerance: f64, name: &str, unit: &str, faces: u64, size: [f64; 3], open: usize) {
     let (body, report) =
-        load_step(fixture(name), TOLERANCE).unwrap_or_else(|e| panic!("{name}: {e}"));
+        load_step(fixture(name), tolerance).unwrap_or_else(|e| panic!("{name}: {e}"));
     let mesh = body.mesh();
     assert_eq!(report.unit.name, unit, "{name}: unit");
     assert_eq!(report.faces, faces, "{name}: faces");
@@ -50,14 +54,15 @@ fn check(name: &str, unit: &str, faces: u64, size: [f64; 3]) {
             "{name}: {axis} extent {g:.2} mm, expected {want} mm"
         );
     }
-    check_faces(name, &body, faces);
+    check_faces(name, &body, faces, open);
 }
 
 /// The faces are the file's: one per B-rep face, every one with triangles, every
 /// triangle on one. And the part is a closed solid, so every edge runs between
-/// exactly two faces. That last holds only if the kernel gives the two faces either
-/// side of a B-rep edge the very same points along it, which the weld relies on.
-fn check_faces(name: &str, body: &Body, faces: u64) {
+/// exactly two faces, but for the `open` boundaries the file itself leaves. That
+/// holds only if the kernel gives the two faces either side of a B-rep edge the
+/// very same points along it, which the weld relies on.
+fn check_faces(name: &str, body: &Body, faces: u64, open: usize) {
     let t = body.topology();
     assert_eq!(t.source(), FaceSource::File, "{name}");
     assert_eq!(t.faces().len() as u64, faces, "{name}: topology faces");
@@ -65,46 +70,74 @@ fn check_faces(name: &str, body: &Body, faces: u64) {
     for (i, f) in t.faces().iter().enumerate() {
         assert!(!f.triangles.is_empty(), "{name}: face {i} has no triangles");
     }
-    for e in t.edges() {
-        assert_eq!(
-            e.faces.len(),
-            2,
-            "{name}: an edge runs along {:?}, not between two faces; the solid is open there",
-            e.faces
-        );
-    }
+    let along_one: Vec<_> = t.edges().iter().filter(|e| e.faces.len() != 2).collect();
+    assert_eq!(
+        along_one.len(),
+        open,
+        "{name}: edges along {:?}, not between two faces; the solid is open there",
+        along_one.iter().map(|e| &e.faces).collect::<Vec<_>>()
+    );
+    assert!(along_one.iter().all(|e| e.faces.len() == 1), "{name}");
 }
 
 #[test]
 fn hinge_jig_planar_inch() {
-    check("hinge_jig.step", "inch", 39, [25.4, 31.8, 33.3]);
+    check("hinge_jig.step", "inch", 39, [25.4, 31.8, 33.3], 0);
 }
 
 #[test]
 fn lego_cones_and_cylinders() {
-    check("lego_4x2_01.step", "inch", 76, [100.6, 49.8, 38.1]);
+    check("lego_4x2_01.step", "inch", 76, [100.6, 49.8, 38.1], 0);
 }
 
 #[test]
 fn door_handle_guide() {
-    check("door_handle_guide.step", "inch", 89, [57.1, 215.9, 33.0]);
+    check("door_handle_guide.step", "inch", 89, [57.1, 215.9, 33.0], 0);
 }
 
 #[test]
 fn rail_guide_many_faces() {
-    check("rail_guide.step", "inch", 134, [237.0, 40.6, 12.7]);
+    check("rail_guide.step", "inch", 134, [237.0, 40.6, 12.7], 0);
 }
 
 #[test]
 fn sled_base_mixed_analytic_and_nurbs() {
-    check("sled_base.step", "inch", 387, [237.0, 227.0, 76.2]);
+    check("sled_base.step", "inch", 387, [237.0, 227.0, 76.2], 0);
 }
 
 /// In millimetres, so a hard-coded inch conversion fails as loudly as a missing one,
 /// and revolved, so the extent check has to bound the far side of an axis.
+///
+/// The file leaves one hole: its inner floor (`#209`) is bounded inside by a circle
+/// 4.7e-6 mm across on the axis, which no other face closes, where Fusion revolved
+/// the profile to the axis.
+///
+/// At 0.0125 mm, not [`TOLERANCE`]: see [`the_bowl_is_refused_finer_than_ogeom_meshes_it`].
 #[test]
 fn bowl_revolved_millimetre() {
-    check("bowl_01.step", "millimetre", 5, [380.0, 380.0, 20.0]);
+    check_at(
+        0.0125,
+        "bowl_01.step",
+        "millimetre",
+        5,
+        [380.0, 380.0, 20.0],
+        1,
+    );
+}
+
+/// ogeom 0.10 stops refining a face's grid at 512 steps a direction, which the
+/// bowl's rim, 188 mm from its axis, needs more of below a chord of about 0.004
+/// mm. Its rim then stands 0.0124 mm off its surface however fine the chord, and
+/// the import is refused rather than handed on (gilbertorconde/ogeom-rs#216).
+/// When ogeom meshes it, this fails: move the bowl back to [`TOLERANCE`] and drop
+/// this test.
+#[test]
+fn the_bowl_is_refused_finer_than_ogeom_meshes_it() {
+    let err = load_step(fixture("bowl_01.step"), TOLERANCE).unwrap_err();
+    assert!(
+        matches!(&err, StepError::Kernel { detail, .. } if detail.contains("off its surface")),
+        "{err}"
+    );
 }
 
 /// Private parts, when this machine has them. Each must load, with its checks
@@ -112,9 +145,6 @@ fn bowl_revolved_millimetre() {
 /// A cone that comes to a point with no vertex there, as Fusion writes one. The
 /// size check once refused it, its box stopping short of the apex. Generated, so
 /// exact: 20 mm across and 30 tall (step-conformance's `cone_point`).
-///
-/// Unlike the shop parts, a face pinching to a point may leave OpenCascade a
-/// triangle with two corners at the apex, which the weld drops.
 #[test]
 fn a_cone_to_a_point() {
     let (body, report) = load_step(fixture("cone_point.step"), TOLERANCE).unwrap();
@@ -125,7 +155,7 @@ fn a_cone_to_a_point() {
         (got - glam::dvec3(20.0, 20.0, 30.0)).abs().max_element() < 0.1,
         "{got:?}"
     );
-    check_faces("cone_point.step", &body, 2);
+    check_faces("cone_point.step", &body, 2, 0);
 }
 
 /// A cylinder face of the lego, sunk a millimetre into the part: still inside every
@@ -133,16 +163,8 @@ fn a_cone_to_a_point() {
 #[test]
 fn a_face_wrong_inside_the_part_is_refused() {
     let result = load_step_with(fixture("lego_4x2_01.step"), TOLERANCE, "test", |path, _| {
-        let shape = opencascade::primitives::Shape::read_step(path).map_err(|e| e.to_string())?;
-        let mesh = shape
-            .mesh_with_tolerance(TOLERANCE)
-            .map_err(|e| e.to_string())?;
-        let mut k = KernelMesh {
-            vertices: mesh.vertices.iter().map(|v| dvec3(v.x, v.y, v.z)).collect(),
-            indices: mesh.indices,
-            face_triangles: mesh.face_triangles,
-        };
-        // OpenCascade gives every face its own vertices, so a face moves alone.
+        let mut k = ogeom(path, TOLERANCE)?;
+        // ogeom gives every face its own vertices, so a face moves alone.
         let (lo, hi) = step_check::part21::bounds(&k.vertices).unwrap();
         let mut first = 0;
         for &n in &k.face_triangles.clone() {
@@ -205,9 +227,8 @@ fn private_fixtures_when_available() {
     assert!(seen > 0, "CAMCRAFT_FIXTURES is set but holds no STEP files");
 }
 
-/// Many threads reading STEP at once all succeed and all agree. A guard on the
-/// importer's kernel lock. It has not been seen to fail without the lock, so it
-/// does not prove the lock necessary; it holds the behaviour the lock is there for.
+/// Many threads reading STEP at once all succeed and all agree, which holds as
+/// long as the kernel keeps no state between reads.
 #[test]
 fn concurrent_reads_are_safe() {
     let results: Vec<_> = std::thread::scope(|scope| {

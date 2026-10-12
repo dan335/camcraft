@@ -75,8 +75,8 @@ Fusion's post does. The lego contour posts block for block as Fusion's does.
    by the tool's own shape.
 2. **Exact circles from the B-rep.** A ring's arcs take their centres and radii
    from the model's topology, whose round edges are circles through the
-   tessellation's points, which lie on the B-rep's curves; OpenCascade's own
-   `gp_Circ` is not read yet. Ellipses and splines are followed by lines.
+   tessellation's points, which lie on the B-rep's curves; the kernel's own
+   circles are not read yet. Ellipses and splines are followed by lines.
 3. **More strategies**. Contour (a waterline, which scallop leaves the walls
    to) and flat finishing are done, in Z levels from the region the tool may
    not enter ([decision 0010](docs/decisions/0010-contour-and-flat.md)),
@@ -133,34 +133,34 @@ actually break cutters on the day:
 
 ## Open questions
 
-- **Licensing of distributed binaries.** STEP import links OpenCascade statically
-  through LGPL-2.1 crates, while camcraft is MIT or Apache-2.0. Publishing the source
-  is fine, but this has to be settled before anyone ships a binary. Replacing
-  OpenCascade with a pure-Rust reader would settle it. None is ready yet: ogeom's
-  unreleased main comes closest, passing 91 of step-conformance's 96 runs where
-  OpenCascade passes all 96. `scripts/kernel-trial.sh` says when one is. See
-  [decision 0001](docs/decisions/0001-step-backend.md).
-- **One unexplained STEP read failure.** During a full gate run on 2026-09-23, two
-  session tests reading `hinge_jig.step` failed with OpenCascade's "failed to read
-  STEP file". The same tests passed 80 times since, with and without a lock that
-  serialises every OpenCascade call (`camcraft_import::step`). The lock stays as a
-  precaution, since OpenCascade's data exchange uses process-wide statics. If it
-  happens again, capture the run: this is not understood.
+- **Fine tolerances on large curved parts.** ogeom 0.10 stops refining a face at
+  512 steps a direction, so a face far from its axis cannot be meshed finer than
+  about 0.004 mm: `bowl_01`, 380 mm across, is refused at a 0.01 mm tessellation
+  (a job tolerance of 0.04 mm) rather than imported 0.0124 mm off. Reported as
+  gilbertorconde/ogeom-rs#216; `the_bowl_is_refused_finer_than_ogeom_meshes_it`
+  fails when it is fixed. OpenCascade did not meet such tolerances either (0.009
+  mm off at 0.0025), but nothing measured it.
+- **ogeom's corners.** ogeom can place a B-rep vertex up to 1e-14 mm apart on the
+  faces meeting there, which would leave the welded solid open, so the importer
+  joins faces' points within 1e-9 mm (gilbertorconde/ogeom-rs#217).
 
 ## Standing cautions
 
 - **`fixtures/step/` holds real shop jigs,** published with the repository by choice.
   Parts that cannot be published belong in `CAMCRAFT_FIXTURES`, never in a commit.
-- **B-spline and revolved faces are only box-checked on import.** Faces on planes,
-  cylinders, cones, spheres and tori are held to their surfaces, but a B-spline, a
-  surface of revolution or an extrusion only to its box, so surface wrong inside the
-  part there passes. `scripts/kernel-trial.sh` measures it for a candidate kernel.
+- **B-spline and revolved faces are held to their surfaces only as ogeom read
+  them.** `step-check` holds faces on planes, cylinders, cones, spheres and tori to
+  the surfaces in the file's text, but a B-spline, a surface of revolution or an
+  extrusion only to its box. The importer measures every curved face's mesh against
+  ogeom's surface for it, which sees a mesh too coarse but not a surface misread.
+  `scripts/kernel-trial.sh` measures that against the true shape.
 - **The public fixture set cannot reproduce the bug that disqualified
   `truck-stepio`.** The part that exposed it is private. A synthetic
   sculpted-surface fixture should replace it.
 - **`vendor/` patches opencascade** (the MSVC fix, and each B-rep face's triangle
-  count, which picking needs). Delete it and its `[patch.crates-io]` block only once
-  a release includes both.
+  count) for `camcraft-import`'s `opencascade` feature, kept to cross-check ogeom.
+  Delete the feature, `vendor/` and its `[patch.crates-io]` block together once
+  ogeom has run on real jobs.
 - **There is no CI yet**, so `scripts/check.sh` is the only
   thing between a mistake and `main`. Run it unpiped: piping through `tail` buffers
   the whole run and hides progress.

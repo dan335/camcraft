@@ -1,6 +1,6 @@
-# 0001 — STEP backend: OpenCascade, not truck
+# 0001 — STEP backend: OpenCascade, not truck; since 2026-10-12, ogeom
 
-**Status:** decided, 2026-09-22 · **Milestone:** 0.1-a spike
+**Status:** decided, 2026-09-22; superseded by ogeom 2026-10-12 (see Since) · **Milestone:** 0.1-a spike
 
 ## Question
 
@@ -172,9 +172,40 @@ Accepted costs, all of which were actually hit and resolved during the spike:
   5.5 mm off, and a cone to a point at 0.0125 mm, 0.09 mm off, whose fix
   ogeom-rs#204 plans. No reader but OpenCascade passes the freeform panel at
   every tolerance.
-- **Revisit when** a pure-Rust reader passes `scripts/kernel-trial.sh` everywhere;
-  ogeom is closest. The prize is dropping the C++ toolchain requirement and
-  settling the licence.
+- **2026-10-12, last: switched to ogeom.** ogeom 0.10.0 fixed the panel and the
+  cone (ogeom-rs#206) and passes all 108 of step-conformance's runs, and the
+  private sculpted panel at all four tolerances. `load_step` reads with it, and
+  OpenCascade stays behind `camcraft-import`'s `opencascade` feature, with a test
+  that holds the two to the same faces and extent on every fixture, until ogeom has
+  run on real jobs. cmake and the C++ toolchain are no longer needed, and a binary
+  links no LGPL code. What making it the importer added:
+  - **A chord of a third of the tolerance.** ogeom's chord bounds its edges, but
+    its faces stand off doubly curved surfaces by up to 3.1 times it (ogeom-rs#212).
+    At a third, every run and the private panel came within 1.04 times the
+    tolerance, and everything still meshes faster than OpenCascade did.
+  - **Every curved face measured against its surface.** Each triangle's middle and
+    each side's midpoint are projected onto ogeom's surface for the face, and the
+    import is refused past the tolerance. Measuring to the point at the middle
+    parameters instead was wrong twice over: where a surface's parameters run
+    unevenly it counts sliding along the surface as distance (5.9 times the
+    tolerance on the private panel, which really lies within it), and beside a
+    cone's apex, where a vertex's `u` is arbitrary, it finds the far side.
+  - **It refuses the bowl below a tolerance of about 0.004 mm.** ogeom stops a
+    face's grid at 512 steps a direction, which the bowl's rim, 188 mm out, needs
+    more of; it stands 0.0124 mm off at a chord of 0.0033 and of 0.00083 alike.
+    With the cap raised to 8192 it lands 0.002 mm off at 0.00083, faster. Reported
+    as ogeom-rs#216. OpenCascade, asked for 0.0025, gave 0.009 mm on the bowl and
+    0.010 on the private panel: it missed fine tolerances too, unmeasured.
+  - **Faces' copies of a point within 1e-9 mm are joined.** `sled_base` writes one
+    vertex as 0.0399999999999995 in and the line through it from 0.04, and ogeom
+    takes a face's corner from the curve, so faces meeting there disagree by
+    1.3e-14 mm and the exact-bit weld left the solid open (ogeom-rs#217).
+  - **The bowl's file has a hole.** Its inner floor is bounded by a circle
+    4.7e-6 mm across on the axis that no face closes. ogeom meshes it as written;
+    OpenCascade's mesh of it came out closed.
+- **Revisit when** ogeom-rs#216 is fixed: move the bowl's fixture test back to
+  0.01 mm. Delete the `opencascade` feature and `vendor/` once ogeom has run on
+  real jobs.
 
 ## Implemented (0.1-d, 2026-09-22)
 

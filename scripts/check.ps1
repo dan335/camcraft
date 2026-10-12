@@ -13,8 +13,11 @@
 .EXAMPLE
   .\scripts\check.ps1
   .\scripts\check.ps1 -Full
+  .\scripts\check.ps1 -OpenCascade   also lint camcraft-import's `opencascade`
+                                     feature and cross-check ogeom with it
+                                     (builds OpenCascade: needs cmake, C++)
 #>
-param([switch]$Full)
+param([switch]$Full, [switch]$OpenCascade)
 
 $ErrorActionPreference = 'Continue'
 Set-Location (Join-Path $PSScriptRoot '..')
@@ -47,6 +50,11 @@ Invoke-Gate 'determinism' {
         waterline::tests::is_deterministic `
         morph::tests::is_deterministic `
         ordering::tests::ordering_is_deterministic
+}
+
+if ($OpenCascade) {
+    Invoke-Gate 'opencascade clippy' { cargo clippy -p camcraft-import --features opencascade --all-targets -- -D warnings }
+    Invoke-Gate 'opencascade cross-check' { cargo test -p camcraft-import --features opencascade --test opencascade }
 }
 
 if ($Full) { Invoke-Gate 'bench' { cargo bench --workspace --no-fail-fast } }

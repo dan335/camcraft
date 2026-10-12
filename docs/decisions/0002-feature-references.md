@@ -116,7 +116,9 @@ backwards compatibility while camcraft is pre-alpha (`docs/jobs.md`, Format).
 ## Consequences
 
 - `vendor/opencascade` now differs from upstream in a second way, `Mesh::face_triangles`,
-  and cannot be dropped until upstream has both changes.
+  and cannot be dropped until upstream has both changes. *Since 2026-10-12* STEP is
+  read by ogeom, which meshes face by face, and OpenCascade is kept only behind a
+  feature to cross-check it (decision 0001).
 - Faces found from STL are a heuristic. Coarse holes (under about twelve facets)
   come out as several planes and are not recognised as circles. Two large planes
   meeting at less than 30° become one curved face. Hovering shows a face before it is
