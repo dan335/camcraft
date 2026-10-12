@@ -275,6 +275,12 @@ pub(crate) struct Emit {
     feed: f64,
     /// Passes written.
     pub(crate) passes: u64,
+    /// Ramping down along a closed ring from the closed ring above it, as
+    /// contour finishing goes from level to level: the ramp's angle from level,
+    /// in radians, and how near where the last ended the ring must start.
+    pub(crate) ramp: Option<(f64, f64)>,
+    /// Where the last pass left the tool, and whether it was closed.
+    end: Option<(DVec3, bool)>,
 }
 
 impl Emit {
@@ -284,6 +290,8 @@ impl Emit {
             at: None,
             feed,
             passes: 0,
+            ramp: None,
+            end: None,
         }
     }
 
@@ -293,6 +301,9 @@ impl Emit {
         let Some(&first) = run.points.first() else {
             return Ok(());
         };
+        if self.ramp_onto(run)? {
+            return Ok(());
+        }
         // The strategy does not plan how to arrive; the linker does.
         self.path.feed_to(first, MoveRole::Link, self.feed)?;
         for &p in run.points.iter().skip(1) {
@@ -302,12 +313,110 @@ impl Emit {
             self.path.feed_to(first, MoveRole::Cut, self.feed)?;
         }
         self.passes += 1;
-        self.at = Some(if run.closed {
-            first.truncate()
+        let end = if run.closed {
+            first
         } else {
-            run.points.last().map_or(first, |p| *p).truncate()
-        });
+            run.points.last().map_or(first, |p| *p)
+        };
+        self.at = Some(end.truncate());
+        self.end = Some((end, run.closed));
         Ok(())
+    }
+
+    /// `run`, a closed ring below the closed ring just cut that starts beside
+    /// where that ended, gone down to along itself at the ramp angle, from the
+    /// height the tool left, and then cut once round from where the ramp
+    /// reaches it. `false`, writing nothing, where it is not such a ring.
+    fn ramp_onto(&mut self, run: &Run) -> Result<bool, StrategyError> {
+        let (Some((angle, near)), Some((left, true)), true) = (self.ramp, self.end, run.closed)
+        else {
+            return Ok(false);
+        };
+        // The ring started at its point nearest where the tool left off, on a
+        // side or at a corner.
+        let ring = &run.points;
+        let n = ring.len();
+        let from = left.truncate();
+        let nearest = (0..n)
+            .filter_map(|i| {
+                let (a, b) = (*ring.get(i)?, *ring.get((i + 1) % n)?);
+                let (a2, b2) = (a.truncate(), b.truncate());
+                let along = (b2 - a2).length_squared();
+                let t = if along > 0.0 {
+                    ((from - a2).dot(b2 - a2) / along).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let p = a.lerp(b, t);
+                Some((p.truncate().distance(from), i, p))
+            })
+            .min_by(|x, y| x.0.total_cmp(&y.0));
+        let Some((gap, i, start)) = nearest else {
+            return Ok(false);
+        };
+        let points: Vec<DVec3> = std::iter::once(start)
+            .chain((1..=n).filter_map(|k| ring.get((i + k) % n).copied()))
+            .collect();
+        let n = points.len();
+        let first = start;
+        let drop = left.z - first.z;
+        let lap: f64 = (0..n)
+            .filter_map(|i| Some(points.get(i)?.distance(*points.get((i + 1) % n)?)))
+            .sum();
+        if n < 3 || drop <= 1e-9 || lap <= 1e-9 || gap > near {
+            return Ok(false);
+        }
+        let length = drop / angle.tan();
+        let ramp = MoveRole::Transition;
+        // Over to the ring, at the height the tool left.
+        let mut at = left;
+        let mut go = |path: &mut Toolpath, p: DVec3, role: MoveRole| {
+            if p.distance(at) > 1e-9 {
+                at = p;
+                path.feed_to(p, role, self.feed)
+            } else {
+                Ok(())
+            }
+        };
+        go(&mut self.path, first.truncate().extend(left.z), ramp)?;
+        // Down along it, round again if it is short, to where the ramp reaches
+        // the ring's level.
+        let mut along = 0.0;
+        let mut i = 0;
+        let end = loop {
+            let (Some(&a), Some(&b)) = (points.get(i % n), points.get((i + 1) % n)) else {
+                return Ok(false);
+            };
+            let piece = a.distance(b);
+            if along + piece >= length {
+                let t = if piece > 0.0 {
+                    (length - along) / piece
+                } else {
+                    1.0
+                };
+                break (i, a.lerp(b, t));
+            }
+            along += piece;
+            go(
+                &mut self.path,
+                b.truncate().extend(left.z - drop * along / length),
+                ramp,
+            )?;
+            i += 1;
+        };
+        let (i, reached) = end;
+        go(&mut self.path, reached, ramp)?;
+        // Once round from there, back to it.
+        for k in 1..=n {
+            if let Some(&p) = points.get((i + k) % n) {
+                go(&mut self.path, p, MoveRole::Cut)?;
+            }
+        }
+        go(&mut self.path, reached, MoveRole::Cut)?;
+        self.passes += 1;
+        self.at = Some(reached.truncate());
+        self.end = Some((reached, true));
+        Ok(true)
     }
 
     /// `runs`, the nearest next from where the tool is: a closed one started at

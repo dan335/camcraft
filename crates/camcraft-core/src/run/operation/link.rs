@@ -34,7 +34,11 @@ pub(super) fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
                 max: op.stay_down(diameter),
             },
             vertical,
-            uses.ramp.then(|| Ramp {
+            // Contour's ramp is its own, down the wall between levels: its
+            // leads come down beside the wall, where the linker's test for
+            // material, under the tool's whole width, would see the wall's
+            // stock and go down a helix for nothing.
+            (uses.ramp && !matches!(op.strategy, StrategySpec::Contour { .. })).then(|| Ramp {
                 angle: linking.ramp_angle.to_radians(),
                 // A ramp moves mostly sideways, so it goes nearer the cutting
                 // feed than a straight plunge's.

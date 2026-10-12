@@ -30,6 +30,17 @@
 //! slope range keeps the passes to where the surface is at least so steep, as
 //! Fusion's contact angle does, for a scallop or parallel pass to finish the rest.
 //!
+//! # Between levels
+//!
+//! Where a level's last ring is closed, and the next level down's starts beside
+//! where it ended, the tool goes down to it along the wall rather than off and
+//! down: along the lower ring, from the height it left, at no more than the ramp
+//! angle, then once round that ring from where the ramp reaches it. That is
+//! Fusion's default, smooth, transition, which "avoids abrupt changes in Z by
+//! gradually ramping down along the surface". A lower ring is clear of the part
+//! at every height above it, as the part's shadow only grows going down, so the
+//! ramp cannot reach the part.
+//!
 //! # Order and direction
 //!
 //! Each ring has the part on its left. Climbing with a clockwise spindle has the
@@ -99,6 +110,9 @@ pub struct WaterlineParams {
     pub slope_from: f64,
     /// And at most this steep.
     pub slope_to: f64,
+    /// How steeply, in radians from level, the tool ramps down along the wall
+    /// from a level's last ring onto the next: `None` leaves it to the linker.
+    pub ramp: Option<f64>,
 }
 
 impl Default for WaterlineParams {
@@ -115,6 +129,7 @@ impl Default for WaterlineParams {
             order: Order::ByDepth,
             slope_from: 0.0,
             slope_to: std::f64::consts::FRAC_PI_2,
+            ramp: None,
         }
     }
 }
@@ -270,6 +285,8 @@ pub fn waterline<T: DropTest + Sync>(
     }
 
     let mut emit = Emit::new(params.feed);
+    // Onto a ring that starts within half the tool of where the last ended.
+    emit.ramp = params.ramp.map(|angle| (angle, 0.5 * tool.max_radius()));
     let both_ways = params.direction == Direction::BothWays;
     let runs = |passes: Vec<(usize, Run)>| passes.into_iter().map(|(_, run)| run).collect();
     match params.order {

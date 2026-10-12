@@ -47,7 +47,12 @@ part's top to its bottom unless `heights` says otherwise
 ([decision 0010](decisions/0010-contour-and-flat.md)). It climbs unless
 `direction = "conventional"` or `"both-ways"`, cuts `order = "by-depth"` (each
 level before the next) unless `"by-area"`, and keeps to `slope_from` and
-`slope_to`. Flat (`"flat"`) is Fusion's too: each flat face of the part between
+`slope_to`. From a level's last ring to the next level's, where that starts
+beside where the last ended, it goes down the wall rather than off and down, by
+Fusion's default *smooth* transition: along the lower ring at no more than the
+ramp angle (`linking.ramp_angle`, 2°), then once round it from where the ramp
+reaches it. Where it may not stay down (`stay_down = 0`) it lifts as before.
+Into each level otherwise it comes down onto its lead beside the wall. Flat (`"flat"`) is Fusion's too: each flat face of the part between
 the top and bottom cleared at its own height, rings a stepover apart in from its
 edges, climbing unless conventional, `order = "outside-in"` unless
 `"inside-out"`; its stepover starts as a pocket's. Spiral (`"spiral"`), radial

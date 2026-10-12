@@ -72,7 +72,9 @@ impl StrategySpec {
             // part's, from its top, and each runs round the part beside its
             // walls, below where a tool from above would rest: linked at the
             // level, never over the part, whose way up from a wall's foot is
-            // through the wall.
+            // through the wall. Its ramp is its own, down the wall from level
+            // to level (`waterline`); it comes down onto each level's lead
+            // beside the wall, as before.
             StrategySpec::Contour { .. } => Uses {
                 stepover: false,
                 depths: Depths::Required,
@@ -80,7 +82,7 @@ impl StrategySpec {
                 reach: Reach::Mm(50),
                 helix: HelixSize::Flat,
                 lead_radius: true,
-                ramp: false,
+                ramp: true,
                 top: Some(HeightRef::ModelTop),
                 ..cuts_loops
             },

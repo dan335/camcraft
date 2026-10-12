@@ -264,3 +264,65 @@ fn is_deterministic() {
     let b = run(&mesh, &tool, &p).0;
     assert_eq!(a.moves(), b.moves());
 }
+
+/// With a ramp, each level is reached from the one above down the wall, along
+/// its own ring, as Fusion's smooth transition goes: never up, never steeper
+/// than the ramp, and with no link between; and each level is still cut once
+/// all round at its height, as long as without the ramp.
+#[test]
+fn levels_are_joined_by_ramping_down_the_wall() {
+    let mesh = boss();
+    let tool = flat(1.5);
+    let angle = 2f64.to_radians();
+    let ramped = WaterlineParams {
+        ramp: Some(angle),
+        ..params(5.0, 0.0, 1.0)
+    };
+    let (path, report) = run(&mesh, &tool, &ramped);
+    assert!(report.levels >= 5, "{report:?}");
+    let moves = path.moves();
+    let links = moves.iter().filter(|m| m.role == MoveRole::Link).count();
+    assert_eq!(links, 1, "only into the first level");
+    let mut at = moves[0].to;
+    let mut ramps = 0;
+    for m in &moves[1..] {
+        if m.role == MoveRole::Transition {
+            let drop = at.z - m.to.z;
+            let across = at.truncate().distance(m.to.truncate());
+            assert!(drop >= -1e-9, "up at {m:?}");
+            assert!(
+                drop <= across * angle.tan() + 1e-9,
+                "steeper than the ramp at {m:?}"
+            );
+            ramps += 1;
+        } else {
+            assert_eq!(m.to.z, at.z, "a cut off its level at {m:?}");
+        }
+        at = m.to;
+    }
+    assert!(ramps > 0);
+
+    // Cut at each level, as far as without the ramp.
+    let cut_by_level = |path: &Toolpath| {
+        let mut out: Vec<(f64, f64)> = Vec::new();
+        let mut at = None;
+        for m in path.moves() {
+            if let (Some(a), MoveRole::Cut) = (at, m.role) {
+                let d = DVec3::distance(a, m.to);
+                match out.iter_mut().find(|(z, _)| (*z - m.to.z).abs() < 1e-9) {
+                    Some((_, l)) => *l += d,
+                    None => out.push((m.to.z, d)),
+                }
+            }
+            at = Some(m.to);
+        }
+        out
+    };
+    let plain = run(&mesh, &tool, &params(5.0, 0.0, 1.0)).0;
+    let (with, without) = (cut_by_level(&path), cut_by_level(&plain));
+    assert_eq!(with.len(), without.len());
+    for ((z, a), (w, b)) in with.iter().zip(&without) {
+        assert_eq!(z, w);
+        assert!((a - b).abs() < 1e-6, "level {z}: {a} cut where {b} was");
+    }
+}

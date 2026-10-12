@@ -132,6 +132,9 @@ pub(super) fn contour_paths(
         order: order.engine(),
         slope_from,
         slope_to,
+        // Down the wall from level to level, as Fusion's smooth transition,
+        // where it may stay down at all.
+        ramp: (op.stay_down(work.spec.diameter) > 0.0).then(|| op.linking.ramp_angle.to_radians()),
     };
     let (path, report) =
         waterline(&mut reach, work.cutter, work.tool, &area, &params).map_err(in_op(op))?;
