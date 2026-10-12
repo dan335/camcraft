@@ -66,8 +66,13 @@ down between depths, and its rings follow the model's round edges as exact
 arcs, posted as `G2`/`G3` in `G17`, `G18` and `G19`. Programs start and end as
 Fusion's post does. The lego contour posts block for block as Fusion's does.
 
-1. **Smooth transitions.** Parallel's stay-down links are straight lines lifted
-   over the part; Fusion's are tangent arcs. A pocket has no helix yet.
+1. **Smooth transitions,** after Fusion's defaults
+   ([decision 0012](docs/decisions/0012-transitions-and-entries-from-fusions-defaults.md)):
+   zigzag passes are joined by a half turn tangent to both, contour ramps down
+   the wall from level to level, and pockets go down a helix. Still to come: a
+   turn between passes further apart than the tool, or not running opposite
+   ways, and contour's helix entries, which need the linker to judge material
+   by the tool's own shape.
 2. **Exact circles from the B-rep.** A ring's arcs take their centres and radii
    from the model's topology, whose round edges are circles through the
    tessellation's points, which lie on the B-rep's curves; OpenCascade's own
@@ -75,7 +80,7 @@ Fusion's post does. The lego contour posts block for block as Fusion's does.
 3. **More strategies**. Contour (a waterline, which scallop leaves the walls
    to) and flat finishing are done, in Z levels from the region the tool may
    not enter ([decision 0010](docs/decisions/0010-contour-and-flat.md)),
-   without yet a ramp between contour levels or a flat's own depths. Spiral,
+   without yet a flat's own depths. Spiral,
    radial and morphed spiral are done, patterns dropped onto the part through
    one pipeline with parallel's sampling and scallop's slopes
    ([decision 0011](docs/decisions/0011-patterns-dropped-onto-the-part.md)),
@@ -96,9 +101,10 @@ Fusion's post does. The lego contour posts block for block as Fusion's does.
    smoothing or finishing pass. Facing, as Fusion's Face, is done. 2D profile
    and pocket are done
    ([decision 0005](docs/decisions/0005-2d-profile-and-pocket.md)), with tabs
-   (on profiles, as Fusion's on a 2D contour) and a profile's horizontal leads;
-   they lack finishing passes, a pocket's leads, and picked entry points
-   and tab positions. Stock to leave is Fusion's, radial and axial, negative
+   (on profiles, as Fusion's on a 2D contour), a profile's horizontal leads,
+   and a pocket's finishing passes with leads onto them; they lack leads on a
+   pocket's roughing rings, a profile's finishing passes, and picked entry
+   points and tab positions. Stock to leave is Fusion's, radial and axial, negative
    included, on every operation; which shared settings a strategy uses is one
    table (`StrategySpec::uses`), for a new strategy to fill in.
 4. **A volumetric stock**, so what a top setup leaves carries to a flipped bottom
