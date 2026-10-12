@@ -13,6 +13,11 @@ will write it.
 > are not responsible for crashed machines, broken tools, ruined parts or any other
 > damage.
 
+![camcraft playing back the example rail jig part-way through finishing](docs/images/playback.png)
+
+*The example job part-way through finishing, played back against the simulated
+material.*
+
 ## What it does
 
 You give it a model and describe the job: the stock, the tools, how the part is
