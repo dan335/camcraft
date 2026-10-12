@@ -28,6 +28,7 @@ fn params() -> PlanarParams {
         kept_on_right: true,
         leads: None,
         spiral: None,
+        finishing: None,
     }
 }
 
@@ -347,6 +348,66 @@ fn a_pocket_clears_from_the_middle_out() {
         let end = w[0].last().unwrap();
         let start = w[1][0];
         assert!(end.truncate().distance(start.truncate()) <= 2.0 + 0.02);
+    }
+}
+
+/// With finishing passes, the clearing stops their stepovers short of the
+/// wall, and after each level is cleared they go round, the innermost first,
+/// the last at the wall at the finishing feed and, repeated, twice; on along a
+/// lead to the first and off along one from the last, in what is cleared.
+#[test]
+fn a_pocket_finishes_its_walls_after_each_level() {
+    let shape = Region::new(vec![square(0.0, 21.0)]);
+    let areas = areas(&shape, &[], -1.5, 0.01, &[], &floor(-4.0)).unwrap();
+    let finished = PlanarParams {
+        finishing: Some(WallFinish {
+            passes: 2,
+            stepover: 0.3,
+            feed: 500.0,
+            repeat: true,
+        }),
+        leads: Some(LeadArc {
+            radius: 0.6,
+            sweep: std::f64::consts::FRAC_PI_2,
+            straight: 0.6,
+        }),
+        ..params()
+    };
+    let (path, _) = pocket(&areas, &finished).unwrap();
+    let width = |p: &[DVec3]| {
+        let xs = p.iter().map(|q| q.x);
+        xs.clone().fold(f64::MIN, f64::max) - xs.fold(f64::MAX, f64::min)
+    };
+    // Each level: the clearing, then the two finishing passes, the last twice.
+    let levels: Vec<f64> = {
+        let mut zs: Vec<f64> = path.moves().iter().map(|m| m.to.z).collect();
+        zs.dedup();
+        zs
+    };
+    assert_eq!(levels, [-2.0, -4.0]);
+    let cuts: Vec<(f64, f64)> = passes(&path).iter().map(|p| (p[0].z, width(p))).collect();
+    for z in [-2.0, -4.0] {
+        let here: Vec<f64> = cuts.iter().filter(|c| c.0 == z).map(|c| c.1).collect();
+        let n = here.len();
+        assert!(n >= 4, "{here:?}");
+        // The walls are 18 across: the clearing's last ring 0.6 in from each,
+        // then 0.3, then at them, twice. The leads widen what the first
+        // and last finishing passes span.
+        let rough = here[n - 4];
+        assert!(
+            rough <= 18.0 - 1.2 + 0.03 && rough > 18.0 - 1.2 - 0.05,
+            "{here:?}"
+        );
+        assert!(here[..n - 3].iter().all(|w| *w <= rough + 1e-9), "{here:?}");
+    }
+    // The finishing feed on the last pass, its leads, and the clearing feed
+    // before it.
+    let feeds: Vec<f64> = path.moves().iter().filter_map(|m| m.feed).collect();
+    assert!(feeds.contains(&500.0) && feeds.contains(&1000.0));
+    assert!(path.moves().iter().any(|m| m.role == MoveRole::Lead));
+    // Each lead is in the cleared pocket, clear of the wall.
+    for m in path.moves().iter().filter(|m| m.role == MoveRole::Lead) {
+        assert!(areas[0].region.contains(m.to.truncate()), "{m:?}");
     }
 }
 

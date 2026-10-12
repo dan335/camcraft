@@ -124,6 +124,21 @@ clipping, which decides what the shape is (where a narrow neck closes or a small
 hole vanishes), and a ring that is not the same shape, within twice the
 tolerance, follows the polygon instead.
 
+A pocket has Fusion's **finishing passes** when asked for
+(`passes.finishing`; off without it, as Fusion's): the clearing stops their
+stepovers short of the walls, and once each level is cleared they go round the
+walls with the side of the tool, the innermost first, the last at the walls.
+`passes` says how many (one), `stepover` how far apart they are (a tenth of the
+tool, Fusion's), `feed` how fast the last goes (the cutting feed), and
+`repeat = true` cuts the last twice, for a tool that springs from the wall. The
+pocket's leads (`linking.leads`, on unless turned off) take the tool onto the
+first pass and off the last, level, in what is cleared, as Fusion's do with
+*Leads on all finishing passes* off; between passes it stays down.
+
+```toml
+passes = { stepdown = 3.0, stepover = 2.5, finishing = { passes = 2, feed = 900.0 } }
+```
+
 ```toml
 [[setup.operation]]
 name = "cut out"

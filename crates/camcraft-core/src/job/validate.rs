@@ -375,6 +375,17 @@ impl Operation {
             positive(&field("passes.tabs.height"), t.height)?;
             positive(&field("passes.tabs.spacing"), t.spacing)?;
         }
+        if let Some(f) = self.passes.finishing.filter(|_| uses.finishing) {
+            if f.passes == Some(0) {
+                return Err(bad(field("passes.finishing.passes"), 0.0, "at least one"));
+            }
+            if let Some(s) = f.stepover {
+                positive(&field("passes.finishing.stepover"), s)?;
+            }
+            if let Some(v) = f.feed {
+                positive(&field("passes.finishing.feed"), v)?;
+            }
+        }
         Ok(())
     }
 

@@ -36,7 +36,8 @@ use crate::strategy::morph::{MorphParams, MorphedSpiralReport, morphed_spiral};
 use crate::strategy::parallel::{ParallelParams, ParallelReport, follow, parallel_finish_within};
 use crate::strategy::patterns::{Centred, radial, reaching, spiral};
 use crate::strategy::planar::{
-    Area, LeadArc, PlanarParams, PlanarReport, Spiral, areas, centre_offset, pocket, profile,
+    Area, LeadArc, PlanarParams, PlanarReport, Spiral, WallFinish, areas, centre_offset, pocket,
+    profile,
 };
 use crate::strategy::pocket_clearing::{ClearingParams, pocket_clearing};
 use crate::strategy::projected::{Curve, ProjectParams, ProjectReport, project};

@@ -556,6 +556,67 @@ fn a_part_is_profiled_out_hole_first() {
     assert_eq!(result.verify.gouged, 0);
 }
 
+/// With finishing passes asked for, the same pocket is cleared short of its
+/// walls and then finished round them, at the finishing feed, on and off along
+/// leads in what is cleared; it still reaches the walls and verifies.
+#[test]
+fn a_pocket_with_finishing_passes_verifies() {
+    use crate::job::{FeatureRef, Finishing};
+    use crate::path::toolpath::MoveRole;
+    use crate::setup::features::find_face;
+    let body = Body::derived(synthetic::step(5.0, 10.0));
+    let pick = FeatureRef {
+        model: "dome".into(),
+        index: 0,
+        at: [5.0, 0.0, 0.0],
+    };
+    let face = find_face(&body, &pick, 0.01).unwrap().index;
+    let pocket = StrategySpec::Pocket {
+        conventional: false,
+    };
+    let (mut job, _) = in_a_sheet(pocket, &body);
+    job.stocks[0].spec = crate::job::StockSpec::AroundModels {
+        models: vec![],
+        margin: [0.0, 0.0, 0.0],
+        below: 0.0,
+    };
+    let op = &mut job.setups[0].operations[0];
+    op.selection.faces.push(FeatureRef {
+        index: face,
+        ..pick
+    });
+    op.outline = Outline::Selection;
+    op.passes.finishing = Some(Finishing {
+        passes: Some(2),
+        feed: Some(333.0),
+        ..Finishing::default()
+    });
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let op = &result.operations[0];
+    let moves = op.path.moves();
+    assert!(
+        moves
+            .iter()
+            .any(|m| m.feed == Some(333.0) && m.role == MoveRole::Cut)
+    );
+    assert!(moves.iter().any(|m| m.role == MoveRole::Lead));
+    // Still to the wall, and no further.
+    let cuts: Vec<DVec3> = moves
+        .iter()
+        .filter(|m| m.role == MoveRole::Cut)
+        .map(|m| m.to)
+        .collect();
+    assert!(cuts.iter().all(|p| p.x >= 3.0 - 1e-6 && p.x <= 7.0 + 1e-6));
+    assert!(
+        cuts.iter()
+            .any(|p| (p.x - 3.0).abs() < 0.03 && p.z.abs() < 1e-9)
+    );
+    assert!(op.sim.removed_mm3 > 950.0, "{}", op.sim.removed_mm3);
+    assert!(result.is_clean(), "{:?}", result.warnings());
+    assert_eq!(result.verify.gouged, 0);
+}
+
 /// A pocket picked by its floor, the step's shelf: cleared to it within the
 /// shelf's outline, the tool's side on the wall and nowhere past it, and the
 /// result verifies. A tool too wide for it is refused.

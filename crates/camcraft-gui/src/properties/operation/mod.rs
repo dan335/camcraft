@@ -129,7 +129,9 @@ pub(super) fn show(
             geometry::geometry(ui, m, (setup, index), op, diameter, picks, actions);
         }
         OperationTab::Heights => heights::heights(ui, m, doc.operation_mut(setup, index)?),
-        OperationTab::Passes => passes::passes(ui, m, doc.operation_mut(setup, index)?, least),
+        OperationTab::Passes => {
+            passes::passes(ui, m, doc.operation_mut(setup, index)?, least, diameter);
+        }
         OperationTab::Linking => {
             linking::linking(ui, m, doc.operation_mut(setup, index)?, diameter, corner);
         }

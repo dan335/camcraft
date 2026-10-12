@@ -34,6 +34,12 @@ pub struct Passes {
     /// [`crate::path::tabs`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tabs: Option<Tabs>,
+    /// Passes along a pocket's walls with the side of the tool after each
+    /// level is cleared, the clearing leaving them their stepovers; none when
+    /// not given, as Fusion's 2D pocket has none until asked
+    /// ([`Uses::finishing`](super::Uses::finishing)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finishing: Option<Finishing>,
 }
 
 impl Default for Passes {
@@ -46,8 +52,45 @@ impl Default for Passes {
             max_cut_step: default_max_cut_step(),
             rpm: None,
             tabs: None,
+            finishing: None,
         }
     }
+}
+
+/// A pocket's finishing passes along its walls: Fusion's 2D pocket's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Finishing {
+    /// How many, each a stepover nearer the wall, the last at it: Fusion's
+    /// Number of Finishing Passes, one when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passes: Option<u32>,
+    /// The distance between them, and the most the last takes off the wall,
+    /// in millimetres: a tenth of the tool when not given, Fusion's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stepover: Option<f64>,
+    /// Feed along the last, in mm/min: Fusion's Finish Feedrate, the cutting
+    /// feed when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feed: Option<f64>,
+    /// Whether the last is cut twice, for a tool that springs from the wall:
+    /// Fusion's Repeat Finishing Pass.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub repeat: bool,
+}
+
+/// A pocket's finishing passes, every value its own or its default for the
+/// tool.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FinishingSizes {
+    /// How many.
+    pub passes: u32,
+    /// The distance between them, in millimetres.
+    pub stepover: f64,
+    /// Feed along the last, in mm/min.
+    pub feed: f64,
+    /// Whether the last is cut twice.
+    pub repeat: bool,
 }
 
 /// Tabs: bridges of material left standing across the deepest cut, so a part cut
@@ -130,6 +173,21 @@ impl StockToLeave {
 }
 
 impl Operation {
+    /// Its finishing passes along the walls, sized for a tool `diameter`
+    /// across, when they are asked for and its strategy has them.
+    pub fn finishing(&self, diameter: f64) -> Option<FinishingSizes> {
+        let f = self
+            .passes
+            .finishing
+            .filter(|_| self.strategy.uses().finishing)?;
+        Some(FinishingSizes {
+            passes: f.passes.unwrap_or(1),
+            stepover: f.stepover.unwrap_or(0.1 * diameter),
+            feed: f.feed.unwrap_or(self.passes.feed),
+            repeat: f.repeat,
+        })
+    }
+
     /// The deepest each of its levels may be, when it cuts in levels: its own,
     /// unless its strategy has none. `None` is straight to the bottom in one.
     pub fn stepdown(&self) -> Option<f64> {

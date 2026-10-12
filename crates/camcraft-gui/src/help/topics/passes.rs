@@ -91,4 +91,14 @@ topics! {
     TAB_SPACING: "Spacing",
         "About how far apart tabs are round each loop. There are always at least two to a loop.",
         Figure::Tab(Tab::Spacing);
+    FINISHING: "Finishing passes",
+        "Passes round the pocket's walls with the side of the tool, once each level is cleared. The clearing stops short of the walls to leave them their stepovers.";
+    FINISHING_PASSES: "Passes",
+        "How many finishing passes, each a stepover nearer the wall, the last at it.";
+    FINISHING_STEPOVER: "Stepover",
+        "The distance between finishing passes, and the most the last takes off the wall. Left empty, a tenth of the tool.";
+    FINISHING_FEED: "Finishing feed",
+        "How fast the last finishing pass goes. Left empty, the cutting feed.";
+    FINISHING_REPEAT: "Repeat",
+        "Cuts the last finishing pass twice, for a tool that springs away from the wall.";
 }

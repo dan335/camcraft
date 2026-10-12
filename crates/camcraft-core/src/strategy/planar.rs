@@ -113,6 +113,25 @@ pub struct PlanarParams {
     /// A profile ramped into, cut as one spiral down each ring, as Fusion's is;
     /// `None` cuts each level as a pass of its own.
     pub spiral: Option<Spiral>,
+    /// A pocket's finishing passes along its walls, after each level is
+    /// cleared; `None` clears to the walls.
+    pub finishing: Option<WallFinish>,
+}
+
+/// A pocket's finishing passes along its walls, as Fusion's 2D pocket's: the
+/// clearing stops their stepovers short of the walls, and at each level, once
+/// it is cleared, they go round, the innermost first, the last at the walls.
+/// A pocket's leads, if any, take the tool onto the first and off the last.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WallFinish {
+    /// How many.
+    pub passes: u32,
+    /// The distance between them, in millimetres.
+    pub stepover: f64,
+    /// Feed along the last, in mm/min.
+    pub feed: f64,
+    /// Whether the last is cut twice.
+    pub repeat: bool,
 }
 
 /// How a profile ramped into goes down each ring: along it, in the direction it
@@ -508,14 +527,43 @@ pub fn pocket(
     let reverse = !params.kept_on_right;
     // Each area's rings, from its middle out, with its levels.
     let mut cleared: Vec<PocketArea> = Vec::new();
-    for area in areas {
+    for (index, area) in areas.iter().enumerate() {
         let levels = levels(area.top, area.bottom, params.stepdown);
         if levels.is_empty() {
             report.too_shallow += 1;
             continue;
         }
-        let rings = middle_out(area, params, reverse);
-        if rings.is_empty() {
+        // What the clearing leaves the finishing passes: their stepovers.
+        let close = 2.0 * params.arc + 1e-3;
+        let inset = |d: f64| {
+            let region = area.region.offset(-d, params.arc);
+            let rings = exact_rings(&region, &moved(&area.rings, -d), close);
+            (region, rings)
+        };
+        let finish: Vec<(Vec<Ring>, f64)> = params.finishing.map_or_else(Vec::new, |f| {
+            (0..f.passes)
+                .rev()
+                .map(|j| {
+                    let (_, rings) = inset(f64::from(j) * f.stepover);
+                    let feed = if j == 0 { f.feed } else { params.feed };
+                    (rings.iter().map(|r| wound(r, reverse)).collect(), feed)
+                })
+                .filter(|(rings, _): &(Vec<Ring>, f64)| !rings.is_empty())
+                .collect()
+        });
+        let rings = match params.finishing {
+            Some(f) => {
+                let (region, rings) = inset(f64::from(f.passes) * f.stepover);
+                let rough = Area {
+                    region,
+                    rings,
+                    ..area.clone()
+                };
+                middle_out(&rough, params, reverse)
+            }
+            None => middle_out(area, params, reverse),
+        };
+        if rings.is_empty() && finish.is_empty() {
             continue;
         }
         report.areas += 1;
@@ -535,11 +583,19 @@ pub fn pocket(
         let middle = sets
             .first()
             .map(|set| set.iter().flat_map(|(_, p)| p.iter().copied()).collect())
+            .or_else(|| {
+                finish
+                    .first()
+                    .map(|(rings, _)| rings.iter().flat_map(|r| r.points(params.arc)).collect())
+            })
             .unwrap_or_default();
+        report.rings += finish.iter().map(|(r, _)| r.len() as u64).sum::<u64>();
         cleared.push(PocketArea {
             sets,
             middle,
             levels,
+            finish,
+            index,
         });
     }
 
@@ -571,9 +627,103 @@ pub fn pocket(
                     at = Some(ring.start());
                 }
             }
+            at = finish_walls(area, areas, z, params, at, &mut report, &mut path)?;
         }
     }
     Ok((path, report))
+}
+
+/// A pocket area's finishing passes at level `z`, from where the tool is at:
+/// each pass's rings nearest first, the innermost pass first, the last at the
+/// walls at the finishing feed, and twice if asked. Leads onto the first pass
+/// and off the last, where they fit in what is cleared. Where the tool is
+/// after.
+fn finish_walls(
+    area: &PocketArea,
+    areas: &[Area],
+    z: f64,
+    params: &PlanarParams,
+    mut at: Option<DVec2>,
+    report: &mut PlanarReport,
+    path: &mut Toolpath,
+) -> Result<Option<DVec2>, StrategyError> {
+    let Some(f) = params.finishing else {
+        return Ok(at);
+    };
+    let Some(own) = areas.get(area.index) else {
+        return Ok(at);
+    };
+    let count = area.finish.len();
+    let beside = 2.0 * params.arc + 1e-3;
+    for (k, (rings, feed)) in area.finish.iter().enumerate() {
+        let (first, last) = (k == 0, k + 1 == count);
+        let mut todo: Vec<usize> = (0..rings.len()).collect();
+        while !todo.is_empty() {
+            let points: Vec<Vec<DVec2>> = rings.iter().map(|r| r.points(params.arc)).collect();
+            let j = todo.remove(nearest(&todo, |&j| {
+                ring_distance(points.get(j).map(Vec::as_slice), at)
+            }));
+            let Some(ring) = rings.get(j) else {
+                continue;
+            };
+            let mut ring = at.map_or_else(|| ring.clone(), |p| ring.starting_near(p));
+            // On along a lead to the first pass and off along one from the
+            // last, in the area cleared, as the profile's: where the ring
+            // starts at a corner, or a lead has no room there, halfway along
+            // its longest span instead.
+            let asked = params.leads.filter(|_| first || last);
+            let fit = |r: &Ring| {
+                asked.and_then(|l| {
+                    leads_for(r, l, params.kept_on_right, |p| {
+                        own.region.contains(p) || r.distance_to(p) <= beside
+                    })
+                })
+            };
+            if asked.is_some() && ring.starts_at_corner() {
+                ring = ring.longest_middle();
+            }
+            let mut leads = fit(&ring);
+            if asked.is_some() && leads.is_none() {
+                let middle = ring.longest_middle();
+                leads = fit(&middle);
+                if leads.is_some() {
+                    ring = middle;
+                }
+            }
+            if asked.is_some() && leads.is_none() {
+                report.no_room_to_lead += 1;
+            }
+            let leads = leads.map(|l| RingLeads {
+                start: if first { l.start } else { ring.start() },
+                lead_in: if first { l.lead_in } else { Vec::new() },
+                lead_out: if last { l.lead_out } else { Vec::new() },
+            });
+            let times = if last && f.repeat { 2 } else { 1 };
+            for time in 0..times {
+                // A repeat comes back round without leading on again.
+                let leads = leads.as_ref().map(|l| RingLeads {
+                    start: if time == 0 { l.start } else { ring.start() },
+                    lead_in: if time == 0 {
+                        l.lead_in.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    lead_out: if time + 1 == times {
+                        l.lead_out.clone()
+                    } else {
+                        Vec::new()
+                    },
+                });
+                emit(&ring, z, *feed, leads.as_ref(), path)?;
+                report.passes += 1;
+            }
+            at = leads
+                .as_ref()
+                .and_then(RingLeads::end)
+                .or(Some(ring.start()));
+        }
+    }
+    Ok(at)
 }
 
 /// A pocket's area to clear: its rings from the middle out, each with its
@@ -583,6 +733,11 @@ struct PocketArea {
     sets: Vec<Vec<(Ring, Vec<DVec2>)>>,
     middle: Vec<DVec2>,
     levels: Vec<f64>,
+    /// Its finishing passes' rings, the innermost pass first, each with its
+    /// feed.
+    finish: Vec<(Vec<Ring>, f64)>,
+    /// Which of the areas it is.
+    index: usize,
 }
 
 fn check_params(params: &PlanarParams, areas: &[Area]) -> Result<(), StrategyError> {

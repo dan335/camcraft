@@ -2,8 +2,8 @@
 //! apart they are, the levels it cuts in, the stock it leaves and its tabs.
 
 use camcraft_core::job::{
-    ContourOrder, CutDirection, Depths, FaceDirection, Leave, Operation, PassOrder,
-    RadialDirection, StockToLeave, StrategySpec, TabShape, Tabs,
+    ContourOrder, CutDirection, Depths, FaceDirection, Finishing, Leave, Operation, PassOrder,
+    Passes, RadialDirection, StockToLeave, StrategySpec, TabShape, Tabs,
 };
 use eframe::egui;
 
@@ -14,7 +14,13 @@ use crate::ui::measure::{Measure, follow_radial};
 use crate::ui::theme;
 use crate::ui::widgets::{self, form, hint};
 
-pub(super) fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave) {
+pub(super) fn passes(
+    ui: &mut egui::Ui,
+    m: Measure,
+    op: &mut Operation,
+    least: StockToLeave,
+    diameter: Option<f64>,
+) {
     let uses = op.strategy.uses();
     form(ui, "passes", |ui| {
         match &mut op.strategy {
@@ -238,6 +244,56 @@ pub(super) fn passes(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: S
         ui.add_space(theme::SPACE_2);
         tabs(ui, m, &mut op.passes.tabs);
     }
+    if uses.finishing {
+        ui.add_space(theme::SPACE_4);
+        ui.label(widgets::section_label("Finishing passes"));
+        ui.add_space(theme::SPACE_2);
+        finishing(ui, m, &mut op.passes, diameter);
+    }
+}
+
+/// A pocket's finishing passes along its walls, off until asked for, as
+/// Fusion's: how many, how far apart, how fast the last goes, and whether it
+/// goes twice. A value left out is Fusion's, and says what it comes to.
+fn finishing(ui: &mut egui::Ui, m: Measure, passes: &mut Passes, diameter: Option<f64>) {
+    let mut on = passes.finishing.is_some();
+    ui.checkbox(&mut on, "Finish the walls with the side of the tool")
+        .help(&pass::FINISHING);
+    match (on, passes.finishing.is_some()) {
+        (true, false) => passes.finishing = Some(Finishing::default()),
+        (false, true) => passes.finishing = None,
+        _ => {}
+    }
+    let feed = passes.feed;
+    let Some(f) = passes.finishing.as_mut() else {
+        return;
+    };
+    let tenth = match diameter {
+        Some(d) => format!("a tenth of the tool: {}", m.length(0.1 * d, 2)),
+        None => "a tenth of the tool".to_string(),
+    };
+    ui.add_space(theme::SPACE_2);
+    form(ui, "finishing", |ui| {
+        widgets::row(ui, &pass::FINISHING_PASSES, |ui| {
+            let mut n = f.passes.unwrap_or(1);
+            ui.add(egui::DragValue::new(&mut n).range(1..=20));
+            f.passes = (n != 1).then_some(n);
+        });
+        widgets::row(ui, &pass::FINISHING_STEPOVER, |ui| {
+            let start = 0.1 * diameter.unwrap_or(6.0);
+            widgets::optional(ui, &mut f.stepover, start, &tenth, |ui, v| {
+                m.length_field(ui, v, 0.01, 100.0, "");
+            });
+        });
+        widgets::row(ui, &pass::FINISHING_FEED, |ui| {
+            widgets::optional(ui, &mut f.feed, feed, "the cutting feed", |ui, v| {
+                m.feed_field(ui, v, 50_000.0);
+            });
+        });
+        widgets::row(ui, &pass::FINISHING_REPEAT, |ui| {
+            ui.checkbox(&mut f.repeat, "cut the last one twice");
+        });
+    });
 }
 
 /// The direction passes run, in degrees from X.

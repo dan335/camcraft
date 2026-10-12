@@ -86,7 +86,7 @@ pub use heights::{Height, HeightContext, HeightRef, Heights, Picks};
 pub use linking::{Entry, LeadSizes, Leads, Linking, Retraction};
 pub use model::{FixedBox, LengthUnit, ModelDef, Place, StockDef, StockSpec, Transform};
 pub use operation::Operation;
-pub use passes::{Passes, StockToLeave, TabShape, Tabs};
+pub use passes::{Finishing, FinishingSizes, Passes, StockToLeave, TabShape, Tabs};
 pub use pick::{FeatureRef, PointRef, Snap};
 pub use setup::{Along, BoxOf, Origin, Setup};
 pub use strategy_spec::{

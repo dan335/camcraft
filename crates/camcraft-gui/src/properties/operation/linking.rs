@@ -147,10 +147,17 @@ pub(super) fn linking(
                 });
             }
         }
-        if uses.leads {
+        // A pocket's leads take the tool onto its finishing passes and off.
+        let pocket_leads = uses.finishing && op.passes.finishing.is_some();
+        if uses.leads || pocket_leads {
             let mut on = op.linking.leads.is_some();
             widgets::row(ui, &link::LEADS, |ui| {
-                ui.checkbox(&mut on, "on and off each ring");
+                let what = if uses.leads {
+                    "on and off each ring"
+                } else {
+                    "onto the finishing passes and off"
+                };
+                ui.checkbox(&mut on, what);
             });
             match (on, op.linking.leads.is_some()) {
                 (true, false) => op.linking.leads = Some(Leads::default()),
@@ -160,11 +167,13 @@ pub(super) fn linking(
             if let Some(l) = &mut op.linking.leads {
                 let start = 0.1 * diameter.unwrap_or(6.0);
                 let tenth = of_tool(0.1, "a tenth of the tool");
-                for (topic, v) in [
-                    (&link::LEAD_VERTICAL, &mut l.vertical),
+                // A pocket's finishing passes are entered level, beside the
+                // wall: their leads have no vertical arc.
+                let vertical = (uses.leads).then_some((&link::LEAD_VERTICAL, &mut l.vertical));
+                for (topic, v) in vertical.into_iter().chain([
                     (&link::LEAD_STRAIGHT, &mut l.straight),
                     (&link::LEAD_ARC, &mut l.radius),
-                ] {
+                ]) {
                     widgets::row(ui, topic, |ui| {
                         widgets::optional(ui, v, start, &tenth, |ui, v| {
                             m.length_field(ui, v, 0.05, 1000.0, "");

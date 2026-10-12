@@ -277,6 +277,57 @@ fn an_entry_not_offered_is_refused() {
     ));
 }
 
+/// A pocket's finishing passes are off unless asked for, as Fusion's are; asked
+/// for, each value left out is Fusion's for the tool, a value out of range is
+/// refused, and only a pocket has them.
+#[test]
+fn a_pocket_finishes_its_walls_only_when_asked() {
+    let pocket = |passes: &str| {
+        let text = SAMPLE
+            .replacen("strategy = \"parallel\"\n", "strategy = \"pocket\"\n", 1)
+            .replace("angle = 90.0\n", "")
+            .replace("passes = { stepover = 0.4, feed = 2400.0 }", passes);
+        let j: Job = toml::from_str(&text).unwrap();
+        (j.validate(), j.setups[0].operations[1].clone())
+    };
+    let (ok, op) = pocket("passes = { stepover = 0.4, feed = 2400.0 }");
+    ok.unwrap();
+    assert_eq!(op.finishing(6.0), None);
+    let (ok, op) = pocket("passes = { stepover = 0.4, feed = 2400.0, finishing = {} }");
+    ok.unwrap();
+    let f = op.finishing(6.0).unwrap();
+    assert_eq!((f.passes, f.feed, f.repeat), (1, 2400.0, false));
+    assert!((f.stepover - 0.6).abs() < 1e-12);
+    let (ok, op) = pocket(
+        "passes = { stepover = 0.4, feed = 2400.0, finishing = { passes = 2, stepover = 0.25, feed = 900.0, repeat = true } }",
+    );
+    ok.unwrap();
+    assert_eq!(
+        op.finishing(6.0),
+        Some(FinishingSizes {
+            passes: 2,
+            stepover: 0.25,
+            feed: 900.0,
+            repeat: true
+        })
+    );
+    // Written as given, and read back the same.
+    let text = toml::to_string(&op.passes).unwrap();
+    assert_eq!(toml::from_str::<Passes>(&text).unwrap(), op.passes);
+    for bad in ["passes = 0", "stepover = -1.0", "feed = 0.0"] {
+        let (refused, _) = pocket(&format!(
+            "passes = {{ stepover = 0.4, feed = 2400.0, finishing = {{ {bad} }} }}"
+        ));
+        assert!(
+            matches!(refused, Err(JobError::BadValue { .. })),
+            "{bad}: {refused:?}"
+        );
+    }
+    let mut profile = op.clone();
+    profile.strategy = StrategySpec::named("profile").unwrap();
+    assert_eq!(profile.finishing(6.0), None);
+}
+
 /// A profile has Fusion's leads unless they are turned off, as Fusion's does;
 /// off is written, and on at Fusion's sizes is not.
 #[test]

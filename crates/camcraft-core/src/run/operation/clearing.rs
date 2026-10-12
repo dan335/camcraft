@@ -134,7 +134,16 @@ pub(super) fn planar_paths(
         arc: work.job.tolerance * 0.5,
         radius: work.tool.cutter_radius(),
         kept_on_right: work.kept_on_right(),
-        leads: op.leads(diameter).map(|l| LeadArc {
+        // A profile's leads go onto every ring; a pocket's, as Fusion's 2D
+        // pocket's, onto its first finishing pass and off its last.
+        leads: match op.strategy {
+            StrategySpec::Pocket { .. } => op
+                .finishing(diameter)
+                .and(op.linking.leads)
+                .map(|l| l.sizes(diameter)),
+            _ => op.leads(diameter),
+        }
+        .map(|l| LeadArc {
             radius: l.radius,
             sweep: l.sweep.to_radians(),
             straight: l.straight,
@@ -148,6 +157,12 @@ pub(super) fn planar_paths(
             feed: op.ramp_feed(),
             most: Some(op.ramp_stepdown(diameter)),
             above: op.linking.safe_distance,
+        }),
+        finishing: op.finishing(diameter).map(|f| WallFinish {
+            passes: f.passes,
+            stepover: f.stepover,
+            feed: f.feed,
+            repeat: f.repeat,
         }),
     };
     let (path, report, detail): (Toolpath, PlanarReport, fn(PlanarReport) -> StrategyDetail) =

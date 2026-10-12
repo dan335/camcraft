@@ -19,6 +19,7 @@ impl StrategySpec {
             stock_to_leave: Leave::Both,
             depths: Depths::Optional,
             tabs: false,
+            finishing: false,
             links: Links::Level,
             stay_down: true,
             reach: Reach::Tools(5),
@@ -123,6 +124,7 @@ impl StrategySpec {
             StrategySpec::Pocket { .. } => Uses {
                 boundary: false,
                 outline: true,
+                finishing: true,
                 entries: &[Entry::Helix, Entry::Ramp, Entry::Plunge],
                 ..cuts_loops
             },
@@ -162,6 +164,7 @@ impl StrategySpec {
                 // Its pecks are its own.
                 depths: Depths::None,
                 tabs: false,
+                finishing: false,
                 // Up out of each hole, and across to the next.
                 links: Links::Own,
                 stay_down: false,
@@ -211,6 +214,8 @@ pub struct Uses {
     pub depths: Depths,
     /// Tabs across the deepest cut of the loops it cuts.
     pub tabs: bool,
+    /// Finishing passes along a pocket's walls, as Fusion's 2D pocket has.
+    pub finishing: bool,
     /// How the links it leaves to the linker are made.
     pub links: Links,
     /// Links made without lifting.
