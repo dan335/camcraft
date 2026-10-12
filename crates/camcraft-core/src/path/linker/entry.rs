@@ -224,11 +224,14 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                 } else {
                     -along.perp()
                 };
-                // The largest helix clear of the part, if there is material to
-                // go down through at all.
-                let fits = [1.0, 0.5, 0.25]
+                // The largest helix clear of the part, no smaller than the
+                // least, if there is material to go down through at all.
+                let least = self.p.helix_min_radius.min(self.p.helix_radius);
+                let fits = [1.0, 0.75, 0.5, 0.25]
                     .into_iter()
                     .map(|k| self.p.helix_radius * k)
+                    .filter(|&r| r >= least - 1e-9)
+                    .chain(std::iter::once(least))
                     .find(|&r| r > 1e-6 && self.helix_clear(end, aside, r));
                 match fits {
                     Some(radius) if self.helix(end, aside, radius, None).is_some() => Way::Helix {
@@ -237,35 +240,41 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                         radius,
                         lead: lead.map(|(_, arc)| arc),
                     },
+                    // No room: along the pass, where that may be, as Fusion's
+                    // helix ramp type falls back to a profile ramp.
+                    _ if self.p.ramp_where_no_helix => {
+                        self.ramp_into(to, pass, ramp).unwrap_or_else(plain)
+                    }
                     _ => plain(),
                 }
             }
-            EntryKind::Ramp => {
-                // A ring with leads is ramped into along the ring itself, from
-                // its start, and entered there without its lead.
-                let lead_in = pass.iter().take_while(|m| m.role == MoveRole::Lead).count();
-                let lead_out = pass
-                    .iter()
-                    .rev()
-                    .take_while(|m| m.role == MoveRole::Lead)
-                    .count();
-                let (onto, ring, skip) =
-                    match pass.get(lead_in..pass.len().saturating_sub(lead_out)) {
-                        Some(ring) if lead_in > 0 && !ring.is_empty() => {
-                            let onto = pass.get(lead_in - 1).map_or(to, |m| m.to);
-                            (onto, segs(onto, ring), lead_in)
-                        }
-                        _ => (to, segs(to, pass), 0),
-                    };
-                if !self.ramped(onto) {
-                    return plain();
-                }
-                match self.ramp_down(onto, &ring, ramp) {
-                    Some((start, moves)) => Way::Ramp { start, moves, skip },
-                    None => plain(),
-                }
-            }
+            EntryKind::Ramp => self.ramp_into(to, pass, ramp).unwrap_or_else(plain),
         }
+    }
+
+    /// Down along `pass`, from `to`, at the ramp: `None` where it does not
+    /// start in material or is too short to ramp along.
+    fn ramp_into(&self, to: DVec3, pass: &[Move], ramp: Ramp) -> Option<Way> {
+        // A ring with leads is ramped into along the ring itself, from
+        // its start, and entered there without its lead.
+        let lead_in = pass.iter().take_while(|m| m.role == MoveRole::Lead).count();
+        let lead_out = pass
+            .iter()
+            .rev()
+            .take_while(|m| m.role == MoveRole::Lead)
+            .count();
+        let (onto, ring, skip) = match pass.get(lead_in..pass.len().saturating_sub(lead_out)) {
+            Some(ring) if lead_in > 0 && !ring.is_empty() => {
+                let onto = pass.get(lead_in - 1).map_or(to, |m| m.to);
+                (onto, segs(onto, ring), lead_in)
+            }
+            _ => (to, segs(to, pass), 0),
+        };
+        if !self.ramped(onto) {
+            return None;
+        }
+        self.ramp_down(onto, &ring, ramp)
+            .map(|(start, moves)| Way::Ramp { start, moves, skip })
     }
 
     /// Whether a helix of `radius` off to `aside` of `end` keeps clear of the

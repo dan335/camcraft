@@ -70,6 +70,12 @@ pub struct LinkParams {
     pub entry: EntryKind,
     /// The radius of a helical entry, as the tool's centre goes, in millimetres.
     pub helix_radius: f64,
+    /// The smallest a helical entry is made where there is no room for one of
+    /// [`LinkParams::helix_radius`], in millimetres.
+    pub helix_min_radius: f64,
+    /// Whether a pass with no room for a helix is ramped into along itself, as
+    /// Fusion's helix ramp type allows a pocket, rather than plunged.
+    pub ramp_where_no_helix: bool,
     /// Whether a helix turns counter-clockwise seen from above, which climbs
     /// with a clockwise spindle.
     pub helix_ccw: bool,
@@ -106,6 +112,8 @@ impl LinkParams {
             ramp: None,
             entry: EntryKind::Ramp,
             helix_radius: 0.0,
+            helix_min_radius: 0.0,
+            ramp_where_no_helix: false,
             helix_ccw: true,
             ramp_stepdown: None,
             lead_in_material: false,

@@ -97,7 +97,7 @@ pub use tool::{
     Coolant, DRILL_POINT, Holder, HolderSegment, Preset, SpindleDirection, ToolFieldError,
     ToolKind, ToolMaterial, ToolSpec, free_preset_name,
 };
-pub use uses::{Depths, Leave, Links, Uses};
+pub use uses::{Depths, HelixSize, Leave, Links, Reach, Uses};
 
 /// The job file format this build reads and writes, and the only one it reads.
 pub const JOB_VERSION: u32 = 1;

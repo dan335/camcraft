@@ -148,7 +148,8 @@ Clearing ([decision 0007](decisions/0007-adaptive-clearing.md)): Z levels a
 stepdown apart, each cleared by passes steered step by step to hold the tool's
 engagement at the *optimal load*, which is its `passes.stepover` (a tenth of the
 tool to start). Passes start beside the block where they can, and go down a helix
-(`linking.helix_diameter`, 0.9 of the tool) where they cannot; `direction` is
+(`linking.helix_diameter`, Fusion's: 0.95 × the tool less its corners, no less
+than a quarter of the tool) where they cannot; `direction` is
 `"climb"` (the default), `"conventional"` or `"both-ways"`; `flat_areas` (on by
 default) adds a level on each flat face, raised by the stock to leave down. It
 clears the stock's block as it starts: an operation before it is not yet taken
@@ -204,8 +205,8 @@ start each ring, beside the lead:
   top, then once round level, as Fusion's helix ends, so its circle is cut to
   the depth all round and the next depth's way in cuts nothing on the way. Its circle, as the
   tool's centre goes, is `helix_diameter` across (0.9 × the tool's); where the
-  part leaves no room for it, or for one half or a quarter the size, the tool
-  goes straight down instead.
+  part leaves no room for it, or for one three quarters, half or a quarter the
+  size, the tool goes straight down instead.
 - `"plunge"`: straight down at the plunge feed onto the vertical arc's top, as
   Fusion's 2D contour does without a ramp.
 - `"ramp"`: the ring cut as one spiral, as Fusion cuts one: on along the
@@ -214,6 +215,17 @@ start each ring, beside the lead:
   reached it; straight on down to the next depth, and so on; and off along the
   lead-out once, from where the last lap ends. Never up, nor off and on again,
   between depths.
+
+Pocket clearing and a 2D pocket have an entry too, into the first ring of each
+level, as Fusion's 3D and 2D Offset Roughing: `"helix"` (the default), down a
+helix beside where the ring starts, then once round level; `"ramp"`, along the
+ring in the direction it cuts; or `"plunge"`. Pocket clearing's helix is
+Fusion's size, 0.95 × the tool less its corners and no less than a quarter of
+the tool, made smaller where the part leaves no room, down to half the tool
+less its corners; a 2D pocket's is 0.9 × the tool, down to a quarter of that.
+Where no helix fits, the ring is ramped along instead, as Fusion's helix ramp
+type allows, and only where that does not fit either does the tool go
+straight down.
 
 Adaptive clearing has an entry too, into what it cannot reach from the side:
 `"helix"` (the default) or `"plunge"`, as Fusion's 3D Adaptive's ramp types. It
@@ -235,16 +247,21 @@ above the first cut, and between cuts it goes across as Fusion's *retraction*
 says: `"minimum"` (the default), the safe distance over the material under the
 way across as the operation found it; `"full"`, the retract height, or higher
 where the material is. A link no longer than the *stay-down*
-distance is made without lifting, at the cutting feed: 50 mm for parallel, riding
-over the part; five times the tool's diameter for pocket clearing and 2D, straight and
-level, and for a profile down to its ring's next depth. Adaptive clearing makes
-its own links at the level, only straight across what it has cleared, up to ten
-times the tool's diameter; it goes down its own helix into what it cannot reach
+distance is made without lifting, at the cutting feed; the distance is Fusion's
+Maximum Stay-Down Distance for the strategy: 50 mm for parallel and contour;
+twice the tool's diameter for scallop and flat; five times for spiral, radial,
+morphed spiral, pocket clearing, adaptive clearing and the 2D strategies.
+Parallel and the other finishing strategies ride over the part; pocket clearing
+and the 2D strategies go straight and level, and a profile down to its ring's
+next depth. Adaptive clearing makes
+its own links at the level, only straight across what it has cleared; it goes
+down its own helix into what it cannot reach
 from the side, and straight down everywhere else, into what it has cleared.
 Parallel enters and leaves each pass along a vertical arc (the *lead radius*, a
-tenth of the tool); pocket clearing, 2D pockets and facing ramp into material along the pass
-they are about to cut, in the direction it cuts (the *ramp angle*, 2°, at the
-*ramp feed*, 60% of the cutting feed, as Fusion's). After the last cut the tool goes up to
+tenth of the tool); pocket clearing and 2D pockets go down a helix into material
+(their entry, above), and facing ramps along the pass it is about to cut, in
+the direction it cuts. Helixes and ramps go down at the *ramp angle*, 2°, at the
+*ramp feed*, 60% of the cutting feed, as Fusion's. After the last cut the tool goes up to
 the clearance height before the spindle stops. The settings are written only when
 changed.
 

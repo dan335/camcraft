@@ -250,9 +250,13 @@ fn a_playhead_part_way_is_a_replay_position() {
                 fraction: 0.5,
             })
             .unwrap();
+        // Halfway along the move it shows: along its arc, for a helix.
         let s = &scene.segments[shown];
         assert_eq!(op, s.op as usize);
-        assert!((tip - (s.a + s.b) * 0.5).length() < 1e-9);
+        assert!((tip - s.point_at(0.5)).length() < 1e-9);
+        if s.kind == camcraft_core::path::toolpath::MoveKind::Linear {
+            assert!((tip - (s.a + s.b) * 0.5).length() < 1e-9);
+        }
     }
 }
 

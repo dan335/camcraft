@@ -720,9 +720,13 @@ fn each_strategy_says_what_it_uses() {
     .uses();
     assert!(!profile.stepover && profile.tabs && profile.leads);
     assert_eq!(profile.entries, [Entry::Helix, Entry::Plunge, Entry::Ramp]);
+    // A pocket, 2D or 3D, goes down a helix by default, as Fusion's.
+    assert_eq!(pocket.entries, [Entry::Helix, Entry::Ramp, Entry::Plunge]);
+    let clearing = StrategySpec::named("pocket-clearing").unwrap().uses();
+    assert_eq!(clearing.entries, [Entry::Helix, Entry::Ramp, Entry::Plunge]);
     assert!(
-        pocket.entries.is_empty() && parallel.entries.is_empty(),
-        "a pocket and a finishing pass have no choice of entry"
+        parallel.entries.is_empty(),
+        "a finishing pass has no choice of entry"
     );
     // Fusion's 3D Adaptive has no ring to ramp along.
     let adaptive = StrategySpec::named("adaptive").unwrap().uses();
@@ -2017,15 +2021,29 @@ fn each_strategy_says_how_it_links() {
 #[test]
 fn linking_values_default_as_the_strategy_says() {
     let op = |name: &str| Operation::new("o", StrategySpec::named(name).unwrap());
+    // Fusion's Maximum Stay-Down Distance for each.
     assert_eq!(op("parallel").stay_down(6.0), 50.0);
+    assert_eq!(op("scallop").stay_down(6.0), 12.0);
+    assert_eq!(op("spiral").stay_down(6.0), 30.0);
+    assert_eq!(op("contour").stay_down(6.0), 50.0);
+    assert_eq!(op("flat").stay_down(6.0), 12.0);
     assert_eq!(op("pocket-clearing").stay_down(6.0), 30.0);
-    assert_eq!(op("adaptive").stay_down(6.0), 60.0);
+    assert_eq!(op("adaptive").stay_down(6.0), 30.0);
     assert_eq!(op("drill").stay_down(6.0), 0.0);
     assert!((op("contour").lead_radius(6.0) - 0.6).abs() < 1e-12);
     assert_eq!(op("pocket").lead_radius(6.0), 0.0);
-    assert!((op("profile").helix_diameter(10.0) - 9.0).abs() < 1e-12);
+    assert!((op("profile").helix_diameter(10.0, 0.0) - 9.0).abs() < 1e-12);
+    // Fusion's 3D helix: 0.95 × the tool less its corners, no less than a
+    // quarter of the tool; no smaller than half the tool less its corners.
+    let clearing = op("pocket-clearing");
+    assert!((clearing.helix_diameter(10.0, 0.0) - 9.5).abs() < 1e-12);
+    assert!((clearing.helix_diameter(10.0, 1.0) - 7.6).abs() < 1e-12);
+    assert!((clearing.helix_diameter(10.0, 5.0) - 2.5).abs() < 1e-12);
+    assert!((clearing.least_helix_diameter(10.0, 0.0) - 5.0).abs() < 1e-12);
+    assert!((clearing.least_helix_diameter(10.0, 5.0) - 2.5).abs() < 1e-12);
     assert_eq!(op("profile").entry(), Some(Entry::Helix));
-    assert_eq!(op("pocket").entry(), None);
+    assert_eq!(op("pocket").entry(), Some(Entry::Helix));
+    assert_eq!(op("parallel").entry(), None);
     assert!(op("profile").leads(6.0).is_some());
     assert_eq!(op("pocket").leads(6.0), None);
     // The stepdown, or the tool without one.

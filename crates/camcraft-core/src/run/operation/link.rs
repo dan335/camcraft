@@ -42,14 +42,16 @@ pub(super) fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
             }),
         ),
     };
+    // A profile's ramp is its own path, a spiral down each ring
+    // (`planar_paths`): the linker only brings the tool onto its lead.
+    let profile = matches!(op.strategy, StrategySpec::Profile { .. });
     let entry = match op.entry() {
         Some(Entry::Helix) => EntryKind::Helix,
         Some(Entry::Plunge) => EntryKind::Plunge,
-        // A profile's ramp is its own path, a spiral down each ring
-        // (`planar_paths`): the linker only brings the tool onto its lead.
-        Some(Entry::Ramp) => EntryKind::Plunge,
-        None => EntryKind::Ramp,
+        Some(Entry::Ramp) if profile => EntryKind::Plunge,
+        Some(Entry::Ramp) | None => EntryKind::Ramp,
     };
+    let corner = work.spec.corner_radius();
     LinkParams {
         retract_feed: linking.retract_feed,
         plunge_feed: linking.plunge_feed,
@@ -59,7 +61,11 @@ pub(super) fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         lead_radius,
         ramp,
         entry,
-        helix_radius: op.helix_diameter(diameter) / 2.0,
+        helix_radius: op.helix_diameter(diameter, corner) / 2.0,
+        helix_min_radius: op.least_helix_diameter(diameter, corner) / 2.0,
+        // A pocket with no room for a helix ramps along its ring, as Fusion's
+        // helix ramp type allows; a profile goes straight down beside its lead.
+        ramp_where_no_helix: !profile,
         // A helix climbs as the cut does.
         helix_ccw: work.kept_on_right(),
         ramp_stepdown: Some(op.ramp_stepdown(diameter)),

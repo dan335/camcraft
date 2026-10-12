@@ -19,7 +19,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use camcraft_core::path::toolpath::{MoveRole, Toolpath};
+use camcraft_core::path::toolpath::{Arc, MoveKind, MoveRole, Toolpath};
 use camcraft_geom::mesh::TriMesh;
 use camcraft_geom::synthetic;
 use camcraft_session::{load_models, models_of, read_job, run_setup};
@@ -131,7 +131,7 @@ fn motions(program: &str) -> Vec<(bool, [f64; 3])> {
             let (letter, value) = word.split_at(1);
             match letter {
                 "G" if value == "0" => rapid = true,
-                "G" if value == "1" => rapid = false,
+                "G" if matches!(value, "1" | "2" | "3") => rapid = false,
                 "X" | "Y" | "Z" => {
                     let axis = usize::from(letter.as_bytes()[0] - b'X');
                     pos[axis] = value.parse::<f64>().unwrap() + 0.0;
@@ -148,15 +148,50 @@ fn motions(program: &str) -> Vec<(bool, [f64; 3])> {
 }
 
 /// The path as the post will have written it: rounded, and without the moves that
-/// round to where the tool already is, which the renderer rightly drops.
+/// round to where the tool already is, which the renderer rightly drops. An arc
+/// is written a half turn at a time, and a piece shorter than 0.25 mm across as
+/// straight moves along it, as the renderer writes them.
 fn expected(path: &Toolpath) -> Vec<(bool, [f64; 3])> {
     let mut out: Vec<(bool, [f64; 3])> = Vec::new();
-    for m in path.moves() {
-        let p = at(m.to);
-        if out.last().is_some_and(|(_, q)| *q == p) {
-            continue;
+    let mut push = |rapid: bool, p: glam::DVec3| {
+        let p = at(p);
+        if !out.last().is_some_and(|(_, q)| *q == p) {
+            out.push((rapid, p));
         }
-        out.push((m.role == MoveRole::Rapid, p));
+    };
+    let mut from = None;
+    for m in path.moves() {
+        match (m.kind, from) {
+            (MoveKind::Arc(a), Some(start)) => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let n = (a.sweep.abs() / std::f64::consts::PI - 1e-9)
+                    .ceil()
+                    .max(1.0) as u32;
+                let mut at = start;
+                for i in 1..=n {
+                    let end = if i == n {
+                        m.to
+                    } else {
+                        a.point_at(start, m.to, f64::from(i) / f64::from(n))
+                    };
+                    let piece = Arc {
+                        sweep: a.sweep / f64::from(n),
+                        ..a
+                    };
+                    let across = (end - at) - a.axis * (end - at).dot(a.axis);
+                    if across.length() < 0.25 {
+                        for p in piece.chords(at, end, 0.002) {
+                            push(false, p);
+                        }
+                    } else {
+                        push(false, end);
+                    }
+                    at = end;
+                }
+            }
+            _ => push(m.role == MoveRole::Rapid, m.to),
+        }
+        from = Some(m.to);
     }
     out
 }

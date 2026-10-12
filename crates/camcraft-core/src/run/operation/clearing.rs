@@ -62,7 +62,7 @@ pub(super) fn adaptive_paths(
     // Into a closed area it goes down a helix, or straight: it offers no ramp.
     let helix_radius = match op.entry() {
         Some(Entry::Plunge) => 0.0,
-        _ => op.helix_diameter(diameter) / 2.0,
+        _ => op.helix_diameter(diameter, work.spec.corner_radius()) / 2.0,
     };
     let params = AdaptiveParams {
         // Checked with the job: it always has one.
@@ -139,8 +139,11 @@ pub(super) fn planar_paths(
             sweep: l.sweep.to_radians(),
             straight: l.straight,
         }),
-        // Ramped into, a profile goes down each ring in one spiral, as Fusion's.
-        spiral: (op.entry() == Some(Entry::Ramp)).then(|| Spiral {
+        // Ramped into, a profile goes down each ring in one spiral, as Fusion's;
+        // a pocket ramps along its rings as the linker enters them.
+        spiral: (matches!(op.strategy, StrategySpec::Profile { .. })
+            && op.entry() == Some(Entry::Ramp))
+        .then(|| Spiral {
             angle: op.linking.ramp_angle.to_radians(),
             feed: op.ramp_feed(),
             most: Some(op.ramp_stepdown(diameter)),

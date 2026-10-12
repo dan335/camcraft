@@ -260,6 +260,16 @@ pub enum ToolKind {
 pub const DRILL_POINT: f64 = 118.0;
 
 impl ToolSpec {
+    /// The radius of its corner, as Fusion's `tool_cornerRadius`: a ball's is
+    /// half its diameter, a bullnose's its corner, any other's none.
+    pub fn corner_radius(&self) -> f64 {
+        match self.kind {
+            ToolKind::Ball => self.diameter / 2.0,
+            ToolKind::Bullnose => self.corner,
+            ToolKind::Flat | ToolKind::Cone | ToolKind::Drill => 0.0,
+        }
+    }
+
     /// The preset called `name`.
     pub fn preset(&self, name: &str) -> Option<&Preset> {
         self.presets.iter().find(|p| p.name == name)

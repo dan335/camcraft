@@ -34,9 +34,8 @@ pub struct Linking {
     )]
     pub safe_distance: f64,
     /// The longest link made without lifting clear, in millimetres: the
-    /// strategy's own when not given ([`Operation::stay_down`]: 50 mm over the
-    /// part, 10 × the tool's diameter for adaptive clearing's own links, and
-    /// 5 × for the rest), zero to always lift.
+    /// strategy's own when not given ([`Operation::stay_down`], Fusion's
+    /// Maximum Stay-Down Distance for it), zero to always lift.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stay_down: Option<f64>,
     /// The radius of the vertical arcs each pass is entered and left along, for a
@@ -74,8 +73,8 @@ pub struct Linking {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry: Option<Entry>,
     /// The diameter of a helical entry's circle, as the tool's centre goes, in
-    /// millimetres: 0.9 × the tool's diameter when not given, smaller where the
-    /// waste has no room for it.
+    /// millimetres: the strategy's own when not given
+    /// ([`Operation::helix_diameter`]), smaller where there is no room for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helix_diameter: Option<f64>,
     /// The most a helix or a ramp round a ring descends in one lap, in
@@ -103,12 +102,12 @@ pub enum Retraction {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Entry {
-    /// Down a helix in the waste beside the lead, at the ramp angle: the
-    /// profile's own.
+    /// Down a helix at the ramp angle: in the waste beside a profile's lead,
+    /// or beside where a pocket's first ring starts.
     #[default]
     Helix,
-    /// Straight down beside the lead at the plunge feed, as a 2D contour
-    /// without a ramp does in Fusion.
+    /// Straight down at the plunge feed, beside a profile's lead, as a 2D
+    /// contour without a ramp does in Fusion.
     Plunge,
     /// Down along the pass itself, in the direction it cuts, at the ramp angle.
     Ramp,
@@ -314,8 +313,8 @@ impl Operation {
 
     /// The longest link it makes without lifting clear, in millimetres, with a
     /// tool `diameter` across: as given, or its strategy's own
-    /// ([`Links::stay_down`]). Zero, always lifting, for one that never stays
-    /// down.
+    /// ([`Uses::reach`](super::Uses::reach)). Zero, always lifting, for one
+    /// that never stays down.
     pub fn stay_down(&self, diameter: f64) -> f64 {
         let uses = self.strategy.uses();
         if !uses.stay_down {
@@ -323,7 +322,7 @@ impl Operation {
         }
         self.linking
             .stay_down
-            .unwrap_or_else(|| uses.links.stay_down(diameter))
+            .unwrap_or_else(|| uses.reach.of(diameter))
     }
 
     /// The radius of the vertical arcs each pass is entered and left along, in
@@ -355,10 +354,21 @@ impl Operation {
     }
 
     /// The diameter of a helical entry's circle, as the tool's centre goes, in
-    /// millimetres, with a tool `diameter` across: as given, or 0.9 × the tool.
-    /// Where the waste has no room for it, the helix is made smaller.
-    pub fn helix_diameter(&self, diameter: f64) -> f64 {
-        self.linking.helix_diameter.unwrap_or(0.9 * diameter)
+    /// millimetres, with a tool `diameter` across whose corners are of radius
+    /// `corner`: as given, or its strategy's own
+    /// ([`Uses::helix`](super::Uses::helix)). Where there is no room for it,
+    /// the helix is made smaller, down to [`Operation::least_helix_diameter`].
+    pub fn helix_diameter(&self, diameter: f64, corner: f64) -> f64 {
+        self.linking
+            .helix_diameter
+            .unwrap_or_else(|| self.strategy.uses().helix.diameter(diameter, corner))
+    }
+
+    /// The smallest a helical entry is made where there is no room for
+    /// [`Operation::helix_diameter`]'s, for the same tool.
+    pub fn least_helix_diameter(&self, diameter: f64, corner: f64) -> f64 {
+        let largest = self.helix_diameter(diameter, corner);
+        self.strategy.uses().helix.least(largest, diameter, corner)
     }
 
     /// The most a helix or a ramp round a ring descends in one lap, in

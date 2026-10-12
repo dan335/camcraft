@@ -107,12 +107,13 @@ fn summary(result: &SetupResult) -> Vec<String> {
             Made::Skipped => format!("{}: not generated", op.name),
             Made::Disabled => format!("{}: turned off", op.name),
             Made::Generated | Made::Kept => format!(
-                "{}: {} passes, {} links stayed down, {} ramped, removed {:.0} mm3, \
-                 travel saved {:.0}%, rapid contacts {}{}",
+                "{}: {} passes, {} links stayed down, {} ramped, {} down a helix, \
+                 removed {:.0} mm3, travel saved {:.0}%, rapid contacts {}{}",
                 op.name,
                 op.passes,
                 op.links.stayed_down,
                 op.links.ramps,
+                op.links.helixes,
                 op.sim.removed_mm3,
                 op.travel_saved * 100.0,
                 op.sim.rapid_contacts,

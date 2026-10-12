@@ -90,6 +90,7 @@ pub(super) fn show(
             .as_ref()
             .is_some_and(|t| doc.number_clash(t).is_some());
     let diameter = spec.map(|t| t.diameter);
+    let corner = spec.map_or(0.0, |t| t.corner_radius());
     // How far below zero its stock to leave may go: the tool's to say.
     let least = spec.map_or(
         StockToLeave {
@@ -130,7 +131,7 @@ pub(super) fn show(
         OperationTab::Heights => heights::heights(ui, m, doc.operation_mut(setup, index)?),
         OperationTab::Passes => passes::passes(ui, m, doc.operation_mut(setup, index)?, least),
         OperationTab::Linking => {
-            linking::linking(ui, m, doc.operation_mut(setup, index)?, diameter);
+            linking::linking(ui, m, doc.operation_mut(setup, index)?, diameter, corner);
         }
     }
     Some(page)

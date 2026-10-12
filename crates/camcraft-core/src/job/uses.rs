@@ -21,6 +21,8 @@ impl StrategySpec {
             tabs: false,
             links: Links::Level,
             stay_down: true,
+            reach: Reach::Tools(5),
+            helix: HelixSize::Tool,
             lead_radius: false,
             ramp: true,
             entries: &[],
@@ -36,6 +38,7 @@ impl StrategySpec {
             StrategySpec::Parallel { .. } => Uses {
                 depths: Depths::None,
                 links: Links::OverPart,
+                reach: Reach::Mm(50),
                 lead_radius: true,
                 ramp: false,
                 reorder: true,
@@ -52,6 +55,12 @@ impl StrategySpec {
             | StrategySpec::MorphedSpiral { .. } => Uses {
                 depths: Depths::None,
                 links: Links::OverPart,
+                // Fusion's: scallop's rings are closer than a pattern's laps.
+                reach: if matches!(self, StrategySpec::Scallop { .. }) {
+                    Reach::Tools(2)
+                } else {
+                    Reach::Tools(5)
+                },
                 lead_radius: true,
                 ramp: false,
                 top: None,
@@ -68,6 +77,8 @@ impl StrategySpec {
                 stepover: false,
                 depths: Depths::Required,
                 links: Links::Level,
+                reach: Reach::Mm(50),
+                helix: HelixSize::Flat,
                 lead_radius: true,
                 ramp: false,
                 top: Some(HeightRef::ModelTop),
@@ -78,13 +89,18 @@ impl StrategySpec {
             // part's flats, from its top.
             StrategySpec::Flat { .. } => Uses {
                 depths: Depths::None,
+                reach: Reach::Tools(2),
                 top: Some(HeightRef::ModelTop),
                 ..cuts_loops
             },
             // Slice by slice is what it is. Its order is its own, each level's
-            // rings from the middle out, and each the way it cuts.
+            // rings from the middle out, and each the way it cuts. Into
+            // material it goes down a helix, as Fusion's 3D pocket does by
+            // default, or ramps along its ring, or plunges.
             StrategySpec::PocketClearing { .. } => Uses {
                 depths: Depths::Required,
+                entries: &[Entry::Helix, Entry::Ramp, Entry::Plunge],
+                helix: HelixSize::Flat,
                 ..cuts_loops
             },
             // Its stepover is its optimal load. It goes down a helix, or
@@ -96,6 +112,7 @@ impl StrategySpec {
                 load: true,
                 depths: Depths::Required,
                 links: Links::Own,
+                helix: HelixSize::Flat,
                 entries: &[Entry::Helix, Entry::Plunge],
                 ..cuts_loops
             },
@@ -104,6 +121,7 @@ impl StrategySpec {
             StrategySpec::Pocket { .. } => Uses {
                 boundary: false,
                 outline: true,
+                entries: &[Entry::Helix, Entry::Ramp, Entry::Plunge],
                 ..cuts_loops
             },
             StrategySpec::Profile { side, .. } => Uses {
@@ -145,6 +163,8 @@ impl StrategySpec {
                 // Up out of each hole, and across to the next.
                 links: Links::Own,
                 stay_down: false,
+                reach: Reach::Tools(0),
+                helix: HelixSize::Tool,
                 lead_radius: false,
                 ramp: false,
                 entries: &[],
@@ -193,6 +213,11 @@ pub struct Uses {
     pub links: Links,
     /// Links made without lifting.
     pub stay_down: bool,
+    /// The longest of them when not given: Fusion's Maximum Stay-Down
+    /// Distance for the strategy.
+    pub reach: Reach,
+    /// How wide its helical entries are when not given.
+    pub helix: HelixSize,
     /// Vertical arcs into and out of each pass.
     pub lead_radius: bool,
     /// Ramping into material.
@@ -224,17 +249,58 @@ pub enum Links {
     Own,
 }
 
-impl Links {
-    /// The longest link made without lifting clear, in millimetres, when none
-    /// is given, with a tool `diameter` across: 50 mm over the part, 10 × the
-    /// tool for adaptive clearing's own links at the level, and 5 × for the
-    /// rest.
-    pub fn stay_down(self, diameter: f64) -> f64 {
+/// The longest link a strategy makes without lifting when none is given, as
+/// Fusion's Maximum Stay-Down Distance for it: so many millimetres, or so many
+/// of the tool's diameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    /// Millimetres.
+    Mm(u32),
+    /// The tool's diameters.
+    Tools(u32),
+}
+
+impl Reach {
+    /// In millimetres, with a tool `diameter` across.
+    pub fn of(self, diameter: f64) -> f64 {
         match self {
-            Links::OverPart => 50.0,
-            // Adaptive clearing's, where it has cleared the way.
-            Links::Own => 10.0 * diameter,
-            Links::Level => 5.0 * diameter,
+            Reach::Mm(mm) => f64::from(mm),
+            Reach::Tools(k) => f64::from(k) * diameter,
+        }
+    }
+}
+
+/// How wide a strategy's helical entries are when not given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelixSize {
+    /// 0.9 × the tool's diameter, camcraft's for a 2D strategy, down to a
+    /// quarter of that where it has no room.
+    Tool,
+    /// Fusion's 3D strategies' Helical Ramp Diameter: 0.95 × the tool's
+    /// diameter less its corners, no less than a quarter of the tool; down to
+    /// its Minimum Ramp Diameter, half the tool less its corners, no less than
+    /// a quarter of the tool, where it has no room.
+    Flat,
+}
+
+impl HelixSize {
+    /// The helix's diameter, as the tool's centre goes, for a tool `diameter`
+    /// across with corners of radius `corner`.
+    pub fn diameter(self, diameter: f64, corner: f64) -> f64 {
+        match self {
+            HelixSize::Tool => 0.9 * diameter,
+            HelixSize::Flat => (0.95 * (diameter - 2.0 * corner)).max(0.25 * diameter),
+        }
+    }
+
+    /// The smallest a helix of `largest` across may be made where there is no
+    /// room for it, for the same tool.
+    pub fn least(self, largest: f64, diameter: f64, corner: f64) -> f64 {
+        match self {
+            HelixSize::Tool => 0.25 * largest,
+            HelixSize::Flat => (0.5 * (diameter - 2.0 * corner))
+                .max(0.25 * diameter)
+                .min(largest),
         }
     }
 }

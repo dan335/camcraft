@@ -1,7 +1,7 @@
 //! An operation's Linking tab: how it moves between cuts, and into and out of
 //! them.
 
-use camcraft_core::job::{Entry, Leads, Links, Operation, Retraction};
+use camcraft_core::job::{Entry, HelixSize, Leads, Operation, Reach, Retraction};
 use eframe::egui;
 
 use crate::help::topics::linking as link;
@@ -9,8 +9,15 @@ use crate::ui::measure::Measure;
 use crate::ui::widgets::{self, form};
 
 /// How the operation moves between cuts. A value left out is the strategy's own,
-/// as Fusion's, and says what that comes to for the tool chosen.
-pub(super) fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diameter: Option<f64>) {
+/// as Fusion's, and says what that comes to for the tool chosen, whose corners
+/// are of radius `corner`.
+pub(super) fn linking(
+    ui: &mut egui::Ui,
+    m: Measure,
+    op: &mut Operation,
+    diameter: Option<f64>,
+    corner: f64,
+) {
     let uses = op.strategy.uses();
     // Where a value is left out, the strategy's own for the tool, or for a
     // 6 mm one before a tool is chosen.
@@ -41,14 +48,10 @@ pub(super) fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diamete
             m.length_field(ui, &mut op.linking.safe_distance, 0.1, 1_000.0, "");
         });
         if uses.stay_down {
-            // Finishing that follows the part stays down over it; the rest at
-            // the level, a multiple of the tool.
-            let absent = match uses.links {
-                Links::OverPart => format!("up to {}", m.length(uses.links.stay_down(d), 0)),
-                Links::Level | Links::Own => {
-                    let k = uses.links.stay_down(1.0);
-                    of_tool(k, &format!("up to {k} × the tool"))
-                }
+            // Fusion's for the strategy: a length, or a multiple of the tool.
+            let absent = match uses.reach {
+                Reach::Mm(mm) => format!("up to {}", m.length(f64::from(mm), 0)),
+                Reach::Tools(k) => of_tool(f64::from(k), &format!("up to {k} × the tool")),
             };
             let start = op.stay_down(d);
             widgets::row(ui, &link::STAY_DOWN, |ui| {
@@ -107,17 +110,30 @@ pub(super) fn linking(ui: &mut egui::Ui, m: Measure, op: &mut Operation, diamete
         if !uses.entries.is_empty() {
             let mut entry = op.entry().unwrap_or_default();
             widgets::row(ui, &link::ENTRY, |ui| {
-                widgets::select(ui, "entry", &mut entry, uses.entries, |e| match e {
-                    Entry::Helix => "helix beside the lead",
-                    Entry::Plunge => "plunge beside the lead",
-                    Entry::Ramp => "ramp along the ring",
+                // A profile goes down beside its lead; a pocket where its
+                // first ring starts.
+                widgets::select(ui, "entry", &mut entry, uses.entries, |e| {
+                    match (e, uses.leads) {
+                        (Entry::Helix, true) => "helix beside the lead",
+                        (Entry::Plunge, true) => "plunge beside the lead",
+                        (Entry::Helix, false) => "helix",
+                        (Entry::Plunge, false) => "plunge",
+                        (Entry::Ramp, _) => "ramp along the ring",
+                    }
                 });
             });
             // The default is written only when changed.
             op.linking.entry = (entry != Entry::default()).then_some(entry);
             if entry == Entry::Helix {
-                let absent = of_tool(0.9, "0.9 × the tool");
-                let start = op.helix_diameter(d);
+                let absent = match (uses.helix, diameter) {
+                    (HelixSize::Tool, _) => of_tool(0.9, "0.9 × the tool"),
+                    (HelixSize::Flat, Some(_)) => format!(
+                        "0.95 × the tool less its corners: {}",
+                        m.length(op.helix_diameter(d, corner), 2)
+                    ),
+                    (HelixSize::Flat, None) => "0.95 × the tool less its corners".to_string(),
+                };
+                let start = op.helix_diameter(d, corner);
                 widgets::row(ui, &link::HELIX_DIAMETER, |ui| {
                     widgets::optional(
                         ui,
