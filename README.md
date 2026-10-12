@@ -13,9 +13,9 @@ will write it.
 > are not responsible for crashed machines, broken tools, ruined parts or any other
 > damage.
 
-![camcraft playing back the example rail jig part-way through finishing](docs/images/playback.png)
+![camcraft playing back a lego brick half-way through roughing](docs/images/playback.png)
 
-*The example job part-way through finishing, played back against the simulated
+*A lego brick half-way through roughing, played back against the simulated
 material.*
 
 ## What it does
