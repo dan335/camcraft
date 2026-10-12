@@ -2,11 +2,6 @@
 
 3-axis CAM for CNC routers. Takes a 3D model and a job description, emits G-code.
 
-Model in [Plasticity](https://www.plasticity.xyz/) or FreeCAD; machine with camcraft.
-A B-rep modelling kernel is 50+ person-years of work — which is why Plasticity and
-Shapr3D both license Parasolid rather than write one — but CAM needs no kernel at all.
-This is the CAM half.
-
 **Status: 0.2, pre-alpha.** A desktop app and a command line on one engine. Takes
 STEP or STL models and a job file, writes G-code, and refuses to write a program the
 simulator has not verified against material. STEP files are read in the units they
@@ -122,6 +117,8 @@ count, which picking needs (see the root `Cargo.toml`). Reasoning in
 ## License
 
 Dual licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+Third-party code and assets keep their own licences: `vendor/` is LGPL-2.1, and
+[NOTICE](NOTICE) lists the rest.
 
 **Not yet settled for distributed binaries.** STEP import links OpenCascade
 statically, through the `opencascade` and `occt-sys` crates, and both are LGPL-2.1

@@ -1,0 +1,29 @@
+camcraft
+Copyright (c) 2026 dan335
+Licensed under the MIT License or the Apache License, Version 2.0, at your option
+(LICENSE-MIT, LICENSE-APACHE).
+
+Third-party material
+
+vendor/opencascade and vendor/opencascade-sys are the opencascade and opencascade-sys 0.3.0
+crates by Brian Schwind (https://github.com/bschwind/opencascade-rs). They are licensed under
+the GNU Lesser General Public License 2.1, not under camcraft's licences, and their licence is
+in vendor/opencascade/LICENSE and vendor/opencascade-sys/LICENSE. camcraft modifies them: fixes
+so they build and link with MSVC, and each B-rep face's triangle count, which picking needs.
+Diffing either crate against the published 0.3.0 shows every change.
+
+Through the occt-sys crate they build Open CASCADE Technology (https://dev.opencascade.org)
+from source and link it statically. It is licensed under the LGPL 2.1 with the Open CASCADE
+exception. What that means for distributed binaries is not settled: see the README's License
+section and docs/decisions/0001-step-backend.md.
+
+The app's fonts are IBM Plex Sans and Fira Code, under the SIL Open Font License 1.1, and a
+subset of Lucide's icons, under the ISC licence. crates/camcraft-gui/assets/fonts/ holds each
+licence and where each file came from.
+
+Other dependencies are listed in Cargo.lock and carry their own licences.
+
+camcraft is an independent project and is not affiliated with, sponsored by or endorsed by
+Autodesk, Inc. Autodesk and Fusion are trademarks of Autodesk, Inc., used here only to describe
+the behaviour camcraft follows and the programs it is compared with. Other product names are
+trademarks of their respective owners.
