@@ -155,3 +155,22 @@ fn a_tools_direction_and_coolant_are_posted() {
     assert!(word("M4") && !word("M3"), "{text}");
     assert!(word("M7") && word("M9"), "{text}");
 }
+
+/// Every operation of the example job, posted for every built-in machine and
+/// read back as a controller would, cuts the path it was posted from.
+#[test]
+fn every_program_reads_back_to_its_path() {
+    let (job, _, ran) = example();
+    let setup = &job.setups[0];
+    for name in builtin_posts() {
+        let profile = load_profile(name, None).unwrap();
+        for (i, op) in ran.result.operations.iter().enumerate() {
+            let (text, _) =
+                program(op, setup.wcs, &profile, &program_name("top", i, &op.name)).unwrap();
+            let spec = program_spec(op, setup.wcs, &profile);
+            if let Err(p) = camcraft_post::readback::check(&text, &op.path, &spec, &profile) {
+                panic!("{} posted for {name} does not read back: {p}", op.name);
+            }
+        }
+    }
+}

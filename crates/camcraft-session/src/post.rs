@@ -74,14 +74,9 @@ pub fn program_name(setup: &str, index: usize, op_name: &str) -> String {
     )
 }
 
-/// Render one operation as a program for `profile`.
-pub fn program(
-    op: &OperationResult,
-    wcs: u8,
-    profile: &Profile,
-    name: &str,
-) -> Result<(String, RenderReport), SessionError> {
-    let spec = ProgramSpec {
+/// Everything one operation's program needs besides its path, for `profile`.
+pub fn program_spec(op: &OperationResult, wcs: u8, profile: &Profile) -> ProgramSpec {
+    ProgramSpec {
         op_name: op.name.clone(),
         strategy: op.strategy.to_string(),
         tool: op.tool_number,
@@ -101,8 +96,17 @@ pub fn program(
             }),
             _ => None,
         },
-    };
-    let ops = lower(&op.path, &spec)?;
+    }
+}
+
+/// Render one operation as a program for `profile`.
+pub fn program(
+    op: &OperationResult,
+    wcs: u8,
+    profile: &Profile,
+    name: &str,
+) -> Result<(String, RenderReport), SessionError> {
+    let ops = lower(&op.path, &program_spec(op, wcs, profile))?;
     Ok(render(&ops, profile, name))
 }
 
@@ -241,5 +245,5 @@ pub fn write_posting(posting: &Posting) -> Result<usize, SessionError> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests;

@@ -44,8 +44,8 @@ Autodesk.)
 - **Checking:** every program is simulated against the stock. camcraft refuses
   to write one that gouges the part or fails another check, and says why.
 - **Playback:** watch the material come off, move by move, before posting.
-- **Posts:** Masso (millimetres or inches) and GRBL built in, or your own
-  profile written in TOML.
+- **Posts:** Masso, Centroid CNC12 on an Avid CNC router (each in millimetres
+  or inches) and GRBL built in, or your own profile written in TOML.
 
 ## Status
 

@@ -16,6 +16,15 @@ use glam::{DVec2, DVec3};
 use crate::op::{CycleKind, Op};
 use crate::profile::{ArcStyle, Profile, ProgramUnits, ToolChangeStyle};
 
+/// Arcs shorter than this across their chord, in millimetres, are written as
+/// straight moves, as Fusion's posts write them (`minimumChordLength`): an arc
+/// whose ends round to the same point reads as a full circle.
+const SHORTEST_CHORD: f64 = 0.25;
+
+/// How far the straight moves written for such an arc may stray from it, in
+/// millimetres: Fusion's posts' `tolerance`.
+const STRAIGHTENED: f64 = 0.002;
+
 /// What rendering produced besides the text.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RenderReport {
@@ -59,6 +68,9 @@ struct Writer<'a> {
     plane: Option<&'static str>,
     // Whether lengths and feeds are written in inches: after a `G20`.
     inches: bool,
+    // The tool whose length offset the next Z word takes up, after a tool
+    // change, where the profile says to.
+    offset: Option<u32>,
 }
 
 impl<'a> Writer<'a> {
@@ -74,6 +86,7 @@ impl<'a> Writer<'a> {
             raised: false,
             plane: None,
             inches: false,
+            offset: None,
         }
     }
 
@@ -171,31 +184,12 @@ impl<'a> Writer<'a> {
                 let p = self.p;
                 self.lines(&p.end_home);
             }
-            Op::ToolChange { tool, comment } => match self.p.tool_change {
-                ToolChangeStyle::M6 => {
-                    if !comment.is_empty() {
-                        self.comment(comment);
-                    }
-                    let s = format!("T{tool} M6");
-                    self.raw(&s);
-                    // A changer moves the machine; the tool is where the change
-                    // left it. Raised by a safe retract, it is still raised.
-                    self.at = None;
+            Op::ToolChange { tool, comment } => {
+                if self.p.length_offset {
+                    self.offset = Some(*tool);
                 }
-                ToolChangeStyle::Pause => {
-                    let msg = if comment.is_empty() {
-                        format!("fit tool {tool}")
-                    } else {
-                        format!("fit tool {tool}: {comment}")
-                    };
-                    self.comment(&msg);
-                    let s = format!("T{tool}");
-                    self.raw(&s);
-                    self.raw("M0");
-                    // The operator may have jogged anywhere, down included.
-                    self.lost();
-                }
-            },
+                self.tool_change(*tool, comment);
+            }
             Op::SpindleOn { rpm, dir } => {
                 let m = match dir {
                     SpindleDirection::Clockwise => "M3",
@@ -250,6 +244,35 @@ impl<'a> Writer<'a> {
         }
     }
 
+    /// Change to `tool`, by changer or by hand, as the profile says.
+    fn tool_change(&mut self, tool: u32, comment: &str) {
+        match self.p.tool_change {
+            ToolChangeStyle::M6 => {
+                if !comment.is_empty() {
+                    self.comment(comment);
+                }
+                let s = format!("T{tool} M6");
+                self.raw(&s);
+                // A changer moves the machine; the tool is where the change
+                // left it. Raised by a safe retract, it is still raised.
+                self.at = None;
+            }
+            ToolChangeStyle::Pause => {
+                let msg = if comment.is_empty() {
+                    format!("fit tool {tool}")
+                } else {
+                    format!("fit tool {tool}: {comment}")
+                };
+                self.comment(&msg);
+                let s = format!("T{tool}");
+                self.raw(&s);
+                self.raw("M0");
+                // The operator may have jogged anywhere, down included.
+                self.lost();
+            }
+        }
+    }
+
     /// Emit one motion block, suppressing only what the machine already has.
     ///
     /// A rapid from nowhere known goes across and down one at a time, never
@@ -268,10 +291,11 @@ impl<'a> Writer<'a> {
             } else {
                 "G0 "
             };
+            let z = self.z_word(&z);
             let (first, second) = if self.raised {
-                (format!("G0 X{x} Y{y}"), format!("{again}Z{z}"))
+                (format!("G0 X{x} Y{y}"), format!("{again}{z}"))
             } else {
-                (format!("G0 Z{z}"), format!("{again}X{x} Y{y}"))
+                (format!("G0 {z}"), format!("{again}X{x} Y{y}"))
             };
             self.raw(&first);
             self.raw(&second);
@@ -314,9 +338,26 @@ impl<'a> Writer<'a> {
         };
 
         let same = |a: Option<&String>, b: &str| a.map(|s| s.as_str()) == Some(b);
+        let z_same = same(prev.as_ref().map(|p| &p.2), &z);
+        // A length offset waits for a Z word; after a tool change, the first
+        // block states every axis, so it never waits long.
+        let offset = if z_same && self.p.modal.suppress_axes {
+            None
+        } else {
+            self.offset.take()
+        };
+        if offset.is_some() {
+            if !block.is_empty() {
+                block.push(' ');
+            }
+            block.push_str("G43");
+        }
         push('X', &x, same(prev.as_ref().map(|p| &p.0), &x), &mut block);
         push('Y', &y, same(prev.as_ref().map(|p| &p.1), &y), &mut block);
-        push('Z', &z, same(prev.as_ref().map(|p| &p.2), &z), &mut block);
+        push('Z', &z, z_same, &mut block);
+        if let Some(h) = offset {
+            let _ = write!(block, " H{h}");
+        }
 
         if let Some(f) = &feed {
             let unchanged = self.feed.as_deref() == Some(f.as_str());
@@ -342,11 +383,21 @@ impl<'a> Writer<'a> {
         self.at = Some(to);
     }
 
+    /// A Z word, taking up the tool's length offset with it when one is
+    /// waiting: `G43 Z… H<tool>`, as Fusion writes it.
+    fn z_word(&mut self, z: &str) -> String {
+        match self.offset.take() {
+            Some(h) => format!("G43 Z{z} H{h}"),
+            None => format!("Z{z}"),
+        }
+    }
+
     /// An arc, or a helix, from where the tool is, in the plane it turns in,
     /// written in pieces no longer than the profile's arcs may be: a half turn
     /// with centre offsets, which cannot be misread even as a full circle, and a
     /// quarter with a radius, whose sign would otherwise have to choose the long
-    /// way round.
+    /// way round. A piece too short across to be written as an arc is written
+    /// as straight moves along it.
     fn arc(&mut self, to: DVec3, arc: &Arc, feed: f64) {
         let Some(from) = self.at else {
             // Nothing is known to start it from: straight to its end, rather than
@@ -373,7 +424,15 @@ impl<'a> Writer<'a> {
                 sweep: arc.sweep / f64::from(n),
                 ..*arc
             };
-            self.arc_block(at, end, &piece, feed);
+            let across = (end - at) - arc.axis * (end - at).dot(arc.axis);
+            if across.length() < SHORTEST_CHORD {
+                let f = self.p.feed_in(feed, self.inches);
+                for p in piece.chords(at, end, STRAIGHTENED) {
+                    self.motion_block("G1", p, Some(f.clone()));
+                }
+            } else {
+                self.arc_block(at, end, &piece, feed);
+            }
             at = end;
         }
     }

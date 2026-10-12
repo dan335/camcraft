@@ -114,6 +114,13 @@ pub struct Profile {
     pub extension: String,
     /// How comments are wrapped, as a pair of strings.
     pub comment: (String, String),
+    /// The characters a comment may hold, letters in either case; any other is
+    /// left out, as Fusion's posts filter them. Absent, any may.
+    #[serde(default)]
+    pub comment_chars: Option<String>,
+    /// Whether comments are written in capitals.
+    #[serde(default)]
+    pub comment_upper: bool,
     /// Number formatting.
     pub format: Format,
     /// Line numbering.
@@ -127,6 +134,11 @@ pub struct Profile {
     pub units: ProgramUnits,
     /// Tool change style.
     pub tool_change: ToolChangeStyle,
+    /// Whether the first move down after a tool change takes up the tool's
+    /// length offset, `G43 Z… H<tool>`, as Fusion's posts write it. Off, the
+    /// controller applies the offset itself, or has none.
+    #[serde(default)]
+    pub length_offset: bool,
     /// Whether the controller takes canned drilling cycles (`G81`, `G82`, `G83`,
     /// `G80`). Off, a drilling operation is posted as its moves.
     #[serde(default)]
@@ -179,6 +191,14 @@ const BUILTIN: &[(&str, &str)] = &[
     ("masso", include_str!("../profiles/masso.toml")),
     ("masso-inch", include_str!("../profiles/masso-inch.toml")),
     ("grbl", include_str!("../profiles/grbl.toml")),
+    (
+        "centroid-avid",
+        include_str!("../profiles/centroid-avid.toml"),
+    ),
+    (
+        "centroid-avid-inch",
+        include_str!("../profiles/centroid-avid-inch.toml"),
+    ),
 ];
 
 impl Profile {
@@ -252,6 +272,13 @@ impl Profile {
                 reason: "a comment needs something to open it".into(),
             });
         }
+        if self.comment_chars.as_deref() == Some("") {
+            return Err(ProfileError::BadValue {
+                field: "comment_chars",
+                reason: "would leave every comment empty; leave it out to allow any character"
+                    .into(),
+            });
+        }
         Ok(())
     }
 
@@ -319,7 +346,8 @@ impl Profile {
     /// `text` made safe to stand inside a comment: its delimiters substituted, as
     /// [`comment`](Self::comment) says, and control characters, a newline above
     /// all, made spaces. An empty delimiter, as a comment to the line's end has
-    /// for its close, is nothing to substitute.
+    /// for its close, is nothing to substitute. Then in capitals, and without
+    /// what the profile's comments may not hold, where it says so.
     pub fn escaped(&self, text: &str) -> String {
         let mut safe = text.to_string();
         for (delimiter, with) in [(&self.comment.0, "["), (&self.comment.1, "]")] {
@@ -327,8 +355,17 @@ impl Profile {
                 safe = safe.replace(delimiter.as_str(), with);
             }
         }
+        if self.comment_upper {
+            safe = safe.to_uppercase();
+        }
+        let allowed = |c: char| {
+            self.comment_chars
+                .as_deref()
+                .is_none_or(|chars| chars.chars().any(|a| a.eq_ignore_ascii_case(&c)))
+        };
         safe.chars()
             .map(|c| if c.is_control() { ' ' } else { c })
+            .filter(|&c| allowed(c))
             .collect()
     }
 }
@@ -360,6 +397,38 @@ mod tests {
             ..masso
         };
         assert_eq!(inch, expected);
+    }
+
+    /// The Avid profile in inches is its own file, and the millimetre one in
+    /// everything but its name, units and feed, which Fusion's Avid post writes
+    /// to a tenth in inches and to a whole number in millimetres.
+    #[test]
+    fn centroid_avid_inch_is_centroid_avid_in_inches() {
+        let mm = Profile::builtin("centroid-avid").unwrap().unwrap();
+        let inch = Profile::builtin("centroid-avid-inch").unwrap().unwrap();
+        let expected = Profile {
+            name: "Centroid CNC12 (Avid CNC, inch)".into(),
+            units: ProgramUnits::Inch,
+            format: Format {
+                feed_decimals: 1,
+                ..mm.format.clone()
+            },
+            ..mm
+        };
+        assert_eq!(inch, expected);
+    }
+
+    /// Avid as Fusion's Avid post writes it: no trailing zeros and no bare
+    /// point, and comments in capitals with only what that post lets through.
+    #[test]
+    fn centroid_avid_writes_numbers_and_comments_as_fusion_does() {
+        let p = Profile::builtin("centroid-avid").unwrap().unwrap();
+        assert_eq!(p.axis(10.0), "10");
+        assert_eq!(p.axis(2.25), "2.25");
+        assert_eq!(p.feed(1200.4), "1200");
+        assert_eq!(p.length(25.4 * 3.46084, true), "3.4608");
+        assert_eq!(p.comment("6mm ball (carbide) #2"), "(6MM BALL CARBIDE 2)");
+        assert_eq!(p.comment("rough: top/side"), "(ROUGH TOPSIDE)");
     }
 
     /// Masso as Fusion's post writes it: rounded to the places given, trailing
@@ -418,6 +487,20 @@ mod tests {
         let mut p = Profile::builtin("grbl").unwrap().unwrap();
         p.comment = (";".into(), String::new());
         assert_eq!(p.comment("fit tool 3; then go"), ";fit tool 3[ then go");
+    }
+
+    /// Filtering keeps letters in whichever case they were written, and a
+    /// newline, made a space, survives only where a space may.
+    #[test]
+    fn comment_chars_match_either_case() {
+        let mut p = Profile::builtin("masso").unwrap().unwrap();
+        p.comment_chars = Some("abc ".into());
+        assert_eq!(
+            p.comment(&format!("AbCd{}cab!", char::from(10))),
+            "(AbC cab)"
+        );
+        p.comment_chars = Some("abc".into());
+        assert_eq!(p.comment(&format!("ab{}c", char::from(10))), "(abc)");
     }
 
     #[test]

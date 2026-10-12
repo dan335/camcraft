@@ -360,27 +360,37 @@ written).
 
 ## Posts
 
-A setup's `post` names a builtin profile (`masso`, `masso-inch` or `grbl`, from
-`crates/camcraft-post/profiles/`) or a TOML profile file, found from the job's
-folder. A profile is a dialect: header and footer, word
+A setup's `post` names a builtin profile (`masso`, `masso-inch`, `grbl`,
+`centroid-avid` or `centroid-avid-inch`, from `crates/camcraft-post/profiles/`)
+or a TOML profile file, found from the job's folder. A profile is a dialect:
+header and footer, word
 formats, units (`units = "inch"` writes `G20` and converts every length and
 feed, as `masso-inch` does), line numbers, and whether drilling is posted as
 canned cycles (`drill_cycles`, off in
-both built-in profiles until cycles have been dry-run on the machine). Golden files
+every built-in profile until cycles have been dry-run on the machine). Golden files
 in `crates/camcraft-post/tests/golden/` hold the output.
 
 The Masso profiles write as Fusion's Masso post does: blocks numbered from `N10`
 in fives, comments not, and numbers without their trailing zeros but with
 their point (`Z2.2`, `I0.`, `F150.`), inches to four places.
 
+The Centroid profiles are for CNC12 on an Avid CNC router (the EX control), and
+write as Avid's own Fusion post for it does: `.tap` files, no line numbers, no
+trailing zeros and no bare point (`Z2.2`, `I0`, `F1200`; feeds to a tenth in
+inches), and comments in capitals holding only letters, digits and ` .,=_-`
+(`comment_upper`, `comment_chars`). CNC12 runs Avid's tool change at `M6`, which
+measures the tool on the tool height setter, and the first move down after it
+takes up that length (`length_offset`: `G43 Z25 H3`).
+
 A program starts and ends as Fusion's do. Before the tool change the spindle
 stops and the tool goes straight up clear of everything (`safe_retract`: Masso's
-`G28 G91 Z0`, GRBL's `G53 G0 Z0`); the first move then goes across at that height
-and down to where the path starts, never diagonally from wherever the change left
-the tool. A profile without a safe retract rises (or falls) to the path's crossing
+`G28 G91 Z0`, GRBL's and Avid's `G53 G0 Z0`); the first move then goes across
+at that height and down to where the path starts, never diagonally from wherever
+the change left the tool. A profile without a safe retract rises (or falls) to the path's crossing
 height first and goes across there. After the last cut the spindle stops, the tool
 goes up again, and the machine goes home across (`end_home`: Masso's `G28 G91 X0
-Y0`; GRBL's stored `G28` position may be anywhere, so it has none).
+Y0`; Avid's `G0 X0 Y0`, over the work origin, where Fusion's Avid post ends; GRBL's
+stored `G28` position may be anywhere, so it has none).
 
 A path's arcs are arcs in the program, not strings of short moves: `G2` or `G3`
 in the plane they turn in (`G17` level, `G18` or `G19` for an arc in an upright
@@ -391,4 +401,21 @@ across the part at an angle, it makes short straight moves within the tolerance,
 so the program is always the path that was simulated. With centre offsets
 (`arc_style = "ij"`) no block turns more than half a turn, and with a radius
 (`"r"`) no more than a quarter, whose sign would otherwise have to say which way
-round.
+round. An arc shorter than 0.25 mm across, whose ends could round to the same
+point and read as a full circle, is written as straight moves within 0.002 mm
+of it, as Fusion's posts write one (`minimumChordLength`, `tolerance`).
+
+A program is checked by what it does, not by what it says.
+`camcraft_post::readback` reads one back as a controller would (units, distance
+mode, arcs by centre or radius in any plane, helices, drilling cycles, `G28`,
+`G53`, length offsets, tool changes), refusing anything it does not understand,
+and replays it against the path it was posted from: every move reached in
+order, no cut made a rapid, feeds as asked, arcs on the same curve turning the
+same way. It holds the program to its safety too: never across from a height
+it does not know, nor across and down at once; the spindle stopped for the
+tool change; the right tool, work offset, length offset, spindle and coolant
+in force before the first cut; after the last cut only up, and across only
+once clear. The tests read back every built-in profile, set every way it can
+be, in both units, over the golden fixture, hundreds of arcs and drilled
+holes, and the example job's real paths; and programs broken on purpose, one
+fault each, to show each fault is caught.
