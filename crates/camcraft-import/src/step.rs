@@ -5,7 +5,7 @@
 //! a face that did not transfer is a hole the cutter drops into, and a unit read
 //! wrongly is a part 25.4 times the wrong size. So the mesh is checked against the
 //! file it came from, using facts read from the file's text independently of the
-//! kernel (see [`crate::part21`]):
+//! kernel (see [`step_check::part21`]):
 //!
 //! The checks are [`step_check`]'s, kept free of camcraft so any importer can use them:
 //!
@@ -22,6 +22,11 @@
 //!   must extend at least as far as they do. This is the check that catches a unit
 //!   error which makes the part too *small*, which the hull check alone cannot: a
 //!   shrunken part still sits inside the hull.
+//! - **Every face lies on its surface.** A face on a plane, cylinder, cone, sphere or
+//!   torus must lie within the job's tolerance of it (four times the tessellation
+//!   tolerance, which is a quarter of the job's), and every such face of the file
+//!   must have some of the mesh on it. This sees surface wrong inside the part,
+//!   which the boxes cannot. A face on a B-spline is held to its box alone.
 //!
 //! The two geometric checks are made where the file's assembly puts each component
 //! ([`step_check::part21`] follows its placements). Only geometry placed in a way that

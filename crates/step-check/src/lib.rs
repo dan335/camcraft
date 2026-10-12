@@ -18,14 +18,23 @@
 //! - **The mesh reaches every vertex.** B-rep vertices lie on the part, so the mesh
 //!   must extend at least as far as they do. This catches a unit error that makes the
 //!   part too small, which a shrunken mesh inside the box would otherwise pass.
+//! - **Every face lies on its surface.** Each face the kernel gave must fit inside
+//!   the box of some face of the file, and where every face it could be lies on a
+//!   plane, cylinder, cone, sphere or torus, every triangle's corners and centre must
+//!   lie within [`SLACK`] times the tolerance of one of those surfaces. And every
+//!   face of the file on such a surface must have some of the mesh on it, or a face
+//!   flattened onto its neighbour would pass. This sees surface that is wrong inside
+//!   the part, which the boxes cannot.
 //!
-//! The geometric checks are boxes: they catch surface thrown outside the part, not
-//! surface that is wrong inside it.
+//! A face that could lie on a B-spline, a surface of revolution or an extrusion is
+//! held to its box alone, so surface wrong inside the part there still passes.
 //!
 //! This is the checking half of camcraft's STEP import, kept free of camcraft and of
 //! any kernel so that any importer can run it on its own output.
 
 mod check;
 pub mod part21;
+mod surface;
 
-pub use check::{FileCheck, KernelMesh, Problem, check};
+pub use check::{FileCheck, KernelMesh, Problem, SLACK, check};
+pub use surface::Surface;

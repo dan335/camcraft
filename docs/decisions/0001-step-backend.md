@@ -156,9 +156,11 @@ Accepted costs, all of which were actually hit and resolved during the spike:
   and needs no cmake, so it is the reader to switch to once it holds on the panel.
   The run also showed two gaps in the checks, both closed: they skipped any file with
   a placement, the panel among them, and they relied on the kernel to refuse a face
-  it could not mesh, where truck hands one back empty. They still cannot see surface
-  that is wrong inside the part's box, like truck's bowl, 53 mm off, which only the
-  trial's distance catches.
+  it could not mesh, where truck hands one back empty. Since then every face on a
+  plane, cylinder, cone, sphere or torus is also held to its surface, which sees
+  surface wrong inside the part. A face on a B-spline or a surface of revolution is
+  still held to its box alone, so truck's bowl, 53 mm off on its revolved rim, passes
+  the checks, and only the trial's distance catches it.
 - **Revisit when** solidcraft's reader passes `scripts/kernel-trial.sh` everywhere.
   The prize is dropping the C++ toolchain requirement and settling the licence.
 

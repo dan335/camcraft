@@ -140,10 +140,10 @@ actually break cutters on the day:
 
 - **`fixtures/step/` holds real shop jigs,** published with the repository by choice.
   Parts that cannot be published belong in `CAMCRAFT_FIXTURES`, never in a commit.
-- **The STEP import checks are boxes.** They catch surface thrown outside the part, a
-  dropped face or a unit error, but not surface that is wrong inside the part's box.
-  `scripts/kernel-trial.sh` measures that for a candidate kernel; nothing measures it
-  on every import.
+- **B-spline and revolved faces are only box-checked on import.** Faces on planes,
+  cylinders, cones, spheres and tori are held to their surfaces, but a B-spline, a
+  surface of revolution or an extrusion only to its box, so surface wrong inside the
+  part there passes. `scripts/kernel-trial.sh` measures it for a candidate kernel.
 - **The public fixture set cannot reproduce the bug that disqualified
   `truck-stepio`.** The part that exposed it is private. A synthetic
   sculpted-surface fixture should replace it.

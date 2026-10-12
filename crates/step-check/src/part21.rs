@@ -15,6 +15,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{DAffine3, DVec3};
 
+use crate::surface::Surface;
+
 /// Most placements of one representation followed before giving up, so a file
 /// that instances a sub-assembly many times over cannot run away.
 const MAX_PLACEMENTS: usize = 100_000;
@@ -79,6 +81,22 @@ pub struct StepFacts {
     /// or a transform not tied to an assembly's product structure. Raw points
     /// then bound nothing.
     pub unplaced: bool,
+    /// Every face, once for each place the assembly puts it.
+    pub file_faces: Vec<FileFace>,
+}
+
+/// A face of the file, where the file puts it.
+#[derive(Debug, Clone)]
+pub struct FileFace {
+    /// Its entity in the file: `#id`.
+    pub entity: u64,
+    /// A box it cannot leave, in millimetres: the box around everything that
+    /// bounds it and the surface it lies on, grown by their largest radius. `None`
+    /// when its surface is one this cannot bound, such as a surface of revolution.
+    pub bounds: Option<(DVec3, DVec3)>,
+    /// The surface it lies on, when distance to it is exact: a plane, cylinder,
+    /// cone, sphere or torus.
+    pub surface: Option<Surface>,
 }
 
 /// Read the facts out of a STEP file's text.
@@ -170,6 +188,13 @@ pub fn facts(text: &str) -> Result<StepFacts, Part21Error> {
             })
     });
 
+    let mut file_faces = Vec::new();
+    for (&id, body) in &entities {
+        if matches!(kind(body), "ADVANCED_FACE" | "FACE_SURFACE") {
+            file_faces.extend(file_face(&entities, id, body, s, radians, &placements));
+        }
+    }
+
     let mut vertices = Vec::new();
     for body in entities.values() {
         if kind(body) == "VERTEX_POINT"
@@ -186,7 +211,59 @@ pub fn facts(text: &str) -> Result<StepFacts, Part21Error> {
         extent,
         faces,
         unplaced: placements.unplaced,
+        file_faces,
     })
+}
+
+/// The face `id`, once for each place the file puts it.
+///
+/// A face lies inside the box around everything it refers to: its edges, their
+/// vertices and curves, and its surface, whose control points hold a B-spline. The
+/// box is grown by the largest radius among them, and reaches a cone's apex. A
+/// surface of revolution or an extrusion is not bounded by its points, so a face on
+/// one gets no box.
+fn file_face(
+    entities: &BTreeMap<u64, String>,
+    id: u64,
+    body: &str,
+    s: f64,
+    radians: f64,
+    placements: &Placements,
+) -> Vec<FileFace> {
+    // (name, bounds, surface, same sense)
+    let Some(surface_body) = refs(body).last().and_then(|r| entities.get(r)) else {
+        return Vec::new();
+    };
+    let surface = Surface::read(entities, surface_body, s, radians);
+    let bounded = surface.is_some() || surface_body.contains("B_SPLINE_SURFACE");
+    let local = bounded
+        .then(|| {
+            let (points, radius) = reach(entities, id);
+            let mut points: Vec<DVec3> = points.into_iter().map(|p| p * s).collect();
+            points.extend(surface.and_then(|f| f.apex()));
+            let grow = DVec3::splat(radius * s);
+            bounds(&points).map(|(lo, hi)| (lo - grow, hi + grow))
+        })
+        .flatten();
+    placements
+        .transforms(id)
+        .iter()
+        .map(|w| FileFace {
+            entity: id,
+            bounds: local.map(|(lo, hi)| {
+                let corner = |i: u8| {
+                    DVec3::new(
+                        if i & 1 == 0 { lo.x } else { hi.x },
+                        if i & 2 == 0 { lo.y } else { hi.y },
+                        if i & 4 == 0 { lo.z } else { hi.z },
+                    )
+                };
+                let placed: Vec<DVec3> = (0..8).map(|i| w.transform_point3(corner(i))).collect();
+                bounds(&placed).unwrap_or((lo, hi))
+            }),
+            surface: surface.map(|f| f.moved(w)),
+        })
+        .collect()
 }
 
 /// Where the file puts each piece of its geometry.
@@ -348,6 +425,20 @@ impl Placements {
         out
     }
 
+    /// Every transform taking entity `id` to where the file puts it: one for each
+    /// placement of the frames it is in, or none at all if it is in the root.
+    fn transforms(&self, id: u64) -> Vec<DAffine3> {
+        match self.owners.get(&id) {
+            None => vec![DAffine3::IDENTITY],
+            Some(frames) => frames
+                .iter()
+                .filter_map(|&f| self.world.get(f))
+                .flatten()
+                .copied()
+                .collect(),
+        }
+    }
+
     /// Where the point `p` of entity `id`, in millimetres, ends up: once for each
     /// placement of the frames it is in.
     fn place(&self, id: u64, p: DVec3) -> Vec<DVec3> {
@@ -427,7 +518,7 @@ fn location(entities: &BTreeMap<u64, String>, id: u64) -> Option<u64> {
 
 /// The frame an `AXIS2_PLACEMENT_3D` stands for, with its origin in millimetres.
 /// An axis or reference direction left out (`$`) is the standard one.
-fn placement(entities: &BTreeMap<u64, String>, id: u64, s: f64) -> Option<DAffine3> {
+pub(crate) fn placement(entities: &BTreeMap<u64, String>, id: u64, s: f64) -> Option<DAffine3> {
     let body = entities.get(&id)?;
     if kind(body) != "AXIS2_PLACEMENT_3D" {
         return None;
@@ -496,7 +587,7 @@ fn radius(body: &str) -> f64 {
 /// largest radius of any circle-like entity on the way.
 ///
 /// Bounded in depth and by a visited set, so a malformed file cannot make it spin.
-fn reach(entities: &BTreeMap<u64, String>, id: u64) -> (Vec<DVec3>, f64) {
+pub(crate) fn reach(entities: &BTreeMap<u64, String>, id: u64) -> (Vec<DVec3>, f64) {
     let mut seen = std::collections::BTreeSet::new();
     let mut stack = vec![(id, 0u32)];
     let mut points = Vec::new();
@@ -510,7 +601,12 @@ fn reach(entities: &BTreeMap<u64, String>, id: u64) -> (Vec<DVec3>, f64) {
         };
         match kind(body) {
             "CARTESIAN_POINT" => points.extend(point(body)),
-            "CIRCLE" | "ELLIPSE" => r = r.max(radius(body)),
+            "CIRCLE"
+            | "ELLIPSE"
+            | "CYLINDRICAL_SURFACE"
+            | "SPHERICAL_SURFACE"
+            | "CONICAL_SURFACE"
+            | "TOROIDAL_SURFACE" => r = r.max(radius(body)),
             _ => {}
         }
         stack.extend(refs(body).into_iter().map(|n| (n, depth + 1)));
@@ -577,12 +673,12 @@ fn entities(text: &str) -> Result<BTreeMap<u64, String>, Part21Error> {
 }
 
 /// The entity type of a simple instance, or empty for a complex one.
-fn kind(body: &str) -> &str {
+pub(crate) fn kind(body: &str) -> &str {
     body.split('(').next().map_or("", str::trim)
 }
 
 /// Every `#n` reference outside strings, in order.
-fn refs(body: &str) -> Vec<u64> {
+pub(crate) fn refs(body: &str) -> Vec<u64> {
     let mut out = Vec::new();
     let mut in_string = false;
     let mut digits: Option<String> = None;
@@ -611,7 +707,7 @@ fn refs(body: &str) -> Vec<u64> {
 }
 
 /// Every numeric literal outside strings, in order. References are not numbers.
-fn numbers(body: &str) -> Vec<f64> {
+pub(crate) fn numbers(body: &str) -> Vec<f64> {
     let mut out = Vec::new();
     let mut in_string = false;
     let mut token = String::new();
@@ -646,7 +742,7 @@ fn numbers(body: &str) -> Vec<f64> {
 
 /// A 3D `CARTESIAN_POINT`. Two-coordinate points live in a surface's parameter
 /// space, not in the model, and are skipped.
-fn point(body: &str) -> Option<DVec3> {
+pub(crate) fn point(body: &str) -> Option<DVec3> {
     let open = body.rfind('(')?;
     let close = body[open..].find(')')? + open;
     let coords: Vec<f64> = body[open + 1..close]

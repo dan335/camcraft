@@ -24,9 +24,10 @@ match step_check::check(&facts, &mesh, tolerance_mm) {
 ```
 
 It checks that every face arrives with triangles, that nothing lands outside the
-file's own geometry, and that the mesh reaches every vertex. The geometric checks are
-boxes: they catch surface thrown outside the part, not surface that is wrong inside
-it. For that, score the importer with
+file's own geometry, that the mesh reaches every vertex, and that every face lies on
+its surface: within four times the tolerance of the plane, cylinder, cone, sphere or
+torus it could be, with every such face of the file covered. A face that could lie on a B-spline, a surface of revolution or an
+extrusion is held to its box alone. To measure an importer everywhere, score it with
 [step-conformance](https://github.com/dan335/step-conformance).
 
 Written for [camcraft](https://github.com/dan335/camcraft)'s STEP import and kept free

@@ -62,9 +62,13 @@ Only placements that cannot be followed, such as mapped items, still skip them.
 `crates/camcraft-import/tests/assembly.rs` wraps the hinge jig in an assembly and
 holds the placement to OpenCascade's.
 
-The geometric checks are boxes, so they catch surface thrown outside the part, not
-surface that is wrong inside it: upstream truck's bowl, 53 mm off at 0.05 mm, passes
-them. `scripts/kernel-trial.sh` measures that, against a fine OpenCascade mesh.
+Every face is also held to its surface: a face that lies on a plane, cylinder, cone,
+sphere or torus must lie within four times the tessellation tolerance of it, and every
+such face of the file must have some of the mesh on it, which sees surface wrong
+inside the part. A face on a B-spline, a surface of revolution or
+an extrusion is held to its box alone: upstream truck's bowl, 53 mm off at 0.05 mm on
+its revolved rim, still passes. `scripts/kernel-trial.sh` measures that, against a
+fine OpenCascade mesh.
 
 ## Private fixtures: `CAMCRAFT_FIXTURES`
 

@@ -8,12 +8,19 @@
 //! Parts that cannot be committed are swept from `CAMCRAFT_FIXTURES` when it is
 //! set. See `fixtures/step/README.md`.
 
-#![allow(clippy::unwrap_used, clippy::panic, clippy::float_cmp)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::float_cmp,
+    clippy::indexing_slicing
+)]
 
 use std::path::{Path, PathBuf};
 
 use camcraft_geom::topology::{Body, EdgeKind, FaceKind, FaceSource};
-use camcraft_import::step::{FileCheck, load_step};
+use camcraft_import::step::{FileCheck, KernelMesh, StepError, load_step, load_step_with};
+use glam::{DVec2, dvec3};
+use step_check::Problem;
 
 /// Tessellation tolerance, in millimetres. The spike's figure.
 const TOLERANCE: f64 = 0.01;
@@ -119,6 +126,61 @@ fn a_cone_to_a_point() {
         "{got:?}"
     );
     check_faces("cone_point.step", &body, 2);
+}
+
+/// A cylinder face of the lego, sunk a millimetre into the part: still inside every
+/// box the file gives, so only measuring it against the file's own surface sees it.
+#[test]
+fn a_face_wrong_inside_the_part_is_refused() {
+    let result = load_step_with(fixture("lego_4x2_01.step"), TOLERANCE, "test", |path, _| {
+        let shape = opencascade::primitives::Shape::read_step(path).map_err(|e| e.to_string())?;
+        let mesh = shape
+            .mesh_with_tolerance(TOLERANCE)
+            .map_err(|e| e.to_string())?;
+        let mut k = KernelMesh {
+            vertices: mesh.vertices.iter().map(|v| dvec3(v.x, v.y, v.z)).collect(),
+            indices: mesh.indices,
+            face_triangles: mesh.face_triangles,
+        };
+        // OpenCascade gives every face its own vertices, so a face moves alone.
+        let (lo, hi) = step_check::part21::bounds(&k.vertices).unwrap();
+        let mut first = 0;
+        for &n in &k.face_triangles.clone() {
+            let corners: Vec<usize> = k.indices[first * 3..(first + n) * 3].to_vec();
+            first += n;
+            let points: Vec<_> = corners.iter().map(|&i| k.vertices[i]).collect();
+            let (a, b) = step_check::part21::bounds(&points).unwrap();
+            let axis = DVec2::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+            let radii: Vec<f64> = points.iter().map(|p| p.truncate().distance(axis)).collect();
+            let upright_cylinder = b.z - a.z > 1.0
+                && radii
+                    .iter()
+                    .all(|r| (r - radii[0]).abs() < 1e-6 && *r > 2.0);
+            let inside =
+                a.x > lo.x + 2.0 && b.x < hi.x - 2.0 && a.y > lo.y + 2.0 && b.y < hi.y - 2.0;
+            if upright_cylinder && inside {
+                // Each vertex once, though triangles share it.
+                let moved: std::collections::BTreeSet<usize> = corners.into_iter().collect();
+                for i in moved {
+                    let p = k.vertices[i];
+                    let out = (p.truncate() - axis).normalize();
+                    k.vertices[i] = p - (out * 1.0).extend(0.0);
+                }
+                return Ok(k);
+            }
+        }
+        Err("no cylinder face inside the part".into())
+    });
+    assert!(
+        matches!(
+            result,
+            Err(StepError::Check {
+                source: Problem::OffSurface { by, .. },
+                ..
+            }) if (by - 1.0).abs() < 0.05
+        ),
+        "{result:?}"
+    );
 }
 
 #[test]
