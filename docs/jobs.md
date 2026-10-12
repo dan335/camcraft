@@ -417,5 +417,10 @@ tool change; the right tool, work offset, length offset, spindle and coolant
 in force before the first cut; after the last cut only up, and across only
 once clear. The tests read back every built-in profile, set every way it can
 be, in both units, over the golden fixture, hundreds of arcs and drilled
-holes, and the example job's real paths; and programs broken on purpose, one
-fault each, to show each fault is caught.
+holes, and the real paths of the example job and the lego contour; and
+programs broken on purpose, one fault each, to show each fault is caught. To
+read back a job of your own, every setup for every built-in post:
+
+```sh
+CAMCRAFT_READBACK_JOB=path/to/job.camcraft cargo test -p camcraft-session readback_job
+```

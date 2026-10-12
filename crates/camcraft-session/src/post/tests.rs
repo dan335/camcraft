@@ -156,21 +156,113 @@ fn a_tools_direction_and_coolant_are_posted() {
     assert!(word("M7") && word("M9"), "{text}");
 }
 
-/// Every operation of the example job, posted for every built-in machine and
-/// read back as a controller would, cuts the path it was posted from.
-#[test]
-fn every_program_reads_back_to_its_path() {
-    let (job, _, ran) = example();
-    let setup = &job.setups[0];
+/// Every operation of setup `index` of `job`, as run, posted for every
+/// built-in machine and read back as a controller would, cuts the path it was
+/// posted from. Says how many moves were read back, so a run with nothing in
+/// it does not pass for one that checked something.
+fn reads_back_for_every_post(job: &camcraft_core::job::Job, index: usize, ran: &Ran) -> usize {
+    let setup = &job.setups[index];
+    let mut moves = 0;
     for name in builtin_posts() {
         let profile = load_profile(name, None).unwrap();
         for (i, op) in ran.result.operations.iter().enumerate() {
-            let (text, _) =
-                program(op, setup.wcs, &profile, &program_name("top", i, &op.name)).unwrap();
+            let (text, _) = program(
+                op,
+                setup.wcs,
+                &profile,
+                &program_name(&setup.name, i, &op.name),
+            )
+            .unwrap();
             let spec = program_spec(op, setup.wcs, &profile);
             if let Err(p) = camcraft_post::readback::check(&text, &op.path, &spec, &profile) {
                 panic!("{} posted for {name} does not read back: {p}", op.name);
             }
+            moves += op.path.len();
         }
     }
+    moves
+}
+
+/// The example job's pocket clearing and parallel finish.
+#[test]
+fn every_program_reads_back_to_its_path() {
+    let (job, _, ran) = example();
+    assert!(reads_back_for_every_post(&job, 0, &ran) > 1000);
+}
+
+/// The lego brick's contour, as the command line's comparison with Fusion
+/// runs it: ramped down round the ring at three depths, with Fusion's leads,
+/// upright arcs among them.
+#[test]
+fn the_lego_contour_reads_back_for_every_post() {
+    let text = format!(
+        r#"
+version = 1
+tolerance = 0.05
+
+[tools.quarter]
+kind = "flat"
+diameter = 6.35
+number = 2
+rpm = 16000
+
+[[model]]
+name = "lego"
+path = "{}"
+
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [50.8, 12.7, 5.08]
+
+[[setup]]
+name = "top"
+models = ["lego"]
+stocks = ["block"]
+
+[setup.origin]
+kind = "box-point"
+of = "stock"
+x = "min"
+y = "min"
+z = "min"
+
+[[setup.operation]]
+name = "contour"
+strategy = "profile"
+tool = "quarter"
+heights = {{ bottom = {{ ref = "model-bottom", offset = 1.0 }} }}
+passes = {{ feed = 3810.0, stepdown = 15.0 }}
+linking = {{ entry = "ramp" }}
+"#,
+        crate::test_support::fixture("lego_4x2_01.step")
+            .display()
+            .to_string()
+            .replace('\\', "/")
+    );
+    let job = parse_job(&text, "lego").unwrap();
+    let loaded = load_models(&job, Path::new("."), &[0]).unwrap();
+    let ran = run_setup(&job, 0, &crate::models_of(&loaded)).unwrap();
+    assert!(reads_back_for_every_post(&job, 0, &ran) > 50);
+}
+
+/// A job of your own, each setup run and read back for every built-in post:
+/// `CAMCRAFT_READBACK_JOB=path/to/job.camcraft cargo test -p camcraft-session
+/// readback_job`. Nothing is checked when it is not set.
+#[test]
+fn readback_job_from_the_environment() {
+    let Ok(path) = std::env::var("CAMCRAFT_READBACK_JOB") else {
+        return;
+    };
+    let path = PathBuf::from(path);
+    let job = crate::read_job(&path).unwrap();
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut moves = 0;
+    for index in 0..job.setups.len() {
+        let loaded = load_models(&job, dir, &[index]).unwrap();
+        let ran = run_setup(&job, index, &crate::models_of(&loaded)).unwrap();
+        moves += reads_back_for_every_post(&job, index, &ran);
+    }
+    println!("{moves} moves read back from {}", path.display());
+    assert!(moves > 0, "nothing in {} to read back", path.display());
 }

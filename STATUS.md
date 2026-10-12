@@ -113,10 +113,13 @@ Fusion's post does. The lego contour posts block for block as Fusion's does.
 The simulator verifies against a *simulated* part. It cannot check the things that
 actually break cutters on the day:
 
-- **The Masso profile has never run on the machine.** It was built from the
-  controller's documented G-code reference. Dry-run it well above the work first.
-  Canned drilling cycles are off in both built-in profiles until they have been
-  dry-run.
+- **No built-in post has run on a machine.** The Masso profiles were built from
+  the controller's documented G-code reference, the Centroid ones for an Avid
+  router from Avid's own Fusion post for CNC12. Dry-run them well above the work
+  first. The tests read every program back as a controller would and hold it to
+  its path (`camcraft_post::readback`), but nothing there knows what a machine's
+  own macros do, such as Avid's tool change at `M6`. Canned drilling cycles are
+  off in every built-in profile until they have been dry-run.
 - Nothing knows whether the WCS is where the job assumes, whether the tool in the
   spindle matches its `diameter`, or whether the stock is the size the job was told.
 - Roughing is contour-parallel clearing that ramps into material at 2°. It has
@@ -127,8 +130,10 @@ actually break cutters on the day:
 - **Licensing of distributed binaries.** STEP import links OpenCascade statically
   through LGPL-2.1 crates, while camcraft is MIT or Apache-2.0. Publishing the source
   is fine, but this has to be settled before anyone ships a binary. Replacing
-  OpenCascade with solidcraft's pure-Rust reader would settle it; `scripts/kernel-trial.sh`
-  says when that reader is ready. See [decision 0001](docs/decisions/0001-step-backend.md).
+  OpenCascade with a pure-Rust reader would settle it. None is ready yet: ogeom's
+  unreleased main comes closest, passing 91 of step-conformance's 96 runs where
+  OpenCascade passes all 96. `scripts/kernel-trial.sh` says when one is. See
+  [decision 0001](docs/decisions/0001-step-backend.md).
 - **One unexplained STEP read failure.** During a full gate run on 2026-09-23, two
   session tests reading `hinge_jig.step` failed with OpenCascade's "failed to read
   STEP file". The same tests passed 80 times since, with and without a lock that

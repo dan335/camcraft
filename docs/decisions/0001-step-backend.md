@@ -161,8 +161,20 @@ Accepted costs, all of which were actually hit and resolved during the spike:
   surface wrong inside the part. A face on a B-spline or a surface of revolution is
   still held to its box alone, so truck's bowl, 53 mm off on its revolved rim, passes
   the checks, and only the trial's distance catches it.
-- **Revisit when** solidcraft's reader passes `scripts/kernel-trial.sh` everywhere.
-  The prize is dropping the C++ toolchain requirement and settling the licence.
+- **2026-10-12, later: ogeom leads.** step-conformance now scores 24 parts at the
+  four tolerances, 96 runs a reader. Its published results: OpenCascade 96,
+  solidcraft (f0292b1) 80, truck master 79, ogeom 0.9.16 75, truck 0.3/0.4 70,
+  brepkit 38 (AGPL, so scored only). ogeom's maintainer then fixed the B-spline
+  faces closed round with no seam, which came back with no triangles, and the
+  dome bounded by its equator, 20 mm off, both reported in ogeom-rs#202. Its main
+  (63da721, not yet released) passes 91 of 96 and nothing that passed before got
+  worse. It still fails the freeform panel at 0.0125, 0.05 and 0.1 mm, 0.6 to
+  5.5 mm off, and a cone to a point at 0.0125 mm, 0.09 mm off, whose fix
+  ogeom-rs#204 plans. No reader but OpenCascade passes the freeform panel at
+  every tolerance.
+- **Revisit when** a pure-Rust reader passes `scripts/kernel-trial.sh` everywhere;
+  ogeom is closest. The prize is dropping the C++ toolchain requirement and
+  settling the licence.
 
 ## Implemented (0.1-d, 2026-09-22)
 
