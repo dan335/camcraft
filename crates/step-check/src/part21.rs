@@ -86,12 +86,14 @@ pub fn facts(text: &str) -> Result<StepFacts, Part21Error> {
     let entities = entities(text)?;
     let unit = length_unit(&entities)?;
     let s = unit.mm;
+    let radians = angle_unit(&entities);
     let placements = Placements::read(&entities, s);
 
     let mut points: BTreeMap<u64, Vec<DVec3>> = BTreeMap::new();
     let mut max_radius: f64 = 0.0;
     let mut sweep: f64 = 0.0;
     let mut revolved: Vec<(DVec3, f64)> = Vec::new();
+    let mut apexes = Vec::new();
     let mut faces = 0;
     for (&id, body) in &entities {
         match kind(body) {
@@ -106,10 +108,25 @@ pub fn facts(text: &str) -> Result<StepFacts, Part21Error> {
             "CIRCLE"
             | "CYLINDRICAL_SURFACE"
             | "SPHERICAL_SURFACE"
-            | "CONICAL_SURFACE"
             | "TOROIDAL_SURFACE"
             | "ELLIPSE" => {
                 max_radius = max_radius.max(radius(body) * s);
+            }
+            // (name, position, radius, semi-angle). A cone reaches its apex, which no
+            // point in the file need mark: a face can come to a point there with no
+            // vertex, as a cone does from Fusion.
+            "CONICAL_SURFACE" => {
+                max_radius = max_radius.max(radius(body) * s);
+                let n = numbers(body);
+                if let (Some(&at), [r, angle, ..]) = (refs(body).first(), n.as_slice())
+                    && let Some(frame) = placement(&entities, at, s)
+                {
+                    let t = (*angle * radians).tan();
+                    if t.abs() > 1e-12 {
+                        let apex = frame.translation - (*r * s / t) * frame.matrix3.z_axis;
+                        apexes.extend(placements.place(id, apex));
+                    }
+                }
             }
             // (name, swept curve, axis). Rotation about an axis through A keeps
             // every point at its distance from A, so the surface lies within a ball
@@ -144,7 +161,7 @@ pub fn facts(text: &str) -> Result<StepFacts, Part21Error> {
         }
     }
 
-    let extent = bounds(points.values().flatten()).map(|(lo, hi)| {
+    let extent = bounds(points.values().flatten().chain(&apexes)).map(|(lo, hi)| {
         let grow = DVec3::splat(max_radius + sweep);
         revolved
             .iter()
@@ -641,6 +658,40 @@ fn point(body: &str) -> Option<DVec3> {
         [x, y, z] => Some(DVec3::new(*x, *y, *z)),
         _ => None,
     }
+}
+
+/// Radians per plane angle unit: one unless a context assigns another. Only a cone's
+/// half-angle needs it, so an angle unit this cannot read is taken as radians.
+fn angle_unit(entities: &BTreeMap<u64, String>) -> f64 {
+    for body in entities.values() {
+        let Some(at) = body.find("GLOBAL_UNIT_ASSIGNED_CONTEXT") else {
+            continue;
+        };
+        let tail = &body[at..];
+        let group = tail
+            .find('(')
+            .and_then(|o| tail[o..].find(')').map(|c| &tail[o..o + c]))
+            .unwrap_or("");
+        for id in refs(group) {
+            let Some(unit) = entities.get(&id) else {
+                continue;
+            };
+            if !unit.contains("PLANE_ANGLE_UNIT") {
+                continue;
+            }
+            // ( CONVERSION_BASED_UNIT('DEGREE',#m) ... ), with #m
+            // PLANE_ANGLE_MEASURE_WITH_UNIT(PLANE_ANGLE_MEASURE(0.0174532925),#radian)
+            if unit.contains("CONVERSION_BASED_UNIT")
+                && let Some(m) = refs(unit).first().and_then(|m| entities.get(m))
+                && let Some(&f) = numbers(m).first()
+                && f > 0.0
+            {
+                return f;
+            }
+            return 1.0;
+        }
+    }
+    1.0
 }
 
 /// The length unit of every geometric context, which must all agree.

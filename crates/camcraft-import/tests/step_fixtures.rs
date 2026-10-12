@@ -102,6 +102,25 @@ fn bowl_revolved_millimetre() {
 
 /// Private parts, when this machine has them. Each must load, with its checks
 /// passed or their skipping explained; none may fail.
+/// A cone that comes to a point with no vertex there, as Fusion writes one. The
+/// size check once refused it, its box stopping short of the apex. Generated, so
+/// exact: 20 mm across and 30 tall (step-conformance's `cone_point`).
+///
+/// Unlike the shop parts, a face pinching to a point may leave OpenCascade a
+/// triangle with two corners at the apex, which the weld drops.
+#[test]
+fn a_cone_to_a_point() {
+    let (body, report) = load_step(fixture("cone_point.step"), TOLERANCE).unwrap();
+    assert_eq!(report.check, FileCheck::Passed);
+    assert_eq!(report.faces, 2);
+    let got = body.mesh().bounds().unwrap().extent();
+    assert!(
+        (got - glam::dvec3(20.0, 20.0, 30.0)).abs().max_element() < 0.1,
+        "{got:?}"
+    );
+    check_faces("cone_point.step", &body, 2);
+}
+
 #[test]
 fn private_fixtures_when_available() {
     let Some(dir) = std::env::var_os("CAMCRAFT_FIXTURES") else {

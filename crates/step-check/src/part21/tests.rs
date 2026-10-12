@@ -304,3 +304,48 @@ fn geometry_in_the_root_stays_put_while_an_empty_part_is_placed() {
         "{lo:?} {hi:?}"
     );
 }
+
+/// A cone 20 mm across at its base on the origin, coming to a point 30 mm up with
+/// no vertex there, written as Fusion writes one: placed at the base, its axis
+/// pointing down, the way it widens.
+const CONE: &str = "ISO-10303-21;
+HEADER; FILE_SCHEMA (('AUTOMOTIVE_DESIGN'));
+ENDSEC;
+DATA;
+#1=CARTESIAN_POINT('',(0.,0.,0.));
+#2=DIRECTION('',(0.,0.,-1.));
+#3=DIRECTION('',(1.,0.,0.));
+#4=AXIS2_PLACEMENT_3D('',#1,#2,#3);
+#5=CONICAL_SURFACE('',#4,10.,0.3217505543966422);
+#6=CARTESIAN_POINT('',(10.,0.,0.));
+#7=VERTEX_POINT('',#6);
+#8=ADVANCED_FACE('',(#9),#5,.T.);
+#900=( GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNIT_ASSIGNED_CONTEXT((#901,#902)) REPRESENTATION_CONTEXT('','3D') );
+#901=( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) );
+#902=( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) );
+ENDSEC;
+END-ISO-10303-21;
+";
+
+#[test]
+fn a_cone_reaches_its_apex_though_no_point_marks_it() {
+    // The box is grown by the largest radius all round, so it reaches past the
+    // apex; without the apex it would stop at the base circle, grown, at 10.
+    let (_, hi) = facts(CONE).unwrap().extent.unwrap();
+    assert!(hi.z >= 30.0 - 1e-9, "{hi:?}");
+}
+
+#[test]
+fn a_cone_half_angle_in_degrees_is_read_as_degrees() {
+    let degrees = CONE
+        .replace("0.3217505543966422", "18.43494882292201")
+        .replace(
+            "#902=( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) );",
+            "#902=( CONVERSION_BASED_UNIT('DEGREE',#903) NAMED_UNIT(#905) PLANE_ANGLE_UNIT() );
+#903=PLANE_ANGLE_MEASURE_WITH_UNIT(PLANE_ANGLE_MEASURE(0.0174532925199433),#904);
+#904=( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) );
+#905=DIMENSIONAL_EXPONENTS(0.,0.,0.,0.,0.,0.,0.);",
+        );
+    let (_, hi) = facts(&degrees).unwrap().extent.unwrap();
+    assert!(hi.z >= 30.0 - 1e-6, "{hi:?}");
+}
