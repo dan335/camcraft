@@ -251,9 +251,15 @@ distance is made without lifting, at the cutting feed; the distance is Fusion's
 Maximum Stay-Down Distance for the strategy: 50 mm for parallel and contour;
 twice the tool's diameter for scallop and flat; five times for spiral, radial,
 morphed spiral, pocket clearing, adaptive clearing and the 2D strategies.
-Parallel and the other finishing strategies ride over the part; pocket clearing
-and the 2D strategies go straight and level, and a profile down to its ring's
-next depth. Adaptive clearing makes
+Parallel and the other finishing strategies ride over the part: between passes
+side by side that run opposite ways, as zigzag passes do, by Fusion's default
+*smooth* transition, a half turn out past their ends as wide as they are apart,
+tangent to both (straight on along the shorter first, or after, where one ends
+short of the other), wherever the part and the material leave it room and the
+passes are no further apart than the tool is wide; otherwise by the straight
+line between them, lifted wherever the part rises above it. Pocket clearing and
+the 2D strategies go straight and level, and a profile down to its ring's next
+depth. Adaptive clearing makes
 its own links at the level, only straight across what it has cleared; it goes
 down its own helix into what it cannot reach
 from the side, and straight down everywhere else, into what it has cleared.

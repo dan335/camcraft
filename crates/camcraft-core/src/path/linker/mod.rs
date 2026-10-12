@@ -41,7 +41,7 @@ mod entry;
 mod params;
 mod world;
 
-use std::f64::consts::FRAC_PI_2;
+use std::f64::consts::{FRAC_PI_2, PI};
 
 use glam::{DVec2, DVec3, dvec3};
 
@@ -51,7 +51,7 @@ pub use params::{EntryKind, LinkError, LinkParams, LinkReport, Ramp, StayDown};
 pub use world::{Air, Material, NoPart, Surface, Unchanging};
 
 use crate::is_positive;
-use crate::path::toolpath::{Move, MoveRole, PLUNGE_RATIO, Toolpath, steep};
+use crate::path::toolpath::{Arc, Move, MoveRole, PLUNGE_RATIO, Toolpath, steep};
 
 /// Resolve every [`MoveRole::Link`], cutting what is linked into `material` as it
 /// goes.
@@ -451,6 +451,111 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
             .is_some_and(|top| top > z + self.p.tolerance)
     }
 
+    /// The turn from the end of the last pass, at `from`, round onto the next
+    /// at `to`, where they run opposite ways side by side, as zigzag passes
+    /// do: Fusion's default transition, smooth ("smooth tangential movements
+    /// using true arcs where appropriate"). A half turn as wide as the passes
+    /// are apart, out past their ends the way the last was heading, tangent to
+    /// both; where one pass ends short of the other, straight on along it
+    /// first, or after, so the turn is at the further end. Level as seen from
+    /// above, it goes from one pass's height to the other's as it goes.
+    ///
+    /// `None` where the passes do not run so, or are further apart than the
+    /// tool is wide, as a turn that size would swing far off the work; or
+    /// where the part rises into the turn, the turn would cut more than a cut
+    /// step into the material, or would fall steeply further than a descent at
+    /// cutting feed may. The lifted straight line is made instead.
+    fn turn_around(
+        &self,
+        from: DVec3,
+        to: DVec3,
+        pass: &[Move],
+    ) -> Option<Vec<(DVec3, Option<Arc>)>> {
+        let moves = self.out.moves();
+        let [before, last] = moves.get(moves.len().checked_sub(2)?..)? else {
+            return None;
+        };
+        let out = last
+            .tangent_at(before.to, 1.0)?
+            .truncate()
+            .try_normalize()?;
+        let into = pass
+            .first()?
+            .tangent_at(to, 0.0)?
+            .truncate()
+            .try_normalize()?;
+        if out.dot(into) > -0.99 {
+            return None;
+        }
+        let (a, b) = (from.truncate(), to.truncate());
+        // How far the next pass starts along the way the last was heading,
+        // and the turn's width: the gap square to the passes.
+        let along = (b - a).dot(out);
+        let width = (b - a - out * along).length();
+        if width < 1e-6 || width > 2.0 * self.p.tool_radius {
+            return None;
+        }
+        // The straight on, before the turn or after it, and the turn's ends.
+        let (turn_from, turn_to) = if along >= 0.0 {
+            (a + out * along, b)
+        } else {
+            (a, b + out * -along)
+        };
+        let straight = along.abs();
+        let length = straight + std::f64::consts::FRAC_PI_2 * width;
+        let z_at = |run: f64| from.z + (to.z - from.z) * (run / length);
+        let (p, q) = if along >= 0.0 {
+            (turn_from.extend(z_at(straight)), to)
+        } else {
+            (from, turn_to.extend(z_at(length - straight)))
+        };
+        let centre = (turn_from + turn_to) / 2.0;
+        // Counter-clockwise starts off along Z × the radius: the way the pass
+        // was heading, or it turns the other way.
+        let ccw = (turn_from - centre).perp().dot(out) > 0.0;
+        let arc = Arc {
+            centre: centre.extend(p.z),
+            axis: DVec3::Z,
+            sweep: if ccw { PI } else { -PI },
+        };
+        let mut pieces = Vec::new();
+        if along >= 0.0 && straight > 1e-9 {
+            pieces.push((p, None));
+        }
+        pieces.push((q, Some(arc)));
+        if along < 0.0 && straight > 1e-9 {
+            pieces.push((to, None));
+        }
+        // What it passes through, close enough that the tool's own width
+        // covers what lies between.
+        let mut way: Vec<DVec3> = Vec::new();
+        let mut at = from;
+        for &(end, arc) in &pieces {
+            let n = 32;
+            way.extend((1..=n).map(|k| {
+                let t = f64::from(k) / f64::from(n);
+                arc.map_or_else(|| at.lerp(end, t), |c| c.point_at(at, end, t))
+            }));
+            at = end;
+        }
+        // Clear of the part; and of the material, brushing what stands beside
+        // it half the tool's radius in at most, as a level link may: at the
+        // next pass's start, what it meets is that pass's own cut.
+        let clear = way.iter().all(|p| {
+            let xy = p.truncate();
+            self.surface
+                .at(xy)
+                .is_none_or(|z| z <= p.z + self.p.tolerance)
+                && (xy.distance(b) < 1e-6
+                    || self
+                        .material
+                        .highest(xy, xy, 0.5 * self.p.tool_radius)
+                        .is_none_or(|top| top <= p.z + self.p.max_cut_step))
+        });
+        let fallen = trailing_fall(moves);
+        (clear && !falls_steeply(fallen, from, &way, pass, self.p.max_cut_step)).then_some(pieces)
+    }
+
     /// Make the link from `from` to `to`, where `pass` starts, without lifting
     /// clear, if it may be.
     fn stay_down(
@@ -479,6 +584,17 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                 };
                 if below(from) || below(to) {
                     return Ok(false);
+                }
+                // Fusion's default transition, smooth: a half turn tangent to
+                // both passes, where it fits.
+                if let Some(pieces) = self.turn_around(from, to, pass) {
+                    for (p, arc) in pieces {
+                        match arc {
+                            Some(arc) => self.out.arc_to(p, arc, MoveRole::Transition, feed)?,
+                            None => self.out.feed_to(p, MoveRole::Transition, feed)?,
+                        }
+                    }
+                    return Ok(true);
                 }
                 // The straight line between the cuts, lifted onto the part wherever
                 // the part is above it.

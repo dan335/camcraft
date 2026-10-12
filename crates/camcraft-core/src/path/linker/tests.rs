@@ -1,4 +1,5 @@
 use super::*;
+use crate::path::toolpath::MoveKind;
 use camcraft_geom::heightmap::HeightMap;
 use glam::dvec2;
 
@@ -367,7 +368,9 @@ fn passes_beside_a_wall_are_not_joined_over_the_part() {
 }
 
 /// Zigzag passes a stepover apart are joined without lifting, at the cutting
-/// feed, as Fusion's are; further apart than the stay-down distance, they lift.
+/// feed, as Fusion's are, by its default smooth transition: a half turn out
+/// past their ends, tangent to both. Further apart than the stay-down
+/// distance, they lift.
 #[test]
 fn near_passes_are_joined_without_lifting() {
     let plane = ClearancePlane::new(10.0).unwrap();
@@ -394,6 +397,15 @@ fn near_passes_are_joined_without_lifting() {
     let transition = out.moves()[4];
     assert_eq!(transition.feed, Some(1000.0));
     assert_eq!(transition.to, dvec3(5.0, 1.0, 0.0));
+    let MoveKind::Arc(arc) = transition.kind else {
+        panic!("a straight join: {transition:?}");
+    };
+    assert_eq!(arc.sweep.abs(), std::f64::consts::PI);
+    let from = dvec3(5.0, 0.0, 0.0);
+    // On along +x where the pass left off, out past the end, back along -x.
+    assert!(arc.tangent_at(from, transition.to, 0.0).distance(DVec3::X) < 1e-9);
+    assert!(arc.tangent_at(from, transition.to, 1.0).distance(-DVec3::X) < 1e-9);
+    assert!((arc.point_at(from, transition.to, 0.5).x - 5.5).abs() < 1e-9);
 
     let (far, report) = link(
         &zigzag(60.0),
@@ -405,6 +417,87 @@ fn near_passes_are_joined_without_lifting() {
     .unwrap();
     assert_eq!(report.stayed_down, 0);
     assert!(!roles(&far).contains(&MoveRole::Transition));
+}
+
+/// A half turn is made only where it fits: where the part rises into it, it
+/// is the straight line lifted over the part; between passes that run the
+/// same way, or further apart than the tool is wide, it is the straight line.
+#[test]
+fn a_half_turn_only_where_it_fits() {
+    fn joins<S: Surface>(t: &Toolpath, part: &S) -> Vec<MoveKind> {
+        let plane = ClearancePlane::new(10.0).unwrap();
+        let (out, report) = link(t, &plane, &mut Air, part, &staying(50.0)).unwrap();
+        assert_eq!(report.stayed_down, 1);
+        out.moves()
+            .iter()
+            .filter(|m| m.role == MoveRole::Transition)
+            .map(|m| m.kind)
+            .collect()
+    }
+    let arcs = |kinds: &[MoveKind]| kinds.iter().any(|k| matches!(k, MoveKind::Arc(_)));
+    assert!(arcs(&joins(&zigzag(1.0), &FlatPart(0.0))));
+    // A step up just past the passes' ends, where the turn would go.
+    struct Step;
+    impl Surface for Step {
+        fn at(&self, p: DVec2) -> Option<f64> {
+            Some(if p.x > 5.2 { 3.0 } else { 0.0 })
+        }
+        fn along(&self, from: DVec2, to: DVec2) -> Vec<DVec3> {
+            vec![from.extend(0.0), to.extend(0.0)]
+        }
+    }
+    assert!(!arcs(&joins(&zigzag(1.0), &Step)));
+    // Wider than the tool (radius 3).
+    assert!(!arcs(&joins(&zigzag(7.0), &FlatPart(0.0))));
+    // One way: the second pass runs as the first did.
+    let mut one_way = Toolpath::new();
+    one_way
+        .feed_to(dvec3(0.0, 0.0, 0.0), MoveRole::Link, 1000.0)
+        .unwrap();
+    one_way
+        .feed_to(dvec3(5.0, 0.0, 0.0), MoveRole::Cut, 1000.0)
+        .unwrap();
+    one_way
+        .feed_to(dvec3(5.0, 1.0, 0.0), MoveRole::Link, 1000.0)
+        .unwrap();
+    one_way
+        .feed_to(dvec3(10.0, 1.0, 0.0), MoveRole::Cut, 1000.0)
+        .unwrap();
+    assert!(!arcs(&joins(&one_way, &FlatPart(0.0))));
+}
+
+/// Where one pass ends short of the other, the turn is at the further end:
+/// straight on along the shorter first, or after, tangent all the way.
+#[test]
+fn a_turn_between_passes_of_different_lengths() {
+    let plane = ClearancePlane::new(10.0).unwrap();
+    let turned = |next_start: f64| {
+        let mut t = Toolpath::new();
+        t.feed_to(dvec3(0.0, 0.0, 0.0), MoveRole::Link, 1000.0)
+            .unwrap();
+        t.feed_to(dvec3(5.0, 0.0, 0.0), MoveRole::Cut, 1000.0)
+            .unwrap();
+        t.feed_to(dvec3(next_start, 1.0, 0.0), MoveRole::Link, 1000.0)
+            .unwrap();
+        t.feed_to(dvec3(-1.0, 1.0, 0.0), MoveRole::Cut, 1000.0)
+            .unwrap();
+        let (out, _) = link(&t, &plane, &mut Air, &FlatPart(0.0), &staying(50.0)).unwrap();
+        out.moves()
+            .iter()
+            .filter(|m| m.role == MoveRole::Transition)
+            .map(|m| (m.to, matches!(m.kind, MoveKind::Arc(_))))
+            .collect::<Vec<_>>()
+    };
+    // The next pass starts further on: on to there, then round.
+    assert_eq!(
+        turned(7.0),
+        [(dvec3(7.0, 0.0, 0.0), false), (dvec3(7.0, 1.0, 0.0), true)]
+    );
+    // It starts short: round at this pass's end, then back along to it.
+    assert_eq!(
+        turned(3.0),
+        [(dvec3(5.0, 1.0, 0.0), true), (dvec3(3.0, 1.0, 0.0), false)]
+    );
 }
 
 /// A link that stays down rides over the part where it rises above the line
