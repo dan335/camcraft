@@ -36,9 +36,11 @@ use camcraft_session::{Model, SessionError, write_job};
 
 use crate::worker::DocId;
 
-pub use edit::Wanted;
+pub use edit::{Wanted, is_stl, needs_room};
 pub use run::{OpStatus, Status};
 pub use setup_state::{Layout, RanSetup, SetupState, SetupView, Transport, ViewMode};
+#[cfg(test)]
+pub(crate) use tests::with_plate;
 
 /// A number never handed out before, for telling uploads apart.
 pub fn next_key() -> u64 {
@@ -420,9 +422,7 @@ fn moved(path: &str, from: &Path, to: &Path) -> String {
 /// A setup's machine profile, `post`, moved as [`moved`] moves a path when it
 /// names a file, and as it is when it names one built in.
 fn moved_post(post: &str, from: &Path, to: &Path) -> String {
-    let builtin = camcraft_session::builtin_posts()
-        .iter()
-        .any(|b| b.eq_ignore_ascii_case(post));
+    let builtin = camcraft_session::builtin_posts().any(|b| b.eq_ignore_ascii_case(post));
     if builtin || post.is_empty() {
         post.to_string()
     } else {
@@ -454,12 +454,17 @@ fn checked_name<'a>(
     mut names: impl Iterator<Item = &'a str>,
     from: &str,
 ) -> Result<String, String> {
+    let a = if what.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
+    };
     let to = to.trim();
     if to.is_empty() {
-        return Err(format!("a {what} needs a name"));
+        return Err(format!("{a} {what} needs a name"));
     }
     if to != from && names.any(|n| n == to) {
-        return Err(format!("there is already a {what} called '{to}'"));
+        return Err(format!("there is already {a} {what} called '{to}'"));
     }
     Ok(to.to_string())
 }

@@ -1,6 +1,6 @@
 use super::*;
-use crate::frame::{Axis, Orientation};
-use crate::tool::{Cutter, ToolProfile};
+use crate::cutter::tool::{Cutter, ToolProfile};
+use crate::setup::frame::{Axis, Orientation};
 
 const SAMPLE: &str = r#"
 version = 1
@@ -246,6 +246,35 @@ fn leads_are_fusions_unless_given() {
     let linking = &j.setups[0].operations[1].linking;
     assert_eq!(linking.entry, Some(Entry::Plunge));
     assert_eq!(linking.leads.unwrap().straight, Some(1.0));
+}
+
+/// An entry the strategy does not offer is refused: adaptive clearing goes
+/// down a helix or straight, and has no ring to ramp along.
+#[test]
+fn an_entry_not_offered_is_refused() {
+    let adaptive = |entry: &str| {
+        let text = SAMPLE
+            .replacen(
+                "strategy = \"parallel\"\n",
+                &format!("strategy = \"adaptive\"\nlinking = {{ entry = \"{entry}\" }}\n"),
+                1,
+            )
+            .replace("angle = 90.0\n", "")
+            .replace(
+                "passes = { stepover = 0.4, feed = 2400.0 }",
+                "passes = { stepover = 0.4, feed = 2400.0, stepdown = 1.0 }",
+            );
+        toml::from_str::<Job>(&text).unwrap().validate()
+    };
+    adaptive("plunge").unwrap();
+    assert!(matches!(
+        adaptive("ramp"),
+        Err(JobError::NotOffered {
+            value: "ramp",
+            strategy: "adaptive",
+            ..
+        })
+    ));
 }
 
 /// A profile has Fusion's leads unless they are turned off, as Fusion's does;
@@ -689,11 +718,15 @@ fn each_strategy_says_what_it_uses() {
         conventional: false,
     }
     .uses();
-    assert!(!profile.stepover && profile.tabs && profile.leads && profile.entry);
+    assert!(!profile.stepover && profile.tabs && profile.leads);
+    assert_eq!(profile.entries, [Entry::Helix, Entry::Plunge, Entry::Ramp]);
     assert!(
-        !pocket.entry && !parallel.entry,
-        "only a profile chooses its entry"
+        pocket.entries.is_empty() && parallel.entries.is_empty(),
+        "a pocket and a finishing pass have no choice of entry"
     );
+    // Fusion's 3D Adaptive has no ring to ramp along.
+    let adaptive = StrategySpec::named("adaptive").unwrap().uses();
+    assert_eq!(adaptive.entries, [Entry::Helix, Entry::Plunge]);
     assert_eq!(profile.stock_to_leave, Leave::Both);
     let drill = StrategySpec::Drill {
         peck: None,
@@ -1166,6 +1199,7 @@ fn a_preset_sets_only_what_it_has() {
 #[test]
 fn a_pick_must_be_on_the_setup_and_a_point() {
     let mut j = picked();
+    j.setups[0].operations[1].boundary.kind = Boundary::Selection;
     j.setups[0].operations[1].selection.faces[0].model = "elsewhere".into();
     assert!(matches!(
         j.validate(),
@@ -1319,7 +1353,11 @@ fn a_2d_operation_has_an_outline_and_a_3d_one_a_boundary() {
     for s in strategies {
         let u = s.uses();
         assert!(!(u.boundary && u.outline), "{}", s.name());
-        assert_eq!(u.outline, s.is_2d(), "{}", s.name());
+        let flat = matches!(
+            s,
+            StrategySpec::Profile { .. } | StrategySpec::Pocket { .. }
+        );
+        assert_eq!(u.outline, flat, "{}", s.name());
     }
 }
 
@@ -1437,24 +1475,19 @@ fn facing_reads_with_fusions_defaults() {
     assert!(j.validate().is_err());
 }
 
-/// Pocket clearing was Z-level roughing: a job written then still reads, and is
-/// written back by the new name, its defaults left out.
+/// Pocket clearing reads with its defaults, and is written back with them left
+/// out; a new one starts from them.
 #[test]
-fn pocket_clearing_reads_by_its_old_name_too() {
-    let old = SAMPLE.replace("\"pocket-clearing\"", "\"zlevel-rough\"");
-    let j: Job = toml::from_str(&old).unwrap();
+fn pocket_clearing_reads_with_its_defaults() {
+    let j: Job = toml::from_str(SAMPLE).unwrap();
     let clearing = StrategySpec::PocketClearing {
         min_ring_length: 3.0,
         conventional: false,
         flat_areas: true,
     };
     assert_eq!(j.setups[0].operations[0].strategy, clearing);
+    assert_eq!(StrategySpec::named("pocket-clearing"), Some(clearing));
     let written = toml::to_string(&j).unwrap();
-    assert!(
-        written.contains("strategy = \"pocket-clearing\""),
-        "{written}"
-    );
-    assert!(!written.contains("zlevel"), "{written}");
     assert!(!written.contains("conventional"), "{written}");
     assert!(!written.contains("flat_areas"), "{written}");
     assert_eq!(toml::from_str::<Job>(&written).unwrap(), j);
@@ -1476,6 +1509,44 @@ fn pocket_clearing_reads_by_its_old_name_too() {
         toml::from_str::<Job>(&toml::to_string(&j).unwrap()).unwrap(),
         j
     );
+}
+
+/// Every strategy is found by the name a job file gives it, as a file that gives
+/// none of its parameters has it; nothing else is.
+#[test]
+fn every_strategy_is_named() {
+    for name in [
+        "parallel",
+        "scallop",
+        "contour",
+        "flat",
+        "spiral",
+        "radial",
+        "morphed-spiral",
+        "pocket-clearing",
+        "adaptive",
+        "profile",
+        "pocket",
+        "face",
+        "drill",
+    ] {
+        let spec = StrategySpec::named(name).unwrap();
+        assert_eq!(spec.name(), name);
+    }
+    assert_eq!(
+        StrategySpec::named("radial"),
+        Some(StrategySpec::Radial {
+            centre: None,
+            inner_radius: 0.0,
+            outer_radius: 0.0,
+            angle_from: 0.0,
+            angle_to: 360.0,
+            direction: RadialDirection::BothWays,
+            slope_from: 0.0,
+            slope_to: 90.0,
+        })
+    );
+    assert_eq!(StrategySpec::named("zlevel-rough"), None);
 }
 
 /// Scallop reads with Fusion's defaults, both ways from the boundary in on
@@ -1754,4 +1825,238 @@ fn patterns_about_a_centre_refuse_what_they_cannot_have() {
         slope_to: 90.0,
     };
     assert!(j.validate().is_err());
+}
+
+/// Picks nothing reads are kept, and not checked: a boundary switched back to
+/// the stock after picking, its model since taken out of the setup, still runs.
+/// Read again, as a boundary or by a height, they are checked.
+#[test]
+fn picks_nothing_reads_do_not_stop_the_job() {
+    let mut j = picked();
+    let op = &mut j.setups[0].operations[1];
+    op.selection.faces[0].model = "gone".into();
+    op.selection.edges[0].at[0] = f64::NAN;
+    j.validate().unwrap();
+    j.setups[0].operations[1].heights.top = Some(Height {
+        reference: HeightRef::Selection,
+        offset: 0.0,
+    });
+    assert!(matches!(
+        j.validate(),
+        Err(JobError::PickedFromOtherModel { .. })
+    ));
+    j.setups[0].operations[1].heights.top = None;
+    j.setups[0].operations[1].boundary.kind = Boundary::Selection;
+    assert!(j.validate().is_err());
+}
+
+/// A value is refused naming the field at fault and what it must be.
+#[test]
+fn a_bad_value_names_its_field_and_range() {
+    let mut j = sample();
+    j.setups[0].operations[1].strategy = StrategySpec::Scallop {
+        direction: CutDirection::BothWays,
+        order: PassOrder::OutsideIn,
+        slope_from: 30.0,
+        slope_to: 20.0,
+    };
+    let err = j.validate().unwrap_err();
+    assert!(
+        matches!(&err, JobError::BadValue { field, value, .. } if field == "top/finish.slope_to" && *value == 20.0),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("greater than slope_from"), "{err}");
+    j.setups[0].operations[1].strategy = StrategySpec::Scallop {
+        direction: CutDirection::BothWays,
+        order: PassOrder::OutsideIn,
+        slope_from: -1.0,
+        slope_to: 20.0,
+    };
+    assert!(matches!(
+        j.validate(),
+        Err(JobError::BadValue { field, .. }) if field == "top/finish.slope_from"
+    ));
+    // Zero is a margin, not a mistake; below it is.
+    let mut j = sample();
+    let StockSpec::AroundModels { margin, .. } = &mut j.stocks[0].spec else {
+        panic!("the sample's stock is around its models");
+    };
+    margin[0] = -1.0;
+    let err = j.validate().unwrap_err();
+    assert!(err.to_string().contains("at least zero"), "{err}");
+    assert!(!err.to_string().contains("greater than zero"), "{err}");
+}
+
+/// Every value an operation's strategy reads is checked before anything runs,
+/// and only those: a NaN margin on a 3D operation, a safe distance below the
+/// material, a ramp that does not descend, a height that is not a number.
+#[test]
+fn every_value_a_strategy_reads_is_checked_up_front() {
+    let field_of = |j: &Job| match j.validate() {
+        Err(JobError::BadValue { field, .. }) => field,
+        other => panic!("expected a bad value, got {other:?}"),
+    };
+    type Edit = fn(&mut Operation);
+    let edits: [(&str, Edit); 6] = [
+        ("top/rough.boundary.margin", |op| {
+            op.boundary.margin = f64::NAN;
+        }),
+        ("top/rough.linking.safe_distance", |op| {
+            op.linking.safe_distance = -1.0;
+        }),
+        ("top/rough.linking.ramp_angle", |op| {
+            op.linking.ramp_angle = 0.0;
+        }),
+        ("top/rough.linking.ramp_feed", |op| {
+            op.linking.ramp_feed = Some(0.0);
+        }),
+        ("top/rough.heights.clearance.offset", |op| {
+            op.heights.clearance.offset = f64::INFINITY;
+        }),
+        ("top/rough.heights.bottom.offset", |op| {
+            op.heights.bottom = Some(Height {
+                reference: HeightRef::ModelBottom,
+                offset: f64::NAN,
+            });
+        }),
+    ];
+    for (field, edit) in edits {
+        let mut j = sample();
+        edit(&mut j.setups[0].operations[0]);
+        assert_eq!(field_of(&j), field);
+    }
+    let mut j = sample();
+    j.setups[0].operations[1].linking.lead_radius = Some(-0.5);
+    assert_eq!(field_of(&j), "top/finish.linking.lead_radius");
+
+    // What a strategy does not read is not checked: a profile has no boundary,
+    // and parallel finishing neither ramps nor has a top.
+    let mut j = sample();
+    let finish = &mut j.setups[0].operations[1];
+    finish.linking.ramp_angle = f64::NAN;
+    finish.heights.top = Some(Height {
+        reference: HeightRef::StockTop,
+        offset: f64::NAN,
+    });
+    j.validate().unwrap();
+    j.setups[0].operations[1].strategy = StrategySpec::Profile {
+        side: ProfileSide::Outside,
+        conventional: false,
+    };
+    j.setups[0].operations[1].boundary.margin = f64::NAN;
+    j.setups[0].operations[1].linking.ramp_angle = 2.0;
+    j.setups[0].operations[1].heights.top = None;
+    j.setups[0].operations[1].tool = Some("rough-6-flat".into());
+    j.validate().unwrap();
+}
+
+/// Settings a strategy has no use for are not required: a contour, a profile
+/// and a drill have no stepover, and a drill no cutting feed.
+#[test]
+fn settings_a_strategy_does_not_use_are_not_required() {
+    let mut j = sample();
+    let finish = &mut j.setups[0].operations[1];
+    finish.strategy = StrategySpec::named("contour").unwrap();
+    finish.passes.stepdown = Some(1.0);
+    finish.passes.stepover = 0.0;
+    j.validate().unwrap();
+    let finish = &mut j.setups[0].operations[1];
+    finish.strategy = StrategySpec::Drill {
+        peck: None,
+        dwell: None,
+    };
+    finish.tool = Some("rough-6-flat".into());
+    finish.passes.feed = 0.0;
+    j.validate().unwrap();
+    j.setups[0].operations[1].strategy = StrategySpec::named("parallel").unwrap();
+    assert!(matches!(
+        j.validate(),
+        Err(JobError::BadValue { field, .. }) if field == "top/finish.passes.stepover"
+    ));
+}
+
+/// How each strategy links, and what a drill's picks and adaptive's stepover
+/// are, is its `uses()`'s to say.
+#[test]
+fn each_strategy_says_how_it_links() {
+    for name in ["parallel", "scallop", "spiral", "radial", "morphed-spiral"] {
+        let s = StrategySpec::named(name).unwrap();
+        assert_eq!(s.uses().links, Links::OverPart, "{name}");
+    }
+    // A contour's passes run round the part beside its walls, not over it: it
+    // links as a level's do.
+    for name in [
+        "contour",
+        "flat",
+        "pocket-clearing",
+        "pocket",
+        "profile",
+        "face",
+    ] {
+        assert_eq!(
+            StrategySpec::named(name).unwrap().uses().links,
+            Links::Level,
+            "{name}"
+        );
+    }
+    for name in ["adaptive", "drill"] {
+        assert_eq!(
+            StrategySpec::named(name).unwrap().uses().links,
+            Links::Own,
+            "{name}"
+        );
+    }
+    let drill = StrategySpec::named("drill").unwrap().uses();
+    assert!(drill.holes && !drill.feed && !drill.load);
+    let adaptive = StrategySpec::named("adaptive").unwrap().uses();
+    assert!(adaptive.load && adaptive.feed && !adaptive.holes);
+}
+
+/// Each linking value left out is its strategy's own for the tool, as the run
+/// cuts with it; given, it is as given.
+#[test]
+fn linking_values_default_as_the_strategy_says() {
+    let op = |name: &str| Operation::new("o", StrategySpec::named(name).unwrap());
+    assert_eq!(op("parallel").stay_down(6.0), 50.0);
+    assert_eq!(op("pocket-clearing").stay_down(6.0), 30.0);
+    assert_eq!(op("adaptive").stay_down(6.0), 60.0);
+    assert_eq!(op("drill").stay_down(6.0), 0.0);
+    assert!((op("contour").lead_radius(6.0) - 0.6).abs() < 1e-12);
+    assert_eq!(op("pocket").lead_radius(6.0), 0.0);
+    assert!((op("profile").helix_diameter(10.0) - 9.0).abs() < 1e-12);
+    assert_eq!(op("profile").entry(), Some(Entry::Helix));
+    assert_eq!(op("pocket").entry(), None);
+    assert!(op("profile").leads(6.0).is_some());
+    assert_eq!(op("pocket").leads(6.0), None);
+    // The stepdown, or the tool without one.
+    assert_eq!(op("pocket").ramp_stepdown(6.0), 2.0);
+    assert_eq!(op("parallel").ramp_stepdown(6.0), 6.0);
+    let mut given = op("adaptive");
+    given.linking.stay_down = Some(12.0);
+    given.linking.entry = Some(Entry::Plunge);
+    given.linking.ramp_stepdown = Some(0.5);
+    assert_eq!(given.stay_down(6.0), 12.0);
+    assert_eq!(given.entry(), Some(Entry::Plunge));
+    assert_eq!(given.ramp_stepdown(6.0), 0.5);
+}
+
+/// A new operation starts with its strategy's own depths and stock to leave,
+/// and no tool.
+#[test]
+fn a_new_operation_starts_as_fusions() {
+    let rough = Operation::new("rough", StrategySpec::named("adaptive").unwrap());
+    assert_eq!(rough.name, "rough");
+    assert_eq!(rough.tool, None);
+    assert_eq!(rough.passes.stepdown, Some(2.0));
+    assert_eq!(rough.passes.stock_to_leave.radial, 0.5);
+    assert!(rough.enabled);
+    let finish = Operation::new("finish", StrategySpec::named("parallel").unwrap());
+    assert_eq!(finish.passes.stepdown, None);
+    assert_eq!(finish.passes.stock_to_leave, StockToLeave::default());
+    // Only a height from its picks, and not a drill's.
+    assert!(!finish.can_measure_from_picks());
+    let mut picked = picked();
+    assert!(picked.setups[0].operations[1].can_measure_from_picks());
+    picked.setups[0].operations[1].strategy = StrategySpec::named("drill").unwrap();
+    assert!(!picked.setups[0].operations[1].can_measure_from_picks());
 }

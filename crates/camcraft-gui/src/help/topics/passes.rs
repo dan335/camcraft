@@ -23,7 +23,7 @@ topics! {
     SCALLOP_ORDER: "Order",
         "Outside in cuts from the boundary inward. Inside out cuts each area from its middle, ending on the boundary.";
     SLOPES: "Slopes",
-        "Only finishes where the surface is between these angles from level: 0° is flat, 90° a wall. Faces steeper than a plunge are left, for a contour pass.";
+        "Only finishes where the surface is between these angles from level, both included: 0° is flat, 90° a wall. Scallop leaves faces steeper than a plunge.";
     CONTOUR_ORDER: "Order",
         "By depth cuts each level all the way round before the next down. By area cuts each piece of the part all the way down first.";
     DIRECTION_SPIRAL: "Direction",

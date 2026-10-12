@@ -21,7 +21,7 @@
 //! The result depends only on the triangles, and every order is fixed, so the same
 //! file gives the same faces on every run and every machine.
 
-use super::Side;
+use super::build::Side;
 use crate::mesh::TriMesh;
 use glam::DVec3;
 use std::collections::VecDeque;

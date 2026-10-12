@@ -12,6 +12,7 @@
 mod checks_window;
 mod show_panel;
 
+use camcraft_geom::mesh::Aabb;
 use camcraft_session::checks::Finding;
 use eframe::egui;
 use glam::DVec3;
@@ -25,17 +26,9 @@ use crate::view::viewport::{Content, StockRef, StockShow, View};
 pub use checks_window::checks;
 pub use show_panel::{controls, result};
 
-/// `12345` as `12,345`, as counts are printed.
+/// `12345` as `12,345`, as counts are printed ([`camcraft_session::checks::thousands`]).
 pub fn thousands(n: usize) -> String {
-    let digits = n.to_string();
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
+    camcraft_session::checks::thousands(u64::try_from(n).unwrap_or(u64::MAX))
 }
 
 /// Whether the last run was laid out as the setup is now, so its paths belong on
@@ -139,7 +132,7 @@ pub fn content<'a>(state: &'a SetupState, name: &str, selection: &Selection) -> 
         let live = state.live.as_ref().filter(|l| l.scene_key == r.scene_key)?;
         let (key, image, changed) = live.shown()?;
         Some(StockShow {
-            key: (key, usize::MAX),
+            key,
             image: StockRef(image),
             changed,
             mode: view.transport.color,
@@ -149,43 +142,51 @@ pub fn content<'a>(state: &'a SetupState, name: &str, selection: &Selection) -> 
         .layout
         .as_ref()
         .and_then(|l| Some((l.key, l.prepared.as_ref().ok()?, &l.outline)));
-    let part = laid
-        .map(|(key, p, _)| (key, &p.part))
-        .or_else(|| state.ran.as_ref().map(|r| (r.scene_key, &r.ran.part)));
-    let (show_part, show_paths, shown, ops) = if back {
+    // Laid out, the part's bounds are known; otherwise, rarely, measured.
+    let (part, part_bounds) = match (laid, &state.ran) {
+        (Some((key, p, _)), _) => (Some((key, &p.part)), Some(p.model_bounds)),
+        (None, Some(r)) => (Some((r.scene_key, &r.ran.part)), r.ran.part.bounds()),
+        (None, None) => (None, None),
+    };
+    let (show_part, show_paths, shown, ops, only) = if back {
         (
             view.part_in_playback,
             view.paths_in_playback,
             view.at.shown,
             view.view.ops,
+            None,
         )
     } else {
         // Setting up: the selection's toolpaths, all of them. An operation of
         // this setup is its alone; anything else, the setup's.
-        let ops = match selection {
-            Selection::Operation(s, i) if s == name => u32::try_from(*i)
+        let only = match selection {
+            Selection::Operation(s, i) if s == name => Some(*i),
+            _ => None,
+        };
+        let ops = only.map_or(u32::MAX, |i| {
+            u32::try_from(i)
                 .ok()
                 .and_then(|i| 1u32.checked_shl(i))
-                .unwrap_or(0),
-            _ => u32::MAX,
-        };
+                .unwrap_or(0)
+        });
         let all = scene.map_or(0, |r| r.scene.segments.len());
-        (view.view.part, view.show_paths, all, ops)
+        (view.view.part, view.show_paths, all, ops, only)
     };
     Content {
         part,
+        part_bounds,
         framing: view.framing,
         scene: scene.map(|r| (r.scene_key, &r.scene)),
         outline: laid.map(|(key, _, o)| (key, o.as_slice())),
-        stock_box: laid.map(|(_, p, _)| p.stock_bounds()).or_else(|| {
-            let stocks = &state.ran.as_ref()?.ran.result.stocks;
-            stocks.iter().copied().reduce(|a, b| a.union(&b))
-        }),
+        stock_box: laid
+            .map(|(_, p, _)| p.stock_bounds())
+            .or_else(|| Aabb::union_all(&state.ran.as_ref()?.ran.result.stocks)),
         stock,
         view: View {
             part: show_part,
             roles: if show_paths { view.view.roles } else { 0 },
             ops,
+            only,
             shown,
             cutter,
             ..view.view
@@ -195,5 +196,25 @@ pub fn content<'a>(state: &'a SetupState, name: &str, selection: &Selection) -> 
         ghost: None,
         hint: None,
         planes: &[],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Setting up with an operation selected shows its toolpaths alone, however
+    /// far down the setup it is: past the 32 operations the mask holds too.
+    #[test]
+    fn a_selected_operation_shows_alone_wherever_it_is() {
+        let state = SetupState::default();
+        for i in [0, 31, 32, 40] {
+            let selected = Selection::Operation("top".into(), i);
+            assert_eq!(content(&state, "top", &selected).view.only, Some(i));
+        }
+        let other = Selection::Operation("bottom".into(), 40);
+        assert_eq!(content(&state, "top", &other).view.only, None);
+        let setup = Selection::Setup("top".into());
+        assert_eq!(content(&state, "top", &setup).view.only, None);
     }
 }

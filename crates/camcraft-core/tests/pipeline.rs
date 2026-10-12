@@ -6,12 +6,12 @@
 
 #![allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
 
-use camcraft_core::allowance::{Allowance, EffectiveTool};
-use camcraft_core::dropcutter::DropCutter;
-use camcraft_core::linker::{Air, ClearancePlane, LinkParams, NoPart, link};
-use camcraft_core::parallel::{ParallelParams, parallel_finish};
-use camcraft_core::tool::{Ball, ToolProfile};
-use camcraft_core::toolpath::MoveRole;
+use camcraft_core::cutter::allowance::{Allowance, EffectiveTool};
+use camcraft_core::cutter::dropcutter::DropCutter;
+use camcraft_core::cutter::tool::{Ball, ToolProfile};
+use camcraft_core::path::linker::{Air, ClearancePlane, LinkParams, NoPart, link};
+use camcraft_core::path::toolpath::MoveRole;
+use camcraft_core::strategy::parallel::{ParallelParams, parallel_finish};
 use camcraft_geom::synthetic;
 use glam::dvec2;
 

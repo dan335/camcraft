@@ -281,6 +281,84 @@ pub fn optional<T>(
     }
 }
 
+/// One of `options`, as `Select.jsx`: the one chosen, and the rest in a list
+/// that drops from it, each read as `name` gives it. The response is the
+/// control's, changed when another is chosen.
+pub fn select<T: Clone + PartialEq, W: Into<egui::WidgetText>>(
+    ui: &mut egui::Ui,
+    id: impl egui::AsIdSalt,
+    value: &mut T,
+    options: &[T],
+    name: impl Fn(&T) -> W,
+) -> egui::Response {
+    let mut changed = false;
+    let mut response = egui::ComboBox::from_id_salt(id)
+        .selected_text(name(value))
+        .show_ui(ui, |ui| {
+            for option in options {
+                changed |= ui
+                    .selectable_value(value, option.clone(), name(option))
+                    .changed();
+            }
+        })
+        .response;
+    if changed {
+        response.mark_changed();
+    }
+    response
+}
+
+/// One of a few, all in sight side by side: a segmented control, the one chosen
+/// lit. Each of `options` is a value and what it reads as. The response covers
+/// them all, changed when another is chosen.
+pub fn segmented<T: Clone + PartialEq>(
+    ui: &mut egui::Ui,
+    value: &mut T,
+    options: &[(T, &str)],
+) -> egui::Response {
+    let mut changed = false;
+    let mut response = ui
+        .horizontal(|ui| {
+            for (option, name) in options {
+                changed |= ui.selectable_value(value, option.clone(), *name).changed();
+            }
+        })
+        .response;
+    if changed {
+        response.mark_changed();
+    }
+    response
+}
+
+/// What a dialog holds, as `Dialog.jsx`, in the window that holds it (an
+/// `egui::Modal` wears the system's): its title over a hairline, `body`, and
+/// under another hairline `footer`'s buttons on the right. They are laid out
+/// from the right, so the answer goes in first and Cancel after it, on its left.
+pub fn dialog<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    body: impl FnOnce(&mut egui::Ui),
+    footer: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    ui.label(
+        medium(title, theme::TEXT_BASE)
+            .family(egui::FontFamily::Name(theme::SEMIBOLD.into()))
+            .color(theme::egui_color(theme::TEXT_1)),
+    );
+    ui.add_space(theme::SPACE_3);
+    ui.separator();
+    ui.add_space(theme::SPACE_3);
+    body(ui);
+    ui.add_space(theme::SPACE_4);
+    ui.separator();
+    ui.add_space(theme::SPACE_3);
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), footer)
+            .inner
+    })
+    .inner
+}
+
 /// A form: labels in a column on the left, their fields lined up on the right.
 pub fn form(ui: &mut egui::Ui, id: impl egui::AsIdSalt, body: impl FnOnce(&mut egui::Ui)) {
     egui::Grid::new(id)
@@ -419,6 +497,24 @@ pub fn tag(ui: &mut egui::Ui, text: &str) -> egui::Response {
         galley,
         theme::egui_color(theme::TEXT_2),
     );
+    response
+}
+
+/// A status in a word, as `Badge.jsx`: the level's colour on its 12% tint, small
+/// and set in a row beside what it is about.
+pub fn badge(ui: &mut egui::Ui, level: Level, text: &str) -> egui::Response {
+    let color = level.color();
+    let galley = galley(ui, medium(text, theme::TEXT_XS).color(color));
+    let size = egui::vec2(galley.size().x + 12.0, 18.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let rgb = match level {
+        Level::Ok => theme::OK,
+        Level::Warn => theme::WARN,
+        Level::Err => theme::ERR,
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, theme::RADIUS_SM, Tint { rgb, alpha: 0.12 }.color());
+    painter.galley(rect.center() - galley.size() / 2.0, galley, color);
     response
 }
 

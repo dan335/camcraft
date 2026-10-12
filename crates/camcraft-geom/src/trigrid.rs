@@ -5,7 +5,7 @@
 //! # Nodes, cells and triangles
 //!
 //! Node `n` is `iy · nx + ix`, at `origin + (ix, iy) · pitch`, lifted to its own
-//! height. A node is *defined* when it is active and has a finite height. Cell
+//! height. A node is *defined* when it has a finite height. Cell
 //! `(cx, cy)` has the nodes `(cx, cy)` to `(cx + 1, cy + 1)` at its corners and is
 //! split into triangles `2c` and `2c + 1`, `c = cy · (nx − 1) + cx`, each wound
 //! anticlockwise seen from above. A triangle exists when all three of its nodes are
@@ -36,39 +36,27 @@ pub struct TriGrid {
     pitch: f64,
     nx: u32,
     ny: u32,
-    /// Each node's height; NaN where it is not defined, active or not.
+    /// Each node's height; NaN where it is not defined.
     z: Vec<f32>,
     diagonal: Vec<Diagonal>,
 }
 
 impl TriGrid {
     /// The grid of `nx × ny` nodes from `origin`, `pitch` apart, with the height
-    /// `z` of each (NaN where there is none) and whether it takes part.
+    /// `z` of each: NaN where there is none, and the node takes no part.
     ///
     /// `None` unless there are at least two nodes each way, the pitch is finite and
-    /// positive, and `z` and `active` have a value for every node.
-    pub fn new(
-        origin: DVec2,
-        pitch: f64,
-        nx: u32,
-        ny: u32,
-        mut z: Vec<f32>,
-        active: Vec<bool>,
-    ) -> Option<Self> {
+    /// positive, and `z` has a value for every node.
+    pub fn new(origin: DVec2, pitch: f64, nx: u32, ny: u32, z: Vec<f32>) -> Option<Self> {
         let nodes = usize::try_from(u64::from(nx) * u64::from(ny)).ok()?;
         if nx < 2
             || ny < 2
             || !(pitch.is_finite() && pitch > 0.0)
             || !origin.is_finite()
             || z.len() != nodes
-            || active.len() != nodes
             || u32::try_from(nodes).is_err()
         {
             return None;
-        }
-        // A node not taking part has no height, so one test says both.
-        for (z, _) in z.iter_mut().zip(&active).filter(|(_, a)| !**a) {
-            *z = f32::NAN;
         }
         let mut grid = Self {
             origin,
@@ -119,7 +107,7 @@ impl TriGrid {
     }
 
     /// The column and row of node `n`.
-    pub fn column_row(&self, n: u32) -> (u32, u32) {
+    fn column_row(&self, n: u32) -> (u32, u32) {
         (n % self.nx, n / self.nx)
     }
 
@@ -137,7 +125,7 @@ impl TriGrid {
         z.is_finite().then_some(z)
     }
 
-    /// Whether node `n` is defined: active, with a height.
+    /// Whether node `n` is defined: with a height.
     pub fn defined(&self, n: u32) -> bool {
         self.z(n).is_some()
     }
@@ -162,7 +150,7 @@ impl TriGrid {
 
     /// The triangles that exist with node `n` a corner of them, with their nodes:
     /// at most six.
-    pub fn triangles_at(&self, n: u32) -> impl Iterator<Item = (u32, [u32; 3])> + '_ {
+    pub(crate) fn triangles_at(&self, n: u32) -> impl Iterator<Item = (u32, [u32; 3])> + '_ {
         let (ix, iy) = self.column_row(n);
         let cells = [(0, 0), (1, 0), (0, 1), (1, 1)]
             .into_iter()
@@ -176,18 +164,6 @@ impl TriGrid {
                 .filter(|nodes| nodes.contains(&n))
                 .map(|nodes| (t, nodes))
         })
-    }
-
-    /// The nodes joined to `n` by an edge of a triangle that exists.
-    pub fn neighbours(&self, n: u32) -> Vec<u32> {
-        let mut out: Vec<u32> = self
-            .triangles_at(n)
-            .flat_map(|(_, nodes)| nodes)
-            .filter(|&m| m != n)
-            .collect();
-        out.sort_unstable();
-        out.dedup();
-        out
     }
 
     /// The triangle that exists over `p`, if any.
@@ -291,14 +267,14 @@ mod tests {
 
     fn flat(nx: u32, ny: u32) -> TriGrid {
         let n = usize::try_from(nx * ny).unwrap();
-        TriGrid::new(DVec2::ZERO, 1.0, nx, ny, vec![0.0; n], vec![true; n]).unwrap()
+        TriGrid::new(DVec2::ZERO, 1.0, nx, ny, vec![0.0; n]).unwrap()
     }
 
     #[test]
     fn refuses_a_grid_with_no_cells() {
-        assert!(TriGrid::new(DVec2::ZERO, 1.0, 1, 3, vec![0.0; 3], vec![true; 3]).is_none());
-        assert!(TriGrid::new(DVec2::ZERO, 0.0, 2, 2, vec![0.0; 4], vec![true; 4]).is_none());
-        assert!(TriGrid::new(DVec2::ZERO, 1.0, 2, 2, vec![0.0; 3], vec![true; 4]).is_none());
+        assert!(TriGrid::new(DVec2::ZERO, 1.0, 1, 3, vec![0.0; 3]).is_none());
+        assert!(TriGrid::new(DVec2::ZERO, 0.0, 2, 2, vec![0.0; 4]).is_none());
+        assert!(TriGrid::new(DVec2::ZERO, 1.0, 2, 2, vec![0.0; 3]).is_none());
     }
 
     #[test]
@@ -318,7 +294,7 @@ mod tests {
     fn an_undefined_corner_leaves_one_triangle() {
         let mut z = vec![0.0f32; 4];
         z[0] = f32::NAN;
-        let g = TriGrid::new(DVec2::ZERO, 1.0, 2, 2, z, vec![true; 4]).unwrap();
+        let g = TriGrid::new(DVec2::ZERO, 1.0, 2, 2, z).unwrap();
         let tris: Vec<(u32, [u32; 3])> = g.triangles().collect();
         assert_eq!(tris.len(), 1);
         assert!(!tris[0].1.contains(&0));
@@ -346,18 +322,17 @@ mod tests {
     }
 
     #[test]
-    fn a_node_has_its_six_neighbours() {
+    fn a_node_is_in_six_triangles() {
         let g = flat(3, 3);
         let middle = g.node(1, 1).unwrap();
         assert_eq!(g.triangles_at(middle).count(), 6);
-        assert_eq!(g.neighbours(middle).len(), 6);
     }
 
     #[test]
     fn slope_is_the_lifted_planes() {
         let n = 9;
         let z: Vec<f32> = (0..n).map(|i| (i % 3) as f32).collect();
-        let g = TriGrid::new(DVec2::ZERO, 1.0, 3, 3, z, vec![true; 9]).unwrap();
+        let g = TriGrid::new(DVec2::ZERO, 1.0, 3, 3, z).unwrap();
         for (t, _) in g.triangles() {
             assert!((g.slope(t).unwrap() - std::f64::consts::FRAC_PI_4).abs() < 1e-6);
         }

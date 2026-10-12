@@ -13,15 +13,14 @@
 //! has a preset for each material it suits, its feed worked out from a
 //! conservative chip load, and a stepdown and stepover from its diameter.
 
-use camcraft_core::cutting::feed_for;
+use camcraft_core::cutter::cutting::feed_for;
 use camcraft_core::job::{Preset, ToolKind, ToolMaterial, ToolSpec};
 
-use super::Folder;
+use super::{Folder, MM_PER_INCH};
+use crate::checks::thousands;
 
 /// The System library's folder, at the top of the library.
 pub const SYSTEM: &str = "System library";
-
-const MM_PER_INCH: f64 = 25.4;
 
 /// Whether the folder at `path` is the System library or inside it.
 pub fn is_system(path: &[String]) -> bool {
@@ -369,7 +368,7 @@ fn preset(bit: &Bit, material: Material) -> Preset {
             "{} in/tooth at {} rev/min: a conservative start for a hobby router; \
              adjust to your machine",
             inches(fz),
-            thousands(bit.rpm)
+            thousands(u64::from(bit.rpm))
         ),
         rpm: Some(bit.rpm),
         feed: Some(feed),
@@ -385,19 +384,6 @@ fn preset(bit: &Bit, material: Material) -> Preset {
 fn inches(v: f64) -> String {
     let s = format!("{v:.5}");
     s.trim_end_matches('0').to_string()
-}
-
-/// `18000` as `18,000`.
-fn thousands(n: u32) -> String {
-    let s = n.to_string();
-    let mut out = String::new();
-    for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
 }
 
 #[cfg(test)]
@@ -522,12 +508,5 @@ mod tests {
     fn chip_loads_read_as_charted() {
         assert_eq!(inches(0.0005 * 1.5), "0.00075");
         assert_eq!(inches(0.002), "0.002");
-    }
-
-    #[test]
-    fn thousands_are_grouped() {
-        assert_eq!(thousands(18000), "18,000");
-        assert_eq!(thousands(900), "900");
-        assert_eq!(thousands(1_234_567), "1,234,567");
     }
 }

@@ -14,16 +14,20 @@
 //! the edges on the screen.
 //!
 //! What the pointer hits is found in [`ray`], what a slot takes and what a click
-//! does to the job in [`slots`], and what a pick is called in [`describe`].
+//! does to the job in [`slots`], what the picks made show in [`shown`], what is
+//! drawn for what is under the pointer in [`highlight`], and what a pick is
+//! called in [`describe`].
 
 pub mod describe;
+pub mod highlight;
 pub mod ray;
+pub mod shown;
 pub mod slots;
 
 use std::borrow::Cow;
 
 use camcraft_core::job::{
-    self, FeatureRef, Heights, MachiningBoundary, Operation, Origin, Outline, StockToLeave,
+    self, Boundary, FeatureRef, MachiningBoundary, Operation, Origin, Outline, StockToLeave,
     StrategySpec, ToolSpec,
 };
 #[cfg(all(test, feature = "ui-snapshots"))]
@@ -34,11 +38,12 @@ use crate::ui::measure::Measure;
 use crate::view::viewport::{Content, Highlight, PointerEvent};
 use crate::worker::DocId;
 use ray::{PickScene, PickStock, Target};
-use slots::{Kind, Shown, Slot};
+use shown::Shown;
+use slots::{Kind, Slot};
 
 /// What the picks shown were worked out from: when any of it changes, they are
-/// worked out again. Each frame's is borrowed from the job, to compare with the
-/// one kept, and copied only when they differ.
+/// worked out again, and nothing else makes them. Each frame's is borrowed from
+/// the job, to compare with the one kept, and copied only when they differ.
 #[derive(Debug, Clone, PartialEq)]
 struct ShownFrom<'a> {
     doc: DocId,
@@ -47,17 +52,97 @@ struct ShownFrom<'a> {
     op: Option<usize>,
     origin: Cow<'a, Origin>,
     selection: Option<Cow<'a, job::Selection>>,
-    boundary: Option<MachiningBoundary>,
-    outline: Option<Outline>,
-    /// A 2D outline is drawn at the heights measured from the picks.
-    heights: Option<Cow<'a, Heights>>,
-    /// A 2D operation's outline is drawn with what its tool cuts, which its
-    /// strategy (a profile's side) and the stock it leaves decide.
-    strategy: Option<Cow<'a, StrategySpec>>,
-    leave: Option<StockToLeave>,
-    tool: Option<Cow<'a, ToolSpec>>,
+    /// What the operation's boundary or outline is drawn with, besides its picks.
+    drawn: Option<Drawn<'a>>,
     tolerance: u64,
     measure: Measure,
+}
+
+/// What an operation's boundary or outline is drawn with besides its picks: only
+/// what its kind of strategy draws it with, so an edit to anything else (its
+/// stepover, a 3D operation's heights) does not work the picks out again.
+#[derive(Debug, Clone, PartialEq)]
+enum Drawn<'a> {
+    /// Facing: the stock's footprint, grown by this offset (its bits).
+    Face(u64),
+    /// A 2D operation's outline, drawn at the heights measured from the picks
+    /// when they are, with what its tool cuts beside it, which its strategy (a
+    /// profile's side) and the stock it leaves decide.
+    Outline {
+        outline: Outline,
+        from_picks: bool,
+        strategy: Cow<'a, StrategySpec>,
+        leave: StockToLeave,
+        tool: Option<Cow<'a, ToolSpec>>,
+    },
+    /// A 3D operation's machining boundary, where its tool's centre may go against
+    /// it, and what the tool cuts outside the part.
+    Boundary {
+        boundary: MachiningBoundary,
+        leave: StockToLeave,
+        tool: Option<Cow<'a, ToolSpec>>,
+    },
+    /// Nothing: a 3D operation kept to the stock.
+    Nothing,
+}
+
+impl<'a> Drawn<'a> {
+    /// What `op`, of `job`, draws its boundary or outline with.
+    fn of(job: &'a job::Job, op: &'a Operation) -> Self {
+        let tool = || job.tool_for(op).map(Cow::Borrowed);
+        if let StrategySpec::Face { stock_offset, .. } = op.strategy {
+            return Drawn::Face(stock_offset.to_bits());
+        }
+        let uses = op.strategy.uses();
+        if uses.outline {
+            Drawn::Outline {
+                outline: op.outline,
+                from_picks: op.heights.measured_from_selection(),
+                strategy: Cow::Borrowed(&op.strategy),
+                leave: op.stock_to_leave(),
+                tool: tool(),
+            }
+        } else if uses.boundary && op.boundary.kind != Boundary::Stock {
+            Drawn::Boundary {
+                boundary: op.boundary,
+                leave: op.stock_to_leave(),
+                tool: tool(),
+            }
+        } else {
+            Drawn::Nothing
+        }
+    }
+
+    /// A copy to keep.
+    fn into_owned(self) -> Drawn<'static> {
+        let owned = |t: Option<Cow<'_, ToolSpec>>| t.map(|t| Cow::Owned(t.into_owned()));
+        match self {
+            Drawn::Face(offset) => Drawn::Face(offset),
+            Drawn::Outline {
+                outline,
+                from_picks,
+                strategy,
+                leave,
+                tool,
+            } => Drawn::Outline {
+                outline,
+                from_picks,
+                strategy: Cow::Owned(strategy.into_owned()),
+                leave,
+                tool: owned(tool),
+            },
+            Drawn::Boundary {
+                boundary,
+                leave,
+                tool,
+            } => Drawn::Boundary {
+                boundary,
+                leave,
+                tool: owned(tool),
+            },
+            Drawn::Nothing => Drawn::Nothing,
+        }
+    }
 }
 
 impl ShownFrom<'_> {
@@ -70,12 +155,7 @@ impl ShownFrom<'_> {
             op: self.op,
             origin: Cow::Owned(self.origin.into_owned()),
             selection: self.selection.map(|s| Cow::Owned(s.into_owned())),
-            boundary: self.boundary,
-            outline: self.outline,
-            heights: self.heights.map(|h| Cow::Owned(h.into_owned())),
-            strategy: self.strategy.map(|s| Cow::Owned(s.into_owned())),
-            leave: self.leave,
-            tool: self.tool.map(|t| Cow::Owned(t.into_owned())),
+            drawn: self.drawn.map(Drawn::into_owned),
             tolerance: self.tolerance,
             measure: self.measure,
         }
@@ -285,7 +365,7 @@ impl Picking {
                     .as_ref()
                     .is_none_or(|(d, k, s, ..)| (*d, *k, s) != (doc.id, layout, slot)) =>
             {
-                let h = slots::ghosts(scene, slot);
+                let h = highlight::ghosts(scene, slot);
                 self.ghost = Some((doc.id, layout, slot.clone(), h, next_key()));
             }
             Some(_) => {}
@@ -308,14 +388,7 @@ impl Picking {
                 op,
                 origin: Cow::Borrowed(&s.origin),
                 selection: operation.map(|o| Cow::Borrowed(&o.selection)),
-                boundary: operation.map(|o| o.boundary),
-                outline: operation.map(|o| o.outline),
-                heights: operation.map(|o| Cow::Borrowed(&o.heights)),
-                strategy: operation.map(|o| Cow::Borrowed(&o.strategy)),
-                leave: operation.map(Operation::stock_to_leave),
-                tool: operation
-                    .and_then(|o| doc.job.tool_for(o))
-                    .map(Cow::Borrowed),
+                drawn: operation.map(|o| Drawn::of(&doc.job, o)),
                 tolerance: doc.job.tolerance.to_bits(),
                 measure: m,
             })
@@ -323,7 +396,7 @@ impl Picking {
         match from {
             None => self.shown = None,
             Some(from) if self.shown.as_ref().is_none_or(|(f, ..)| *f != from) => {
-                let shown = slots::shown(doc, setup, from.op, prepared, scene, m);
+                let shown = shown::shown(doc, setup, from.op, prepared, scene, m);
                 self.shown = Some((from.into_owned(), shown, next_key()));
             }
             Some(_) => {}
@@ -344,7 +417,7 @@ impl Picking {
         match under {
             None => self.hovered = None,
             Some(t) if self.hovered.as_ref().is_none_or(|(h, ..)| *h != t) => {
-                let h = slots::hovered(scene, &t);
+                let h = highlight::hovered(scene, &t);
                 self.hovered = Some((t, h, next_key()));
             }
             Some(_) => {}
@@ -474,4 +547,55 @@ fn row_target(scene: &PickScene, doc: &Document, r: &FeatureRef, kind: Kind) -> 
             at,
         },
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+    use camcraft_core::job::{Height, HeightRef, ProfileSide};
+
+    /// The picks are worked out again only for an edit to what draws them: not a
+    /// 3D operation's angle or heights, but its boundary; and a 2D operation's
+    /// heights once they are measured from its picks.
+    #[test]
+    fn picks_are_worked_out_again_only_for_what_draws_them() {
+        let mut doc = Document::untitled(1);
+        let setup = doc.job.setups[0].name.clone();
+        doc.add_operation(&setup, StrategySpec::Parallel { angle: 0.0 });
+        doc.add_operation(
+            &setup,
+            StrategySpec::Profile {
+                side: ProfileSide::Outside,
+                conventional: false,
+            },
+        );
+        let job = doc.job.clone();
+        let mut parallel = job.setups[0].operations[0].clone();
+        parallel.boundary.kind = Boundary::Silhouette;
+        let profile = job.setups[0].operations[1].clone();
+        let drawn = |op: &Operation| Drawn::of(&job, op).into_owned();
+        let from_picks = Some(Height {
+            reference: HeightRef::Selection,
+            offset: 0.0,
+        });
+
+        let mut turned = parallel.clone();
+        turned.strategy = StrategySpec::Parallel { angle: 45.0 };
+        turned.heights.top = from_picks;
+        assert_eq!(drawn(&parallel), drawn(&turned));
+        let mut kept_in = parallel.clone();
+        kept_in.boundary.margin = 2.0;
+        assert_ne!(drawn(&parallel), drawn(&kept_in));
+
+        let mut measured = profile.clone();
+        measured.heights.top = from_picks;
+        assert_ne!(drawn(&profile), drawn(&measured));
+        let mut inside = profile.clone();
+        inside.strategy = StrategySpec::Profile {
+            side: ProfileSide::Inside,
+            conventional: false,
+        };
+        assert_ne!(drawn(&profile), drawn(&inside));
+    }
 }

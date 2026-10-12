@@ -7,10 +7,7 @@
 
 use std::cell::RefCell;
 
-use camcraft_core::job::{
-    ContourOrder, CutDirection, FaceDirection, Operation, PassOrder, ProfileSide, RadialDirection,
-    Setup, StrategySpec,
-};
+use camcraft_core::job::{Operation, Setup, StrategySpec};
 use camcraft_core::run::Stage;
 use eframe::egui;
 
@@ -139,7 +136,7 @@ fn beside(ui: &mut egui::Ui, text: impl Into<String>) {
     ui.label(hint_text(text).size(theme::TEXT_SM));
 }
 
-/// A row that selects `selection`, with `extra` beside it.
+/// A row reading `text` that selects `selection`.
 fn row(
     ui: &mut egui::Ui,
     doc: &Document,
@@ -446,8 +443,10 @@ fn setup(
             }
         },
         |ui| {
+            let statuses = d.op_statuses(&name);
             for (i, op) in s.operations.iter().enumerate() {
-                let line = operation_row(ui, d, &name, i, op, edits, actions);
+                let status = statuses.get(i).copied().unwrap_or(OpStatus::NotRun);
+                let line = operation_row(ui, d, (&name, i, status), op, edits, actions);
                 if let Some(edit) = drop_target(ui, &name, i, line) {
                     edits.borrow_mut().push(edit);
                 }
@@ -461,19 +460,18 @@ fn setup(
     );
 }
 
-/// Operation `i` of setup `name`: where it stands, its name, a warning when it has
-/// no tool, and its menu. It drags to a new place. Returns where its row is.
+/// Operation `i` of setup `name`, `op`: where it stands, `status`, its name, a
+/// warning when it has no tool, and its menu. It drags to a new place. Returns
+/// where its row is.
 fn operation_row(
     ui: &mut egui::Ui,
     d: &Document,
-    name: &str,
-    i: usize,
+    (name, i, status): (&str, usize, OpStatus),
     op: &Operation,
     edits: &RefCell<Vec<Edit>>,
     actions: &RefCell<Vec<BrowserAction>>,
 ) -> egui::Rect {
     leaf(ui, |ui| {
-        let status = d.op_status(name, i);
         op_marker(ui, status);
         let tool = op.tool.as_deref().unwrap_or("no tool");
         let text = format!("{}. {}", i + 1, op.name);
@@ -498,7 +496,7 @@ fn operation_row(
             label: text,
         });
         if op.tool.is_none() {
-            ui.colored_label(widgets::Level::Warn.color(), "no tool");
+            widgets::badge(ui, widgets::Level::Warn, "no tool");
         }
         if let OpStatus::Running(since) = status {
             beside(ui, format!("{} s", since.elapsed().as_secs()));
@@ -604,137 +602,60 @@ fn generate_item(
     }
 }
 
+/// A strategy's name, as the menu that adds an operation of it and the panel of
+/// one read it. A job file names it [`StrategySpec::name`]'s way.
+pub fn strategy_label(s: &StrategySpec) -> &'static str {
+    match s {
+        StrategySpec::Parallel { .. } => "Parallel",
+        StrategySpec::Scallop { .. } => "Scallop",
+        StrategySpec::Contour { .. } => "Contour",
+        StrategySpec::Flat { .. } => "Flat",
+        StrategySpec::Spiral { .. } => "Spiral",
+        StrategySpec::Radial { .. } => "Radial",
+        StrategySpec::MorphedSpiral { .. } => "Morphed spiral",
+        StrategySpec::PocketClearing { .. } => "Pocket clearing",
+        StrategySpec::Adaptive { .. } => "Adaptive clearing",
+        StrategySpec::Profile { .. } => "2D profile",
+        StrategySpec::Pocket { .. } => "2D pocket",
+        StrategySpec::Face { .. } => "Face",
+        StrategySpec::Drill { .. } => "Drill",
+    }
+}
+
 /// A kind of operation to add: its name in the menu and what a new one starts
 /// from.
 pub type NewOperation = (&'static str, StrategySpec);
 
 /// The kinds of operation there are to add, grouped as Fusion's toolbar groups
 /// them: 2D, 3D and drilling. Each group is sections with a line between, 3D's
-/// roughing above its finishing.
+/// roughing above its finishing. Each starts as a job file that gives none of
+/// its strategy's parameters has it, found by the name the file gives it.
 pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
+    let section = |names: &[&str]| -> Vec<NewOperation> {
+        names
+            .iter()
+            .filter_map(|name| StrategySpec::named(name))
+            .map(|s| (strategy_label(&s), s))
+            .collect()
+    };
     [
-        (
-            "2D",
-            vec![vec![
-                (
-                    "Face",
-                    StrategySpec::Face {
-                        angle: 0.0,
-                        direction: FaceDirection::BothWays,
-                        pass_extension: 0.0,
-                        stock_offset: 0.0,
-                    },
-                ),
-                (
-                    "Pocket",
-                    StrategySpec::Pocket {
-                        conventional: false,
-                    },
-                ),
-                (
-                    "Profile",
-                    StrategySpec::Profile {
-                        side: ProfileSide::Outside,
-                        conventional: false,
-                    },
-                ),
-            ]],
-        ),
+        ("2D", vec![section(&["face", "pocket", "profile"])]),
         (
             "3D",
             vec![
-                vec![
-                    (
-                        "Adaptive clearing",
-                        StrategySpec::Adaptive {
-                            direction: CutDirection::Climb,
-                            flat_areas: true,
-                        },
-                    ),
-                    (
-                        "Pocket clearing",
-                        StrategySpec::PocketClearing {
-                            min_ring_length: 3.0,
-                            conventional: false,
-                            flat_areas: true,
-                        },
-                    ),
-                ],
-                vec![
-                    ("Parallel", StrategySpec::Parallel { angle: 0.0 }),
-                    (
-                        "Scallop",
-                        StrategySpec::Scallop {
-                            direction: CutDirection::BothWays,
-                            order: PassOrder::OutsideIn,
-                            slope_from: 0.0,
-                            slope_to: 90.0,
-                        },
-                    ),
-                    (
-                        "Contour",
-                        StrategySpec::Contour {
-                            direction: CutDirection::Climb,
-                            order: ContourOrder::ByDepth,
-                            slope_from: 0.0,
-                            slope_to: 90.0,
-                        },
-                    ),
-                    (
-                        "Flat",
-                        StrategySpec::Flat {
-                            direction: CutDirection::Climb,
-                            order: PassOrder::OutsideIn,
-                        },
-                    ),
-                    (
-                        "Spiral",
-                        StrategySpec::Spiral {
-                            centre: None,
-                            inner_radius: 0.0,
-                            outer_radius: 0.0,
-                            direction: CutDirection::Climb,
-                            order: PassOrder::OutsideIn,
-                            slope_from: 0.0,
-                            slope_to: 90.0,
-                        },
-                    ),
-                    (
-                        "Radial",
-                        StrategySpec::Radial {
-                            centre: None,
-                            inner_radius: 0.0,
-                            outer_radius: 0.0,
-                            angle_from: 0.0,
-                            angle_to: 360.0,
-                            direction: RadialDirection::BothWays,
-                            slope_from: 0.0,
-                            slope_to: 90.0,
-                        },
-                    ),
-                    (
-                        "Morphed spiral",
-                        StrategySpec::MorphedSpiral {
-                            centre: None,
-                            direction: CutDirection::Climb,
-                            order: PassOrder::OutsideIn,
-                            slope_from: 0.0,
-                            slope_to: 90.0,
-                        },
-                    ),
-                ],
+                section(&["adaptive", "pocket-clearing"]),
+                section(&[
+                    "parallel",
+                    "scallop",
+                    "contour",
+                    "flat",
+                    "spiral",
+                    "radial",
+                    "morphed-spiral",
+                ]),
             ],
         ),
-        (
-            "Drilling",
-            vec![vec![(
-                "Drill",
-                StrategySpec::Drill {
-                    peck: None,
-                    dwell: None,
-                },
-            )]],
-        ),
+        ("Drilling", vec![section(&["drill"])]),
     ]
 }
 
@@ -951,5 +872,29 @@ mod tests {
             .collect();
         assert_eq!(names(h.state()), ["finish copy", "finish"]);
         assert_eq!(other, ["finish copy", "rough", "finish", "rough 2"]);
+    }
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    /// The menu offers every strategy there is, each once: one misnamed in
+    /// [`operation_groups`] would drop out of it without a word.
+    #[test]
+    fn every_strategy_is_offered_once() {
+        let mut names: Vec<&str> = operation_groups()
+            .into_iter()
+            .flat_map(|(_, sections)| sections.into_iter().flatten())
+            .map(|(label, s)| {
+                assert_eq!(label, strategy_label(&s));
+                s.name()
+            })
+            .collect();
+        let offered = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), offered, "one is offered twice: {names:?}");
+        assert_eq!(offered, 13, "{names:?}");
     }
 }

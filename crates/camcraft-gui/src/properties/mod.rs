@@ -1,14 +1,15 @@
 //! The properties of whatever is selected in the job's tree, edited in place.
 //!
 //! Every field writes straight into the job. Nothing here runs anything: a change
-//! only marks a setup's result out of date, and Generate, on the setup's
-//! right-click menu or the toolbar, runs it again. Lengths and feeds are shown in
-//! the chosen units and kept in millimetres.
+//! takes out of the setup's last run the operation it changes and every one after
+//! it, and Generate runs them again, from the setup's right-click menu or, for an
+//! operation alone, from the button the app keeps under its panel. Lengths and
+//! feeds are shown in the chosen units and kept in millimetres.
 //!
-//! The panel only edits. What the tree already shows (the setups' operations, where
-//! each stands) and what its right-click menus already do (add, generate, remove)
-//! is not repeated here. A setup and an operation put their fields on tabs, as the
-//! tool library does, so each shows a short form rather than one long scroll.
+//! The panel edits. What the tree already shows (the setups' operations, where
+//! each stands) and what its right-click menus already do (add, remove) is not
+//! repeated here. A setup and an operation put their fields on tabs, as the tool
+//! library does, so each shows a short form rather than one long scroll.
 //!
 //! A property filled by picking in the view (a setup's models, stocks and work
 //! zero, an operation's faces or edges) has a button that asks the app to arm the
@@ -21,7 +22,7 @@ mod setup;
 mod stock;
 mod work_zero;
 
-pub use operation::{OperationTab, height_planes};
+pub use operation::{HeightPlanes, OperationTab};
 
 use eframe::egui;
 
@@ -55,7 +56,7 @@ pub enum PropAction {
 
 /// What the panel needs to know of picking in the view.
 #[derive(Clone, Copy, Default)]
-pub struct Picks<'a> {
+pub struct ViewPicks<'a> {
     /// The slot being filled, if any.
     pub armed: Option<&'a Slot>,
     /// What the selection's picks are, as the engine finds them.
@@ -72,7 +73,7 @@ pub struct Panel {
 }
 
 /// The panel for `doc`'s selection.
-pub fn show(ui: &mut egui::Ui, doc: &mut Document, m: Measure, picks: Picks<'_>) -> Panel {
+pub fn show(ui: &mut egui::Ui, doc: &mut Document, m: Measure, picks: ViewPicks<'_>) -> Panel {
     let mut actions = Vec::new();
     let mut operation_tab = None;
     // A name being typed when something else was chosen: its field will not be
@@ -188,10 +189,7 @@ fn apply_name(doc: &mut Document, what: &Selection, to: &str) {
         Selection::Model(name) => doc.rename_model(name, to),
         Selection::Stock(name) => doc.rename_stock(name, to),
         Selection::Setup(name) => doc.rename_setup(name, to),
-        Selection::Operation(setup, index) => {
-            operation::rename_to(doc, setup, *index, to);
-            return;
-        }
+        Selection::Operation(setup, index) => doc.rename_operation(setup, *index, to),
         _ => return,
     };
     renamed(doc, r);
@@ -340,7 +338,7 @@ fn renamed(doc: &mut Document, result: Result<(), String>) -> bool {
 }
 
 #[cfg(all(test, feature = "ui-snapshots"))]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use egui_kittest::Harness;
@@ -365,7 +363,7 @@ mod tests {
                     fonts = true;
                     return;
                 }
-                show(ui, doc, Measure::Metric, Picks::default());
+                show(ui, doc, Measure::Metric, ViewPicks::default());
             },
             doc,
         );

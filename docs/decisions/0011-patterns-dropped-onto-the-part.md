@@ -28,6 +28,13 @@ how is a spiral that follows any boundary laid out?
   A pattern's slope is the cutter location's, as scallop's grid measures it.
   It is measured by central differences of the drop-cutter at each segment's
   middle, a third of a stepover apart, and only when a range is asked for.
+  A pattern keeps to the range and nothing else, both ends included, as
+  Fusion's From and To slope angles ("only areas equal to or greater than ...
+  equal to or less than this value are machined"): steep stretches are cut down
+  the part and broken where one falls further than a cut step, as a parallel
+  pass is. (They were once also left wherever steeper than a plunge, but only
+  when a range was asked for, so 0 to 89.9° cut far less than 0 to 90°.)
+  Scallop still leaves them, for a contour pass (decision 0009).
 - **Spiral.** Archimedean, a stepover further out each lap, from the inner
   radius to the outer (by default out to the area's furthest corner). Each step
   is sized from the spiral's own radius of curvature, which near the centre is

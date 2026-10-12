@@ -7,14 +7,14 @@
 
 #![allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
 
-use camcraft_core::allowance::{Allowance, EffectiveTool};
-use camcraft_core::dropcutter::DropCutter;
-use camcraft_core::linker::{ClearancePlane, LinkParams, NoPart, Unchanging, link};
-use camcraft_core::parallel::{ParallelParams, parallel_finish};
-use camcraft_core::scallop::{ScallopParams, scallop_finish};
-use camcraft_core::simadapt::sim_moves;
-use camcraft_core::tool::{Ball, Flat, ToolProfile};
-use camcraft_core::toolpath::{MoveRole, Toolpath};
+use camcraft_core::cutter::allowance::{Allowance, EffectiveTool};
+use camcraft_core::cutter::dropcutter::DropCutter;
+use camcraft_core::cutter::tool::{Ball, Flat, ToolProfile};
+use camcraft_core::path::linker::{ClearancePlane, LinkParams, NoPart, Unchanging, link};
+use camcraft_core::path::simadapt::sim_moves;
+use camcraft_core::path::toolpath::{MoveRole, Toolpath};
+use camcraft_core::strategy::parallel::{ParallelParams, parallel_finish};
+use camcraft_core::strategy::scallop::{ScallopParams, scallop_finish};
 use camcraft_geom::synthetic;
 use camcraft_sim::stock::{MoveClass, PartSurface, SimMove, Stock};
 use glam::{dvec2, dvec3};
@@ -374,9 +374,9 @@ fn machines_clean(
 /// dome: a pattern dropped onto the part never cuts into it.
 #[test]
 fn patterns_on_a_dome_match_the_part() {
-    use camcraft_core::morph::{MorphParams, morphed_spiral};
-    use camcraft_core::patterns::{Centred, Spokes, radial, spiral};
-    use camcraft_core::projected::{ProjectParams, project};
+    use camcraft_core::strategy::morph::{MorphParams, morphed_spiral};
+    use camcraft_core::strategy::patterns::{Centred, Spokes, radial, spiral};
+    use camcraft_core::strategy::projected::{ProjectParams, project};
 
     let sphere_r = 12.0;
     let mesh = synthetic::uv_sphere(sphere_r, 160, 220);
@@ -427,8 +427,8 @@ fn patterns_on_a_dome_match_the_part() {
 /// dome: every point is where the tool first touches it, never into it.
 #[test]
 fn a_contoured_dome_matches_the_part() {
-    use camcraft_core::reach::LevelReach;
-    use camcraft_core::waterline::{WaterlineParams, waterline};
+    use camcraft_core::strategy::reach::LevelReach;
+    use camcraft_core::strategy::waterline::{WaterlineParams, waterline};
 
     let sphere_r = 12.0;
     let mesh = synthetic::uv_sphere(sphere_r, 160, 220);
@@ -460,9 +460,9 @@ fn a_contoured_dome_matches_the_part() {
 /// nothing else.
 #[test]
 fn flats_are_cut_to_the_part() {
-    use camcraft_core::adaptive::flat_heights;
-    use camcraft_core::flat::{FlatParams, flat_finish};
-    use camcraft_core::reach::LevelReach;
+    use camcraft_core::strategy::adaptive::flat_heights;
+    use camcraft_core::strategy::flat::{FlatParams, flat_finish};
+    use camcraft_core::strategy::reach::LevelReach;
     use camcraft_geom::mesh::TriMesh;
 
     let plate = synthetic::cuboid(dvec3(-12.0, -12.0, 0.0), dvec3(12.0, 12.0, 2.0));

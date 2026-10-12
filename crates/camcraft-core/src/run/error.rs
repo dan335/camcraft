@@ -1,17 +1,18 @@
 //! Why a setup could not be run.
 
+use camcraft_geom::contour::RegionError;
 use camcraft_sim::stock::StockError;
 
-use crate::allowance::AllowanceError;
-use crate::drilling::HoleError;
-use crate::features::FeatureError;
+use crate::cutter::allowance::AllowanceError;
+use crate::cutter::tool::ToolError;
 use crate::job::{JobError, Operation};
-use crate::linker::LinkError;
-use crate::reach::ReachError;
+use crate::path::linker::LinkError;
+use crate::path::toolpath::ToolpathError;
 use crate::setup::PrepareError;
+use crate::setup::features::FeatureError;
 use crate::strategy::StrategyError;
-use crate::tool::ToolError;
-use crate::toolpath::ToolpathError;
+use crate::strategy::drilling::HoleError;
+use crate::strategy::reach::ReachError;
 
 /// A setup that could not be run.
 #[derive(Debug, thiserror::Error)]
@@ -110,6 +111,12 @@ impl OperationError for FeatureError {
 impl OperationError for HoleError {
     fn named(self, op: String) -> RunError {
         RunError::Holes { op, source: self }
+    }
+}
+
+impl OperationError for RegionError {
+    fn named(self, op: String) -> RunError {
+        StrategyError::from(self).named(op)
     }
 }
 

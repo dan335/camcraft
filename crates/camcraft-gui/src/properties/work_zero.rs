@@ -5,7 +5,7 @@
 use camcraft_core::job::{Along, BoxOf, Origin};
 use eframe::egui;
 
-use super::{Picks, PropAction};
+use super::{PropAction, ViewPicks};
 use crate::help::Help;
 use crate::help::topics::setup as topics;
 use crate::picking::describe::describe_box_point;
@@ -53,7 +53,7 @@ pub(super) fn show(
     m: Measure,
     setup: &str,
     origin: &mut Origin,
-    picks: Picks<'_>,
+    picks: ViewPicks<'_>,
     actions: &mut Vec<PropAction>,
 ) {
     let slot = Slot::WorkZero {
@@ -240,7 +240,7 @@ fn box_grid(ui: &mut egui::Ui, x: &mut Along, y: &mut Along) {
 
 /// A point picked on the part: what it is, or why it cannot be found, and a way
 /// back to the stock's corner.
-fn picked_row(ui: &mut egui::Ui, origin: &mut Origin, picks: Picks<'_>) {
+fn picked_row(ui: &mut egui::Ui, origin: &mut Origin, picks: ViewPicks<'_>) {
     let mut back = false;
     ui.horizontal(|ui| {
         match picks.shown.and_then(|s| s.origin.as_ref()) {
@@ -259,13 +259,7 @@ fn picked_row(ui: &mut egui::Ui, origin: &mut Origin, picks: Picks<'_>) {
         });
     });
     if back {
-        *origin = Origin::BoxPoint {
-            of: BoxOf::Stock,
-            x: Along::Min,
-            y: Along::Min,
-            z: Along::Max,
-            offset: origin.offset(),
-        };
+        *origin = Origin::stock_corner().with_offset(origin.offset());
     }
 }
 

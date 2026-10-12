@@ -84,16 +84,7 @@ impl PartSurface {
         } else {
             0.0
         };
-        #[allow(clippy::cast_possible_truncation)]
-        let k = cells.floor().min(64.0) as i64;
-        self.disc = (-k..=k)
-            .flat_map(|dy| (-k..=k).map(move |dx| (dx, dy)))
-            .filter(|&(dx, dy)| {
-                #[allow(clippy::cast_precision_loss)]
-                let d2 = (dx * dx + dy * dy) as f64;
-                d2 <= cells * cells + 1.0e-9
-            })
-            .collect();
+        self.disc = disc(cells);
         self
     }
 
@@ -103,36 +94,34 @@ impl PartSurface {
     /// of it, less `axial`, and no part at all where that reaches past the
     /// part's edge. Negative stock to leave, as asked, is then no gouge, and
     /// only where the operation that asked for it cut.
+    ///
+    /// Parallel over rows, each reading only the part as it was and writing only
+    /// its own cells, so the result does not depend on thread count.
     #[must_use]
-    pub fn cut_past(mut self, radial: f64, axial: f64, cut: impl Fn(u32, u32) -> bool) -> Self {
-        let cells = radial.max(0.0) / self.field.pitch();
-        #[allow(clippy::cast_possible_truncation)]
-        let k = cells.ceil().min(64.0) as i64;
-        let disc: Vec<(i64, i64)> = (-k..=k)
-            .flat_map(|dy| (-k..=k).map(move |dx| (dx, dy)))
-            .filter(|&(dx, dy)| {
-                #[allow(clippy::cast_precision_loss)]
-                let d2 = (dx * dx + dy * dy) as f64;
-                d2 <= cells * cells + 1.0e-9
-            })
-            .collect();
+    pub fn cut_past(
+        mut self,
+        radial: f64,
+        axial: f64,
+        cut: impl Fn(u32, u32) -> bool + Sync,
+    ) -> Self {
+        let disc = disc(radial.max(0.0) / self.field.pitch());
         let (nx, ny) = (self.field.nx(), self.field.ny());
         let mut out = self.field.data().to_vec();
-        for wy in 0..ny {
-            for wx in 0..nx {
-                let (gx, gy) = (wx + self.at.0, wy + self.at.1);
-                if self.field.get(wx, wy).is_none() || !cut(gx, gy) {
-                    continue;
-                }
-                let low = disc.iter().try_fold(f64::INFINITY, |low, &(dx, dy)| {
-                    self.at_cell(i64::from(gx) + dx, i64::from(gy) + dy)
-                        .map(|v| low.min(v))
-                });
-                if let Some(slot) = out.get_mut(wy as usize * nx as usize + wx as usize) {
+        out.par_chunks_mut(nx as usize)
+            .zip(0..ny)
+            .for_each(|(row, wy)| {
+                for (wx, slot) in (0..nx).zip(row) {
+                    let (gx, gy) = (wx + self.at.0, wy + self.at.1);
+                    if self.field.get(wx, wy).is_none() || !cut(gx, gy) {
+                        continue;
+                    }
+                    let low = disc.iter().try_fold(f64::INFINITY, |low, &(dx, dy)| {
+                        self.at_cell(i64::from(gx) + dx, i64::from(gy) + dy)
+                            .map(|v| low.min(v))
+                    });
                     *slot = low.map_or(f32::NAN, |l| narrow(l - axial.max(0.0)));
                 }
-            }
-        }
+            });
         self.field.data_mut().copy_from_slice(&out);
         self
     }
@@ -183,21 +172,17 @@ impl PartSurface {
         })
     }
 
-    /// The part's window of the grid, and where its first cell is in the grid.
-    pub fn window(&self) -> (&HeightMap, (u32, u32)) {
-        (&self.field, self.at)
-    }
-
     /// The position of cell `(ix, iy)` of the grid the part is judged on, worked
     /// out as the grid works it out.
-    pub fn position(&self, ix: u32, iy: u32) -> DVec2 {
+    #[cfg(test)]
+    pub(crate) fn position(&self, ix: u32, iy: u32) -> DVec2 {
         let (o, pitch, _, _) = self.grid;
         o + dvec2(f64::from(ix) * pitch, f64::from(iy) * pitch)
     }
 
     /// Whether this surface is judged on exactly the cells of `field`, so a
     /// column can be read by its index rather than by position.
-    pub fn on_grid_of(&self, field: &HeightMap) -> bool {
+    fn on_grid_of(&self, field: &HeightMap) -> bool {
         let (o, pitch, nx, ny) = self.grid;
         nx == field.nx()
             && ny == field.ny()
@@ -233,6 +218,24 @@ impl PartSurface {
             Some((own, floor - stock))
         }
     }
+}
+
+/// Offsets, in cells, to every cell within `cells` across, out to 64 at most.
+///
+/// Rounded up, so a cell whose distance is within the test's hair of `cells` is
+/// in, even where `cells` falls a rounding error short of a whole number (a
+/// reach of 0.3 at a pitch of 0.05 is 5.999999999999999 cells).
+fn disc(cells: f64) -> Vec<(i64, i64)> {
+    #[allow(clippy::cast_possible_truncation)]
+    let k = cells.ceil().min(64.0) as i64;
+    (-k..=k)
+        .flat_map(|dy| (-k..=k).map(move |dx| (dx, dy)))
+        .filter(|&(dx, dy)| {
+            #[allow(clippy::cast_precision_loss)]
+            let d2 = (dx * dx + dy * dy) as f64;
+            d2 <= cells * cells + 1.0e-9
+        })
+        .collect()
 }
 
 /// How much wider than a triangle the part is looked for: a hair, so a column

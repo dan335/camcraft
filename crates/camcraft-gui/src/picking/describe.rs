@@ -32,11 +32,12 @@ pub fn describe_box_point(x: Along, y: Along, z: Along) -> String {
     }
 }
 
-/// How a round edge is described: "Ø6.35 circle" or "R3.00 arc".
-pub fn describe_circle(body: &Body, edge: u32) -> Option<String> {
+/// How a round edge is described, in the unit shown: "Ø6.35 circle" or "R3.00
+/// arc".
+pub fn describe_circle(body: &Body, edge: u32, m: Measure) -> Option<String> {
     match body.topology().edge(edge)?.kind {
-        EdgeKind::Circle(c) if c.full => Some(format!("Ø{:.2} circle", c.radius * 2.0)),
-        EdgeKind::Circle(c) => Some(format!("R{:.2} arc", c.radius)),
+        EdgeKind::Circle(c) if c.full => Some(format!("Ø{} circle", m.number(c.radius * 2.0, 2))),
+        EdgeKind::Circle(c) => Some(format!("R{} arc", m.number(c.radius, 2))),
         EdgeKind::Line | EdgeKind::Curve => None,
     }
 }
@@ -61,10 +62,9 @@ pub fn describe_edge(body: &Body, model: &str, edge: u32, m: Measure) -> String 
         return format!("Edge {edge} on '{model}'");
     };
     let what = match e.kind {
-        EdgeKind::Circle(c) if c.full => format!("Ø{} circle", m.number(c.radius * 2.0, 2)),
-        EdgeKind::Circle(c) => format!("R{} arc", m.number(c.radius, 2)),
         EdgeKind::Line => format!("line {} long", m.length(e.length, 2)),
         EdgeKind::Curve => format!("curve {} long", m.length(e.length, 2)),
+        EdgeKind::Circle(_) => describe_circle(body, edge, m).unwrap_or_default(),
     };
     let closed = if e.closed { ", closed" } else { "" };
     format!("Edge {edge} · {what}{closed} · on '{model}'")
@@ -75,7 +75,7 @@ pub fn describe_edge(body: &Body, model: &str, edge: u32, m: Measure) -> String 
 pub fn describe_point(body: &Body, model: &str, snap: Snap, index: u32, m: Measure) -> String {
     match snap {
         Snap::Vertex => format!("Corner {index} on '{model}'"),
-        Snap::CircleCenter => match describe_circle(body, index) {
+        Snap::CircleCenter => match describe_circle(body, index, m) {
             Some(c) => format!("Centre of the {c} on '{model}'"),
             None => format!("Centre of edge {index} on '{model}'"),
         },
@@ -87,5 +87,34 @@ pub fn describe_point(body: &Body, model: &str, snap: Snap, index: u32, m: Measu
                 .unwrap_or_default();
             format!("Middle of edge {index}{long} on '{model}'")
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use camcraft_geom::synthetic;
+
+    /// A hole's rim, and the point at its centre, are sized in the unit shown,
+    /// as its edge is.
+    #[test]
+    fn a_circle_is_sized_in_the_unit_shown() {
+        let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 32));
+        let t = body.topology();
+        let rim = (0..u32::try_from(t.edges().len()).unwrap())
+            .find(|&e| matches!(t.edge(e).unwrap().kind, EdgeKind::Circle(c) if c.full))
+            .unwrap();
+        assert_eq!(
+            describe_circle(&body, rim, Measure::Metric).unwrap(),
+            "Ø8.00 circle"
+        );
+        assert_eq!(
+            describe_circle(&body, rim, Measure::Imperial).unwrap(),
+            "Ø0.3150 circle"
+        );
+        let centre = describe_point(&body, "p", Snap::CircleCenter, rim, Measure::Imperial);
+        assert_eq!(centre, "Centre of the Ø0.3150 circle on 'p'");
+        assert!(describe_edge(&body, "p", rim, Measure::Imperial).contains("Ø0.3150 circle"));
     }
 }

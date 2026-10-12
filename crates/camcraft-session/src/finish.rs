@@ -1,4 +1,5 @@
-//! A single finishing pass described by its numbers: the command line's `post`.
+//! A single finishing operation described by its numbers: the command line's
+//! `post`.
 
 use std::collections::BTreeMap;
 
@@ -7,24 +8,22 @@ use camcraft_core::job::{
     StockSpec, StockToLeave, StrategySpec, ToolKind, ToolSpec,
 };
 
-/// Cutter shape for a single finishing pass.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FinishTool {
-    /// Ball nose.
-    Ball,
-    /// Square end.
-    Flat,
-}
-
-/// A single parallel finishing pass, described by its numbers rather than a file.
+/// A single finishing operation, described by its numbers rather than a file.
 #[derive(Debug, Clone, Copy)]
 pub struct FinishSpec {
+    /// The strategy, with its own parameters.
+    pub strategy: StrategySpec,
     /// Cutter shape.
-    pub tool: FinishTool,
+    pub tool: ToolKind,
+    /// A bullnose cutter's corner radius, in millimetres.
+    pub corner: f64,
     /// Cutter diameter, in millimetres.
     pub diameter: f64,
     /// Distance between passes, in millimetres.
     pub stepover: f64,
+    /// Distance between levels, in millimetres, for a strategy that cuts in
+    /// levels; its own default unless given.
+    pub stepdown: Option<f64>,
     /// Chordal tolerance, in millimetres.
     pub tolerance: f64,
     /// Stock to leave perpendicular to the tool axis, in millimetres.
@@ -33,7 +32,8 @@ pub struct FinishSpec {
     pub stock_axial: f64,
     /// Largest Z drop that may be cut, in millimetres.
     pub max_cut_step: f64,
-    /// Traverse height above the material, in millimetres.
+    /// How far above the model's top the tool arrives and leaves, in
+    /// millimetres.
     pub clearance: f64,
     /// Cutting feed, in mm/min.
     pub feed: f64,
@@ -47,19 +47,27 @@ pub struct FinishSpec {
 
 /// The one-operation job a [`FinishSpec`] describes, for `model`.
 ///
-/// The block is the model's own bounding box, and traverses clear the material by
-/// `clearance`. Retracts run at the cutting feed and plunges at a quarter of it.
+/// The block is the model's own bounding box. The tool arrives and leaves
+/// `clearance` above the model's top, and between cuts lifts only clear of the
+/// material. Retracts run at the cutting feed and plunges at a quarter of it.
 /// Its one setup is called `finish`.
 pub fn single_operation(spec: &FinishSpec, model: ModelDef) -> Job {
     const TOOL: &str = "cutter";
-    let (kind, shape) = match spec.tool {
-        FinishTool::Ball => (ToolKind::Ball, "ball"),
-        FinishTool::Flat => (ToolKind::Flat, "flat"),
+    let shape = match spec.tool {
+        ToolKind::Ball => "ball",
+        ToolKind::Flat => "flat",
+        ToolKind::Bullnose => "bullnose",
+        ToolKind::Cone => "cone",
+        ToolKind::Drill => "drill",
     };
     let tool = ToolSpec {
-        kind,
+        kind: spec.tool,
         diameter: spec.diameter,
-        corner: 0.0,
+        corner: if spec.tool == ToolKind::Bullnose {
+            spec.corner
+        } else {
+            0.0
+        },
         number: spec.number,
         rpm: spec.rpm,
         comment: format!("{}mm {shape}", spec.diameter),
@@ -71,7 +79,7 @@ pub fn single_operation(spec: &FinishSpec, model: ModelDef) -> Job {
     setup.wcs = spec.wcs;
     setup.operations = vec![Operation {
         name: "finish".into(),
-        strategy: StrategySpec::Parallel { angle: 0.0 },
+        strategy: spec.strategy,
         tool: Some(TOOL.into()),
         preset: None,
         selection: Default::default(),
@@ -86,7 +94,7 @@ pub fn single_operation(spec: &FinishSpec, model: ModelDef) -> Job {
         },
         passes: Passes {
             stepover: spec.stepover,
-            stepdown: None,
+            stepdown: spec.stepdown.or(spec.strategy.default_stepdown()),
             feed: spec.feed,
             stock_to_leave: StockToLeave {
                 radial: spec.stock_radial,

@@ -35,27 +35,16 @@ impl DirtyTiles {
 
     /// Mark every tile `rect` reaches.
     pub fn mark(&mut self, rect: CellRect) {
-        if self.cols == 0 || self.rows == 0 {
-            return;
-        }
-        let (c0, c1) = (
-            (rect.x0 / TILE).min(self.cols - 1),
-            (rect.x1 / TILE).min(self.cols - 1),
-        );
-        let (r0, r1) = (
-            (rect.y0 / TILE).min(self.rows - 1),
-            (rect.y1 / TILE).min(self.rows - 1),
-        );
-        for r in r0..=r1 {
-            let row = r as usize * self.cols as usize;
-            if let Some(span) = self.marked.get_mut(row + c0 as usize..=row + c1 as usize) {
-                span.fill(true);
-            }
-        }
+        self.set(rect, true);
     }
 
     /// Unmark every tile `rect` reaches.
     pub fn unmark(&mut self, rect: CellRect) {
+        self.set(rect, false);
+    }
+
+    /// Mark or unmark every tile `rect` reaches.
+    fn set(&mut self, rect: CellRect, marked: bool) {
         if self.cols == 0 || self.rows == 0 {
             return;
         }
@@ -70,9 +59,14 @@ impl DirtyTiles {
         for r in r0..=r1 {
             let row = r as usize * self.cols as usize;
             if let Some(span) = self.marked.get_mut(row + c0 as usize..=row + c1 as usize) {
-                span.fill(false);
+                span.fill(marked);
             }
         }
+    }
+
+    /// Whether it covers no cells: those of a stock that has none.
+    pub fn is_blank(&self) -> bool {
+        self.marked.is_empty()
     }
 
     /// The first of the marked rectangles ([`DirtyTiles::rects`]) that together hold
@@ -194,5 +188,6 @@ mod tests {
         assert_eq!(t.rects(), rects[1..].to_vec());
         t.clear();
         assert!(t.is_empty());
+        assert!(!t.is_blank() && DirtyTiles::new(0, 5).is_blank());
     }
 }

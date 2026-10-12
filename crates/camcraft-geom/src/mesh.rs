@@ -153,6 +153,15 @@ impl TriMesh {
         ])
     }
 
+    /// The smallest box holding triangle `i`, or `None` if `i` is out of range.
+    pub fn triangle_bounds(&self, i: usize) -> Option<Aabb> {
+        let [a, b, c] = self.triangle(i)?;
+        Some(Aabb {
+            min: a.min(b).min(c),
+            max: a.max(b).max(c),
+        })
+    }
+
     /// Bounding box of the mesh, or `None` when it has no vertices.
     pub fn bounds(&self) -> Option<Aabb> {
         let mut iter = self.vertices.iter();
@@ -200,7 +209,7 @@ impl TriMesh {
 /// Möller-Trumbore. Two-sided because a picked face is picked whichever way its
 /// triangles happen to be wound, and STL files get that wrong often enough. A ray
 /// in the triangle's plane, or a triangle with no area, misses.
-pub fn ray_triangle(origin: DVec3, dir: DVec3, [a, b, c]: [DVec3; 3]) -> Option<f64> {
+pub(crate) fn ray_triangle(origin: DVec3, dir: DVec3, [a, b, c]: [DVec3; 3]) -> Option<f64> {
     let (e1, e2) = (b - a, c - a);
     let p = dir.cross(e2);
     let det = e1.dot(p);
@@ -274,6 +283,11 @@ pub fn closest_point_on_triangle(p: DVec3, [a, b, c]: [DVec3; 3]) -> DVec3 {
 
 /// Distance in the plane from `p` to the segment `a`-`b`.
 pub fn distance_to_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
+    segment_distance2(p, a, b).sqrt()
+}
+
+/// The square of the distance in the plane from `p` to the segment `a`-`b`.
+pub fn segment_distance2(p: DVec2, a: DVec2, b: DVec2) -> f64 {
     let ab = b - a;
     let len2 = ab.length_squared();
     let t = if len2 > 0.0 {
@@ -281,7 +295,7 @@ pub fn distance_to_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
     } else {
         0.0
     };
-    (p - (a + ab * t)).length()
+    (a + ab * t).distance_squared(p)
 }
 
 /// The point of the segment `a`-`b` nearest `p`.

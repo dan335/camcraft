@@ -6,6 +6,7 @@
 //! them, toolpaths in the toolpath palette, and what the field sets in amber.
 
 use camcraft_core::job::{ToolKind, ToolSpec};
+use camcraft_core::path::toolpath::MoveRole;
 use eframe::egui::{self, Align, Align2, Color32, Pos2, Stroke};
 
 use crate::tools::drawing::tip_profile;
@@ -36,7 +37,7 @@ impl Tone {
     pub fn fill(self) -> Color32 {
         match self {
             Tone::Stock => theme::egui_color(theme::GRAY_4),
-            Tone::Part => theme::egui_color(theme::PART),
+            Tone::Part => theme::egui_color(theme::GRAY_6),
             Tone::Tool => theme::egui_color(theme::GRAY_7),
             Tone::Ghost => Color32::TRANSPARENT,
             Tone::Air => theme::egui_color(theme::BG),
@@ -68,13 +69,13 @@ pub enum Move {
 }
 
 impl Move {
-    /// Its colour in the toolpath palette.
+    /// Its colour in the toolpath palette: its role's, as the view draws it.
     pub fn color(self) -> Color32 {
-        theme::egui_color(match self {
-            Move::Cut => theme::PATH_CUT,
-            Move::Rapid => theme::PATH_RAPID,
-            Move::Lead => theme::PATH_LEAD,
-        })
+        theme::egui_color(theme::role_srgb(match self {
+            Move::Cut => MoveRole::Cut,
+            Move::Rapid => MoveRole::Rapid,
+            Move::Lead => MoveRole::Lead,
+        }))
     }
 }
 

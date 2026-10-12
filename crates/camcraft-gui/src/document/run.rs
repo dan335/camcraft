@@ -7,13 +7,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use camcraft_core::job::{Job, ModelDef, Origin, Setup, StockDef, ToolSpec};
+use camcraft_core::job::{Job, ModelDef, Operation, Origin, Setup, StockDef, ToolSpec};
 use camcraft_core::run::{Made, OperationResult, Plan, Stage};
 use camcraft_core::setup::{Bodies, PrepareError, Prepared, prepare};
 use camcraft_session::{Model, Ran, SessionError, check_runnable};
 use glam::DVec3;
 
 use super::{Document, Layout, Level, ModelKey, ModelSlot, RanSetup, next_key};
+use crate::transport::marks;
 use crate::view::scene::{Playhead, Scene, box_edges};
 use crate::view::viewport::{Outline, OutlineKind};
 
@@ -109,6 +110,19 @@ impl SetupInputs {
             .get(index)
             .is_some_and(|setup| same_but_operations(&self.setup, setup))
             && self.cut_is_now(job, loaded, index)
+    }
+
+    /// Whether operation `i` of `setup`, as `job` has it now, is as these took
+    /// it: the operation, and its tool as it was taken then. Where the part and
+    /// stock sit is the setup's to ask, once for all its operations.
+    fn op_is_now(&self, job: &Job, setup: &Setup, i: usize) -> bool {
+        let (Some(then), Some(now)) = (self.setup.operations.get(i), setup.operations.get(i))
+        else {
+            return false;
+        };
+        let tool_then = then.tool.as_ref().map(|t| self.tools.get(t));
+        let tool_now = now.tool.as_ref().map(|t| job.tools.get(t));
+        then == now && tool_then == tool_now
     }
 
     /// Whether what shapes the cuts, not what is only posted with them, is as
@@ -225,8 +239,9 @@ impl Document {
         }
         // Which operations the run works out or keeps, as `plans` has them, asked
         // of each without copying what would be kept: this is asked every frame.
+        let kept = only.map(|_| self.kept(setup)).unwrap_or_default();
         let runs = |i: usize| match only {
-            Some(k) => i == k || self.kept(setup, i).is_some(),
+            Some(k) => i == k || kept.get(i).is_some_and(Option::is_some),
             None => true,
         };
         if let Err(e) = check_runnable(&self.job, index, &runs) {
@@ -256,12 +271,13 @@ impl Document {
         let (Some(k), Some(setup)) = (only, self.job.setups.get(index)) else {
             return Vec::new();
         };
+        let kept = self.kept(setup);
         (0..setup.operations.len())
             .map(|i| {
                 if i == k {
                     return Plan::Generate;
                 }
-                match self.kept(setup, i) {
+                match kept.get(i).copied().flatten() {
                     Some(op) => Plan::Keep(Box::new(op.clone())),
                     None => Plan::Skip,
                 }
@@ -269,57 +285,42 @@ impl Document {
             .collect()
     }
 
-    /// What `setup` last made of its operation `i`, if a run of another operation
-    /// alone can keep it: it has paths, and nothing it was made from has changed.
-    fn kept(&self, setup: &Setup, i: usize) -> Option<&OperationResult> {
-        let ran = self.setups.get(&setup.name)?.ran.as_ref()?;
-        ran.ran
-            .result
-            .operations
-            .get(i)
-            .filter(|op| op.made.has_paths() && self.op_unchanged(&setup.name, i))
+    /// What `setup` last made of each of its operations, where a run of another
+    /// operation alone can keep it: it has paths, and nothing it was made from
+    /// has changed. Empty when it has not run.
+    fn kept(&self, setup: &Setup) -> Vec<Option<&OperationResult>> {
+        let Some(ran) = self.setups.get(&setup.name).and_then(|s| s.ran.as_ref()) else {
+            return Vec::new();
+        };
+        let unchanged = self.unchanged(&setup.name);
+        let made = &ran.ran.result.operations;
+        unchanged
+            .iter()
+            .enumerate()
+            .map(|(i, &same)| made.get(i).filter(|op| same && op.made.has_paths()))
+            .collect()
     }
 
-    /// Whether operation `i` of setup `name` is as it was when the setup last
-    /// ran: the operation, its tool, and where the part and stock sit.
-    fn op_unchanged(&self, name: &str, i: usize) -> bool {
+    /// Whether each operation of setup `name` is as it was when the setup last
+    /// ran: the operation, its tool, and where the part and stock sit, which is
+    /// found once for them all. Empty when it has not run.
+    fn unchanged(&self, name: &str) -> Vec<bool> {
         let then = self
             .setups
             .get(name)
             .and_then(|s| s.ran.as_ref())
             .map(|r| &r.inputs);
-        let (Some(then), Some(index)) = (then, self.setup_index(name)) else {
-            return false;
+        let index = self.setup_index(name);
+        let (Some(then), Some(index)) = (then, index) else {
+            return Vec::new();
         };
-        let now = self.job.setups.get(index).and_then(|s| s.operations.get(i));
-        let (Some(a), Some(b)) = (then.setup.operations.get(i), now) else {
-            return false;
+        let Some(setup) = self.job.setups.get(index) else {
+            return Vec::new();
         };
-        // The tool as it was taken then, and as the job has it now.
-        let tool_then = a.tool.as_ref().map(|t| then.tools.get(t));
-        let tool_now = b.tool.as_ref().map(|t| self.job.tools.get(t));
-        a == b && tool_then == tool_now && then.layout_is_now(&self.job, &self.models, index)
-    }
-
-    /// Whether operation `i` of setup `name`, setup `index` of the job, would cut
-    /// what it cut when the setup last ran: the operation, its tool, and what
-    /// shapes the cuts (see [`SetupInputs::cut_is_now`]) are as they were.
-    fn op_cuts_as_ran(&self, name: &str, index: usize, i: usize) -> bool {
-        let Some(then) = self
-            .setups
-            .get(name)
-            .and_then(|s| s.ran.as_ref())
-            .map(|r| &r.inputs)
-        else {
-            return false;
-        };
-        let now = self.job.setups.get(index).and_then(|s| s.operations.get(i));
-        let (Some(a), Some(b)) = (then.setup.operations.get(i), now) else {
-            return false;
-        };
-        let tool_then = a.tool.as_ref().map(|t| then.tools.get(t));
-        let tool_now = b.tool.as_ref().map(|t| self.job.tools.get(t));
-        a == b && tool_then == tool_now && then.cut_is_now(&self.job, &self.models, index)
+        let laid_out = then.layout_is_now(&self.job, &self.models, index);
+        (0..setup.operations.len())
+            .map(|i| laid_out && then.op_is_now(&self.job, setup, i))
+            .collect()
     }
 
     /// Take out of each setup's last run what no longer stands: from its first
@@ -339,7 +340,11 @@ impl Document {
             .filter_map(|(index, setup)| {
                 let ran = self.setups.get(&setup.name)?.ran.as_ref()?;
                 let len = ran.ran.result.operations.len();
-                let first = (0..len).find(|&i| !self.op_cuts_as_ran(&setup.name, index, i))?;
+                // What shapes every cut (see [`SetupInputs::cut_is_now`]), then
+                // each operation and its tool.
+                let then = &ran.inputs;
+                let cut = then.cut_is_now(&self.job, &self.models, index);
+                let first = (0..len).find(|&i| !(cut && then.op_is_now(&self.job, setup, i)))?;
                 Some((setup.name.clone(), first))
             })
             .collect();
@@ -389,40 +394,57 @@ impl Document {
         }
     }
 
-    /// Where operation `index` of setup `name` stands.
+    /// Where operation `index` of setup `name` stands: one of
+    /// [`Document::op_statuses`], as the tests ask.
+    #[cfg(test)]
     pub fn op_status(&self, name: &str, index: usize) -> OpStatus {
-        let off = self.operation(name, index).is_some_and(|o| !o.enabled);
-        if off {
-            return OpStatus::Disabled;
-        }
-        let Some(state) = self.setups.get(name) else {
-            return OpStatus::NotRun;
-        };
-        if state.running.is_some() {
-            return match state.progress {
-                Some((Stage::Operation(at), since)) if at == index => OpStatus::Running(since),
-                Some((Stage::Operation(at), _)) if at > index => OpStatus::Done,
-                Some((Stage::Verifying | Stage::Checking, _)) => OpStatus::Done,
-                _ => OpStatus::Waiting,
-            };
-        }
-        let made = state
-            .ran
-            .as_ref()
-            .and_then(|r| r.ran.result.operations.get(index));
-        match made {
-            None => OpStatus::NotRun,
-            Some(op) if !op.made.has_paths() => OpStatus::NotRun,
-            Some(_) if !self.op_unchanged(name, index) => OpStatus::Stale,
-            Some(op) if !op.warnings.is_empty() => OpStatus::Warnings,
-            Some(_) => OpStatus::Done,
-        }
+        self.op_statuses(name)
+            .get(index)
+            .copied()
+            .unwrap_or(OpStatus::NotRun)
     }
 
-    /// Run `seq`, sent for setup `sent`, has finished. A reply for a run since
-    /// superseded, or for a setup since removed, is dropped; one for a setup
-    /// renamed since goes to it by its new name.
-    pub fn finished(&mut self, sent: &str, seq: u64, result: Result<Ran, SessionError>) {
+    /// Where each operation of setup `name` stands: the tree asks for every
+    /// one every frame, so what they share is found once.
+    pub fn op_statuses(&self, name: &str) -> Vec<OpStatus> {
+        let Some(setup) = self.setup(name) else {
+            return Vec::new();
+        };
+        let state = self.setups.get(name);
+        let running = state.filter(|s| s.running.is_some());
+        let ran = state.and_then(|s| s.ran.as_ref());
+        let unchanged = match (running, ran) {
+            (None, Some(_)) => self.unchanged(name),
+            _ => Vec::new(),
+        };
+        let status = |(index, op): (usize, &Operation)| {
+            if !op.enabled {
+                return OpStatus::Disabled;
+            }
+            if let Some(state) = running {
+                return match state.progress {
+                    Some((Stage::Operation(at), since)) if at == index => OpStatus::Running(since),
+                    Some((Stage::Operation(at), _)) if at > index => OpStatus::Done,
+                    Some((Stage::Verifying | Stage::Checking, _)) => OpStatus::Done,
+                    _ => OpStatus::Waiting,
+                };
+            }
+            match ran.and_then(|r| r.ran.result.operations.get(index)) {
+                None => OpStatus::NotRun,
+                Some(op) if !op.made.has_paths() => OpStatus::NotRun,
+                Some(_) if unchanged.get(index) != Some(&true) => OpStatus::Stale,
+                Some(op) if !op.warnings.is_empty() => OpStatus::Warnings,
+                Some(_) => OpStatus::Done,
+            }
+        };
+        setup.operations.iter().enumerate().map(status).collect()
+    }
+
+    /// Run `seq`, sent for setup `sent`, has finished: what it made, with its
+    /// toolpaths laid out for drawing ([`Scene::build`]) where it ran. A reply
+    /// for a run since superseded, or for a setup since removed, is dropped; one
+    /// for a setup renamed since goes to it by its new name.
+    pub fn finished(&mut self, sent: &str, seq: u64, result: Result<(Ran, Scene), SessionError>) {
         let Some(name) = self.running_as(seq) else {
             return;
         };
@@ -444,7 +466,7 @@ impl Document {
             return;
         };
         match result {
-            Ok(ran) => {
+            Ok((ran, scene)) => {
                 let mut lines: Vec<(Level, String)> =
                     ran.notes.iter().map(|n| (Level::Info, n.clone())).collect();
                 lines.extend(ran.warnings.iter().map(|w| (Level::Warn, w.clone())));
@@ -459,10 +481,6 @@ impl Document {
                         format!("'{name}' did NOT pass its checks: it would be refused"),
                     )
                 });
-                let Some(setup) = job.setups.get(index) else {
-                    return;
-                };
-                let scene = Scene::build(&job, setup, &ran.result);
                 let view = &mut state.view;
                 // A new run plays back from its first move, the stock uncut, with
                 // every operation visible.
@@ -472,7 +490,8 @@ impl Document {
                 if let Some(inputs) = inputs {
                     state.ran = Some(RanSetup {
                         inputs,
-                        job: job.clone(),
+                        job,
+                        marks: marks(&ran, &scene),
                         ran,
                         scene,
                         scene_key: next_key(),

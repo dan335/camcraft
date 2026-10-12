@@ -123,7 +123,7 @@ impl App {
                         .mesh()
                         .triangle(*f.triangles.first()? as usize)?;
                     let at = (tri[0] + tri[1] + tri[2]) / 3.0;
-                    let at = camcraft_core::features::unplaced(&loaded.body, at);
+                    let at = camcraft_core::setup::features::unplaced(&loaded.body, at);
                     Some((u32::try_from(i).ok()?, f.area, at))
                 }
                 _ => None,
@@ -168,7 +168,7 @@ impl App {
         let eye = self.viewport.camera().eye().as_dvec3();
         let (rim, centre, rect) = self.picking.rim_for_snapshot(eye)?;
         let aspect = rect.width() / rect.height().max(1.0);
-        let proj = crate::picking::ray::Projector::new(
+        let proj = crate::view::camera::Projector::new(
             self.viewport.camera().view_projection(aspect),
             rect,
         );
@@ -295,7 +295,8 @@ impl App {
 
     /// Make one of the showing setup's checks fail, as a rapid through the part
     /// would, then post every setup into `dir`: the HALT banner, and the prompt
-    /// that asks before posting anyway. Only the snapshot harness asks.
+    /// that asks before posting anyway, once the worker has rendered the
+    /// programs. Only the snapshot harness asks.
     pub fn fail_a_check_and_post_for_snapshot(&mut self, dir: &Path) {
         use camcraft_session::checks::Level as CheckLevel;
         let id = self.doc().map(|d| d.id);
@@ -318,9 +319,18 @@ impl App {
                 f.detail = "deepest 2.40 mm under the cutter".into();
                 f.at_move = Some(len / 2);
             }
+            ran.marks = crate::transport::marks(&ran.ran, &ran.scene);
         }
         if let Some(id) = id {
-            self.prepare_post(id, None, dir);
+            // The worker only wakes the window with it; the harness steps it.
+            let ctx = egui::Context::default();
+            self.prepare_post(&ctx, id, None, dir);
+            while !self.worker.idle() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                for (id, task, reply) in self.worker.poll() {
+                    self.accept(&ctx, id, task, reply);
+                }
+            }
         }
     }
 

@@ -29,7 +29,7 @@ use crate::document::{Document, Level, ModelSlot, Selection, Status, Wanted, nex
 use crate::file_dialog::{AppFileDialog, FileRequest};
 use crate::picking::Picking;
 use crate::playback;
-use crate::properties::{self, Picks, PropAction};
+use crate::properties::{self, HeightPlanes, PropAction, ViewPicks};
 use crate::settings::Settings;
 use crate::tools::manager::ToolManager;
 use crate::tools::picker::{Outcome, Picked, ToolPicker};
@@ -37,7 +37,7 @@ use crate::transport;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
 use crate::ui::widgets;
-use crate::view::viewport::{Content, Plane, Viewport};
+use crate::view::viewport::{Content, Viewport};
 use crate::worker::{DocId, Reply, Request, Task, Worker};
 
 use prompts::Prompt;
@@ -88,7 +88,7 @@ pub struct App {
     /// panel's last drawing.
     operation_tab: Option<properties::OperationTab>,
     /// The selected operation's heights, drawn while its Heights tab shows.
-    planes: Vec<Plane>,
+    planes: HeightPlanes,
     dialog: AppFileDialog,
     /// The tool library, in a window inside the app when open.
     tools: ToolManager,
@@ -134,7 +134,7 @@ impl App {
             viewport: Viewport::default(),
             picking: Picking::default(),
             operation_tab: None,
-            planes: Vec::new(),
+            planes: HeightPlanes::default(),
             dialog: AppFileDialog::new(dialog),
             tools: ToolManager::new(),
             picker: None,
@@ -308,7 +308,7 @@ impl App {
         }
     }
 
-    fn accept(&mut self, id: DocId, task: Task, reply: Reply) {
+    fn accept(&mut self, ctx: &egui::Context, id: DocId, task: Task, reply: Reply) {
         match (task, reply) {
             (Task::Open, Reply::Opened(opened)) => match *opened {
                 Ok((path, job)) => {
@@ -343,6 +343,10 @@ impl App {
                 if let Some(doc) = self.find(id) {
                     doc.finished(&setup, seq, *ran);
                 }
+            }
+            (Task::Post, Reply::Planned(planned)) => self.planned(ctx, id, *planned),
+            (Task::Write { dir, refused }, Reply::Written(written)) => {
+                self.written(id, (&dir, &refused), written);
             }
             (task, Reply::Died(what)) => {
                 let text = format!(
@@ -486,9 +490,11 @@ impl App {
                 let state = doc.setups.entry(name.clone()).or_default();
                 if state.ran.is_some() {
                     if status == Status::Stale {
-                        ui.colored_label(
-                            widgets::Level::Warn.color(),
+                        widgets::diagnostic(
+                            ui,
+                            widgets::Level::Warn,
                             "Out of date: the setup has changed since this ran. Generate it again.",
+                            |_| {},
                         );
                     }
                     playback::result(ui, state, m);
@@ -519,7 +525,7 @@ impl App {
             return;
         };
         let id = doc.id;
-        let picks = Picks {
+        let picks = ViewPicks {
             armed: self.picking.armed(id),
             shown: self.picking.shown(id),
         };
@@ -716,7 +722,7 @@ impl App {
             }
             FileRequest::PostTo(id, scope) => {
                 if let Some(dir) = paths.into_iter().next() {
-                    self.prepare_post(id, scope, &dir);
+                    self.prepare_post(ctx, id, scope, &dir);
                 }
             }
             FileRequest::ImportTools => {
@@ -788,7 +794,7 @@ impl App {
             let geometry = self.operation_tab == Some(properties::OperationTab::Geometry);
             self.picking.decorate(doc.id, geometry, &mut content);
         }
-        content.planes = &self.planes;
+        content.planes = self.planes.planes();
         content
     }
 }
@@ -797,7 +803,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         for (id, task, reply) in self.worker.poll() {
-            self.accept(id, task, reply);
+            self.accept(&ctx, id, task, reply);
         }
         // Not while a field is being typed in or dragged: dragging the tolerance
         // would otherwise tessellate every model at every step of the drag.
@@ -886,10 +892,13 @@ impl eframe::App for App {
                     #[cfg(all(test, feature = "ui-snapshots"))]
                     let rect = ui.available_rect_before_wrap();
                     // After the panel, so the heights drawn are the ones just edited.
-                    self.planes = self
-                        .doc()
-                        .map(|d| properties::height_planes(d, m, self.operation_tab))
-                        .unwrap_or_default();
+                    let tab = self.operation_tab;
+                    match self.docs.get(self.active) {
+                        Some(d) => {
+                            self.planes.update(d, m, tab);
+                        }
+                        None => self.planes = HeightPlanes::default(),
+                    }
                     // The viewport is taken out for the call, because the content it
                     // draws borrows the rest of the app.
                     let mut viewport = std::mem::take(&mut self.viewport);

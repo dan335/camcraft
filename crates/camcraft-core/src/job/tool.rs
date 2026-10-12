@@ -4,8 +4,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::{StockToLeave, is_default};
+use crate::cutter::tool::{Ball, Bullnose, Cone, Cutter, Flat, ToolError};
 use crate::is_positive;
-use crate::tool::{Ball, Bullnose, Cone, Cutter, Flat, ToolError};
 
 /// A cutter.
 ///

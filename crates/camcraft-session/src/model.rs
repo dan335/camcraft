@@ -43,10 +43,16 @@ impl Model {
     pub fn placed(&self, transform: &Transform) -> Result<Model, SessionError> {
         let body = self.file.placed(transform.matrix())?;
         let bounds = body.mesh().bounds().ok_or(SessionError::EmptyModel)?;
+        // Field by field: cloning the whole model would copy the body only to
+        // throw it away.
         Ok(Model {
             body,
             bounds,
-            ..self.clone()
+            file: Arc::clone(&self.file),
+            path: self.path.clone(),
+            units: self.units.clone(),
+            notes: self.notes.clone(),
+            warnings: self.warnings.clone(),
         })
     }
 }

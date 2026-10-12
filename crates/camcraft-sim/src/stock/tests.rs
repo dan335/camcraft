@@ -628,3 +628,135 @@ fn an_arc_is_swept_along_itself() {
     assert_eq!(half.height_at(4.2, 4.2), Some(5.0));
     assert!((half.height_at(-4.2, 4.2).unwrap() - 1.0).abs() < 1e-6);
 }
+
+/// The volume is the same to the bit however many threads add it up.
+#[test]
+fn the_volume_does_not_depend_on_the_thread_count() {
+    // A floor with no short binary form, so no sum of heights over it is exact.
+    let mut s = Stock::block(dvec2(-10.0, -10.0), dvec2(10.0, 10.0), 5.0, -4.9, 0.03).unwrap();
+    s.sweep(&zigzag(), &Ball(1.7));
+    let on = |threads| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| s.volume())
+    };
+    let one = on(1);
+    for threads in [2, 3, 8, 13] {
+        assert_eq!(on(threads).to_bits(), one.to_bits(), "{threads} threads");
+    }
+}
+
+/// A reach a rounding error short of a whole number of cells still reaches the
+/// cells that far across. At a pitch of 0.05 a tolerance of 0.25 makes a budget
+/// of 0.3, which is 5.999999999999999 cells: the foot of a wall six cells away
+/// is within it, and seven away is not.
+#[test]
+fn a_reach_a_rounding_error_short_of_whole_cells_still_reaches_them() {
+    let (tolerance, pitch) = (0.25, 0.05);
+    let budget = tolerance + pitch;
+    assert!(budget / pitch < 6.0, "the case this is about");
+    // Plateau at 4 for x < 0, shelf at 0 beyond.
+    let mesh = synthetic::step(4.0, 10.0);
+    let (lo, hi) = (dvec2(-5.0, -5.0), dvec2(5.0, 5.0));
+    let part = PartSurface::from_mesh(&mesh, lo, hi, pitch)
+        .unwrap()
+        .reaching(budget);
+    let iy = 100u32;
+    let row = i64::from(iy);
+    let shelf = (0..)
+        .find(|&ix| part.at_cell(ix, row) == Some(0.0))
+        .unwrap();
+    assert_eq!(
+        part.at_cell(shelf - 1, row),
+        Some(4.0),
+        "the wall's top edge"
+    );
+    let cell = |ix: i64| CellRect::cell(u32::try_from(ix).unwrap(), iy);
+    // Material cut down to the shelf six cells from it is the wall's height
+    // under its own column, but level with the part within the reach.
+    let mut stock = Stock::block(lo, hi, 5.0, -5.0, pitch).unwrap();
+    stock.write_cells(cell(shelf - 6), &[0.0]);
+    let v = stock.verify(&part, budget, 50.0);
+    assert_eq!(v.gouged, 0, "{v:?}");
+    stock.write_cells(cell(shelf - 7), &[0.0]);
+    let v = stock.verify(&part, budget, 50.0);
+    assert_eq!(v.gouged, 1, "{v:?}");
+}
+
+/// The cells that differ between two stocks, by their bits.
+fn differing(a: &Stock, b: &Stock) -> Option<CellRect> {
+    let nx = a.field().nx() as usize;
+    a.field()
+        .data()
+        .iter()
+        .zip(b.field().data())
+        .enumerate()
+        .filter(|(_, (x, y))| x.to_bits() != y.to_bits())
+        .map(|(i, _)| {
+            let (ix, iy) = (i % nx, i / nx);
+            CellRect::cell(u32::try_from(ix).unwrap(), u32::try_from(iy).unwrap())
+        })
+        .fold(None, |r, c| CellRect::join(r, Some(c)))
+}
+
+/// Restoring says exactly which cells changed, whether the packed stock is kept
+/// as runs or, too rough for runs, as every height.
+#[test]
+fn restoring_says_exactly_which_cells_changed() {
+    let mut rough = block();
+    let (nx, ny) = (rough.field().nx(), rough.field().ny());
+    let noise: Vec<f32> = (0..nx * ny)
+        .map(|i| f32::from(u8::try_from(i % 97).unwrap()) * 0.01)
+        .collect();
+    rough.write_cells(CellRect::all(nx, ny), &noise);
+    assert_eq!(
+        PackedStock::pack(&rough).bytes(),
+        noise.len() * 4,
+        "kept as every height"
+    );
+    let mut cut = block();
+    cut.sweep(&zigzag(), &Ball(1.7));
+    let mut dented = block();
+    dented.write_cells(CellRect::cell(7, 3), &[1.0]);
+    dented.write_cells(CellRect::cell(2, 30), &[1.0]);
+    let fresh = block();
+    for (from, over) in [
+        (&rough, &cut),
+        (&cut, &rough),
+        (&rough, &rough),
+        (&cut, &dented),
+        (&dented, &cut),
+        (&dented, &fresh),
+        (&fresh, &dented),
+    ] {
+        let mut back = over.clone();
+        let want = differing(from, over);
+        assert_eq!(PackedStock::pack(from).restore(&mut back), Some(want));
+        assert_eq!(&back, from);
+    }
+}
+
+/// A packed stock is restored only onto its own grid: the same cells and pitch
+/// somewhere else is another grid, and is left as it was.
+#[test]
+fn a_packed_stock_restores_only_onto_its_own_grid() {
+    let packed = PackedStock::pack(&block());
+    let mut shifted = Stock::block(dvec2(-9.0, -10.0), dvec2(11.0, 10.0), 5.0, -5.0, 0.5).unwrap();
+    assert_eq!(shifted.field().nx(), block().field().nx());
+    shifted.sweep(&zigzag(), &Ball(1.7));
+    let before = shifted.clone();
+    assert_eq!(packed.restore(&mut shifted), None);
+    assert_eq!(shifted, before);
+}
+
+/// Below the part by more than the budget is a gouge, whatever else; well above
+/// it is leftover; no part is off it.
+#[test]
+fn a_column_is_classified_by_the_verifiers_rule() {
+    assert_eq!(classify(0.0, None, 0.1, 0.5), Class::OffPart);
+    assert_eq!(classify(1.0, Some((1.2, 0.2)), 0.1, 0.5), Class::Gouge);
+    assert_eq!(classify(1.05, Some((1.0, -0.05)), 0.1, 0.5), Class::OnPart);
+    assert_eq!(classify(1.6, Some((1.0, -0.6)), 0.1, 0.5), Class::Leftover);
+}

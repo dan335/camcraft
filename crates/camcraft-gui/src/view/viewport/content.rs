@@ -7,10 +7,9 @@ use camcraft_sim::stock::CellRect;
 use eframe::egui;
 use glam::{DVec2, DVec3, Vec3};
 
-use super::gpu::{BOTTOM, CLEARANCE, RETRACT, TOP};
-use crate::picking::ray::Projector;
 use crate::stock::stock_view::{ColorMode, StockImage};
 use crate::ui::theme;
+use crate::view::camera::Projector;
 use crate::view::scene::Scene;
 
 /// What an outline line shows.
@@ -65,22 +64,13 @@ impl PlaneKind {
 
     /// Its colour, from the toolpath palette: rapids fly at the clearance, leads
     /// come in at the top, and cuts reach the bottom.
-    pub fn color(self) -> [u8; 3] {
+    pub const fn color(self) -> [u8; 3] {
         match self {
             PlaneKind::Clearance => theme::PATH_RAPID,
             // Rapids stop coming down here, and feeds start.
             PlaneKind::Retract => theme::PATH_PLUNGE,
             PlaneKind::Top => theme::PATH_LEAD,
             PlaneKind::Bottom => theme::PATH_CUT,
-        }
-    }
-
-    pub(super) fn line_kind(self) -> u32 {
-        match self {
-            PlaneKind::Clearance => CLEARANCE,
-            PlaneKind::Retract => RETRACT,
-            PlaneKind::Top => TOP,
-            PlaneKind::Bottom => BOTTOM,
         }
     }
 
@@ -122,7 +112,9 @@ impl Plane {
     }
 }
 
-/// A line that is not a move: the stock's edges and the work zero's axes.
+/// A line that is not a move: an edge of the stock, one of the work zero's axes,
+/// a picked edge or the one under the pointer, a boundary, or the edge of a
+/// height plane, as its [`OutlineKind`] says.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Outline {
     /// One end.
@@ -146,6 +138,9 @@ pub struct View {
     pub roles: u32,
     /// Bit per operation, from zero. Operations past 32 are always shown.
     pub ops: u32,
+    /// The one operation shown, whatever `ops` says: setting up, the one
+    /// selected, which may be past 32.
+    pub only: Option<usize>,
     /// Segments shown, in machine order.
     pub shown: usize,
     /// The cutter to draw, as an operation index, and where its tip is.
@@ -160,6 +155,7 @@ impl Default for View {
             origin: true,
             roles: u32::MAX,
             ops: u32::MAX,
+            only: None,
             shown: usize::MAX,
             cutter: None,
         }
@@ -199,6 +195,8 @@ pub struct PointerEvent {
 pub struct Content<'a> {
     /// The part mesh.
     pub part: Option<(u64, &'a TriMesh)>,
+    /// The box around it.
+    pub part_bounds: Option<Aabb>,
     /// Changes when a different model is opened, and only then: the view is framed
     /// on it once. Re-running the same model must not snap the camera back.
     pub framing: u64,
@@ -253,7 +251,7 @@ impl StockRef<'_> {
 /// Material to draw, and how much of it to upload.
 pub struct StockShow<'a> {
     /// Changes whenever the image is a different one.
-    pub key: (u64, usize),
+    pub key: u64,
     /// The material.
     pub image: StockRef<'a>,
     /// What changed in it since it was last uploaded under the same key.
@@ -267,6 +265,7 @@ impl Content<'_> {
     pub fn empty() -> Self {
         Content {
             part: None,
+            part_bounds: None,
             framing: 0,
             scene: None,
             outline: None,

@@ -12,6 +12,8 @@ struct Grid {
     // Linear colours: below the part, leftover faint and strong, on the part,
     // off the part, and the material.
     palette: array<vec4<f32>, 6>,
+    // The material's roughness, metalness.
+    finish: vec4<f32>,
 };
 @group(1) @binding(0) var<uniform> g: Grid;
 @group(1) @binding(1) var heights: texture_2d<f32>;
@@ -276,10 +278,9 @@ fn fs(i: BoxOut) -> Hit {
         }
     }
     let color = code_color(cell);
-    let diffuse = abs(dot(normal, f.light.xyz));
     let shade = mix(1.0, seen, SKY_STRENGTH);
     var out: Hit;
-    out.color = vec4<f32>(to_srgb(color * (0.3 + 0.7 * diffuse) * shade), 1.0);
+    out.color = vec4<f32>(to_srgb(lit(color, g.finish, normal, -dir) * shade), 1.0);
     let clip = f.view_proj * vec4<f32>(at, 1.0);
     out.depth = clip.z / clip.w;
     return out;

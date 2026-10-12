@@ -4,7 +4,7 @@
 use eframe::egui;
 use glam::DVec3;
 
-use super::{jump_to, playing_back, thousands};
+use super::{go_to, jump_to, playing_back, thousands};
 use crate::document::{RanSetup, SetupState, SetupView};
 use crate::help::Help;
 use crate::help::topics::app;
@@ -12,8 +12,7 @@ use crate::stock::stock_view::{CLASSES, Class, ColorMode, cell_color, class_name
 use crate::ui::measure::Measure;
 use crate::ui::theme;
 use crate::ui::widgets::{self, hint_text, section_label};
-use crate::view::scene::{Playhead, Scene, Steep};
-use crate::view::viewport::StockRef;
+use crate::view::scene::{Scene, Steep};
 
 /// A checkbox for one bit of a mask.
 fn bit(ui: &mut egui::Ui, mask: &mut u32, index: usize, label: impl Into<egui::WidgetText>) {
@@ -122,7 +121,10 @@ pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option
         &mut view.show_paths
     };
     ui.checkbox(paths, "toolpaths").help(&app::SHOW_TOOLPATHS);
-    toolpaths(ui, view, &ran.scene, back);
+    // Stopping there, as every other jump does, rather than playing on.
+    if let Some(end) = toolpaths(ui, view, &ran.scene, back) {
+        go_to(state, end);
+    }
     if back {
         ui.separator();
         material(ui, state);
@@ -133,8 +135,9 @@ pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option
 }
 
 /// The toolpaths by role, and playing back, by operation, each with its count.
-/// Setting up, the selection says which operations'.
-fn toolpaths(ui: &mut egui::Ui, view: &mut SetupView, scene: &Scene, back: bool) {
+/// Setting up, the selection says which operations'. Where to go, when an
+/// operation's "go to end" is clicked: the moves shown then.
+fn toolpaths(ui: &mut egui::Ui, view: &mut SetupView, scene: &Scene, back: bool) -> Option<usize> {
     ui.add_space(4.0);
     for (i, role) in theme::ROLES.iter().enumerate() {
         let n = scene.role_counts.get(i).copied().unwrap_or(0);
@@ -178,9 +181,7 @@ fn toolpaths(ui: &mut egui::Ui, view: &mut SetupView, scene: &Scene, back: bool)
             );
         }
     }
-    if let Some(end) = jump {
-        view.at = Playhead::at(end);
-    }
+    jump
 }
 
 /// How the material is coloured, and a legend of its cells.
@@ -195,19 +196,9 @@ fn material(ui: &mut egui::Ui, state: &mut SetupState) {
             .on_hover_text("every column against the part, by the verifier's rule");
     });
     let mode = view.transport.color;
-    // Locked, shared with its thread: held no longer than the legend needs it.
-    let Some((_, image, _)) = state.live.as_ref().and_then(|l| l.shown()) else {
+    // As the thread last counted them, without locking the image it writes.
+    let Some(live) = state.live.as_ref().filter(|l| l.filled()) else {
         return;
-    };
-    let counts: Vec<usize> =
-        StockRef(image).with(|i| CLASSES.iter().map(|c| i.count(*c)).collect());
-    let count = |class: Class| {
-        CLASSES
-            .iter()
-            .position(|c| *c == class)
-            .and_then(|i| counts.get(i))
-            .copied()
-            .unwrap_or(0)
     };
     let classes: &[Class] = match mode {
         ColorMode::Compare => &CLASSES,
@@ -216,7 +207,7 @@ fn material(ui: &mut egui::Ui, state: &mut SetupState) {
     for &class in classes {
         legend_row(
             ui,
-            count(class),
+            live.count(class),
             |ui| {
                 swatch(ui, theme::egui_color(cell_color(mode, class, 0.0)));
                 ui.label(class_name(class));
@@ -291,4 +282,23 @@ fn steep(ui: &mut egui::Ui, ran: &RanSetup, m: Measure) -> Option<Steep> {
             });
     }
     go
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::document::{SetupState, ViewMode};
+    use crate::view::scene::Playhead;
+
+    /// Going to an operation's end stops there, as the other jumps do, rather
+    /// than playing on into the next.
+    #[test]
+    fn going_to_an_operations_end_stops_there() {
+        let mut state = SetupState::default();
+        state.view.mode = ViewMode::Playback;
+        state.view.transport.playing = true;
+        super::go_to(&mut state, 12);
+        assert!(!state.view.transport.playing);
+        assert_eq!(state.view.at, Playhead::at(12));
+        assert_eq!(state.view.mode, ViewMode::Playback);
+    }
 }

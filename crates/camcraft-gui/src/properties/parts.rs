@@ -5,8 +5,8 @@
 use camcraft_core::job::{LengthUnit, Setup, Transform};
 use eframe::egui;
 
-use super::{Picks, PropAction, header, renamed};
-use crate::document::{Document, ModelSlot, Selection};
+use super::{PropAction, ViewPicks, header, renamed};
+use crate::document::{Document, ModelSlot, Selection, is_stl};
 use crate::help::Help;
 use crate::help::topics::model as topics;
 use crate::picking::slots::Slot;
@@ -36,7 +36,7 @@ pub(super) fn names(
     ui: &mut egui::Ui,
     n: &Names<'_>,
     included: &mut Vec<String>,
-    picks: Picks<'_>,
+    picks: ViewPicks<'_>,
     actions: &mut Vec<PropAction>,
 ) {
     let others: Vec<&String> = n.all.iter().filter(|x| !included.contains(x)).collect();
@@ -205,13 +205,16 @@ pub(super) fn model(
             widgets::key_label(ui, "File");
             ui.add(egui::Label::new(widgets::mono(&def.path, theme::TEXT_SM)).wrap());
             ui.end_row();
-            let stl = std::path::Path::new(&def.path)
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("stl"));
-            if stl {
+            if is_stl(&def.path) {
                 widgets::row(ui, &topics::UNITS, |ui| {
-                    ui.radio_value(&mut def.units, Some(LengthUnit::Mm), "mm");
-                    ui.radio_value(&mut def.units, Some(LengthUnit::Inch), "inch");
+                    widgets::segmented(
+                        ui,
+                        &mut def.units,
+                        &[
+                            (Some(LengthUnit::Mm), "mm"),
+                            (Some(LengthUnit::Inch), "inch"),
+                        ],
+                    );
                 });
             }
         });

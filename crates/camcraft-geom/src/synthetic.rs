@@ -112,9 +112,9 @@ pub fn step(h: f64, half: f64) -> TriMesh {
 /// Getting that `- br` wrong would bake an error of one ball radius into everything
 /// downstream, which is precisely why this fixture exists.
 ///
-/// `lat` and `lon` are clamped to `[2, MAX_SUBDIVISION]` and `[3, MAX_SUBDIVISION]`
-/// respectively, which keeps every index well inside `u32` and makes overflow
-/// impossible rather than merely unlikely.
+/// `lat` and `lon` are clamped to `[2, 4096]` and `[3, 4096]` respectively, which
+/// keeps every index well inside `u32` and makes overflow impossible rather than
+/// merely unlikely.
 pub fn uv_sphere(r: f64, lat: u32, lon: u32) -> TriMesh {
     let (lat, lon) = clamp_subdivision(lat, lon);
     let row = lon + 1;
@@ -216,7 +216,7 @@ pub fn plate_with_hole(half: f64, h: f64, r: f64, segments: u32) -> TriMesh {
 
 /// Upper bound on [`uv_sphere`] subdivision, chosen so the largest possible vertex
 /// index stays far below `u32::MAX`.
-pub const MAX_SUBDIVISION: u32 = 4096;
+pub(crate) const MAX_SUBDIVISION: u32 = 4096;
 
 fn clamp_subdivision(lat: u32, lon: u32) -> (u32, u32) {
     (lat.clamp(2, MAX_SUBDIVISION), lon.clamp(3, MAX_SUBDIVISION))

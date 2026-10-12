@@ -23,7 +23,7 @@
 //! - **Grids are only for stock.** Height fields represent material: the
 //!   simulation, rest machining, clearance. Every point a toolpath follows, and
 //!   every boundary it is offset from, comes from the model's geometry — exact
-//!   drop-cutter queries, or shadows of the mesh ([`reach`]). A stock grid may
+//!   drop-cutter queries, or shadows of the mesh ([`strategy::reach`]). A stock grid may
 //!   decide *whether* a path cuts somewhere, never *where* it runs. Nothing
 //!   smooths a path to hide a grid.
 //! - The effective tool profile derives from `(tool, radial_stock, axial_stock)`.
@@ -32,62 +32,14 @@
 //!   core count. Parallel map-and-collect preserves order and is fine;
 //!   order-dependent floating point reductions are not.
 
-pub mod tool;
-
-pub mod dropcutter;
-
-pub mod allowance;
-
-mod field;
-mod nesting;
-pub mod parallel;
-pub mod projected;
-pub mod scallop;
-mod slope;
-pub mod strategy;
-pub mod toolpath;
-
-pub mod linker;
-
-pub mod simadapt;
-
-pub mod reach;
-
-pub mod pocket_clearing;
-
-pub mod waterline;
-
-pub mod flat;
-
-pub mod patterns;
-
-pub mod morph;
-
-pub mod adaptive;
-
-pub mod ordering;
-
+pub mod cutter;
 pub mod job;
-
-pub mod cutting;
-
-pub mod drilling;
-
-pub mod planar;
-
-pub mod face;
-
-pub mod tabs;
-
-pub mod frame;
-
-pub mod setup;
-
-pub mod features;
-
+pub mod path;
 /// The material at any point in a finished job, for showing and for playback.
 pub mod replay;
 pub mod run;
+pub mod setup;
+pub mod strategy;
 
 #[cfg(test)]
 pub(crate) mod fixture;

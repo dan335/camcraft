@@ -1,6 +1,6 @@
 [package]
 name        = "camcraft-geom"
-description = "Geometry primitives for camcraft: meshes, BVH, height maps and 2D contours."
+description = "Geometry primitives for camcraft: meshes and their topology, BVH, height maps, 2D contours, rings and arcs, and fields on a lifted grid."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

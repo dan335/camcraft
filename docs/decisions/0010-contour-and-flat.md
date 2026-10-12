@@ -66,9 +66,12 @@ for stock?
   shared. The ring along the walls is the region's boundary itself, drawn as
   finely as the region was. Outside in ends on the walls; inside out starts on
   them. The highest flat is cut first.
-- **Linking.** Contour stays down over the part as the other finishing
-  strategies do, stepping down the wall between levels. Flat links at its
-  level, as pocket clearing does, and ramps in.
+- **Linking.** Contour links at its level, as pocket clearing does, and lifts
+  between levels. It first stayed down over the part as the other finishing
+  strategies do, but its passes run beside the walls, below where a tool from
+  above would rest, so the way from one level up to the next went through the
+  top of the wall: on the three-pin lego, 13 to 25 mm gouges (2026-09-29). Flat
+  links at its level too, and ramps in.
 
 ## Rejected
 

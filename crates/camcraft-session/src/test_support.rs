@@ -4,10 +4,10 @@
 
 use std::path::{Path, PathBuf};
 
-use camcraft_core::job::{Job, ModelDef};
+use camcraft_core::job::{Job, ModelDef, StrategySpec, ToolKind};
 
 use crate::checks::{self, Checks};
-use crate::{FinishSpec, FinishTool, Models, Ran, load_job_model, run_setup, single_operation};
+use crate::{FinishSpec, Models, Ran, load_job_model, run_setup, single_operation};
 
 /// A STEP file from the repository's fixtures.
 pub(crate) fn fixture(name: &str) -> PathBuf {
@@ -29,9 +29,12 @@ fn hinge() -> ModelDef {
 pub(crate) fn small_job() -> Job {
     single_operation(
         &FinishSpec {
-            tool: FinishTool::Ball,
+            strategy: StrategySpec::Parallel { angle: 0.0 },
+            tool: ToolKind::Ball,
+            corner: 0.0,
             diameter: 6.0,
             stepover: 2.0,
+            stepdown: None,
             tolerance: 0.05,
             stock_radial: 0.0,
             stock_axial: 0.0,
@@ -57,7 +60,7 @@ pub(crate) fn run_small() -> Ran {
 /// Re-check a run after its first operation's path has been tampered with.
 pub(crate) fn recheck(
     ran: &Ran,
-    tamper: impl FnOnce(&mut camcraft_core::toolpath::Toolpath),
+    tamper: impl FnOnce(&mut camcraft_core::path::toolpath::Toolpath),
 ) -> Checks {
     let job = small_job();
     let mut ops = ran.result.operations.clone();

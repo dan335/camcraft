@@ -30,8 +30,7 @@ footer = [
 ]
 
 # Written as Fusion's Masso post writes them: `Z2.2`, `I0.`, `F150.`, and blocks
-# numbered from N10 in fives, comments not. `units = "inch"` writes G20 and
-# converts every length and feed (the builtin "masso-inch").
+# numbered from N10 in fives, comments not. The same in inches is masso-inch.toml.
 [format]
 axis_decimals        = 3
 inch_axis_decimals   = 4

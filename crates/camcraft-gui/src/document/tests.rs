@@ -5,10 +5,32 @@ use super::run::SetupInputs;
 use super::*;
 use camcraft_core::job::{Preset, StrategySpec, ToolSpec};
 use camcraft_core::run::{Plan, Stage};
+use camcraft_session::Ran;
 use glam::DVec3;
 
-use crate::view::scene::Playhead;
+use crate::view::scene::{Playhead, Scene};
 use crate::view::viewport::OutlineKind;
+
+/// What the worker hands back for a run of `job`'s first setup, its models found
+/// from `dir`: what the run made, with its toolpaths laid out for drawing.
+fn ran_zero(job: &Job, dir: &Path) -> Result<(Ran, Scene), SessionError> {
+    let ran = crate::test_jobs::run_setup_zero(job, dir);
+    let scene = Scene::build(job, &job.setups[0], &ran.result);
+    Ok((ran, scene))
+}
+
+/// The example, cutting the small fixture so a test runs quickly, with its
+/// models found from the folder returned.
+fn quick_example() -> (Document, PathBuf) {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let text = std::fs::read_to_string(dir.join("rail-jig.camcraft")).unwrap();
+    let text = text.replace("sled_base.step", "hinge_jig.step");
+    let job = camcraft_session::parse_job(&text, "rail-jig").unwrap();
+    (
+        Document::opened(1, Some(dir.join("rail-jig.camcraft")), job),
+        dir,
+    )
+}
 
 fn example() -> Document {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/rail-jig.camcraft");
@@ -17,7 +39,7 @@ fn example() -> Document {
 }
 
 /// A new job whose setup machines a plate with a hole, loaded as if from disk.
-fn with_plate() -> (Document, String) {
+pub(crate) fn with_plate() -> (Document, String) {
     let mut doc = Document::untitled(1);
     let def = ModelDef {
         name: "p".into(),
@@ -206,6 +228,30 @@ fn another_tool_keeps_a_chosen_offset() {
     assert_eq!(doc.job.setups[0].operations[0].boundary.margin, 0.0);
 }
 
+/// Room is made round the part by one rule, wherever it is asked: a boundary
+/// round the part, reached into from outside, with no offset at all. An offset
+/// in, or any other boundary, is one chosen.
+#[test]
+fn room_is_made_only_where_there_is_none() {
+    use camcraft_core::job::{Boundary, Containment, MachiningBoundary};
+    let mut b = MachiningBoundary {
+        kind: Boundary::Silhouette,
+        containment: Containment::Outside,
+        margin: 0.0,
+    };
+    assert!(needs_room(&b));
+    b.kind = Boundary::BoundingBox;
+    assert!(needs_room(&b));
+    b.margin = -0.5;
+    assert!(!needs_room(&b), "an offset in is chosen");
+    b.margin = 0.0;
+    b.containment = Containment::Center;
+    assert!(!needs_room(&b));
+    b.containment = Containment::Outside;
+    b.kind = Boundary::Stock;
+    assert!(!needs_room(&b));
+}
+
 /// Saving drops tools no operation uses.
 #[test]
 fn unused_tools_are_not_saved() {
@@ -216,6 +262,30 @@ fn unused_tools_are_not_saved() {
     doc.save_to(&dir.join("pruned.camcraft")).unwrap();
     assert!(!doc.job.tools.contains_key("spare"));
     assert_eq!(doc.job.tools.len(), 2);
+}
+
+/// An operation is renamed as models, stocks and setups are: trimmed, and never
+/// to nothing or to the name of another of its setup's operations.
+#[test]
+fn an_operation_is_renamed_as_anything_else_is() {
+    let mut doc = example();
+    doc.rename_operation("top", 1, "  finish 2 ").unwrap();
+    assert_eq!(doc.job.setups[0].operations[1].name, "finish 2");
+    assert_eq!(
+        doc.rename_operation("top", 1, "rough"),
+        Err("there is already an operation called 'rough'".into())
+    );
+    assert_eq!(
+        doc.rename_operation("top", 1, " "),
+        Err("an operation needs a name".into())
+    );
+    doc.rename_operation("top", 1, "finish 2").unwrap();
+    assert!(doc.rename_operation("top", 9, "other").is_err());
+    assert_eq!(doc.job.setups[0].operations[1].name, "finish 2");
+    assert_eq!(
+        doc.rename_model("sled_base", ""),
+        Err("a model needs a name".into())
+    );
 }
 
 #[test]
@@ -399,8 +469,8 @@ fn a_changed_operation_takes_its_toolpath_with_it() {
     let mut doc = Document::opened(1, Some(dir.join("rail-jig.camcraft")), job);
     let run = |doc: &mut Document| {
         let seq = doc.started("top");
-        let ran = crate::test_jobs::run_setup_zero(&doc.job, &dir);
-        doc.finished("top", seq, Ok(ran));
+        let ran = ran_zero(&doc.job, &dir);
+        doc.finished("top", seq, ran);
     };
     let ops = |doc: &Document| {
         doc.setups["top"]
@@ -424,12 +494,15 @@ fn a_changed_operation_takes_its_toolpath_with_it() {
     assert_eq!(ops(&doc), 2, "a work offset changes no path");
     doc.job.setups[0].wcs = 54;
 
-    // The finish changed: the roughing stands, the finish is gone.
+    // The finish changed: the roughing stands, the finish is gone, and what
+    // the timeline marks goes with it.
     doc.job.setups[0].operations[1].passes.feed += 100.0;
     doc.invalidate_changed_operations();
     assert_eq!(ops(&doc), 1);
     let state = &doc.setups["top"];
-    let left = state.ran.as_ref().unwrap().scene.segments.len();
+    let ran = state.ran.as_ref().unwrap();
+    assert_eq!(ran.marks, crate::transport::marks(&ran.ran, &ran.scene));
+    let left = ran.scene.segments.len();
     assert!(0 < left && left < whole, "{left} of {whole}");
     assert_eq!(
         state.view.at,
@@ -486,8 +559,8 @@ fn the_view_sets_up_or_plays_back() {
     let mut doc = Document::opened(1, Some(dir.join("rail-jig.camcraft")), job);
     assert!(cannot_play_back(doc.setups.entry("top".into()).or_default()).is_some());
     let seq = doc.started("top");
-    let ran = crate::test_jobs::run_setup_zero(&doc.job, &dir);
-    doc.finished("top", seq, Ok(ran));
+    let ran = ran_zero(&doc.job, &dir);
+    doc.finished("top", seq, ran);
     let whole = doc.setups["top"].ran.as_ref().unwrap().scene.segments.len();
 
     let state = doc.setups.get_mut("top").unwrap();
@@ -563,8 +636,8 @@ fn one_operation_is_generated_alone() {
     let job = camcraft_session::parse_job(&text, "rail-jig").unwrap();
     let mut doc = Document::opened(1, Some(dir.join("rail-jig.camcraft")), job);
     let seq = doc.started("top");
-    let ran = crate::test_jobs::run_setup_zero(&doc.job, &dir);
-    doc.finished("top", seq, Ok(ran));
+    let ran = ran_zero(&doc.job, &dir);
+    doc.finished("top", seq, ran);
     let kinds = |plans: &[Plan]| -> Vec<&'static str> {
         plans
             .iter()
@@ -941,4 +1014,31 @@ fn a_moved_model_is_placed_again_not_read() {
         doc.wanted_loads().as_slice(),
         [(_, _, Wanted::Read)]
     ));
+}
+
+/// A run cut back to its first operations keeps the scene a run of them alone
+/// would have drawn: the same segments at the same times, the same steep
+/// descents in the same order, and the same counts.
+#[test]
+fn a_scene_cut_back_is_the_one_built_for_what_is_left() {
+    let (doc, dir) = quick_example();
+    let job = &doc.job;
+    let (ran, scene) = ran_zero(job, &dir).unwrap();
+    let n = ran.result.operations.len();
+    assert!(n >= 2 && scene.ops.iter().all(|o| o.count > 0));
+    for kept in 0..=n {
+        let mut cut = scene.clone();
+        super::setup_state::keep_first(&mut cut, kept);
+        let mut result = ran.result.clone();
+        result.operations.truncate(kept);
+        let built = Scene::build(job, &job.setups[0], &result);
+        assert_eq!(cut.segments, built.segments, "{kept} kept");
+        assert_eq!(cut.steep, built.steep, "{kept} kept");
+        assert_eq!(cut.role_counts, built.role_counts, "{kept} kept");
+        assert_eq!(cut.ops.len(), built.ops.len(), "{kept} kept");
+        for (a, b) in cut.ops.iter().zip(&built.ops) {
+            assert_eq!((&a.name, a.first, a.count), (&b.name, b.first, b.count));
+            assert_eq!(a.cutter, b.cutter);
+        }
+    }
 }

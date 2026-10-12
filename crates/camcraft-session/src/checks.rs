@@ -20,13 +20,13 @@
 //! then decide. The codes are kept stable, so that anything written about them
 //! still reads right.
 
-use camcraft_core::allowance::{Allowance, EffectiveTool};
-use camcraft_core::dropcutter::{DropCutter, DropTest};
+use camcraft_core::cutter::allowance::{Allowance, EffectiveTool};
+use camcraft_core::cutter::dropcutter::{DropCutter, DropTest};
+use camcraft_core::cutter::tool::ToolProfile;
 use camcraft_core::job::Job;
-use camcraft_core::parallel::ParallelReport;
+use camcraft_core::path::toolpath::{MoveRole, PLUNGE_RATIO, Toolpath};
 use camcraft_core::run::{OperationResult, StrategyDetail};
-use camcraft_core::tool::ToolProfile;
-use camcraft_core::toolpath::{MoveRole, PLUNGE_RATIO, Toolpath};
+use camcraft_core::strategy::parallel::ParallelReport;
 use camcraft_geom::mesh::TriMesh;
 use camcraft_sim::stock::VerifyReport;
 use glam::DVec3;
@@ -94,16 +94,28 @@ impl Checks {
 
     /// Every failure as a line of text, for a log.
     pub fn failure_lines(&self) -> Vec<String> {
-        self.failures()
-            .map(|(g, f)| {
-                let detail = if f.detail.is_empty() {
-                    String::new()
-                } else {
-                    format!(" ({})", f.detail)
-                };
-                format!("{} {}: {}{detail}", f.code, g.title, f.message)
-            })
-            .collect()
+        self.failures().map(|(g, f)| f.line(g)).collect()
+    }
+}
+
+impl Finding {
+    /// It as a line of text, for a log: its code, `group`'s title, what was
+    /// found, and its numbers.
+    pub fn line(&self, group: &Group) -> String {
+        let detail = if self.detail.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", self.detail)
+        };
+        format!("{} {}: {}{detail}", self.code, group.title, self.message)
+    }
+
+    /// It, at move `i` of its operation's path.
+    fn at(self, i: usize) -> Self {
+        Self {
+            at_move: Some(i),
+            ..self
+        }
     }
 }
 
@@ -242,18 +254,16 @@ fn operation_findings(
             "no unresolved links".into(),
             String::new(),
         ),
-        Some(&i) => Finding {
-            at_move: Some(i),
-            ..finding(
-                Level::Fail,
-                "CC101",
-                format!(
-                    "{} unresolved link(s): the path is not machinable",
-                    links.len()
-                ),
-                String::new(),
-            )
-        },
+        Some(&i) => finding(
+            Level::Fail,
+            "CC101",
+            format!(
+                "{} unresolved link(s): the path is not machinable",
+                links.len()
+            ),
+            String::new(),
+        )
+        .at(i),
     });
 
     // CC102: the cutter dropped along every rapid, onto the part itself.
@@ -286,18 +296,16 @@ fn operation_findings(
             "plunges and retracts are vertical".into(),
             String::new(),
         ),
-        Some(&i) => Finding {
-            at_move: Some(i),
-            ..finding(
-                Level::Fail,
-                "CC103",
-                format!(
-                    "{} plunge or retract move(s) travel sideways",
-                    sideways.len()
-                ),
-                "drags the cutter through the wall it just cut".into(),
-            )
-        },
+        Some(&i) => finding(
+            Level::Fail,
+            "CC103",
+            format!(
+                "{} plunge or retract move(s) travel sideways",
+                sideways.len()
+            ),
+            "drags the cutter through the wall it just cut".into(),
+        )
+        .at(i),
     });
 
     // CC104: every move that feeds has a feed, and no rapid carries one.
@@ -321,18 +329,16 @@ fn operation_findings(
             "feed rates are consistent with move roles".into(),
             String::new(),
         ),
-        Some(&i) => Finding {
-            at_move: Some(i),
-            ..finding(
-                Level::Fail,
-                "CC104",
-                format!(
-                    "{} move(s) with a feed that does not suit their role",
-                    bad_feed.len()
-                ),
-                "a feeding move without a feed, or a rapid with one".into(),
-            )
-        },
+        Some(&i) => finding(
+            Level::Fail,
+            "CC104",
+            format!(
+                "{} move(s) with a feed that does not suit their role",
+                bad_feed.len()
+            ),
+            "a feeding move without a feed, or a rapid with one".into(),
+        )
+        .at(i),
     });
 
     // CC105: a plunge at cutting feed, measured as one continuous descent.
@@ -349,19 +355,17 @@ fn operation_findings(
             "no cutting descent plunges past the allowance".into(),
             format!("{allowance:.2} mm allowed"),
         ),
-        Some(d) => Finding {
-            at_move: Some(d.last),
-            ..finding(
-                Level::Fail,
-                "CC105",
-                format!(
-                    "a steep cutting descent of {:.2} mm exceeds the {allowance:.2} mm \
-                     allowance",
-                    d.depth
-                ),
-                "a plunge at cutting feed breaks cutters".into(),
-            )
-        },
+        Some(d) => finding(
+            Level::Fail,
+            "CC105",
+            format!(
+                "a steep cutting descent of {:.2} mm exceeds the {allowance:.2} mm \
+                 allowance",
+                d.depth
+            ),
+            "a plunge at cutting feed breaks cutters".into(),
+        )
+        .at(d.last),
     });
 
     // CC106: the simulator's own verdict, which needs the material as it stood.
@@ -431,13 +435,12 @@ fn operation_findings(
         StrategyDetail::Spiral(r) | StrategyDetail::Radial(r) => {
             sampling(&r.sweep, &mut out);
             finished(op, r.passes, NOTHING_IN_SLOPES, &mut out);
-            too_steep(op, r.too_steep, &mut out);
         }
         StrategyDetail::MorphedSpiral(r) => {
             sampling(&r.cut.sweep, &mut out);
             finished(op, r.cut.passes, NOTHING_IN_SLOPES, &mut out);
             coarsened(op, r.pattern.coarsened, 0.0, &mut out);
-            if r.pattern.widest > r.pattern.stepover * (1.0 + 1e-6) {
+            if r.pattern.uneven() {
                 out.push(finding(
                     Level::Warn,
                     "CC213",
@@ -461,26 +464,15 @@ fn operation_findings(
                     "too concave for one spiral from its boundary to its centre".into(),
                 ));
             }
-            too_steep(op, r.cut.too_steep, &mut out);
         }
         StrategyDetail::PocketClearing(r) => {
             if r.rings == 0 {
-                out.push(finding(
-                    Level::Warn,
-                    "CC205",
-                    "roughing found nothing to clear".into(),
-                    "the stock may already be below this operation's top".into(),
-                ));
+                out.push(nothing_to_clear());
             }
         }
         StrategyDetail::Adaptive(r) => {
             if r.passes == 0 {
-                out.push(finding(
-                    Level::Warn,
-                    "CC205",
-                    "roughing found nothing to clear".into(),
-                    "the stock may already be below this operation's top".into(),
-                ));
+                out.push(nothing_to_clear());
             }
             if r.no_room > 0 {
                 out.push(finding(
@@ -601,7 +593,8 @@ fn rapid_depth(
         .fold(0.0, f64::max)
 }
 
-fn thousands(n: u64) -> String {
+/// `n` with its thousands grouped by commas: `18,000`.
+pub fn thousands(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, c) in s.chars().enumerate() {
@@ -611,6 +604,16 @@ fn thousands(n: u64) -> String {
         out.push(c);
     }
     out
+}
+
+/// Roughing that found nothing to clear.
+fn nothing_to_clear() -> Finding {
+    finding(
+        Level::Warn,
+        "CC205",
+        "roughing found nothing to clear".into(),
+        "the stock may already be below this operation's top".into(),
+    )
 }
 
 /// Why a finishing pass over a pattern may find nothing: none of it within the
@@ -733,7 +736,7 @@ mod tests {
     /// path alone: the engine's own reports still say all is well.
     #[test]
     fn the_checks_find_what_is_wrong_with_a_path() {
-        use camcraft_core::toolpath::MoveRole;
+        use camcraft_core::path::toolpath::MoveRole;
         use glam::dvec3;
         let ran = run_small();
         let b = ran.part.bounds().unwrap();
@@ -776,5 +779,12 @@ mod tests {
             }
         });
         assert_eq!(failed(&c), ["CC105"]);
+    }
+
+    #[test]
+    fn thousands_are_grouped() {
+        assert_eq!(thousands(18000), "18,000");
+        assert_eq!(thousands(900), "900");
+        assert_eq!(thousands(1_234_567), "1,234,567");
     }
 }

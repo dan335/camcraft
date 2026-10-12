@@ -8,6 +8,10 @@
 //! - did the tool end up **below the part**, and by how much
 //! - did a **rapid touch material**, which is the defect Pngcam ships with
 //!
+//! Simulating the emitted program and comparing the result with the part is the
+//! primary regression test for the whole system: it finds real defects without
+//! anyone reading G-code.
+//!
 //! # Removal is an erosion, the dual of the cutter-location dilation
 //!
 //! A tool tip at `(x, y, z)` occupies, at radial distance `d` from its axis, every
@@ -37,7 +41,7 @@ mod sweep;
 mod tests;
 
 use camcraft_geom::arc::Arc;
-use camcraft_geom::heightmap::{HeightMap, HeightMapError};
+use camcraft_geom::heightmap::{HeightMap, HeightMapError, cell_index};
 use glam::{DVec2, DVec3};
 use rayon::prelude::*;
 
@@ -77,14 +81,6 @@ pub struct SimMove {
 }
 
 impl SimMove {
-    /// The point a fraction `t` of the way along it, from `from`.
-    pub fn point_at(&self, from: DVec3, t: f64) -> DVec3 {
-        match self.arc {
-            None => from.lerp(self.to, t),
-            Some(a) => a.point_at(from, self.to, t),
-        }
-    }
-
     /// The first `t` of it, from `from`, as a move of its own.
     pub fn part(&self, from: DVec3, t: f64) -> Self {
         match self.arc {
@@ -265,6 +261,44 @@ impl VerifyReport {
     }
 }
 
+/// How a column of material compares with the part.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Class {
+    /// Below the part by more than the budget: a ruined part.
+    Gouge,
+    /// On the part, within the budget and the leftover limit.
+    OnPart,
+    /// Further above the part than the leftover limit: where the cutter could not
+    /// reach, or has not yet.
+    Leftover,
+    /// Material the part does not cover.
+    OffPart,
+}
+
+/// Classify a column of material `stock` high against the part there, as
+/// [`PartSurface::lookup`] gives it: `(its height, how far the material is below
+/// it)`, or `None` where there is no part. Below by more than `budget` is a
+/// gouge; otherwise more than `leftover_limit` above is leftover.
+///
+/// The rule [`Stock::verify`] counts by, so whatever shows material by it agrees
+/// with the verdict cell for cell.
+pub fn classify(stock: f64, part: Option<(f64, f64)>, budget: f64, leftover_limit: f64) -> Class {
+    let Some((part, under)) = part else {
+        return Class::OffPart;
+    };
+    if under > budget {
+        Class::Gouge
+    } else if stock - part > leftover_limit {
+        Class::Leftover
+    } else {
+        Class::OnPart
+    }
+}
+
+/// Cells added up as one part of a volume: fixed, so the parts, and the order
+/// they are added in, do not depend on how many threads there are.
+const VOLUME_CELLS: usize = 1 << 14;
+
 impl Stock {
     /// A rectangular block covering `[min, max]`, its top at `top`.
     pub fn block(
@@ -309,14 +343,11 @@ impl Stock {
         let (nx, ny, origin) = (field.nx(), field.ny(), field.origin());
         // Cells from the one at or below a block's low edge to the one at or
         // beyond its high edge: a lone block covers the whole grid, as `block`.
-        let span = |lo: f64, hi: f64, o: f64, n: u32| -> (u32, u32) {
-            let last = f64::from(n.saturating_sub(1));
-            let a = ((lo - o) / pitch + 1.0e-9).floor().clamp(0.0, last);
-            let b = ((hi - o) / pitch - 1.0e-9).ceil().clamp(0.0, last);
-            // Clamped into the grid, so the narrowing is exact.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let r = (a as u32, b as u32);
-            r
+        let span = |lo: f64, hi: f64, o: f64, n: u32| {
+            (
+                cell_index(((lo - o) / pitch + 1.0e-9).floor(), n),
+                cell_index(((hi - o) / pitch - 1.0e-9).ceil(), n),
+            )
         };
         for &(lo, hi, top) in boxes {
             let (x0, x1) = span(lo.x, hi.x, origin.x, nx);
@@ -375,22 +406,31 @@ impl Stock {
     }
 
     /// Volume of material remaining, in cubic millimetres.
+    ///
+    /// Added up in parts of a fixed size in parallel, then the parts in order, so
+    /// it comes out the same to the bit on any number of threads.
     pub fn volume(&self) -> f64 {
         let cell = self.field.pitch() * self.field.pitch();
         let floor = self.floor;
-        self.field
+        let parts: Vec<f64> = self
+            .field
             .data()
-            .par_iter()
-            .map(|v| {
-                let h = f64::from(*v);
-                if h.is_finite() {
-                    (h - floor).max(0.0)
-                } else {
-                    0.0
-                }
+            .par_chunks(VOLUME_CELLS)
+            .map(|cells| {
+                cells
+                    .iter()
+                    .map(|v| {
+                        let h = f64::from(*v);
+                        if h.is_finite() {
+                            (h - floor).max(0.0)
+                        } else {
+                            0.0
+                        }
+                    })
+                    .sum::<f64>()
             })
-            .sum::<f64>()
-            * cell
+            .collect();
+        parts.iter().sum::<f64>() * cell
     }
 
     /// Compare the simulated result against the part it was meant to produce.
@@ -399,30 +439,48 @@ impl Stock {
     /// is a ruined part; well above it is leftover, which is only unfinished. Below
     /// is measured from the lowest the part comes nearby when it was given a reach
     /// ([`PartSurface::reaching`]), so a wall's height is not a gouge beside it.
+    /// Each column is judged by [`classify`].
+    ///
+    /// Rows are judged in parallel. Their counts add and their extremes are
+    /// maxima, so the report does not depend on the order they are combined in.
     pub fn verify(&self, part: &PartSurface, tolerance: f64, leftover_limit: f64) -> VerifyReport {
-        let mut r = VerifyReport::default();
         let part_at = part.lookup(&self.field);
-        for iy in 0..self.field.ny() {
+        let row = |iy: u32| {
+            let mut r = VerifyReport::default();
             for ix in 0..self.field.nx() {
                 let (Some(p), Some(stock)) = (self.field.position(ix, iy), self.field.get(ix, iy))
                 else {
                     continue;
                 };
-                let Some((target, under)) = part_at(ix, iy, p, stock, tolerance) else {
+                let near = part_at(ix, iy, p, stock, tolerance);
+                let Some((target, under)) = near else {
                     continue;
                 };
                 r.compared += 1;
-                let delta = stock - target;
-                if under > tolerance {
-                    r.gouged += 1;
-                    r.deepest_gouge_mm = r.deepest_gouge_mm.max(under);
-                } else if delta > leftover_limit {
-                    r.leftover += 1;
-                    r.tallest_leftover_mm = r.tallest_leftover_mm.max(delta);
+                match classify(stock, near, tolerance, leftover_limit) {
+                    Class::Gouge => {
+                        r.gouged += 1;
+                        r.deepest_gouge_mm = r.deepest_gouge_mm.max(under);
+                    }
+                    Class::Leftover => {
+                        r.leftover += 1;
+                        r.tallest_leftover_mm = r.tallest_leftover_mm.max(stock - target);
+                    }
+                    Class::OnPart | Class::OffPart => {}
                 }
             }
-        }
-        r
+            r
+        };
+        (0..self.field.ny())
+            .into_par_iter()
+            .map(row)
+            .reduce(VerifyReport::default, |a, b| VerifyReport {
+                compared: a.compared + b.compared,
+                gouged: a.gouged + b.gouged,
+                deepest_gouge_mm: a.deepest_gouge_mm.max(b.deepest_gouge_mm),
+                leftover: a.leftover + b.leftover,
+                tallest_leftover_mm: a.tallest_leftover_mm.max(b.tallest_leftover_mm),
+            })
     }
 
     /// Write the field as a 16-bit grayscale PGM, for eyeballing.

@@ -1,6 +1,7 @@
+use super::pitch::{CELLS_PER_TOOL, FINEST_PITCH, MAX_SIM_CELLS};
 use super::*;
 use crate::fixture::JOB;
-use crate::job::{Boundary, Height, HeightRef, Outline};
+use crate::job::{Boundary, Height, HeightRef, Outline, StrategySpec};
 use crate::setup::PrepareError;
 use camcraft_geom::synthetic;
 use camcraft_geom::topology::Body;
@@ -190,7 +191,7 @@ fn an_empty_model_is_refused() {
 #[test]
 fn a_flipped_setup_machines_the_underside() {
     let mut job: Job = toml::from_str(JOB).unwrap();
-    job.setups[0].orientation = crate::frame::Orientation::default().flipped();
+    job.setups[0].orientation = crate::setup::frame::Orientation::default().flipped();
     let dome = dome().mapped(|p| p + glam::dvec3(0.0, 0.0, 3.0)).unwrap();
     let result = run_job(&job, &dome).unwrap();
     assert!((result.heights.model_top - 5.0).abs() < 1e-6);
@@ -247,8 +248,8 @@ fn two_blocks_are_one_stock() {
 /// The step as the "dome" of `JOB`, with one operation left: `finish` or
 /// `rough`, kept to the plateau.
 fn kept_to_plateau(keep: &str, containment: crate::job::Containment) -> (Job, Body) {
-    use crate::features::find_face;
     use crate::job::FeatureRef;
+    use crate::setup::features::find_face;
     let body = Body::derived(synthetic::step(5.0, 10.0));
     let mut job: Job = toml::from_str(JOB).unwrap();
     job.setups[0].operations.retain(|op| op.name == keep);
@@ -272,8 +273,8 @@ fn kept_to_plateau(keep: &str, containment: crate::job::Containment) -> (Job, Bo
 /// 8 mm drill in pecks: one hole, drilled to the model's bottom, each peck
 /// backing out, and the result verifies.
 fn drilled(peck: Option<f64>) -> (SetupResult, Job) {
-    use crate::features::find_edge;
     use crate::job::{FeatureRef, ToolSpec};
+    use crate::setup::features::find_edge;
     let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
     let mut job: Job = toml::from_str(JOB).unwrap();
     job.tools.insert(
@@ -324,7 +325,7 @@ fn a_hole_is_drilled_through_in_pecks() {
         .path
         .moves()
         .iter()
-        .filter(|m| m.role == crate::toolpath::MoveRole::Retract)
+        .filter(|m| m.role == crate::path::toolpath::MoveRole::Retract)
         .count();
     assert!(retracts >= 3, "{retracts} retracts");
     assert!(result.is_clean(), "{:?}", result.warnings());
@@ -348,7 +349,7 @@ fn cuts(result: &SetupResult) -> Vec<DVec2> {
         .path
         .moves()
         .iter()
-        .filter(|m| m.role == crate::toolpath::MoveRole::Cut)
+        .filter(|m| m.role == crate::path::toolpath::MoveRole::Cut)
         .map(|m| m.to.truncate())
         .collect()
 }
@@ -541,7 +542,7 @@ fn a_part_is_profiled_out_hole_first() {
         .path
         .moves()
         .iter()
-        .filter(|m| m.role == crate::toolpath::MoveRole::Cut)
+        .filter(|m| m.role == crate::path::toolpath::MoveRole::Cut)
         .map(|m| m.to)
         .collect();
     let deepest = cuts.iter().map(|p| p.z).fold(f64::MAX, f64::min);
@@ -560,8 +561,8 @@ fn a_part_is_profiled_out_hole_first() {
 /// result verifies. A tool too wide for it is refused.
 #[test]
 fn a_pocket_is_cleared_to_its_picked_floor() {
-    use crate::features::find_face;
     use crate::job::FeatureRef;
+    use crate::setup::features::find_face;
     let body = Body::derived(synthetic::step(5.0, 10.0));
     let pick = FeatureRef {
         model: "dome".into(),
@@ -597,7 +598,7 @@ fn a_pocket_is_cleared_to_its_picked_floor() {
         .path
         .moves()
         .iter()
-        .filter(|m| m.role == crate::toolpath::MoveRole::Cut)
+        .filter(|m| m.role == crate::path::toolpath::MoveRole::Cut)
         .map(|m| m.to)
         .collect();
     for p in &cuts {
@@ -636,7 +637,7 @@ fn a_pocket_is_cleared_to_its_picked_floor() {
         .path
         .moves()
         .iter()
-        .filter(|m| m.role == crate::toolpath::MoveRole::Cut)
+        .filter(|m| m.role == crate::path::toolpath::MoveRole::Cut)
         .map(|m| m.to.z)
         .collect();
     let deepest = zs.iter().copied().fold(f64::MAX, f64::min);
@@ -656,14 +657,14 @@ fn a_pocket_is_cleared_to_its_picked_floor() {
 /// still goes down to the floor picked on the boundary itself.
 #[test]
 fn stock_to_leave_moves_a_2d_cut_and_an_offset_does_not() {
-    use crate::features::find_face;
     use crate::job::{FeatureRef, ProfileSide};
+    use crate::setup::features::find_face;
     let cuts = |result: &SetupResult| -> Vec<DVec3> {
         result.operations[0]
             .path
             .moves()
             .iter()
-            .filter(|m| m.role == crate::toolpath::MoveRole::Cut)
+            .filter(|m| m.role == crate::path::toolpath::MoveRole::Cut)
             .map(|m| m.to)
             .collect()
     };
@@ -755,7 +756,9 @@ fn a_profiled_part_is_held_by_tabs() {
             .path
             .moves()
             .iter()
-            .filter(|m| m.role == crate::toolpath::MoveRole::Cut && (m.to.z - 2.0).abs() < 1e-9)
+            .filter(|m| {
+                m.role == crate::path::toolpath::MoveRole::Cut && (m.to.z - 2.0).abs() < 1e-9
+            })
             .count();
         assert!(on_top > 0, "{shape:?}: nothing rides over a tab");
         let (a, b) = (op.sim.removed_mm3, without.operations[0].sim.removed_mm3);
@@ -771,7 +774,7 @@ fn a_profiled_part_is_held_by_tabs() {
 #[test]
 fn a_profile_leads_on_and_off_each_ring() {
     use crate::job::{Leads, ProfileSide, Tabs};
-    use crate::toolpath::MoveRole;
+    use crate::path::toolpath::MoveRole;
     let plate = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
     let profile = StrategySpec::Profile {
         side: ProfileSide::Outside,
@@ -839,7 +842,7 @@ fn a_profile_leaves_stock_beside_or_cuts_past_the_part() {
             .path
             .moves()
             .iter()
-            .filter(|m| m.role == crate::toolpath::MoveRole::Cut)
+            .filter(|m| m.role == crate::path::toolpath::MoveRole::Cut)
             .map(|m| m.to.x.abs().max(m.to.y.abs()))
             .fold(0.0, f64::max);
         assert!(
@@ -854,8 +857,8 @@ fn a_profile_leaves_stock_beside_or_cuts_past_the_part() {
 /// keeps off them by it, and less is taken out.
 #[test]
 fn a_pocket_leaves_stock_on_its_walls() {
-    use crate::features::find_face;
     use crate::job::{FeatureRef, StockToLeave};
+    use crate::setup::features::find_face;
     let body = Body::derived(synthetic::step(5.0, 10.0));
     let pick = FeatureRef {
         model: "dome".into(),
@@ -886,7 +889,7 @@ fn a_pocket_leaves_stock_on_its_walls() {
         assert_eq!(result.verify.gouged, 0);
         let op = &result.operations[0];
         for m in op.path.moves() {
-            if m.role == crate::toolpath::MoveRole::Cut {
+            if m.role == crate::path::toolpath::MoveRole::Cut {
                 let leave = job.setups[0].operations[0].passes.stock_to_leave.radial;
                 assert!(
                     m.to.x >= 3.0 + leave - 1e-6 && m.to.x <= 7.0 - leave + 1e-6,
@@ -927,7 +930,7 @@ fn roughing_twice_leaves_nothing_for_the_second() {
         let moves = o.path.moves();
         moves
             .windows(2)
-            .filter(|w| w[1].role == crate::toolpath::MoveRole::Cut)
+            .filter(|w| w[1].role == crate::path::toolpath::MoveRole::Cut)
             .map(|w| w[0].to.distance(w[1].to))
             .sum()
     };
@@ -984,7 +987,7 @@ fn facing_takes_the_stock_down_to_the_part() {
         .path
         .moves()
         .iter()
-        .filter(|m| m.role == crate::toolpath::MoveRole::Cut)
+        .filter(|m| m.role == crate::path::toolpath::MoveRole::Cut)
         .map(|m| m.to)
         .collect();
     let deepest = cuts.iter().map(|p| p.z).fold(f64::MAX, f64::min);
@@ -1101,4 +1104,22 @@ fn adaptive_runs_are_deterministic() {
     };
     let (one, eight) = (on(1), on(8));
     assert_eq!(one.operations[0].path, eight.operations[0].path);
+}
+
+/// An operation turned off or skipped cuts nothing, so the material after it
+/// is the material before it: the same keyframe, not another copy of it.
+#[test]
+fn an_operation_left_out_keeps_the_keyframe_before_it() {
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    job.setups[0].operations[0].enabled = false;
+    let body = Body::derived(dome());
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let prepared = crate::setup::prepare(&job, 0, &bodies).unwrap();
+    let plans = [Plan::Generate, Plan::Skip];
+    let result = run_prepared_planned(&job, 0, &prepared, &bodies, &plans, &mut |_| {}).unwrap();
+    let k = &result.keyframes;
+    assert_eq!(k.len(), 3);
+    assert!(Arc::ptr_eq(&k[0], &k[1]) && Arc::ptr_eq(&k[1], &k[2]));
+    assert_eq!(result.operations[0].made, Made::Disabled);
+    assert_eq!(result.operations[1].made, Made::Skipped);
 }

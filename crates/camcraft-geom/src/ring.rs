@@ -12,7 +12,9 @@
 //! tessellation's points on a round edge do, taking the circle's centre and radius
 //! from the model. [`Ring::offset`] moves every line and arc of a ring square to
 //! itself, and turns the corners it opens round an arc about the corner. Nothing
-//! is ever fitted to points.
+//! here fits a curve to points: the model's circles are its round edges, which
+//! [`crate::topology`] calls circles only where every point of the edge lies within
+//! its tolerance of the circle fitted through them.
 //!
 //! # Checked against the polygons
 //!
@@ -24,6 +26,9 @@
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 use glam::DVec2;
+
+use crate::arc::chord_count;
+use crate::mesh::segment_distance2;
 
 /// One piece of a ring, from where the piece before it ended.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -145,16 +150,7 @@ impl Span {
         match *self {
             Span::Line { to } => vec![to],
             Span::Arc { to, centre, sweep } => {
-                let r = from.distance(centre);
-                let widest = if tolerance < r {
-                    2.0 * (1.0 - tolerance / r).acos()
-                } else {
-                    FRAC_PI_2
-                }
-                .clamp(1e-3, FRAC_PI_2);
-                let n = (sweep.abs() / widest).ceil().clamp(1.0, 1e5);
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let n = n as u32;
+                let n = chord_count(from.distance(centre), sweep, tolerance);
                 let mut out: Vec<DVec2> = (1..n)
                     .map(|k| self.point_at(from, f64::from(k) / f64::from(n)))
                     .collect();
@@ -206,9 +202,9 @@ impl Ring {
             .map(move |s| (std::mem::replace(&mut at, s.to()), s))
     }
 
-    /// Whether any span is an arc.
-    pub fn has_arcs(&self) -> bool {
-        self.spans.iter().any(|s| matches!(s, Span::Arc { .. }))
+    /// Each span with where it starts, gathered.
+    fn piece_list(&self) -> Vec<(DVec2, Span)> {
+        self.pieces().map(|(f, s)| (f, *s)).collect()
     }
 
     /// Its length.
@@ -248,8 +244,8 @@ impl Ring {
 
     /// The same ring run the other way.
     pub fn reversed(&self) -> Self {
-        let pieces: Vec<(DVec2, Span)> = self.pieces().map(|(f, s)| (f, *s)).collect();
-        let spans = pieces
+        let spans = self
+            .piece_list()
             .iter()
             .rev()
             .map(|(from, s)| match *s {
@@ -270,7 +266,7 @@ impl Ring {
     /// The same ring started at span `i`, a fraction `t` of the way along it.
     fn started_at(&self, i: usize, t: f64) -> Self {
         let n = self.spans.len();
-        let pieces: Vec<(DVec2, Span)> = self.pieces().map(|(f, s)| (f, *s)).collect();
+        let pieces = self.piece_list();
         let Some(&(from, span)) = pieces.get(i) else {
             return self.clone();
         };
@@ -311,7 +307,7 @@ impl Ring {
     pub fn along(&self, distance: f64) -> (Vec<Span>, DVec2) {
         let mut out = Vec::new();
         let mut left = distance;
-        let pieces: Vec<(DVec2, Span)> = self.pieces().map(|(f, s)| (f, *s)).collect();
+        let pieces = self.piece_list();
         let total: f64 = pieces.iter().map(|(f, s)| s.length(*f)).sum();
         if total <= 1e-12 || left <= 1e-12 {
             return (out, self.start);
@@ -461,7 +457,7 @@ impl Ring {
         if d.abs() < 1e-12 {
             return Some(self.clone());
         }
-        let pieces: Vec<(DVec2, Span)> = self.pieces().map(|(f, s)| (f, *s)).collect();
+        let pieces = self.piece_list();
         let n = pieces.len();
         // Each span moved, from its moved start.
         let moved: Vec<(DVec2, Span)> = pieces
@@ -527,16 +523,7 @@ impl Ring {
             points
                 .iter()
                 .zip(points.iter().cycle().skip(1))
-                .map(|(&a, &b)| {
-                    let d = b - a;
-                    let l = d.length_squared();
-                    let t = if l > 1e-24 {
-                        ((p - a).dot(d) / l).clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    };
-                    (a + d * t).distance_squared(p)
-                })
+                .map(|(&a, &b)| segment_distance2(p, a, b))
                 .fold(f64::INFINITY, f64::min)
                 .sqrt()
         };
@@ -657,179 +644,4 @@ fn trimmed(from: DVec2, s: Span, a: DVec2, b: DVec2) -> Option<Span> {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp, clippy::indexing_slicing)]
-mod tests {
-    use super::*;
-    use glam::dvec2;
-    use std::f64::consts::PI;
-
-    /// A rounded rectangle `w` by `h`, corners of radius `r`, counter-clockwise,
-    /// as a tessellation gives it: each corner as `steps` chords.
-    fn rounded(w: f64, h: f64, r: f64, steps: u32) -> (Vec<DVec2>, Vec<(DVec2, f64)>) {
-        let centres = [
-            dvec2(w - r, r),
-            dvec2(w - r, h - r),
-            dvec2(r, h - r),
-            dvec2(r, r),
-        ];
-        let mut pts = Vec::new();
-        for (k, c) in centres.iter().enumerate() {
-            let a0 = -FRAC_PI_2 + f64::from(u32::try_from(k).unwrap()) * FRAC_PI_2;
-            for s in 0..=steps {
-                let a = a0 + FRAC_PI_2 * f64::from(s) / f64::from(steps);
-                pts.push(*c + DVec2::from_angle(a) * r);
-            }
-        }
-        (pts, centres.iter().map(|c| (*c, r)).collect())
-    }
-
-    /// A tessellated rounded rectangle snaps to four lines and four exact
-    /// quarter arcs of the model's corners.
-    #[test]
-    fn a_tessellated_round_corner_snaps_to_its_circle() {
-        let (pts, circles) = rounded(100.0, 50.0, 3.175, 9);
-        let ring = Ring::snapped(&pts, &circles, 1e-3, 0.05).unwrap();
-        let arcs: Vec<&Span> = ring
-            .spans()
-            .iter()
-            .filter(|s| matches!(s, Span::Arc { .. }))
-            .collect();
-        assert_eq!(arcs.len(), 4, "{ring:?}");
-        for a in arcs {
-            let Span::Arc { sweep, .. } = a else {
-                unreachable!()
-            };
-            assert!((sweep - FRAC_PI_2).abs() < 1e-9, "{sweep}");
-        }
-        assert_eq!(ring.spans().len(), 8);
-        assert!((ring.length() - (2.0 * (100.0 + 50.0 - 4.0 * 3.175) + TAU * 3.175)).abs() < 1e-9);
-        assert!(!ring.starts_at_corner(), "a round ring has no corner");
-    }
-
-    /// A chord across a circle is not an arc of it: a D whose flat's ends are on
-    /// the circle keeps its flat.
-    #[test]
-    fn a_chord_is_not_an_arc() {
-        let c = dvec2(0.0, 0.0);
-        let mut pts: Vec<DVec2> = (0..=18)
-            .map(|k| DVec2::from_angle(-FRAC_PI_2 + PI * f64::from(k) / 18.0) * 10.0)
-            .collect();
-        pts.dedup();
-        let ring = Ring::snapped(&pts, &[(c, 10.0)], 1e-3, 0.05).unwrap();
-        assert_eq!(ring.spans().len(), 2, "{ring:?}");
-        assert!(
-            matches!(ring.spans()[0], Span::Arc { .. })
-                != matches!(ring.spans()[1], Span::Arc { .. })
-        );
-    }
-
-    /// Moved out, a rounded rectangle's arcs grow by the distance and its lines
-    /// move out square to themselves: still tangent, still eight spans.
-    #[test]
-    fn an_offset_moves_lines_and_grows_arcs() {
-        let (pts, circles) = rounded(100.0, 50.0, 3.175, 9);
-        let ring = Ring::snapped(&pts, &circles, 1e-3, 0.05).unwrap();
-        // Counter-clockwise: its right is outside.
-        let out = ring.offset(3.175).unwrap();
-        assert_eq!(out.spans().len(), 8, "{out:?}");
-        for (from, s) in out.pieces() {
-            if let Span::Arc { centre, .. } = s {
-                assert!((from.distance(*centre) - 6.35).abs() < 1e-9);
-            }
-        }
-        let expected = 2.0 * (100.0 + 50.0 - 4.0 * 3.175) + TAU * 6.35;
-        assert!((out.length() - expected).abs() < 1e-9, "{}", out.length());
-        assert!(!out.starts_at_corner());
-        // Back in again, the same ring.
-        let back = out.offset(-3.175).unwrap();
-        assert!((back.length() - ring.length()).abs() < 1e-9);
-    }
-
-    /// Round a sharp corner the tool's centre turns an arc about the corner,
-    /// the tool's radius; inside one, the moved sides are cut where they cross.
-    #[test]
-    fn corners_open_round_and_close_cut() {
-        let square = Ring::from_points(&[
-            dvec2(0.0, 0.0),
-            dvec2(10.0, 0.0),
-            dvec2(10.0, 10.0),
-            dvec2(0.0, 10.0),
-        ])
-        .unwrap();
-        let out = square.offset(2.0).unwrap();
-        assert_eq!(out.spans().len(), 8);
-        let expected = 40.0 + TAU * 2.0;
-        assert!((out.length() - expected).abs() < 1e-9);
-        let pts: Vec<DVec2> = out.points(0.001);
-        assert!(
-            pts.iter()
-                .all(|p| (p.x.max(p.y) - 12.0 < 1e-9) && (p.x.min(p.y) + 2.0 > -1e-9))
-        );
-        let inside = square.offset(-2.0).unwrap();
-        assert_eq!(inside.spans().len(), 4);
-        assert!((inside.length() - 24.0).abs() < 1e-9);
-        // Too far in, it turns inside out.
-        assert!(square.offset(-6.0).is_none());
-    }
-
-    /// Round a ring by a distance, as often as it takes, ends that far on.
-    #[test]
-    fn along_a_ring() {
-        let square = Ring::from_points(&[
-            dvec2(0.0, 0.0),
-            dvec2(10.0, 0.0),
-            dvec2(10.0, 10.0),
-            dvec2(0.0, 10.0),
-        ])
-        .unwrap();
-        let (spans, end) = square.along(15.0);
-        assert_eq!(spans.len(), 2);
-        assert!((end - dvec2(10.0, 5.0)).length() < 1e-12);
-        let (spans, end) = square.along(45.0);
-        assert_eq!(spans.len(), 5, "once round and a quarter more");
-        assert!((end - dvec2(5.0, 0.0)).length() < 1e-12);
-        let (_, end) = square.along(40.0);
-        assert!(end.length() < 1e-12, "exactly round is back at the start");
-    }
-
-    /// A ring is the same shape as a polygon only where every point of each is
-    /// near the other.
-    #[test]
-    fn close_to_checks_both_ways() {
-        let (pts, circles) = rounded(100.0, 50.0, 3.175, 9);
-        let ring = Ring::snapped(&pts, &circles, 1e-3, 0.05).unwrap();
-        assert!(ring.close_to(&pts, 0.02));
-        let mut short = pts.clone();
-        short.truncate(pts.len() / 2);
-        assert!(!ring.close_to(&short, 0.02));
-    }
-
-    /// Started anywhere, reversed, or halfway along its longest span, a ring is
-    /// the same shape.
-    #[test]
-    fn restarting_and_reversing() {
-        let (pts, circles) = rounded(100.0, 50.0, 3.175, 9);
-        let ring = Ring::snapped(&pts, &circles, 1e-3, 0.05).unwrap();
-        let length = ring.length();
-        for r in [
-            ring.starting_near(dvec2(50.0, -5.0)),
-            ring.starting_near(dvec2(101.0, -1.0)),
-            ring.longest_middle(),
-            ring.reversed(),
-        ] {
-            assert!((r.length() - length).abs() < 1e-9);
-            assert!(r.close_to(&pts, 0.02));
-        }
-        let mid = ring.longest_middle();
-        assert!(
-            (mid.start() - dvec2(50.0, 0.0)).length() < 1e-9,
-            "{:?}",
-            mid.start()
-        );
-        let near = ring.starting_near(dvec2(101.0, -1.0));
-        assert!(
-            near.start()
-                .distance(dvec2(100.0 - 3.175, 3.175) + DVec2::from_angle(-PI / 4.0) * 3.175)
-                < 1e-9
-        );
-    }
-}
+mod tests;

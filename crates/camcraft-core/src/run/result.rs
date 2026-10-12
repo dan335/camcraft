@@ -7,20 +7,20 @@ use camcraft_geom::mesh::Aabb;
 use camcraft_sim::stock::{PackedStock, PartSurface, SimReport, VerifyReport};
 use glam::DVec2;
 
-use crate::adaptive::AdaptiveReport;
-use crate::drilling::DrillReport;
-use crate::flat::FlatReport;
-use crate::frame::Frame;
 use crate::job::{Coolant, HeightContext, SpindleDirection};
-use crate::linker::LinkReport;
-use crate::morph::MorphedSpiralReport;
-use crate::parallel::ParallelReport;
-use crate::planar::PlanarReport;
-use crate::pocket_clearing::ClearingReport;
-use crate::projected::ProjectReport;
-use crate::scallop::ScallopReport;
-use crate::toolpath::Toolpath;
-use crate::waterline::WaterlineReport;
+use crate::path::linker::LinkReport;
+use crate::path::toolpath::Toolpath;
+use crate::setup::frame::Frame;
+use crate::strategy::adaptive::AdaptiveReport;
+use crate::strategy::drilling::DrillReport;
+use crate::strategy::flat::FlatReport;
+use crate::strategy::morph::MorphedSpiralReport;
+use crate::strategy::parallel::ParallelReport;
+use crate::strategy::planar::PlanarReport;
+use crate::strategy::pocket_clearing::ClearingReport;
+use crate::strategy::projected::ProjectReport;
+use crate::strategy::scallop::ScallopReport;
+use crate::strategy::waterline::WaterlineReport;
 
 /// What a strategy reported, in its own terms.
 ///

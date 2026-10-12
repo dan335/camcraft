@@ -18,7 +18,11 @@ use rayon::prelude::*;
 
 use crate::stock::pyramid::{Level, Pyramid};
 use crate::stock::stock_view::StockImage;
-use crate::view::viewport::WALL_CELLS;
+
+/// How many cells tall a step between neighbouring columns must be to be lit as
+/// a wall rather than as the surface's slope: about 72 degrees. The stock shader
+/// lights by it, and the shading here keeps to it.
+pub const WALL_CELLS: f32 = 3.0;
 
 /// Directions looked along from each cell, each both ways.
 const SLICES: usize = 8;

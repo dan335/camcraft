@@ -1,28 +1,99 @@
 # camcraft
 
-3-axis CAM for CNC routers. Takes a 3D model and a job description, emits G-code.
+Open-source CAM for 3-axis CNC routers, written in Rust. It turns a STEP or STL
+model into G-code, and simulates every program against the material before it
+will write it.
 
-**Status: 0.2, pre-alpha.** A desktop app and a command line on one engine. Takes
-STEP or STL models and a job file, writes G-code, and refuses to write a program the
-simulator has not verified against material. STEP files are read in the units they
-declare, and every import is checked against the file it came from.
-Nothing has been cut yet. See [STATUS.md](STATUS.md) for where the work left off and
-what the simulator cannot check for you.
+> [!WARNING]
+> **Use at your own risk.** camcraft is pre-alpha and has not been proven on a real
+> machine. Its G-code can be wrong in ways that crash the machine, break tools, ruin
+> the part or hurt someone. Check every program yourself before it cuts: in a
+> simulator you trust, then as an air cut above the stock, with a hand near the
+> e-stop. The software comes with no warranty (see the licences), and its authors
+> are not responsible for crashed machines, broken tools, ruined parts or any other
+> damage.
 
-## What it is
+## What it does
 
-- **3D-mesh-first.** Real surface machining, not 2.5D with 3D bolted on.
-- **Native and parallel.** No mesh decimation, no vertex budgets, no accuracy traded
-  for speed.
-- **A CLI and a desktop app on one engine path.** The `camcraft` command line
-  scripts it ([docs/jobs.md](docs/jobs.md)). `camcraft-gui` edits jobs, runs and
-  checks them, plays the program back against the material, and posts
-  ([docs/app.md](docs/app.md)). Both go through the same library, so they cannot
-  disagree about what runs or what is posted.
+You give it a model and describe the job: the stock, the tools, how the part is
+held, and the operations to run. camcraft works out the toolpaths, simulates them
+cutting the stock, and writes a G-code program for each operation. There is a
+desktop app for doing this by hand and a command line for scripting it. Both run
+the same engine, so they always produce the same program.
 
-## Architecture
+If you know Fusion's CAM, it should feel familiar: the operations, their settings
+and the programs they post follow Fusion's. (camcraft is not affiliated with
+Autodesk.)
 
-The dependency graph is acyclic, and the direction carries meaning:
+- **Models:** STEP and STL. STEP files are read in the units they declare, and
+  every import is checked against the file it came from.
+- **Roughing:** adaptive clearing and pocket clearing.
+- **Finishing:** parallel, scallop, contour, flat, spiral, radial and morphed
+  spiral.
+- **2D:** profiles, pockets, facing and drilling.
+- **Tools:** flat, ball, bullnose, V-bit and chamfer cutters, with speed and feed
+  presets. There is a built-in library of twenty common bits, and Fusion tool
+  libraries import from CSV.
+- **Setups:** several per job, each with its own orientation, work zero and work
+  offset.
+- **Checking:** every program is simulated against the stock. camcraft refuses
+  to write one that gouges the part or fails another check, and says why.
+- **Playback:** watch the material come off, move by move, before posting.
+- **Posts:** Masso (millimetres or inches) and GRBL built in, or your own
+  profile written in TOML.
+
+## Status
+
+Version 0.2, pre-alpha. The app runs, checks, plays back and posts jobs. File
+formats change without notice, and there is no release or installer yet: you
+build it from source. [STATUS.md](STATUS.md) says where the work stands and what
+the simulator cannot check for you.
+
+## Try it
+
+You need:
+
+- **Rust**, installed with [rustup](https://rustup.rs). The repository pins the
+  version it needs, and rustup fetches it on the first build.
+- **cmake and a C++ compiler.** STEP import builds OpenCascade from source, so
+  the first build takes several minutes; later builds reuse it.
+
+It is developed on macOS and builds on Windows. On Windows, build from an MSVC
+developer prompt so cmake can find `cl.exe`. Other platforms have not been tried.
+
+Open the example job in the app:
+
+```sh
+git clone https://github.com/dan335/camcraft
+cd camcraft
+cargo run --release -- examples/rail-jig.camcraft
+```
+
+Press Generate, read the checks, play the program back, then Post. A plain
+`cargo run` opens the app too, but a debug build is slower.
+
+Or use the command line:
+
+```sh
+cargo run --release -p camcraft-cli -- job examples/rail-jig.camcraft            # run and check, write nothing
+cargo run --release -p camcraft-cli -- job examples/rail-jig.camcraft --out out  # also write the G-code
+```
+
+## Documentation
+
+| For                                                    | Read                                         |
+|--------------------------------------------------------|----------------------------------------------|
+| The desktop app                                        | [docs/app.md](docs/app.md)                   |
+| Job files, the checks, the command line and the posts  | [docs/jobs.md](docs/jobs.md)                 |
+| How simulation and verification work                   | [docs/simulation.md](docs/simulation.md)     |
+| Why things are the way they are                        | [docs/decisions/](docs/decisions/)           |
+| Where the work stands                                  | [STATUS.md](STATUS.md)                       |
+
+## Development
+
+### How it fits together
+
+The crates depend on each other in one direction only:
 
 ```
 camcraft-geom     BVH, height maps, contours, shadows, topology     (leaf)
@@ -35,53 +106,46 @@ camcraft-cli      post / job (.camcraft) -> .nc                     -> session
 camcraft-gui      desktop app (egui, wgpu)                         -> session
 ```
 
-`core` does not depend on `post`. It therefore *cannot* reference a G-code concept,
-which is what structurally enforces the pipeline:
+`core` does not depend on `post`, so it *cannot* reference a G-code concept. That
+is what enforces the pipeline:
 
 ```
 Strategy -> Toolpath -> transforms -> Linker -> IR -> Post
 ```
 
-Arc fitting, tabs, lead in/out, feed optimisation and cutter compensation are each a
-`Toolpath -> Toolpath` transform. They have nowhere to live if a strategy emits
-instructions directly, so no strategy ever does.
+Arc fitting, tabs, leads, feed optimisation and cutter compensation are each a
+`Toolpath -> Toolpath` transform, so no strategy ever emits instructions directly.
 
-`import` is reached only through `session`, which only the two binaries use. So
-whatever the STEP backend costs to build, the inner development loop on
-`geom` / `sim` / `core` / `post` never pays it.
+Only the two binaries reach `import`, through `session`, so work on `geom`, `sim`,
+`core` and `post` never waits for OpenCascade to build.
 
-## Conventions
+### Conventions
 
-Millimetres, Z-up, right-handed. The controlled point is the **tool tip**. `f64` for
-computation, `f32` only for grid storage. `tolerance` is a job parameter, never a
-constant — it drives sampling density, grid resolution and the gouge threshold alike.
+Millimetres, Z-up, right-handed. The controlled point is the **tool tip**. `f64`
+for computation, `f32` only for grid storage. `tolerance` is a job parameter,
+never a constant: it drives sampling density, grid resolution and the gouge
+threshold alike.
 
-## Correctness rules
+### Correctness rules
 
-This drives a machine that can destroy a part, a cutter, or itself. These are not
-style preferences:
+This drives a machine that can destroy a part, a cutter, or itself. These are
+not style preferences:
 
 - **Deterministic output.** Identical inputs produce byte-identical G-code on any
   core count. No order-dependent floating point reductions.
-- **No panics in library crates.** Geometry code meets degenerate meshes, zero-area
-  triangles, NaNs and open shells. Fallible paths return `Result`; `unwrap` and
-  `expect` are denied by lint outside tests.
-- **Every iterative algorithm is explicitly bounded** and reports when it hits the
-  cap. A bounded algorithm that reports "incomplete" beats one that spins.
+- **No panics in library crates.** Geometry code meets degenerate meshes,
+  zero-area triangles, NaNs and open shells. Fallible paths return `Result`;
+  `unwrap` and `expect` are denied by lint outside tests.
+- **Every iterative algorithm is explicitly bounded** and reports when it hits
+  the cap. A bounded algorithm that reports "incomplete" beats one that spins.
 - **Structured diagnostics, never silence.** Silently emitting bad G-code is the
   worst available failure mode.
 - **The simulator gates release.** No cut from a toolpath it has not verified.
 
-## Build, run and check
+### Checking a change
 
-```sh
-cargo build --workspace
-bash scripts/run.sh [JOB]...                                    # the app
-cargo run --release -p camcraft-cli -- job examples/rail-jig.camcraft --out out
-```
-
-There is deliberately **no CI** while this repository is private, so one script is
-the only thing standing between a mistake and `main`. Run it before every push:
+There is no CI yet, so one script is the only thing between a mistake and
+`main`. Run it before every push:
 
 ```sh
 bash scripts/check.sh               # the crates your changes can affect: before committing
@@ -91,37 +155,27 @@ bash scripts/check.sh --all         # every crate: before pushing
 bash scripts/check.sh --full        # every crate, plus benchmarks
 ```
 
-By default it checks only what the uncommitted changes can affect: the crates they
-touch and every crate that depends on them. A change to `camcraft-gui` checks only
-`camcraft-gui`; one to `camcraft-core` checks core and everything above it. Anything
-outside `crates/` that is not documentation (a manifest, the lockfile, an example,
-a fixture) checks everything.
+By default the script checks the crates your uncommitted changes touch and every
+crate that depends on them. A change outside `crates/` that is not documentation (a
+manifest, the lockfile, an example, a fixture) checks everything. Run it
+unpiped: piping through `tail` hides progress on a suite that takes minutes. On
+Windows, `.\scripts\check.ps1` (and `-Full`) checks every crate.
 
-Run it unpiped. Piping through `tail` buffers the whole run and hides progress on
-a suite that now takes minutes; read the tail of the output afterwards instead.
+Plain `cargo build` and `cargo test` cover only the app, so that `cargo run`
+opens it. Add `--workspace` to build or test everything.
 
-On Windows, `.\scripts\check.ps1` (and `-Full`) checks every crate.
-
-It checks each gate on its own exit status and prints a summary, rather than
-chaining commands in a way that can report success without having checked anything.
-Restore the GitHub Actions workflow when the repository goes public.
-
-`camcraft-import` pulls in OpenCascade, which adds **cmake and a C++ toolchain** as
-prerequisites (on Windows, build from an MSVC environment so cmake can find
-`cl.exe`). That crate is reached only by the two binaries, so the inner loop on
-`geom` / `sim` / `core` / `post` never pays that cost. `vendor/` holds opencascade's
-sources, patched on every platform: the MSVC fix, and each B-rep face's triangle
-count, which picking needs (see the root `Cargo.toml`). Reasoning in
-[docs/decisions/0001-step-backend.md](docs/decisions/0001-step-backend.md).
+`vendor/` holds OpenCascade's Rust bindings, patched to build with MSVC and to
+report each B-rep face's triangle count, which picking needs. The reasoning is
+in [docs/decisions/0001-step-backend.md](docs/decisions/0001-step-backend.md).
 
 ## License
 
-Dual licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
-Third-party code and assets keep their own licences: `vendor/` is LGPL-2.1, and
-[NOTICE](NOTICE) lists the rest.
+Dual licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
+option. Third-party code and assets keep their own licences: `vendor/` is
+LGPL-2.1, and [NOTICE](NOTICE) lists the rest.
 
 **Not yet settled for distributed binaries.** STEP import links OpenCascade
-statically, through the `opencascade` and `occt-sys` crates, and both are LGPL-2.1
-(OpenCascade adds its own exception). The source here stays MIT or Apache-2.0, but a
-`camcraft` binary carries LGPL obligations until that is resolved. See
-[docs/decisions/0001-step-backend.md](docs/decisions/0001-step-backend.md).
+statically, through the `opencascade` and `occt-sys` crates, and both are
+LGPL-2.1 (OpenCascade adds its own exception). The source here stays MIT or
+Apache-2.0, but a `camcraft` binary carries LGPL obligations until that is
+resolved. See [docs/decisions/0001-step-backend.md](docs/decisions/0001-step-backend.md).

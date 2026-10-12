@@ -18,16 +18,25 @@
 //!   It drives adaptive sampling density, grid resolution, arc fitting and the
 //!   simulator's gouge threshold. Nothing here hardcodes a step size.
 //!
-//! # Two geometry channels
+//! # Geometry channels
 //!
-//! camcraft carries two distinct geometry channels, and this crate owns both:
+//! camcraft carries distinct geometry channels, and this crate owns them all:
 //!
-//! - **Height maps**, consumed by the 3D strategies.
-//! - **Contours**, consumed by roughing, by boundaries picked on a model, and by the
-//!   2D operations still to come.
+//! - **The model**: its triangles ([`mesh`]), indexed for exact drop-cutter, ray and
+//!   nearest-point queries ([`bvh`]), and its faces, edges and corners
+//!   ([`topology`]): what a person picks, and the round edges a 2D cut follows.
+//! - **Height maps** ([`heightmap`]): where material stands, for the simulated
+//!   stock. A grid may decide whether a path cuts somewhere, never where it runs
+//!   (decision 0003).
+//! - **Contours** ([`contour`]): closed regions, consumed by clearing, by
+//!   boundaries picked on a model and by the 2D operations; with the exact lines
+//!   and arcs a cut follows round them ([`ring`], [`arc`]).
+//! - **Fields** on a lifted grid ([`trigrid`]): distances along the part
+//!   ([`geodesic`]), whose lines of equal value ([`isoline`]) place passes seen from
+//!   above and never give a Z (decision 0009).
 //!
-//! Collapsing these into one would leave the entire 2D half of a CAM system with
-//! nowhere to live.
+//! Collapsing the height maps and the contours into one would leave the entire 2D
+//! half of a CAM system with nowhere to live.
 
 pub mod arc;
 pub mod mesh;

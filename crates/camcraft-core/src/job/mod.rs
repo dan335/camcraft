@@ -46,7 +46,7 @@
 //! find it while the model is unchanged. A model tessellated again, or re-exported
 //! with its faces in another order, still has a face through that point, so the
 //! pick survives; a model edited so the point is on nothing any more says so, and
-//! nothing is cut until the pick is made again. See `crate::features`.
+//! nothing is cut until the pick is made again. See `crate::setup::features`.
 //!
 //! # Format
 //!
@@ -54,11 +54,17 @@
 //! refused by name rather than read as something it may not mean.
 
 mod error;
+mod geometry;
+mod heights;
+mod linking;
 mod model;
 mod operation;
+mod passes;
 mod pick;
 mod setup;
+mod strategy_spec;
 mod tool;
+mod uses;
 mod validate;
 
 #[cfg(test)]
@@ -75,19 +81,23 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 pub use error::JobError;
+pub use geometry::{Boundary, Containment, MachiningBoundary, Outline, Selection};
+pub use heights::{Height, HeightContext, HeightRef, Heights, Picks};
+pub use linking::{Entry, LeadSizes, Leads, Linking, Retraction};
 pub use model::{FixedBox, LengthUnit, ModelDef, Place, StockDef, StockSpec, Transform};
-pub use operation::{
-    Boundary, Containment, ContourOrder, CutDirection, Depths, Entry, FaceDirection, Height,
-    HeightContext, HeightRef, Heights, LeadSizes, Leads, Leave, Linking, MachiningBoundary,
-    Operation, Outline, PassOrder, Passes, Picks, ProfileSide, RadialDirection, Retraction,
-    Selection, StockToLeave, StrategySpec, TabShape, Tabs, Uses,
-};
+pub use operation::Operation;
+pub use passes::{Passes, StockToLeave, TabShape, Tabs};
 pub use pick::{FeatureRef, PointRef, Snap};
 pub use setup::{Along, BoxOf, Origin, Setup};
+pub use strategy_spec::{
+    ContourOrder, CutDirection, FaceDirection, PassOrder, ProfileSide, RadialDirection,
+    StrategySpec,
+};
 pub use tool::{
     Coolant, DRILL_POINT, Holder, HolderSegment, Preset, SpindleDirection, ToolFieldError,
     ToolKind, ToolMaterial, ToolSpec, free_preset_name,
 };
+pub use uses::{Depths, Leave, Links, Uses};
 
 /// The job file format this build reads and writes, and the only one it reads.
 pub const JOB_VERSION: u32 = 1;
@@ -143,6 +153,16 @@ fn default_tolerance() -> f64 {
 
 fn is_default<T: Default + PartialEq>(v: &T) -> bool {
     *v == T::default()
+}
+
+// Serde's `skip_serializing_if` hands the field by reference.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_yes(b: &bool) -> bool {
+    *b
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Job {

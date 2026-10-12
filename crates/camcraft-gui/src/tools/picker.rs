@@ -14,7 +14,7 @@ use crate::tools::drawing::{kind_name, paint_tool};
 use crate::tools::table::{column_header, dim, name_cell, number, number_cell, tool_table};
 use crate::ui::measure::Measure;
 use crate::ui::theme;
-use crate::ui::widgets::hint_text;
+use crate::ui::widgets::{self, Size, Variant, hint_text};
 use crate::worker::DocId;
 
 /// Where the table's tools come from.
@@ -104,60 +104,73 @@ impl ToolPicker {
             // given and a divider the height, and a window sizes itself to what it
             // holds, so anything left free would grow the window every frame.
             ui.set_width(860.0);
-            ui.heading("Select tool");
-            ui.separator();
-            let body = egui::vec2(860.0, 420.0);
-            let row = egui::Layout::left_to_right(egui::Align::Min);
-            ui.allocate_ui_with_layout(body, row, |ui| {
-                ui.set_min_size(body);
-                ui.vertical(|ui| {
-                    ui.set_width(200.0);
-                    egui::ScrollArea::vertical()
-                        .id_salt("picker-sources")
-                        .max_height(body.y)
-                        .show(ui, |ui| self.sources(ui, job, library));
-                });
-                ui.separator();
-                ui.vertical(|ui| {
-                    ui.set_width(380.0);
-                    ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("filter"));
-                    self.table(ui, job, library, m, body.y - 30.0);
-                });
-                ui.separator();
-                ui.vertical(|ui| {
-                    ui.set_width(240.0);
-                    if let Some(tool) = self.chosen_tool(job, library) {
-                        paint_tool(ui, tool, m);
-                        ui.label(&tool.comment);
-                        ui.add_space(6.0);
-                        self.preset_choice(ui, tool);
-                    } else {
-                        ui.label(hint_text("Choose a tool to see it."));
+            // Drawn in the body, answered in the footer.
+            let picked = std::cell::RefCell::new(None);
+            widgets::dialog(
+                ui,
+                "Select tool",
+                |ui| {
+                    let body = egui::vec2(860.0, 420.0);
+                    let row = egui::Layout::left_to_right(egui::Align::Min);
+                    ui.allocate_ui_with_layout(body, row, |ui| {
+                        ui.set_min_size(body);
+                        ui.vertical(|ui| {
+                            ui.set_width(200.0);
+                            egui::ScrollArea::vertical()
+                                .id_salt("picker-sources")
+                                .max_height(body.y)
+                                .show(ui, |ui| self.sources(ui, job, library));
+                        });
+                        ui.separator();
+                        ui.vertical(|ui| {
+                            ui.set_width(380.0);
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.filter).hint_text("filter"),
+                            );
+                            self.table(ui, job, library, m, body.y - 30.0);
+                        });
+                        ui.separator();
+                        ui.vertical(|ui| {
+                            ui.set_width(240.0);
+                            if let Some(tool) = self.chosen_tool(job, library) {
+                                paint_tool(ui, tool, m);
+                                ui.label(&tool.comment);
+                                ui.add_space(6.0);
+                                self.preset_choice(ui, tool);
+                            } else {
+                                ui.label(hint_text("Choose a tool to see it."));
+                            }
+                        });
+                    });
+                    picked.replace(Some((
+                        self.picked(job, library),
+                        self.preset.clone(),
+                        matches!(self.chosen, Some((Source::Library(_), _, _))),
+                    )));
+                },
+                |ui| {
+                    let (picked, preset, from_library) =
+                        picked.take().unwrap_or((None, None, false));
+                    let r = ui
+                        .add_enabled_ui(picked.is_some(), |ui| {
+                            widgets::button(ui, Variant::Primary, Size::Md, None, "Use this tool")
+                        })
+                        .inner;
+                    if r.clicked()
+                        && let Some(tool) = picked
+                    {
+                        outcome = Outcome::Chosen { tool, preset };
                     }
-                });
-            });
-            ui.separator();
-            ui.horizontal(|ui| {
-                let picked = self.picked(job, library);
-                if ui
-                    .add_enabled(picked.is_some(), egui::Button::new("Use this tool"))
-                    .clicked()
-                    && let Some(tool) = picked
-                {
-                    outcome = Outcome::Chosen {
-                        tool,
-                        preset: self.preset.clone(),
-                    };
-                }
-                if ui.button("Cancel").clicked() {
-                    outcome = Outcome::Cancelled;
-                }
-                if matches!(self.chosen, Some((Source::Library(_), _, _))) {
-                    ui.label(hint_text(
-                        "A copy goes into the job; the library is not linked.",
-                    ));
-                }
-            });
+                    if widgets::button(ui, Variant::Ghost, Size::Md, None, "Cancel").clicked() {
+                        outcome = Outcome::Cancelled;
+                    }
+                    if from_library {
+                        ui.label(hint_text(
+                            "A copy goes into the job; the library is not linked.",
+                        ));
+                    }
+                },
+            );
         });
         if outcome == Outcome::Open && modal.should_close() {
             outcome = Outcome::Cancelled;
@@ -214,7 +227,9 @@ impl ToolPicker {
                 here.find(true, &self.filter)
             }
         };
-        rows.sort_by_key(|(f, n, t)| (t.number, f.clone(), *n));
+        // Compared in place: a key would copy a folder path per comparison, every
+        // frame.
+        rows.sort_by(|(fa, na, ta), (fb, nb, tb)| (ta.number, fa, na).cmp(&(tb.number, fb, nb)));
         rows
     }
 
@@ -315,19 +330,19 @@ impl ToolPicker {
             return;
         }
         ui.label("Preset");
-        egui::ComboBox::from_id_salt("picker-preset")
-            .width(220.0)
-            .selected_text(
-                self.preset
-                    .as_deref()
-                    .unwrap_or("none: keep the operation's"),
-            )
-            .show_ui(ui, |ui| {
-                for p in &tool.presets {
-                    ui.selectable_value(&mut self.preset, Some(p.name.clone()), &p.name);
-                }
-                ui.selectable_value(&mut self.preset, None, "none: keep the operation's");
+        let none = "none: keep the operation's";
+        let choices: Vec<Option<String>> = tool
+            .presets
+            .iter()
+            .map(|p| Some(p.name.clone()))
+            .chain([None])
+            .collect();
+        ui.scope(|ui| {
+            ui.spacing_mut().combo_width = 220.0;
+            widgets::select(ui, "picker-preset", &mut self.preset, &choices, |p| {
+                p.as_deref().unwrap_or(none).to_string()
             });
+        });
         if let Some(p) = self.preset.as_ref().and_then(|n| tool.preset(n)) {
             if !p.comment.is_empty() {
                 ui.label(hint_text(&p.comment));

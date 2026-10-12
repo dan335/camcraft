@@ -63,6 +63,19 @@ fn settle(harness: &mut Harness<'_, App>) {
     }
 }
 
+/// Step frames until the playback material stands, shaded, where the playhead
+/// is, for no longer than `secs`; then let the frames after it land.
+fn catch_up(harness: &mut Harness<'_, App>, secs: u64) {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    harness.run_steps(2);
+    while !harness.state_mut().live_caught_up_for_snapshot() {
+        assert!(Instant::now() < deadline, "the material never caught up");
+        std::thread::sleep(Duration::from_millis(20));
+        harness.step();
+    }
+    harness.run_steps(3);
+}
+
 fn shoot(harness: &mut Harness<'_, App>, name: &str) {
     match harness.render() {
         Ok(image) => {
@@ -128,14 +141,7 @@ fn main_window_after_a_run() {
     h.state_mut().playback_for_snapshot(false);
     for (op, name) in [(passes.len() - 1, "stock_final"), (0, "stock_after_rough")] {
         h.state_mut().set_view_for_snapshot(op, 1.0, u32::MAX);
-        let deadline = Instant::now() + Duration::from_secs(60);
-        h.run_steps(2);
-        while !h.state_mut().live_caught_up_for_snapshot() {
-            assert!(Instant::now() < deadline, "the material never caught up");
-            std::thread::sleep(Duration::from_millis(20));
-            h.step();
-        }
-        h.run_steps(3);
+        catch_up(&mut h, 60);
         shoot(&mut h, name);
     }
 
@@ -147,14 +153,7 @@ fn main_window_after_a_run() {
     ] {
         h.state_mut().playback_for_snapshot(false);
         h.state_mut().set_view_for_snapshot(op, fraction, u32::MAX);
-        let deadline = Instant::now() + Duration::from_secs(60);
-        h.run_steps(2);
-        while !h.state_mut().live_caught_up_for_snapshot() {
-            assert!(Instant::now() < deadline, "the material never caught up");
-            std::thread::sleep(Duration::from_millis(20));
-            h.step();
-        }
-        h.run_steps(3);
+        catch_up(&mut h, 60);
         shoot(&mut h, name);
     }
 
@@ -238,8 +237,8 @@ fn main_window_after_a_run() {
 #[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
 fn two_setups_in_tabs() {
     use crate::document::Selection;
-    use camcraft_core::frame::Orientation;
     use camcraft_core::job::{Along, BoxOf, Origin};
+    use camcraft_core::setup::frame::Orientation;
 
     // The example, with a second setup turned over and zeroed on the stock's top.
     let dir = output_dir().join("two-sided");
@@ -549,14 +548,7 @@ fn model_transform() {
     shoot(&mut h, "models_placed_generated");
     h.state_mut().playback_for_snapshot(false);
     h.state_mut().set_view_for_snapshot(1, 0.5, u32::MAX);
-    for _ in 0..200 {
-        h.run_steps(1);
-        if h.state_mut().live_caught_up_for_snapshot() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    h.run_steps(2);
+    catch_up(&mut h, 60);
     shoot(&mut h, "models_placed_playback");
 
     // Duplicated: another beside it, placed from the one loaded.
@@ -816,14 +808,7 @@ tool = "rough-6-flat"
     for (fraction, name) in [(0.5, "lego_half_roughed"), (1.0, "lego_roughed")] {
         h.state_mut().playback_for_snapshot(false);
         h.state_mut().set_view_for_snapshot(0, fraction, u32::MAX);
-        let deadline = Instant::now() + Duration::from_secs(120);
-        h.run_steps(2);
-        while !h.state_mut().live_caught_up_for_snapshot() {
-            assert!(Instant::now() < deadline, "the material never caught up");
-            std::thread::sleep(Duration::from_millis(20));
-            h.step();
-        }
-        h.run_steps(3);
+        catch_up(&mut h, 120);
         shoot(&mut h, name);
     }
     // How long a frame of the whole brick takes to draw and read back: an upper
@@ -916,14 +901,7 @@ boundary = {{ kind = "silhouette", containment = "outside", margin = 6.35 }}
     settle(&mut h);
     h.state_mut().playback_for_snapshot(false);
     h.state_mut().set_view_for_snapshot(0, 1.0, u32::MAX);
-    let deadline = Instant::now() + Duration::from_secs(120);
-    h.run_steps(2);
-    while !h.state_mut().live_caught_up_for_snapshot() {
-        assert!(Instant::now() < deadline, "the material never caught up");
-        std::thread::sleep(Duration::from_millis(20));
-        h.step();
-    }
-    h.run_steps(3);
+    catch_up(&mut h, 120);
     shoot(&mut h, "lego_boundary_roughed");
 }
 
@@ -1070,14 +1048,7 @@ passes = {{ stepdown = 3.0, feed = 1500.0 }}
     settle(&mut h);
     h.state_mut().playback_for_snapshot(false);
     h.state_mut().set_view_for_snapshot(1, 1.0, u32::MAX);
-    let deadline = Instant::now() + Duration::from_secs(120);
-    h.run_steps(2);
-    while !h.state_mut().live_caught_up_for_snapshot() {
-        assert!(Instant::now() < deadline, "the material never caught up");
-        std::thread::sleep(Duration::from_millis(20));
-        h.step();
-    }
-    h.run_steps(3);
+    catch_up(&mut h, 120);
     shoot(&mut h, "lego_2d_played");
     // The cut out's paths: leads on and off each ring, and the tabs ridden over.
     h.state_mut().playback_for_snapshot(true);
@@ -1139,14 +1110,7 @@ passes = {{ stepdown = 3.0, feed = 1500.0, stepover = 1.9 }}
     settle(&mut h);
     h.state_mut().playback_for_snapshot(false);
     h.state_mut().set_view_for_snapshot(0, 1.0, u32::MAX);
-    let deadline = Instant::now() + Duration::from_secs(120);
-    h.run_steps(2);
-    while !h.state_mut().live_caught_up_for_snapshot() {
-        assert!(Instant::now() < deadline, "the material never caught up");
-        std::thread::sleep(Duration::from_millis(20));
-        h.step();
-    }
-    h.run_steps(3);
+    catch_up(&mut h, 120);
     assert!(!h.state().camera_for_snapshot().orthographic());
     shoot(&mut h, "cube_first_view");
 
@@ -1256,18 +1220,11 @@ passes = {{ stepdown = 1.0, stepover = 0.8, feed = 1500.0 }}
         h.state_mut().playback_for_snapshot(false);
         h.state_mut().set_view_for_snapshot(0, fraction, u32::MAX);
         let started = Instant::now();
-        let deadline = started + Duration::from_secs(300);
-        h.run_steps(2);
-        while !h.state_mut().live_caught_up_for_snapshot() {
-            assert!(Instant::now() < deadline, "the material never caught up");
-            std::thread::sleep(Duration::from_millis(20));
-            h.step();
-        }
+        catch_up(&mut h, 300);
         println!(
             "{name}: caught up in {:.1} s",
             started.elapsed().as_secs_f64()
         );
-        h.run_steps(3);
         shoot(&mut h, name);
     }
     let frame = |h: &mut Harness<'_, App>| {

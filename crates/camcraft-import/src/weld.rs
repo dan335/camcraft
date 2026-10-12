@@ -22,14 +22,18 @@ pub(crate) struct Welder {
     pub degenerate: u64,
 }
 
+/// A corner as it is welded, and its key: `None` when it is not finite.
+fn keyed(p: DVec3) -> Option<(DVec3, [u64; 3])> {
+    if !p.is_finite() {
+        return None;
+    }
+    // Adding zero makes negative zero positive, and leaves the rest alone.
+    let p = p + DVec3::ZERO;
+    Some((p, [p.x.to_bits(), p.y.to_bits(), p.z.to_bits()]))
+}
+
 impl Welder {
-    fn intern(&mut self, p: DVec3) -> Option<u32> {
-        if !p.is_finite() {
-            return None;
-        }
-        // Adding zero makes negative zero positive, and leaves the rest alone.
-        let p = p + DVec3::ZERO;
-        let key = [p.x.to_bits(), p.y.to_bits(), p.z.to_bits()];
+    fn intern(&mut self, (p, key): (DVec3, [u64; 3])) -> Option<u32> {
         if let Some(&i) = self.index.get(&key) {
             return Some(i);
         }
@@ -40,20 +44,27 @@ impl Welder {
     }
 
     /// Add one triangle. Returns whether it was kept.
+    ///
+    /// A triangle is judged before any of its corners is added, so one that is
+    /// dropped leaves no vertex behind.
     pub fn push(&mut self, corners: [DVec3; 3]) -> bool {
+        let [Some(a), Some(b), Some(c)] = corners.map(keyed) else {
+            self.degenerate += 1;
+            return false;
+        };
+        if a.1 == b.1 || b.1 == c.1 || a.1 == c.1 {
+            self.degenerate += 1;
+            return false;
+        }
         let mut abc = [0u32; 3];
-        for (slot, p) in abc.iter_mut().zip(corners) {
-            match self.intern(p) {
+        for (slot, corner) in abc.iter_mut().zip([a, b, c]) {
+            match self.intern(corner) {
                 Some(i) => *slot = i,
                 None => {
                     self.degenerate += 1;
                     return false;
                 }
             }
-        }
-        if abc[0] == abc[1] || abc[1] == abc[2] || abc[0] == abc[2] {
-            self.degenerate += 1;
-            return false;
         }
         self.triangles.push(abc);
         true
@@ -89,5 +100,27 @@ mod tests {
         assert!(w.push([a, DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.0, 1.0, 0.0)]));
         assert!(w.push([DVec3::new(-0.0, -0.0, 0.0), b, DVec3::new(-1.0, 0.0, 0.0)]));
         assert_eq!(w.vertex_count(), 4);
+    }
+
+    /// A triangle that is dropped, for a corner that is not finite or two that
+    /// coincide, leaves none of its corners behind as vertices.
+    #[test]
+    fn a_dropped_triangle_adds_no_vertices() {
+        let mut w = Welder::default();
+        let (a, b, c) = (
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(0.0, 1.0, 0.0),
+        );
+        assert!(!w.push([a, b, DVec3::new(f64::NAN, 0.0, 0.0)]));
+        assert!(!w.push([a, b, b]));
+        assert!(!w.push([c, DVec3::new(-0.0, 1.0, 0.0), a]));
+        assert_eq!((w.vertex_count(), w.degenerate), (0, 3));
+        assert!(w.push([a, b, c]));
+        let mesh = w.finish().unwrap();
+        assert_eq!(
+            (mesh.vertices(), mesh.triangles()),
+            (&[a, b, c][..], &[[0, 1, 2]][..])
+        );
     }
 }

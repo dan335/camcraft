@@ -17,7 +17,7 @@ const STRAIGHT: f64 = 1.0e-9;
 /// swept as its chords, which cut this much inside it at most.
 const ARC_CHORD: f64 = 0.1;
 
-/// Cells a level move's footprint must span before its rows are cut in parallel.
+/// Cells a sweep's footprint must span before its rows are cut in parallel.
 const PARALLEL_CELLS: u64 = 100_000;
 
 /// Where the row at `y` crosses the points within `r` of the segment `a`-`b`, as
@@ -105,6 +105,52 @@ fn lower_row<T: SweptTool>(
     cut
 }
 
+/// Lower each row of `rect` in `data`, a field `nx` cells across, with `row`,
+/// given the row's index and its cells, which says how deep it cut and the first
+/// and last columns it lowered. Returns how deep the deepest cell was cut and
+/// which cells were lowered.
+///
+/// Rows are independent, and each cell is worked out alone, so a sweep over many
+/// cells (a long pass on a sheet, a large tool) is cut in parallel; a small one
+/// is not worth handing out. Either way every cell comes out the same.
+fn lower_rows(
+    data: &mut [f32],
+    nx: usize,
+    rect: CellRect,
+    row: impl Fn(u32, &mut [f32]) -> Option<(f64, u32, u32)> + Sync,
+) -> (f64, Option<CellRect>) {
+    let rows = data
+        .get_mut(rect.y0 as usize * nx..(rect.y1 as usize + 1) * nx)
+        .unwrap_or_default();
+    let cells = u64::from(rect.width()) * u64::from(rect.height());
+    let cuts: Vec<Option<(f64, u32, u32)>> = if cells >= PARALLEL_CELLS {
+        rows.par_chunks_mut(nx)
+            .enumerate()
+            .map(|(i, cells)| row(rect.y0 + u32::try_from(i).unwrap_or(0), cells))
+            .collect()
+    } else {
+        rows.chunks_mut(nx)
+            .zip(rect.y0..=rect.y1)
+            .map(|(cells, iy)| row(iy, cells))
+            .collect()
+    };
+    let mut deepest = 0.0f64;
+    let mut touched: Option<CellRect> = None;
+    for (iy, cut) in (rect.y0..).zip(cuts) {
+        if let Some((d, lo, hi)) = cut {
+            deepest = deepest.max(d);
+            let r = CellRect {
+                x0: lo,
+                y0: iy,
+                x1: hi,
+                y1: iy,
+            };
+            touched = CellRect::join(touched, Some(r));
+        }
+    }
+    (deepest, touched)
+}
+
 impl Stock {
     /// Sweep a path through the block, removing material.
     ///
@@ -126,8 +172,9 @@ impl Stock {
     /// Sweep a path through the block exactly as [`Stock::apply`] does, without
     /// measuring the volume removed, and say which cells it lowered.
     ///
-    /// For playback, which sweeps a few moves at a time: two passes over the whole
-    /// grid for the volume would cost more than the sweep.
+    /// For whatever sweeps a few moves at a time, as playback does and as a run
+    /// does while it links each operation over the material: two passes over the
+    /// whole grid for the volume would cost more than the sweep.
     pub fn sweep<T: SweptTool>(&mut self, moves: &[SimMove], tool: &T) -> Swept {
         let mut report = Swept::default();
         let pitch = self.field.pitch();
@@ -143,11 +190,20 @@ impl Stock {
                     continue;
                 }
             };
-            // An arc is swept as chords within a tenth of a cell of it.
+            // An arc is swept as chords within a tenth of a cell of it; a
+            // straight move is its one chord.
+            let chords;
+            let ends: &[DVec3] = match m.arc {
+                None => std::slice::from_ref(&m.to),
+                Some(arc) => {
+                    chords = arc.chords(from, m.to, pitch * ARC_CHORD);
+                    &chords
+                }
+            };
             let mut worst = 0.0f64;
             let mut touched = None;
             let mut a = from;
-            for b in m.chords(from, pitch * ARC_CHORD) {
+            for &b in ends {
                 let (w, t) = self.stamp_segment(a, b, tool, step, first);
                 worst = worst.max(w);
                 touched = CellRect::join(touched, t);
@@ -256,41 +312,7 @@ impl Stock {
                 distance_to_segment(p, a, b)
             })
         };
-        let rows = self
-            .field
-            .data_mut()
-            .get_mut(rect.y0 as usize * nx..(rect.y1 as usize + 1) * nx)
-            .unwrap_or_default();
-        // Rows are independent, and each cell is worked out alone, so a move over
-        // many cells (a long pass on a sheet) is cut in parallel; a short one is
-        // not worth handing out.
-        let cells = u64::from(rect.width()) * u64::from(rect.height());
-        let cuts: Vec<Option<(f64, u32, u32)>> = if cells >= PARALLEL_CELLS {
-            rows.par_chunks_mut(nx)
-                .enumerate()
-                .map(|(i, cells)| row(rect.y0 + u32::try_from(i).unwrap_or(0), cells))
-                .collect()
-        } else {
-            rows.chunks_mut(nx)
-                .zip(rect.y0..=rect.y1)
-                .map(|(cells, iy)| row(iy, cells))
-                .collect()
-        };
-        let mut deepest = 0.0f64;
-        let mut touched: Option<CellRect> = None;
-        for (iy, cut) in (rect.y0..).zip(cuts) {
-            if let Some((d, lo, hi)) = cut {
-                deepest = deepest.max(d);
-                let r = CellRect {
-                    x0: lo,
-                    y0: iy,
-                    x1: hi,
-                    y1: iy,
-                };
-                touched = CellRect::join(touched, Some(r));
-            }
-        }
-        (deepest, touched)
+        lower_rows(self.field.data_mut(), nx, rect, row)
     }
 
     /// The cells a tool of `radius` at `tip` could reach, clamped to the grid,
@@ -321,7 +343,7 @@ impl Stock {
         // the cell exactly at the cutter's rim unstamped, which under-removes
         // material -- and under-removal is the dangerous direction, because it can
         // hide a gouge.
-        let Some(CellRect { x0, y0, x1, y1 }) = self.footprint(tip, r) else {
+        let Some(rect) = self.footprint(tip, r) else {
             return (0.0, None);
         };
 
@@ -335,45 +357,29 @@ impl Stock {
         // A hair over the radius squared: a cell this rejects, the tool's own
         // profile would have too.
         let reach2 = r * r * (1.0 + 1.0e-9);
-        let data = self.field.data_mut();
-        let mut deepest = 0.0f64;
-        let mut touched: Option<CellRect> = None;
-        for iy in y0..=y1 {
+        // One row: how deep it cut, and the first and last columns it lowered.
+        let row = |iy: u32, cells: &mut [f32]| -> Option<(f64, u32, u32)> {
             let py = origin.y + f64::from(iy) * pitch;
             let dy = py - tip.y;
             let across = reach2 - dy * dy;
             if across < 0.0 {
-                continue;
+                return None;
             }
             // Only the columns the tool's circle spans on this row, and one more
             // each side for rounding; the profile decides.
             let w = across.sqrt();
-            let first = (((tip.x - w - origin.x) / pitch).floor() - 1.0).max(f64::from(x0));
-            let last = (((tip.x + w - origin.x) / pitch).ceil() + 1.0).min(f64::from(x1));
+            let first = (((tip.x - w - origin.x) / pitch).floor() - 1.0).max(f64::from(rect.x0));
+            let last = (((tip.x + w - origin.x) / pitch).ceil() + 1.0).min(f64::from(rect.x1));
             if first.is_nan() || last.is_nan() || first > last {
-                continue;
+                return None;
             }
             // Within the footprint, so the narrowing is exact.
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let (first, last) = (first as u32, last as u32);
-            let row = iy as usize * nx as usize;
-            let Some(cells) = data.get_mut(row..row + nx as usize) else {
-                continue;
-            };
-            let cut = lower_row(cells, iy, (first, last), origin, pitch, &under, |p| {
+            lower_row(cells, iy, (first, last), origin, pitch, &under, |p| {
                 (p - axis).length()
-            });
-            if let Some((d, lo, hi)) = cut {
-                deepest = deepest.max(d);
-                let r = CellRect {
-                    x0: lo,
-                    y0: iy,
-                    x1: hi,
-                    y1: iy,
-                };
-                touched = CellRect::join(touched, Some(r));
-            }
-        }
-        (deepest, touched)
+            })
+        };
+        lower_rows(self.field.data_mut(), nx as usize, rect, row)
     }
 }

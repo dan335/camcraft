@@ -47,11 +47,18 @@ fn jobs_from_args() -> Vec<std::path::PathBuf> {
         .collect()
 }
 
+/// The app's icon: a pocket cleared from the middle out, drawn in
+/// `assets/icon.svg` and rendered to 512 px.
+fn icon() -> egui::IconData {
+    eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).unwrap_or_default()
+}
+
 fn main() -> eframe::Result {
     let jobs = jobs_from_args();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("camcraft")
+            .with_icon(icon())
             .with_inner_size([1280.0, 820.0])
             .with_min_inner_size([820.0, 520.0]),
         ..Default::default()
@@ -61,4 +68,14 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| Ok(Box::new(app::App::with_jobs(cc, jobs)))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    /// The icon is the rendered PNG, not egui's own for want of one.
+    #[test]
+    fn the_icon_loads() {
+        let icon = super::icon();
+        assert_eq!((icon.width, icon.height), (512, 512));
+    }
 }

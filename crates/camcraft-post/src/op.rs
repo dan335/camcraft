@@ -17,19 +17,12 @@
 //! turns in. The engine only makes arcs a three-axis machine can cut
 //! ([`principal`]), and one that is not is refused rather than guessed at.
 
-use camcraft_core::drilling::Hole;
 use camcraft_core::job::{Coolant, SpindleDirection};
-use camcraft_core::toolpath::{Arc, MoveKind, MoveRole, Toolpath, principal};
+use camcraft_core::path::toolpath::{Arc, MoveKind, MoveRole, Toolpath, principal};
+use camcraft_core::strategy::drilling::Hole;
 use glam::{DVec2, DVec3, dvec3};
 
-/// Which unit the program is written in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Units {
-    /// Millimetres (`G21`).
-    Millimetres,
-    /// Inches (`G20`).
-    Inches,
-}
+use crate::profile::ProgramUnits;
 
 /// A canned drilling cycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,10 +33,6 @@ pub enum CycleKind {
     DrillDwell,
     /// Peck drill (`G83`).
     Peck,
-    /// Tapping (`G84`).
-    Tap,
-    /// Boring (`G85`).
-    Bore,
 }
 
 /// One machine-independent instruction.
@@ -62,10 +51,8 @@ pub enum Op {
     },
     /// End of the current operation's output.
     SectionEnd,
-    /// A comment.
-    Comment(String),
     /// Set the program units.
-    Units(Units),
+    Units(ProgramUnits),
     /// Select a work offset, 54 for `G54`.
     WorkOffset(u8),
     /// Change to a tool.
@@ -132,6 +119,9 @@ pub enum Op {
         /// Feed in mm/min.
         feed: f64,
     },
+    /// Start of a run of canned cycles, each returning to the height it
+    /// started from (`G98`).
+    CycleStart,
     /// End of a run of canned cycles (`G80`).
     CycleEnd,
     /// Text passed through untouched, for manual NC and probe macros.
@@ -147,8 +137,6 @@ pub enum Op {
 /// Everything a program needs that a toolpath does not carry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProgramSpec {
-    /// Program name, for the header comment.
-    pub name: String,
     /// Operation name.
     pub op_name: String,
     /// Strategy that produced the path.
@@ -166,7 +154,7 @@ pub struct ProgramSpec {
     /// Coolant; [`Coolant::Off`] leaves it off.
     pub coolant: Coolant,
     /// Program units.
-    pub units: Units,
+    pub units: ProgramUnits,
     /// The holes of a drilling operation, to write as canned cycles instead of
     /// its moves; only for a profile that takes them.
     pub drill: Option<DrillCycles>,
@@ -190,7 +178,6 @@ pub struct DrillCycles {
 impl Default for ProgramSpec {
     fn default() -> Self {
         Self {
-            name: "camcraft".into(),
             op_name: "operation".into(),
             strategy: "parallel".into(),
             tool: 1,
@@ -199,7 +186,7 @@ impl Default for ProgramSpec {
             rpm: 18000,
             spin: SpindleDirection::Clockwise,
             coolant: Coolant::Off,
-            units: Units::Millimetres,
+            units: ProgramUnits::Mm,
             drill: None,
         }
     }
@@ -302,7 +289,7 @@ fn cycles(d: &DrillCycles, out: &mut Vec<Op>) {
     out.push(Op::Rapid {
         to: dvec3(first.at.x, first.at.y, d.clearance),
     });
-    out.push(Op::Raw("G98".into()));
+    out.push(Op::CycleStart);
     let kind = match (d.peck, d.dwell) {
         (Some(_), _) => CycleKind::Peck,
         (None, Some(_)) => CycleKind::DrillDwell,
@@ -368,12 +355,7 @@ mod tests {
     #[test]
     fn wraps_the_path_in_a_program() {
         let ops = lower(&linked_path(), &ProgramSpec::default()).unwrap();
-        assert_eq!(ops.first(), Some(&Op::Units(Units::Millimetres)));
-        assert!(
-            !ops.iter()
-                .any(|o| matches!(o, Op::Comment(c) if *c == "camcraft")),
-            "the profile header owns the program name; lowering must not repeat it"
-        );
+        assert_eq!(ops.first(), Some(&Op::Units(ProgramUnits::Mm)));
         assert!(ops.contains(&Op::WorkOffset(54)));
         assert!(ops.contains(&Op::SpindleOff));
         assert_eq!(ops.last(), Some(&Op::ProgramEnd));

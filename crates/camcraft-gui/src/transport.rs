@@ -8,6 +8,7 @@
 //! its own thread (`stock/live.rs`), so nothing here waits for a sweep.
 
 use camcraft_geom::heightmap::narrow;
+use camcraft_session::Ran;
 use camcraft_session::checks::Level;
 use eframe::egui;
 
@@ -65,15 +66,12 @@ pub enum Mark {
     Warn,
 }
 
-/// Where the checks found something at a move, and the steep descents: each as
-/// the playhead position just after it, sorted.
-pub fn marks(state: &SetupState) -> Vec<(usize, Mark)> {
-    let Some(ran) = &state.ran else {
-        return Vec::new();
-    };
-    let scene = &ran.scene;
+/// Where the checks of `ran` found something at a move, and the steep descents
+/// of its `scene`: each as the playhead position just after it, sorted. Found
+/// once for a run, when it lands or is cut back, and kept with it
+/// ([`crate::document::RanSetup::marks`]).
+pub fn marks(ran: &Ran, scene: &Scene) -> Vec<(usize, Mark)> {
     let mut out: Vec<(usize, Mark)> = ran
-        .ran
         .checks
         .groups
         .iter()
@@ -273,22 +271,18 @@ pub fn tick(ctx: &egui::Context, state: &mut SetupState) {
     if !playing {
         return;
     }
-    let Some(scene) = state
-        .ran
-        .as_ref()
-        .filter(|_| playing_back(state))
-        .map(|r| &r.scene)
-    else {
+    let Some(ran) = state.ran.as_ref().filter(|_| playing_back(state)) else {
         state.view.transport.playing = false;
         return;
     };
+    let scene = &ran.scene;
     let dt = f64::from(ctx.input(|i| i.stable_dt).min(LONGEST_FRAME));
     let from = state.view.at;
     let step = if reverse { -dt * speed } else { dt * speed };
     let mut to = scene.advance(from, step);
     let mut stops: Vec<usize> = Vec::new();
     if stop_at_problems {
-        stops.extend(marks(state).into_iter().map(|(at, _)| at));
+        stops.extend(ran.marks.iter().map(|(at, _)| *at));
     }
     if stop_at_op_end {
         stops.extend(op_bounds(scene));
@@ -339,8 +333,7 @@ pub fn bar(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) {
         return;
     }
     ui.add_space(theme::SPACE_2);
-    let marks = marks(state);
-    timeline(ui, state, &marks);
+    timeline(ui, state);
     ui.add_space(theme::SPACE_2);
     let mut commands = Vec::new();
     ui.horizontal(|ui| {
@@ -425,16 +418,13 @@ pub fn bar(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) {
             })
             .response
             .on_hover_text("where playing pauses by itself");
-            egui::ComboBox::from_id_salt("speed")
-                .selected_text(widgets::mono(speed_label(t.speed), theme::TEXT_SM))
-                .width(72.0)
-                .show_ui(ui, |ui| {
-                    for s in SPEEDS {
-                        ui.selectable_value(&mut t.speed, s, speed_label(s));
-                    }
+            ui.scope(|ui| {
+                ui.spacing_mut().combo_width = 72.0;
+                widgets::select(ui, "speed", &mut t.speed, &SPEEDS, |s| {
+                    widgets::mono(speed_label(*s), theme::TEXT_SM)
                 })
-                .response
                 .help(&app::SPEED);
+            });
         });
     });
     move_readout(ui, state, m);
@@ -508,10 +498,11 @@ fn move_readout(ui: &mut egui::Ui, state: &SetupState, m: Measure) {
 /// The program as a strip, one span per operation as long as it takes to run,
 /// with what the checks found marked on it and the playhead. Click or drag to go
 /// anywhere.
-fn timeline(ui: &mut egui::Ui, state: &mut SetupState, marks: &[(usize, Mark)]) {
-    let Some(scene) = state.ran.as_ref().map(|r| &r.scene) else {
+fn timeline(ui: &mut egui::Ui, state: &mut SetupState) {
+    let Some(ran) = state.ran.as_ref() else {
         return;
     };
+    let scene = &ran.scene;
     let height = 22.0;
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
@@ -555,7 +546,7 @@ fn timeline(ui: &mut egui::Ui, state: &mut SetupState, marks: &[(usize, Mark)]) 
     let done = egui::Rect::from_x_y_ranges(rect.left()..=now, rect.y_range());
     painter.rect_filled(done, radius, theme::ACCENT_SUBTLE.color());
 
-    for (at, mark) in marks {
+    for (at, mark) in &ran.marks {
         let x = x_of(scene.time_of(Playhead::at(*at)));
         let color = match mark {
             Mark::Fail => theme::ERR,

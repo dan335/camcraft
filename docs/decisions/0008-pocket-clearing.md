@@ -16,8 +16,8 @@ differently, and is it worth a strategy of its own?
 
 - **One strategy, renamed.** Z-level roughing *is* offset pocket clearing, so it
   is upgraded and called what Fusion calls it: `"pocket-clearing"` in a job,
-  *Pocket clearing* in the 3D menu. A job written before reads by its old name,
-  `"zlevel-rough"` (a serde alias), and is written back by the new one.
+  *Pocket clearing* in the 3D menu. There is one job format, so the old name
+  is not read.
 - **The same rings, from the middle out.** The rings are still the reachable
   region's own offsets, a stepover apart in from its edges, clipped to the
   material. What is further in than each stepover falls into regions as it

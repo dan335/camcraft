@@ -9,7 +9,7 @@ use eframe::egui;
 use glam::DVec3;
 
 use super::parts::{Names, all_model_bounds, names, used_by};
-use super::{Picks, header, renamed};
+use super::{ViewPicks, header, renamed};
 use crate::document::{Document, Selection};
 use crate::help::Help;
 use crate::help::topics::stock as topics;
@@ -98,7 +98,7 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
                     more: None,
                 },
                 models,
-                Picks::default(),
+                ViewPicks::default(),
                 &mut Vec::new(),
             );
         }
@@ -131,7 +131,7 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
                     more: None,
                 },
                 &mut b.models,
-                Picks::default(),
+                ViewPicks::default(),
                 &mut Vec::new(),
             );
         }
@@ -432,7 +432,7 @@ fn paint_stock(ui: &mut egui::Ui, p: &Placement, m: Measure) {
     let block = egui::Stroke::new(1.5, theme::egui_color(theme::AMBER_5));
     let block_fill = theme::egui_color(theme::AMBER_5).gamma_multiply(0.22);
     let model = egui::Stroke::new(1.0, theme::egui_color(theme::GRAY_7));
-    let model_fill = theme::egui_color(theme::PART);
+    let model_fill = theme::egui_color(theme::GRAY_6);
     for (view, [u, v], label) in [
         (top_view, [0_usize, 1], "top"),
         (front_view, [0, 2], "front"),

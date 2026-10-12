@@ -14,8 +14,11 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32, l: LineI
     var out: LineOut;
     out.color = vec4<f32>(0.0);
     let kind_on = ((f.masks.x >> l.kind) & 1u) == 1u;
-    let is_move = l.kind < 8u;
-    let op_on = l.op >= 32u || ((f.masks.y >> l.op) & 1u) == 1u;
+    let is_move = l.kind < MOVE_KINDS;
+    // The one operation shown alone, if there is one; otherwise by the mask,
+    // operations past its 32 always.
+    let by_mask = l.op >= 32u || ((f.masks.y >> l.op) & 1u) == 1u;
+    let op_on = select(by_mask, l.op + 1u == f.masks.w, f.masks.w != 0u);
     let reached = ii < f.masks.z;
     let ca = f.view_proj * vec4<f32>(l.a, 1.0);
     let cb = f.view_proj * vec4<f32>(l.b, 1.0);
@@ -41,7 +44,8 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32, l: LineI
     let t = ends[vi];
     var clip = mix(ca, cb, t);
     // Picks and the boundary are drawn twice as wide, to read over the part.
-    let width = select(f.viewport.z, f.viewport.z * 2.0, l.kind >= 12u && l.kind <= 14u);
+    let wide = ((WIDE_KINDS >> l.kind) & 1u) == 1u;
+    let width = select(f.viewport.z, f.viewport.z * 2.0, wide);
     let offset = normal * sides[vi] * width * 0.5 + dir * (t * 2.0 - 1.0) * width * 0.5;
     clip = vec4<f32>(clip.xy + offset / half * clip.w, clip.z, clip.w);
     // A cut runs exactly on the surface it follows; pull it towards the eye so the

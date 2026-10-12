@@ -1,11 +1,11 @@
 //! A setup's panel: what it machines and from what (Parts), how the part sits and
 //! where zero is (Position), and what the machine is told (Post).
 
-use camcraft_core::frame::{Axis, Orientation};
+use camcraft_core::setup::frame::{Axis, Orientation};
 use eframe::egui;
 
 use super::parts::{Names, names};
-use super::{Picks, PropAction, cannot_generate, header, renamed, work_zero};
+use super::{PropAction, ViewPicks, cannot_generate, header, renamed, work_zero};
 use crate::document::{Document, Selection};
 use crate::help::topics::setup as topics;
 use crate::picking::slots::Slot;
@@ -22,7 +22,7 @@ pub(super) fn show(
     doc: &mut Document,
     m: Measure,
     name: &str,
-    picks: Picks<'_>,
+    picks: ViewPicks<'_>,
     actions: &mut Vec<PropAction>,
 ) {
     if doc.setup(name).is_none() {
@@ -135,22 +135,14 @@ pub(super) fn show(
         _ => {
             form(ui, "setup-post", |ui| {
                 widgets::row(ui, &topics::WCS, |ui| {
-                    egui::ComboBox::from_id_salt("wcs")
-                        .selected_text(format!("G{}", s.wcs))
-                        .show_ui(ui, |ui| {
-                            for w in 54..=59 {
-                                ui.selectable_value(&mut s.wcs, w, format!("G{w}"));
-                            }
-                        });
+                    let offsets: Vec<_> = (54..=59).collect();
+                    widgets::select(ui, "wcs", &mut s.wcs, &offsets, |w| format!("G{w}"));
                 });
                 widgets::row(ui, &topics::POST, |ui| {
-                    egui::ComboBox::from_id_salt("post")
-                        .selected_text(&s.post)
-                        .show_ui(ui, |ui| {
-                            for p in camcraft_session::builtin_posts() {
-                                ui.selectable_value(&mut s.post, (*p).to_string(), *p);
-                            }
-                        });
+                    let builtin: Vec<String> = camcraft_session::builtin_posts()
+                        .map(str::to_string)
+                        .collect();
+                    widgets::select(ui, "post", &mut s.post, &builtin, String::clone);
                     if widgets::button(ui, Variant::Secondary, Size::Sm, None, "File…")
                         .on_hover_text("a machine profile of your own")
                         .clicked()

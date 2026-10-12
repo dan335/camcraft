@@ -8,8 +8,10 @@
 //! is worth knowing about before operation two is planned against the material it
 //! left behind.
 //!
-//! An operation with picked faces or edges is kept to their boundary
-//! ([`crate::features::machining_boundary`]) as well as to the stock's footprint.
+//! A 3D operation whose boundary is its selection is kept to what its picked
+//! faces and edges enclose ([`Picking::machining_boundary`]) as well as to the
+//! stock's footprint. Picks nothing of the operation reads are kept, and never
+//! found.
 
 mod error;
 mod operation;
@@ -25,25 +27,26 @@ mod result;
 )]
 mod tests;
 
+use std::cell::OnceCell;
 use std::sync::Arc;
 
 use camcraft_sim::stock::{PackedStock, PartSurface, Stock};
 use glam::DVec2;
 
-use crate::allowance::{Allowance, EffectiveTool};
-use crate::dropcutter::DropCutter;
-use crate::features::machining_boundary;
-use crate::job::{HeightContext, Job, JobError, Operation, Setup, StrategySpec, ToolSpec};
-use crate::setup::{Bodies, Prepared, prepare};
-use crate::simadapt::sim_moves;
+use crate::cutter::allowance::{Allowance, EffectiveTool};
+use crate::cutter::dropcutter::DropCutter;
+use crate::job::{Job, JobError, Operation, Setup, ToolSpec};
+use crate::path::simadapt::sim_moves;
+use crate::setup::features::Picking;
+use crate::setup::{Bodies, Prepared};
 
-pub use crate::toolpath::PLUNGE_RATIO;
+pub use crate::path::toolpath::PLUNGE_RATIO;
 pub use error::RunError;
-pub use pitch::{CELLS_PER_TOOL, FINEST_PITCH, MAX_SIM_CELLS, SIM_CELLS, sim_pitch};
 pub use result::{Made, OperationResult, Plan, SetupResult, Stage, StrategyDetail};
 
 use error::in_op;
 use operation::{Target, Work, drill_holes, heights_of, not_made, planar_areas, run_operation};
+use pitch::sim_pitch;
 
 /// Material further above the part than this, in millimetres, counts as left over.
 ///
@@ -53,10 +56,15 @@ use operation::{Target, Work, drill_holes, heights_of, not_made, planar_areas, r
 pub const LEFTOVER_LIMIT: f64 = 1.0;
 
 /// Check, lay out and run setup `index` of `job`, with its models by name.
-pub fn run_setup(job: &Job, index: usize, bodies: &Bodies<'_>) -> Result<SetupResult, RunError> {
+#[cfg(test)]
+pub(crate) fn run_setup(
+    job: &Job,
+    index: usize,
+    bodies: &Bodies<'_>,
+) -> Result<SetupResult, RunError> {
     job.check_common()?;
     job.check_setup(index)?;
-    let prepared = prepare(job, index, bodies)?;
+    let prepared = crate::setup::prepare(job, index, bodies)?;
     run_prepared_planned(job, index, &prepared, bodies, &[], &mut |_| {})
 }
 
@@ -79,20 +87,10 @@ pub fn run_prepared_planned(
 ) -> Result<SetupResult, RunError> {
     let setup = job.setups.get(index).ok_or(JobError::NoSetups)?;
     let mesh = &prepared.part;
-    let bounds = prepared.model_bounds;
     let all = prepared.stock_bounds();
     let lo = all.min.truncate();
     let hi = all.max.truncate();
-    let stock_top = all.max.z;
-    let stock_bottom = all.min.z;
-
-    let ctx = HeightContext {
-        stock_top,
-        stock_bottom,
-        model_top: bounds.max.z,
-        model_bottom: bounds.min.z,
-        picked: None,
-    };
+    let ctx = prepared.heights();
 
     let narrowest = setup
         .operations
@@ -106,8 +104,10 @@ pub fn run_prepared_planned(
         .iter()
         .map(|b| (b.min.truncate(), b.max.truncate(), b.max.z))
         .collect();
-    let mut stock = Stock::from_boxes(&blocks, stock_bottom - 1.0, sim_pitch)?;
+    let mut stock = Stock::from_boxes(&blocks, ctx.stock_bottom - 1.0, sim_pitch)?;
     let cutter = DropCutter::new(mesh);
+    // Found once for the setup, when an operation first needs them.
+    let flats = OnceCell::new();
 
     let mut operations = Vec::with_capacity(setup.operations.len());
     let mut keyframes = Vec::with_capacity(setup.operations.len() + 1);
@@ -121,7 +121,11 @@ pub fn run_prepared_planned(
                 Made::Disabled
             };
             operations.push(not_made(op, job.tool_for(op), made));
-            keyframes.push(Arc::new(PackedStock::pack(&stock)));
+            // Nothing cut: the material is as it was, and so is its keyframe.
+            let same = keyframes
+                .last()
+                .map_or_else(|| Arc::new(PackedStock::pack(&stock)), Arc::clone);
+            keyframes.push(same);
             continue;
         }
         progress(Stage::Operation(i));
@@ -134,37 +138,25 @@ pub fn run_prepared_planned(
             keyframes.push(Arc::new(PackedStock::pack(&stock)));
             continue;
         }
-        let ctx = heights_of(job, op, prepared, bodies, &ctx)?;
+        // Its picks, found once, however many of its settings read them.
+        let picking = Picking::new(&op.selection, prepared, bodies, job.tolerance);
+        let ctx = heights_of(op, &picking, &ctx)?;
         // A drilling operation's picked edges are its holes, and a 2D one's
-        // boundary is what it cuts round or clears, not a limit.
-        let target = match op.strategy {
-            StrategySpec::Drill { .. } => {
-                Target::Holes(drill_holes(job, op, prepared, bodies, &ctx)?)
-            }
-            StrategySpec::Profile { .. } | StrategySpec::Pocket { .. } => {
-                Target::Areas(planar_areas(job, op, prepared, bodies, &ctx, &tool)?)
-            }
+        // outline is what it cuts round or clears, not a limit.
+        let uses = op.strategy.uses();
+        let target = if uses.boundary {
+            Target::Limit(
+                picking
+                    .machining_boundary(&op.boundary, tool.cutter_radius())
+                    .map_err(in_op(op))?,
+            )
+        } else if uses.outline {
+            Target::Areas(planar_areas(job, op, &picking, bodies, &ctx, &tool)?)
+        } else if uses.holes {
+            Target::Holes(drill_holes(job, op, prepared, bodies, &ctx)?)
+        } else {
             // Facing works from the stock alone.
-            StrategySpec::Face { .. } => Target::Limit(None),
-            StrategySpec::Parallel { .. }
-            | StrategySpec::Scallop { .. }
-            | StrategySpec::Contour { .. }
-            | StrategySpec::Flat { .. }
-            | StrategySpec::Spiral { .. }
-            | StrategySpec::Radial { .. }
-            | StrategySpec::MorphedSpiral { .. }
-            | StrategySpec::PocketClearing { .. }
-            | StrategySpec::Adaptive { .. } => Target::Limit(
-                machining_boundary(
-                    &op.boundary,
-                    &op.selection,
-                    prepared,
-                    bodies,
-                    tool.cutter_radius(),
-                    job.tolerance,
-                )
-                .map_err(in_op(op))?,
-            ),
+            Target::Limit(None)
         };
         let work = Work {
             job,
@@ -172,10 +164,11 @@ pub fn run_prepared_planned(
             spec,
             tool: &tool,
             heights: &ctx,
-            mesh,
+            prepared,
             cutter: &cutter,
             bounds: (lo, hi),
-            stocks: &prepared.stocks,
+            blocks: &blocks,
+            flats: &flats,
         };
         operations.push(run_operation(&work, &target, &mut stock)?);
         keyframes.push(Arc::new(PackedStock::pack(&stock)));

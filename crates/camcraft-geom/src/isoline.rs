@@ -518,15 +518,7 @@ mod tests {
     /// A flat grid of `n × n` nodes `pitch` apart, and a field from `f`.
     fn field(n: u32, pitch: f64, f: impl Fn(DVec2) -> f64) -> (TriGrid, Vec<f64>) {
         let count = usize::try_from(n * n).unwrap();
-        let g = TriGrid::new(
-            DVec2::ZERO,
-            pitch,
-            n,
-            n,
-            vec![0.0; count],
-            vec![true; count],
-        )
-        .unwrap();
+        let g = TriGrid::new(DVec2::ZERO, pitch, n, n, vec![0.0; count]).unwrap();
         let d = (0..g.nodes()).map(|m| f(g.xy(m).unwrap())).collect();
         (g, d)
     }

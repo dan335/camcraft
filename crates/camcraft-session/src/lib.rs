@@ -31,11 +31,11 @@ mod run;
 mod test_support;
 
 pub use error::SessionError;
-pub use finish::{FinishSpec, FinishTool, single_operation};
+pub use finish::{FinishSpec, single_operation};
 pub use job_file::{job_text, parse_job, read_job, write_job};
 pub use model::{Model, Models, load_job_model, load_model, load_models, models_of, units_of};
 pub use post::{
     Posting, Program, builtin_posts, load_profile, plan_posting, program, program_name,
-    write_posting,
+    setup_profile, write_posting,
 };
 pub use run::{Passed, Ran, check_runnable, gate, run_setup, run_setup_planned};

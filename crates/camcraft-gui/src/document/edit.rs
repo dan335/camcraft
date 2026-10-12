@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use camcraft_core::job::{
-    Boundary, Containment, LengthUnit, ModelDef, Operation, Origin, Passes, Preset, Setup,
-    StockDef, StockSpec, StrategySpec, ToolSpec,
+    Boundary, Containment, LengthUnit, MachiningBoundary, ModelDef, Operation, Origin, Preset,
+    Setup, StockDef, StockSpec, StrategySpec, ToolSpec,
 };
 use camcraft_geom::bvh::MeshBvh;
 use camcraft_session::fs::relative_path;
@@ -16,6 +16,13 @@ use super::{
     Document, Level, ModelKey, ModelSlot, Selection, checked_name, free, moved_index, rename_in,
     shift,
 };
+
+/// Whether `path` names an STL, which says nothing of its units.
+pub fn is_stl(path: impl AsRef<Path>) -> bool {
+    path.as_ref()
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("stl"))
+}
 
 /// How a wanted model is to be had.
 #[derive(Debug, Clone)]
@@ -42,10 +49,7 @@ impl Document {
                 let key = ModelKey::of(&dir, def, self.job.tolerance);
                 let current = self.models.get(&def.name);
                 // An STL waits for its units rather than failing without them.
-                let stl = Path::new(&def.path)
-                    .extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("stl"));
-                if stl && def.units.is_none() {
+                if is_stl(&def.path) && def.units.is_none() {
                     return None;
                 }
                 if self.placing.contains_key(&def.name) || current.map(ModelSlot::key) == Some(&key)
@@ -146,15 +150,12 @@ impl Document {
                 .file_stem()
                 .map_or_else(|| "model".into(), |s| s.to_string_lossy().into_owned());
             let name = free(&base, self.job.models.iter().map(|m| m.name.as_str()));
-            let stl = file
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("stl"));
             self.job.models.push(ModelDef {
                 name: name.clone(),
                 path: self.job_path_for(file),
                 // An STL says nothing of its units; millimetres is a start the
                 // person sees, and can change, before anything is cut.
-                units: stl.then_some(LengthUnit::Mm),
+                units: is_stl(file).then_some(LengthUnit::Mm),
                 transform: Default::default(),
             });
             names.push(name);
@@ -468,49 +469,24 @@ impl Document {
     /// Add an operation of `strategy` at the end of setup `setup`, with the tool
     /// its last operation used.
     pub fn add_operation(&mut self, setup: &str, strategy: StrategySpec) -> Option<usize> {
-        let s = self.job.setups.iter_mut().find(|s| s.name == setup)?;
+        let s = self.setup(setup)?;
         let base = match strategy {
             StrategySpec::Parallel { .. } => "finish",
-            StrategySpec::Scallop { .. } => "scallop",
-            StrategySpec::Contour { .. } => "contour",
-            StrategySpec::Flat { .. } => "flat",
-            StrategySpec::Spiral { .. } => "spiral",
-            StrategySpec::Radial { .. } => "radial",
-            StrategySpec::MorphedSpiral { .. } => "morphed-spiral",
             StrategySpec::PocketClearing { .. } => "rough",
-            StrategySpec::Adaptive { .. } => "adaptive",
-            StrategySpec::Profile { .. } => "profile",
-            StrategySpec::Pocket { .. } => "pocket",
-            StrategySpec::Face { .. } => "face",
-            StrategySpec::Drill { .. } => "drill",
+            _ => strategy.name(),
         };
         let name = free(base, s.operations.iter().map(|o| o.name.as_str()));
-        let tool = s.operations.last().and_then(|o| o.tool.clone());
-        let preset = tool
-            .as_ref()
-            .and_then(|t| self.job.tools.get(t))
-            .and_then(|t| t.presets.first());
+        let last = s.operations.last();
+        let tool = last.and_then(|o| o.tool.clone());
+        let spec = last.and_then(|o| self.job.tool_for(o));
+        let preset = spec.and_then(|t| t.presets.first());
         let mut op = Operation {
-            name,
-            strategy,
             tool,
-            preset: None,
-            selection: Default::default(),
-            boundary: Default::default(),
-            outline: Default::default(),
-            heights: Default::default(),
-            passes: Passes {
-                stepdown: strategy.default_stepdown(),
-                stock_to_leave: strategy.default_stock_to_leave(),
-                ..Default::default()
-            },
-            linking: Default::default(),
-            enabled: true,
+            ..Operation::new(name, strategy)
         };
         if let Some(p) = preset {
             op.apply_preset(p);
         }
-        let spec = op.tool.as_ref().and_then(|t| self.job.tools.get(t));
         fit_stepover(&mut op, spec, preset, self.job.tolerance);
         start_on_silhouette(&mut op);
         fit_channel(&mut op, spec);
@@ -520,6 +496,22 @@ impl Document {
         self.active = Some(setup.to_string());
         self.selection = Selection::Operation(setup.to_string(), i);
         Some(i)
+    }
+
+    /// Rename operation `index` of setup `setup`: no two of a setup's operations
+    /// share a name.
+    pub fn rename_operation(&mut self, setup: &str, index: usize, to: &str) -> Result<(), String> {
+        let Some(s) = self.setup_mut(setup) else {
+            return Err(format!("there is no setup '{setup}'"));
+        };
+        let Some(from) = s.operations.get(index).map(|o| o.name.as_str()) else {
+            return Err(format!("setup '{setup}' has no operation {}", index + 1));
+        };
+        let to = checked_name(to, "operation", s.operations.iter().map(|o| &*o.name), from)?;
+        if let Some(op) = s.operations.get_mut(index) {
+            op.name = to;
+        }
+        Ok(())
     }
 
     /// A copy of an operation, after it.
@@ -709,23 +701,27 @@ fn start_on_silhouette(op: &mut Operation) {
     op.boundary.containment = containment;
 }
 
-/// Room for `tool` round the part, as the Geometry tab gives it: a boundary round
-/// the part that the tool reaches in from outside, with no offset yet, is offset
-/// by the tool's diameter, a channel two tools wide. Set once, as a number, so
-/// changing the tool later does not move it.
-fn fit_channel(op: &mut Operation, tool: Option<&ToolSpec>) {
-    // Only a 3D boundary has an additional offset to make room with.
-    if !op.strategy.uses().boundary {
-        return;
-    }
-    let b = &mut op.boundary;
-    let around_part = matches!(b.kind, Boundary::BoundingBox | Boundary::Silhouette);
-    if around_part
+/// Whether `b` leaves the tool no room round the part: a boundary round the part
+/// that the tool reaches in from outside, with no additional offset. Its centre
+/// stops a radius outside the part's walls, so it only touches them and clears
+/// nothing past them. A new operation's boundary ([`fit_channel`]) and one
+/// chosen in the Geometry tab are given room; the tab says what this one does.
+pub fn needs_room(b: &MachiningBoundary) -> bool {
+    matches!(b.kind, Boundary::BoundingBox | Boundary::Silhouette)
         && b.containment == Containment::Outside
         && b.margin == 0.0
+}
+
+/// Room for `tool` round the part, as the Geometry tab gives it: a boundary that
+/// [`needs_room`] is offset by the tool's diameter, a channel two tools wide. Set
+/// once, as a number, so changing the tool later does not move it.
+fn fit_channel(op: &mut Operation, tool: Option<&ToolSpec>) {
+    // Only a 3D boundary has an additional offset to make room with.
+    if op.strategy.uses().boundary
+        && needs_room(&op.boundary)
         && let Some(t) = tool
     {
-        b.margin = t.diameter;
+        op.boundary.margin = t.diameter;
     }
 }
 
@@ -738,9 +734,7 @@ fn fit_stepover(
     tolerance: f64,
 ) {
     // A preset's stepover is not an adaptive operation's load, which it keeps.
-    if preset.is_some_and(|p| p.stepover.is_some())
-        && !matches!(op.strategy, StrategySpec::Adaptive { .. })
-    {
+    if preset.is_some_and(|p| p.stepover.is_some()) && !op.strategy.uses().load {
         return;
     }
     if let Some(over) = tool.and_then(|t| op.default_stepover(t, tolerance)) {

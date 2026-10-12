@@ -54,15 +54,17 @@ edges, climbing unless conventional, `order = "outside-in"` unless
 (`"radial"`) and morphed spiral (`"morphed-spiral"`) are patterns laid out seen
 from above and dropped onto the part, as Fusion's
 ([decision 0011](decisions/0011-patterns-dropped-onto-the-part.md)), each with
-the slopes and a stepover that starts as parallel's. A spiral and radial spokes
+the slopes and a stepover that starts as parallel's. Their slopes are Fusion's,
+the range asked for and nothing else, both ends included: a steep stretch is cut
+down the part as a parallel pass is, and broken where it falls further than a cut
+step (CC204). A spiral and radial spokes
 turn about `centre = [x, y]` (the boundary's middle unless given) from
 `inner_radius` to `outer_radius` (0, and all of the boundary); a spiral climbs
 unless conventional and runs outside in unless `order = "inside-out"`; spokes
 run from `angle_from` to `angle_to` degrees (0 to 360), `direction =
 "both-ways"` unless `"outward"` or `"inward"`. A morphed spiral turns from the
 boundary's shape into its `centre`, the point furthest inside unless given, its
-laps no more than a stepover apart. Pocket clearing (`"pocket-clearing"`, which a job written before
-it had that name calls `"zlevel-rough"`) is Fusion's 3D Pocket Clearing: each
+laps no more than a stepover apart. Pocket clearing (`"pocket-clearing"`) is Fusion's 3D Pocket Clearing: each
 level's rings a stepover apart in from its edges, cut from the middle out so the
 ring along the walls is last, climbing unless `conventional = true`, with a level
 on each flat face unless `flat_areas = false`. What
@@ -130,7 +132,7 @@ passes = { stepdown = 3.0, tabs = { width = 6.0, height = 3.0, spacing = 150.0 }
 standing across it, as Fusion's holding tabs. They go on profiles, as Fusion's
 go only on a 2D contour: every ring a profile cuts is beside what it keeps,
 where a pocket's or a roughing level's clearing rings are in the waste, and
-tabs on them would leave pillars standing there (`camcraft_core::tabs` works on
+tabs on them would leave pillars standing there (`camcraft_core::path::tabs` works on
 any path's closed loops; `StrategySpec::uses` says which strategy has them). A
 pocket or roughing operation given them keeps them, unused. They go evenly
 round each loop cut at the operation's deepest level, about `spacing` apart and at
@@ -169,7 +171,7 @@ radius (a flat end, or a 2D floor, may go any depth). Every operation has it,
 and cuts with as much as its strategy uses: a drill none, a profile on the
 boundary only its floor's. New adaptive and pocket clearing start at 0.5 mm each way, as
 Fusion's roughing does; everything else at none, which is not written. The 3D
-strategies grow the tool by it (`camcraft_core::allowance`); a 2D one moves its
+strategies grow the tool by it (`camcraft_core::cutter::allowance`); a 2D one moves its
 cut out by it and raises its floors by it. The material is cut by the real
 tool, so what is left shows in the simulation, and what was cut past the part
 on purpose is not called a gouge.
@@ -212,6 +214,10 @@ start each ring, beside the lead:
   reached it; straight on down to the next depth, and so on; and off along the
   lead-out once, from where the last lap ends. Never up, nor off and on again,
   between depths.
+
+Adaptive clearing has an entry too, into what it cannot reach from the side:
+`"helix"` (the default) or `"plunge"`, as Fusion's 3D Adaptive's ramp types. It
+has no ring to ramp along, so `"ramp"` is refused.
 
 Neither a helix nor a ramp round a ring goes down more in one lap than the
 *most per lap* (`ramp_stepdown`, Fusion's maximum ramp stepdown): the
@@ -338,14 +344,19 @@ rendered before any is written: half a job's programs are a trap on the machine.
 The app's Post goes through the same code (`camcraft_session::plan_posting`), so
 the two write the same files under the same names.
 
-`post` writes a single finishing pass described with flags (`camcraft post --help`).
+`post` writes a single finishing operation described with flags (`camcraft post --help`):
+any 3D finishing strategy, `--strategy parallel` unless another is named as a job
+names it (`scallop`, `contour`, `flat`, `spiral`, `radial`, `morphed-spiral`), each
+with its own defaults, and a ball, flat or bullnose cutter (`--tool bullnose
+--corner 0.5`); `--stepdown` sets contour's levels, 1 mm apart unless given.
 It builds a one-operation job and goes through the same `run_setup` as `job` and
 the app, so there is exactly one engine path. `crates/camcraft-cli/tests/one_path.rs`
 parses every written program back into positions and compares them with the paths
 `run_setup` produces in-process, move for move.
 
-Exit codes: `0` clean, `2` ran with warnings worth reading, `1` a check failed (and,
-with `--out`, nothing was written).
+Exit codes: `0` clean, `2` ran with warnings worth reading (or, with `--force`, wrote
+programs that failed a check), `1` a check failed (and, with `--out`, nothing was
+written).
 
 ## Posts
 

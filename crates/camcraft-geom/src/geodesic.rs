@@ -182,8 +182,7 @@ mod tests {
                 z.push(height(dvec2(f64::from(ix), f64::from(iy)) * pitch) as f32);
             }
         }
-        let count = z.len();
-        TriGrid::new(DVec2::ZERO, pitch, n, n, z, vec![true; count]).unwrap()
+        TriGrid::new(DVec2::ZERO, pitch, n, n, z).unwrap()
     }
 
     /// A plane front, on a flat grid and a sloping one, at an angle to the grid:

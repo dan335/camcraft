@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# A bare `cargo run` opens the app. This also narrows a bare `cargo build` or `cargo
+# test` to the app; scripts/check.sh names its crates, so it is unaffected.
+default-members = ["crates/camcraft-gui"]
 # Patched third-party crates, see [patch.crates-io] below. Not ours to lint or test.
 exclude = ["vendor"]
 

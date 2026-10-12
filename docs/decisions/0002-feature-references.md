@@ -57,7 +57,7 @@ at = [30.2, 14.0, 12.7]
 
 `at` is a point on the feature, in the model's own coordinates: where the person
 clicked. **It is what the pick is.** `index` is only a quick way to it.
-`camcraft_core::features` finds a pick in this order:
+`camcraft_core::setup::features` finds a pick in this order:
 
 1. By number, if that feature still passes through `at`.
 2. By position: the feature of that kind through `at`. An edge must be the only one

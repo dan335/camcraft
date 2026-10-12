@@ -23,13 +23,13 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolChangeStyle {
-    /// `M6 T<n>`, for a machine with a changer or a macro.
+    /// `T<n> M6`, for a machine with a changer or a macro.
     M6,
     /// A program pause with a comment, for changing by hand.
     Pause,
 }
 
-/// How arc centres are written. Reserved; nothing emits arcs yet.
+/// How arc centres are written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArcStyle {
@@ -120,7 +120,7 @@ pub struct Profile {
     pub numbering: Numbering,
     /// Modal suppression.
     pub modal: Modal,
-    /// Arc centre style. Reserved.
+    /// Arc centre style.
     pub arc_style: ArcStyle,
     /// The units its programs are written in.
     #[serde(default)]
@@ -174,10 +174,12 @@ pub enum ProfileError {
 /// Millimetres in an inch.
 const MM_PER_INCH: f64 = 25.4;
 
-/// The Masso profile, compiled in.
-pub const MASSO: &str = include_str!("../profiles/masso.toml");
-/// The GRBL profile, compiled in.
-pub const GRBL: &str = include_str!("../profiles/grbl.toml");
+/// The profiles compiled in, by name: each a file of its own in `profiles/`.
+const BUILTIN: &[(&str, &str)] = &[
+    ("masso", include_str!("../profiles/masso.toml")),
+    ("masso-inch", include_str!("../profiles/masso-inch.toml")),
+    ("grbl", include_str!("../profiles/grbl.toml")),
+];
 
 impl Profile {
     /// Parse a profile from TOML.
@@ -199,21 +201,16 @@ impl Profile {
 
     /// One of the compiled-in profiles, by name.
     pub fn builtin(name: &str) -> Option<Result<Self, ProfileError>> {
-        match name.to_ascii_lowercase().as_str() {
-            "masso" => Some(Self::from_toml(MASSO)),
-            "masso-inch" => Some(Self::from_toml(MASSO).map(|p| Self {
-                name: "Masso (inch)".into(),
-                units: ProgramUnits::Inch,
-                ..p
-            })),
-            "grbl" => Some(Self::from_toml(GRBL)),
-            _ => None,
-        }
+        let name = name.to_ascii_lowercase();
+        BUILTIN
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, text)| Self::from_toml(text))
     }
 
     /// Names of the compiled-in profiles.
-    pub fn builtin_names() -> &'static [&'static str] {
-        &["masso", "masso-inch", "grbl"]
+    pub fn builtin_names() -> impl Iterator<Item = &'static str> {
+        BUILTIN.iter().map(|(name, _)| *name)
     }
 
     fn validate(&self) -> Result<(), ProfileError> {
@@ -286,6 +283,12 @@ impl Profile {
         self.number(v, self.format.feed_decimals)
     }
 
+    /// Format a time in seconds for a dwell word: to the millisecond, as
+    /// Fusion's posts write one, whatever the feed's places.
+    pub fn seconds(&self, v: f64) -> String {
+        self.number(v, 3)
+    }
+
     fn number(&self, v: f64, decimals: u8) -> String {
         let mut s = format!("{v:.*}", decimals as usize);
         // "-0.000" is the same position as "0.000" and reads like an error.
@@ -343,6 +346,20 @@ mod tests {
             assert!(!p.extension.is_empty());
         }
         assert!(Profile::builtin("nonesuch").is_none());
+    }
+
+    /// Masso in inches is its own file, and the Masso profile in everything but
+    /// its name and units.
+    #[test]
+    fn masso_inch_is_masso_in_inches() {
+        let masso = Profile::builtin("masso").unwrap().unwrap();
+        let inch = Profile::builtin("masso-inch").unwrap().unwrap();
+        let expected = Profile {
+            name: "Masso (inch)".into(),
+            units: ProgramUnits::Inch,
+            ..masso
+        };
+        assert_eq!(inch, expected);
     }
 
     /// Masso as Fusion's post writes it: rounded to the places given, trailing

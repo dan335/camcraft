@@ -19,10 +19,10 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use camcraft_core::toolpath::{MoveRole, Toolpath};
+use camcraft_core::path::toolpath::{MoveRole, Toolpath};
 use camcraft_geom::mesh::TriMesh;
 use camcraft_geom::synthetic;
-use camcraft_session::{Models, load_job_model, read_job, run_setup};
+use camcraft_session::{load_models, models_of, read_job, run_setup};
 use common::scratch;
 
 const JOB: &str = r#"
@@ -164,19 +164,8 @@ fn expected(path: &Toolpath) -> Vec<(bool, [f64; 3])> {
 /// Setup 0 of the job at `path`, run in-process exactly as the app runs it.
 fn run_in_process(path: &Path) -> Vec<(String, Toolpath)> {
     let job = read_job(path).unwrap();
-    let dir = path.parent().unwrap();
-    let loaded: Vec<_> = job
-        .models_for(0)
-        .into_iter()
-        .map(|m| {
-            (
-                m.name.clone(),
-                load_job_model(dir, m, job.tolerance).unwrap(),
-            )
-        })
-        .collect();
-    let models: Models<'_> = loaded.iter().map(|(n, m)| (n.as_str(), m)).collect();
-    run_setup(&job, 0, &models)
+    let loaded = load_models(&job, path.parent().unwrap(), &[0]).unwrap();
+    run_setup(&job, 0, &models_of(&loaded))
         .unwrap()
         .result
         .operations
@@ -226,19 +215,17 @@ fn every_program_is_the_path_the_app_shows() {
     }
 }
 
-/// `post` is a one-operation job, not a separate engine path.
-#[test]
-fn post_is_the_same_path_as_the_equivalent_job() {
-    let dir = scratch("post_is_the_same_path_as_the_equivalent_job");
+/// `post` with `flags` writes the same path as a job file with the same
+/// operation, whose tool and strategy lines are `tool` and `strategy`.
+fn post_matches_job(test: &str, flags: &[&str], tool: &str, strategy: &str) {
+    let dir = scratch(test);
     let model = dome(&dir);
-    let flags = dir.join("flags.nc");
-    camcraft(&[
+    let written = dir.join("flags.nc");
+    let mut args = vec![
         "post",
         model.to_str().unwrap(),
         "--units",
         "mm",
-        "--tool",
-        "ball",
         "--diameter",
         "3",
         "--stepover",
@@ -252,18 +239,21 @@ fn post_is_the_same_path_as_the_equivalent_job() {
         "--tool-number",
         "1",
         "--out",
-        flags.to_str().unwrap(),
-    ]);
+        written.to_str().unwrap(),
+    ];
+    args.extend_from_slice(flags);
+    camcraft(&args);
 
     // The same operation, written out as a job file.
     let job = dir.join("job.camcraft");
     std::fs::write(
         &job,
-        r#"
+        format!(
+            r#"
 version = 1
 tolerance = 0.1
 [tools.cutter]
-kind = "ball"
+{tool}
 diameter = 3.0
 number = 1
 [[model]]
@@ -279,12 +269,12 @@ models = ["dome"]
 stocks = ["block"]
 [[setup.operation]]
 name = "finish"
-strategy = "parallel"
+{strategy}
 tool = "cutter"
-passes = { stepover = 1.2, feed = 2000.0 }
-heights = { clearance = { ref = "model-top", offset = 5.0 } }
-linking = { retract_feed = 2000.0, plunge_feed = 500.0 }
-"#,
+heights = {{ clearance = {{ ref = "model-top", offset = 5.0 }} }}
+linking = {{ retract_feed = 2000.0, plunge_feed = 500.0 }}
+"#
+        ),
     )
     .unwrap();
     let out = dir.join("out");
@@ -292,7 +282,39 @@ linking = { retract_feed = 2000.0, plunge_feed = 500.0 }
 
     let from_job = motions(&std::fs::read_to_string(out.join("finish-01-finish.nc")).unwrap());
     assert!(from_job.len() > 50);
-    assert_same("post", &flags, &from_job);
+    assert_same("post", &written, &from_job);
+}
+
+/// `post` is a one-operation job, not a separate engine path.
+#[test]
+fn post_is_the_same_path_as_the_equivalent_job() {
+    post_matches_job(
+        "post_is_the_same_path_as_the_equivalent_job",
+        &["--tool", "ball"],
+        r#"kind = "ball""#,
+        "strategy = \"parallel\"\npasses = { stepover = 1.2, feed = 2000.0 }",
+    );
+}
+
+/// `post` finishes with any finishing strategy, named as a job names it, with a
+/// bullnose, and in levels a stepdown apart where the strategy has them.
+#[test]
+fn post_takes_any_finishing_strategy() {
+    post_matches_job(
+        "post_takes_any_finishing_strategy",
+        &[
+            "--strategy",
+            "contour",
+            "--tool",
+            "bullnose",
+            "--corner",
+            "0.5",
+            "--stepdown",
+            "2",
+        ],
+        "kind = \"bullnose\"\ncorner = 0.5",
+        "strategy = \"contour\"\npasses = { stepover = 1.2, stepdown = 2.0, feed = 2000.0 }",
+    );
 }
 
 /// Without `--out`, a job is run and checked, and nothing is written.

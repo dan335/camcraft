@@ -9,7 +9,7 @@
 //! the system's graphite surfaces, hairline borders, sharp corners and amber
 //! selection without asking. The components built on top are in `widgets.rs`.
 
-use camcraft_core::toolpath::MoveRole;
+use camcraft_core::path::toolpath::MoveRole;
 use eframe::egui;
 
 /// `--gray-0`, the page background: near-black graphite, like a machine enclosure.
@@ -22,11 +22,15 @@ pub const GRAY_2: [u8; 3] = [0x17, 0x18, 0x1D];
 pub const GRAY_3: [u8; 3] = [0x1F, 0x21, 0x27];
 /// `--gray-4`: `--surface-raised` and `--border`.
 pub const GRAY_4: [u8; 3] = [0x2A, 0x2D, 0x35];
-/// `--gray-6`: the part surface, and `--text-4`.
-pub const PART: [u8; 3] = [0x58, 0x5D, 0x6A];
+/// `--gray-6`: `--text-4`, and the part as the help's figures and the stock
+/// panel's sketch draw it.
+pub const GRAY_6: [u8; 3] = [0x58, 0x5D, 0x6A];
 /// `--gray-7`: neutral. Retracts, because a safe move should not compete for
 /// attention, and the stock outline.
 pub const GRAY_7: [u8; 3] = [0x8B, 0x90, 0x9D];
+/// The part in the view: `--gray-7`, a mid grey the light rig models, as the
+/// material is before it is compared with the part.
+pub const PART: [u8; 3] = GRAY_7;
 /// `--gray-9`: `--text-1`.
 pub const GRAY_9: [u8; 3] = [0xE6, 0xE8, 0xEE];
 /// `--gray-10`: near-white. An unresolved link, which is exactly "unclassified".
@@ -61,6 +65,40 @@ pub const GRAY_8: [u8; 3] = [0xB9, 0xBD, 0xC7];
 /// Material as playback shows it, before it is compared with the part:
 /// `--gray-7`, a mid grey that shading turns into machined metal.
 pub const MATERIAL: [u8; 3] = GRAY_7;
+
+/// How a surface in the view takes the light, as a physically based material
+/// has it: from 0 (a mirror) to 1 (chalk), and from 0 (plastic, wood) to 1
+/// (metal).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Finish {
+    pub roughness: f32,
+    pub metalness: f32,
+}
+
+impl Finish {
+    /// As the shaders read it.
+    pub fn uniform(self) -> [f32; 4] {
+        [self.roughness, self.metalness, 0.0, 0.0]
+    }
+}
+
+/// The part: satin, as dcpwood's printed parts are.
+pub const PART_FINISH: Finish = Finish {
+    roughness: 0.62,
+    metalness: 0.0,
+};
+/// The material: a little smoother than the part, as wood or plastic stock on
+/// a router is.
+pub const MATERIAL_FINISH: Finish = Finish {
+    roughness: 0.5,
+    metalness: 0.0,
+};
+/// What is drawn over the part to point something out: picks, planes, the
+/// cutter. Matte, so no highlight competes with what it shows.
+pub const MARK_FINISH: Finish = Finish {
+    roughness: 1.0,
+    metalness: 0.0,
+};
 /// What is picked in the view: the accent, as the design system gives selection.
 pub const SELECTED: [u8; 3] = AMBER_5;
 /// What is under the pointer, ready to pick: `--accent-hover`.
@@ -104,7 +142,7 @@ pub const TEXT_2: [u8; 3] = GRAY_8;
 /// `--text-3`: labels, units, everything secondary.
 pub const TEXT_3: [u8; 3] = GRAY_7;
 /// `--text-4`: the quietest text: counts, paths, "not given".
-pub const TEXT_4: [u8; 3] = PART;
+pub const TEXT_4: [u8; 3] = GRAY_6;
 /// `--accent`.
 pub const ACCENT: [u8; 3] = AMBER_5;
 
@@ -518,7 +556,7 @@ mod tests {
             ("--gray-3:", GRAY_3),
             ("--gray-4:", GRAY_4),
             ("--gray-5:", GRAY_5),
-            ("--gray-6:", PART),
+            ("--gray-6:", GRAY_6),
             ("--gray-7:", GRAY_7),
             ("--gray-8:", GRAY_8),
             ("--gray-9:", GRAY_9),
@@ -553,7 +591,7 @@ mod tests {
             ("--text-1", "--gray-9", TEXT_1, GRAY_9),
             ("--text-2", "--gray-8", TEXT_2, GRAY_8),
             ("--text-3", "--gray-7", TEXT_3, GRAY_7),
-            ("--text-4", "--gray-6", TEXT_4, PART),
+            ("--text-4", "--gray-6", TEXT_4, GRAY_6),
             ("--accent", "--amber-5", ACCENT, AMBER_5),
         ] {
             let want = format!("{alias}:var({gray})");

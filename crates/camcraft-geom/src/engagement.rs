@@ -19,11 +19,12 @@
 //! the trail's sweep, and each arc between is in material or not as a point in
 //! its middle is. So the angle is exact to the region, with no sampling.
 
-use std::f64::consts::{FRAC_PI_2, TAU};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use glam::DVec2;
 
-use crate::contour::Region;
+use crate::contour::{Contour, Region};
+pub use crate::mesh::segment_distance2;
 
 /// Arcs of a circle in material, as `(start, sweep)` angles, counter-clockwise
 /// from +X, in radians.
@@ -57,18 +58,17 @@ impl Engaged {
             let a = wrap(start - h);
             let b = a + sweep;
             // Split at 0 and at π (and 2π, for an arc that wraps past it).
-            let cuts = [a, b, 0.0, std::f64::consts::PI, TAU];
-            let mut ends: Vec<f64> = cuts.into_iter().filter(|&c| c >= a && c <= b).collect();
-            ends.sort_by(f64::total_cmp);
-            for w in ends.windows(2) {
-                let (Some(&x), Some(&y)) = (w.first(), w.get(1)) else {
-                    continue;
-                };
-                let mid = wrap((x + y) * 0.5);
-                if mid < 0.0 {
-                    right += y - x;
-                } else {
-                    left += y - x;
+            let mut cuts = [a, b, 0.0, PI, TAU];
+            cuts.sort_by(f64::total_cmp);
+            let mut from = None;
+            for y in cuts.into_iter().filter(|&c| c >= a && c <= b) {
+                if let Some(x) = from.replace(y) {
+                    let mid = wrap((x + y) * 0.5);
+                    if mid < 0.0 {
+                        right += y - x;
+                    } else {
+                        left += y - x;
+                    }
                 }
             }
         }
@@ -79,7 +79,7 @@ impl Engaged {
 /// An angle in (-π, π].
 fn wrap(a: f64) -> f64 {
     let w = a.rem_euclid(TAU);
-    if w > std::f64::consts::PI { w - TAU } else { w }
+    if w > PI { w - TAU } else { w }
 }
 
 /// The arcs of the circle about `centre` of `radius` that lie in material: in
@@ -96,15 +96,8 @@ pub fn engaged(centre: DVec2, radius: f64, uncut: &Region, trail: &[DVec2], swep
     // Far enough from the centre that the circle cannot reach: tested first,
     // since most of the region's edges are.
     let mut cuts: Vec<f64> = Vec::new();
-    for ring in uncut.rings() {
-        let pts = ring.points();
-        let n = pts.len();
-        for i in 0..n {
-            let (Some(&a), Some(&b)) = (pts.get(i), pts.get((i + 1) % n)) else {
-                continue;
-            };
-            circle_segment(centre, radius, a, b, &mut cuts);
-        }
+    for (a, b) in uncut.rings().iter().flat_map(Contour::edges) {
+        circle_segment(centre, radius, a, b, &mut cuts);
     }
     let at_centre = |p: DVec2| p.distance_squared(centre) <= (radius * 1e-9).powi(2);
     for (i, &p) in trail.iter().enumerate() {
@@ -193,7 +186,7 @@ pub fn engaged(centre: DVec2, radius: f64, uncut: &Region, trail: &[DVec2], swep
 
 /// Whether `p` is strictly nearer than `swept` to the polyline `trail`: inside
 /// what the tool has swept, not on its edge.
-pub fn near_trail(p: DVec2, trail: &[DVec2], swept: f64) -> bool {
+fn near_trail(p: DVec2, trail: &[DVec2], swept: f64) -> bool {
     // Its edge, to a hair, counts as outside: the circle ahead of a tool is the
     // edge of what it has swept, and is where it cuts.
     let limit = swept * (1.0 - 1e-9);
@@ -208,23 +201,10 @@ pub fn near_trail(p: DVec2, trail: &[DVec2], swept: f64) -> bool {
         .any(|w| matches!(w, [a, b] if segment_distance2(p, *a, *b) < limit2))
 }
 
-/// The square of the distance from `p` to the segment `a`–`b`.
-pub fn segment_distance2(p: DVec2, a: DVec2, b: DVec2) -> f64 {
-    let ab = b - a;
-    let len2 = ab.length_squared();
-    let t = if len2 > 0.0 {
-        ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    (a + ab * t).distance_squared(p)
-}
-
 /// Angles at which the circle crosses the segment `a`–`b`.
 fn circle_segment(c: DVec2, r: f64, a: DVec2, b: DVec2, out: &mut Vec<f64>) {
-    // A segment wholly inside the circle, or wholly beyond it, cannot cross it.
-    let far = a.distance(c).max(b.distance(c));
-    if far < r || segment_distance2(c, a, b) > r * r {
+    // A segment wholly beyond the circle, or wholly inside it, cannot cross it.
+    if segment_distance2(c, a, b) > r * r || a.distance(c).max(b.distance(c)) < r {
         return;
     }
     line_hits(c, r, a, b, out);
@@ -285,154 +265,4 @@ fn circle_circle(c0: DVec2, r0: f64, c1: DVec2, r1: f64, out: &mut Vec<f64>) {
     clippy::indexing_slicing,
     clippy::cast_precision_loss
 )]
-mod tests {
-    use super::*;
-    use crate::contour::Contour;
-    use glam::dvec2;
-    use std::f64::consts::PI;
-
-    fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Region {
-        Region::rectangle(dvec2(x0, y0), dvec2(x1, y1))
-    }
-
-    /// The same, found by walking round the circle a point at a time.
-    fn sampled(centre: DVec2, r: f64, uncut: &Region, trail: &[DVec2], swept: f64) -> f64 {
-        let n = 200_000;
-        let hits = (0..n)
-            .filter(|&k| {
-                let a = TAU * (f64::from(k) + 0.5) / f64::from(n);
-                let p = centre + DVec2::from_angle(a) * r;
-                uncut.contains(p) && !near_trail(p, trail, swept)
-            })
-            .count();
-        TAU * hits as f64 / f64::from(n)
-    }
-
-    #[test]
-    fn wholly_in_material_is_a_full_circle() {
-        let e = engaged(DVec2::ZERO, 3.0, &rect(-10.0, -10.0, 10.0, 10.0), &[], 3.0);
-        assert!((e.angle() - TAU).abs() < 1e-12);
-    }
-
-    #[test]
-    fn nothing_to_cut_is_nothing() {
-        let e = engaged(DVec2::ZERO, 3.0, &Region::default(), &[], 3.0);
-        assert_eq!(e.angle(), 0.0);
-        let e = engaged(DVec2::ZERO, 3.0, &rect(20.0, 20.0, 30.0, 30.0), &[], 3.0);
-        assert_eq!(e.angle(), 0.0);
-    }
-
-    /// Feeding straight up a slot of its own cutting: a half circle ahead.
-    #[test]
-    fn a_full_slot_is_a_half_circle() {
-        let uncut = rect(-50.0, -50.0, 50.0, 50.0);
-        let trail = [dvec2(0.0, -20.0), dvec2(0.0, 0.0)];
-        let e = engaged(DVec2::ZERO, 3.0, &uncut, &trail, 3.0);
-        assert!((e.angle() - PI).abs() < 1e-9, "{}", e.angle());
-        // Split evenly either side of the way it goes.
-        let (right, left) = e.sides(dvec2(0.0, 1.0));
-        assert!((right - FRAC_PI_2).abs() < 1e-9 && (left - FRAC_PI_2).abs() < 1e-9);
-    }
-
-    /// A wall `ae` into the tool, alongside a pass already cut: the classic
-    /// radial engagement.
-    #[test]
-    fn a_radial_width_gives_its_angle() {
-        let r = 3.0;
-        for ae in [0.3, 0.6, 1.5, 3.0, 4.5] {
-            // Material to the right of x = r − ae, the tool going up +Y.
-            let uncut = rect(r - ae, -50.0, 50.0, 50.0);
-            let trail = [dvec2(0.0, -20.0), dvec2(0.0, 0.0)];
-            let e = engaged(DVec2::ZERO, r, &uncut, &trail, r);
-            let want = (1.0 - ae / r).acos();
-            assert!((e.angle() - want).abs() < 1e-9, "ae {ae}: {}", e.angle());
-            // Climbing, on the right, up to a quarter; past the tool's middle, the
-            // rest is on the left.
-            let (right, left) = e.sides(dvec2(0.0, 1.0));
-            let climb = want.min(FRAC_PI_2);
-            assert!((right - climb).abs() < 1e-9 && (left - (want - climb)).abs() < 1e-9);
-        }
-    }
-
-    #[test]
-    fn a_region_with_a_hole_counts_the_hole_as_air() {
-        let outer = Contour::new(vec![
-            dvec2(-20.0, -20.0),
-            dvec2(20.0, -20.0),
-            dvec2(20.0, 20.0),
-            dvec2(-20.0, 20.0),
-        ])
-        .unwrap();
-        let hole = Contour::new(vec![
-            dvec2(-1.0, -1.0),
-            dvec2(-1.0, 1.0),
-            dvec2(1.0, 1.0),
-            dvec2(1.0, -1.0),
-        ])
-        .unwrap();
-        let uncut = Region::new(vec![outer, hole]);
-        // A circle of radius 1 round the hole's corner: a quarter is in the hole.
-        let c = dvec2(1.0, 1.0);
-        let e = engaged(c, 1.0, &uncut, &[], 1.0);
-        assert!((e.angle() - 1.5 * PI).abs() < 1e-9, "{}", e.angle());
-    }
-
-    /// Turning a corner, against a trail of several segments: agrees with
-    /// walking round the circle.
-    #[test]
-    fn agrees_with_sampling_round_a_corner() {
-        let uncut = rect(-10.0, -10.0, 30.0, 30.0).difference(&rect(-10.0, -10.0, 2.0, 30.0));
-        let uncut = uncut.unwrap();
-        let trail = [
-            dvec2(0.0, -8.0),
-            dvec2(0.0, 0.0),
-            dvec2(0.8, 1.2),
-            dvec2(2.0, 2.0),
-            dvec2(3.1, 2.4),
-        ];
-        let centre = *trail.last().unwrap();
-        for r in [1.0, 2.5, 3.0, 6.0] {
-            let e = engaged(centre, r, &uncut, &trail, r);
-            let s = sampled(centre, r, &uncut, &trail, r);
-            assert!((e.angle() - s).abs() < 1e-3, "r {r}: {} vs {s}", e.angle());
-        }
-        // And from a point off the trail's end.
-        for c in [dvec2(4.0, 4.0), dvec2(-1.0, 3.0), dvec2(2.0, -3.0)] {
-            let e = engaged(c, 3.0, &uncut, &trail, 3.0);
-            let s = sampled(c, 3.0, &uncut, &trail, 3.0);
-            assert!((e.angle() - s).abs() < 1e-3, "{c}: {} vs {s}", e.angle());
-        }
-    }
-
-    /// Folding the trail into the region, as clearing does from time to time,
-    /// changes nothing but the region's own rounding.
-    #[test]
-    fn a_trail_folded_in_gives_the_same_angle() {
-        let uncut = rect(-40.0, -40.0, 40.0, 40.0);
-        let old = [dvec2(-20.0, 0.0), dvec2(0.0, 0.0), dvec2(10.0, 5.0)];
-        let r = 3.0;
-        let folded = uncut
-            .difference(&Region::around_polylines(&[old.to_vec()], r, 1e-4))
-            .unwrap();
-        let next = [dvec2(10.0, 5.0), dvec2(11.0, 7.2)];
-        let centre = dvec2(11.0, 7.2);
-        let mut whole = old.to_vec();
-        whole.push(centre);
-        let a = engaged(centre, r, &uncut, &whole, r).angle();
-        let b = engaged(centre, r, &folded, &next, r).angle();
-        assert!((a - b).abs() < 1e-2, "{a} vs {b}");
-    }
-
-    #[test]
-    fn sides_split_an_arc_across_the_heading() {
-        // A half circle ahead of a tool going +X, from -90° to +90°.
-        let e = Engaged {
-            arcs: vec![(-FRAC_PI_2, PI)],
-        };
-        let (right, left) = e.sides(dvec2(1.0, 0.0));
-        assert!((right - FRAC_PI_2).abs() < 1e-12 && (left - FRAC_PI_2).abs() < 1e-12);
-        // Going +Y, the same arc is wholly on the right.
-        let (right, left) = e.sides(dvec2(0.0, 1.0));
-        assert!((right - PI).abs() < 1e-12 && left.abs() < 1e-12);
-    }
-}
+mod tests;

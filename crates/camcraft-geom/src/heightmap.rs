@@ -25,7 +25,7 @@ use glam::{DVec2, dvec2};
 ///
 /// A bound, not a guess — an unbounded allocation driven by a tolerance value is a
 /// way to turn a typo into an out-of-memory kill.
-pub const MAX_CELLS: usize = 1 << 28;
+pub(crate) const MAX_CELLS: usize = 1 << 28;
 
 /// A regular grid of heights over an axis-aligned XY region.
 #[derive(Debug, Clone, PartialEq)]
@@ -54,7 +54,7 @@ pub enum HeightMapError {
     /// The origin was NaN or infinite.
     #[error("grid origin is not finite: {0:?}")]
     BadOrigin(DVec2),
-    /// The grid would exceed [`MAX_CELLS`].
+    /// The grid would have more than 2^28 cells, the most this crate allocates.
     #[error("grid of {nx} x {ny} needs {cells} cells, over the {MAX_CELLS} limit")]
     TooLarge {
         /// Requested width.
@@ -122,7 +122,8 @@ impl HeightMap {
         })
     }
 
-    /// A grid covering `[min, max]` in XY at the given pitch, every cell unset.
+    /// A grid covering `[min, max]` in XY at the given pitch, every cell set to
+    /// `value`.
     ///
     /// The grid is grown outward to whole cells, so it always covers the region asked
     /// for rather than clipping it.

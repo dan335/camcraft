@@ -7,10 +7,10 @@ use eframe::egui_wgpu::RenderState;
 use eframe::wgpu;
 
 use super::content::{StockChange, StockShow};
-use super::gpu::{COMMON, Gpu, IntoRgba, PipelineSpec, pipeline};
+use super::gpu::{Gpu, PipelineSpec, linear_rgba, pipeline, source};
 use crate::stock::gpu_tiles::{self, Tile};
 use crate::stock::pyramid::Pyramid;
-use crate::stock::stock_ao;
+use crate::stock::stock_ao::{self, WALL_CELLS};
 use crate::stock::stock_view::{CLASSES, Class, ColorMode, NO_CELL, StockImage, cell_color};
 use crate::ui::theme;
 
@@ -33,10 +33,6 @@ use crate::ui::theme;
 /// wall only where it stands more than [`WALL_CELLS`] cells tall.
 pub(super) const STOCK_SHADER: &str = include_str!("shaders/stock.wgsl");
 
-/// How many cells tall a step between neighbouring columns must be to be lit as
-/// a wall rather than as the surface's slope: about 72 degrees.
-pub(crate) const WALL_CELLS: f32 = 3.0;
-
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GridUniforms {
@@ -45,6 +41,7 @@ struct GridUniforms {
     top_wall: [f32; 4],
     core: [u32; 4],
     palette: [[f32; 4]; 6],
+    finish: [f32; 4],
 }
 
 /// Where the cells of `rect` start in an image `nx` cells wide with `bytes` per
@@ -201,7 +198,7 @@ fn palette() -> [[f32; 4]; 6] {
     let strong = cell_color(ColorMode::Compare, Class::Leftover, f64::INFINITY);
     let [gouge, _, on, off] = CLASSES.map(|c| cell_color(ColorMode::Compare, c, 0.0));
     let material = cell_color(ColorMode::Material, Class::OnPart, 0.0);
-    [gouge, faint, strong, on, off, material].map(|c| theme::linear(c).into_rgba())
+    [gouge, faint, strong, on, off, material].map(|c| linear_rgba(c, 1.0))
 }
 
 /// One tile of the material on the GPU.
@@ -219,7 +216,7 @@ pub(super) struct TileGpu {
 
 /// The material on the GPU, as tiles, sized to one stock.
 pub(super) struct StockGpu {
-    key: (u64, usize),
+    key: u64,
     size: [u32; 2],
     pub(super) tiles: Vec<TileGpu>,
     /// How the tiles' grids colour the material, as last written; `None` before
@@ -280,7 +277,7 @@ pub(super) fn stock_pipeline(
     });
     let stock_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("camcraft stock"),
-        source: wgpu::ShaderSource::Wgsl(format!("{COMMON}{STOCK_SHADER}").into()),
+        source: wgpu::ShaderSource::Wgsl(source(STOCK_SHADER).into()),
     });
     let stock_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("camcraft stock"),
@@ -306,13 +303,23 @@ pub(super) fn stock_pipeline(
 
 impl Gpu {
     /// Upload the material, when it changed. Textures are made once per grid size;
-    /// after that, a new stage is a texture write, and a step of playback writes
+    /// after that, a new image is written whole, and a step of playback writes
     /// only the cells it changed, in the tiles that hold them, and the cells of
     /// their pyramids above.
+    ///
+    /// The image is shared with playback's thread, which holds it while it works:
+    /// it is locked only when something is to be written.
     pub(super) fn upload_stock(&mut self, rs: &RenderState, stock: Option<&StockShow<'_>>) {
         let Some(show) = stock else {
             return;
         };
+        let current = self
+            .stock
+            .as_ref()
+            .is_some_and(|s| s.key == show.key && s.grids == Some(show.mode));
+        if current && show.changed == StockChange::Nothing {
+            return;
+        }
         show.image.with(|image| self.upload_image(rs, show, image));
     }
 
@@ -331,7 +338,7 @@ impl Gpu {
             _ if !same => None,
             StockChange::Nothing => None,
             StockChange::Cells(cells) if cells.iter().all(|r| r.x1 < size[0] && r.y1 < size[1]) => {
-                Some(cells.clone())
+                Some(cells.as_slice())
             }
             StockChange::Cells(_) | StockChange::All => None,
         };
@@ -369,7 +376,7 @@ impl Gpu {
             use rayon::prelude::*;
             gpu.tiles
                 .par_iter_mut()
-                .map(|tile| plan_tile(tile, rects.as_deref(), image, floor))
+                .map(|tile| plan_tile(tile, rects, image, floor))
                 .collect()
         };
         for (tile, plan) in gpu.tiles.iter().zip(plans) {
@@ -450,6 +457,7 @@ impl Gpu {
                     u32::from(mode == ColorMode::Compare),
                 ],
                 palette,
+                finish: theme::MATERIAL_FINISH.uniform(),
             };
             rs.queue
                 .write_buffer(&tile.grid, 0, bytemuck::bytes_of(&grid));
@@ -540,6 +548,17 @@ impl Gpu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tile's grid, finish and all, is laid out as the stock shader reads it.
+    #[test]
+    fn a_grid_is_laid_out_as_the_shader_reads_it() {
+        let (offset, span) = crate::view::viewport::gpu::tests::layout(STOCK_SHADER, "Grid");
+        assert_eq!(
+            offset("finish"),
+            Some(std::mem::offset_of!(GridUniforms, finish))
+        );
+        assert_eq!(span, std::mem::size_of::<GridUniforms>());
+    }
 
     /// A rectangle's copy starts at its first cell and strides whole image rows.
     #[test]

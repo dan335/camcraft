@@ -19,11 +19,11 @@
 
 #![allow(clippy::unwrap_used, clippy::panic)]
 
-use camcraft_core::drilling::Hole;
 use camcraft_core::job::{Coolant, SpindleDirection};
-use camcraft_core::toolpath::Arc;
-use camcraft_core::toolpath::{MoveRole, Toolpath};
-use camcraft_post::op::{DrillCycles, ProgramSpec, Units, lower};
+use camcraft_core::path::toolpath::Arc;
+use camcraft_core::path::toolpath::{MoveRole, Toolpath};
+use camcraft_core::strategy::drilling::Hole;
+use camcraft_post::op::{DrillCycles, ProgramSpec, lower};
 use camcraft_post::profile::{Profile, ProgramUnits};
 use camcraft_post::render::render;
 use glam::{DVec3, dvec2, dvec3};
@@ -87,7 +87,6 @@ fn fixture() -> Toolpath {
 
 fn spec() -> ProgramSpec {
     ProgramSpec {
-        name: "golden".into(),
         op_name: "finish".into(),
         strategy: "parallel".into(),
         tool: 3,
@@ -96,7 +95,7 @@ fn spec() -> ProgramSpec {
         rpm: 18000,
         spin: SpindleDirection::Clockwise,
         coolant: Coolant::Flood,
-        units: Units::Millimetres,
+        units: ProgramUnits::Mm,
         drill: None,
     }
 }
@@ -107,10 +106,7 @@ fn check(profile_name: &str) {
         .unwrap();
     // Written in the profile's units, as a session posts it.
     let spec = ProgramSpec {
-        units: match profile.units {
-            ProgramUnits::Mm => Units::Millimetres,
-            ProgramUnits::Inch => Units::Inches,
-        },
+        units: profile.units,
         ..spec()
     };
     check_against(&profile, &fixture(), &spec, profile_name);

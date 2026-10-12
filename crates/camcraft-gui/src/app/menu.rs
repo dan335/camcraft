@@ -9,7 +9,7 @@ use crate::browser;
 use crate::document::Selection;
 use crate::file_dialog::FileRequest;
 use crate::ui::theme;
-use crate::ui::widgets;
+use crate::ui::widgets::{self, Icon, Size, Variant};
 
 impl App {
     pub(super) fn menu(&mut self, ui: &mut egui::Ui) {
@@ -224,10 +224,13 @@ impl App {
                     .color(theme::egui_color(theme::TEXT_1)),
             );
             ui.add_space(12.0);
-            if ui.button("New job").clicked() {
+            if widgets::button(ui, Variant::Primary, Size::Md, Some(Icon::Plus), "New job")
+                .clicked()
+            {
                 self.new_job();
             }
-            if ui.button("Open job…").clicked() {
+            ui.add_space(theme::SPACE_3);
+            if widgets::button(ui, Variant::Secondary, Size::Md, None, "Open job…").clicked() {
                 self.dialog.open(FileRequest::OpenJobs, "");
             }
             if !self.worker.idle() {

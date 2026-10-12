@@ -34,6 +34,25 @@ fn turned(v: DVec3, axis: DVec3, angle: f64) -> DVec3 {
     v * c + axis.cross(v) * s
 }
 
+/// How many chords, none turning more than a quarter turn nor straying more than
+/// `tolerance` from the circle of `radius`, span a turn of `sweep` radians: at
+/// least one, at most 100 000, and one for a sweep that is not finite.
+pub(crate) fn chord_count(radius: f64, sweep: f64, tolerance: f64) -> u32 {
+    // The largest angle whose chord strays no more than the tolerance.
+    let widest = if tolerance < radius {
+        2.0 * (1.0 - tolerance / radius).acos()
+    } else {
+        FRAC_PI_2
+    };
+    let widest = widest.clamp(1.0e-3, FRAC_PI_2);
+    let n = (sweep.abs() / widest).ceil().max(1.0);
+    let n = if n.is_finite() { n.min(1.0e5) } else { 1.0 };
+    // At least one and at most 100 000, so the narrowing is exact.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let n = n as u32;
+    n
+}
+
 impl Arc {
     /// The arc about `axis` through `centre` from `from` to `to`, turning
     /// counter-clockwise about the axis when `ccw`, the short way or the long way
@@ -94,6 +113,12 @@ impl Arc {
     pub fn point_at(&self, from: DVec3, to: DVec3, t: f64) -> DVec3 {
         let (r0, a0) = self.frame(from);
         let (_, a1) = self.frame(to);
+        self.point_in(r0, a0, a1, t)
+    }
+
+    /// The point a fraction `t` of the way along it, from where it starts at `r0`
+    /// from the axis and `a0` along it, to `a1` along it.
+    fn point_in(&self, r0: DVec3, a0: f64, a1: f64, t: f64) -> DVec3 {
         self.centre + turned(r0, self.axis, self.sweep * t) + self.axis * (a0 + (a1 - a0) * t)
     }
 
@@ -121,20 +146,11 @@ impl Arc {
     /// Points along it within `tolerance` of it, from `from`: the start left out,
     /// `to` last, exactly. No chord spans more than a quarter turn.
     pub fn chords(&self, from: DVec3, to: DVec3, tolerance: f64) -> Vec<DVec3> {
-        let r = self.radius(from);
-        // The largest angle whose chord strays no more than the tolerance.
-        let widest = if tolerance < r {
-            2.0 * (1.0 - tolerance / r).acos()
-        } else {
-            FRAC_PI_2
-        };
-        let widest = widest.clamp(1.0e-3, FRAC_PI_2);
-        let n = (self.sweep.abs() / widest).ceil().max(1.0);
-        let n = if n.is_finite() { n.min(1.0e5) } else { 1.0 };
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let n = n as u32;
+        let (r0, a0) = self.frame(from);
+        let (_, a1) = self.frame(to);
+        let n = chord_count(r0.length(), self.sweep, tolerance);
         let mut out: Vec<DVec3> = (1..n)
-            .map(|k| self.point_at(from, to, f64::from(k) / f64::from(n)))
+            .map(|k| self.point_in(r0, a0, a1, f64::from(k) / f64::from(n)))
             .collect();
         out.push(to);
         out

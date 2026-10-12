@@ -328,11 +328,9 @@ fn label(ui: &egui::Ui, painter: &egui::Painter, cube: &Cube, face: &Face) {
     let across = right - centre;
     let angle = across.y.atan2(across.x);
     let color = theme::egui_color(theme::TEXT_2);
-    let galley = ui.painter().layout_no_wrap(
-        face.name.to_string(),
-        egui::FontId::proportional(theme::TEXT_XS),
-        color,
-    );
+    let galley =
+        ui.painter()
+            .layout_no_wrap(face.name.to_string(), theme::caption(ui.style()), color);
     let size = galley.size();
     let rot = egui::emath::Rot2::from_angle(angle);
     let pos = centre - rot * (size * 0.5);

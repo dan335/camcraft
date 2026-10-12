@@ -216,8 +216,17 @@ toggles by role and by operation. Playback needs a run that fits the setup as it
 is; without one the tab says to generate, and an out-of-date run drops the view
 back to Setup.
 
-The part is shaded with half-resolution GTAO, the material with horizon ambient
-occlusion on its own heights, shaded as it is cut. *Compare* colours the material
+Part and material are lit by one rig, dcpwood's viewers' turned to Z up: a warm
+sky-to-ground hemisphere, a warm key from high above the front left of where the
+camera starts (so tops read lighter than walls), a faint cool fill and rim, and
+the room's even light, tone mapped as three.js's Neutral
+(`view/viewport/shaders/common.wgsl`). Surfaces are shaded as three.js's standard
+material, with no textures: GGX highlights off the three lights, and Karis's
+analytic fit for what the room reflects. Each has a finish, a roughness and a
+metalness (`theme::Finish`): the part satin (0.62), the material a little smoother
+(0.5), and what is drawn to point something out matte. The part is shaded with half-resolution
+GTAO, the material with horizon ambient occlusion on its own heights, shaded as it
+is cut. *Compare* colours the material
 by the verifier's own rule: red below the part, amber left above it (deeper amber
 for more), grey finished, dark where there is no part. The legend's counts are the
 verifier's counts, and a test holds them equal.

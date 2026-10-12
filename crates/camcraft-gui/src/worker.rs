@@ -10,20 +10,25 @@
 //! is dropped.
 //!
 //! A run takes the job as the app holds it, not as it is on disk, so what runs is
-//! what is on screen, saved or not.
+//! what is on screen, saved or not. Its toolpaths are laid out for drawing here
+//! too, and a program is rendered and written here, so a long one never holds
+//! the window up.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
-use camcraft_core::job::{Job, ModelDef, Transform};
+use camcraft_core::job::{Job, ModelDef, Setup, Transform};
 use camcraft_core::run::{Plan, Stage};
 use camcraft_geom::bvh::MeshBvh;
 use camcraft_session::{
-    Model, Models, Ran, SessionError, load_job_model, read_job, run_setup_planned,
+    Model, Models, Posting, Ran, SessionError, load_job_model, plan_posting, read_job,
+    run_setup_planned, write_posting,
 };
 use eframe::egui;
+
+use crate::view::scene::Scene;
 
 /// Which open job a piece of work is for.
 pub type DocId = u64;
@@ -46,6 +51,15 @@ pub enum Task {
         setup: String,
         /// Which run of it, to tell a reply from one since superseded.
         seq: u64,
+    },
+    /// Rendering programs, to write them or ask first.
+    Post,
+    /// Writing programs rendered.
+    Write {
+        /// Where to.
+        dir: PathBuf,
+        /// The setups among them that did not pass their checks.
+        refused: Vec<String>,
     },
 }
 
@@ -84,6 +98,21 @@ pub enum Request {
         /// What to do with each operation; none, to work them all out.
         plans: Vec<Plan>,
     },
+    /// Render the programs of setups into a folder, writing nothing, as
+    /// [`plan_posting`] does.
+    Post {
+        /// Each setup, as it ran, with what running it made.
+        setups: Vec<(Setup, Ran)>,
+        /// The job's folder, where a machine profile that is a file is found.
+        job_dir: PathBuf,
+        /// Where the programs go.
+        dir: PathBuf,
+    },
+    /// Write programs rendered, all or none.
+    Write {
+        /// What to write, and where.
+        posting: Box<Posting>,
+    },
 }
 
 /// What came back.
@@ -94,8 +123,13 @@ pub enum Reply {
     /// A model, loaded, with the index picking in the view casts rays against:
     /// built here, off the UI thread, because a large model takes a while.
     Loaded(Result<(Arc<Model>, Arc<MeshBvh>), SessionError>),
-    /// A setup, run.
-    Ran(Box<Result<Ran, SessionError>>),
+    /// A setup, run, with its toolpaths laid out for drawing: built here, off
+    /// the UI thread, because a long program takes a while.
+    Ran(Box<Result<(Ran, Scene), SessionError>>),
+    /// Programs rendered, and not written yet.
+    Planned(Box<Result<Posting, SessionError>>),
+    /// Programs written: how many.
+    Written(Result<usize, SessionError>),
     /// Where a run has got to: sent as it goes, before [`Reply::Ran`].
     Progress(Stage),
     /// The thread stopped without replying: it panicked, most likely inside the
@@ -129,6 +163,8 @@ impl Worker {
             Request::Load { .. } => "loading model",
             Request::Place { .. } => "placing model",
             Request::Run { .. } => "running setup",
+            Request::Post { .. } => "rendering programs",
+            Request::Write { .. } => "writing programs",
         };
         let (tx, rx) = channel();
         let ctx = ctx.clone();
@@ -194,123 +230,28 @@ fn execute(request: Request, progress: &mut dyn FnMut(Stage)) -> Reply {
             plans,
         } => {
             let refs: Models<'_> = models.iter().map(|(n, m)| (n.as_str(), &**m)).collect();
-            Reply::Ran(Box::new(run_setup_planned(
-                &job, setup, &refs, &plans, progress,
-            )))
+            let ran = run_setup_planned(&job, setup, &refs, &plans, progress);
+            Reply::Ran(Box::new(ran.map(|ran| {
+                let scene = job
+                    .setups
+                    .get(setup)
+                    .map(|s| Scene::build(&job, s, &ran.result))
+                    .unwrap_or_default();
+                (ran, scene)
+            })))
         }
+        Request::Post {
+            setups,
+            job_dir,
+            dir,
+        } => {
+            let setups: Vec<(&Setup, &Ran)> = setups.iter().map(|(s, r)| (s, r)).collect();
+            Reply::Planned(Box::new(plan_posting(&setups, &job_dir, &dir, None)))
+        }
+        Request::Write { posting } => Reply::Written(write_posting(&posting)),
     }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
-mod tests {
-    use super::*;
-    use camcraft_session::fs::job_dir;
-    use std::time::{Duration, Instant};
-
-    fn wait(worker: &mut Worker) -> (DocId, Task, Reply) {
-        let deadline = Instant::now() + Duration::from_secs(120);
-        loop {
-            // Progress on the way is not the answer.
-            if let Some(reply) = worker
-                .poll()
-                .into_iter()
-                .find(|(_, _, r)| !matches!(r, Reply::Progress(_)))
-            {
-                return reply;
-            }
-            assert!(Instant::now() < deadline, "the worker never replied");
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    /// A run through the worker is the CLI's run: the same result as calling the
-    /// session directly with the same job and models.
-    #[test]
-    fn a_run_through_the_worker_matches_the_session_directly() {
-        let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples/rail-jig.camcraft");
-        let mut worker = Worker::default();
-        let ctx = egui::Context::default();
-        worker.start(&ctx, 7, Task::Open, Request::Open { path: example });
-        assert!(!worker.idle());
-        let (doc, task, Reply::Opened(opened)) = wait(&mut worker) else {
-            panic!("expected an opened job");
-        };
-        assert_eq!((doc, task), (7, Task::Open));
-        let (path, job) = (*opened).unwrap();
-        let def = job.models[0].clone();
-        let key = crate::document::ModelKey::of(&job_dir(&path), &def, job.tolerance);
-        worker.start(
-            &ctx,
-            7,
-            Task::Load {
-                name: def.name.clone(),
-                key,
-            },
-            Request::Load {
-                dir: job_dir(&path),
-                model: def.clone(),
-                tolerance: job.tolerance,
-            },
-        );
-        let (_, _, Reply::Loaded(model)) = wait(&mut worker) else {
-            panic!("expected a model");
-        };
-        let models = BTreeMap::from([(def.name.clone(), model.unwrap().0)]);
-
-        // Something quicker than the example's roughing: its finish alone.
-        let mut job = job;
-        job.setups[0].operations.remove(0);
-        job.tolerance = 0.1;
-        let task = Task::Run {
-            setup: "top".into(),
-            seq: 1,
-        };
-        worker.start(
-            &ctx,
-            7,
-            task.clone(),
-            Request::Run {
-                job: Box::new(job.clone()),
-                setup: 0,
-                models: models.clone(),
-                plans: Vec::new(),
-            },
-        );
-        assert!(!worker.idle());
-        let (_, _, Reply::Ran(ran)) = wait(&mut worker) else {
-            panic!("expected a run");
-        };
-        let ran = (*ran).unwrap();
-        assert!(worker.idle());
-
-        let refs: Models<'_> = models.iter().map(|(n, m)| (n.as_str(), &**m)).collect();
-        let direct = camcraft_session::run_setup(&job, 0, &refs).unwrap();
-        let (a, b) = (&ran.result, &direct.result);
-        assert_eq!(a.operations.len(), b.operations.len());
-        for (x, y) in a.operations.iter().zip(&b.operations) {
-            assert_eq!(x.passes, y.passes);
-            assert_eq!(x.path.moves(), y.path.moves(), "{}: paths differ", x.name);
-        }
-        assert_eq!(a.verify.compared, b.verify.compared);
-        assert_eq!(a.is_clean(), b.is_clean());
-    }
-
-    #[test]
-    fn errors_come_back_as_replies() {
-        let mut worker = Worker::default();
-        worker.start(
-            &egui::Context::default(),
-            1,
-            Task::Open,
-            Request::Open {
-                path: PathBuf::from("no-such-job.camcraft"),
-            },
-        );
-        match wait(&mut worker) {
-            (1, Task::Open, Reply::Opened(r)) if matches!(*r, Err(SessionError::JobIo { .. })) => {}
-            other => panic!("expected a read error, got {other:?}"),
-        }
-    }
-}
+mod tests;

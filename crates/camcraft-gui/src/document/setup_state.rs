@@ -12,6 +12,8 @@ use super::next_key;
 use super::run::SetupInputs;
 use crate::stock::live::LiveStock;
 use crate::stock::stock_view::ColorMode;
+use crate::transport::{Mark, marks};
+use crate::ui::theme;
 use crate::view::camera::Camera;
 use crate::view::scene::{Playhead, Scene};
 use crate::view::viewport::{Outline, View};
@@ -40,6 +42,10 @@ pub struct RanSetup {
     pub scene: Scene,
     /// Tells this scene's upload from any other.
     pub scene_key: u64,
+    /// Where the checks found something and the steep descents, as the timeline
+    /// marks them and playing stops at them ([`marks`]): found once, not every
+    /// frame they are drawn.
+    pub marks: Vec<(usize, Mark)>,
 }
 
 /// A setup laid out for drawing, before or without a run.
@@ -168,18 +174,15 @@ impl SetupState {
         let Some(ran) = self.ran.as_mut() else {
             return;
         };
-        let result = &mut ran.ran.result;
-        let Some(setup) = ran.job.setups.iter().find(|s| s.name == result.setup) else {
-            self.forget_run();
-            return;
-        };
         if kept == 0 {
             self.forget_run();
             return;
         }
+        let result = &mut ran.ran.result;
         result.operations.truncate(kept);
         result.keyframes.truncate(kept + 1);
-        ran.scene = Scene::build(&ran.job, setup, result);
+        keep_first(&mut ran.scene, kept);
+        ran.marks = marks(&ran.ran, &ran.scene);
         ran.scene_key = next_key();
         self.live = None;
         let view = &mut self.view;
@@ -188,5 +191,28 @@ impl SetupState {
             view.at = Playhead::at(end);
         }
         view.transport.playing = false;
+    }
+}
+
+/// Cut `scene` back to its first `kept` operations: what [`Scene::build`] makes
+/// of them alone. Each operation's segments, their times and its steep descents
+/// come from it and the ones before, so they stand as they are; only the counts
+/// of what is left are made again.
+pub(super) fn keep_first(scene: &mut Scene, kept: usize) {
+    let Some(end) = scene.ops.get(kept).map(|o| o.first) else {
+        return;
+    };
+    scene.segments.truncate(end);
+    scene.ops.truncate(kept);
+    // Deepest first, in machine order among equals, as they were.
+    scene.steep.retain(|s| s.op < kept);
+    scene.role_counts.fill(0);
+    for s in &scene.segments {
+        if let Some(c) = scene
+            .role_counts
+            .get_mut(theme::role_index(s.role) as usize)
+        {
+            *c += 1;
+        }
     }
 }

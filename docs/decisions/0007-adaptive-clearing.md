@@ -44,7 +44,11 @@ and fine stepdown steps back up each slab over the terraces left on slopes.
   whatever ends it behind. **Stay-down links are straight**, only where the tool
   stays clear of the material; otherwise the linker lifts, and goes straight down
   into what is cleared. **Adaptive makes its own helixes**, the size it planned,
-  at its entries only; the linker's would helix into every re-entry.
+  at its entries only; the linker's would helix into every re-entry. An entry
+  whose pass then finds nothing left to take (the helix's disc held all there
+  was) is still cut, as a helix alone: the disc is counted cleared, so it must
+  be. The linker arrives at a helix's start, the safe distance above the level
+  before, by rapid: that is no plunge, and is not reported as one (CC202).
 - **Levels** are rough levels a stepdown apart, each worked on its own and in
   parallel, and a level on each up-facing flat face, raised by the axial stock to
   leave, cut after the level below it and starting from what that level swept.

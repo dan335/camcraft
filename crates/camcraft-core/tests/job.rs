@@ -7,15 +7,15 @@
 
 #![allow(clippy::unwrap_used, clippy::float_cmp, clippy::panic)]
 
-use camcraft_core::allowance::{Allowance, EffectiveTool};
-use camcraft_core::dropcutter::DropCutter;
-use camcraft_core::linker::{ClearanceField, LinkParams, NoPart, Unchanging, link};
-use camcraft_core::ordering::order_passes;
-use camcraft_core::parallel::{ParallelParams, parallel_finish};
-use camcraft_core::pocket_clearing::{ClearingParams, pocket_clearing};
-use camcraft_core::reach::LevelReach;
-use camcraft_core::simadapt::sim_moves;
-use camcraft_core::tool::{Ball, Flat, ToolProfile};
+use camcraft_core::cutter::allowance::{Allowance, EffectiveTool};
+use camcraft_core::cutter::dropcutter::DropCutter;
+use camcraft_core::cutter::tool::{Ball, Flat, ToolProfile};
+use camcraft_core::path::linker::{ClearanceField, LinkParams, NoPart, Unchanging, link};
+use camcraft_core::path::ordering::order_passes;
+use camcraft_core::path::simadapt::sim_moves;
+use camcraft_core::strategy::parallel::{ParallelParams, parallel_finish};
+use camcraft_core::strategy::pocket_clearing::{ClearingParams, pocket_clearing};
+use camcraft_core::strategy::reach::LevelReach;
 use camcraft_geom::contour::Region;
 use camcraft_geom::synthetic;
 use camcraft_sim::stock::{PartSurface, Stock};
@@ -66,7 +66,7 @@ fn rough_then_finish_threading_stock_between_them() {
         "roughing found nothing: {rough_report:?}"
     );
 
-    let (rough_ordered, order) = order_passes(&rough_raw, true).unwrap();
+    let (rough_ordered, order) = order_passes(&rough_raw, true, true).unwrap();
     assert!(
         order.travel_after_mm <= order.travel_before_mm,
         "ordering must not make travel worse"
@@ -119,7 +119,7 @@ fn rough_then_finish_threading_stock_between_them() {
     .unwrap();
     assert!(finish_report.is_clean());
 
-    let (finish_ordered, _) = order_passes(&finish_raw, false).unwrap();
+    let (finish_ordered, _) = order_passes(&finish_raw, false, false).unwrap();
     let finish_clearance =
         ClearanceField::new(stock.field().clone(), 4.0, block_top + 4.0).unwrap();
     let (finish_path, _) = link(

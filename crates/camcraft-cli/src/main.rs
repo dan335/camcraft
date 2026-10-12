@@ -16,12 +16,14 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use camcraft_core::job::{Job as JobSpec, LengthUnit, ModelDef, Setup};
+use camcraft_core::job::{
+    Job as JobSpec, LengthUnit, ModelDef, Passes, Setup, StrategySpec, ToolKind,
+};
 use camcraft_session::checks::{Checks, Level};
 use camcraft_session::fs::{job_dir, write_atomically};
 use camcraft_session::{
-    FinishSpec, FinishTool, Model, Models, Passed, Program, Ran, SessionError, gate, load_model,
-    load_models, load_profile, models_of, plan_posting, program, read_job, run_setup,
+    FinishSpec, Model, Models, Passed, Program, Ran, SessionError, gate, load_model, load_models,
+    load_profile, models_of, plan_posting, program, read_job, run_setup, setup_profile,
     single_operation, units_of, write_posting,
 };
 use clap::{Parser, Subcommand, ValueEnum};
@@ -36,7 +38,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Write a G-code program for a single finishing pass.
+    /// Write a G-code program for a single finishing operation.
     ///
     /// Refuses unless the result passes its checks, the simulator's against the
     /// part among them, because a file that can reach a machine should have been
@@ -76,10 +78,73 @@ struct JobArgs {
     force: bool,
 }
 
+/// A single finishing operation, described with flags.
 #[derive(Parser, Debug)]
 struct PostArgs {
-    #[command(flatten)]
-    job: FlagArgs,
+    /// Model to machine (`.stl`, `.step` or `.stp`).
+    model: PathBuf,
+
+    /// Finishing strategy, named as a job file names it, with its own defaults.
+    #[arg(long, value_enum, default_value_t = StrategyArg::Parallel)]
+    strategy: StrategyArg,
+
+    /// What the numbers in the model mean. Required for STL, which carries no
+    /// units. A STEP file states its own; given anyway, it must agree.
+    #[arg(long, value_enum)]
+    units: Option<UnitArg>,
+
+    /// Cutter shape.
+    #[arg(long, value_enum, default_value_t = ToolArg::Ball)]
+    tool: ToolArg,
+
+    /// Cutter diameter in millimetres.
+    #[arg(long, default_value_t = 6.0)]
+    diameter: f64,
+
+    /// Corner radius of a bullnose cutter, in millimetres.
+    #[arg(long, default_value_t = 0.5)]
+    corner: f64,
+
+    /// Distance between passes, in millimetres.
+    #[arg(long, default_value_t = Passes::default().stepover)]
+    stepover: f64,
+
+    /// Distance between levels, in millimetres, for contour: 1 mm unless given.
+    #[arg(long)]
+    stepdown: Option<f64>,
+
+    /// Direction of parallel's passes, in degrees from +X.
+    #[arg(long, default_value_t = 0.0)]
+    angle: f64,
+
+    /// Chordal tolerance, in millimetres.
+    #[arg(long, default_value_t = 0.01)]
+    tolerance: f64,
+
+    /// Stock to leave perpendicular to the tool axis, in millimetres.
+    #[arg(long, default_value_t = 0.0)]
+    stock_radial: f64,
+
+    /// Stock to leave along the tool axis, in millimetres.
+    #[arg(long, default_value_t = 0.0)]
+    stock_axial: f64,
+
+    /// Largest Z drop that may be traversed as a cutting move, in millimetres.
+    #[arg(long, default_value_t = Passes::default().max_cut_step)]
+    max_cut_step: f64,
+
+    /// How far above the model's top the tool arrives and leaves, in
+    /// millimetres. Between cuts it lifts only clear of the material.
+    #[arg(long, default_value_t = 10.0)]
+    clearance: f64,
+
+    /// Cutting feed, in mm/min. Retracts run at it, plunges at a quarter of it.
+    #[arg(long, default_value_t = Passes::default().feed)]
+    feed: f64,
+
+    /// Where to write the program.
+    #[arg(short, long)]
+    out: PathBuf,
 
     /// Machine profile: a builtin name, or a path to a TOML profile.
     #[arg(long, default_value = "masso")]
@@ -105,58 +170,6 @@ struct PostArgs {
     force: bool,
 }
 
-/// A single finishing pass, described with flags.
-#[derive(Parser, Debug)]
-struct FlagArgs {
-    /// Model to machine (`.stl`, `.step` or `.stp`).
-    model: PathBuf,
-
-    /// What the numbers in the model mean. Required for STL, which carries no
-    /// units. A STEP file states its own; given anyway, it must agree.
-    #[arg(long, value_enum)]
-    units: Option<UnitArg>,
-
-    /// Cutter shape.
-    #[arg(long, value_enum, default_value_t = ToolArg::Ball)]
-    tool: ToolArg,
-
-    /// Cutter diameter in millimetres.
-    #[arg(long, default_value_t = 6.0)]
-    diameter: f64,
-
-    /// Distance between passes, in millimetres.
-    #[arg(long, default_value_t = 1.0)]
-    stepover: f64,
-
-    /// Chordal tolerance, in millimetres.
-    #[arg(long, default_value_t = 0.01)]
-    tolerance: f64,
-
-    /// Stock to leave perpendicular to the tool axis, in millimetres.
-    #[arg(long, default_value_t = 0.0)]
-    stock_radial: f64,
-
-    /// Stock to leave along the tool axis, in millimetres.
-    #[arg(long, default_value_t = 0.0)]
-    stock_axial: f64,
-
-    /// Largest Z drop that may be traversed as a cutting move, in millimetres.
-    #[arg(long, default_value_t = 0.5)]
-    max_cut_step: f64,
-
-    /// Traverse height above the material, in millimetres.
-    #[arg(long, default_value_t = 10.0)]
-    clearance: f64,
-
-    /// Cutting feed, in mm/min.
-    #[arg(long, default_value_t = 1200.0)]
-    feed: f64,
-
-    /// Where to write the program.
-    #[arg(short, long)]
-    out: PathBuf,
-}
-
 #[derive(ValueEnum, Clone, Copy, Debug)]
 enum UnitArg {
     /// Millimetres.
@@ -177,11 +190,42 @@ impl UnitArg {
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
+enum StrategyArg {
+    /// Raster passes side by side. Fusion's Parallel.
+    Parallel,
+    /// Passes a constant distance apart along the surface. Fusion's Scallop.
+    Scallop,
+    /// Passes round the part at levels a stepdown apart. Fusion's Contour.
+    Contour,
+    /// Each flat face cleared at its own height. Fusion's Flat.
+    Flat,
+    /// A spiral about the middle, dropped onto the part. Fusion's Spiral.
+    Spiral,
+    /// Spokes out from the middle, dropped onto the part. Fusion's Radial.
+    Radial,
+    /// A spiral from the boundary into the middle. Fusion's Morphed Spiral.
+    MorphedSpiral,
+}
+
+impl StrategyArg {
+    /// The strategy as a new one starts, by the name a job file gives it, which
+    /// is the flag's.
+    fn spec(self) -> Fallible<StrategySpec> {
+        let name = self.to_possible_value().map(|v| v.get_name().to_string());
+        name.as_deref()
+            .and_then(StrategySpec::named)
+            .ok_or_else(|| format!("no strategy called {name:?}").into())
+    }
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug)]
 enum ToolArg {
     /// Ball-nose end mill.
     Ball,
     /// Flat (square-end) end mill.
     Flat,
+    /// Flat end mill with rounded corners, of `--corner`.
+    Bullnose,
 }
 
 type Fallible<T> = Result<T, Box<dyn std::error::Error>>;
@@ -201,7 +245,7 @@ fn main() -> ExitCode {
     match outcome {
         Ok(0) => ExitCode::SUCCESS,
         Ok(n) => {
-            tracing::warn!("{n} warning(s); review before cutting");
+            tracing::warn!("{n} warning(s) or failed check(s); review before cutting");
             ExitCode::from(2)
         }
         Err(e) => {
@@ -259,6 +303,9 @@ fn execute(job: &JobSpec, setup: usize, models: &Models<'_>) -> Fallible<Ran> {
     for n in &ran.notes {
         tracing::info!("{n}");
     }
+    for w in &ran.warnings {
+        tracing::warn!("{w}");
+    }
     Ok(ran)
 }
 
@@ -289,12 +336,7 @@ fn report_checks(title: &str, checks: &Checks) {
     let mut passed = 0;
     for group in &checks.groups {
         for f in &group.findings {
-            let detail = if f.detail.is_empty() {
-                String::new()
-            } else {
-                format!(" ({})", f.detail)
-            };
-            let line = format!("{} {}: {}{detail}", f.code, group.title, f.message);
+            let line = f.line(group);
             match f.level {
                 Level::Fail => tracing::error!("{line}"),
                 Level::Warn => tracing::warn!("{line}"),
@@ -344,6 +386,14 @@ fn job(args: JobArgs) -> Fallible<usize> {
         return Err("the job has no setups".into());
     }
 
+    // The machine profiles first, when writing: a wrong one should not cost a
+    // whole run.
+    if args.out.is_some() {
+        for setup in chosen.iter().filter_map(|&i| job.setups.get(i)) {
+            setup_profile(setup, &job_dir, args.profile.as_deref())?;
+        }
+    }
+
     // Each model once, however many setups use it, at the job's tolerance: it
     // decides how finely a STEP model is tessellated.
     let loaded = load_models(&job, &job_dir, &chosen).map_err(explain)?;
@@ -386,11 +436,12 @@ fn job(args: JobArgs) -> Fallible<usize> {
     if args.out.is_none() && failed > 0 {
         return Err(format!("{failed} check(s) failed").into());
     }
-    Ok(runs.iter().map(|(_, r)| r.warnings.len()).sum())
+    // Written anyway with --force, a failed check is still worth reading.
+    Ok(runs.iter().map(|(_, r)| r.warnings.len()).sum::<usize>() + failed)
 }
 
 /// The job `post` describes with flags, and its model, loaded.
-fn flag_job(args: &FlagArgs, wcs: u8, rpm: u32, number: u32) -> Fallible<(JobSpec, Model)> {
+fn flag_job(args: &PostArgs) -> Fallible<(JobSpec, Model)> {
     let model = load(&args.model, args.units, args.tolerance)?;
     let def = ModelDef {
         name: "model".into(),
@@ -398,12 +449,14 @@ fn flag_job(args: &FlagArgs, wcs: u8, rpm: u32, number: u32) -> Fallible<(JobSpe
         units: args.units.map(UnitArg::length),
         transform: Default::default(),
     };
-    let job = single_operation(&finish_spec(args, wcs, rpm, number), def);
+    let job = single_operation(&finish_spec(args)?, def);
     Ok((job, model))
 }
 
 fn post(args: PostArgs) -> Fallible<usize> {
-    let (job, model) = flag_job(&args.job, args.wcs, args.rpm, args.tool_number)?;
+    // The profile first: a wrong name should not cost a whole run.
+    let profile = load_profile(&args.profile, None)?;
+    let (job, model) = flag_job(&args)?;
     let models: Models<'_> = [("model", &model)].into_iter().collect();
     let ran = execute(&job, 0, &models)?;
     report_checks("post", &ran.checks);
@@ -413,45 +466,70 @@ fn post(args: PostArgs) -> Fallible<usize> {
         "camcraft job with a job file and no --out, or open it in the app",
     )?;
 
-    let profile = load_profile(&args.profile, None)?;
     let op = ran
         .result
         .operations
         .first()
         .ok_or("the job produced no operation")?;
-    let out = &args.job.out;
+    let out = &args.out;
     let name = out
         .file_stem()
         .map_or_else(|| "camcraft".into(), |s| s.to_string_lossy().to_string());
     let (text, report) = program(op, args.wcs, &profile, &name)?;
     write_atomically(out, &text)?;
-    report_program(&Program {
-        path: out.clone(),
-        text,
-        op: op.name.clone(),
-        profile: profile.name.clone(),
-        report,
-    });
-    Ok(ran.warnings.len())
+    tracing::info!(
+        "{}: {} lines, {} motion blocks for {} -> {}",
+        op.name,
+        report.lines,
+        report.motion_blocks,
+        profile.name,
+        out.display()
+    );
+    Ok(ran.warnings.len() + ran.checks.failures().count())
 }
 
-/// The finishing pass that `post` describes with flags.
-fn finish_spec(args: &FlagArgs, wcs: u8, rpm: u32, number: u32) -> FinishSpec {
-    FinishSpec {
+/// The finishing operation that `post` describes with flags.
+fn finish_spec(args: &PostArgs) -> Fallible<FinishSpec> {
+    let mut strategy = args.strategy.spec()?;
+    if let StrategySpec::Parallel { angle } = &mut strategy {
+        *angle = args.angle;
+    }
+    Ok(FinishSpec {
+        strategy,
         tool: match args.tool {
-            ToolArg::Ball => FinishTool::Ball,
-            ToolArg::Flat => FinishTool::Flat,
+            ToolArg::Ball => ToolKind::Ball,
+            ToolArg::Flat => ToolKind::Flat,
+            ToolArg::Bullnose => ToolKind::Bullnose,
         },
+        corner: args.corner,
         diameter: args.diameter,
         stepover: args.stepover,
+        stepdown: args.stepdown,
         tolerance: args.tolerance,
         stock_radial: args.stock_radial,
         stock_axial: args.stock_axial,
         max_cut_step: args.max_cut_step,
         clearance: args.clearance,
         feed: args.feed,
-        wcs,
-        rpm,
-        number,
+        wcs: args.wcs,
+        rpm: args.rpm,
+        number: args.tool_number,
+    })
+}
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::float_cmp)]
+mod tests {
+    use super::*;
+
+    /// Every strategy `--strategy` offers is the 3D finishing strategy a job
+    /// file calls by the same name: kept to a boundary, and cutting to size.
+    #[test]
+    fn every_strategy_flag_is_a_finishing_strategy() {
+        for arg in StrategyArg::value_variants() {
+            let spec = arg.spec().unwrap();
+            assert_eq!(spec.name(), arg.to_possible_value().unwrap().get_name());
+            assert!(spec.uses().boundary);
+            assert_eq!(spec.default_stock_to_leave().radial, 0.0);
+        }
     }
 }

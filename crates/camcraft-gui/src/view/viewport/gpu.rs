@@ -1,70 +1,55 @@
 //! The viewport on the GPU: its shaders and pipelines, the offscreen targets it
-//! draws into, what is uploaded of the content it is given, and the passes that
-//! draw a frame.
+//! draws into, and the passes that draw a frame. What is uploaded of the content
+//! it is given is kept in [`super::upload`], its lines are [`super::lines`], and
+//! the material is [`super::stock_gpu`].
 
-use camcraft_geom::mesh::TriMesh;
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use eframe::wgpu;
 use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 
-use super::content::{Content, Outline, OutlineKind, Plane, PlaneKind};
+use super::content::PlaneKind;
+use super::lines::{self, HIDDEN_LINE, KINDS, kind_colors, kinds_shown, lines_shown, only_op};
 use super::stock_gpu::{self, StockGpu};
+use super::upload::{HighlightGpu, Uploaded, Vertex};
 use super::{FrameInput, v3};
 use crate::ui::theme;
 use crate::view::part_ao::PartAo;
-use crate::view::scene::Scene;
 
 /// Offscreen colour format: what egui expects of a native texture.
 const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const SAMPLES: u32 = 4;
-/// Line kind for the stock outline, after the eight move roles; the work zero's
-/// axes follow it.
-const STOCK: u32 = 8;
-/// Line kinds for the work zero's X, Y and Z axes.
-const AXIS_X: u32 = 9;
-const AXIS_Y: u32 = 10;
-const AXIS_Z: u32 = 11;
-/// Line kinds for picked edges, the edge under the pointer, and the boundary an
-/// operation is kept to. Always shown, and drawn wider.
-const SELECTED: u32 = 12;
-const HOVER: u32 = 13;
-const BOUNDARY: u32 = 14;
-/// Line kind for a stock that could be picked into the setup: faint, and drawn
-/// only while it is being picked.
-const GHOST: u32 = 15;
-/// Line kinds for the edges of an operation's height planes: clearance, top and
-/// bottom.
-pub(super) const CLEARANCE: u32 = 16;
-pub(super) const TOP: u32 = 17;
-pub(super) const BOTTOM: u32 = 18;
-/// Line kinds for where the tool's centre may go against the boundary, and the
-/// hatching over what it cuts outside the part. Always shown, drawn thin.
-const LIMIT: u32 = 19;
-const CHANNEL: u32 = 20;
-/// Line kind for the edges of an operation's retract plane.
-pub(super) const RETRACT: u32 = 21;
-/// Line kinds in all, and so colours.
-const KINDS: usize = 22;
 
-pub(super) const COMMON: &str = include_str!("shaders/common.wgsl");
+const COMMON: &str = include_str!("shaders/common.wgsl");
 
 const MESH_SHADER: &str = include_str!("shaders/mesh.wgsl");
 
-const LINE_SHADER: &str = include_str!("shaders/line.wgsl");
+/// A shader's whole source: the kinds of line's constants, what every shader
+/// shares, then `body`.
+pub(super) fn source(body: &str) -> String {
+    format!("{}{COMMON}{body}", lines::wgsl_constants())
+}
 
+/// What changes from frame to frame of the frame's uniforms. First in its buffer,
+/// so a frame writes only these.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct FrameUniforms {
     view_proj: [[f32; 4]; 4],
-    light: [f32; 4],
     viewport: [f32; 4],
     masks: [u32; 4],
-    colors: [[f32; 4]; KINDS],
     eye: [f32; 4],
     sight: [f32; 4],
+}
+
+/// The rest of the frame's uniforms, written once: each kind of line's colour.
+/// The light is the shaders' own (`common.wgsl`).
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct FrameConstants {
+    colors: [[f32; 4]; KINDS],
 }
 
 #[repr(C)]
@@ -72,97 +57,13 @@ struct FrameUniforms {
 struct ObjectUniforms {
     model: [[f32; 4]; 4],
     color: [f32; 4],
+    finish: [f32; 4],
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex {
-    position: [f32; 3],
-    normal: [f32; 3],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct LineInstance {
-    a: [f32; 3],
-    b: [f32; 3],
-    kind: u32,
-    op: u32,
-}
-
-/// Unshared vertices with a face normal each, so every triangle shades flat. Flat
-/// shading shows facets, which is honest about what the engine is cutting against.
-fn flat_vertices(triangles: impl Iterator<Item = [Vec3; 3]>) -> Vec<Vertex> {
-    let mut out = Vec::new();
-    for [a, b, c] in triangles {
-        let n = (b - a).cross(c - a).normalize_or_zero().to_array();
-        for p in [a, b, c] {
-            out.push(Vertex {
-                position: p.to_array(),
-                normal: n,
-            });
-        }
-    }
-    out
-}
-
-fn mesh_triangles(mesh: &TriMesh) -> impl Iterator<Item = [Vec3; 3]> + '_ {
-    (0..mesh.len())
-        .filter_map(|i| mesh.triangle(i))
-        .map(|t| t.map(|p| Vec3::from(v3(p))))
-}
-
-/// The scene's moves as lines, in machine order, an arc as several; and how many
-/// lines the moves up to and including each one make, so the playhead, which
-/// counts moves, can say how many lines are showing.
-fn line_instances(scene: &Scene) -> (Vec<LineInstance>, Vec<u32>) {
-    let mut lines = Vec::with_capacity(scene.segments.len());
-    let mut ends = Vec::with_capacity(scene.segments.len());
-    for s in &scene.segments {
-        for (a, b) in s.pieces() {
-            lines.push(LineInstance {
-                a: v3(a),
-                b: v3(b),
-                kind: theme::role_index(s.role),
-                op: s.op,
-            });
-        }
-        ends.push(u32::try_from(lines.len()).unwrap_or(u32::MAX));
-    }
-    (lines, ends)
-}
-
-/// How many lines are showing when `shown` moves are.
-fn lines_shown(ends: &[u32], shown: usize) -> u32 {
-    shown
-        .checked_sub(1)
-        .and_then(|i| ends.get(i).or(ends.last()))
-        .copied()
-        .unwrap_or(0)
-}
-
-fn outline_instances(outline: &[Outline]) -> Vec<LineInstance> {
-    outline
-        .iter()
-        .map(|o| LineInstance {
-            a: v3(o.a),
-            b: v3(o.b),
-            kind: match o.kind {
-                OutlineKind::Stock => STOCK,
-                OutlineKind::AxisX => AXIS_X,
-                OutlineKind::AxisY => AXIS_Y,
-                OutlineKind::AxisZ => AXIS_Z,
-                OutlineKind::Selected => SELECTED,
-                OutlineKind::Hover => HOVER,
-                OutlineKind::Boundary => BOUNDARY,
-                OutlineKind::Limit => LIMIT,
-                OutlineKind::Channel => CHANNEL,
-                OutlineKind::Ghost => GHOST,
-                OutlineKind::Plane(k) => k.line_kind(),
-            },
-            op: 0,
-        })
-        .collect()
+/// An sRGB colour in linear light, at `alpha`.
+pub(super) fn linear_rgba(c: [u8; 3], alpha: f32) -> [f32; 4] {
+    let [r, g, b] = theme::linear(c);
+    [r, g, b, alpha]
 }
 
 struct Targets {
@@ -172,44 +73,56 @@ struct Targets {
     resolved: wgpu::TextureView,
 }
 
+impl Targets {
+    /// A pass drawing into them. The first of a frame, given the colour to clear
+    /// to, clears them and keeps what it draws for the next; the last loads them
+    /// and resolves the picture, keeping nothing else.
+    fn pass<'e>(
+        &self,
+        encoder: &'e mut wgpu::CommandEncoder,
+        label: &str,
+        clear: Option<[f32; 3]>,
+    ) -> wgpu::RenderPass<'e> {
+        let (color, depth, store) = match clear {
+            Some([r, g, b]) => (
+                wgpu::LoadOp::Clear(wgpu::Color {
+                    r: f64::from(r),
+                    g: f64::from(g),
+                    b: f64::from(b),
+                    a: 1.0,
+                }),
+                wgpu::LoadOp::Clear(1.0),
+                wgpu::StoreOp::Store,
+            ),
+            None => (
+                wgpu::LoadOp::Load,
+                wgpu::LoadOp::Load,
+                wgpu::StoreOp::Discard,
+            ),
+        };
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(label),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.msaa,
+                resolve_target: clear.is_none().then_some(&self.resolved),
+                ops: wgpu::Operations { load: color, store },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.depth,
+                depth_ops: Some(wgpu::Operations { load: depth, store }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        })
+    }
+}
+
 struct Object {
     uniforms: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-}
-
-/// A highlight on the GPU: its faces and its lines, either of which may be empty.
-struct HighlightGpu {
-    key: u64,
-    faces: Option<(wgpu::Buffer, u32)>,
-    lines: Option<(wgpu::Buffer, u32)>,
-}
-
-struct Uploaded {
-    part: Option<(u64, wgpu::Buffer, u32)>,
-    selection: Option<HighlightGpu>,
-    hover: Option<HighlightGpu>,
-    ghost: Option<HighlightGpu>,
-    scene: Option<SceneGpu>,
-    outline: Option<(u64, wgpu::Buffer, u32)>,
-    /// The height planes as uploaded: each one's fill, and all their edges.
-    planes: Option<PlanesGpu>,
-}
-
-/// A run's toolpaths and cutters on the GPU, with the key they were made under.
-struct SceneGpu {
-    key: u64,
-    moves: Option<(wgpu::Buffer, u32)>,
-    /// How many lines the moves up to each one make.
-    ends: Vec<u32>,
-    /// One per operation; `None` where the job named no tool that could be drawn.
-    cutters: Vec<Option<(wgpu::Buffer, u32)>>,
-}
-
-/// Height planes on the GPU, with the planes they were made from.
-struct PlanesGpu {
-    from: Vec<Plane>,
-    fills: Vec<(PlaneKind, wgpu::Buffer)>,
-    lines: (wgpu::Buffer, u32),
 }
 
 pub(super) struct Gpu {
@@ -239,7 +152,8 @@ pub(super) struct Gpu {
     plane_objects: [(Object, Object); 4],
     targets: Option<Targets>,
     texture: Option<egui::TextureId>,
-    up: Uploaded,
+    /// What is uploaded of the content.
+    pub(super) up: Uploaded,
 }
 
 /// What sets one of the viewport's pipelines apart: they share the targets, the
@@ -300,102 +214,6 @@ pub(super) fn pipeline(device: &wgpu::Device, spec: &PipelineSpec<'_>) -> wgpu::
     })
 }
 
-/// How much of a line shows where the part hides it: the blend constant its
-/// hidden pipeline mixes it in by.
-const HIDDEN_LINE: f64 = 0.35;
-
-/// The pipeline that draws every line, toolpaths and outlines alike, as
-/// instanced quads. `hidden`, the one that draws them only where something is in
-/// front, mixed in by [`HIDDEN_LINE`], and leaves the depth alone.
-fn line_pipeline_for(
-    device: &wgpu::Device,
-    frame_layout: &wgpu::BindGroupLayout,
-    hidden: bool,
-) -> wgpu::RenderPipeline {
-    let line_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("camcraft lines"),
-        source: wgpu::ShaderSource::Wgsl(format!("{COMMON}{LINE_SHADER}").into()),
-    });
-    let line_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("camcraft lines"),
-        bind_group_layouts: &[Some(frame_layout)],
-        immediate_size: 0,
-    });
-    pipeline(
-        device,
-        &PipelineSpec {
-            label: "camcraft lines",
-            layout: &line_layout,
-            module: &line_module,
-            vertex: "vs",
-            buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: std::mem::size_of::<LineInstance>() as u64,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &wgpu::vertex_attr_array![
-                    0 => Float32x3, 1 => Float32x3, 2 => Uint32, 3 => Uint32
-                ],
-            })],
-            blend: hidden.then_some(wgpu::BlendState {
-                color: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::Constant,
-                    dst_factor: wgpu::BlendFactor::OneMinusConstant,
-                    operation: wgpu::BlendOperation::Add,
-                },
-                alpha: wgpu::BlendComponent::OVER,
-            }),
-            depth_write: !hidden,
-            compare: if hidden {
-                wgpu::CompareFunction::Greater
-            } else {
-                wgpu::CompareFunction::LessEqual
-            },
-            bias: wgpu::DepthBiasState::default(),
-        },
-    )
-}
-
-/// `data` in a new vertex buffer, with how many items it holds.
-fn vertex_buffer<T: bytemuck::Pod>(
-    rs: &RenderState,
-    label: &str,
-    data: &[T],
-) -> (wgpu::Buffer, u32) {
-    let buffer = rs
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(label),
-            contents: bytemuck::cast_slice(data),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-    (buffer, u32::try_from(data.len()).unwrap_or(u32::MAX))
-}
-
-/// As [`vertex_buffer`], or nothing for no `data`: a buffer may not be empty, and
-/// an empty one would draw nothing anyway.
-fn vertex_buffer_of<T: bytemuck::Pod>(
-    rs: &RenderState,
-    label: &str,
-    data: &[T],
-) -> Option<(wgpu::Buffer, u32)> {
-    (!data.is_empty()).then(|| vertex_buffer(rs, label, data))
-}
-
-/// Keep `slot`, an upload made under a key, in step with `wanted`, the key it
-/// should be made under now and what from: made again by `make` when the key has
-/// changed, dropped when nothing is wanted, and otherwise left as it is.
-fn keep_up<K: PartialEq, W, U>(
-    slot: &mut Option<U>,
-    key: impl Fn(&U) -> K,
-    wanted: Option<(K, W)>,
-    make: impl FnOnce(K, W) -> Option<U>,
-) {
-    match wanted {
-        Some((k, w)) if slot.as_ref().map(key).as_ref() != Some(&k) => *slot = make(k, w),
-        Some(_) => {}
-        None => *slot = None,
-    }
-}
-
 impl Gpu {
     pub(super) fn new(rs: &RenderState) -> Self {
         let device = &rs.device;
@@ -416,12 +234,13 @@ impl Gpu {
         };
         let frame_layout = uniform_layout("camcraft frame");
         let object_layout = uniform_layout("camcraft object");
-        let buffer = |label, size: usize| {
-            device.create_buffer(&wgpu::BufferDescriptor {
+        // Uniforms made with what they hold, and written again only where a frame
+        // changes them.
+        let buffer = |label, contents: &[u8]| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
-                size: size as u64,
+                contents,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
             })
         };
         let group = |layout: &wgpu::BindGroupLayout, buffer: &wgpu::Buffer| {
@@ -434,10 +253,21 @@ impl Gpu {
                 }],
             })
         };
-        let frame = buffer("camcraft frame", std::mem::size_of::<FrameUniforms>());
+        let per_frame: FrameUniforms = bytemuck::Zeroable::zeroed();
+        let mut frame_contents = bytemuck::bytes_of(&per_frame).to_vec();
+        frame_contents.extend_from_slice(bytemuck::bytes_of(&FrameConstants {
+            colors: kind_colors(),
+        }));
+        let frame = buffer("camcraft frame", &frame_contents);
         let frame_group = group(&frame_layout, &frame);
-        let object = |label| {
-            let uniforms = buffer(label, std::mem::size_of::<ObjectUniforms>());
+        // An object in `color` at `alpha` and of `finish`, where it is.
+        let object = |label, color, alpha, finish: theme::Finish| {
+            let uniforms = ObjectUniforms {
+                model: Mat4::IDENTITY.to_cols_array_2d(),
+                color: linear_rgba(color, alpha),
+                finish: finish.uniform(),
+            };
+            let uniforms = buffer(label, bytemuck::bytes_of(&uniforms));
             let bind_group = group(&object_layout, &uniforms);
             Object {
                 uniforms,
@@ -447,7 +277,7 @@ impl Gpu {
 
         let mesh_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("camcraft mesh"),
-            source: wgpu::ShaderSource::Wgsl(format!("{COMMON}{MESH_SHADER}").into()),
+            source: wgpu::ShaderSource::Wgsl(source(MESH_SHADER).into()),
         });
         let mesh_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("camcraft mesh"),
@@ -529,8 +359,8 @@ impl Gpu {
             pull,
         );
 
-        let line_hidden_pipeline = line_pipeline_for(device, &frame_layout, true);
-        let line_pipeline = line_pipeline_for(device, &frame_layout, false);
+        let line_hidden_pipeline = lines::line_pipeline_for(device, &frame_layout, true);
+        let line_pipeline = lines::line_pipeline_for(device, &frame_layout, false);
 
         let (stock_pipeline, stock_layout) = stock_gpu::stock_pipeline(device, &frame_layout);
 
@@ -548,136 +378,41 @@ impl Gpu {
             line_hidden_pipeline,
             frame,
             frame_group,
-            part_object: object("camcraft part"),
-            selection_object: object("camcraft selection"),
-            hover_object: object("camcraft hover"),
-            ghost_object: object("camcraft ghost"),
-            ghost_hidden_object: object("camcraft ghost, hidden"),
-            cutter_object: object("camcraft cutter"),
+            part_object: object("camcraft part", theme::PART, 1.0, theme::PART_FINISH),
+            selection_object: object(
+                "camcraft selection",
+                theme::SELECTED,
+                0.55,
+                theme::MARK_FINISH,
+            ),
+            hover_object: object("camcraft hover", theme::HOVER, 0.4, theme::MARK_FINISH),
+            ghost_object: object("camcraft ghost", theme::GHOST, 0.22, theme::MARK_FINISH),
+            ghost_hidden_object: object(
+                "camcraft ghost, hidden",
+                theme::GHOST,
+                0.1,
+                theme::MARK_FINISH,
+            ),
+            // Opaque enough to find at a glance on a large part, and still
+            // showing what it passes through.
+            cutter_object: object("camcraft cutter", theme::AMBER_5, 0.8, theme::MARK_FINISH),
             part_ao: PartAo::new(device, COLOR, SAMPLES),
-            plane_objects: PlaneKind::ALL
-                .map(|_| (object("camcraft plane"), object("camcraft plane, hidden"))),
+            // Faint: the part must still be read through them.
+            plane_objects: PlaneKind::ALL.map(|k| {
+                (
+                    object("camcraft plane", k.color(), 0.16, theme::MARK_FINISH),
+                    object(
+                        "camcraft plane, hidden",
+                        k.color(),
+                        0.06,
+                        theme::MARK_FINISH,
+                    ),
+                )
+            }),
             targets: None,
             texture: None,
-            up: Uploaded {
-                part: None,
-                selection: None,
-                hover: None,
-                ghost: None,
-                scene: None,
-                outline: None,
-                planes: None,
-            },
+            up: Uploaded::none(),
         }
-    }
-
-    /// Upload whatever changed since the last frame.
-    pub(super) fn upload(&mut self, rs: &RenderState, content: &Content<'_>) {
-        self.upload_stock(rs, content.stock.as_ref());
-
-        keep_up(
-            &mut self.up.part,
-            |p| p.0,
-            content.part,
-            |key, mesh| {
-                let v = flat_vertices(mesh_triangles(mesh));
-                let (buffer, n) = vertex_buffer(rs, "camcraft part", &v);
-                Some((key, buffer, n))
-            },
-        );
-
-        for (slot, wanted) in [
-            (&mut self.up.selection, content.selection),
-            (&mut self.up.hover, content.hover),
-            (&mut self.up.ghost, content.ghost),
-        ] {
-            keep_up(
-                slot,
-                |h| h.key,
-                wanted,
-                |key, h| {
-                    let faces = flat_vertices(h.faces.iter().copied());
-                    Some(HighlightGpu {
-                        key,
-                        faces: vertex_buffer_of(rs, "camcraft picked faces", &faces),
-                        lines: vertex_buffer_of(
-                            rs,
-                            "camcraft picked lines",
-                            &outline_instances(&h.lines),
-                        ),
-                    })
-                },
-            );
-        }
-
-        if content.planes.is_empty() {
-            self.up.planes = None;
-        } else if self
-            .up
-            .planes
-            .as_ref()
-            .is_none_or(|p| p.from != content.planes)
-        {
-            let fills = content
-                .planes
-                .iter()
-                .map(|p| {
-                    let [a, b, c, d] = p.corners().map(|c| Vec3::from(v3(c)));
-                    let v = flat_vertices([[a, b, c], [a, c, d]].into_iter());
-                    (p.kind, vertex_buffer(rs, "camcraft plane", &v).0)
-                })
-                .collect();
-            let edges: Vec<Outline> = content
-                .planes
-                .iter()
-                .flat_map(|p| {
-                    let c = p.corners();
-                    let next = c.into_iter().cycle().skip(1);
-                    c.into_iter().zip(next).map(move |(a, b)| Outline {
-                        a,
-                        b,
-                        kind: OutlineKind::Plane(p.kind),
-                    })
-                })
-                .collect();
-            self.up.planes = Some(PlanesGpu {
-                from: content.planes.to_vec(),
-                fills,
-                lines: vertex_buffer(rs, "camcraft plane edges", &outline_instances(&edges)),
-            });
-        }
-
-        keep_up(
-            &mut self.up.outline,
-            |o| o.0,
-            content.outline,
-            |key, outline| {
-                let lines = outline_instances(outline);
-                vertex_buffer_of(rs, "camcraft outline", &lines).map(|(buffer, n)| (key, buffer, n))
-            },
-        );
-
-        keep_up(
-            &mut self.up.scene,
-            |s| s.key,
-            content.scene,
-            |key, scene| {
-                let (lines, ends) = line_instances(scene);
-                Some(SceneGpu {
-                    key,
-                    moves: vertex_buffer_of(rs, "camcraft moves", &lines),
-                    ends,
-                    cutters: scene
-                        .ops
-                        .iter()
-                        .map(|op| {
-                            let v = flat_vertices(op.cutter.iter().copied());
-                            vertex_buffer_of(rs, "camcraft cutter", &v)
-                        })
-                        .collect(),
-                })
-            },
-        );
     }
 
     /// Make sure the offscreen targets are `size`, and that egui knows the texture.
@@ -749,6 +484,7 @@ impl Gpu {
         self.texture = Some(id);
         Some(id)
     }
+
     pub(super) fn render(
         &mut self,
         rs: &RenderState,
@@ -766,7 +502,6 @@ impl Gpu {
         };
         self.write_uniforms(rs, input, shown);
 
-        let bg = theme::linear(theme::BG);
         let mut encoder = rs
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -776,34 +511,8 @@ impl Gpu {
         // The part alone first, kept, so its occlusion can be worked out from the
         // depth it leaves and darken it before anything else is drawn over it.
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("camcraft viewport part"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &targets.msaa,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: f64::from(bg[0]),
-                            g: f64::from(bg[1]),
-                            b: f64::from(bg[2]),
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &targets.depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let bg = theme::linear(theme::BG);
+            let mut pass = targets.pass(&mut encoder, "camcraft viewport part", Some(bg));
             pass.set_bind_group(0, &self.frame_group, &[]);
             if let Some((_, buffer, n)) = part {
                 pass.set_pipeline(&self.part_pipeline);
@@ -822,29 +531,7 @@ impl Gpu {
             self.part_ao.draw(&mut encoder, &targets.msaa);
         }
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("camcraft viewport"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &targets.msaa,
-                    resolve_target: Some(&targets.resolved),
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Discard,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &targets.depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Discard,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let mut pass = targets.pass(&mut encoder, "camcraft viewport", None);
             pass.set_bind_group(0, &self.frame_group, &[]);
             self.draw_rest(&mut pass, input, part.is_some(), shown);
         }
@@ -852,55 +539,15 @@ impl Gpu {
         Some(texture)
     }
 
-    /// Write the frame's uniforms, and each object's: colours, masks, the part,
-    /// the tints of picks and planes, and where the cutter is.
+    /// Write what changes from frame to frame of the uniforms: the view, the
+    /// masks of what is shown, the eye, and where the cutter is. The rest was
+    /// written when they were made.
     fn write_uniforms(&self, rs: &RenderState, input: &FrameInput, shown: u32) {
         let view = input.view;
-        let mut colors = [[0.0; 4]; KINDS];
-        for (slot, role) in colors.iter_mut().zip(theme::ROLES) {
-            *slot = theme::linear(theme::role_srgb(role)).into_rgba();
-        }
-        for (kind, color) in [
-            (STOCK, theme::MATERIAL),
-            (AXIS_X, theme::AXIS_X),
-            (AXIS_Y, theme::AXIS_Y),
-            (AXIS_Z, theme::AXIS_Z),
-            (SELECTED, theme::SELECTED),
-            (HOVER, theme::HOVER),
-            (BOUNDARY, theme::BOUNDARY),
-            (LIMIT, theme::BOUNDARY_LIMIT),
-            (CHANNEL, theme::CHANNEL),
-            (GHOST, theme::GHOST),
-            (CLEARANCE, PlaneKind::Clearance.color()),
-            (TOP, PlaneKind::Top.color()),
-            (BOTTOM, PlaneKind::Bottom.color()),
-            (RETRACT, PlaneKind::Retract.color()),
-        ] {
-            if let Some(slot) = colors.get_mut(kind as usize) {
-                *slot = theme::linear(color).into_rgba();
-            }
-        }
-        let axes = (1 << AXIS_X) | (1 << AXIS_Y) | (1 << AXIS_Z);
-        let kinds = (view.roles & 0xff)
-            | if view.stock { 1 << STOCK } else { 0 }
-            | if view.origin { axes } else { 0 }
-            | (1 << SELECTED)
-            | (1 << HOVER)
-            | (1 << BOUNDARY)
-            | (1 << LIMIT)
-            | (1 << CHANNEL)
-            | (1 << GHOST)
-            | (1 << CLEARANCE)
-            | (1 << TOP)
-            | (1 << BOTTOM)
-            | (1 << RETRACT);
         let frame = FrameUniforms {
             view_proj: input.view_proj.to_cols_array_2d(),
-            // From the front right and above, where the camera starts.
-            light: Vec3::new(0.4, -0.7, 0.9).normalize().extend(0.0).to_array(),
             viewport: [input.pixels[0], input.pixels[1], input.line_width, 2e-4],
-            masks: [kinds, view.ops, shown, 0],
-            colors,
+            masks: [kinds_shown(&view), view.ops, shown, only_op(&view)],
             eye: input.eye.extend(1.0).to_array(),
             sight: match input.sight {
                 Some((forward, length)) => forward.extend(length).to_array(),
@@ -909,49 +556,11 @@ impl Gpu {
         };
         rs.queue
             .write_buffer(&self.frame, 0, bytemuck::bytes_of(&frame));
-        let part = ObjectUniforms {
-            model: Mat4::IDENTITY.to_cols_array_2d(),
-            color: theme::linear(theme::PART).into_rgba(),
-        };
-        rs.queue
-            .write_buffer(&self.part_object.uniforms, 0, bytemuck::bytes_of(&part));
-        for (object, color, alpha) in [
-            (&self.selection_object, theme::SELECTED, 0.55),
-            (&self.hover_object, theme::HOVER, 0.4),
-            (&self.ghost_object, theme::GHOST, 0.22),
-            (&self.ghost_hidden_object, theme::GHOST, 0.1),
-        ] {
-            let mut color = theme::linear(color).into_rgba();
-            color[3] = alpha;
-            let tint = ObjectUniforms {
-                model: Mat4::IDENTITY.to_cols_array_2d(),
-                color,
-            };
-            rs.queue
-                .write_buffer(&object.uniforms, 0, bytemuck::bytes_of(&tint));
-        }
-        for (kind, (seen, hidden)) in PlaneKind::ALL.iter().zip(&self.plane_objects) {
-            // Faint: the part must still be read through them.
-            for (object, alpha) in [(seen, 0.16), (hidden, 0.06)] {
-                let mut color = theme::linear(kind.color()).into_rgba();
-                color[3] = alpha;
-                let tint = ObjectUniforms {
-                    model: Mat4::IDENTITY.to_cols_array_2d(),
-                    color,
-                };
-                rs.queue
-                    .write_buffer(&object.uniforms, 0, bytemuck::bytes_of(&tint));
-            }
-        }
         if let Some((_, tip)) = view.cutter {
-            let mut color = theme::linear(theme::AMBER_5).into_rgba();
-            // Opaque enough to find at a glance on a large part, and still
-            // showing what it passes through.
-            color[3] = 0.8;
+            // Its model matrix, which leads its uniforms.
             let model = Mat4::from_translation(Vec3::from(v3(tip))).to_cols_array_2d();
-            let cutter = ObjectUniforms { model, color };
             rs.queue
-                .write_buffer(&self.cutter_object.uniforms, 0, bytemuck::bytes_of(&cutter));
+                .write_buffer(&self.cutter_object.uniforms, 0, bytemuck::bytes_of(&model));
         }
     }
 
@@ -1086,39 +695,21 @@ impl Gpu {
     }
 }
 
-/// An RGB colour with full alpha.
-pub(super) trait IntoRgba {
-    fn into_rgba(self) -> [f32; 4];
-}
-
-impl IntoRgba for [f32; 3] {
-    fn into_rgba(self) -> [f32; 4] {
-        [self[0], self[1], self[2], 1.0]
-    }
-}
-
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::float_cmp,
-    clippy::indexing_slicing,
-    clippy::panic
-)]
-mod tests {
+#[allow(clippy::panic)]
+pub(super) mod tests {
     use super::*;
-    use camcraft_geom::synthetic;
-    use glam::DVec3;
 
     /// Every shader parses and validates as the GPU will be given it, so a slip in
     /// one fails here rather than when the app first draws.
     #[test]
     fn every_shader_is_valid_wgsl() {
-        for (name, body) in [
-            ("mesh", MESH_SHADER),
-            ("line", LINE_SHADER),
-            ("stock", stock_gpu::STOCK_SHADER),
+        for (name, source) in [
+            ("mesh", source(MESH_SHADER)),
+            ("line", source(lines::LINE_SHADER)),
+            ("stock", source(stock_gpu::STOCK_SHADER)),
+            ("part ao", crate::view::part_ao::SHADER.to_string()),
         ] {
-            let source = format!("{COMMON}{body}");
             let module = naga::front::wgsl::parse_str(&source)
                 .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(&source)));
             naga::valid::Validator::new(
@@ -1130,109 +721,58 @@ mod tests {
         }
     }
 
+    /// The frame's uniforms are laid out as the shaders read them: what changes
+    /// each frame first, then the colours, each kind's in its place.
     #[test]
-    fn every_triangle_becomes_three_flat_shaded_vertices() {
-        let mesh = synthetic::plane(0.0, 10.0);
-        let v = flat_vertices(mesh_triangles(&mesh));
-        assert_eq!(v.len(), mesh.len() * 3);
-        for tri in v.chunks(3) {
-            // Flat: the three corners share one normal, of unit length.
-            assert!(tri.iter().all(|x| x.normal == tri[0].normal));
-            let n = Vec3::from(tri[0].normal);
-            assert!((n.length() - 1.0).abs() < 1e-5);
-            // A plane at Z=0 faces straight up or straight down.
-            assert!(n.z.abs() > 0.999);
-        }
+    fn the_frame_is_laid_out_as_the_shaders_read_it() {
+        let (offset, span) = layout(MESH_SHADER, "Frame");
+        let size = std::mem::size_of::<FrameUniforms>();
+        assert_eq!(offset("colors"), Some(size));
+        assert_eq!(
+            offset("masks"),
+            Some(std::mem::offset_of!(FrameUniforms, masks))
+        );
+        assert_eq!(
+            offset("sight"),
+            Some(std::mem::offset_of!(FrameUniforms, sight))
+        );
+        assert_eq!(span, size + std::mem::size_of::<FrameConstants>());
     }
 
-    /// An arc is drawn as lines along it, all of them belonging to its move: the
-    /// playhead, which counts moves, shows them together or not at all.
-    #[test]
-    fn an_arc_is_drawn_as_lines_along_it() {
-        use crate::view::scene::{Scene, Segment};
-        use camcraft_core::toolpath::{Arc, MoveKind, MoveRole};
-        let straight = Segment {
-            a: DVec3::new(-1.0, 0.0, 0.0),
-            b: DVec3::new(0.0, 0.0, 0.0),
-            kind: MoveKind::Linear,
-            role: MoveRole::Cut,
-            op: 0,
-            feed: Some(600.0),
-            ends_at: 0.0,
+    /// Where each member of the struct `name` in `shader` sits, and its size.
+    pub(in crate::view::viewport) fn layout(
+        shader: &str,
+        name: &str,
+    ) -> (impl Fn(&str) -> Option<usize>, usize) {
+        let source = source(shader);
+        let module = naga::front::wgsl::parse_str(&source)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+        let found = module
+            .types
+            .iter()
+            .find(|(_, t)| t.name.as_deref() == Some(name))
+            .map(|(_, t)| t.inner.clone());
+        let Some(naga::TypeInner::Struct { members, span }) = found else {
+            panic!("no {name}");
         };
-        let half = Segment {
-            a: DVec3::ZERO,
-            b: DVec3::new(10.0, 0.0, 0.0),
-            kind: MoveKind::Arc(Arc {
-                centre: DVec3::new(5.0, 0.0, 0.0),
-                axis: DVec3::Z,
-                sweep: -std::f64::consts::PI,
-            }),
-            ..straight
+        let offset = move |member: &str| {
+            members
+                .iter()
+                .find(|m| m.name.as_deref() == Some(member))
+                .map(|m| m.offset as usize)
         };
-        let scene = Scene {
-            segments: vec![straight, half, straight],
-            ..Scene::default()
-        };
-        let (lines, ends) = line_instances(&scene);
-        let arc = (ends[1] - ends[0]) as usize;
-        assert!(arc > 8, "{arc} lines for a half turn");
-        for l in &lines[1..=arc] {
-            for p in [l.a, l.b] {
-                let r = ((p[0] - 5.0).powi(2) + p[1].powi(2)).sqrt();
-                assert!((r - 5.0).abs() < 1e-4, "{p:?} is off the arc");
-            }
-        }
-        assert_eq!(lines_shown(&ends, 0), 0);
-        assert_eq!(lines_shown(&ends, 1), 1);
-        assert_eq!(lines_shown(&ends, 2), ends[1]);
-        assert_eq!(lines_shown(&ends, 9), ends[2]);
-        // Half way along in time is half way round.
-        let mid = half.point_at(0.5);
-        assert!((mid - DVec3::new(5.0, 5.0, 0.0)).length() < 1e-9, "{mid}");
-        assert!((half.length() - 5.0 * std::f64::consts::PI).abs() < 1e-9);
+        (offset, span as usize)
     }
 
-    /// The instance buffer is the scene in order, so the GPU's instance index is
-    /// the move's place in the program, which is what the playhead compares against.
+    /// An object's uniforms, finish and all, are laid out as the mesh shader
+    /// reads them.
     #[test]
-    fn line_instances_keep_machine_order_and_roles() {
-        use crate::view::scene::{Scene, Segment};
-        use camcraft_core::toolpath::MoveRole;
-        let seg = |x: f64, role, op| Segment {
-            a: DVec3::new(x, 0.0, 0.0),
-            b: DVec3::new(x + 1.0, 0.0, 0.0),
-            kind: camcraft_core::toolpath::MoveKind::Linear,
-            role,
-            op,
-            feed: None,
-            ends_at: 0.0,
-        };
-        let scene = Scene {
-            segments: vec![
-                seg(0.0, MoveRole::Rapid, 0),
-                seg(1.0, MoveRole::Cut, 0),
-                seg(2.0, MoveRole::Plunge, 1),
-            ],
-            ..Scene::default()
-        };
-        let (moves, ends) = line_instances(&scene);
-        let got: Vec<(f32, u32, u32)> = moves.iter().map(|m| (m.a[0], m.kind, m.op)).collect();
-        assert_eq!(got, vec![(0.0, 1, 0), (1.0, 0, 0), (2.0, 2, 1)]);
-        assert_eq!(ends, [1, 2, 3]);
-        let outline = outline_instances(&[
-            Outline {
-                a: DVec3::ZERO,
-                b: DVec3::X,
-                kind: OutlineKind::Stock,
-            },
-            Outline {
-                a: DVec3::ZERO,
-                b: DVec3::Z,
-                kind: OutlineKind::AxisZ,
-            },
-        ]);
-        let kinds: Vec<u32> = outline.iter().map(|o| o.kind).collect();
-        assert_eq!(kinds, [STOCK, AXIS_Z]);
+    fn an_object_is_laid_out_as_the_shaders_read_it() {
+        let (offset, span) = layout(MESH_SHADER, "Object");
+        assert_eq!(
+            offset("finish"),
+            Some(std::mem::offset_of!(ObjectUniforms, finish))
+        );
+        assert_eq!(span, std::mem::size_of::<ObjectUniforms>());
     }
 }

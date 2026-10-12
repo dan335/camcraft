@@ -1,11 +1,12 @@
-//! The fields of one tool, drawn and edited: shared by the tool manager, which
-//! edits the library's tools, and an operation's panel, which edits the job's copy.
+//! The fields of one tool, drawn and edited, as the tool manager edits the
+//! library's tools; and the surface speed and chip load rows an operation's
+//! panel shares with it.
 //!
 //! The fields are on tabs, as Fusion's tool dialog has them, so each shows a
 //! short form rather than one long scroll. A tab with a field in error carries a
 //! red dot, so a problem out of sight is still seen.
 
-use camcraft_core::cutting;
+use camcraft_core::cutter::cutting;
 use camcraft_core::job::{
     Coolant, DRILL_POINT, Holder, HolderSegment, Leave, Preset, SpindleDirection, StockToLeave,
     ToolFieldError, ToolKind, ToolMaterial, ToolSpec, free_preset_name,
@@ -102,35 +103,35 @@ fn general(ui: &mut egui::Ui, tool: &mut ToolSpec) {
         "the maker's part number",
     );
     widgets::row(ui, &lib::MATERIAL, |ui| {
-        egui::ComboBox::from_id_salt("material")
-            .selected_text(match tool.material {
-                None => "not given",
+        widgets::select(
+            ui,
+            "material",
+            &mut tool.material,
+            &[None, Some(ToolMaterial::Carbide), Some(ToolMaterial::Hss)],
+            |m| match m {
+                None => NOT_GIVEN,
                 Some(ToolMaterial::Carbide) => "carbide",
                 Some(ToolMaterial::Hss) => "HSS",
-            })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut tool.material, None, "not given");
-                ui.selectable_value(&mut tool.material, Some(ToolMaterial::Carbide), "carbide");
-                ui.selectable_value(&mut tool.material, Some(ToolMaterial::Hss), "HSS");
-            });
+            },
+        );
     });
 }
 
 fn cutter(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFieldError]) {
     widgets::row(ui, &lib::KIND, |ui| {
-        egui::ComboBox::from_id_salt("kind")
-            .selected_text(kind_name(tool.kind))
-            .show_ui(ui, |ui| {
-                for k in [
-                    ToolKind::Flat,
-                    ToolKind::Ball,
-                    ToolKind::Bullnose,
-                    ToolKind::Cone,
-                    ToolKind::Drill,
-                ] {
-                    ui.selectable_value(&mut tool.kind, k, kind_name(k));
-                }
-            });
+        widgets::select(
+            ui,
+            "kind",
+            &mut tool.kind,
+            &[
+                ToolKind::Flat,
+                ToolKind::Ball,
+                ToolKind::Bullnose,
+                ToolKind::Cone,
+                ToolKind::Drill,
+            ],
+            |k| kind_name(*k),
+        );
     });
     if tool.kind == ToolKind::Cone && tool.angle.is_none() {
         tool.angle = Some(90.0);
@@ -341,37 +342,34 @@ fn post(ui: &mut egui::Ui, tool: &mut ToolSpec) {
                 .prefix("T"),
         );
     });
+    // A left-hand cutter's counter-clockwise is in the row's help.
     widgets::row(ui, &lib::SPINDLE_TURNS, |ui| {
-        egui::ComboBox::from_id_salt("spindle")
-            .selected_text(match tool.spindle {
+        widgets::select(
+            ui,
+            "spindle",
+            &mut tool.spindle,
+            &[
+                SpindleDirection::Clockwise,
+                SpindleDirection::CounterClockwise,
+            ],
+            |d| match d {
                 SpindleDirection::Clockwise => "clockwise (M3)",
                 SpindleDirection::CounterClockwise => "counter-clockwise (M4)",
-            })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(
-                    &mut tool.spindle,
-                    SpindleDirection::Clockwise,
-                    "clockwise (M3)",
-                );
-                ui.selectable_value(
-                    &mut tool.spindle,
-                    SpindleDirection::CounterClockwise,
-                    "counter-clockwise (M4), for a left-hand cutter",
-                );
-            });
+            },
+        );
     });
     widgets::row(ui, &lib::COOLANT, |ui| {
-        egui::ComboBox::from_id_salt("coolant")
-            .selected_text(match tool.coolant {
+        widgets::select(
+            ui,
+            "coolant",
+            &mut tool.coolant,
+            &[Coolant::Off, Coolant::Flood, Coolant::Mist],
+            |c| match c {
                 Coolant::Off => "off",
                 Coolant::Flood => "flood (M8)",
                 Coolant::Mist => "mist (M7)",
-            })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut tool.coolant, Coolant::Off, "off");
-                ui.selectable_value(&mut tool.coolant, Coolant::Flood, "flood (M8)");
-                ui.selectable_value(&mut tool.coolant, Coolant::Mist, "mist (M7)");
-            });
+            },
+        );
     });
 }
 

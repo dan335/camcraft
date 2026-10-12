@@ -22,17 +22,19 @@
 
 mod content;
 mod gpu;
+mod lines;
 mod stock_gpu;
+mod upload;
 
 use camcraft_geom::heightmap::narrow;
+use camcraft_geom::mesh::Aabb;
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use glam::{DVec3, Mat4, Vec2, Vec3};
 
-use crate::picking::ray::Projector;
 use crate::stock::stock_ao;
 use crate::ui::theme;
-use crate::view::camera::Camera;
+use crate::view::camera::{Camera, Projector};
 use crate::view::viewcube::{self, Action};
 use gpu::Gpu;
 
@@ -40,7 +42,6 @@ pub use content::{
     Content, Highlight, Outline, OutlineKind, Plane, PlaneKind, PointerEvent, StockChange,
     StockRef, StockShow, View,
 };
-pub(crate) use stock_gpu::WALL_CELLS;
 
 /// Toolpath width, in points.
 const LINE_WIDTH: f32 = 1.25;
@@ -256,15 +257,8 @@ impl Viewport {
 
         // Frame each newly opened model once, with its stock; after that the view
         // is the person's, though it can always reach all the stock.
-        let scene_box = match (
-            content.part.and_then(|(_, m)| m.bounds()),
-            content.stock_box,
-        ) {
-            (Some(a), Some(b)) => Some(a.union(&b)),
-            (a, b) => a.or(b),
-        };
-        if let Some(b) = scene_box {
-            let centre = Vec3::from(v3((b.min + b.max) * 0.5));
+        if let Some(b) = Aabb::union_all(content.part_bounds.iter().chain(&content.stock_box)) {
+            let centre = Vec3::from(v3(b.center()));
             let radius = narrow(b.extent().length() * 0.5);
             if self.framed != Some(content.framing) && content.part.is_some() {
                 self.camera = Camera::framing(centre, radius);
@@ -281,14 +275,10 @@ impl Viewport {
         // Sizes in pixels are small, positive integers; the float came from egui.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let size = [px[0] as u32, px[1] as u32];
-        let reach =
-            content
-                .part
-                .and_then(|(_, m)| m.bounds())
-                .map_or(stock_ao::reach_mm(0.0), |b| {
-                    let e = b.extent();
-                    stock_ao::reach_mm(e.x.max(e.y))
-                });
+        let reach = content.part_bounds.map_or(stock_ao::reach_mm(0.0), |b| {
+            let e = b.extent();
+            stock_ao::reach_mm(e.x.max(e.y))
+        });
         let frame = FrameInput {
             view_proj: self.camera.view_projection(aspect),
             projection: self.camera.projection(aspect),
@@ -373,10 +363,12 @@ fn paint_over(ui: &egui::Ui, rect: egui::Rect, projector: &Projector, content: &
         }
     }
     if let Some(hint) = content.hint {
+        // In the accent, as a primary button is: dark text on amber.
+        let text = theme::egui_color(theme::BG);
         let galley = painter.layout_no_wrap(
             hint.to_string(),
             theme::font(ui.style(), egui::TextStyle::Body),
-            theme::egui_color(theme::BG),
+            text,
         );
         // Low in the view, clear of the card describing what was picked, which
         // sits at the top.
@@ -385,12 +377,8 @@ fn paint_over(ui: &egui::Ui, rect: egui::Rect, projector: &Projector, content: &
             at - egui::vec2(0.0, galley.size().y / 2.0),
             galley.size() + egui::vec2(20.0, 10.0),
         );
-        painter.rect_filled(bubble, 4.0, theme::egui_color(theme::SELECTED));
-        painter.galley(
-            bubble.center() - galley.size() / 2.0,
-            galley,
-            egui::Color32::BLACK,
-        );
+        painter.rect_filled(bubble, theme::RADIUS_SM, theme::egui_color(theme::ACCENT));
+        painter.galley(bubble.center() - galley.size() / 2.0, galley, text);
     }
 
     let faint = theme::egui_color(theme::TEXT_3);

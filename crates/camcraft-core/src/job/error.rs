@@ -1,8 +1,7 @@
 //! Why a job cannot be run as written.
 
 use super::{JOB_VERSION, ToolFieldError};
-use crate::frame::BadOrientation;
-use crate::tool::ToolError;
+use crate::setup::frame::BadOrientation;
 
 /// A job that cannot be run as written.
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -98,21 +97,25 @@ pub enum JobError {
         /// Which tool it asked for.
         tool: String,
     },
-    /// A tool dimension was not physically meaningful.
-    #[error("tool '{name}': {source}")]
-    BadTool {
-        /// Which tool.
-        name: String,
-        /// Why.
-        source: ToolError,
-    },
     /// A value was outside its usable range.
-    #[error("{field} must be finite and greater than zero, got {value}")]
+    #[error("{field} must be {range}, got {value}")]
     BadValue {
         /// Which field.
         field: String,
         /// What it was.
         value: f64,
+        /// What it must be: finite and greater than zero, say.
+        range: &'static str,
+    },
+    /// A choice the operation's strategy does not offer.
+    #[error("{field} is '{value}', which {strategy} does not offer")]
+    NotOffered {
+        /// Which field.
+        field: String,
+        /// What it was given.
+        value: &'static str,
+        /// The strategy, as a job file names it.
+        strategy: &'static str,
     },
     /// A work offset outside the usual range.
     #[error("setup '{setup}': work offset {wcs} is not in the range 54..=59")]

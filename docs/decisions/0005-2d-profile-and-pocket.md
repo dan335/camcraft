@@ -100,7 +100,7 @@ backwards compatibility while camcraft is pre-alpha (`docs/jobs.md`, Format).
 
 - An onion skin, to hold parts cut free from a sheet. Tabs are taken
   (2026-09-26): a `Toolpath -> Toolpath` transform any operation can use, in
-  `camcraft_core::tabs`, on the loops of its deepest cut.
+  `camcraft_core::path::tabs`, on the loops of its deepest cut.
 - Finishing passes. A profile's horizontal lead-in and lead-out arcs are taken
   (2026-09-26): in the waste, checked against the areas, shrunk or moved to the
   middle of the longest side to fit.

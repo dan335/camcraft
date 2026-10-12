@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{Operation, PointRef, is_default};
-use crate::frame::Orientation;
+use crate::setup::frame::Orientation;
 
 /// How a part is held and machined from one side.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -108,8 +108,7 @@ impl Origin {
     }
 
     /// The same work zero, moved by `to` instead.
-    #[cfg(test)]
-    pub(crate) fn with_offset(mut self, to: [f64; 3]) -> Self {
+    pub fn with_offset(mut self, to: [f64; 3]) -> Self {
         match &mut self {
             Origin::ModelOrigin { offset }
             | Origin::BoxPoint { offset, .. }
@@ -118,14 +117,15 @@ impl Origin {
         self
     }
 
-    /// The stock's front-left corner at its bottom, so X and Y run into the part
-    /// and Z up through it.
+    /// The stock's front-left corner on its top, so X and Y run into the part
+    /// and Z is zero where the tool is touched off: the corner Autodesk's own
+    /// Fusion tutorials and setup sample pick (`TOP_XMIN_YMIN`).
     pub fn stock_corner() -> Self {
         Origin::BoxPoint {
             of: BoxOf::Stock,
             x: Along::Min,
             y: Along::Min,
-            z: Along::Min,
+            z: Along::Max,
             offset: [0.0; 3],
         }
     }
