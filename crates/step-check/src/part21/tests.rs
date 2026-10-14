@@ -349,3 +349,16 @@ fn a_cone_half_angle_in_degrees_is_read_as_degrees() {
     let (_, hi) = facts(&degrees).unwrap().extent.unwrap();
     assert!(hi.z >= 30.0 - 1e-6, "{hi:?}");
 }
+
+/// Fusion states its fit as 0.01 mm, written in the file's own unit.
+#[test]
+fn reads_the_stated_accuracy_in_millimetres() {
+    assert_eq!(facts(INCH).unwrap().accuracy, None, "it states none");
+    let stated = INCH.replace(
+        "ENDSEC;\nEND",
+        "#954=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(0.000393700787401575),#959,\
+         'distance_accuracy_value','Maximum Tolerance applied to model');\nENDSEC;\nEND",
+    );
+    let accuracy = facts(&stated).unwrap().accuracy.unwrap();
+    assert!((accuracy - 0.01).abs() < 1e-12, "{accuracy}");
+}

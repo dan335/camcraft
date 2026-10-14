@@ -223,6 +223,18 @@ Accepted costs, all of which were actually hit and resolved during the spike:
   0.0125 mm (a new job's 0.05, quartered), 398,750 triangles there, but is still
   refused at 0.005 and 0.0025: a thin B-spline strip along its edge, 1.3 mm tall,
   stands 0.0075 mm off at 0.0025.
+- **2026-10-14, later: the file, not the kernel.** That strip's top edge is the
+  round's own boundary curve, and the file fits the band and the round to it
+  separately: read from the file's text alone, the edge lies 0.0073 mm off the
+  band, within the 0.01 mm the file states for its geometry. No mesh can lie closer
+  to the band than its edges do, so a tolerance finer than that is refused as
+  `StepError::FinerThanFile`, which names the file's accuracy, and a session says
+  which machining tolerance reads it. `step-check` reads the stated accuracy.
+  `round_edge_loose_fit.step` stands in for it, its top circle raised 0.006 mm off
+  the torus. ogeom then draws the seam it adds down the torus in 8 steps,
+  0.0915 mm off at any chord, so it is refused at 0.01 too (ogeom-rs#261).
+- **Revisit when** ogeom-rs#261 is fixed in a release: check the loose fit at
+  0.01 mm and drop the test pinning its refusal.
 - **Revisit:** 0.11 also says ogeom meshes ruled faces without the rows
   (ogeom-rs#213) and holds every triangle of a curved face to its chord (#212).
   Measure both, then delete `ruled` and mesh at the tolerance rather than a third

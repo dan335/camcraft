@@ -8,7 +8,7 @@ use std::sync::Arc;
 use camcraft_core::job::{Job, LengthUnit, ModelDef, Transform};
 use camcraft_geom::mesh::{Aabb, TriMesh};
 use camcraft_geom::topology::{Body, FaceSource};
-use camcraft_import::step::{FileCheck, load_step};
+use camcraft_import::step::{FileCheck, StepError, load_step};
 use camcraft_import::stl::{Units, load_stl};
 
 use crate::{SessionError, fs};
@@ -74,6 +74,26 @@ fn tessellation_tolerance(tolerance: f64) -> f64 {
     tolerance / 4.0
 }
 
+/// The machining tolerance whose tessellation tolerance is `tessellation`: the
+/// inverse of [`tessellation_tolerance`].
+fn machining_tolerance(tessellation: f64) -> f64 {
+    tessellation * 4.0
+}
+
+/// `x`, rounded up at its first significant figure below one, or to a whole
+/// number from one: 0.0291 to 0.03. Float noise just past a step does not round
+/// it up a whole step: 0.03 stays 0.03.
+fn round_up(x: f64) -> f64 {
+    if !(x.is_finite() && x > 0.0) {
+        return x;
+    }
+    let mut scale = 1.0;
+    while x * scale < 1.0 {
+        scale *= 10.0;
+    }
+    ((x * scale) - 1e-9).ceil() / scale
+}
+
 /// Read a model, choosing the reader by extension.
 ///
 /// An STL carries no units, so `units` is required for one. A STEP file states its
@@ -109,7 +129,14 @@ pub fn load_model(
         }
         "step" | "stp" => {
             let started = std::time::Instant::now();
-            let (body, report) = load_step(path, tessellation_tolerance(tolerance))?;
+            let (body, report) =
+                load_step(path, tessellation_tolerance(tolerance)).map_err(|e| match e {
+                    StepError::FinerThanFile { edges, .. } => SessionError::FinerThanFile {
+                        least: round_up(machining_tolerance(edges)),
+                        source: e,
+                    },
+                    e => e.into(),
+                })?;
             if let Some(said) = units
                 && (said.to_mm() - report.unit.mm).abs() > 1e-9 * said.to_mm()
             {
@@ -267,6 +294,36 @@ mod tests {
                 assert_eq!(file, "inch");
             }
             other => panic!("expected a disagreement, got {other:?}"),
+        }
+    }
+
+    /// Its edges stand 0.006 mm off the round they bound, which a machining
+    /// tolerance of 0.01 meshes finer than: the message names the tolerance that
+    /// reads it, 0.006 at a quarter, rounded up.
+    #[test]
+    fn a_tolerance_finer_than_the_file_names_one_that_reads_it() {
+        let err = load_model(&fixture("round_edge_loose_fit.step"), None, 0.01);
+        let Err(SessionError::FinerThanFile { least, .. }) = &err else {
+            panic!("expected the file to be too coarse, got {:?}", err.err());
+        };
+        assert!((least - 0.03).abs() < 1e-12, "{least}");
+        let message = err.err().unwrap().to_string();
+        assert!(
+            message.ends_with("machining tolerance of 0.03 mm or coarser"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn round_up_keeps_one_figure() {
+        for (x, want) in [
+            (0.0291, 0.03),
+            (0.024, 0.03),
+            (0.03, 0.03),
+            (0.2, 0.2),
+            (1.2, 2.0),
+        ] {
+            assert!((round_up(x) - want).abs() < 1e-12, "{x}: {}", round_up(x));
         }
     }
 

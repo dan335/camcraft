@@ -133,6 +133,66 @@ fn a_round_edge() {
     check("round_edge.step", "millimetre", 3, [200.0, 200.0, 19.0], 0);
 }
 
+/// The round edge with its top edge raised 0.006 mm off the torus it bounds, in a
+/// file that states its geometry to 0.01 mm: a modeller fits each face and edge
+/// separately, and a private part's band and the round below it disagreed by
+/// 0.0073 mm along their edge.
+///
+/// It should read within the tolerance, but ogeom 0.11 then draws the seam it adds
+/// down the torus in 8 steps, 0.0915 mm off (gilbertorconde/ogeom-rs#261). When
+/// ogeom meshes it, this fails: [`check`] it at [`TOLERANCE`] instead.
+#[test]
+fn a_loose_fit_is_refused_for_ogeoms_seam() {
+    let err = load_step(fixture("round_edge_loose_fit.step"), TOLERANCE).unwrap_err();
+    assert!(
+        matches!(&err, StepError::Kernel { detail, .. } if detail.contains("lies 0.0915 mm off")),
+        "{err}"
+    );
+}
+
+/// Finer than the file's own edges, it is refused for that, not as a kernel's
+/// failing: no mesh can lie closer to the torus than the edges round it do.
+#[test]
+fn a_loose_fit_is_refused_finer_than_the_file() {
+    let err = load_step(fixture("round_edge_loose_fit.step"), 0.0025).unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.ends_with(
+            "lie 0.0060 mm off its surface, more than the 0.0025 mm asked for. The file \
+             states its geometry only to 0.0100 mm, so it cannot be meshed that finely"
+        ),
+        "{message}"
+    );
+    let StepError::FinerThanFile {
+        edges, accuracy, ..
+    } = err
+    else {
+        panic!("{err}");
+    };
+    assert!((edges - 0.006).abs() < 1e-4, "{edges}");
+    assert!((accuracy - 0.01).abs() < 1e-12, "{accuracy}");
+}
+
+/// The same file claiming an accuracy its edges do not keep is not excused by it:
+/// it is refused as before, saying how far its edges stand off.
+#[test]
+fn a_loose_fit_beyond_the_files_claim_is_not_excused() {
+    let text = std::fs::read_to_string(fixture("round_edge_loose_fit.step")).unwrap();
+    let claimed = text.replace("LENGTH_MEASURE(0.01)", "LENGTH_MEASURE(0.001)");
+    assert_ne!(claimed, text);
+    let path = std::env::temp_dir().join(format!("camcraft-loose-fit-{}.step", std::process::id()));
+    std::fs::write(&path, claimed).unwrap();
+    let result = load_step(&path, 0.0025);
+    std::fs::remove_file(&path).unwrap();
+    let Err(StepError::Kernel { detail, .. }) = result else {
+        panic!("{:?}", result.map(|(_, report)| report));
+    };
+    assert!(
+        detail.contains("the file's own edges round it lie 0.006"),
+        "{detail}"
+    );
+}
+
 /// Private parts, when this machine has them. Each must load, with its checks
 /// passed or their skipping explained; none may fail.
 /// A cone that comes to a point with no vertex there, as Fusion writes one. The

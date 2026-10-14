@@ -134,6 +134,27 @@ pub enum StepError {
         /// Which file.
         path: String,
     },
+    /// The file's own edges round a face lie further off its surface than the
+    /// tolerance asked for, though within the accuracy the file states for its
+    /// geometry: a modeller fits each face and each edge separately, to that
+    /// accuracy, so the file cannot be meshed finer than it.
+    #[error(
+        "{path}: the file's own edges round face {face} lie {edges:.4} mm off its surface, \
+         more than the {tolerance} mm asked for. The file states its geometry only to \
+         {accuracy:.4} mm, so it cannot be meshed that finely"
+    )]
+    FinerThanFile {
+        /// Which file.
+        path: String,
+        /// The face, in the kernel's order.
+        face: usize,
+        /// How far the file's edges round it lie off its surface, in millimetres.
+        edges: f64,
+        /// The accuracy the file states, in millimetres.
+        accuracy: f64,
+        /// The tessellation tolerance asked for, in millimetres.
+        tolerance: f64,
+    },
     /// The requested tessellation tolerance was not usable.
     #[error("tessellation tolerance must be finite and greater than zero, got {0}")]
     BadTolerance(f64),
@@ -164,10 +185,87 @@ pub struct StepReport {
 /// The tolerance is the largest distance between a triangle and the true surface.
 /// It is error the simulator cannot see, because the simulator checks against this
 /// mesh, so it should be a small part of the machining tolerance.
+///
+/// A face refused because the file's own edges round it lie off its surface, by
+/// more than `tolerance` but within the accuracy the file states, is refused as
+/// [`StepError::FinerThanFile`]: no mesher can do better than the file.
 pub fn load_step(path: impl AsRef<Path>, tolerance: f64) -> Result<(Body, StepReport), StepError> {
-    load_step_with(path, tolerance, "ogeom", |path, _facts| {
-        ogeom(path, tolerance)
-    })
+    let mut finer = None;
+    let result = load_step_with(path, tolerance, "ogeom", |path, facts| {
+        mesh(path, tolerance).map_err(|refusal| {
+            if let Refusal::OffSurface { face, edges, .. } = refusal
+                && let Some(accuracy) = facts.accuracy
+                && edges > tolerance
+                && edges <= accuracy
+            {
+                finer = Some((face, edges, accuracy));
+            }
+            refusal.to_string()
+        })
+    });
+    match (result, finer) {
+        (Err(StepError::Kernel { path, .. }), Some((face, edges, accuracy))) => {
+            Err(StepError::FinerThanFile {
+                path,
+                face,
+                edges,
+                accuracy,
+                tolerance,
+            })
+        }
+        (result, _) => result,
+    }
+}
+
+/// Why [`mesh`] refused, kept apart so that [`load_step`] can tell a file that
+/// cannot be meshed as finely as asked from a kernel that did not.
+#[derive(Debug)]
+enum Refusal {
+    /// A face lies further off its surface than the tolerance.
+    OffSurface {
+        /// The face, in the kernel's order.
+        face: usize,
+        /// How far off it lies, in millimetres.
+        off: f64,
+        /// How far the file's own edges round it lie off it, in millimetres.
+        edges: f64,
+        /// The tolerance, in millimetres.
+        tolerance: f64,
+    },
+    /// Anything else, as the kernel or the measuring said it.
+    Other(String),
+}
+
+impl From<String> for Refusal {
+    fn from(reason: String) -> Self {
+        Self::Other(reason)
+    }
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OffSurface {
+                face,
+                off,
+                edges,
+                tolerance,
+            } => {
+                write!(
+                    f,
+                    "face {face} lies {off:.4} mm off its surface, more than {tolerance} mm"
+                )?;
+                if edges > tolerance {
+                    write!(
+                        f,
+                        ", and the file's own edges round it lie {edges:.4} mm off it"
+                    )?;
+                }
+                Ok(())
+            }
+            Self::Other(reason) => f.write_str(reason),
+        }
+    }
 }
 
 /// Read the STEP file at `path` with ogeom and tessellate it to within `tolerance`
@@ -181,6 +279,11 @@ pub fn load_step(path: impl AsRef<Path>, tolerance: f64) -> Result<(Body, StepRe
 /// and refused if any of it lies further than `tolerance` off, since that is error
 /// the simulator cannot see.
 pub fn ogeom(path: &Path, tolerance: f64) -> Result<KernelMesh, String> {
+    mesh(path, tolerance).map_err(|refusal| refusal.to_string())
+}
+
+/// [`ogeom()`], saying why it refused.
+fn mesh(path: &Path, tolerance: f64) -> Result<KernelMesh, Refusal> {
     let text = std::fs::read(path).map_err(|e| e.to_string())?;
     let import = ogeom_io::read_step(&String::from_utf8_lossy(&text), MILLIMETRES)
         .map_err(|e| e.to_string())?;
@@ -221,7 +324,7 @@ pub fn ogeom(path: &Path, tolerance: f64) -> Result<KernelMesh, String> {
             let face = out.face_triangles.len();
             let mut mesh = piece.map_err(|e| format!("face {face} would not mesh: {e}"))?;
             let measured = |mesh: &Triangulation| {
-                stand_off(model, &shape, mesh, tolerance)
+                stand_off(model, &shape, mesh, tolerance, Measure::Triangles)
                     .map_err(|e| format!("face {face} could not be measured: {e}"))
             };
             // A ruled face in fewer triangles, where they hold to the surface.
@@ -243,9 +346,15 @@ pub fn ogeom(path: &Path, tolerance: f64) -> Result<KernelMesh, String> {
                 None => measured(&mesh)?,
             };
             if off > tolerance {
-                return Err(format!(
-                    "face {face} lies {off:.4} mm off its surface, more than {tolerance} mm"
-                ));
+                // Whether the file's own edges stand off too, which no mesh can mend.
+                let edges = stand_off(model, &shape, &mesh, tolerance, Measure::Rim)
+                    .map_err(|e| format!("face {face} could not be measured: {e}"))?;
+                return Err(Refusal::OffSurface {
+                    face,
+                    off,
+                    edges,
+                    tolerance,
+                });
             }
             let base = out.vertices.len();
             out.vertices
@@ -310,11 +419,16 @@ fn snap_shared_points(vertices: &mut [DVec3], faces_from: &[usize]) {
 /// middles, and holds them to that chord rather than to camcraft's tolerance, which
 /// is three times it (see [`CHORD_PER_TOLERANCE`]). The sides are measured too, so
 /// that a stretch ogeom drew coarser than asked, at a cap on its steps, is seen.
+///
+/// With [`Measure::Rim`], only the vertices round the mesh's rim are measured
+/// instead. They lie on the file's edges, so this is how far the file's own
+/// edges stand off the face's surface, which no mesh can do better than.
 fn stand_off(
     model: &Model,
     face: &Shape,
     mesh: &Triangulation,
     tolerance: f64,
+    measure: Measure,
 ) -> Result<f64, String> {
     let Some(NodeData::Face(data)) = model.node(face).map(|n| n.data()) else {
         return Err("it is not a face of the model".into());
@@ -362,6 +476,26 @@ fn stand_off(
     let mid = |a: (f64, f64), b: (f64, f64)| ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
 
     let mut worst: f64 = 0.0;
+    if measure == Measure::Rim {
+        // A side of one triangle alone runs along the rim.
+        let mut sides: std::collections::BTreeMap<(u32, u32), usize> =
+            std::collections::BTreeMap::new();
+        for t in &mesh.triangles {
+            for (p, q) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                *sides.entry((p.min(q), p.max(q))).or_default() += 1;
+            }
+        }
+        let rim: std::collections::BTreeSet<u32> = sides
+            .into_iter()
+            .filter(|&(_, n)| n == 1)
+            .flat_map(|((p, q), _)| [p, q])
+            .collect();
+        for i in rim {
+            let (p, uv) = at(i)?;
+            worst = worst.max(off(p, uv)?);
+        }
+        return Ok(worst);
+    }
     for t in &mesh.triangles {
         let [(a, ua), (b, ub), (c, uc)] = [at(t[0])?, at(t[1])?, at(t[2])?];
         for ((p, up), (q, uq)) in [((a, ua), (b, ub)), ((b, ub), (c, uc)), ((c, uc), (a, ua))] {
@@ -371,6 +505,15 @@ fn stand_off(
         worst = worst.max(off((a + b + c) / 3.0, middle)?);
     }
     Ok(worst)
+}
+
+/// What [`stand_off`] measures.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Measure {
+    /// The middles of the triangles and of their sides.
+    Triangles,
+    /// The vertices round the mesh's rim, on the file's edges.
+    Rim,
 }
 
 /// Whether `face` lies on a cylinder or a cone, ruled by straight lines: see

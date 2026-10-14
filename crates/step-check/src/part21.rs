@@ -83,6 +83,11 @@ pub struct StepFacts {
     pub unplaced: bool,
     /// Every face, once for each place the assembly puts it.
     pub file_faces: Vec<FileFace>,
+    /// How accurate the file says its geometry is, in millimetres: the coarsest
+    /// `distance_accuracy_value` its contexts state, or `None` if it states none.
+    /// A modeller writes each face and each edge as its own fit, and they meet to
+    /// within this.
+    pub accuracy: Option<f64>,
 }
 
 /// A face of the file, where the file puts it.
@@ -212,6 +217,7 @@ pub fn facts(text: &str) -> Result<StepFacts, Part21Error> {
         faces,
         unplaced: placements.unplaced,
         file_faces,
+        accuracy: accuracy(&entities),
     })
 }
 
@@ -822,6 +828,27 @@ fn length_unit(entities: &BTreeMap<u64, String>) -> Result<LengthUnit, Part21Err
         }
     }
     found.ok_or(Part21Error::NoLengthUnit)
+}
+
+/// The coarsest distance accuracy the file states, in millimetres: each
+/// `UNCERTAINTY_MEASURE_WITH_UNIT` named `distance_accuracy_value`, in the unit it
+/// names. One whose unit cannot be resolved is left out.
+fn accuracy(entities: &BTreeMap<u64, String>) -> Option<f64> {
+    entities
+        .values()
+        .filter(|body| {
+            kind(body) == "UNCERTAINTY_MEASURE_WITH_UNIT"
+                && body
+                    .to_ascii_lowercase()
+                    .contains("'distance_accuracy_value'")
+        })
+        .filter_map(|body| {
+            let value = body.split("LENGTH_MEASURE(").nth(1)?.split(')').next()?;
+            let value: f64 = value.trim().parse().ok()?;
+            let unit = resolve(entities, *refs(body).first()?, 0).ok()?;
+            (value.is_finite() && value > 0.0).then_some(value * unit.mm)
+        })
+        .reduce(f64::max)
 }
 
 /// Millimetres per unit for the length unit entity `id`.

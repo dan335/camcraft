@@ -37,6 +37,14 @@ pub enum SessionError {
     /// The STEP file could not be read or did not check out.
     #[error(transparent)]
     Step(#[from] StepError),
+    /// The job's tolerance is finer than the STEP file's own geometry holds.
+    #[error("{source}. It reads at a machining tolerance of {least} mm or coarser")]
+    FinerThanFile {
+        /// What the import said.
+        source: StepError,
+        /// The finest machining tolerance that reads it, rounded up, in millimetres.
+        least: f64,
+    },
     /// The model had nothing in it.
     #[error("model has no geometry")]
     EmptyModel,
