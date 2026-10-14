@@ -8,7 +8,7 @@ default-members = ["crates/camcraft-gui"]
 exclude = ["vendor"]
 
 [workspace.package]
-version      = "0.1.0"
+version      = "0.2.0"
 edition      = "2024"
 rust-version = "1.98"
 license      = "MIT OR Apache-2.0"
@@ -17,14 +17,14 @@ authors      = ["dan335"]
 
 [workspace.dependencies]
 # internal — the dependency DAG is enforced per-crate, see README
-camcraft-geom   = { path = "crates/camcraft-geom",   version = "0.1.0" }
-camcraft-import = { path = "crates/camcraft-import", version = "0.1.0" }
+camcraft-geom   = { path = "crates/camcraft-geom",   version = "0.2.0" }
+camcraft-import = { path = "crates/camcraft-import", version = "0.2.0" }
 # Kept free of camcraft, for any STEP importer to use; see its crate docs.
-step-check      = { path = "crates/step-check",      version = "0.1.0" }
-camcraft-sim    = { path = "crates/camcraft-sim",    version = "0.1.0" }
-camcraft-core   = { path = "crates/camcraft-core",   version = "0.1.0" }
-camcraft-post   = { path = "crates/camcraft-post",   version = "0.1.0" }
-camcraft-session = { path = "crates/camcraft-session", version = "0.1.0" }
+step-check      = { path = "crates/step-check",      version = "0.2.0" }
+camcraft-sim    = { path = "crates/camcraft-sim",    version = "0.2.0" }
+camcraft-core   = { path = "crates/camcraft-core",   version = "0.2.0" }
+camcraft-post   = { path = "crates/camcraft-post",   version = "0.2.0" }
+camcraft-session = { path = "crates/camcraft-session", version = "0.2.0" }
 
 # external
 bytemuck           = { version = "1", features = ["derive"] }

@@ -50,9 +50,10 @@ Autodesk.)
 ## Status
 
 Version 0.2, pre-alpha. The app runs, checks, plays back and posts jobs. File
-formats change without notice, and there is no release or installer yet: you
-build it from source. [STATUS.md](STATUS.md) says where the work stands and what
-the simulator cannot check for you.
+formats change without notice. [Releases](https://github.com/dan335/camcraft/releases)
+carry builds for Windows and Linux, with no installer; on macOS, build it from
+source. [STATUS.md](STATUS.md) says where the work stands and what the simulator
+cannot check for you.
 
 ## Try it
 
