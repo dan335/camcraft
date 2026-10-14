@@ -213,11 +213,21 @@ Accepted costs, all of which were actually hit and resolved during the spike:
   - **The bowl's file has a hole.** Its inner floor is bounded by a circle
     4.7e-6 mm across on the axis that no face closes. ogeom meshes it as written;
     OpenCascade's mesh of it came out closed.
-- **Revisit when** ogeom-rs#216 is fixed: move the bowl's fixture test back to
-  0.01 mm. When ogeom meshes ruled faces without the rows (ogeom-rs#213), delete
-  `ruled`; when its faces hold to their chord (ogeom-rs#212), mesh at the
-  tolerance rather than a third of it. Delete the `opencascade` feature and `vendor/` once ogeom has run on
-  real jobs.
+- **2026-10-13: the cap stops a part opening at 0.01 mm.** A private part 340 mm
+  across, its edge rounded on a B-spline, stood 0.052 mm off at 0.01 and was
+  refused; it reads at 0.025 and coarser. `round_edge.step`, a disc 200 mm across
+  with a 19 mm round on it, generated, is refused the same way at 0.01, 0.0153 mm
+  off.
+- **2026-10-14: ogeom 0.11.0.** It carries ogeom-rs#222's fix for #216, so the bowl
+  and the round edge are held to 0.01 mm. The private part reads from 0.1 down to
+  0.0125 mm (a new job's 0.05, quartered), 398,750 triangles there, but is still
+  refused at 0.005 and 0.0025: a thin B-spline strip along its edge, 1.3 mm tall,
+  stands 0.0075 mm off at 0.0025.
+- **Revisit:** 0.11 also says ogeom meshes ruled faces without the rows
+  (ogeom-rs#213) and holds every triangle of a curved face to its chord (#212).
+  Measure both, then delete `ruled` and mesh at the tolerance rather than a third
+  of it. Delete the `opencascade` feature and `vendor/` once ogeom has run on real
+  jobs.
 
 ## Implemented (0.1-d, 2026-09-22)
 

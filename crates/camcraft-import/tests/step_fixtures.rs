@@ -112,32 +112,25 @@ fn sled_base_mixed_analytic_and_nurbs() {
 /// 4.7e-6 mm across on the axis, which no other face closes, where Fusion revolved
 /// the profile to the axis.
 ///
-/// At 0.0125 mm, not [`TOLERANCE`]: see [`the_bowl_is_refused_finer_than_ogeom_meshes_it`].
+/// Its rim, 188 mm from its axis, needs more than 512 grid steps round at this
+/// tolerance, where ogeom 0.10 stopped and left it 0.0124 mm off
+/// (gilbertorconde/ogeom-rs#216, fixed in 0.11).
 #[test]
 fn bowl_revolved_millimetre() {
-    check_at(
-        0.0125,
-        "bowl_01.step",
-        "millimetre",
-        5,
-        [380.0, 380.0, 20.0],
-        1,
-    );
+    check("bowl_01.step", "millimetre", 5, [380.0, 380.0, 20.0], 1);
 }
 
-/// ogeom 0.10 stops refining a face's grid at 512 steps a direction, which the
-/// bowl's rim, 188 mm from its axis, needs more of below a chord of about 0.004
-/// mm. Its rim then stands 0.0124 mm off its surface however fine the chord, and
-/// the import is refused rather than handed on (gilbertorconde/ogeom-rs#216).
-/// When ogeom meshes it, this fails: move the bowl back to [`TOLERANCE`] and drop
-/// this test.
+/// A disc 200 mm across and 19 thick, its top edge one round of 19 mm: a torus
+/// face wrapping all the way round, with no seam edge, as Fusion writes one.
+/// Generated, so exact.
+///
+/// The bowl's trouble on a part a third smaller: ogeom 0.10's 512 steps round the
+/// torus ran out before 2π, and the last of the turn stood 0.0153 mm off. A private
+/// part 340 mm across, rounded the same way on a B-spline, stood 0.052 mm off and
+/// could not be opened.
 #[test]
-fn the_bowl_is_refused_finer_than_ogeom_meshes_it() {
-    let err = load_step(fixture("bowl_01.step"), TOLERANCE).unwrap_err();
-    assert!(
-        matches!(&err, StepError::Kernel { detail, .. } if detail.contains("off its surface")),
-        "{err}"
-    );
+fn a_round_edge() {
+    check("round_edge.step", "millimetre", 3, [200.0, 200.0, 19.0], 0);
 }
 
 /// Private parts, when this machine has them. Each must load, with its checks

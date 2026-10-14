@@ -38,12 +38,12 @@ csv                = "1.4"
 directories        = "6"
 glam               = { version = "0.33", features = ["serde"] }
 # STEP backend, see docs/decisions/0001-step-backend.md: ogeom, pure Rust.
-ogeom-core         = "0.10"
-ogeom-io           = "0.10"
-ogeom-geom         = "0.10"
-ogeom-math         = "0.10"
-ogeom-mesh         = "0.10"
-ogeom-topo         = "0.10"
+ogeom-core         = "0.11"
+ogeom-io           = "0.11"
+ogeom-geom         = "0.11"
+ogeom-math         = "0.11"
+ogeom-mesh         = "0.11"
+ogeom-topo         = "0.11"
 # The previous STEP backend, behind camcraft-import's `opencascade` feature, kept
 # to cross-check ogeom against. Builds OpenCascade from source: cmake and a C++
 # toolchain are prerequisites, but only with the feature on.
