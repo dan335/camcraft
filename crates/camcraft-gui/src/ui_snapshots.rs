@@ -773,7 +773,7 @@ rpm = 16000
 
 [[model]]
 name = "lego"
-path = "{}"
+path = '{}'
 
 [[stock]]
 name = "block"
@@ -860,7 +860,7 @@ rpm = 16000
 
 [[model]]
 name = "lego"
-path = "{}"
+path = '{}'
 
 [[stock]]
 name = "block"
@@ -928,7 +928,7 @@ rpm = 18000
 
 [[model]]
 name = "lego"
-path = "{}"
+path = '{}'
 
 [[stock]]
 name = "block"
@@ -1078,7 +1078,7 @@ rpm = 18000
 
 [[model]]
 name = "lego"
-path = "{}"
+path = '{}'
 
 [[stock]]
 name = "block"
@@ -1173,7 +1173,7 @@ number = 2
 
 [[model]]
 name = "lego"
-path = "{}"
+path = '{}'
 
 [[stock]]
 name = "sheet"
@@ -1328,10 +1328,10 @@ fn help_popups() {
                 ui.add_space(24.0);
                 widgets::form(ui, "help-form", |ui| {
                     widgets::row(ui, &topics::passes::STEPOVER, |ui| {
-                        f.field = ui.add(egui::DragValue::new(&mut f.stepover)).rect;
+                        f.field = ui.add(widgets::number(&mut f.stepover)).rect;
                     });
                     widgets::row(ui, &topics::passes::STEPDOWN, |ui| {
-                        ui.add(egui::DragValue::new(&mut f.stepdown));
+                        ui.add(widgets::number(&mut f.stepdown));
                     });
                 });
             },
@@ -1354,4 +1354,85 @@ fn help_popups() {
         }
         Err(err) => println!("skipped help hover: could not render ({err})"),
     }
+}
+
+/// The fine stepdown typed into in the app, a key at a time: the field keeps
+/// the keyboard from key to key, as a lost one sends each key nowhere, which
+/// Windows answers with its error sound.
+#[test]
+#[ignore = "drives the whole app; run with --features ui-snapshots"]
+fn the_fine_stepdown_keeps_the_keyboard_in_the_app() {
+    use crate::document::Selection;
+    use egui_kittest::kittest::Queryable as _;
+    let dir = output_dir().join("fine-stepdown");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = repo("fixtures/step/lego_4x2_01.step");
+    let job = format!(
+        r#"version = 1
+tolerance = 0.05
+
+[tools.flat]
+kind = "flat"
+diameter = 6.35
+number = 1
+
+[[model]]
+name = "lego"
+path = '{}'
+
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [8.0, 8.0, 3.0]
+
+[[setup]]
+name = "top"
+models = ["lego"]
+stocks = ["block"]
+
+[[setup.operation]]
+name = "rough"
+strategy = "adaptive"
+tool = "flat"
+passes = {{ stepdown = 12.7, fine_stepdown = 3.25 }}
+"#,
+        model.display()
+    );
+    let path = dir.join("fine.camcraft");
+    std::fs::write(&path, job).unwrap();
+    let mut h = harness();
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    h.state_mut().open_job(&ctx, path);
+    settle(&mut h);
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.selection = Selection::Operation("top".into(), 0);
+    }
+    // The Passes tab.
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 3_usize));
+    h.run_steps(4);
+    h.get_all_by_role(egui::accesskit::Role::SpinButton)
+        .find(|n| n.value().is_some_and(|v| v.starts_with("3.25")))
+        .expect("the fine stepdown's field")
+        .click();
+    h.run_steps(2);
+    for c in "2.54".chars() {
+        let focused = h
+            .get_all_by_role(egui::accesskit::Role::SpinButton)
+            .filter(|n| n.is_focused())
+            .count();
+        assert_eq!(focused, 1, "the keyboard was lost before {c:?}");
+        h.get_all_by_role(egui::accesskit::Role::SpinButton)
+            .find(|n| n.is_focused())
+            .unwrap()
+            .type_text(&c.to_string());
+        h.run_steps(2);
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    let doc = h.state_mut().doc_for_snapshot().unwrap();
+    assert_eq!(
+        doc.job.setups[0].operations[0].passes.fine_stepdown,
+        Some(2.54)
+    );
 }

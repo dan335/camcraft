@@ -10,6 +10,7 @@ use eframe::egui;
 use crate::browser::strategy_label;
 use crate::help::topics::passes as pass;
 use crate::help::{Help, Topic};
+use crate::ui::defaults::Defaults;
 use crate::ui::measure::{Measure, follow_radial};
 use crate::ui::theme;
 use crate::ui::widgets::{self, form, hint};
@@ -18,6 +19,7 @@ pub(super) fn passes(
     ui: &mut egui::Ui,
     m: Measure,
     op: &mut Operation,
+    d: &mut Defaults<Operation>,
     least: StockToLeave,
     diameter: Option<f64>,
 ) {
@@ -25,7 +27,7 @@ pub(super) fn passes(
     form(ui, "passes", |ui| {
         match &mut op.strategy {
             StrategySpec::Parallel { angle } => {
-                widgets::row(ui, &pass::PASS_ANGLE, |ui| angle_field(ui, angle));
+                d.row(ui, &pass::PASS_ANGLE, "angle", |ui| angle_field(ui, angle));
             }
             StrategySpec::Scallop {
                 direction,
@@ -33,9 +35,9 @@ pub(super) fn passes(
                 slope_from,
                 slope_to,
             } => {
-                both_ways_direction(ui, direction);
-                pass_order(ui, &pass::SCALLOP_ORDER, order);
-                slopes(ui, slope_from, slope_to);
+                both_ways_direction(ui, d, direction);
+                pass_order(ui, d, &pass::SCALLOP_ORDER, order);
+                slopes(ui, d, slope_from, slope_to);
             }
             StrategySpec::Contour {
                 direction,
@@ -43,8 +45,8 @@ pub(super) fn passes(
                 slope_from,
                 slope_to,
             } => {
-                both_ways_direction(ui, direction);
-                widgets::row(ui, &pass::CONTOUR_ORDER, |ui| {
+                both_ways_direction(ui, d, direction);
+                d.row(ui, &pass::CONTOUR_ORDER, "order", |ui| {
                     widgets::segmented(
                         ui,
                         order,
@@ -54,11 +56,11 @@ pub(super) fn passes(
                         ],
                     );
                 });
-                slopes(ui, slope_from, slope_to);
+                slopes(ui, d, slope_from, slope_to);
             }
             StrategySpec::Flat { direction, order } => {
-                climb_direction(ui, &pass::DIRECTION_2D, direction);
-                pass_order(ui, &pass::SCALLOP_ORDER, order);
+                climb_direction(ui, d, &pass::DIRECTION_2D, direction);
+                pass_order(ui, d, &pass::SCALLOP_ORDER, order);
             }
             StrategySpec::Spiral {
                 centre,
@@ -69,10 +71,10 @@ pub(super) fn passes(
                 slope_from,
                 slope_to,
             } => {
-                centred(ui, m, centre, inner_radius, outer_radius);
-                climb_direction(ui, &pass::DIRECTION_SPIRAL, direction);
-                pass_order(ui, &pass::SPIRAL_ORDER, order);
-                slopes(ui, slope_from, slope_to);
+                centred(ui, d, m, centre, inner_radius, outer_radius);
+                climb_direction(ui, d, &pass::DIRECTION_SPIRAL, direction);
+                pass_order(ui, d, &pass::SPIRAL_ORDER, order);
+                slopes(ui, d, slope_from, slope_to);
             }
             StrategySpec::Radial {
                 centre,
@@ -84,17 +86,17 @@ pub(super) fn passes(
                 slope_from,
                 slope_to,
             } => {
-                centred(ui, m, centre, inner_radius, outer_radius);
-                widgets::row(ui, &pass::RADIAL_ANGLES, |ui| {
+                centred(ui, d, m, centre, inner_radius, outer_radius);
+                d.row(ui, &pass::RADIAL_ANGLES, "angle_from,angle_to", |ui| {
                     ui.add(
-                        egui::DragValue::new(angle_from)
+                        widgets::number(angle_from)
                             .speed(1.0)
                             .range(-360.0..=360.0)
                             .prefix("from ")
                             .suffix("°"),
                     );
                     ui.add(
-                        egui::DragValue::new(angle_to)
+                        widgets::number(angle_to)
                             .speed(1.0)
                             .range(-360.0..=720.0)
                             .prefix("to ")
@@ -108,7 +110,7 @@ pub(super) fn passes(
                 if *angle_to > *angle_from + 360.0 {
                     *angle_to = *angle_from + 360.0;
                 }
-                widgets::row(ui, &pass::RADIAL_DIRECTION, |ui| {
+                d.row(ui, &pass::RADIAL_DIRECTION, "direction", |ui| {
                     widgets::segmented(
                         ui,
                         direction,
@@ -119,7 +121,7 @@ pub(super) fn passes(
                         ],
                     );
                 });
-                slopes(ui, slope_from, slope_to);
+                slopes(ui, d, slope_from, slope_to);
             }
             StrategySpec::MorphedSpiral {
                 centre,
@@ -128,23 +130,23 @@ pub(super) fn passes(
                 slope_from,
                 slope_to,
             } => {
-                widgets::row(ui, &pass::MORPH_CENTRE, |ui| {
+                d.row(ui, &pass::MORPH_CENTRE, "centre", |ui| {
                     centre_field(ui, m, centre, "the point furthest inside");
                 });
-                climb_direction(ui, &pass::DIRECTION_SPIRAL, direction);
-                pass_order(ui, &pass::SPIRAL_ORDER, order);
-                slopes(ui, slope_from, slope_to);
+                climb_direction(ui, d, &pass::DIRECTION_SPIRAL, direction);
+                pass_order(ui, d, &pass::SPIRAL_ORDER, order);
+                slopes(ui, d, slope_from, slope_to);
             }
             StrategySpec::PocketClearing {
                 min_ring_length,
                 conventional,
                 flat_areas,
             } => {
-                climb_or_conventional(ui, &pass::DIRECTION_2D, conventional);
-                widgets::row(ui, &pass::FLAT_AREAS, |ui| {
+                climb_or_conventional(ui, d, (&pass::DIRECTION_2D, "conventional"), conventional);
+                d.row(ui, &pass::FLAT_AREAS, "flat_areas", |ui| {
                     ui.checkbox(flat_areas, "a level on each flat face");
                 });
-                widgets::row(ui, &pass::SHORTEST_RING, |ui| {
+                d.row(ui, &pass::SHORTEST_RING, "min_ring_length", |ui| {
                     m.length_field(ui, min_ring_length, 0.1, 1000.0, "");
                 });
             }
@@ -152,7 +154,7 @@ pub(super) fn passes(
                 direction,
                 flat_areas,
             } => {
-                widgets::row(ui, &pass::DIRECTION_ADAPTIVE, |ui| {
+                d.row(ui, &pass::DIRECTION_ADAPTIVE, "direction", |ui| {
                     widgets::segmented(
                         ui,
                         direction,
@@ -163,12 +165,12 @@ pub(super) fn passes(
                         ],
                     );
                 });
-                widgets::row(ui, &pass::FLAT_AREAS, |ui| {
+                d.row(ui, &pass::FLAT_AREAS, "flat_areas", |ui| {
                     ui.checkbox(flat_areas, "a level on each flat face");
                 });
             }
             StrategySpec::Profile { conventional, .. } | StrategySpec::Pocket { conventional } => {
-                climb_or_conventional(ui, &pass::DIRECTION_2D, conventional);
+                climb_or_conventional(ui, d, (&pass::DIRECTION_2D, "conventional"), conventional);
             }
             StrategySpec::Face {
                 angle,
@@ -176,8 +178,8 @@ pub(super) fn passes(
                 pass_extension,
                 ..
             } => {
-                widgets::row(ui, &pass::PASS_ANGLE, |ui| angle_field(ui, angle));
-                widgets::row(ui, &pass::DIRECTION_FACE, |ui| {
+                d.row(ui, &pass::PASS_ANGLE, "angle", |ui| angle_field(ui, angle));
+                d.row(ui, &pass::DIRECTION_FACE, "direction", |ui| {
                     widgets::segmented(
                         ui,
                         direction,
@@ -188,20 +190,20 @@ pub(super) fn passes(
                         ],
                     );
                 });
-                widgets::row(ui, &pass::PASS_EXTENSION, |ui| {
+                d.row(ui, &pass::PASS_EXTENSION, "pass_extension", |ui| {
                     m.length_field(ui, pass_extension, 0.1, 1000.0, "");
                 });
             }
             StrategySpec::Drill { peck, dwell } => {
-                widgets::row(ui, &pass::PECK, |ui| {
+                d.row(ui, &pass::PECK, "peck", |ui| {
                     widgets::optional(ui, peck, 2.0, "all the way at once", |ui, p| {
                         m.length_field(ui, p, 0.05, 100.0, "");
                     });
                 });
-                widgets::row(ui, &pass::DWELL, |ui| {
+                d.row(ui, &pass::DWELL, "dwell", |ui| {
                     widgets::optional(ui, dwell, 0.5, "none", |ui, d| {
                         ui.add(
-                            egui::DragValue::new(d)
+                            widgets::number(d)
                                 .speed(0.05)
                                 .range(0.0..=60.0)
                                 .suffix(" s at the bottom"),
@@ -213,16 +215,16 @@ pub(super) fn passes(
         if uses.stepover {
             // Adaptive clearing's stepover is the width of cut it holds.
             if uses.load {
-                widgets::row(ui, &pass::OPTIMAL_LOAD, |ui| {
+                d.row(ui, &pass::OPTIMAL_LOAD, "passes.stepover", |ui| {
                     m.length_field(ui, &mut op.passes.stepover, 0.01, 100.0, "");
                 });
             } else {
-                widgets::row(ui, &pass::STEPOVER, |ui| {
+                d.row(ui, &pass::STEPOVER, "passes.stepover", |ui| {
                     m.length_field(ui, &mut op.passes.stepover, 0.05, 100.0, "");
                 });
             }
         }
-        widgets::row(ui, &pass::DEEPEST_STEP, |ui| {
+        d.row(ui, &pass::DEEPEST_STEP, "passes.max_cut_step", |ui| {
             m.length_field(ui, &mut op.passes.max_cut_step, 0.05, 50.0, "");
         });
     });
@@ -230,35 +232,44 @@ pub(super) fn passes(
         ui.add_space(theme::SPACE_4);
         ui.label(widgets::section_label("Multiple depths"));
         ui.add_space(theme::SPACE_2);
-        multiple_depths(ui, m, op);
+        multiple_depths(ui, d, m, op);
     }
     if uses.stock_to_leave != Leave::None {
         ui.add_space(theme::SPACE_4);
         ui.label(widgets::section_label("Stock to leave"));
         ui.add_space(theme::SPACE_2);
-        stock_to_leave(ui, m, op, least);
+        stock_to_leave(ui, d, m, op, least);
     }
     if uses.tabs {
         ui.add_space(theme::SPACE_4);
         ui.label(widgets::section_label("Tabs"));
         ui.add_space(theme::SPACE_2);
-        tabs(ui, m, &mut op.passes.tabs);
+        tabs(ui, d, m, &mut op.passes.tabs);
     }
     if uses.finishing {
         ui.add_space(theme::SPACE_4);
         ui.label(widgets::section_label("Finishing passes"));
         ui.add_space(theme::SPACE_2);
-        finishing(ui, m, &mut op.passes, diameter);
+        finishing(ui, d, m, &mut op.passes, diameter);
     }
 }
 
 /// A pocket's finishing passes along its walls, off until asked for, as
 /// Fusion's: how many, how far apart, how fast the last goes, and whether it
 /// goes twice. A value left out is Fusion's, and says what it comes to.
-fn finishing(ui: &mut egui::Ui, m: Measure, passes: &mut Passes, diameter: Option<f64>) {
+fn finishing(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    m: Measure,
+    passes: &mut Passes,
+    diameter: Option<f64>,
+) {
     let mut on = passes.finishing.is_some();
-    ui.checkbox(&mut on, "Finish the walls with the side of the tool")
-        .help(&pass::FINISHING);
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut on, "Finish the walls with the side of the tool")
+            .help(&pass::FINISHING);
+        d.reset_group(ui, "passes.finishing");
+    });
     match (on, passes.finishing.is_some()) {
         (true, false) => passes.finishing = Some(Finishing::default()),
         (false, true) => passes.finishing = None,
@@ -274,65 +285,106 @@ fn finishing(ui: &mut egui::Ui, m: Measure, passes: &mut Passes, diameter: Optio
     };
     ui.add_space(theme::SPACE_2);
     form(ui, "finishing", |ui| {
-        widgets::row(ui, &pass::FINISHING_PASSES, |ui| {
-            let mut n = f.passes.unwrap_or(1);
-            ui.add(egui::DragValue::new(&mut n).range(1..=20));
-            f.passes = (n != 1).then_some(n);
-        });
-        widgets::row(ui, &pass::FINISHING_STEPOVER, |ui| {
-            let start = 0.1 * diameter.unwrap_or(6.0);
-            widgets::optional(ui, &mut f.stepover, start, &tenth, |ui, v| {
-                m.length_field(ui, v, 0.01, 100.0, "");
-            });
-        });
-        widgets::row(ui, &pass::FINISHING_FEED, |ui| {
+        d.row(
+            ui,
+            &pass::FINISHING_PASSES,
+            "passes.finishing.passes",
+            |ui| {
+                let mut n = f.passes.unwrap_or(1);
+                ui.add(widgets::number(&mut n).range(1..=20));
+                f.passes = (n != 1).then_some(n);
+            },
+        );
+        d.row(
+            ui,
+            &pass::FINISHING_STEPOVER,
+            "passes.finishing.stepover",
+            |ui| {
+                let start = 0.1 * diameter.unwrap_or(6.0);
+                widgets::optional(ui, &mut f.stepover, start, &tenth, |ui, v| {
+                    m.length_field(ui, v, 0.01, 100.0, "");
+                });
+            },
+        );
+        d.row(ui, &pass::FINISHING_FEED, "passes.finishing.feed", |ui| {
             widgets::optional(ui, &mut f.feed, feed, "the cutting feed", |ui, v| {
                 m.feed_field(ui, v, 50_000.0);
             });
         });
-        widgets::row(ui, &pass::FINISHING_REPEAT, |ui| {
-            ui.checkbox(&mut f.repeat, "cut the last one twice");
-        });
+        d.row(
+            ui,
+            &pass::FINISHING_REPEAT,
+            "passes.finishing.repeat",
+            |ui| {
+                ui.checkbox(&mut f.repeat, "cut the last one twice");
+            },
+        );
     });
 }
 
 /// The direction passes run, in degrees from X.
 fn angle_field(ui: &mut egui::Ui, angle: &mut f64) {
     ui.add(
-        egui::DragValue::new(angle)
+        widgets::number(angle)
             .speed(1.0)
             .range(-360.0..=360.0)
             .suffix("°"),
     );
 }
 
+/// The stepdown a box ticked to step down in levels starts at: the
+/// strategy's own, or 2 mm.
+pub(super) fn starting_stepdown(op: &Operation) -> f64 {
+    op.strategy.default_stepdown().unwrap_or(2.0)
+}
+
 /// Multiple depths, as Fusion's Passes tab has them: ticked to cut in levels,
 /// then the deepest each may be. Unticked is the bottom in one pass. A strategy
 /// that always cuts in levels, as roughing does, cannot be unticked.
-fn multiple_depths(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
+fn multiple_depths(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, op: &mut Operation) {
     let required = op.strategy.uses().depths == Depths::Required;
     let mut on = op.passes.stepdown.is_some();
     let r = ui
-        .add_enabled(
-            !(required && on),
-            egui::Checkbox::new(&mut on, "Step down in levels"),
-        )
-        .help(&pass::MULTIPLE_DEPTHS)
-        .on_disabled_hover_text(format!(
-            "{} always cuts in levels",
-            strategy_label(&op.strategy)
-        ));
+        .horizontal(|ui| {
+            let r = ui
+                .add_enabled(
+                    !(required && on),
+                    egui::Checkbox::new(&mut on, "Step down in levels"),
+                )
+                .help(&pass::MULTIPLE_DEPTHS)
+                .on_disabled_hover_text(format!(
+                    "{} always cuts in levels",
+                    strategy_label(&op.strategy)
+                ));
+            // Where it always does, the stepdown's own row has the ↺.
+            if !required {
+                d.reset_group(ui, "passes.stepdown");
+            }
+            r
+        })
+        .inner;
     if r.changed() {
-        op.passes.stepdown = on.then(|| op.strategy.default_stepdown().unwrap_or(2.0));
+        op.passes.stepdown = on.then(|| starting_stepdown(op));
     }
+    let fine = op.strategy.uses().fine_stepdown;
     let Some(stepdown) = &mut op.passes.stepdown else {
         return;
     };
     ui.add_space(theme::SPACE_2);
     form(ui, "multiple-depths", |ui| {
-        widgets::row(ui, &pass::STEPDOWN, |ui| {
+        d.row(ui, &pass::STEPDOWN, "passes.stepdown", |ui| {
             m.length_field(ui, stepdown, 0.05, 100.0, "");
         });
+        // Ticked, it starts at a quarter of the stepdown.
+        if fine {
+            let start = *stepdown / 4.0;
+            let most = *stepdown;
+            d.row(ui, &pass::FINE_STEPDOWN, "passes.fine_stepdown", |ui| {
+                widgets::optional(ui, &mut op.passes.fine_stepdown, start, "none", |ui, f| {
+                    m.length_field(ui, f, 0.05, most, "");
+                });
+            });
+        }
     });
 }
 
@@ -363,14 +415,26 @@ fn stock_to_start(op: &Operation) -> StockToLeave {
 /// much on the walls and floors, as far as the strategy leaves any on either.
 /// Unticked is none, and ticked starts at roughing's half a millimetre; set back
 /// to none, it unticks.
-fn stock_to_leave(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: StockToLeave) {
+fn stock_to_leave(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    m: Measure,
+    op: &mut Operation,
+    least: StockToLeave,
+) {
     let leave = op.strategy.uses().stock_to_leave;
     let mut on = leaves_stock(op);
-    if ui
-        .checkbox(&mut on, "Leave stock for a finishing pass")
-        .help(&pass::STOCK_TO_LEAVE)
-        .changed()
-    {
+    let ticked = ui
+        .horizontal(|ui| {
+            let r = ui
+                .checkbox(&mut on, "Leave stock for a finishing pass")
+                .help(&pass::STOCK_TO_LEAVE)
+                .changed();
+            d.reset(ui, "passes.stock_to_leave");
+            r
+        })
+        .inner;
+    if ticked {
         op.passes.stock_to_leave = if on {
             stock_to_start(op)
         } else {
@@ -385,11 +449,11 @@ fn stock_to_leave(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: Stoc
     let before = *stock;
     form(ui, "stock-to-leave", |ui| {
         if leave == Leave::Both {
-            widgets::row(ui, &pass::WALLS, |ui| {
+            d.row(ui, &pass::WALLS, "passes.stock_to_leave.radial", |ui| {
                 m.wall_to_leave_field(ui, &mut stock.radial, least.radial, "");
             });
         }
-        widgets::row(ui, &pass::FLOORS, |ui| {
+        d.row(ui, &pass::FLOORS, "passes.stock_to_leave.axial", |ui| {
             m.floor_to_leave_field(ui, &mut stock.axial, least.axial, "");
         });
     });
@@ -397,10 +461,13 @@ fn stock_to_leave(ui: &mut egui::Ui, m: Measure, op: &mut Operation, least: Stoc
 }
 
 /// Tabs left across the deepest cut to hold what it frees, and their size.
-fn tabs(ui: &mut egui::Ui, m: Measure, tabs: &mut Option<Tabs>) {
+fn tabs(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, tabs: &mut Option<Tabs>) {
     let mut on = tabs.is_some();
-    ui.checkbox(&mut on, "Leave tabs to hold the part")
-        .help(&pass::TABS);
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut on, "Leave tabs to hold the part")
+            .help(&pass::TABS);
+        d.reset_group(ui, "passes.tabs");
+    });
     match (on, tabs.is_some()) {
         (true, false) => *tabs = Some(Tabs::default()),
         (false, true) => *tabs = None,
@@ -411,7 +478,7 @@ fn tabs(ui: &mut egui::Ui, m: Measure, tabs: &mut Option<Tabs>) {
     };
     ui.add_space(theme::SPACE_2);
     form(ui, "tabs", |ui| {
-        widgets::row(ui, &pass::TAB_SHAPE, |ui| {
+        d.row(ui, &pass::TAB_SHAPE, "passes.tabs.shape", |ui| {
             widgets::select(
                 ui,
                 "tab-shape",
@@ -423,13 +490,13 @@ fn tabs(ui: &mut egui::Ui, m: Measure, tabs: &mut Option<Tabs>) {
                 },
             );
         });
-        widgets::row(ui, &pass::TAB_WIDTH, |ui| {
+        d.row(ui, &pass::TAB_WIDTH, "passes.tabs.width", |ui| {
             m.length_field(ui, &mut t.width, 0.1, 1000.0, "");
         });
-        widgets::row(ui, &pass::TAB_HEIGHT, |ui| {
+        d.row(ui, &pass::TAB_HEIGHT, "passes.tabs.height", |ui| {
             m.length_field(ui, &mut t.height, 0.1, 1000.0, "");
         });
-        widgets::row(ui, &pass::TAB_SPACING, |ui| {
+        d.row(ui, &pass::TAB_SPACING, "passes.tabs.spacing", |ui| {
             m.length_field(ui, &mut t.spacing, 1.0, 100_000.0, "about ");
         });
     });
@@ -441,8 +508,12 @@ fn tabs(ui: &mut egui::Ui, m: Measure, tabs: &mut Option<Tabs>) {
 }
 
 /// Which way a finishing pass cuts, both ways among them.
-fn both_ways_direction(ui: &mut egui::Ui, direction: &mut CutDirection) {
-    widgets::row(ui, &pass::DIRECTION_SCALLOP, |ui| {
+fn both_ways_direction(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    direction: &mut CutDirection,
+) {
+    d.row(ui, &pass::DIRECTION_SCALLOP, "direction", |ui| {
         widgets::segmented(
             ui,
             direction,
@@ -456,8 +527,13 @@ fn both_ways_direction(ui: &mut egui::Ui, direction: &mut CutDirection) {
 }
 
 /// Whether a pass cuts conventional rather than climb.
-fn climb_or_conventional(ui: &mut egui::Ui, topic: &Topic, conventional: &mut bool) {
-    widgets::row(ui, topic, |ui| {
+fn climb_or_conventional(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    (topic, path): (&Topic, &str),
+    conventional: &mut bool,
+) {
+    d.row(ui, topic, path, |ui| {
         widgets::segmented(
             ui,
             conventional,
@@ -468,10 +544,15 @@ fn climb_or_conventional(ui: &mut egui::Ui, topic: &Topic, conventional: &mut bo
 
 /// Which way a pass cuts, climb or conventional: both ways, which has no
 /// meaning for it, reads as climb.
-fn climb_direction(ui: &mut egui::Ui, topic: &Topic, direction: &mut CutDirection) {
+fn climb_direction(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    topic: &Topic,
+    direction: &mut CutDirection,
+) {
     let was = *direction == CutDirection::Conventional;
     let mut conventional = was;
-    climb_or_conventional(ui, topic, &mut conventional);
+    climb_or_conventional(ui, d, (topic, "direction"), &mut conventional);
     // Left as it was unless changed, so a job's both ways is kept.
     if conventional != was {
         *direction = if conventional {
@@ -483,8 +564,13 @@ fn climb_direction(ui: &mut egui::Ui, topic: &Topic, direction: &mut CutDirectio
 }
 
 /// Outside in or inside out.
-fn pass_order(ui: &mut egui::Ui, topic: &Topic, order: &mut PassOrder) {
-    widgets::row(ui, topic, |ui| {
+fn pass_order(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    topic: &Topic,
+    order: &mut PassOrder,
+) {
+    d.row(ui, topic, "order", |ui| {
         widgets::segmented(
             ui,
             order,
@@ -498,17 +584,22 @@ fn pass_order(ui: &mut egui::Ui, topic: &Topic, order: &mut PassOrder) {
 
 /// The range of slopes a finishing pass keeps to, put right as it is set if the
 /// job would refuse it.
-fn slopes(ui: &mut egui::Ui, slope_from: &mut f64, slope_to: &mut f64) {
-    widgets::row(ui, &pass::SLOPES, |ui| {
+fn slopes(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    slope_from: &mut f64,
+    slope_to: &mut f64,
+) {
+    d.row(ui, &pass::SLOPES, "slope_from,slope_to", |ui| {
         ui.add(
-            egui::DragValue::new(slope_from)
+            widgets::number(slope_from)
                 .speed(1.0)
                 .range(0.0..=89.0)
                 .prefix("from ")
                 .suffix("°"),
         );
         ui.add(
-            egui::DragValue::new(slope_to)
+            widgets::number(slope_to)
                 .speed(1.0)
                 .range(1.0..=90.0)
                 .prefix("to ")
@@ -535,20 +626,21 @@ fn centre_field(ui: &mut egui::Ui, m: Measure, centre: &mut Option<[f64; 2]>, ab
 /// A pattern about a centre's centre and radii, the inner kept inside the outer.
 fn centred(
     ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
     m: Measure,
     centre: &mut Option<[f64; 2]>,
     inner: &mut f64,
     outer: &mut f64,
 ) {
-    widgets::row(ui, &pass::CENTRE, |ui| {
+    d.row(ui, &pass::CENTRE, "centre", |ui| {
         centre_field(ui, m, centre, "the boundary's middle");
     });
-    widgets::row(ui, &pass::INNER_RADIUS, |ui| {
+    d.row(ui, &pass::INNER_RADIUS, "inner_radius", |ui| {
         m.length_field(ui, inner, 0.1, 10_000.0, "");
     });
     // Zero is none given.
     let mut given = (*outer > 0.0).then_some(*outer);
-    widgets::row(ui, &pass::OUTER_RADIUS, |ui| {
+    d.row(ui, &pass::OUTER_RADIUS, "outer_radius", |ui| {
         widgets::optional(
             ui,
             &mut given,
@@ -603,5 +695,54 @@ mod tests {
             }
         );
         assert_eq!(stock_to_start(&op("drill")), StockToLeave::default());
+    }
+}
+
+#[cfg(all(test, feature = "ui-snapshots"))]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod field_tests {
+    use super::*;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable as _;
+
+    /// The fine stepdown, typed into a key at a time, keeps the keyboard from
+    /// key to key, and takes what was typed on Enter.
+    #[test]
+    fn the_fine_stepdown_keeps_the_keyboard_while_typed_into() {
+        let mut op = Operation::new("rough", StrategySpec::named("adaptive").unwrap());
+        op.passes.stepdown = Some(12.7);
+        op.passes.fine_stepdown = Some(3.175);
+        let def = op.clone();
+        let mut h = Harness::new_ui_state(
+            move |ui, op: &mut Operation| {
+                let mut d = Defaults::of(&*op, &def);
+                multiple_depths(ui, &mut d, Measure::Metric, op);
+                d.apply(op);
+            },
+            op,
+        );
+        h.run();
+        let fields = h.get_all_by_role(egui::accesskit::Role::SpinButton).count();
+        assert_eq!(fields, 2, "the stepdown and the fine stepdown");
+        h.get_all_by_role(egui::accesskit::Role::SpinButton)
+            .nth(1)
+            .unwrap()
+            .click();
+        h.run();
+        for c in "2.54".chars() {
+            let focused = h
+                .get_all_by_role(egui::accesskit::Role::SpinButton)
+                .filter(|n| n.is_focused())
+                .count();
+            assert_eq!(focused, 1, "focus lost before typing {c:?}");
+            h.get_all_by_role(egui::accesskit::Role::SpinButton)
+                .find(|n| n.is_focused())
+                .unwrap()
+                .type_text(&c.to_string());
+            h.run();
+        }
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(h.state().passes.fine_stepdown, Some(2.54));
     }
 }

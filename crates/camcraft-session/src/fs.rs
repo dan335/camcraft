@@ -49,8 +49,10 @@ pub fn with_job_extension(path: &Path) -> PathBuf {
 }
 
 /// A path as the file system has it, links followed, when it exists; otherwise
-/// its folder's, with its name on the end; otherwise as given.
-fn real(path: &Path) -> PathBuf {
+/// its folder's, with its name on the end; otherwise as given. Two paths to
+/// the same file, however written (`..` in them, another case, `\\?\` before
+/// them), are the same path here: what [`relative_path`] compares.
+pub fn real(path: &Path) -> PathBuf {
     if let Ok(p) = path.canonicalize() {
         return p;
     }
@@ -63,7 +65,8 @@ fn real(path: &Path) -> PathBuf {
 }
 
 /// How a job in `from_dir` names `to`: relative, with `/` between folders, or
-/// absolute when the two share no root (another drive).
+/// absolute when the two share no root (another drive), as a person writes it
+/// ([`plain`]).
 pub fn relative_path(from_dir: &Path, to: &Path) -> String {
     let (from, target) = (real(from_dir), real(to));
     let a: Vec<Component<'_>> = from.components().collect();
@@ -75,7 +78,7 @@ pub fn relative_path(from_dir: &Path, to: &Path) -> String {
         .take(common)
         .any(|c| matches!(c, Component::Normal(_)));
     if !shared {
-        return target.display().to_string();
+        return plain(&target).display().to_string();
     }
     let mut parts: Vec<String> = Vec::new();
     for _ in common..a.len() {
@@ -85,6 +88,41 @@ pub fn relative_path(from_dir: &Path, to: &Path) -> String {
         parts.push(c.as_os_str().to_string_lossy().into_owned());
     }
     parts.join("/")
+}
+
+/// `path`, which [`real`] gave, as a person writes it. On Windows a path the
+/// file system has resolved starts `\\?\` (`\\?\C:\...`, `\\?\UNC\server\...`),
+/// which tells Windows to take it exactly as written; without it (`C:\...`,
+/// `\\server\...`) it is the path everything else expects. It is written
+/// without it only when that names the very same file, as [`real`] finds it:
+/// a path too long, or with a name Windows treats specially, needs it, and
+/// keeps it.
+fn plain(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::path::Prefix;
+        let mut parts = path.components();
+        if let Some(Component::Prefix(prefix)) = parts.next() {
+            let head = match prefix.kind() {
+                Prefix::VerbatimDisk(drive) => Some(format!("{}:", char::from(drive))),
+                Prefix::VerbatimUNC(server, share) => Some(format!(
+                    r"\\{}\{}",
+                    server.to_string_lossy(),
+                    share.to_string_lossy()
+                )),
+                _ => None,
+            };
+            if let Some(head) = head {
+                let mut written = std::ffi::OsString::from(head);
+                written.push(parts.as_path().as_os_str());
+                let written = PathBuf::from(written);
+                if real(&written) == real(path) {
+                    return written;
+                }
+            }
+        }
+    }
+    path.to_path_buf()
 }
 
 #[cfg(test)]
@@ -118,6 +156,31 @@ mod tests {
                 .unwrap(),
             root.join("models/m.step").canonicalize().unwrap()
         );
+    }
+
+    /// A model on another drive is named whole, as a person writes it: not with
+    /// the `\\?\` Windows puts before a path it has resolved, and still the
+    /// same file.
+    #[cfg(windows)]
+    #[test]
+    fn a_path_on_another_drive_is_written_plainly() {
+        let root = temp("plain");
+        let file = root.join("models/m.step");
+        let canonical = file.canonicalize().unwrap();
+        assert!(canonical.to_string_lossy().starts_with(r"\\?\"));
+        let written = plain(&canonical);
+        assert!(
+            !written.to_string_lossy().starts_with(r"\\?\"),
+            "{written:?}"
+        );
+        assert_eq!(real(&written), canonical);
+        // From a folder on a drive it shares nothing with.
+        let named = relative_path(Path::new(r"Z:\camcraft-nowhere"), &file);
+        assert!(!named.starts_with(r"\\?\"), "{named}");
+        assert!(Path::new(&named).is_absolute(), "{named}");
+        assert_eq!(real(Path::new(&named)), canonical);
+        // A path Windows did not resolve is left as it was.
+        assert_eq!(plain(Path::new(r"C:\x\y")), Path::new(r"C:\x\y"));
     }
 
     #[test]

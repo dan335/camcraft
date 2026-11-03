@@ -11,6 +11,7 @@ use crate::document::needs_room;
 use crate::help::topics::geometry as geo;
 use crate::picking::slots::{Kind, Slot};
 use crate::properties::{PropAction, ViewPicks};
+use crate::ui::defaults::Defaults;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
 use crate::ui::widgets::{self, Icon, Size, Variant, error, form, hint, list_row_background};
@@ -19,22 +20,22 @@ use crate::ui::widgets::{self, Icon, Size, Variant, error, form, hint, list_row_
 /// `diameter` across when it has one.
 pub(super) fn geometry(
     ui: &mut egui::Ui,
+    (d, op): (&mut Defaults<Operation>, &mut Operation),
     m: Measure,
     (setup, index): (&str, usize),
-    op: &mut Operation,
     diameter: Option<f64>,
     picks: ViewPicks<'_>,
     actions: &mut Vec<PropAction>,
 ) {
     if matches!(op.strategy, StrategySpec::Face { .. }) {
-        face_form(ui, m, op, picks);
+        face_form(ui, d, m, op, picks);
         return;
     }
     let uses = op.strategy.uses();
     let drilling = uses.holes;
     let flat = uses.outline;
     if flat {
-        outline_form(ui, op);
+        outline_form(ui, d, op);
         ui.add_space(theme::SPACE_3);
     }
     if drilling {
@@ -45,13 +46,20 @@ pub(super) fn geometry(
         );
         ui.add_space(theme::SPACE_3);
     } else if uses.boundary {
-        boundary_form(ui, m, &mut op.boundary, diameter);
+        boundary_form(ui, d, m, &mut op.boundary, diameter);
         ui.add_space(theme::SPACE_3);
     }
     if op.cuts_selection() {
         pick_cards(ui, setup, index, &mut op.selection, picks, actions);
     }
     if drilling {
+        return;
+    }
+    if picks.shown.is_some_and(|s| s.waiting) {
+        hint(
+            ui,
+            "Working out the part's silhouette: the boundary is drawn once it is.",
+        );
         return;
     }
     match picks.shown.and_then(|s| s.boundary.as_ref()) {
@@ -155,12 +163,13 @@ fn legend(ui: &mut egui::Ui, items: &[(Swatch, &str)]) {
 /// profile's side of it. Fusion's 2D Contour and 2D Pocket Geometry tabs, which
 /// select what is cut rather than fence the tool in. The tool's centre goes its radius and the
 /// stock to leave beside it, so there is no containment or additional offset.
-fn outline_form(ui: &mut egui::Ui, op: &mut Operation) {
+fn outline_form(ui: &mut egui::Ui, d: &mut Defaults<Operation>, op: &mut Operation) {
     let pocket = matches!(op.strategy, StrategySpec::Pocket { .. });
     form(ui, "outline", |ui| {
-        widgets::row(
+        d.row(
             ui,
             if pocket { &geo::POCKET } else { &geo::CONTOUR },
+            "outline",
             |ui| {
                 widgets::select(
                     ui,
@@ -175,7 +184,7 @@ fn outline_form(ui: &mut egui::Ui, op: &mut Operation) {
             },
         );
         if let StrategySpec::Profile { side, .. } = &mut op.strategy {
-            widgets::row(ui, &geo::SIDE, |ui| {
+            d.row(ui, &geo::SIDE, "side", |ui| {
                 widgets::select(
                     ui,
                     "side",
@@ -212,10 +221,16 @@ fn outline_form(ui: &mut egui::Ui, op: &mut Operation) {
 
 /// What facing faces: the stock's footprint, and how far past it, Fusion's stock
 /// offset. It has nothing to pick.
-fn face_form(ui: &mut egui::Ui, m: Measure, op: &mut Operation, picks: ViewPicks<'_>) {
+fn face_form(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    m: Measure,
+    op: &mut Operation,
+    picks: ViewPicks<'_>,
+) {
     if let StrategySpec::Face { stock_offset, .. } = &mut op.strategy {
         form(ui, "face", |ui| {
-            widgets::row(ui, &geo::STOCK_OFFSET, |ui| {
+            d.row(ui, &geo::STOCK_OFFSET, "stock_offset", |ui| {
                 m.signed_length_field(ui, stock_offset, 0.1, 1000.0, "");
             });
         });
@@ -237,10 +252,16 @@ fn face_form(ui: &mut egui::Ui, m: Measure, op: &mut Operation, picks: ViewPicks
 
 /// The machining boundary, where the tool may go against it, and how far past it:
 /// Fusion's Geometry tab.
-fn boundary_form(ui: &mut egui::Ui, m: Measure, g: &mut MachiningBoundary, diameter: Option<f64>) {
+fn boundary_form(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    m: Measure,
+    g: &mut MachiningBoundary,
+    diameter: Option<f64>,
+) {
     let before = (g.kind, g.containment);
     form(ui, "geometry", |ui| {
-        widgets::row(ui, &geo::BOUNDARY, |ui| {
+        d.row(ui, &geo::BOUNDARY, "boundary.kind", |ui| {
             widgets::select(
                 ui,
                 "boundary",
@@ -260,7 +281,7 @@ fn boundary_form(ui: &mut egui::Ui, m: Measure, g: &mut MachiningBoundary, diame
             );
         });
         if g.kind != Boundary::Stock {
-            widgets::row(ui, &geo::CONTAINMENT, |ui| {
+            d.row(ui, &geo::CONTAINMENT, "boundary.containment", |ui| {
                 widgets::select(
                     ui,
                     "containment",
@@ -278,7 +299,7 @@ fn boundary_form(ui: &mut egui::Ui, m: Measure, g: &mut MachiningBoundary, diame
                 );
             });
         }
-        widgets::row(ui, &geo::ADDITIONAL_OFFSET, |ui| {
+        d.row(ui, &geo::ADDITIONAL_OFFSET, "boundary.margin", |ui| {
             m.signed_length_field(ui, &mut g.margin, 0.1, 1000.0, "");
         });
     });

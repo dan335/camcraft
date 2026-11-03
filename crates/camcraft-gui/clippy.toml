@@ -1,0 +1,3 @@
+disallowed-methods = [
+    { path = "egui::DragValue::new", reason = "use ui::widgets::number, which takes what is typed on Enter, not at every key" },
+]

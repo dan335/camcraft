@@ -35,12 +35,28 @@ fn parts() -> Vec<PathBuf> {
     parts
 }
 
+/// Fixtures ogeom refuses at [`TOLERANCE`] for a fault of its own already
+/// reported, each with the issue: nothing to compare until it is fixed. Each
+/// must still be refused, so a fix shows here, and it is compared again.
+const REFUSED_BY_OGEOM: &[(&str, &str)] = &[(
+    "round_edge_loose_fit.step",
+    "its seam drawn 0.0915 mm off the torus: gilbertorconde/ogeom-rs#261",
+)];
+
 #[test]
 fn ogeom_agrees_with_opencascade() {
     let parts = parts();
     assert!(!parts.is_empty());
     for part in parts {
         let name = part.display();
+        let file = part.file_name().and_then(|f| f.to_str()).unwrap_or_default();
+        if let Some((_, why)) = REFUSED_BY_OGEOM.iter().find(|(f, _)| *f == file) {
+            assert!(
+                load_step_with(&part, TOLERANCE, "ogeom", |p, _| ogeom(p, TOLERANCE)).is_err(),
+                "{name}: ogeom now reads it ({why} is fixed?): compare it again"
+            );
+            continue;
+        }
         let (o, o_report) = load_step_with(&part, TOLERANCE, "ogeom", |p, _| ogeom(p, TOLERANCE))
             .unwrap_or_else(|e| panic!("{e}"));
         let (c, c_report) = load_step_with(&part, TOLERANCE, "OpenCascade", |p, _| {

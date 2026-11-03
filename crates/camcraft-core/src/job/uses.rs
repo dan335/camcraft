@@ -18,6 +18,7 @@ impl StrategySpec {
             feed: true,
             stock_to_leave: Leave::Both,
             depths: Depths::Optional,
+            fine_stepdown: false,
             tabs: false,
             finishing: false,
             links: Links::Level,
@@ -35,16 +36,23 @@ impl StrategySpec {
         };
         match *self {
             // Down the surface in one pass, as Fusion's 3D finishing: it
-            // follows the part all the way down, with no top or bottom.
+            // follows the part all the way down, but for what of it is above a
+            // Top or below a Bottom given it, which is trimmed away
+            // (`path::trim`). Without them, it is all kept: the part's top and
+            // bottom are only where the fields start from.
             StrategySpec::Parallel { .. } => Uses {
                 depths: Depths::None,
                 links: Links::OverPart,
                 reach: Reach::Mm(50),
                 lead_radius: true,
-                ramp: false,
+                // Into material standing over where a pass starts, such as a
+                // roughing's terraces, down along the pass rather than
+                // straight down, never below the pass itself; in the air, as
+                // before, down its vertical lead.
+                ramp: true,
                 reorder: true,
-                top: None,
-                bottom: None,
+                top: Some(HeightRef::ModelTop),
+                bottom: Some(HeightRef::ModelBottom),
                 ..cuts_loops
             },
             // As parallel, but in its own order: reordering would shuffle and
@@ -63,9 +71,11 @@ impl StrategySpec {
                     Reach::Tools(5)
                 },
                 lead_radius: true,
-                ramp: false,
-                top: None,
-                bottom: None,
+                // Ramped into material as parallel is.
+                ramp: true,
+                // Trimmed to them as parallel is.
+                top: Some(HeightRef::ModelTop),
+                bottom: Some(HeightRef::ModelBottom),
                 ..cuts_loops
             },
             // A level each stepdown is what it is, going round, not over: it
@@ -114,6 +124,8 @@ impl StrategySpec {
             StrategySpec::Adaptive { .. } => Uses {
                 load: true,
                 depths: Depths::Required,
+                // Fusion's 3D Adaptive's, between its levels.
+                fine_stepdown: true,
                 links: Links::Own,
                 helix: HelixSize::Flat,
                 entries: &[Entry::Helix, Entry::Plunge],
@@ -163,6 +175,7 @@ impl StrategySpec {
                 stock_to_leave: Leave::None,
                 // Its pecks are its own.
                 depths: Depths::None,
+                fine_stepdown: false,
                 tabs: false,
                 finishing: false,
                 // Up out of each hole, and across to the next.
@@ -212,6 +225,9 @@ pub struct Uses {
     pub stock_to_leave: Leave,
     /// Whether it cuts in levels a stepdown apart.
     pub depths: Depths,
+    /// Finer levels between those, where they leave terraces: Fusion's fine
+    /// stepdown ([`Passes::fine_stepdown`](super::Passes::fine_stepdown)).
+    pub fine_stepdown: bool,
     /// Tabs across the deepest cut of the loops it cuts.
     pub tabs: bool,
     /// Finishing passes along a pocket's walls, as Fusion's 2D pocket has.
@@ -236,9 +252,12 @@ pub struct Uses {
     pub leads: bool,
     /// Passes reordered, and maybe reversed, to shorten travel.
     pub reorder: bool,
-    /// A Top it cuts down from, and where that is without one.
+    /// A Top it cuts down from, and where that is without one. A strategy
+    /// linked over the part ([`Links::OverPart`]) has it only when given: its
+    /// passes are trimmed to it, and without one nothing is.
     pub top: Option<HeightRef>,
-    /// A Bottom it cuts down to, and where that is without one.
+    /// A Bottom it cuts down to, and where that is without one; as `top`, for
+    /// one linked over the part.
     pub bottom: Option<HeightRef>,
 }
 

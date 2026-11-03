@@ -150,7 +150,7 @@ impl TriGrid {
 
     /// The triangles that exist with node `n` a corner of them, with their nodes:
     /// at most six.
-    pub(crate) fn triangles_at(&self, n: u32) -> impl Iterator<Item = (u32, [u32; 3])> + '_ {
+    pub fn triangles_at(&self, n: u32) -> impl Iterator<Item = (u32, [u32; 3])> + '_ {
         let (ix, iy) = self.column_row(n);
         let cells = [(0, 0), (1, 0), (0, 1), (1, 1)]
             .into_iter()

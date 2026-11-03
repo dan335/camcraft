@@ -5,7 +5,7 @@ use camcraft_session::library::system::{SYSTEM, is_system};
 use camcraft_session::library::{Folder, FolderPath};
 use eframe::egui;
 
-use super::{LOCKED, ToolDrag, ToolManager};
+use super::{LOCKED, Message, ToolDrag, ToolManager};
 use crate::ui::theme;
 use crate::ui::widgets::{self, Icon, list_row_background};
 
@@ -68,7 +68,7 @@ impl ToolManager {
             | TreeAction::Delete(p)
                 if is_system(p) =>
             {
-                self.message = Some((false, LOCKED.into()));
+                self.message = Some(Message::err(LOCKED.into()));
                 return;
             }
             _ => {}
@@ -103,7 +103,7 @@ impl ToolManager {
                             moved(f);
                         }
                     }
-                    Err(e) => self.message = Some((false, e.to_string())),
+                    Err(e) => self.message = Some(Message::err(e.to_string())),
                 }
             }
             TreeAction::CancelRename => self.renaming = None,

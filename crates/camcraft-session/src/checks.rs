@@ -403,7 +403,9 @@ fn operation_findings(
                     "and not finished".into(),
                 ));
             }
-            too_steep(op, r.too_steep, &mut out);
+            if r.walls == 0 {
+                too_steep(op, r.too_steep, &mut out);
+            }
         }
         StrategyDetail::Contour(r) => {
             finished(

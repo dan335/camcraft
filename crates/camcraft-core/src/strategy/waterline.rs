@@ -62,7 +62,7 @@ use crate::strategy::parallel::Run;
 use crate::strategy::projected::{Emit, simplify, start_distance};
 use crate::strategy::reach::LevelReach;
 use crate::strategy::slope::{self, SlopeCounts};
-use crate::strategy::{SAME_LEVEL, StrategyError, check};
+use crate::strategy::{SAME_LEVEL, StrategyError, check, with_edge};
 
 /// How many times a chord is halved at most, to put it on the part.
 const MAX_SPLITS: u32 = 16;
@@ -201,6 +201,13 @@ pub fn waterline<T: DropTest + Sync>(
     let range = (params.slope_from, params.slope_to, params.slope_to);
     let thin = 0.25 * params.tolerance;
     let cut_against = params.climb_right != (params.direction == Direction::Conventional);
+    // A region's ring lies up to `reach_by` off where it is pulled to, so it is
+    // kept to the area grown that far before it is pulled, and to the area,
+    // its edge counted in, after: a ring that belongs on the edge, as one round
+    // a wall where the tool stops touching the part does, is not lost for being
+    // found just past it.
+    let near = area.offset(reach_by + params.tolerance, params.tolerance);
+    let within = with_edge(area, params.tolerance);
 
     // Each level's passes, in parallel.
     let worked: Vec<Result<Level, StrategyError>> = levels
@@ -210,14 +217,8 @@ pub fn waterline<T: DropTest + Sync>(
             let mut level = Level::default();
             for ring in region.rings() {
                 let island = island_of(ring.points(), &footprint);
-                // Kept to the area first: the clipper rounds what it hands back
-                // to its tick, which the region's own rings already lie on, and
-                // would move a point pulled onto the part.
-                let stretches = area.clip_lines(&[(ring.points().to_vec(), true)])?;
-                if !stretches.is_empty() {
-                    level.rings += 1;
-                }
-                for (points, closed) in stretches {
+                let mut stretches = Vec::new();
+                for (points, closed) in near.clip_lines(&[(ring.points().to_vec(), true)])? {
                     // Thinned first: the region's rings carry every facet of
                     // the part's shadow, and each point costs a dozen drops.
                     // Pulling puts back what the part needs between.
@@ -233,6 +234,12 @@ pub fn waterline<T: DropTest + Sync>(
                     level.pulled += pulled.pulled;
                     level.unpulled += pulled.unpulled;
                     let points = simplify(&pulled.points, closed, thin);
+                    stretches.extend(within.clip_lines(&[(points, closed)])?);
+                }
+                if !stretches.is_empty() {
+                    level.rings += 1;
+                }
+                for (points, closed) in stretches {
                     let kept = slope::keep(
                         cutter,
                         tool,

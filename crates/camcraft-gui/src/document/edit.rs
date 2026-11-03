@@ -386,11 +386,24 @@ impl Document {
         self.setup_mut(setup)?.operations.get_mut(index)
     }
 
+    /// What setup `name` would be, new: its settings as [`Document::add_setup`]
+    /// gives them, and its models, stocks and operations its own, which are
+    /// chosen, not set. What each of its settings shows as changed from, and
+    /// goes back to.
+    pub fn setup_defaults(&self, name: &str) -> Option<Setup> {
+        let s = self.setup(name)?;
+        Some(Setup {
+            models: s.models.clone(),
+            stocks: s.stocks.clone(),
+            operations: s.operations.clone(),
+            ..fresh_setup(name)
+        })
+    }
+
     /// Add a setup machining every model, from the first stock.
     pub fn add_setup(&mut self) -> String {
         let name = free("Setup", self.job.setups.iter().map(|s| s.name.as_str()));
-        let mut setup = Setup::new(name.clone());
-        setup.origin = Origin::stock_corner();
+        let mut setup = fresh_setup(&name);
         setup.models = self.job.models.iter().map(|m| m.name.clone()).collect();
         setup.stocks = self
             .job
@@ -616,6 +629,29 @@ impl Document {
         name
     }
 
+    /// What operation `index` of `setup` would be, new, with its tool and the
+    /// preset it names: its strategy's own settings as a fresh one of it has
+    /// them, the preset's values, and what is fitted to the tool, as
+    /// [`Document::add_operation`] and [`Document::use_tool`] give them. What
+    /// each of its settings shows as changed from, and goes back to.
+    pub fn operation_defaults(&self, setup: &str, index: usize) -> Option<Operation> {
+        let op = self.operation(setup, index)?;
+        let strategy = StrategySpec::named(op.strategy.name()).unwrap_or(op.strategy);
+        let spec = self.job.tool_for(op);
+        let preset = spec.and_then(|t| op.preset.as_deref().and_then(|p| t.preset(p)));
+        let mut fresh = Operation {
+            tool: op.tool.clone(),
+            ..Operation::new(op.name.clone(), strategy)
+        };
+        if let Some(p) = preset {
+            fresh.apply_preset(p);
+        }
+        fit_stepover(&mut fresh, spec, preset, self.job.tolerance);
+        start_on_silhouette(&mut fresh);
+        fit_channel(&mut fresh, spec);
+        Some(fresh)
+    }
+
     /// Give operation `op` of `setup` the job's tool `tool`, and copy in the values
     /// of its preset `preset`. Without one, the operation keeps its own values and
     /// no longer names a preset.
@@ -670,6 +706,13 @@ impl Document {
         used.dedup();
         used
     }
+}
+
+/// A new setup's settings, called `name`: measured from the stock's corner.
+fn fresh_setup(name: &str) -> Setup {
+    let mut setup = Setup::new(name);
+    setup.origin = Origin::stock_corner();
+    setup
 }
 
 /// Start a new 3D operation on the part's silhouette, as Fusion does. Finishing

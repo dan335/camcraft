@@ -1,6 +1,7 @@
 //! A setup's panel: what it machines and from what (Parts), how the part sits and
 //! where zero is (Position), and what the machine is told (Post).
 
+use camcraft_core::job::Setup;
 use camcraft_core::setup::frame::{Axis, Orientation};
 use eframe::egui;
 
@@ -9,6 +10,7 @@ use super::{PropAction, ViewPicks, cannot_generate, header, renamed, work_zero};
 use crate::document::{Document, Selection};
 use crate::help::topics::setup as topics;
 use crate::picking::slots::Slot;
+use crate::ui::defaults::Defaults;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
 use crate::ui::widgets::{self, Size, Tab, Variant, form, hint};
@@ -56,9 +58,14 @@ pub(super) fn show(
         .shown
         .and_then(|s| s.origin.as_ref())
         .is_some_and(Result::is_err);
+    // What each setting shows as changed from, and goes back to.
+    let Some(def) = doc.setup_defaults(name) else {
+        return;
+    };
     let Some(s) = doc.setup_mut(name) else {
         return;
     };
+    let mut d = Defaults::of(&*s, &def);
 
     let tabs = [
         Tab::new("Parts")
@@ -128,17 +135,17 @@ pub(super) fn show(
             );
         }
         1 => {
-            orientation(ui, &mut s.orientation);
+            orientation(ui, &mut d, &mut s.orientation);
             ui.add_space(theme::SPACE_4);
-            work_zero::show(ui, m, name, &mut s.origin, picks, actions);
+            work_zero::show(ui, &mut d, m, name, &mut s.origin, picks, actions);
         }
         _ => {
             form(ui, "setup-post", |ui| {
-                widgets::row(ui, &topics::WCS, |ui| {
+                d.row(ui, &topics::WCS, "wcs", |ui| {
                     let offsets: Vec<_> = (54..=59).collect();
                     widgets::select(ui, "wcs", &mut s.wcs, &offsets, |w| format!("G{w}"));
                 });
-                widgets::row(ui, &topics::POST, |ui| {
+                d.row(ui, &topics::POST, "post", |ui| {
                     let builtin: Vec<String> = camcraft_session::builtin_posts()
                         .map(str::to_string)
                         .collect();
@@ -153,10 +160,11 @@ pub(super) fn show(
             });
         }
     }
+    d.apply(s);
 }
 
 /// Which way the part sits: the model directions that become the machine's Z and X.
-fn orientation(ui: &mut egui::Ui, o: &mut Orientation) {
+fn orientation(ui: &mut egui::Ui, d: &mut Defaults<Setup>, o: &mut Orientation) {
     let mut turned = None;
     let flipped = o.flipped();
     widgets::card(
@@ -175,11 +183,11 @@ fn orientation(ui: &mut egui::Ui, o: &mut Orientation) {
         },
         |ui| {
             form(ui, "orientation", |ui| {
-                widgets::row(ui, &topics::UP_Z, |ui| {
+                d.row(ui, &topics::UP_Z, "orientation.z", |ui| {
                     axis_combo(ui, "orient-z", &mut o.z, None);
                 });
                 let z = o.z;
-                widgets::row(ui, &topics::ALONG_X, |ui| {
+                d.row(ui, &topics::ALONG_X, "orientation.x", |ui| {
                     axis_combo(ui, "orient-x", &mut o.x, Some(z));
                 });
             });

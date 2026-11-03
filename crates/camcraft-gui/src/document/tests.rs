@@ -93,6 +93,82 @@ fn a_moved_work_zero_says_how_far_the_drawing_moved() {
     assert_eq!(doc.refresh_layout(&setup), None);
 }
 
+/// A layout's part's shadow is asked of a worker, once, and nothing here casts
+/// it: the silhouette waits for it, and is then the one the engine works out.
+/// Kept in the setup's turned frame, it serves a layout made again with the
+/// work zero moved, or the stock changed, and a run, without casting it again;
+/// one turned another way is cast afresh, and one that cannot be cast says
+/// why, and is not asked for again.
+#[test]
+fn a_layouts_shadow_is_cast_off_the_window_once() {
+    let (mut doc, setup) = with_plate();
+    doc.refresh_layout(&setup);
+    let wanted = doc.shadows_wanted();
+    assert_eq!(wanted.len(), 1);
+    let (key, prepared) = wanted.into_iter().next().unwrap();
+    let layout = |doc: &Document| doc.setups[&setup].layout.clone().unwrap();
+    assert_eq!(
+        layout(&doc).silhouette(),
+        Ok(None),
+        "waits, and casts nothing"
+    );
+    assert!(prepared.cast_shadow().is_none());
+    assert!(doc.turned_shadow(0).is_none());
+
+    doc.casting(key);
+    assert!(doc.shadows_wanted().is_empty(), "one at a time");
+    // Laid out again meanwhile, from another work zero.
+    doc.job.setups[0].origin = Origin::ModelOrigin {
+        offset: [1.0, 2.5, 0.0],
+    };
+    doc.refresh_layout(&setup);
+    assert!(doc.shadows_wanted().is_empty());
+
+    // The worker casts it into the layout it was sent, the old one, and hands
+    // it back turned: the new layout takes it, moved, and nothing more is cast.
+    prepared.shadow().unwrap();
+    doc.cast(key, Ok(Arc::new(prepared.turned_shadow().unwrap())));
+    assert!(doc.shadows_wanted().is_empty(), "taken, not cast again");
+    let laid = layout(&doc);
+    let cast = laid.silhouette().unwrap().unwrap();
+    let moved = laid.prepared.clone().unwrap();
+    let fresh = camcraft_core::setup::features::silhouette(&moved.part).unwrap();
+    assert!(cast.difference(&fresh).unwrap().area() < 1e-9);
+    assert!(fresh.difference(cast).unwrap().area() < 1e-9);
+    // The plate, less its hole.
+    let hole = std::f64::consts::PI * 16.0;
+    assert!(
+        (cast.area() - (1600.0 - hole)).abs() < 5.0,
+        "{}",
+        cast.area()
+    );
+    // A run of it takes it too.
+    assert!(doc.turned_shadow(0).is_some());
+
+    // Another stock: laid out again, with the shadow at once.
+    doc.job.stocks[0].spec = StockSpec::AroundModels {
+        models: Vec::new(),
+        margin: [5.0, 5.0, 1.0],
+        below: 0.0,
+    };
+    doc.refresh_layout(&setup);
+    assert!(doc.shadows_wanted().is_empty());
+    assert!(layout(&doc).silhouette().unwrap().is_some());
+
+    // Turned over, the part casts another shadow, asked for afresh; one that
+    // cannot be cast says why, and is not asked for again.
+    doc.job.setups[0].orientation = doc.job.setups[0].orientation.flipped();
+    doc.refresh_layout(&setup);
+    let (failing, _) = doc.shadows_wanted().into_iter().next().unwrap();
+    doc.casting(failing);
+    doc.cast(failing, Err("too tangled".into()));
+    assert!(doc.shadows_wanted().is_empty());
+    assert_eq!(
+        layout(&doc).silhouette(),
+        Err("the part's silhouette: too tangled".into())
+    );
+}
+
 /// A work zero picked on something no longer there still draws the part, from
 /// the model's own zero and without axes, so it can be picked again.
 #[test]
@@ -187,6 +263,93 @@ fn models_are_added_and_saved_relative() {
     doc.save_to(&dir.join("jobs/deeper/fourth.camcraft"))
         .unwrap();
     assert_eq!(doc.job.setups[0].post, "masso");
+}
+
+/// A new job with its model loaded from a folder beside where it is then saved:
+/// saving names the model from there ("../models/part.stl"), which is still the
+/// file it was loaded from, so nothing is loaded or laid out again. It was, and
+/// casting the part's shadow for the layout made again froze the window.
+#[test]
+fn saving_a_new_job_beside_its_model_loads_nothing_again() {
+    let dir = std::env::temp_dir().join(format!("camcraft-doc-beside-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("jobs")).unwrap();
+    std::fs::create_dir_all(dir.join("models")).unwrap();
+    let file = dir.join("models/part.stl");
+    std::fs::write(&file, "").unwrap();
+
+    // The plate, as loaded from the file the dialog gave.
+    let (mut doc, setup) = with_plate();
+    doc.job.models[0].path = file.display().to_string();
+    let key = ModelKey::of(&doc.dir(), &doc.job.models[0], doc.job.tolerance);
+    let Some(ModelSlot::Ready(k, ..)) = doc.models.get_mut("p") else {
+        panic!("the plate is loaded");
+    };
+    *k = key;
+    assert!(doc.wanted_loads().is_empty());
+    doc.refresh_layout(&setup);
+    let laid = doc.setups[&setup].layout.as_ref().unwrap().key;
+
+    doc.save_to(&dir.join("jobs/tray")).unwrap();
+    assert_eq!(doc.job.models[0].path, "../models/part.stl");
+    assert!(doc.wanted_loads().is_empty(), "{:?}", doc.wanted_loads());
+    doc.refresh_layout(&setup);
+    assert_eq!(
+        doc.setups[&setup].layout.as_ref().unwrap().key,
+        laid,
+        "laid out as it was"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// However a model's file is named, from wherever, it is one key: with `..`
+/// in it, and on Windows as `\\?\` names it and with the drive letter in the
+/// other case.
+#[test]
+fn a_file_named_another_way_is_the_same_key() {
+    let dir = std::env::temp_dir().join(format!("camcraft-doc-names-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("jobs")).unwrap();
+    std::fs::create_dir_all(dir.join("models")).unwrap();
+    let file = dir.join("models/part.step");
+    std::fs::write(&file, "").unwrap();
+    let key = |dir: &Path, path: String| {
+        let def = ModelDef {
+            name: "part".into(),
+            path,
+            units: None,
+            transform: Default::default(),
+        };
+        ModelKey::of(dir, &def, 0.05)
+    };
+    let plain = key(&dir, file.display().to_string());
+    let mut names = vec![
+        key(&dir.join("jobs"), "../models/part.step".into()),
+        key(
+            &dir.join("jobs"),
+            dir.join("jobs/../models/part.step").display().to_string(),
+        ),
+    ];
+    if cfg!(windows) {
+        let verbatim = file.canonicalize().unwrap().display().to_string();
+        assert!(verbatim.starts_with(r"\\?\"), "{verbatim}");
+        names.push(key(&dir, verbatim));
+        let shown = file.display().to_string();
+        let mut other_case = shown.clone();
+        if let Some(d) = shown.get(..1) {
+            let swapped = if d == d.to_lowercase() {
+                d.to_uppercase()
+            } else {
+                d.to_lowercase()
+            };
+            other_case.replace_range(..1, &swapped);
+        }
+        names.push(key(&dir, other_case));
+    }
+    for k in &names {
+        assert_eq!(*k, plain);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A setup's rename undone, or redone, keeps what the setup ran, and the
@@ -1041,4 +1204,46 @@ fn a_scene_cut_back_is_the_one_built_for_what_is_left() {
             assert_eq!(a.cutter, b.cutter);
         }
     }
+}
+
+/// An operation's defaults are what it would be new with its tool and the
+/// preset it names: one just made is all defaults, an edit shows against
+/// them, and they stay put while it is edited; another preset is another
+/// default.
+#[test]
+fn an_operations_defaults_are_a_new_one_with_its_tool() {
+    let (mut doc, setup) = with_plate();
+    let preset = |name: &str, feed: f64| Preset {
+        name: name.into(),
+        feed: Some(feed),
+        ..Preset::default()
+    };
+    doc.job.tools.insert(
+        "quarter".into(),
+        ToolSpec {
+            diameter: 6.35,
+            presets: vec![preset("wood", 2500.0), preset("acrylic", 900.0)],
+            ..ToolSpec::default()
+        },
+    );
+    let i = doc
+        .add_operation(&setup, StrategySpec::named("adaptive").unwrap())
+        .unwrap();
+    doc.use_tool(&setup, i, "quarter".into(), Some("wood"));
+    let op = |doc: &Document| doc.operation(&setup, i).unwrap().clone();
+    let def = doc.operation_defaults(&setup, i).unwrap();
+    assert_eq!(op(&doc).passes, def.passes, "new, it is all defaults");
+    assert_eq!(op(&doc).linking, def.linking);
+    assert_eq!(def.passes.feed, 2500.0, "the preset's feed");
+
+    doc.operation_mut(&setup, i).unwrap().passes.stepover = 9.0;
+    let again = doc.operation_defaults(&setup, i).unwrap();
+    assert_eq!(again.passes, def.passes, "an edit is not a default");
+    assert_ne!(op(&doc).passes.stepover, again.passes.stepover);
+
+    doc.use_tool(&setup, i, "quarter".into(), Some("acrylic"));
+    assert_eq!(
+        doc.operation_defaults(&setup, i).unwrap().passes.feed,
+        900.0
+    );
 }

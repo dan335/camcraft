@@ -11,6 +11,16 @@ use eframe::egui;
 use crate::help::{self, Help, Topic};
 use crate::ui::theme::{self, Tint};
 
+/// A number field, dragged or typed into. What is typed is taken when Enter is
+/// pressed or the field is left, not at every key: a number part typed, as "0."
+/// is on the way to "0.07", is never clamped to the field's range, written to
+/// the job, or acted on (a stock to leave of nought unticks its box, and hides
+/// the field being typed into). Every number field is made here.
+#[allow(clippy::disallowed_methods)]
+pub fn number<Num: egui::emath::Numeric>(value: &mut Num) -> egui::DragValue<'_> {
+    egui::DragValue::new(value).update_while_editing(false)
+}
+
 /// The text size of controls at their default size, as `Button.jsx`, `Input.jsx`
 /// and `Tabs.jsx` set it: a step under body text, so a row of controls reads
 /// quieter than what it edits.
@@ -56,6 +66,8 @@ pub enum Icon {
     ChevronFirst,
     ChevronLast,
     MousePointerClick,
+    /// Back to the default: Lucide's rotate-ccw.
+    RotateCcw,
 }
 
 impl Icon {
@@ -63,6 +75,7 @@ impl Icon {
     pub fn glyph(self) -> char {
         match self {
             Icon::Plus => '\u{e13d}',
+            Icon::RotateCcw => '\u{e148}',
             Icon::X => '\u{e1b2}',
             Icon::ChevronUp => '\u{e070}',
             Icon::ChevronDown => '\u{e06d}',
@@ -192,21 +205,49 @@ pub fn key_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.label(egui::RichText::new(text).color(theme::egui_color(theme::TEXT_3)))
 }
 
-/// A field's label in a form, named by `topic`, whose help it shows on hover.
-pub fn field_label(ui: &mut egui::Ui, topic: &Topic) -> egui::Response {
-    field_label_as(ui, topic.title, topic)
-}
-
-/// As [`field_label`], reading `text` where the form names the field its own
-/// way, as a row under a column's heading does.
-pub fn field_label_as(ui: &mut egui::Ui, text: &str, topic: &Topic) -> egui::Response {
-    key_label(ui, text).help(topic)
-}
-
 /// A row of a [`form`]: `topic`'s label, then what `add` puts beside it, with
 /// the help shown on hovering either, as Fusion shows it.
 pub fn row<R>(ui: &mut egui::Ui, topic: &Topic, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     row_as(ui, topic.title, topic, add)
+}
+
+/// As [`row_as`], for a setting that may differ from its default, `changed`:
+/// then its label is amber and a ↺ ends the row ([`reset_button`]). What `add`
+/// gives, and whether the ↺ was clicked. [`crate::ui::defaults::Defaults`] says
+/// which settings differ, and puts them back.
+pub fn setting_row<R>(
+    ui: &mut egui::Ui,
+    text: &str,
+    topic: &Topic,
+    changed: bool,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> (R, bool) {
+    let label = if changed {
+        ui.label(egui::RichText::new(text).color(theme::egui_color(theme::SELECTED)))
+    } else {
+        key_label(ui, text)
+    };
+    let mut reset = false;
+    let field = ui.horizontal(|ui| {
+        let out = add(ui);
+        if changed {
+            reset = reset_button(ui).clicked();
+        }
+        out
+    });
+    let id = ui.id().with(("help", text));
+    help::over(ui, label.rect.union(field.response.rect), id, topic);
+    ui.end_row();
+    (field.inner, reset)
+}
+
+/// The ↺ that puts a setting back to its default.
+pub fn reset_button(ui: &mut egui::Ui) -> egui::Response {
+    let glyph = Icon::RotateCcw
+        .text(SMALL_TEXT)
+        .color(theme::egui_color(theme::SELECTED));
+    ui.add(egui::Button::new(glyph).frame(false))
+        .on_hover_text("Back to the default")
 }
 
 /// As [`row`], labelled `text`.

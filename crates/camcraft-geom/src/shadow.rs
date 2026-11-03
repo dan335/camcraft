@@ -65,6 +65,19 @@ impl Shadow {
         &self.sheets
     }
 
+    /// The same shadow moved by `by`: what the same surface moved by as much
+    /// casts.
+    pub fn translated(&self, by: DVec2) -> Self {
+        Self {
+            area: self.area.translated(by),
+            sheets: self
+                .sheets
+                .iter()
+                .map(|line| line.iter().map(|p| *p + by).collect())
+                .collect(),
+        }
+    }
+
     /// Whether nothing at all is cast.
     pub fn is_empty(&self) -> bool {
         self.area.is_empty() && self.sheets.is_empty()

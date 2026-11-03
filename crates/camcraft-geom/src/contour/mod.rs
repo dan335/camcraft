@@ -22,6 +22,9 @@
 //! it robust; the conversion is hidden here so nothing above deals in ticks.
 
 mod clip;
+mod pole;
+
+pub use pole::Indexed;
 mod stock;
 
 pub use stock::contour_above;
@@ -135,6 +138,20 @@ impl Region {
             }
         }
         groups.into_iter().map(Region::new).collect()
+    }
+
+    /// The same region moved by `by`. Moving keeps every ring's winding, so it
+    /// is still a region as every constructor makes one.
+    pub fn translated(&self, by: DVec2) -> Self {
+        Self {
+            rings: self
+                .rings
+                .iter()
+                .map(|r| Contour {
+                    points: r.points.iter().map(|p| *p + by).collect(),
+                })
+                .collect(),
+        }
     }
 
     /// Whether the region has no rings.

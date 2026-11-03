@@ -81,6 +81,7 @@ pub(super) fn adaptive_paths(
         ramp_stepdown: Some(op.ramp_stepdown(diameter)),
         safe_distance: op.linking.safe_distance,
         flats,
+        fine_stepdown: op.fine_stepdown(),
     };
     // Room past the stock's sides for the whole tool, so a pass can start
     // beside the block rather than going down into it.

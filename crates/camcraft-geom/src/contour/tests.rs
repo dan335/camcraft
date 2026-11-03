@@ -387,6 +387,41 @@ fn clip_lines_keeps_whole_rings_and_rejoins_the_seam() {
     assert!(cut.0.first().unwrap().x < cut.0.last().unwrap().x);
 }
 
+/// A line cut where it leaves a region keeps each of its points where it was
+/// given, finer than the clipper's tick: only the points where it crosses the
+/// edge are new.
+#[test]
+fn clip_lines_keeps_each_point_where_it_was_given() {
+    let region = Region::rectangle(dvec2(0.0, 0.0), dvec2(10.0, 10.0));
+    // Off a tick by a fraction of one, each.
+    let given = vec![
+        dvec2(1.234_567_89, 2.000_003_3),
+        dvec2(5.555_555_55, 3.333_333_33),
+        dvec2(9.876_543_21, 4.000_007_7),
+        dvec2(14.0, 4.5),
+    ];
+    let out = region.clip_lines(&[(given.clone(), false)]).unwrap();
+    assert_eq!(out.len(), 1, "{out:?}");
+    let (points, closed) = &out[0];
+    assert!(!closed);
+    assert_eq!(points.len(), 4, "{points:?}");
+    assert_eq!(points[..3], given[..3], "every point inside, exactly");
+    assert!(
+        (points[3].x - 10.0).abs() < 1e-9,
+        "new where it crosses: {points:?}"
+    );
+
+    // A closed one wholly inside, off the tick, comes back whole and closed.
+    let ring: Vec<DVec2> = (0..200)
+        .map(|i| {
+            let a = f64::from(i) * std::f64::consts::TAU / 200.0;
+            dvec2(5.0, 5.0) + dvec2(a.cos(), a.sin()) * 3.000_003_7
+        })
+        .collect();
+    let out = region.clip_lines(&[(ring.clone(), true)]).unwrap();
+    assert_eq!(out, vec![(ring, true)]);
+}
+
 /// A frame with an island in its hole is two pieces: the frame with its hole,
 /// and the island.
 #[test]

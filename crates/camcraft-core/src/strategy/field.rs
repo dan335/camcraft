@@ -45,6 +45,9 @@ pub(crate) struct AreaGrid {
     pub(crate) grid: TriGrid,
     /// Whether each node is inside the area.
     pub(crate) inside: Vec<bool>,
+    /// Whether each node was asked its height: inside the area or beside it.
+    /// One asked that has none has nothing under the tool there.
+    asked: Vec<bool>,
     /// Whether it was coarsened to stay within its budget.
     pub(crate) coarsened: bool,
 }
@@ -116,8 +119,8 @@ impl AreaGrid {
                     .copied()
                     .unwrap_or(false)
         };
-        let mut active = vec![false; count_nodes];
-        active
+        let mut asked = vec![false; count_nodes];
+        asked
             .par_chunks_mut(wide.max(1))
             .enumerate()
             .for_each(|(iy, row)| {
@@ -135,7 +138,7 @@ impl AreaGrid {
             .for_each_init(Vec::new, |scratch, (iy, row)| {
                 let y = origin.y + f64::from(u32::try_from(iy).unwrap_or(0)) * pitch;
                 for (ix, cell) in row.iter_mut().enumerate() {
-                    if !active.get(iy * wide + ix).copied().unwrap_or(false) {
+                    if !asked.get(iy * wide + ix).copied().unwrap_or(false) {
                         continue;
                     }
                     let x = origin.x + f64::from(u32::try_from(ix).unwrap_or(0)) * pitch;
@@ -150,8 +153,39 @@ impl AreaGrid {
         Ok(Self {
             grid,
             inside,
+            asked,
             coarsened,
         })
+    }
+
+    /// The cells where the tool leaves the part, each by its corners: a corner
+    /// the tool has a height at, and one it was asked for and has none, since
+    /// nothing is under the tool there. Past it the tool would fall.
+    pub(crate) fn leaving_part(&self) -> Vec<[u32; 4]> {
+        let grid = &self.grid;
+        let (nx, ny) = (grid.nx(), grid.ny());
+        let off = |n: u32| {
+            index(u64::from(n))
+                .and_then(|i| self.asked.get(i))
+                .copied()
+                .unwrap_or(false)
+                && !grid.defined(n)
+        };
+        (0..ny.saturating_sub(1))
+            .into_par_iter()
+            .flat_map_iter(|iy| {
+                (0..nx.saturating_sub(1)).filter_map(move |ix| {
+                    let corners = [
+                        grid.node(ix, iy)?,
+                        grid.node(ix + 1, iy)?,
+                        grid.node(ix + 1, iy + 1)?,
+                        grid.node(ix, iy + 1)?,
+                    ];
+                    let on = corners.iter().any(|&n| grid.defined(n));
+                    (on && corners.iter().any(|&n| off(n))).then_some(corners)
+                })
+            })
+            .collect()
     }
 
     /// The nodes of the cells that the box from `min` to `max` touches, seen

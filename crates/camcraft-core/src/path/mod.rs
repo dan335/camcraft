@@ -7,3 +7,4 @@ pub mod ordering;
 pub mod simadapt;
 pub mod tabs;
 pub mod toolpath;
+pub mod trim;

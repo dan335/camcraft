@@ -5,7 +5,9 @@
 //! is, in radians from level, as scallop's grid measures it (decision 0009).
 //! Under a ball that is the part's own slope where the tool touches it.
 
+use camcraft_geom::contour::{Contour, Indexed, Region};
 use camcraft_geom::steps::bounded_count;
+use camcraft_geom::trigrid::TriGrid;
 use glam::DVec2;
 use rayon::prelude::*;
 
@@ -38,6 +40,150 @@ pub(crate) fn check_range(from: f64, to: f64) -> Result<(), StrategyError> {
 /// Whether `[from, to]` is every slope there is, so nothing need be measured.
 fn is_everything(from: f64, to: f64) -> bool {
     from <= 0.0 && to >= std::f64::consts::FRAC_PI_2 - 1e-9
+}
+
+/// Where, as the tool's centre goes, the surface it rides on `grid` is steeper
+/// than a plunge: the band a pass laid on that surface leaves out, for rings
+/// round the walls there to finish.
+///
+/// One region, decided once, so every pass is judged by the same thing and
+/// none flickers in and out of it where the surface stands near the plunge's
+/// slope, as judging each segment alone does.
+///
+/// A face that stands near the plunge's slope all along, as the bottom of a
+/// roundover turning in under the part does, has its slope measured on the
+/// grid a little either side of it: a row of specks above it, with gaps
+/// between. So the band is found as edges are in a picture, by two
+/// thresholds: it starts on ground steeper than a plunge, and spreads from
+/// there across the triangles next to it that are at least half that steep
+/// ([`SPREAD_RATIO`]), so a face that steep all along is one wall. Ground that
+/// is nowhere as steep as a plunge is never a wall, however steep it is
+/// measured nearby. Then its gaps narrower than the tool, `radius` across each
+/// way, are closed: a strip that narrow between steep ground is no pass's to
+/// cut, but the rings'.
+///
+/// Where the tool leaves the part, at `leaving`'s cells
+/// ([`AreaGrid::leaving_part`]), it would fall: ground as steep as any. So a
+/// wall is found from there too, and closed out to it: a strip narrower than
+/// the tool between a wall and where the tool leaves the part, as round the
+/// foot of a part's outside, is no pass's either. Past there the band goes
+/// on, the tool's width beyond `area`: nothing is cut out there, but a pass
+/// along the area's edge, as its first is, is then well inside the band, not
+/// on the edge of it.
+///
+/// Leaving ground out of it never lets a pass ride down a wall: every pass is
+/// broken where it falls steeper than a plunge further than the operation
+/// allows, wherever it runs ([`crate::strategy::parallel`]).
+///
+/// [`AreaGrid::leaving_part`]: crate::strategy::field::AreaGrid::leaving_part
+pub(crate) fn steep_band(
+    grid: &TriGrid,
+    radius: f64,
+    area: &Region,
+    leaving: &[[u32; 4]],
+) -> Result<Region, StrategyError> {
+    let steep = PLUNGE_RATIO.atan();
+    let spread = SPREAD_RATIO.atan();
+    let slope = |t: u32| grid.slope(t).unwrap_or(0.0);
+    // Started on ground steeper than a plunge, and beside where the tool leaves
+    // the part, on ground steep enough to spread across.
+    let mut queue: Vec<(u32, [u32; 3])> = grid
+        .triangles()
+        .filter(|(t, _)| slope(*t) > steep)
+        .collect();
+    queue.extend(
+        leaving
+            .iter()
+            .flatten()
+            .flat_map(|&n| grid.triangles_at(n))
+            .filter(|(t, _)| slope(*t) > spread),
+    );
+    let mut wall: std::collections::HashSet<u32> = queue.iter().map(|(t, _)| *t).collect();
+    while let Some((_, nodes)) = queue.pop() {
+        for n in nodes {
+            for (t, next) in grid.triangles_at(n) {
+                if slope(t) > spread && wall.insert(t) {
+                    queue.push((t, next));
+                }
+            }
+        }
+    }
+    let outline = |nodes: &[u32]| {
+        let corners: Option<Vec<DVec2>> = nodes.iter().map(|&n| grid.xy(n)).collect();
+        Contour::new(corners?)
+    };
+    let falls: Vec<Contour> = leaving.iter().filter_map(|cell| outline(cell)).collect();
+    let mut pieces: Vec<Contour> = grid
+        .triangles()
+        .filter(|(t, _)| wall.contains(t))
+        .filter_map(|(_, nodes)| outline(&nodes))
+        .collect();
+    pieces.extend(falls.iter().cloned());
+    if pieces.is_empty() {
+        return Ok(Region::default());
+    }
+    let band = Region::union_of(&pieces)?;
+    if !(radius.is_finite() && radius > 0.0) {
+        return Ok(band);
+    }
+    // Grown and shrunk back: what the closing adds is gaps under the tool's
+    // width, and corners within it; the steep ground is all still in it.
+    let arc = (0.05 * grid.pitch()).max(1e-4);
+    let closed = band.offset(radius, arc).offset(-radius, arc).union(&band)?;
+    if falls.is_empty() {
+        return Ok(closed);
+    }
+    let beyond = Region::union_of(&falls)?
+        .offset(radius, arc)
+        .difference(area)?;
+    Ok(closed.union(&beyond)?)
+}
+
+/// How steep, as a rise over a run, ground next to a wall may be and still be
+/// part of it: half a plunge's, about 79°.
+const SPREAD_RATIO: f64 = PLUNGE_RATIO / 2.0;
+
+/// `line` with each segment in `band` judged steeper than a plunge, and every
+/// other judged by its own slope as before: so it leaves the band out in one
+/// stretch where it crosses it.
+///
+/// The band's edge is only known to `pitch`, the grid it was found on, so a
+/// line running along it, as the first lines in from a boundary do, is not
+/// taken to cross it each time its segments fall either side: it is in the
+/// band once more than `pitch` inside it, out once more than `pitch` outside,
+/// and between, as it was. Where it starts between, it is as the first
+/// segment that is clearly one or the other has it.
+pub(crate) fn banded(mut line: Sloped, band: &Indexed, pitch: f64) -> Sloped {
+    let n = line.points.len();
+    let middles: Vec<Option<f64>> = (0..line.slopes.len())
+        .map(|i| {
+            let (a, b) = (line.points.get(i)?, line.points.get((i + 1) % n.max(1))?);
+            Some(band.depth_at((*a + *b) / 2.0))
+        })
+        .collect();
+    let clearly = |depth: f64| {
+        if depth > pitch {
+            Some(true)
+        } else if depth < -pitch {
+            Some(false)
+        } else {
+            None
+        }
+    };
+    let mut inside = middles
+        .iter()
+        .flatten()
+        .find_map(|&d| clearly(d))
+        .unwrap_or(false);
+    for (slope, depth) in line.slopes.iter_mut().zip(middles) {
+        if let Some(now) = depth.and_then(clearly) {
+            inside = now;
+        }
+        if inside {
+            *slope = Some(std::f64::consts::FRAC_PI_2);
+        }
+    }
+    line
 }
 
 /// The steepest a stretch may be and still be cut along, up to `to`: a plunge's.

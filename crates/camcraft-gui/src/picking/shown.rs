@@ -8,7 +8,7 @@
 use camcraft_core::cutter::allowance::EffectiveTool;
 use camcraft_core::cutter::tool::ToolProfile;
 use camcraft_core::job::{
-    self, Boundary, FeatureRef, MachiningBoundary, Operation, Origin, StrategySpec,
+    self, Boundary, FeatureRef, MachiningBoundary, Operation, Origin, Outline as Cut, StrategySpec,
 };
 use camcraft_core::run::cutting_tool;
 use camcraft_core::setup::features::{self, FeatureError};
@@ -43,15 +43,21 @@ pub struct Shown {
     pub edge_loops: Vec<(Vec<usize>, Result<String, String>)>,
     /// The boundary the picks make, or why they make none.
     pub boundary: Option<Result<(), String>>,
+    /// The boundary is drawn from the part's silhouette, which is still being
+    /// worked out: it is drawn once it is.
+    pub waiting: bool,
 }
 
 /// The picks of `setup`, and of its operation `op` when one is selected, as they
-/// stand on the models laid out in `prepared`.
+/// stand on the models laid out in `prepared`, whose part's silhouette is
+/// `silhouette`, or `Ok(None)` while it is cast ([`Layout::silhouette`]).
+///
+/// [`Layout::silhouette`]: crate::document::Layout::silhouette
 pub fn shown(
     doc: &Document,
     setup: &str,
     op: Option<usize>,
-    prepared: &Prepared,
+    (prepared, silhouette): (&Prepared, Result<Option<&Region>, String>),
     scene: &PickScene,
     m: Measure,
 ) -> Shown {
@@ -170,9 +176,31 @@ pub fn shown(
         return out;
     }
     let uses = operation.strategy.uses();
+    // What is drawn from the part's silhouette waits for it to be cast,
+    // elsewhere, rather than casting it while a frame is drawn.
+    let tool = cutting_tool(&doc.job, operation).ok();
+    let b = &operation.boundary;
+    let needs_silhouette = if uses.outline {
+        operation.outline == Cut::Silhouette
+    } else {
+        uses.boundary
+            && b.kind != Boundary::Stock
+            && (b.kind == Boundary::Silhouette || tool.is_some())
+    };
+    let part = match silhouette {
+        Ok(Some(part)) => Some(part),
+        Ok(None) if needs_silhouette => {
+            out.waiting = found;
+            return out;
+        }
+        Err(why) if needs_silhouette => {
+            out.boundary = found.then_some(Err(why));
+            return out;
+        }
+        _ => None,
+    };
     if uses.outline {
         if found {
-            let tool = cutting_tool(&doc.job, operation).ok();
             out.boundary = Some(
                 outline_lines(operation, tool.as_ref(), prepared, &bodies, tolerance, z)
                     .map(|lines| out.highlight.lines.extend(lines))
@@ -181,15 +209,13 @@ pub fn shown(
         }
         return out;
     }
-    let b = &operation.boundary;
     if uses.boundary && b.kind != Boundary::Stock && found {
-        let tool = cutting_tool(&doc.job, operation).ok();
         out.boundary = Some(
             boundary_lines(
                 b,
                 sel,
                 tool.as_ref(),
-                (prepared, scene),
+                (prepared, part),
                 &bodies,
                 tolerance,
                 z,
@@ -277,24 +303,27 @@ fn outline_lines(
 /// An operation's machining boundary as lines at height `z`: the boundary as
 /// chosen, where the tool's centre may go against it, and hatched, what the tool
 /// cuts outside the part. That last is worked out against the part's whole
-/// outline, so for a wall straight down it is exact, and for one that leans out
-/// it is where the tool reaches at the bottom.
+/// outline, `part`, so for a wall straight down it is exact, and for one that
+/// leans out it is where the tool reaches at the bottom. `part` is there
+/// whenever the boundary is the silhouette or there is a tool.
 fn boundary_lines(
     b: &MachiningBoundary,
     selection: &job::Selection,
     tool: Option<&EffectiveTool>,
-    (prepared, scene): (&Prepared, &PickScene),
+    (prepared, part): (&Prepared, Option<&Region>),
     bodies: &Bodies<'_>,
     tolerance: f64,
     z: f64,
 ) -> Result<Vec<Outline>, FeatureError> {
+    let silhouette =
+        || part.ok_or_else(|| FeatureError::Region("the part's silhouette is not cast".into()));
     // The boundary as [`features::boundary_shape`] gives it, but for the part's
-    // silhouette, which the scene keeps rather than have it worked out here and
+    // silhouette, which the layout keeps rather than have it worked out here and
     // again below on every change.
     let other;
     let shape = match b.kind {
         Boundary::Silhouette => {
-            let s = scene.silhouette(prepared)?;
+            let s = silhouette()?;
             if s.area() <= 1e-6 {
                 return Err(FeatureError::NoArea);
             }
@@ -320,7 +349,7 @@ fn boundary_lines(
     lines.extend(rings_at(&limit, z, OutlineKind::Limit));
     if let Some(tool) = tool {
         let region = |e: camcraft_geom::contour::RegionError| FeatureError::Region(e.to_string());
-        let part = scene.silhouette(prepared)?;
+        let part = silhouette()?;
         let centres = limit
             .difference(&part.offset(tool.max_radius(), arc))
             .map_err(region)?;

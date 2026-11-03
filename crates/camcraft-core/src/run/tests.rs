@@ -1184,3 +1184,45 @@ fn an_operation_left_out_keeps_the_keyframe_before_it() {
     assert_eq!(result.operations[0].made, Made::Disabled);
     assert_eq!(result.operations[1].made, Made::Skipped);
 }
+
+/// A box with walls straight down, roughed and then finished by scallop: its
+/// passes, laid on the surface as the drop-cutter sees it, stop at the top of
+/// the walls, which it then finishes with rings round them, a stepover apart
+/// down them, and the job still lands on the part.
+#[test]
+fn a_scallop_finishes_the_walls_its_passes_leave() {
+    let text = JOB
+        .replace("margin = [1.0, 1.0, 2.0]", "margin = [6.0, 6.0, 2.0]")
+        .replace("strategy = \"parallel\"", "strategy = \"scallop\"");
+    assert_ne!(text, JOB, "the edits must land");
+    let job: Job = toml::from_str(&text).unwrap();
+    let block = synthetic::cuboid(DVec3::new(-6.0, -6.0, -4.0), DVec3::new(6.0, 6.0, 4.0));
+    let result = run_job(&job, &block).unwrap();
+    let finish = &result.operations[1];
+    let StrategyDetail::Scallop(r) = &finish.detail else {
+        panic!("finish reported {:?}", finish.detail);
+    };
+    assert!(r.walls > 0, "{r:?}");
+    // Rings beside the walls, the ball's radius out from them, at levels a
+    // stepover or less apart all the way down: from the bottom to where the
+    // ball's centre is level with the box's top edge, 2 below it, above which
+    // the ball rolls over the edge and no ring is that far out.
+    let mut levels: Vec<f64> = finish
+        .path
+        .moves()
+        .iter()
+        .filter(|m| m.role == crate::path::toolpath::MoveRole::Cut)
+        .filter(|m| (m.to.x.abs().max(m.to.y.abs()) - 8.0).abs() < 0.05)
+        .map(|m| m.to.z)
+        .collect();
+    levels.sort_by(f64::total_cmp);
+    levels.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+    let (lowest, highest) = (levels.first().copied(), levels.last().copied());
+    assert!(lowest.is_some_and(|z| z <= -4.0 + 0.8), "{levels:?}");
+    assert!(highest.is_some_and(|z| z >= 2.0), "{levels:?}");
+    assert!(
+        levels.windows(2).all(|w| w[1] - w[0] <= 0.8 + 1e-6),
+        "{levels:?}"
+    );
+    assert!(result.is_clean(), "{:?}", result.warnings());
+}

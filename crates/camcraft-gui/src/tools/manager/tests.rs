@@ -10,6 +10,7 @@ use camcraft_session::library::{Folder, FolderPath, Library};
 use super::ToolManager;
 use super::library::{Set, fill_for_snapshot};
 use super::tree::TreeAction;
+use crate::ui::widgets::Level;
 
 fn tools(names: &[&str]) -> Folder {
     Folder {
@@ -48,10 +49,74 @@ fn a_fusion_library_is_imported_into_the_folder_showing() {
     let tool = &m.library.edited.at(&folder).unwrap().tools["SRF4-250UP"];
     assert_eq!(tool.presets.len(), 4);
     assert_eq!(m.selected, Some((folder, "SRF4-250UP".to_string())));
-    assert!(matches!(&m.message, Some((true, t)) if t.contains("added SRF4-250UP")));
+    let said = m.message.clone().unwrap();
+    assert_eq!(said.level, Level::Ok);
+    assert_eq!(
+        said.text,
+        "srf4-250up.csv: 1 tool added · hover for details"
+    );
+    assert_eq!(said.detail, ["added SRF4-250UP"]);
 
     m.import_fusion(&fixtures.join("../step/sled_base.step"));
-    assert!(matches!(&m.message, Some((false, _))), "{:?}", m.message);
+    assert!(
+        m.message.as_ref().is_some_and(|s| s.level == Level::Err),
+        "{:?}",
+        m.message
+    );
+}
+
+/// An import that leaves rows out still brings the rest in: it says so as a
+/// warning, not an error, with counts short enough for the status bar and each
+/// tool and skip on its own line for the hover.
+#[test]
+fn rows_left_out_of_an_import_are_a_warning_listed_on_hover() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/tools");
+    let text = std::fs::read_to_string(fixtures.join("srf4-250up.csv")).unwrap();
+    // The last of its four rows made a tool type this build cannot cut with.
+    let at = text.rfind("\"flat end mill\"").unwrap();
+    let text = format!(
+        "{}\"probe\"{}",
+        &text[..at],
+        &text[at + "\"flat end mill\"".len()..]
+    );
+    let dir = std::env::temp_dir().join(format!("camcraft-tm-skip-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("mixed.csv");
+    std::fs::write(&file, text).unwrap();
+
+    let mut m = manager("skip");
+    let folder = m.library.edit().create(&[], "onefinity").unwrap();
+    m.folder = folder.clone();
+    m.import_fusion(&file);
+    assert_eq!(
+        m.library.edited.at(&folder).unwrap().tools["SRF4-250UP"]
+            .presets
+            .len(),
+        3
+    );
+    let said = m.message.clone().unwrap();
+    assert_eq!(said.level, Level::Warn);
+    assert_eq!(
+        said.text,
+        "mixed.csv: 1 tool added, 1 skipped · hover for details"
+    );
+    assert_eq!(
+        said.detail,
+        [
+            "added SRF4-250UP",
+            "skipped row 5: 'probe' tools are not supported yet"
+        ]
+    );
+
+    // Again: nothing new, which is not a warning of its own.
+    m.import_fusion(&file);
+    let said = m.message.clone().unwrap();
+    assert_eq!(
+        said.text,
+        "mixed.csv: 1 tool already there, 1 skipped · hover for details"
+    );
+    assert_eq!(said.detail[0], "'SRF4-250UP' already has these presets");
+    let _ = std::fs::remove_file(&file);
 }
 
 /// Moving the tool being edited keeps it selected where it went, and a folder
@@ -208,7 +273,9 @@ fn the_system_library_cannot_be_changed() {
     m.move_tool(&mine, "nothing", &ends);
     m.move_tool(&ends, "1/4 upcut", &mine);
     assert!(
-        matches!(&m.message, Some((true, t)) if t.contains("copied")),
+        m.message
+            .as_ref()
+            .is_some_and(|s| s.level == Level::Ok && s.text.contains("copied")),
         "{:?}",
         m.message
     );

@@ -7,6 +7,7 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use crate::help::topics::app;
+use crate::ui::defaults::Defaults;
 use crate::ui::measure::Measure;
 use crate::ui::widgets;
 
@@ -26,8 +27,9 @@ impl Settings {
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
+                let mut d = Defaults::of(&*self, &Settings::default());
                 widgets::form(ui, "settings", |ui| {
-                    widgets::row(ui, &app::UNITS, |ui| {
+                    d.row(ui, &app::UNITS, "measure", |ui| {
                         ui.vertical(|ui| {
                             for m in Measure::ALL {
                                 ui.radio_value(&mut self.measure, m, m.name());
@@ -35,6 +37,7 @@ impl Settings {
                         });
                     });
                 });
+                d.apply(self);
                 ui.label(widgets::hint_text(
                     "How the app shows lengths and feeds. Jobs and programs stay in millimetres.",
                 ));

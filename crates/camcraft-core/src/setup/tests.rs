@@ -312,3 +312,30 @@ fn the_shadow_is_cast_once() {
     assert_eq!((heights.model_bottom, heights.model_top), (0.0, 5.0));
     assert_eq!(heights.picked, None);
 }
+
+/// A shadow kept in the turned frame serves a setup laid out from another work
+/// zero, and another stock: moved there, it is the shadow that setup casts
+/// itself; and a setup that has one already keeps it.
+#[test]
+fn a_turned_shadow_serves_any_work_zero() {
+    let body = Body::derived(camcraft_geom::synthetic::step(5.0, 10.0));
+    let bodies: Bodies<'_> = [("m", &body)].into_iter().collect();
+    let first = prepare(&job(StockSpec::default()), 0, &bodies).unwrap();
+    first.shadow().unwrap();
+    let turned = first.turned_shadow().unwrap();
+
+    let mut moved = job(StockSpec::default());
+    moved.setups[0].origin = Origin::ModelOrigin {
+        offset: [3.0, -7.5, 2.0],
+    };
+    let other = prepare(&moved, 0, &bodies).unwrap();
+    assert!(other.adopt_shadow(&turned));
+    let own = prepare(&moved, 0, &bodies).unwrap();
+    let cast = own.shadow().unwrap();
+    let given = other.cast_shadow().unwrap();
+    assert!((cast.area().area() - 400.0).abs() < 1e-6);
+    for (a, b) in [(given, cast), (cast, given)] {
+        assert!(a.area().difference(b.area()).unwrap().area() < 1e-9);
+    }
+    assert!(!other.adopt_shadow(&turned), "one it has is kept");
+}

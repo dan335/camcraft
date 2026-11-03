@@ -9,6 +9,8 @@ use camcraft_core::job::{Leave, StockToLeave};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
+use crate::ui::widgets;
+
 const MM_PER_INCH: f64 = 25.4;
 
 /// How lengths are shown.
@@ -252,7 +254,7 @@ impl Measure {
         decimals: usize,
     ) -> egui::Response {
         let mut shown = self.show(*mm);
-        let mut drag = egui::DragValue::new(&mut shown)
+        let mut drag = widgets::number(&mut shown)
             .speed(self.show(speed))
             .range(self.show(min)..=self.show(max))
             .prefix(prefix)
@@ -366,6 +368,7 @@ mod tests {
 mod field_tests {
     use super::*;
     use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable as _;
 
     fn click(h: &mut Harness<'_, f64>, at: egui::Pos2) {
         for pressed in [true, false] {
@@ -395,5 +398,103 @@ mod field_tests {
         h.hover_at(egui::pos2(400.0, 400.0));
         click(&mut h, egui::pos2(400.0, 400.0));
         assert_eq!(*h.state(), 0.01);
+    }
+
+    /// A field of a form bound to its defaults, changed from them, offers ↺,
+    /// which puts the default back, and then offers it no more.
+    #[test]
+    fn a_changed_field_resets_to_its_default() {
+        use crate::ui::defaults::Defaults;
+        use camcraft_core::job::{Operation, StrategySpec};
+        let def = Operation::new("rough", StrategySpec::named("adaptive").unwrap());
+        let mut op = def.clone();
+        op.passes.stepover = def.passes.stepover + 2.25;
+        let stepover = def.passes.stepover;
+        let mut h = Harness::new_ui_state(
+            move |ui, op: &mut Operation| {
+                let mut d = Defaults::of(&*op, &def);
+                egui::Grid::new("form").show(ui, |ui| {
+                    d.row(
+                        ui,
+                        &crate::help::topics::passes::STEPOVER,
+                        "passes.stepover",
+                        |ui| {
+                            Measure::Metric.length_field(
+                                ui,
+                                &mut op.passes.stepover,
+                                0.01,
+                                100.0,
+                                "",
+                            );
+                        },
+                    );
+                });
+                d.apply(op);
+            },
+            op,
+        );
+        h.run();
+        h.get_by_role(egui::accesskit::Role::Button).click();
+        h.run();
+        assert_eq!(h.state().passes.stepover, stepover);
+        assert!(h.query_by_role(egui::accesskit::Role::Button).is_none());
+    }
+
+    /// Type `text` into the field at the left of the window a key at a time,
+    /// a frame each, as a person does, with what the field holds after each
+    /// key, and then press Enter.
+    fn type_into(h: &mut Harness<'_, f64>, text: &str) -> Vec<f64> {
+        h.get_by_role(egui::accesskit::Role::SpinButton).click();
+        h.run();
+        let mut seen = Vec::new();
+        for c in text.chars() {
+            // Being typed into, it keeps its role.
+            h.get_by_role(egui::accesskit::Role::SpinButton)
+                .type_text(&c.to_string());
+            h.run();
+            seen.push(*h.state());
+        }
+        h.key_press(egui::Key::Enter);
+        h.run();
+        seen
+    }
+
+    /// ".07" typed into an optimal load in inches is 0.07 in once Enter is
+    /// pressed, and nothing before: ".0" on the way is not clamped up to the
+    /// field's least and written back, which threw the text being typed away
+    /// for the number it had become.
+    #[test]
+    fn a_number_part_typed_is_not_taken_until_enter() {
+        let mut h = Harness::new_ui_state(
+            |ui, mm: &mut f64| {
+                Measure::Imperial.length_field(ui, mm, 0.01, 100.0, "");
+            },
+            2.54,
+        );
+        h.run();
+        let seen = type_into(&mut h, ".07");
+        assert_eq!(seen, [2.54, 2.54, 2.54], "nothing taken while typing");
+        assert!(
+            (*h.state() - 0.07 * MM_PER_INCH).abs() < 1e-9,
+            "{}",
+            h.state()
+        );
+    }
+
+    /// A wall's stock to leave that may go to nought, typed down from half a
+    /// millimetre to 0.07: it never passes through nought on the way, which
+    /// unticked "Leave stock" and took the field away mid-number.
+    #[test]
+    fn a_stock_to_leave_typed_never_passes_through_nought() {
+        let mut h = Harness::new_ui_state(
+            |ui, mm: &mut f64| {
+                Measure::Metric.wall_to_leave_field(ui, mm, -3.0, "");
+            },
+            0.5,
+        );
+        h.run();
+        let seen = type_into(&mut h, ".07");
+        assert!(seen.iter().all(|&v| v == 0.5), "{seen:?}");
+        assert_eq!(*h.state(), 0.07);
     }
 }

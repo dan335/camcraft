@@ -92,6 +92,15 @@ pub(crate) const SAME_LEVEL: f64 = 1.0e-6;
 /// millimetres. Far below any tolerance, far above the grid's f32 storage error.
 pub(crate) const MATERIAL_THICKNESS: f64 = 1.0e-3;
 
+/// `area` with its edge counted in it: grown by `tolerance`, which an area is
+/// drawn to, its arcs as chords that far inside them. A pass that runs along
+/// the edge, as a ring round a wall at the boundary does, or a first pass on
+/// the edge itself, is then in all along, not cut into bits wherever the
+/// edge's chords fall either side of it.
+pub(crate) fn with_edge(area: &Region, tolerance: f64) -> Region {
+    area.offset(tolerance, 0.1 * tolerance)
+}
+
 /// Z levels from `top` down to `bottom`, `stepdown` apart, the last at `bottom`,
 /// each with the flat levels among `flats` that lie between it and the one above,
 /// lowest first: each is cut after the level just below it. Bounded, so a tiny
@@ -125,6 +134,39 @@ pub(crate) fn slabs(top: f64, bottom: f64, stepdown: f64, flats: &[f64]) -> Vec<
     for (_, flats) in &mut slabs {
         flats.sort_by(f64::total_cmp);
         flats.dedup_by(|a, b| (*a - *b).abs() < SAME_LEVEL);
+    }
+    slabs
+}
+
+/// `slabs`, as [`slabs`] makes them from the top down to `top`, with Fusion's
+/// fine stepdown in each: levels `fine` apart up from the slab's level and from
+/// each flat in it, to below the level above, or `top`. Each is cut, as a flat
+/// level is, after the slab's level and the ones below it in the slab, over what
+/// they left: on a slope, the terraces they leave cut down to steps `fine`
+/// tall. Bounded, as [`slabs`] is.
+pub(crate) fn with_fine_levels(
+    mut slabs: Vec<(f64, Vec<f64>)>,
+    top: f64,
+    fine: f64,
+) -> Vec<(f64, Vec<f64>)> {
+    if !is_positive(fine) {
+        return slabs;
+    }
+    let mut above = top;
+    for (z, fills) in &mut slabs {
+        let bases: Vec<f64> = std::iter::once(*z).chain(fills.iter().copied()).collect();
+        for base in bases {
+            for k in 1..=10_000_u32 {
+                let f = base + f64::from(k) * fine;
+                if f >= above - SAME_LEVEL {
+                    break;
+                }
+                fills.push(f);
+            }
+        }
+        fills.sort_by(f64::total_cmp);
+        fills.dedup_by(|a, b| (*a - *b).abs() < SAME_LEVEL);
+        above = *z;
     }
     slabs
 }
@@ -179,6 +221,27 @@ pub(crate) fn innermost(
 #[allow(clippy::float_cmp, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+
+    /// Fine levels go up from each level and from each flat in its slab, a fine
+    /// stepdown apart, to below the level above, or the top; one that falls on
+    /// a flat is that flat. Each slab's are lowest first, to be cut in order.
+    #[test]
+    fn fine_levels_fill_each_slab_up_to_the_level_above() {
+        let s = with_fine_levels(slabs(10.0, 0.0, 4.0, &[5.0]), 10.0, 1.5);
+        assert_eq!(
+            s,
+            [
+                (6.0, vec![7.5, 9.0]),
+                (2.0, vec![3.5, 5.0]),
+                (0.0, vec![1.5]),
+            ]
+        );
+        // Not a number, or no step at all: nothing added.
+        let plain = slabs(10.0, 0.0, 4.0, &[5.0]);
+        for bad in [0.0, -1.0, f64::NAN] {
+            assert_eq!(with_fine_levels(plain.clone(), 10.0, bad), plain);
+        }
+    }
 
     /// 3/4" stock at 1/8" and at 1/4" a level: the depth is a whole number of
     /// steps in millimetres, but not in binary, where the last step falls a

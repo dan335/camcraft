@@ -691,6 +691,7 @@ dependencies = [
  "clipper2-rust",
  "glam 0.33.9",
  "parry3d-f64",
+ "rayon",
  "thiserror 2.0.20",
 ]
 

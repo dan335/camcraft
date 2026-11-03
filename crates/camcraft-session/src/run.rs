@@ -4,6 +4,7 @@ use camcraft_core::job::{Job, JobError};
 use camcraft_core::run::{Made, Plan, SetupResult, Stage, run_prepared_planned};
 use camcraft_core::setup::{Bodies, prepare};
 use camcraft_geom::mesh::TriMesh;
+use camcraft_geom::shadow::Shadow;
 
 use crate::checks::{self, Checks};
 use crate::{Models, SessionError};
@@ -55,6 +56,22 @@ pub fn run_setup_planned(
     plans: &[Plan],
     progress: &mut dyn FnMut(Stage),
 ) -> Result<Ran, SessionError> {
+    run_setup_shadowed(job, index, models, plans, None, progress)
+}
+
+/// As [`run_setup_planned`], with the part's shadow from above already cast
+/// in the setup's turned frame, `turned`, as
+/// [`Prepared::turned_shadow`](camcraft_core::setup::Prepared::turned_shadow)
+/// gives it for the same models turned the same way: taken rather than cast
+/// again.
+pub fn run_setup_shadowed(
+    job: &Job,
+    index: usize,
+    models: &Models<'_>,
+    plans: &[Plan],
+    turned: Option<&Shadow>,
+    progress: &mut dyn FnMut(Stage),
+) -> Result<Ran, SessionError> {
     // Validation happens before anything is computed, so a bad job fails on its own
     // terms rather than part-way through an operation.
     check_runnable(job, index, &|i| !matches!(plans.get(i), Some(Plan::Skip)))?;
@@ -68,6 +85,9 @@ pub fn run_setup_planned(
     let bodies: Bodies<'_> = models.iter().map(|(n, m)| (*n, &m.body)).collect();
     progress(Stage::Preparing);
     let prepared = prepare(job, index, &bodies)?;
+    if let Some(turned) = turned {
+        prepared.adopt_shadow(turned);
+    }
     let result = run_prepared_planned(job, index, &prepared, &bodies, plans, progress)?;
     notes.extend(summary(&result));
 

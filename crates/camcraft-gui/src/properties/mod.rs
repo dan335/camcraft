@@ -30,6 +30,7 @@ use crate::document::{Document, Level, Selection};
 use crate::help::topics::app;
 use crate::picking::slots::{Kind, Shown, Slot};
 use crate::tools::drawing::kind_name;
+use crate::ui::defaults::Defaults;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
 use crate::ui::widgets::{self, Icon, Size, Variant, form, hint};
@@ -275,6 +276,8 @@ fn cannot_generate(ui: &mut egui::Ui, doc: &Document, name: &str) {
 fn job(ui: &mut egui::Ui, doc: &mut Document, m: Measure) {
     ui.label(widgets::section_label("Job"));
     ui.add_space(theme::SPACE_2);
+    let new = camcraft_core::job::Job::default();
+    let mut d = Defaults::of(&doc.job, &new);
     form(ui, "job", |ui| {
         widgets::key_label(ui, "File");
         match &doc.path {
@@ -282,10 +285,11 @@ fn job(ui: &mut egui::Ui, doc: &mut Document, m: Measure) {
             None => hint(ui, "not saved yet"),
         };
         ui.end_row();
-        widgets::row(ui, &app::TOLERANCE, |ui| {
+        d.row(ui, &app::TOLERANCE, "tolerance", |ui| {
             m.length_field(ui, &mut doc.job.tolerance, 0.001, 10.0, "");
         });
     });
+    d.apply(&mut doc.job);
     if doc.job.tolerance < 0.001 {
         doc.job.tolerance = 0.001;
     }
@@ -383,5 +387,193 @@ mod tests {
         h.state_mut().selection = Selection::Job;
         h.run();
         assert_eq!(h.state().job.setups[0].name, "top side");
+    }
+
+    /// Every input of every operation tab, for every strategy, is bound to a
+    /// setting there is. Drawn at an operation's defaults, none shows as
+    /// changed; drawn with its optional groups given, every setting the tabs
+    /// ask about names one of an operation's, so none is mistyped.
+    #[test]
+    fn every_operation_input_is_bound_to_a_setting() {
+        use crate::ui::defaults::ASKED;
+        use camcraft_core::job::{Finishing, Leads, Tabs, ToolSpec};
+        let (mut doc, setup) = crate::document::with_plate();
+        doc.job.tools.insert(
+            "t".into(),
+            ToolSpec {
+                diameter: 6.0,
+                ..ToolSpec::default()
+            },
+        );
+        let strategies: Vec<_> = crate::browser::operation_groups()
+            .into_iter()
+            .flat_map(|(_, sections)| sections.into_iter().flatten())
+            .map(|(_, s)| s)
+            .collect();
+        let mut fonts = false;
+        let mut h = Harness::new_ui_state(
+            move |ui, doc: &mut Document| {
+                if !fonts {
+                    theme::apply(ui.ctx());
+                    fonts = true;
+                    return;
+                }
+                show(ui, doc, Measure::Metric, ViewPicks::default());
+            },
+            doc,
+        );
+        h.run();
+        let resets = |h: &Harness<'_, Document>| {
+            h.query_all_by(|n| n.label().is_some_and(|l| l.contains('\u{e148}')))
+                .count()
+        };
+        let tab = |h: &mut Harness<'_, Document>, k: usize| {
+            h.ctx
+                .data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), k));
+            h.run();
+        };
+        for strategy in strategies {
+            let name = strategy.name();
+            let doc = h.state_mut();
+            doc.job.setups[0].operations.clear();
+            let i = doc.add_operation(&setup, strategy).unwrap();
+            doc.use_tool(&setup, i, "t".into(), None);
+            doc.selection = Selection::Operation(setup.clone(), i);
+            for k in 0..5 {
+                tab(&mut h, k);
+                assert_eq!(resets(&h), 0, "{name}, tab {k}: changed at its defaults");
+            }
+            // Its optional groups given, so their settings are drawn too.
+            let op = h.state_mut().operation_mut(&setup, i).unwrap();
+            op.passes.tabs = Some(Tabs::default());
+            op.passes.finishing = Some(Finishing::default());
+            op.linking.leads = Some(Leads::default());
+            ASKED.with(|a| a.borrow_mut().clear());
+            for k in 0..5 {
+                tab(&mut h, k);
+            }
+            let wrong: Vec<String> = ASKED.with(|a| {
+                a.borrow()
+                    .iter()
+                    .filter(|(.., names)| !names)
+                    .map(|(of, path, _)| format!("{of}: {path}"))
+                    .collect()
+            });
+            assert!(wrong.is_empty(), "{name}: no such setting: {wrong:?}");
+        }
+    }
+
+    /// The settings the asked forms named, that name none.
+    fn no_such_settings() -> Vec<String> {
+        crate::ui::defaults::ASKED.with(|a| {
+            a.borrow()
+                .iter()
+                .filter(|(.., names)| !names)
+                .map(|(of, path, _)| format!("{of}: {path}"))
+                .collect()
+        })
+    }
+
+    /// The other panels' inputs, as the operation's: a new job's setup on each
+    /// of its tabs, its stock of either shape, its model, the job itself, and
+    /// every page of a new tool and its preset, show nothing changed; and every
+    /// setting they ask about names one.
+    #[test]
+    fn every_other_input_is_bound_to_a_setting() {
+        use crate::ui::defaults::ASKED;
+        use camcraft_core::job::{FixedBox, Preset, StockSpec, ToolKind, ToolSpec};
+        let (doc, setup) = crate::document::with_plate();
+        let mut fonts = false;
+        let mut h = Harness::new_ui_state(
+            move |ui, doc: &mut Document| {
+                if !fonts {
+                    theme::apply(ui.ctx());
+                    fonts = true;
+                    return;
+                }
+                show(ui, doc, Measure::Metric, ViewPicks::default());
+            },
+            doc,
+        );
+        h.run();
+        let resets = |h: &Harness<'_, Document>| {
+            h.query_all_by(|n| n.label().is_some_and(|l| l.contains('\u{e148}')))
+                .count()
+        };
+        ASKED.with(|a| a.borrow_mut().clear());
+        let stock = h.state().job.stocks[0].name.clone();
+        for (what, selection, tab) in [
+            (
+                "setup's parts",
+                Selection::Setup(setup.clone()),
+                Some(0_usize),
+            ),
+            ("setup's position", Selection::Setup(setup.clone()), Some(1)),
+            ("setup's post", Selection::Setup(setup.clone()), Some(2)),
+            ("stock", Selection::Stock(stock.clone()), None),
+            ("model", Selection::Model("p".into()), None),
+            ("job", Selection::Job, None),
+        ] {
+            h.state_mut().selection = selection;
+            if let Some(k) = tab {
+                h.ctx
+                    .data_mut(|d| d.insert_temp(egui::Id::new("setup-tab"), k));
+            }
+            h.run();
+            assert_eq!(resets(&h), 0, "{what}: changed as new");
+        }
+        // A box of its own size: what a fixed box starts as, for the models.
+        h.state_mut().selection = Selection::Stock(stock);
+        h.state_mut().job.stocks[0].spec = StockSpec::FixedBox(FixedBox::centred([1.0; 3]));
+        h.run();
+        h.run();
+        let wrong = no_such_settings();
+        assert!(wrong.is_empty(), "no such setting: {wrong:?}");
+
+        // A new tool of each kind, with a preset, on every page.
+        for kind in [
+            ToolKind::Flat,
+            ToolKind::Ball,
+            ToolKind::Bullnose,
+            ToolKind::Cone,
+        ] {
+            let tool = ToolSpec {
+                kind,
+                diameter: 6.0,
+                presets: vec![Preset {
+                    name: "wood".into(),
+                    ..Preset::default()
+                }],
+                ..ToolSpec::default()
+            };
+            for page in 0..5_usize {
+                ASKED.with(|a| a.borrow_mut().clear());
+                let mut fonts = false;
+                let mut t = Harness::new_ui_state(
+                    move |ui, tool: &mut ToolSpec| {
+                        if !fonts {
+                            theme::apply(ui.ctx());
+                            fonts = true;
+                            return;
+                        }
+                        let id = ui.id().with("tool-page");
+                        ui.data_mut(|d| d.insert_temp(id, page));
+                        crate::tools::editor::tool_fields(ui, tool, Measure::Metric, true);
+                    },
+                    tool.clone(),
+                );
+                t.run();
+                t.run();
+                let count = t
+                    .query_all_by(|n| n.label().is_some_and(|l| l.contains('\u{e148}')))
+                    .count();
+                assert_eq!(count, 0, "{kind:?}, page {page}: changed as new");
+                let wrong = no_such_settings();
+                assert!(
+                    wrong.is_empty(),
+                    "{kind:?}, page {page}: no such setting: {wrong:?}"
+                );
+            }
+        }
     }
 }

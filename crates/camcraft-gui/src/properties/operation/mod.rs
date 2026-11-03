@@ -11,13 +11,14 @@ mod tool;
 
 pub use heights::HeightPlanes;
 
-use camcraft_core::job::StockToLeave;
+use camcraft_core::job::{Finishing, Leads, Operation, StockToLeave, Tabs};
 use eframe::egui;
 
 use super::{PropAction, ViewPicks, cannot_generate, header, renamed};
 use crate::browser::strategy_label;
 use crate::document::{Document, Selection};
 use crate::picking::slots::Slot;
+use crate::ui::defaults::Defaults;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
 use crate::ui::widgets::{self, Tab, form};
@@ -51,6 +52,27 @@ const TABS: [OperationTab; 5] = [
 
 /// Operation `index` of `setup`'s panel. Which of its tabs shows, if it has one to
 /// show.
+/// `def`, an operation's default, with each optional group `op` has given as
+/// ticking it starts it: tabs, a pocket's finishing passes, leads and
+/// levels, each as its box makes it.
+fn started(op: &Operation, def: &Operation) -> Operation {
+    let mut started = def.clone();
+    let (passes, linking) = (&mut started.passes, &mut started.linking);
+    if op.passes.tabs.is_some() && passes.tabs.is_none() {
+        passes.tabs = Some(Tabs::default());
+    }
+    if op.passes.finishing.is_some() && passes.finishing.is_none() {
+        passes.finishing = Some(Finishing::default());
+    }
+    if op.linking.leads.is_some() && linking.leads.is_none() {
+        linking.leads = Some(Leads::default());
+    }
+    if op.passes.stepdown.is_some() && passes.stepdown.is_none() {
+        passes.stepdown = Some(passes::starting_stepdown(op));
+    }
+    started
+}
+
 pub(super) fn show(
     ui: &mut egui::Ui,
     doc: &mut Document,
@@ -120,20 +142,46 @@ pub(super) fn show(
         actions.push(PropAction::Disarm);
     }
     let page = TABS.get(page).copied().unwrap_or(OperationTab::Linking);
+    // What each setting shows as changed from, and goes back to: a new
+    // operation's, and inside each optional group it has given, what giving
+    // it starts it as.
+    let def = doc.operation_defaults(setup, index)?;
+    let started = doc.operation(setup, index).map(|op| started(op, &def))?;
     match page {
         OperationTab::Tool => {
             tool::tool(ui, doc, m, (setup, index), tool_name.as_deref(), actions);
         }
         OperationTab::Geometry => {
             let op = doc.operation_mut(setup, index)?;
-            geometry::geometry(ui, m, (setup, index), op, diameter, picks, actions);
+            let mut d = Defaults::of(&*op, &def).started(&started);
+            geometry::geometry(
+                ui,
+                (&mut d, op),
+                m,
+                (setup, index),
+                diameter,
+                picks,
+                actions,
+            );
+            d.apply(op);
         }
-        OperationTab::Heights => heights::heights(ui, m, doc.operation_mut(setup, index)?),
+        OperationTab::Heights => {
+            let op = doc.operation_mut(setup, index)?;
+            let mut d = Defaults::of(&*op, &def).started(&started);
+            heights::heights(ui, &mut d, m, op);
+            d.apply(op);
+        }
         OperationTab::Passes => {
-            passes::passes(ui, m, doc.operation_mut(setup, index)?, least, diameter);
+            let op = doc.operation_mut(setup, index)?;
+            let mut d = Defaults::of(&*op, &def).started(&started);
+            passes::passes(ui, m, op, &mut d, least, diameter);
+            d.apply(op);
         }
         OperationTab::Linking => {
-            linking::linking(ui, m, doc.operation_mut(setup, index)?, diameter, corner);
+            let op = doc.operation_mut(setup, index)?;
+            let mut d = Defaults::of(&*op, &def).started(&started);
+            linking::linking(ui, m, op, &mut d, diameter, corner);
+            d.apply(op);
         }
     }
     Some(page)

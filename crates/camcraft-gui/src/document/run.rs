@@ -9,7 +9,9 @@ use std::time::Instant;
 
 use camcraft_core::job::{Job, ModelDef, Operation, Origin, Setup, StockDef, ToolSpec};
 use camcraft_core::run::{Made, OperationResult, Plan, Stage};
+use camcraft_core::setup::frame::Orientation;
 use camcraft_core::setup::{Bodies, PrepareError, Prepared, prepare};
+use camcraft_geom::shadow::Shadow;
 use camcraft_session::{Model, Ran, SessionError, check_runnable};
 use glam::DVec3;
 
@@ -153,6 +155,21 @@ impl SetupInputs {
                 .eq(models_now)
     }
 }
+
+/// What a setup's part's shadow in its turned frame is cast from: how the part
+/// sits, and each of its models as loaded, in the setup's order (its file, units,
+/// tolerance and placement, [`ModelKey`]), or `None` for one not loaded. Two
+/// layouts with the same cast the same shadow there, whatever their stock or
+/// work zero, which only moves it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShadowKey {
+    orientation: Orientation,
+    models: Vec<Option<ModelKey>>,
+}
+
+/// How many parts' shadows a job keeps: enough for its setups and an undo or
+/// two, and never without bound.
+const KEPT_SHADOWS: usize = 8;
 
 /// Whether two setups are the same but for their operations. Every field is named,
 /// so one added to `Setup` has to be decided on here.
@@ -596,7 +613,15 @@ impl Document {
                 lines
             })
             .unwrap_or_default();
-        let prepared = prepared.map(|(p, _)| p).map_err(|e| e.to_string());
+        let prepared = prepared
+            .map(|(p, _)| Arc::new(p))
+            .map_err(|e| e.to_string());
+        let shadow_key = self.shadow_key(index)?;
+        // The same models turned the same way cast the same shadow: a stock or
+        // a work zero changed only moves it.
+        if let (Ok(p), Some(kept)) = (&prepared, self.kept_shadow(&shadow_key)) {
+            p.adopt_shadow(&kept);
+        }
         let state = self.setups.entry(name.to_string()).or_default();
         let before = state
             .layout
@@ -607,6 +632,8 @@ impl Document {
         state.layout = Some(Layout {
             inputs,
             prepared,
+            shadow_failed: None,
+            shadow_key,
             outline,
             key: next_key(),
         });
@@ -616,6 +643,106 @@ impl Document {
             }
             _ => None,
         }
+    }
+
+    /// Each layout whose part's shadow should be cast, off the window's
+    /// thread, and is not: by its key, with the setup laid out, to cast it on.
+    /// What the view and the panel draw from the shadow (a silhouette
+    /// boundary, what a tool cuts outside the part) waits for it rather than
+    /// casting it while a frame is drawn, which for a large part takes a
+    /// while. A setup with one being cast waits for it to finish before it
+    /// asks for another.
+    pub fn shadows_wanted(&self) -> Vec<(u64, Arc<Prepared>)> {
+        self.setups
+            .values()
+            .filter(|s| s.casting.is_none())
+            .filter_map(|s| {
+                let layout = s.layout.as_ref()?;
+                let prepared = layout.prepared.as_ref().ok()?;
+                let wanted = prepared.cast_shadow().is_none() && layout.shadow_failed.is_none();
+                wanted.then(|| (layout.key, prepared.clone()))
+            })
+            .collect()
+    }
+
+    /// A worker has started casting the shadow of the layout keyed `key`.
+    pub fn casting(&mut self, key: u64) {
+        if let Some(state) = self
+            .setups
+            .values_mut()
+            .find(|s| s.layout.as_ref().is_some_and(|l| l.key == key))
+            && let Some(layout) = &state.layout
+        {
+            state.casting = Some((key, layout.shadow_key.clone()));
+        }
+    }
+
+    /// The shadow of the layout keyed `key` has been cast, and is `result`,
+    /// in its setup's turned frame, or could not be, and why. Kept for any
+    /// layout or run of the same models turned the same way; the setup's layout
+    /// now, made again since it was asked for, takes it if it is one of those.
+    /// Its setup may ask for another.
+    pub fn cast(&mut self, key: u64, result: Result<Arc<Shadow>, String>) {
+        let Some(state) = self
+            .setups
+            .values_mut()
+            .find(|s| s.casting.as_ref().is_some_and(|(k, _)| *k == key))
+        else {
+            return;
+        };
+        let Some((_, shadow_key)) = state.casting.take() else {
+            return;
+        };
+        match result {
+            Ok(turned) => {
+                if let Some(layout) = &state.layout
+                    && layout.shadow_key == shadow_key
+                    && let Ok(p) = &layout.prepared
+                {
+                    p.adopt_shadow(&turned);
+                }
+                self.turned_shadows.retain(|(k, _)| *k != shadow_key);
+                self.turned_shadows.push((shadow_key, turned));
+                if self.turned_shadows.len() > KEPT_SHADOWS {
+                    self.turned_shadows.remove(0);
+                }
+            }
+            Err(why) => {
+                if let Some(layout) = state.layout.as_mut()
+                    && layout.key == key
+                {
+                    layout.shadow_failed = Some(why);
+                }
+            }
+        }
+    }
+
+    /// What setup `index`'s part's shadow would be cast from now.
+    fn shadow_key(&self, index: usize) -> Option<ShadowKey> {
+        let setup = self.job.setups.get(index)?;
+        Some(ShadowKey {
+            orientation: setup.orientation,
+            models: self
+                .job
+                .models_for(index)
+                .iter()
+                .map(|m| self.models.get(&m.name).map(|s| s.key().clone()))
+                .collect(),
+        })
+    }
+
+    /// The shadow kept for `key`, if one is.
+    fn kept_shadow(&self, key: &ShadowKey) -> Option<Arc<Shadow>> {
+        self.turned_shadows
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, s)| Arc::clone(s))
+    }
+
+    /// The shadow kept for setup `index` as it would be laid out now, in its
+    /// turned frame, if one is: for a run of it to take rather than cast.
+    pub fn turned_shadow(&self, index: usize) -> Option<Arc<Shadow>> {
+        self.kept_shadow(&self.shadow_key(index)?)
     }
 }
 

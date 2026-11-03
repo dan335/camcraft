@@ -8,7 +8,17 @@ use camcraft_core::job::ToolSpec;
 use camcraft_session::library::system::is_system;
 use camcraft_session::library::{Folder, FolderPath, Library, folder_label, free_name, fusion_csv};
 
-use super::{LOCKED, ToolManager};
+use super::{LOCKED, Message, ToolManager};
+use crate::ui::widgets::Level;
+
+/// "1 tool", "3 tools".
+fn count(n: usize, what: &str) -> String {
+    if n == 1 {
+        format!("1 {what}")
+    } else {
+        format!("{n} {what}s")
+    }
+}
 
 /// The library: as saved, and as edited.
 #[derive(Debug, Clone, Default)]
@@ -126,20 +136,20 @@ impl ToolManager {
     /// showing. A tool already there gets the file's presets beside its own.
     pub fn import_fusion(&mut self, path: &Path) {
         if is_system(&self.folder) {
-            self.message = Some((false, LOCKED.into()));
+            self.message = Some(Message::err(LOCKED.into()));
             return;
         }
         let text = match std::fs::read_to_string(path) {
             Ok(t) => t,
             Err(e) => {
-                self.message = Some((false, format!("{}: {e}", path.display())));
+                self.message = Some(Message::err(format!("{}: {e}", path.display())));
                 return;
             }
         };
         let imported = match fusion_csv::import(&text) {
             Ok(i) => i,
             Err(e) => {
-                self.message = Some((false, format!("{}: {e}", path.display())));
+                self.message = Some(Message::err(format!("{}: {e}", path.display())));
                 return;
             }
         };
@@ -147,23 +157,32 @@ impl ToolManager {
             return;
         };
         let merged = fusion_csv::merge(folder, imported.tools);
+        // Counts on the status bar, which has room for little; each tool and
+        // each skip by name on its hover.
         let mut said = Vec::new();
+        let mut detail = Vec::new();
         if !merged.added.is_empty() {
-            said.push(format!("added {}", merged.added.join(", ")));
+            said.push(format!("{} added", count(merged.added.len(), "tool")));
+            detail.push(format!("added {}", merged.added.join(", ")));
+        }
+        let grown = merged.extended.iter().filter(|(_, n)| *n > 0).count();
+        if grown > 0 {
+            said.push(format!("presets added to {}", count(grown, "tool")));
+        }
+        let already = merged.extended.len() - grown;
+        if already > 0 {
+            said.push(format!("{} already there", count(already, "tool")));
         }
         for (name, n) in &merged.extended {
-            said.push(match n {
+            detail.push(match n {
                 0 => format!("'{name}' already has these presets"),
                 1 => format!("added 1 preset to '{name}'"),
                 n => format!("added {n} presets to '{name}'"),
             });
         }
         if !imported.skipped.is_empty() {
-            said.push(format!(
-                "skipped {}: {}",
-                imported.skipped.len(),
-                imported.skipped.join("; ")
-            ));
+            said.push(format!("{} skipped", imported.skipped.len()));
+            detail.extend(imported.skipped.iter().map(|s| format!("skipped {s}")));
         }
         if said.is_empty() {
             said.push("no tools in it".into());
@@ -172,10 +191,22 @@ impl ToolManager {
             || path.display().to_string(),
             |f| f.to_string_lossy().into_owned(),
         );
-        self.message = Some((
-            imported.skipped.is_empty(),
-            format!("{file}: {}", said.join("; ")),
-        ));
+        let more = if detail.is_empty() {
+            ""
+        } else {
+            " · hover for details"
+        };
+        // Rows it could not take are worth a look, but the rest came in.
+        let level = if imported.skipped.is_empty() {
+            Level::Ok
+        } else {
+            Level::Warn
+        };
+        self.message = Some(Message {
+            level,
+            text: format!("{file}: {}{more}", said.join(", ")),
+            detail,
+        });
         let first = merged
             .added
             .first()
@@ -210,7 +241,7 @@ impl ToolManager {
                 self.select(None);
                 self.renaming = Some((path, name));
             }
-            Err(e) => self.message = Some((false, e.to_string())),
+            Err(e) => self.message = Some(Message::err(e.to_string())),
         }
     }
 
@@ -231,7 +262,7 @@ impl ToolManager {
                     self.select(None);
                 }
             }
-            Err(e) => self.message = Some((false, e.to_string())),
+            Err(e) => self.message = Some(Message::err(e.to_string())),
         }
     }
 
@@ -241,7 +272,7 @@ impl ToolManager {
             return;
         }
         if is_system(to) {
-            self.message = Some((false, LOCKED.into()));
+            self.message = Some(Message::err(LOCKED.into()));
             return;
         }
         if is_system(from) {
@@ -257,18 +288,18 @@ impl ToolManager {
                 if was {
                     self.select(Some((to.to_vec(), as_name.clone())));
                 }
-                self.message = Some((
-                    true,
-                    format!("moved '{name}' to {} as '{as_name}'", folder_label(to)),
-                ));
+                self.message = Some(Message::ok(format!(
+                    "moved '{name}' to {} as '{as_name}'",
+                    folder_label(to)
+                )));
             }
-            Err(e) => self.message = Some((false, e.to_string())),
+            Err(e) => self.message = Some(Message::err(e.to_string())),
         }
     }
 
     pub(super) fn new_tool(&mut self) {
         if is_system(&self.folder) {
-            self.message = Some((false, LOCKED.into()));
+            self.message = Some(Message::err(LOCKED.into()));
             return;
         }
         let number = self.library.next_number();
@@ -344,7 +375,7 @@ impl ToolManager {
                 folder_label(to)
             )
         };
-        self.message = Some((true, said));
+        self.message = Some(Message::ok(said));
         self.folder = to.to_vec();
         self.own_folder = to.to_vec();
         self.select(Some((to.to_vec(), as_name)));
@@ -352,7 +383,7 @@ impl ToolManager {
 
     pub(super) fn delete(&mut self, folder: &[String], name: &str) {
         if is_system(folder) {
-            self.message = Some((false, LOCKED.into()));
+            self.message = Some(Message::err(LOCKED.into()));
             return;
         }
         if let Some(here) = self.library.edit().at_mut(folder) {

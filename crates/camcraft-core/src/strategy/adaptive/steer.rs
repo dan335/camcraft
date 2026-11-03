@@ -180,23 +180,12 @@ pub(super) fn bisect(
     lo.1
 }
 
-/// Somewhere deep inside `region`: the middle of what is left of it shrunk as
-/// far as it can be. `None` for an empty region.
+/// The point deepest inside `region`, furthest from its edges, to within `arc`:
+/// where a helix has the most room. `None` for a region with no area.
 pub(super) fn deepest(region: &Region, arc: f64) -> Option<DVec2> {
-    let (lo, hi) = region.bounds()?;
-    let best = innermost(region, (0.0, (hi - lo).length() * 0.5 + arc), arc, arc)
-        .map_or_else(|| region.clone(), |(shrunk, _)| shrunk);
-    // The middle of the largest ring left, if it is inside; else a corner of it.
-    let ring = best
-        .rings()
-        .iter()
-        .max_by(|a, b| a.signed_area().total_cmp(&b.signed_area()))?;
-    let pts = ring.points();
-    #[allow(clippy::cast_precision_loss)]
-    let middle = pts.iter().copied().sum::<DVec2>() / pts.len() as f64;
-    if best.contains(middle) {
-        Some(middle)
-    } else {
-        pts.first().copied()
-    }
+    // Found to within `arc` of the deepest there is, by distances to the
+    // region's edges: shrinking a whole level's region until nothing is left
+    // offset it two dozen times, each a great many points round its corners,
+    // and took minutes on a large part.
+    region.deepest_point(arc).map(|(p, _)| p)
 }

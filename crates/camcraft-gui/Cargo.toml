@@ -24,11 +24,13 @@ egui-file-dialog.workspace = true
 glam.workspace             = true
 rayon.workspace            = true
 serde.workspace            = true
+# The job's settings as a job file has them, to tell a form's changed
+# ones from its defaults (`ui::defaults`).
+toml.workspace = true
 egui_kittest = { workspace = true, optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 [dev-dependencies]
-toml.workspace = true
 # wgpu's own shader compiler, the version wgpu builds with: the shaders are
 # parsed and validated by the ordinary tests, not first by a GPU at run time.
 naga = { version = "30.0.1", features = ["wgsl-in"] }

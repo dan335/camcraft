@@ -386,24 +386,6 @@ fn picks_on_placed_models_are_saved_where_their_file_has_them() {
     assert!(found.distance(centre) < 1e-9, "{found}");
 }
 
-/// The part's silhouette is worked out once for the layout, and is the one
-/// the engine works out.
-#[test]
-fn the_silhouette_is_worked_out_once() {
-    let (scene, _, prepared) = laid_out();
-    let first = scene.silhouette(&prepared).unwrap();
-    assert!(std::ptr::eq(first, scene.silhouette(&prepared).unwrap()));
-    let fresh = camcraft_core::setup::features::silhouette(&prepared.part).unwrap();
-    assert!((first.area() - fresh.area()).abs() < 1e-9);
-    // The plate, less its hole.
-    let hole = std::f64::consts::PI * 16.0;
-    assert!(
-        (first.area() - (1600.0 - hole)).abs() < 5.0,
-        "{}",
-        first.area()
-    );
-}
-
 #[test]
 fn a_ray_meets_a_box_where_it_enters() {
     let b = Aabb {

@@ -83,8 +83,22 @@ pub(super) fn scallop_paths(
         slope_to,
         ..Default::default()
     };
-    let (path, report) =
-        scallop_finish(work.cutter, work.tool, &area, &params).map_err(in_op(op))?;
+    let (mut path, mut report, band) =
+        scallop_finish_banded(work.cutter, work.tool, &area, &params).map_err(in_op(op))?;
+    // Its passes are laid on the surface as the drop-cutter sees it, which
+    // goes from a wall's top to its foot at once: they leave out what is
+    // steeper than a plunge where they cross a wall, and stop at its top where
+    // the part ends below it. There, a stepover apart along the surface is a
+    // stepover apart in height: rings round every such wall, a stepover apart
+    // down it, each going no deeper than the last by more than that, as
+    // Fusion's scallop finishes them.
+    let (walls, rings) = steep_walls(work, limit, &band, (direction, slope_to))?;
+    for m in walls.moves() {
+        path.push(*m)
+            .map_err(|e| in_op(op)(StrategyError::from(e)))?;
+    }
+    report.passes += rings;
+    report.walls = rings;
     if report.passes == 0 {
         warnings.push("found nothing to finish: nothing within the boundary and slopes".into());
     }
@@ -97,6 +111,69 @@ pub(super) fn scallop_paths(
         ));
     }
     Ok((path, report.passes, StrategyDetail::Scallop(report)))
+}
+
+/// Rings round the walls a scallop's passes leave out, up to `slope_to`: a
+/// level each stepover down them, times the sine of that slope, so the rings
+/// are no further apart along the surface than the passes, from the top to the
+/// bottom. Over `band`, where the surface the tool's centre rides is steeper
+/// than a plunge, grown by the tool's radius so they overlap the passes either
+/// side, and along where the part ends below an edge, at every slope there:
+/// the band is the passes' own judgement of what they leave, gaps it closed
+/// included, so the rings cut all of that and the passes none of it. Kept to the sweep and
+/// `limit` as contour finishing is, not to where the tool touches the part,
+/// whose edge a ring beside a wall runs right along. The rings, and how many.
+fn steep_walls(
+    work: &Work<'_>,
+    limit: Option<&Region>,
+    band: &Region,
+    (direction, slope_to): (CutDirection, f64),
+) -> Result<(Toolpath, u64), RunError> {
+    let (job, op) = (work.job, work.op);
+    let steep = PLUNGE_RATIO.atan();
+    if slope_to <= steep {
+        return Ok((Toolpath::new(), 0));
+    }
+    // As contour finishing finds its walls: coarser bands are enough to find
+    // them, since every point of a ring is pulled onto the part exactly.
+    let coarse = (10.0 * job.tolerance)
+        .min(work.tool.max_radius() / 4.0)
+        .max(job.tolerance);
+    let mut reach = LevelReach::new(&work.prepared.part, work.tool, coarse).map_err(in_op(op))?;
+    // The band the passes leave, grown to overlap them; and where the part
+    // ends below an edge, which the passes stop at: within the tool's width
+    // inside where it stops touching the part, and a little past, where the
+    // lowest rings run. `touched` is drawn a tolerance short of that, its arcs
+    // as chords inside them, so it is grown by two to be past it all along.
+    let radius = work.tool.max_radius();
+    let overlap = band.offset(radius, job.tolerance);
+    let shadow = work.prepared.shadow().map_err(in_op(op))?;
+    let touched = contact_region(shadow, radius, job.tolerance).map_err(in_op(op))?;
+    let edge = touched
+        .offset(2.0 * job.tolerance, 0.1 * job.tolerance)
+        .difference(&touched.offset(-2.0 * radius, job.tolerance))
+        .map_err(in_op(op))?;
+    let area = finish_area(work, limit, false)?
+        .intersection(&overlap.union(&edge).map_err(in_op(op))?)
+        .map_err(in_op(op))?;
+    let (top, bottom) = op.levels_3d(work.heights);
+    let params = WaterlineParams {
+        stepdown: op.passes.stepover * steep.sin(),
+        top,
+        bottom,
+        flats: Vec::new(),
+        tolerance: job.tolerance,
+        feed: op.passes.feed,
+        direction: direction.engine(),
+        climb_right: work.clockwise(),
+        order: ContourOrder::ByDepth.engine(),
+        slope_from: 0.0,
+        slope_to,
+        ramp: None,
+    };
+    let (path, report) =
+        waterline(&mut reach, work.cutter, work.tool, &area, &params).map_err(in_op(op))?;
+    Ok((path, report.passes))
 }
 
 /// Contour finishing: a waterline round the part at each level, within the

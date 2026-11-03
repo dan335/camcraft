@@ -2,7 +2,7 @@
 //! side of the stock (or of the models' box) from a small top view, a height,
 //! and an offset from there; or a point picked on the part in the view.
 
-use camcraft_core::job::{Along, BoxOf, Origin};
+use camcraft_core::job::{Along, BoxOf, Origin, Setup};
 use eframe::egui;
 
 use super::{PropAction, ViewPicks};
@@ -10,6 +10,7 @@ use crate::help::Help;
 use crate::help::topics::setup as topics;
 use crate::picking::describe::describe_box_point;
 use crate::picking::slots::Slot;
+use crate::ui::defaults::Defaults;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
 use crate::ui::widgets::{self, Icon, Size, Variant, error, form, hint};
@@ -50,6 +51,7 @@ impl On {
 /// The work zero card for setup `setup`.
 pub(super) fn show(
     ui: &mut egui::Ui,
+    d: &mut Defaults<Setup>,
     m: Measure,
     setup: &str,
     origin: &mut Origin,
@@ -81,12 +83,13 @@ pub(super) fn show(
             }
         },
         |ui| {
-            on_row(ui, origin);
+            on_row(ui, d, origin);
             ui.add_space(theme::SPACE_3);
             match origin {
                 Origin::BoxPoint { of, x, y, z, .. } => {
                     ui.horizontal(|ui| {
                         box_grid(ui, x, y);
+                        d.reset(ui, "origin.x,origin.y");
                         ui.add_space(theme::SPACE_4);
                         ui.vertical(|ui| {
                             for (a, label) in [
@@ -96,6 +99,7 @@ pub(super) fn show(
                             ] {
                                 ui.radio_value(z, a, label).help(&topics::WORK_ZERO_HEIGHT);
                             }
+                            d.reset(ui, "origin.z");
                         });
                     });
                     let what = match of {
@@ -113,18 +117,21 @@ pub(super) fn show(
                 }
             }
             ui.add_space(theme::SPACE_3);
-            offset(ui, m, origin);
+            offset(ui, d, m, origin);
         },
     );
 }
 
 /// "On [the stock ▾]": what the work zero is measured from. A picked point is
 /// chosen by picking, so it is shown but not offered.
-fn on_row(ui: &mut egui::Ui, origin: &mut Origin) {
+fn on_row(ui: &mut egui::Ui, d: &mut Defaults<Setup>, origin: &mut Origin) {
     let on = On::of(origin);
     let offset = origin.offset();
     ui.horizontal(|ui| {
-        widgets::field_label(ui, &topics::WORK_ZERO_ON);
+        let label =
+            egui::RichText::new(topics::WORK_ZERO_ON.title).color(theme::egui_color(theme::TEXT_3));
+        ui.label(d.tint(label, "origin.kind,origin.of"))
+            .help(&topics::WORK_ZERO_ON);
         egui::ComboBox::from_id_salt("origin-on")
             .selected_text(on.name())
             .show_ui(ui, |ui| {
@@ -157,6 +164,7 @@ fn on_row(ui: &mut egui::Ui, origin: &mut Origin) {
             })
             .response
             .help(&topics::WORK_ZERO_ON);
+        d.reset(ui, "origin.kind,origin.of");
     });
 }
 
@@ -264,7 +272,7 @@ fn picked_row(ui: &mut egui::Ui, origin: &mut Origin, picks: ViewPicks<'_>) {
 }
 
 /// The offset from the chosen point, folded away while it is nothing.
-fn offset(ui: &mut egui::Ui, m: Measure, origin: &mut Origin) {
+fn offset(ui: &mut egui::Ui, d: &mut Defaults<Setup>, m: Measure, origin: &mut Origin) {
     let offset = match origin {
         Origin::ModelOrigin { offset }
         | Origin::BoxPoint { offset, .. }
@@ -284,8 +292,13 @@ fn offset(ui: &mut egui::Ui, m: Measure, origin: &mut Origin) {
         })
         .body(|ui| {
             form(ui, "work-zero-offset-fields", |ui| {
-                for (label, v) in ["X", "Y", "Z"].into_iter().zip(offset.iter_mut()) {
-                    widgets::row_as(ui, label, &topics::WORK_ZERO_OFFSET, |ui| {
+                for (k, (label, v)) in ["X", "Y", "Z"]
+                    .into_iter()
+                    .zip(offset.iter_mut())
+                    .enumerate()
+                {
+                    let path = format!("origin.offset.{k}");
+                    d.row_as(ui, label, &topics::WORK_ZERO_OFFSET, &path, |ui| {
                         m.signed_length_field(ui, v, 0.1, 10_000.0, "");
                     });
                 }

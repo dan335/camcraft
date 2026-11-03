@@ -95,6 +95,7 @@ pub fn single_operation(spec: &FinishSpec, model: ModelDef) -> Job {
         passes: Passes {
             stepover: spec.stepover,
             stepdown: spec.stepdown.or(spec.strategy.default_stepdown()),
+            fine_stepdown: None,
             feed: spec.feed,
             stock_to_leave: StockToLeave {
                 radial: spec.stock_radial,

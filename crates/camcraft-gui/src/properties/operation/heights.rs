@@ -2,7 +2,7 @@
 //! while the tab shows.
 
 use camcraft_core::job::{
-    self, Height, HeightContext, HeightRef, Heights, Operation, Outline, StrategySpec,
+    self, Height, HeightContext, HeightRef, Heights, Links, Operation, Outline, StrategySpec,
 };
 use camcraft_core::setup::features;
 use camcraft_core::setup::{Bodies, Prepared};
@@ -12,6 +12,7 @@ use glam::DVec2;
 use super::OperationTab;
 use crate::document::{Document, Selection};
 use crate::help::topics::heights as ht;
+use crate::ui::defaults::Defaults;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
 use crate::ui::widgets::{self, error, form, hint};
@@ -24,7 +25,12 @@ fn down_to_picks(op: &Operation) -> bool {
     op.strategy.uses().outline && !op.selection.is_empty() && op.outline == Outline::Selection
 }
 
-pub(super) fn heights(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
+pub(super) fn heights(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    m: Measure,
+    op: &mut Operation,
+) {
     let uses = op.strategy.uses();
     // Only a top or a bottom is measured from the picks, with some picked, and
     // never a drill's, whose holes each go to their own.
@@ -35,21 +41,21 @@ pub(super) fn heights(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
         uses.bottom
     };
     form(ui, "heights", |ui| {
-        widgets::row(ui, &ht::CLEARANCE, |ui| {
+        d.row(ui, &ht::CLEARANCE, "heights.clearance", |ui| {
             height_field(ui, m, "clearance", &mut op.heights.clearance, false);
         });
         if uses.stay_down {
-            widgets::row(ui, &ht::RETRACT, |ui| {
+            d.row(ui, &ht::RETRACT, "heights.retract", |ui| {
                 height_field(ui, m, "retract", &mut op.heights.retract, false);
             });
         }
         if let Some(unset) = uses.top {
-            widgets::row(ui, &ht::TOP, |ui| {
+            d.row(ui, &ht::TOP, "heights.top", |ui| {
                 optional_height(ui, m, "geo-top", &mut op.heights.top, unset, picks);
             });
         }
         if let Some(unset) = bottom {
-            widgets::row(ui, &ht::BOTTOM, |ui| {
+            d.row(ui, &ht::BOTTOM, "heights.bottom", |ui| {
                 optional_height(ui, m, "geo-bottom", &mut op.heights.bottom, unset, picks);
             });
         }
@@ -59,9 +65,11 @@ pub(super) fn heights(ui: &mut egui::Ui, m: Measure, op: &mut Operation) {
     }
     ui.add_space(theme::SPACE_3);
     let about = match op.strategy {
-        _ if uses.top.is_none() && uses.bottom.is_none() => {
-            Some("It follows the part all the way down, so it has no Top or Bottom.")
-        }
+        _ if uses.links == Links::OverPart => Some(
+            "It follows the part, trimmed to the Top and Bottom: what of each pass is \
+             above the Top or below the Bottom is not cut. Without them, it follows \
+             the part all the way down.",
+        ),
         StrategySpec::Contour { .. } => Some(
             "Without a Top or Bottom, its levels run from the part's top down to its \
              bottom.",

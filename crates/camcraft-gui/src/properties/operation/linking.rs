@@ -2,6 +2,8 @@
 //! them.
 
 use camcraft_core::job::{Entry, HelixSize, Leads, Operation, Reach, Retraction};
+
+use crate::ui::defaults::Defaults;
 use eframe::egui;
 
 use crate::help::topics::linking as link;
@@ -15,23 +17,24 @@ pub(super) fn linking(
     ui: &mut egui::Ui,
     m: Measure,
     op: &mut Operation,
+    d: &mut Defaults<Operation>,
     diameter: Option<f64>,
     corner: f64,
 ) {
     let uses = op.strategy.uses();
     // Where a value is left out, the strategy's own for the tool, or for a
     // 6 mm one before a tool is chosen.
-    let d = diameter.unwrap_or(6.0);
+    let across = diameter.unwrap_or(6.0);
     let of_tool = |part: f64, what: &str| match diameter {
         Some(d) => format!("{what}: {}", m.length(part * d, 2)),
         None => what.to_string(),
     };
     form(ui, "linking", |ui| {
-        widgets::row(ui, &link::RETRACT_FEED, |ui| {
+        d.row(ui, &link::RETRACT_FEED, "linking.retract_feed", |ui| {
             m.feed_field(ui, &mut op.linking.retract_feed, 50_000.0);
         });
         if uses.stay_down {
-            widgets::row(ui, &link::RETRACTION, |ui| {
+            d.row(ui, &link::RETRACTION, "linking.retraction", |ui| {
                 widgets::select(
                     ui,
                     "retraction",
@@ -44,7 +47,7 @@ pub(super) fn linking(
                 );
             });
         }
-        widgets::row(ui, &link::SAFE_DISTANCE, |ui| {
+        d.row(ui, &link::SAFE_DISTANCE, "linking.safe_distance", |ui| {
             m.length_field(ui, &mut op.linking.safe_distance, 0.1, 1_000.0, "");
         });
         if uses.stay_down {
@@ -53,8 +56,8 @@ pub(super) fn linking(
                 Reach::Mm(mm) => format!("up to {}", m.length(f64::from(mm), 0)),
                 Reach::Tools(k) => of_tool(f64::from(k), &format!("up to {k} × the tool")),
             };
-            let start = op.stay_down(d);
-            widgets::row(ui, &link::STAY_DOWN, |ui| {
+            let start = op.stay_down(across);
+            d.row(ui, &link::STAY_DOWN, "linking.stay_down", |ui| {
                 widgets::optional(ui, &mut op.linking.stay_down, start, &absent, |ui, v| {
                     m.length_field(ui, v, 0.5, 10_000.0, "up to ");
                 });
@@ -62,17 +65,17 @@ pub(super) fn linking(
         }
         if uses.lead_radius {
             let absent = of_tool(0.1, "a tenth of the tool");
-            let start = op.lead_radius(d);
-            widgets::row(ui, &link::LEAD_RADIUS, |ui| {
+            let start = op.lead_radius(across);
+            d.row(ui, &link::LEAD_RADIUS, "linking.lead_radius", |ui| {
                 widgets::optional(ui, &mut op.linking.lead_radius, start, &absent, |ui, v| {
                     m.length_field(ui, v, 0.05, 100.0, "");
                 });
             });
         }
         if uses.ramp {
-            widgets::row(ui, &link::RAMP_ANGLE, |ui| {
+            d.row(ui, &link::RAMP_ANGLE, "linking.ramp_angle", |ui| {
                 ui.add(
-                    egui::DragValue::new(&mut op.linking.ramp_angle)
+                    widgets::number(&mut op.linking.ramp_angle)
                         .speed(0.1)
                         .range(0.1..=45.0)
                         .suffix("°"),
@@ -84,7 +87,7 @@ pub(super) fn linking(
                 m.feed_unit()
             );
             let start = op.ramp_feed();
-            widgets::row(ui, &link::RAMP_FEED, |ui| {
+            d.row(ui, &link::RAMP_FEED, "linking.ramp_feed", |ui| {
                 widgets::optional(ui, &mut op.linking.ramp_feed, start, &absent, |ui, v| {
                     m.feed_field(ui, v, 50_000.0);
                 });
@@ -94,8 +97,8 @@ pub(super) fn linking(
                 (Some(d), _) => format!("the stepdown: {}", m.length(d, 2)),
                 (None, _) => of_tool(1.0, "the tool's diameter"),
             };
-            let start = op.ramp_stepdown(d);
-            widgets::row(ui, &link::MOST_PER_LAP, |ui| {
+            let start = op.ramp_stepdown(across);
+            d.row(ui, &link::MOST_PER_LAP, "linking.ramp_stepdown", |ui| {
                 widgets::optional(
                     ui,
                     &mut op.linking.ramp_stepdown,
@@ -109,7 +112,7 @@ pub(super) fn linking(
         }
         if !uses.entries.is_empty() {
             let mut entry = op.entry().unwrap_or_default();
-            widgets::row(ui, &link::ENTRY, |ui| {
+            d.row(ui, &link::ENTRY, "linking.entry", |ui| {
                 // A profile goes down beside its lead; a pocket where its
                 // first ring starts.
                 widgets::select(ui, "entry", &mut entry, uses.entries, |e| {
@@ -129,12 +132,12 @@ pub(super) fn linking(
                     (HelixSize::Tool, _) => of_tool(0.9, "0.9 × the tool"),
                     (HelixSize::Flat, Some(_)) => format!(
                         "0.95 × the tool less its corners: {}",
-                        m.length(op.helix_diameter(d, corner), 2)
+                        m.length(op.helix_diameter(across, corner), 2)
                     ),
                     (HelixSize::Flat, None) => "0.95 × the tool less its corners".to_string(),
                 };
-                let start = op.helix_diameter(d, corner);
-                widgets::row(ui, &link::HELIX_DIAMETER, |ui| {
+                let start = op.helix_diameter(across, corner);
+                d.row(ui, &link::HELIX_DIAMETER, "linking.helix_diameter", |ui| {
                     widgets::optional(
                         ui,
                         &mut op.linking.helix_diameter,
@@ -151,7 +154,7 @@ pub(super) fn linking(
         let pocket_leads = uses.finishing && op.passes.finishing.is_some();
         if uses.leads || pocket_leads {
             let mut on = op.linking.leads.is_some();
-            widgets::row(ui, &link::LEADS, |ui| {
+            d.group_row(ui, &link::LEADS, "linking.leads", |ui| {
                 let what = if uses.leads {
                     "on and off each ring"
                 } else {
@@ -169,20 +172,28 @@ pub(super) fn linking(
                 let tenth = of_tool(0.1, "a tenth of the tool");
                 // A pocket's finishing passes are entered level, beside the
                 // wall: their leads have no vertical arc.
-                let vertical = (uses.leads).then_some((&link::LEAD_VERTICAL, &mut l.vertical));
-                for (topic, v) in vertical.into_iter().chain([
-                    (&link::LEAD_STRAIGHT, &mut l.straight),
-                    (&link::LEAD_ARC, &mut l.radius),
+                let vertical = (uses.leads).then_some((
+                    &link::LEAD_VERTICAL,
+                    "linking.leads.vertical",
+                    &mut l.vertical,
+                ));
+                for (topic, path, v) in vertical.into_iter().chain([
+                    (
+                        &link::LEAD_STRAIGHT,
+                        "linking.leads.straight",
+                        &mut l.straight,
+                    ),
+                    (&link::LEAD_ARC, "linking.leads.radius", &mut l.radius),
                 ]) {
-                    widgets::row(ui, topic, |ui| {
+                    d.row(ui, topic, path, |ui| {
                         widgets::optional(ui, v, start, &tenth, |ui, v| {
                             m.length_field(ui, v, 0.05, 1000.0, "");
                         });
                     });
                 }
-                widgets::row(ui, &link::LEAD_SWEEP, |ui| {
+                d.row(ui, &link::LEAD_SWEEP, "linking.leads.sweep", |ui| {
                     ui.add(
-                        egui::DragValue::new(&mut l.sweep)
+                        widgets::number(&mut l.sweep)
                             .speed(1.0)
                             .range(1.0..=180.0)
                             .suffix("°"),
@@ -191,10 +202,10 @@ pub(super) fn linking(
             }
         }
         if uses.reorder {
-            widgets::row(ui, &link::REORDER, |ui| {
+            d.row(ui, &link::REORDER, "linking.reorder", |ui| {
                 ui.checkbox(&mut op.linking.reorder, "to shorten travel");
             });
-            widgets::row(ui, &link::REVERSE, |ui| {
+            d.row(ui, &link::REVERSE, "linking.allow_reverse", |ui| {
                 ui.checkbox(
                     &mut op.linking.allow_reverse,
                     "while reordering (changes climb)",

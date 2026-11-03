@@ -758,7 +758,8 @@ fn roughing_leaves_stock_to_start_and_none_is_not_written() {
 #[test]
 fn each_strategy_says_what_it_uses() {
     let parallel = StrategySpec::Parallel { angle: 0.0 }.uses();
-    assert!(parallel.lead_radius && !parallel.tabs && !parallel.ramp && !parallel.leads);
+    // Into material over a pass start, finishing ramps, along the pass.
+    assert!(parallel.lead_radius && !parallel.tabs && parallel.ramp && !parallel.leads);
     let pocket = StrategySpec::Pocket {
         conventional: false,
     }
@@ -1984,16 +1985,19 @@ fn every_value_a_strategy_reads_is_checked_up_front() {
     j.setups[0].operations[1].linking.lead_radius = Some(-0.5);
     assert_eq!(field_of(&j), "top/finish.linking.lead_radius");
 
-    // What a strategy does not read is not checked: a profile has no boundary,
-    // and parallel finishing neither ramps nor has a top.
+    // What a strategy does not read is not checked: a profile has no boundary.
+    // Parallel finishing ramps into material, and is trimmed to a top, so both
+    // of those are.
     let mut j = sample();
-    let finish = &mut j.setups[0].operations[1];
-    finish.linking.ramp_angle = f64::NAN;
-    finish.heights.top = Some(Height {
+    j.setups[0].operations[1].linking.ramp_angle = f64::NAN;
+    assert_eq!(field_of(&j), "top/finish.linking.ramp_angle");
+    j.setups[0].operations[1].linking.ramp_angle = 2.0;
+    j.setups[0].operations[1].heights.top = Some(Height {
         reference: HeightRef::StockTop,
         offset: f64::NAN,
     });
-    j.validate().unwrap();
+    assert_eq!(field_of(&j), "top/finish.heights.top.offset");
+    j.setups[0].operations[1].heights.top = None;
     j.setups[0].operations[1].strategy = StrategySpec::Profile {
         side: ProfileSide::Outside,
         conventional: false,
@@ -2128,4 +2132,43 @@ fn a_new_operation_starts_as_fusions() {
     assert!(picked.setups[0].operations[1].can_measure_from_picks());
     picked.setups[0].operations[1].strategy = StrategySpec::named("drill").unwrap();
     assert!(!picked.setups[0].operations[1].can_measure_from_picks());
+}
+
+/// A fine stepdown is adaptive's, finer than its stepdown, and written back
+/// only when given: one no finer than the stepdown would add no level, and is
+/// refused rather than left to do nothing; a strategy without one ignores it.
+#[test]
+fn a_fine_stepdown_is_checked_and_kept() {
+    let mut j = sample();
+    let op = &mut j.setups[0].operations[0];
+    op.strategy = StrategySpec::named("adaptive").unwrap();
+    op.passes.fine_stepdown = Some(0.5);
+    j.validate().unwrap();
+    assert_eq!(j.setups[0].operations[0].fine_stepdown(), Some(0.5));
+    let text = toml::to_string(&j).unwrap();
+    assert!(text.contains("fine_stepdown = 0.5"), "{text}");
+    assert_eq!(toml::from_str::<Job>(&text).unwrap(), j);
+
+    for (fine, range) in [
+        (2.0, "less than the stepdown"),
+        (0.0, "finite and greater than zero"),
+    ] {
+        j.setups[0].operations[0].passes.fine_stepdown = Some(fine);
+        match j.validate() {
+            Err(JobError::BadValue {
+                field, range: r, ..
+            }) => {
+                assert_eq!(field, "top/rough.passes.fine_stepdown");
+                assert_eq!(r, range);
+            }
+            other => panic!("{fine}: {other:?}"),
+        }
+    }
+
+    // Pocket clearing has none: given, it is not read.
+    let op = &mut j.setups[0].operations[0];
+    op.strategy = StrategySpec::named("pocket-clearing").unwrap();
+    op.passes.fine_stepdown = Some(5.0);
+    j.validate().unwrap();
+    assert_eq!(j.setups[0].operations[0].fine_stepdown(), None);
 }

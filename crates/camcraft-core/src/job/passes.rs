@@ -16,6 +16,14 @@ pub struct Passes {
     /// Straight to the bottom in one when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stepdown: Option<f64>,
+    /// Fusion's fine stepdown, in millimetres, for a strategy that has one
+    /// ([`Uses::fine_stepdown`](super::Uses::fine_stepdown)): levels this far
+    /// apart up from each level and flat, between it and the level above, each
+    /// cutting only what the ones below it left there. On a slope, that is the
+    /// terraces a stepdown apart would leave, cut down to steps this tall. None
+    /// when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fine_stepdown: Option<f64>,
     /// Cutting feed, in mm/min.
     #[serde(default = "default_feed")]
     pub feed: f64,
@@ -47,6 +55,7 @@ impl Default for Passes {
         Self {
             stepover: default_stepover(),
             stepdown: None,
+            fine_stepdown: None,
             feed: default_feed(),
             stock_to_leave: StockToLeave::default(),
             max_cut_step: default_max_cut_step(),
@@ -194,6 +203,16 @@ impl Operation {
         self.passes
             .stepdown
             .filter(|_| self.strategy.uses().depths != Depths::None)
+    }
+
+    /// Its fine stepdown, when its strategy has one and it cuts in levels: its
+    /// own, if given and less than its stepdown, which leaves no room for one.
+    pub fn fine_stepdown(&self) -> Option<f64> {
+        let fine = self
+            .passes
+            .fine_stepdown
+            .filter(|_| self.strategy.uses().fine_stepdown)?;
+        self.stepdown().filter(|s| fine < *s).map(|_| fine)
     }
 
     /// The stock to leave it cuts with: its own, less what its strategy does not

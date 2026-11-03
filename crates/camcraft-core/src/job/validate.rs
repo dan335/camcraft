@@ -329,6 +329,18 @@ impl Operation {
         }
         if let Some(stepdown) = self.stepdown() {
             positive(&field("passes.stepdown"), stepdown)?;
+            // A fine stepdown no finer than the stepdown would add no level:
+            // said, rather than left to do nothing.
+            if let Some(fine) = self.passes.fine_stepdown.filter(|_| uses.fine_stepdown) {
+                positive(&field("passes.fine_stepdown"), fine)?;
+                if fine >= stepdown {
+                    return Err(bad(
+                        field("passes.fine_stepdown"),
+                        fine,
+                        "less than the stepdown",
+                    ));
+                }
+            }
         } else if uses.depths == Depths::Required {
             return Err(JobError::NoStepdown { op: at });
         }

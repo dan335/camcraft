@@ -54,6 +54,33 @@ fn copy_out_hint(to: &[String]) -> String {
     format!("A copy to change, in {}", folder_label(to))
 }
 
+/// The last thing that happened, for the status bar: how it went, a line short
+/// enough to read there, and anything more, one item a line, for its hover.
+#[derive(Debug, Clone, PartialEq)]
+struct Message {
+    level: Level,
+    text: String,
+    detail: Vec<String>,
+}
+
+impl Message {
+    fn ok(text: String) -> Self {
+        Self {
+            level: Level::Ok,
+            text,
+            detail: Vec::new(),
+        }
+    }
+
+    fn err(text: String) -> Self {
+        Self {
+            level: Level::Err,
+            text,
+            detail: Vec::new(),
+        }
+    }
+}
+
 /// A tool being dragged onto a folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ToolDrag {
@@ -89,7 +116,7 @@ pub struct ToolManager {
     confirm_delete: Option<FolderPath>,
     filter: String,
     sort: Sort,
-    message: Option<(bool, String)>,
+    message: Option<Message>,
     /// Closing was asked for with unsaved changes.
     closing: bool,
     /// The person asked to import a Fusion tool library; the app opens the dialog.
@@ -392,14 +419,23 @@ impl ToolManager {
                 )
                 .on_hover_text(p.display().to_string());
             }
-            if let Some((ok, text)) = &self.message {
+            if let Some(message) = &self.message {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let color = if *ok {
-                        theme::egui_color(theme::TEXT_2)
-                    } else {
-                        Level::Err.color()
+                    let color = match message.level {
+                        Level::Ok => theme::egui_color(theme::TEXT_2),
+                        level => level.color(),
                     };
-                    ui.add(egui::Label::new(egui::RichText::new(text).color(color)).truncate());
+                    let label = ui.add(
+                        egui::Label::new(egui::RichText::new(&message.text).color(color))
+                            .truncate(),
+                    );
+                    if !message.detail.is_empty() {
+                        label.on_hover_ui(|ui| {
+                            for line in &message.detail {
+                                ui.label(line);
+                            }
+                        });
+                    }
                 });
             }
         });
@@ -443,7 +479,7 @@ impl ToolManager {
                         self.name_buffer = new;
                     }
                     Err(e) => {
-                        self.message = Some((false, e));
+                        self.message = Some(Message::err(e));
                         self.name_buffer = name.clone();
                     }
                 }

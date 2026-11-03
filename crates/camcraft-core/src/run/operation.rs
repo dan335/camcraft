@@ -25,6 +25,7 @@ use crate::path::ordering::order_passes;
 use crate::path::simadapt::sim_moves_of;
 use crate::path::tabs::{TabParams, add_tabs};
 use crate::path::toolpath::{Move, Toolpath};
+use crate::path::trim::within_heights;
 use crate::setup::features::{Chain, FeatureError, Picking, picked_chains};
 use crate::setup::{Bodies, Prepared};
 use crate::strategy::StrategyError;
@@ -42,7 +43,7 @@ use crate::strategy::planar::{
 use crate::strategy::pocket_clearing::{ClearingParams, pocket_clearing};
 use crate::strategy::projected::{Curve, ProjectParams, ProjectReport, project};
 use crate::strategy::reach::LevelReach;
-use crate::strategy::scallop::{ScallopParams, contact_region, scallop_finish};
+use crate::strategy::scallop::{ScallopParams, contact_region, scallop_finish_banded};
 use crate::strategy::waterline::{WaterlineParams, waterline};
 
 mod clearing;
@@ -240,6 +241,28 @@ pub(super) fn run_operation(
         StrategySpec::Drill { peck, dwell } => {
             drill_paths(work, peck, dwell, holes, &mut warnings)?
         }
+    };
+
+    // A finishing path over the part keeps between the Top and Bottom it is
+    // given, as Fusion's does: what goes past either is trimmed away, and what
+    // is left is passes for the linker to join. Without them, all of it.
+    let (raw, passes) = if op.strategy.uses().links == Links::OverPart
+        && (op.heights.top.is_some() || op.heights.bottom.is_some())
+    {
+        let (top, bottom) = op.levels_3d(ctx);
+        let (trimmed, report) = within_heights(
+            &raw,
+            op.heights.top.map(|_| top),
+            op.heights.bottom.map(|_| bottom),
+            work.job.tolerance,
+        )
+        .map_err(|e| in_op(op)(StrategyError::from(e)))?;
+        if report.after == 0 && report.before > 0 {
+            warnings.push("found nothing to finish between the Top and Bottom".into());
+        }
+        (trimmed, report.after)
+    } else {
+        (raw, passes)
     };
 
     // Ordering is a Toolpath -> Toolpath transform, applied before linking so the

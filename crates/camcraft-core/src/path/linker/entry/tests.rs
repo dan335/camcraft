@@ -4,7 +4,7 @@ use glam::dvec2;
 
 use super::*;
 use crate::path::linker::tests::{FlatPart, level_material, params, roles, zigzag};
-use crate::path::linker::{Air, ClearancePlane, LinkParams, NoPart, link};
+use crate::path::linker::{Air, ClearancePlane, LinkParams, NoPart, StayDown, link};
 use crate::path::toolpath::Toolpath;
 
 /// Fusion's vertical lead: a quarter turn of the lead radius from straight
@@ -319,6 +319,59 @@ fn a_pass_in_material_is_ramped_into_along_itself() {
     let (out, report) = link(&ring(), &plane, &mut Air, &NoPart, &ramping).unwrap();
     assert_eq!(report.ramps, 0);
     assert!(roles(&out).contains(&MoveRole::Plunge));
+}
+
+/// A finishing pass up a slope, starting under material left over it, as a
+/// roughing's terraces are: entered down along itself, never straight down
+/// into the material, and never below the pass, though the slope rises far
+/// faster than the ramp falls.
+#[test]
+fn a_pass_up_a_slope_is_ramped_into_never_below_itself() {
+    let plane = ClearancePlane::new(10.0).unwrap();
+    let rise = |x: f64| -2.0 + 0.3 * x;
+    let mut t = Toolpath::new();
+    t.feed_to(dvec3(0.0, 0.0, rise(0.0)), MoveRole::Link, 1000.0)
+        .unwrap();
+    for k in 1..=40 {
+        let x = f64::from(k) * 0.5;
+        t.feed_to(dvec3(x, 0.0, rise(x)), MoveRole::Cut, 1000.0)
+            .unwrap();
+    }
+    let ramping = LinkParams {
+        ramp: Some(Ramp {
+            angle: 2f64.to_radians(),
+            feed: 250.0,
+        }),
+        stay_down: StayDown::OverPart { max: 30.0 },
+        lead_radius: 0.5,
+        ..params()
+    };
+    let (out, report) = link(&t, &plane, &mut level_material(), &NoPart, &ramping).unwrap();
+    assert_eq!(report.ramps, 1);
+    let moves = out.moves();
+    let first_cut = moves.iter().position(|m| m.role == MoveRole::Cut).unwrap();
+    assert!(
+        !moves[..first_cut]
+            .iter()
+            .any(|m| m.role == MoveRole::Plunge && m.to.z < 0.0),
+        "plunged into the material: {:?}",
+        &moves[..first_cut]
+    );
+    for m in moves[..first_cut]
+        .iter()
+        .filter(|m| m.role == MoveRole::Ramp)
+    {
+        assert!(
+            m.to.z >= rise(m.to.x) - 1e-9,
+            "{:?} is below the pass",
+            m.to
+        );
+    }
+    assert_eq!(
+        moves[first_cut - 1].to,
+        dvec3(0.0, 0.0, -2.0),
+        "onto its start"
+    );
 }
 
 /// A ramp rides over a tab on the pass, as the pass does, and comes straight

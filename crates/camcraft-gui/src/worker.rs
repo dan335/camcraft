@@ -21,10 +21,12 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use camcraft_core::job::{Job, ModelDef, Setup, Transform};
 use camcraft_core::run::{Plan, Stage};
+use camcraft_core::setup::Prepared;
 use camcraft_geom::bvh::MeshBvh;
+use camcraft_geom::shadow::Shadow;
 use camcraft_session::{
     Model, Models, Posting, Ran, SessionError, load_job_model, plan_posting, read_job,
-    run_setup_planned, write_posting,
+    run_setup_shadowed, write_posting,
 };
 use eframe::egui;
 
@@ -51,6 +53,11 @@ pub enum Task {
         setup: String,
         /// Which run of it, to tell a reply from one since superseded.
         seq: u64,
+    },
+    /// Casting the shadow of a setup's part, for the layout with this key.
+    Shadow {
+        /// The layout's key.
+        layout: u64,
     },
     /// Rendering programs, to write them or ask first.
     Post,
@@ -97,6 +104,16 @@ pub enum Request {
         models: BTreeMap<String, Arc<Model>>,
         /// What to do with each operation; none, to work them all out.
         plans: Vec<Plan>,
+        /// The part's shadow from above in the setup's turned frame, kept from
+        /// a layout of the same models turned the same way: taken rather than
+        /// cast again.
+        shadow: Option<Arc<Shadow>>,
+    },
+    /// Cast a setup's part's shadow from above, into the setup as laid out,
+    /// where the window finds it once it is cast ([`Prepared::shadow`]).
+    Shadow {
+        /// The setup, as laid out, shared with the window.
+        prepared: Arc<Prepared>,
     },
     /// Render the programs of setups into a folder, writing nothing, as
     /// [`plan_posting`] does.
@@ -126,6 +143,9 @@ pub enum Reply {
     /// A setup, run, with its toolpaths laid out for drawing: built here, off
     /// the UI thread, because a long program takes a while.
     Ran(Box<Result<(Ran, Scene), SessionError>>),
+    /// A part's shadow, cast into its layout, and as it is in the setup's
+    /// turned frame, to keep; or why it could not be.
+    Shadowed(Result<Arc<Shadow>, String>),
     /// Programs rendered, and not written yet.
     Planned(Box<Result<Posting, SessionError>>),
     /// Programs written: how many.
@@ -163,6 +183,7 @@ impl Worker {
             Request::Load { .. } => "loading model",
             Request::Place { .. } => "placing model",
             Request::Run { .. } => "running setup",
+            Request::Shadow { .. } => "working out the part's silhouette",
             Request::Post { .. } => "rendering programs",
             Request::Write { .. } => "writing programs",
         };
@@ -228,9 +249,10 @@ fn execute(request: Request, progress: &mut dyn FnMut(Stage)) -> Reply {
             setup,
             models,
             plans,
+            shadow,
         } => {
             let refs: Models<'_> = models.iter().map(|(n, m)| (n.as_str(), &**m)).collect();
-            let ran = run_setup_planned(&job, setup, &refs, &plans, progress);
+            let ran = run_setup_shadowed(&job, setup, &refs, &plans, shadow.as_deref(), progress);
             Reply::Ran(Box::new(ran.map(|ran| {
                 let scene = job
                     .setups
@@ -239,6 +261,14 @@ fn execute(request: Request, progress: &mut dyn FnMut(Stage)) -> Reply {
                     .unwrap_or_default();
                 (ran, scene)
             })))
+        }
+        Request::Shadow { prepared } => {
+            Reply::Shadowed(prepared.shadow().map_err(|e| e.to_string()).and_then(|_| {
+                prepared
+                    .turned_shadow()
+                    .map(Arc::new)
+                    .ok_or_else(|| "the shadow was not kept".to_string())
+            }))
         }
         Request::Post {
             setups,

@@ -337,6 +337,31 @@ fn is_deterministic() {
 }
 
 /// Only where the tool touches the part.
+/// Round a ball, below its equator turning in under itself as a roundover on
+/// a part's underside does, the tool rides off the part at the edge of where
+/// it touches it, steeper there than any pass may go. The band the passes
+/// leave runs out over that edge, all the way round and well past it, so the
+/// first pass, the edge itself, is in it, not cut into bits along it.
+#[test]
+fn the_band_runs_out_over_where_the_tool_leaves_the_part() {
+    let mesh = synthetic::uv_sphere(10.0, 120, 180);
+    let cutter = DropCutter::new(&mesh);
+    let tool = Ball::new(2.0).unwrap();
+    let shadow = camcraft_geom::shadow::shadow_above(&mesh, -20.0).unwrap();
+    let area = contact_region(&shadow, 2.0, 0.01).unwrap();
+    let (_, report, band) = scallop_finish_banded(&cutter, &tool, &area, &params(0.5)).unwrap();
+    let inside = Indexed::of(&band);
+    for ring in area.rings() {
+        for &p in ring.points() {
+            let depth = inside.depth_at(p);
+            assert!(depth > report.pitch, "{p} is {depth} into the band");
+        }
+    }
+    // And no further in than the steep ground: a dome's top is passes'.
+    assert!(!inside.contains(DVec2::ZERO));
+    assert!(!inside.contains(dvec2(8.0, 0.0)));
+}
+
 #[test]
 fn contact_is_the_part_grown_by_the_tool() {
     let mesh = synthetic::plane(0.0, 5.0);

@@ -22,12 +22,17 @@ pub(super) fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         // cleared the way, and goes down its own helixes: a link it leaves is
         // one to lift for, into what it has cleared, straight down.
         Links::Own => (StayDown::Never, 0.0, None),
+        // Into material over where a pass starts, down along the pass, never
+        // below it: the pass is on the part, so the ramp cannot reach it.
         Links::OverPart => (
             StayDown::OverPart {
                 max: op.stay_down(diameter),
             },
             vertical,
-            None,
+            uses.ramp.then(|| Ramp {
+                angle: linking.ramp_angle.to_radians(),
+                feed: op.ramp_feed(),
+            }),
         ),
         Links::Level => (
             StayDown::Level {

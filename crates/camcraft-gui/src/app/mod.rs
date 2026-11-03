@@ -289,6 +289,7 @@ impl App {
             setup: index,
             models,
             plans,
+            shadow: doc.turned_shadow(index),
         };
         let task = Task::Run {
             setup: setup.to_string(),
@@ -344,6 +345,11 @@ impl App {
                     doc.finished(&setup, seq, *ran);
                 }
             }
+            (Task::Shadow { layout }, Reply::Shadowed(result)) => {
+                if let Some(doc) = self.find(id) {
+                    doc.cast(layout, result);
+                }
+            }
             (Task::Post, Reply::Planned(planned)) => self.planned(ctx, id, *planned),
             (Task::Write { dir, refused }, Reply::Written(written)) => {
                 self.written(id, (&dir, &refused), written);
@@ -357,6 +363,10 @@ impl App {
                     Some(doc) => {
                         if let Task::Run { setup, seq } = &task {
                             doc.finished(setup, *seq, Err(SessionError::Refused));
+                        }
+                        // Not waited for again, nor asked for again.
+                        if let Task::Shadow { layout } = &task {
+                            doc.cast(*layout, Err("the engine stopped".into()));
                         }
                         doc.note(Level::Error, text);
                     }
@@ -832,6 +842,17 @@ impl eframe::App for App {
                     {
                         c.shift(by.as_vec3());
                     }
+                }
+                // Its part's shadow, cast off this thread: a large part's takes
+                // a while, and what is drawn from it waits for it.
+                for (key, prepared) in doc.shadows_wanted() {
+                    doc.casting(key);
+                    self.worker.start(
+                        &ctx,
+                        doc.id,
+                        Task::Shadow { layout: key },
+                        Request::Shadow { prepared },
+                    );
                 }
                 let state = doc.setups.entry(name).or_default();
                 playback::settle_mode(state);

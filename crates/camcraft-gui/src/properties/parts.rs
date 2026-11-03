@@ -10,6 +10,7 @@ use crate::document::{Document, ModelSlot, Selection, is_stl};
 use crate::help::Help;
 use crate::help::topics::model as topics;
 use crate::picking::slots::Slot;
+use crate::ui::defaults::Defaults;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
 use crate::ui::widgets::{self, Icon, Size, Variant, error, form, hint, list_row_background};
@@ -288,16 +289,18 @@ fn transform(ui: &mut egui::Ui, m: Measure, name: &str, t: &mut Transform) {
     let id = ui.id().with(("uniform-scale", name));
     let even = t.scale.iter().all(|&s| s.to_bits() == t.scale[0].to_bits());
     let mut uniform = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(even);
+    // Where its file puts it is where it is unless moved.
+    let mut d = Defaults::of(&*t, &Transform::default());
     form(ui, "transform", |ui| {
-        widgets::row(ui, &topics::POSITION, |ui| {
+        d.row(ui, &topics::POSITION, "position", |ui| {
             for (axis, v) in ["X ", "Y ", "Z "].into_iter().zip(t.position.iter_mut()) {
                 m.signed_length_field(ui, v, 0.1, 100_000.0, axis);
             }
         });
-        widgets::row(ui, &topics::ROTATION, |ui| {
+        d.row(ui, &topics::ROTATION, "rotation", |ui| {
             for (axis, v) in ["X ", "Y ", "Z "].into_iter().zip(t.rotation.iter_mut()) {
                 ui.add(
-                    egui::DragValue::new(v)
+                    widgets::number(v)
                         .speed(1.0)
                         .range(-360.0..=360.0)
                         .prefix(axis)
@@ -305,10 +308,10 @@ fn transform(ui: &mut egui::Ui, m: Measure, name: &str, t: &mut Transform) {
                 );
             }
         });
-        widgets::row(ui, &topics::SCALE, |ui| {
+        d.row(ui, &topics::SCALE, "scale", |ui| {
             let scale = |v: &mut f64, prefix: &str, ui: &mut egui::Ui| {
                 ui.add(
-                    egui::DragValue::new(v)
+                    widgets::number(v)
                         .speed(0.01)
                         .range(0.001..=1000.0)
                         .prefix(prefix)
@@ -337,6 +340,7 @@ fn transform(ui: &mut egui::Ui, m: Measure, name: &str, t: &mut Transform) {
             }
         });
     });
+    d.apply(t);
     ui.data_mut(|d| d.insert_temp(id, uniform));
 }
 

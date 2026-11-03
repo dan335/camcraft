@@ -19,6 +19,7 @@ fn params() -> AdaptiveParams {
         ramp_stepdown: None,
         safe_distance: 2.0,
         flats: Vec::new(),
+        fine_stepdown: None,
     }
 }
 
@@ -340,4 +341,57 @@ fn a_flat_face_between_levels_gets_a_level_of_its_own() {
         .filter(|m| (5.0..35.0).contains(&m.to.x) && (5.0..15.0).contains(&m.to.y))
         .count();
     assert!(over > 0, "{report:?}");
+}
+
+/// A slope rising across the stock, roughed 6 mm a level: with a fine
+/// stepdown, levels between cut the terraces the levels leave on it, and
+/// nothing where the levels below have cleared already; without, none.
+#[test]
+fn a_fine_stepdown_cuts_the_terraces_on_a_slope() {
+    use crate::cutter::tool::Flat;
+    use camcraft_geom::synthetic;
+    // z = x / 2, from -10 at x = -20 to 10 at x = 20.
+    let mesh = synthetic::inclined_plane(0.5, 0.0, 0.0, 20.0);
+    let flat = Flat::new(R).unwrap();
+    let rough = |fine: Option<f64>| {
+        let tool = crate::cutter::allowance::EffectiveTool::new(
+            &flat,
+            crate::cutter::allowance::Allowance::new(0.0, 0.0).unwrap(),
+        )
+        .unwrap();
+        let mut reach = LevelReach::new(&mesh, &tool, 0.01).unwrap();
+        let mut p = params();
+        p.top = 10.0;
+        p.bottom = -10.0;
+        p.stepdown = 6.0;
+        p.fine_stepdown = fine;
+        let area = rect(-30.0, -30.0, 30.0, 30.0);
+        let stocks = [(dvec2(-20.0, -20.0), dvec2(20.0, 20.0), 10.0)];
+        adaptive_rough(&mut reach, &area, &stocks, tool.base(), &p).unwrap()
+    };
+    // Levels at 4, -2, -8 and -10; fine ones 2 mm up from each.
+    let at = |path: &Toolpath, z: f64| -> Vec<f64> {
+        path.moves()
+            .iter()
+            .filter(|m| m.role == MoveRole::Cut && (m.to.z - z).abs() < 1e-9)
+            .map(|m| m.to.x)
+            .collect()
+    };
+    let (plain, report) = rough(None);
+    assert_eq!(report.fine_levels, 0);
+    assert!(at(&plain, 2.0).is_empty());
+
+    let (fine, report) = rough(Some(2.0));
+    assert!(report.fine_levels > 0, "{report:?}");
+    let xs = at(&fine, 2.0);
+    assert!(!xs.is_empty(), "the terrace between -2 and 2 is cut");
+    // At 2 mm the slope stands at x = 4, and the level at -2 cleared up to
+    // where it stands at -2, x = -4, less the tool: only the terrace between,
+    // and the tool beside it, is left to cut.
+    assert!(
+        xs.iter().all(|&x| x > -4.0 - 2.0 * R - 0.5 && x < 4.0),
+        "{:?}",
+        xs.iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), &x| (a.min(x), b.max(x)))
+    );
 }

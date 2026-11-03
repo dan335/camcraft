@@ -20,10 +20,9 @@ use std::sync::Arc;
 
 use camcraft_core::job::{Along, PointRef, Snap};
 use camcraft_core::setup::Prepared;
-use camcraft_core::setup::features::{FeatureError, snap_point, unplaced};
+use camcraft_core::setup::features::{snap_point, unplaced};
 use camcraft_core::setup::frame::Frame;
 use camcraft_geom::bvh::MeshBvh;
-use camcraft_geom::contour::Region;
 use camcraft_geom::mesh::Aabb;
 use camcraft_geom::topology::Body;
 use camcraft_session::Model;
@@ -251,12 +250,6 @@ impl PickScene {
             stocks,
             eps: (1e-3 * size).max(1e-3),
         }
-    }
-
-    /// The setup's part seen from above, as the engine sees it: the shadow the
-    /// layout, `prepared`, casts once and keeps ([`Prepared::shadow`]).
-    pub fn silhouette<'p>(&self, prepared: &'p Prepared) -> Result<&'p Region, FeatureError> {
-        Ok(prepared.shadow()?.area())
     }
 
     /// The model called `name`.

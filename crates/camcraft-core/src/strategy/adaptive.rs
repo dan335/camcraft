@@ -57,7 +57,9 @@ use rayon::prelude::*;
 use crate::cutter::tool::{Cutter, ToolProfile};
 use crate::path::toolpath::{MoveRole, Toolpath};
 use crate::strategy::reach::LevelReach;
-use crate::strategy::{MATERIAL_THICKNESS, StrategyError, check, check_levels, innermost, slabs};
+use crate::strategy::{
+    MATERIAL_THICKNESS, SAME_LEVEL, StrategyError, check, check_levels, slabs, with_fine_levels,
+};
 
 mod clearing;
 mod steer;
@@ -134,6 +136,10 @@ pub struct AdaptiveParams {
     /// Extra levels, each on a flat face of the part, raised by the stock to
     /// leave down: cut after the level below each, over what it left.
     pub flats: Vec<f64>,
+    /// Fusion's fine stepdown, in millimetres: levels this far apart up from
+    /// each level and flat, cut as flats are ([`with_fine_levels`]); none
+    /// when `None`.
+    pub fine_stepdown: Option<f64>,
 }
 
 impl Default for AdaptiveParams {
@@ -154,6 +160,7 @@ impl Default for AdaptiveParams {
             ramp_stepdown: None,
             safe_distance: 2.0,
             flats: Vec::new(),
+            fine_stepdown: None,
         }
     }
 }
@@ -165,6 +172,8 @@ pub struct AdaptiveReport {
     pub levels: u64,
     /// Of them, levels on flat faces.
     pub flat_levels: u64,
+    /// Of them, levels of the fine stepdown.
+    pub fine_levels: u64,
     /// Passes emitted.
     pub passes: u64,
     /// Links between passes made without lifting.
@@ -238,6 +247,11 @@ pub fn adaptive_rough(
     // Levels from the top down, a stepdown apart, each flat level in the slab of
     // the one just below it, cut after it from the bottom up.
     let slabs = slabs(params.top, params.bottom, params.stepdown, &params.flats);
+    let slabs = match params.fine_stepdown {
+        Some(fine) => with_fine_levels(slabs, params.top, fine),
+        None => slabs,
+    };
+    let is_flat = |z: f64| params.flats.iter().any(|f| (f - z).abs() < SAME_LEVEL);
 
     // Where the tool may not be at every level, from the top: the shadows are
     // cheapest asked for in descending order. What that leaves of the area,
@@ -301,7 +315,13 @@ pub fn adaptive_rough(
                 continue;
             }
             report.levels += 1;
-            report.flat_levels += u64::from(k > 0);
+            if k > 0 {
+                if is_flat(cut.z) {
+                    report.flat_levels += 1;
+                } else {
+                    report.fine_levels += 1;
+                }
+            }
             for (arrive, points) in &cut.passes {
                 let Some(first) = points.first() else {
                     continue;

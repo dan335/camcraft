@@ -117,6 +117,35 @@ impl Prepared {
         let cast = shadow_above(&self.part, self.model_bounds.min.z - 1.0)?;
         Ok(self.shadow.get_or_init(|| cast))
     }
+
+    /// The part's shadow, if [`Prepared::shadow`] has cast it already: never
+    /// casts it, so a window can ask without waiting while another thread
+    /// casts it.
+    pub fn cast_shadow(&self) -> Option<&Shadow> {
+        self.shadow.get()
+    }
+
+    /// Its shadow as cast, if it has been, in the setup's turned frame: before
+    /// the work zero is taken off. It is the same for every work zero and every
+    /// stock, so it is kept for whatever setup lays out the same models turned
+    /// the same way ([`Prepared::adopt_shadow`]), rather than cast again.
+    pub fn turned_shadow(&self) -> Option<Shadow> {
+        let origin = self.frame.origin.truncate();
+        self.shadow.get().map(|s| s.translated(origin))
+    }
+
+    /// Take `turned`, the shadow of this setup's part in its turned frame, as
+    /// [`Prepared::turned_shadow`] gave it for the same models, placed and
+    /// tessellated the same, turned the same way: moved to its work zero, as
+    /// its own, instead of casting one. Whether it was taken: not if it has one
+    /// already.
+    ///
+    /// The work zero only moves the part, and the shadow is cast from below
+    /// all of it, so moved by as much it is the shadow the part casts.
+    pub fn adopt_shadow(&self, turned: &Shadow) -> bool {
+        let origin = self.frame.origin.truncate();
+        self.shadow.set(turned.translated(-origin)).is_ok()
+    }
 }
 
 /// The box around the named models, in model coordinates.

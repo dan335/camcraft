@@ -38,4 +38,6 @@ pub use post::{
     Posting, Program, builtin_posts, load_profile, plan_posting, program, program_name,
     program_spec, setup_profile, write_posting,
 };
-pub use run::{Passed, Ran, check_runnable, gate, run_setup, run_setup_planned};
+pub use run::{
+    Passed, Ran, check_runnable, gate, run_setup, run_setup_planned, run_setup_shadowed,
+};

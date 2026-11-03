@@ -159,6 +159,35 @@ fn a_coarse_region_still_puts_every_point_on_the_part() {
     }
 }
 
+/// Kept to the part's outline grown by the tool, as a boundary with the tool
+/// outside the part is, every ring runs right along the area's edge: and is
+/// still there whole at every level, though the coarse region it is found on
+/// puts it past the edge before it is pulled onto the part.
+#[test]
+fn a_ring_along_the_areas_edge_is_kept_whole() {
+    let mesh = boss();
+    let tool = flat(1.5);
+    let cutter = DropCutter::new(&mesh);
+    let mut reach = LevelReach::new(&mesh, &tool, 10.0 * TOLERANCE).unwrap();
+    let outline = Region::rectangle(dvec2(-5.0, -5.0), dvec2(5.0, 5.0));
+    let area = outline.offset(1.5, TOLERANCE / 2.0);
+    let (path, report) =
+        waterline(&mut reach, &cutter, &tool, &area, &params(5.0, 0.0, 1.0)).unwrap();
+    assert_eq!(report.fragments, 0, "{report:?}");
+    let passes = passes(&path);
+    assert_eq!(
+        passes.len() as u64,
+        report.levels,
+        "one ring a level: {report:?}"
+    );
+    for pass in &passes {
+        // All the way round: as long as the boss's outline grown by the tool.
+        let length: f64 = pass.windows(2).map(|w| w[0].distance(w[1])).sum();
+        let round = 4.0 * 10.0 + std::f64::consts::TAU * 1.5;
+        assert!(length > round - 1.0, "{length} of {round}: {report:?}");
+    }
+}
+
 #[test]
 fn climbing_goes_round_the_part_clockwise() {
     let mesh = boss();

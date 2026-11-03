@@ -9,6 +9,7 @@ use crate::help::topics::feeds;
 use crate::properties::PropAction;
 use crate::tools::drawing::paint_tool;
 use crate::tools::editor::{chip_load_row, surface_speed_row};
+use crate::ui::defaults::Defaults;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
 use crate::ui::widgets::{self, Size, Variant, error, form};
@@ -71,8 +72,15 @@ pub(super) fn tool(
     ui.add_space(theme::SPACE_4);
     ui.label(widgets::section_label("Feed and speed"));
     ui.add_space(theme::SPACE_2);
+    // What the preset, or a fresh operation, gives each: what it shows as
+    // changed from, and goes back to.
+    let Some(def) = doc.operation_defaults(setup, index) else {
+        return;
+    };
     if let Some(op) = doc.operation_mut(setup, index) {
-        form(ui, "feed-speed", |ui| feed_speed(ui, m, op, cutter));
+        let mut d = Defaults::of(&*op, &def);
+        form(ui, "feed-speed", |ui| feed_speed(ui, &mut d, m, op, cutter));
+        d.apply(op);
     }
 }
 
@@ -80,39 +88,43 @@ pub(super) fn tool(
 /// and chip load they come to, which set them when edited.
 fn feed_speed(
     ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
     m: Measure,
     op: &mut Operation,
     (tool_rpm, diameter, flutes): (u32, f64, Option<u32>),
 ) {
-    widgets::row(ui, &feeds::SPINDLE, |ui| {
-        let absent = format!("the tool's, {tool_rpm} rev/min");
+    let absent = format!("the tool's, {tool_rpm} rev/min");
+    d.row(ui, &feeds::SPINDLE, "passes.rpm", |ui| {
         widgets::optional(ui, &mut op.passes.rpm, tool_rpm, &absent, |ui, rpm| {
-            ui.add(
-                egui::DragValue::new(rpm)
-                    .range(1..=60000)
-                    .suffix(" rev/min"),
-            );
+            ui.add(widgets::number(rpm).range(1..=60000).suffix(" rev/min"));
         });
     });
     // What the spindle turns at, the operation's own or the tool's.
     let turning = op.passes.rpm.or(Some(tool_rpm));
     let mut rpm = turning;
-    surface_speed_row(ui, &mut rpm, diameter, m);
+    surface_speed_row(ui, (d, "passes.rpm"), &mut rpm, diameter, m);
     if rpm != turning {
         op.passes.rpm = rpm;
     }
     // Drilling feeds its holes at the plunge feed: it has no cutting feed.
     if op.strategy.uses().feed {
-        widgets::row(ui, &feeds::CUTTING_FEED, |ui| {
+        d.row(ui, &feeds::CUTTING_FEED, "passes.feed", |ui| {
             m.feed_field(ui, &mut op.passes.feed, 50_000.0);
         });
         let mut feed = Some(op.passes.feed);
-        chip_load_row(ui, &mut feed, op.passes.rpm.or(Some(tool_rpm)), flutes, m);
+        chip_load_row(
+            ui,
+            (d, "passes.feed"),
+            &mut feed,
+            op.passes.rpm.or(Some(tool_rpm)),
+            flutes,
+            m,
+        );
         if let Some(f) = feed {
             op.passes.feed = f;
         }
     }
-    widgets::row(ui, &feeds::PLUNGE_FEED, |ui| {
+    d.row(ui, &feeds::PLUNGE_FEED, "linking.plunge_feed", |ui| {
         m.feed_field(ui, &mut op.linking.plunge_feed, 50_000.0);
     });
 }

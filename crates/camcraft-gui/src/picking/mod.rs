@@ -56,6 +56,17 @@ struct ShownFrom<'a> {
     drawn: Option<Drawn<'a>>,
     tolerance: u64,
     measure: Measure,
+    /// How far the part's silhouette has got: what is drawn from it is drawn
+    /// again once it is cast.
+    silhouette: Silhouette,
+}
+
+/// How far a layout's part's silhouette has got, cast off the window's thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Silhouette {
+    Casting,
+    Cast,
+    Failed,
 }
 
 /// What an operation's boundary or outline is drawn with besides its picks: only
@@ -158,6 +169,7 @@ impl ShownFrom<'_> {
             drawn: self.drawn.map(Drawn::into_owned),
             tolerance: self.tolerance,
             measure: self.measure,
+            silhouette: self.silhouette,
         }
     }
 }
@@ -324,9 +336,10 @@ impl Picking {
         // The showing setup, laid out, ready to pick from.
         let laid = doc.active.as_ref().and_then(|name| {
             let layout = doc.setups.get(name)?.layout.as_ref()?;
-            Some((name, layout.key, layout.prepared.as_ref().ok()?))
+            let prepared = layout.prepared.as_ref().ok()?;
+            Some((name, layout.key, prepared, layout.silhouette()))
         });
-        let Some((setup, layout, prepared)) = laid else {
+        let Some((setup, layout, prepared, silhouette)) = laid else {
             self.scene = None;
             self.shown = None;
             self.hovered = None;
@@ -391,12 +404,17 @@ impl Picking {
                 drawn: operation.map(|o| Drawn::of(&doc.job, o)),
                 tolerance: doc.job.tolerance.to_bits(),
                 measure: m,
+                silhouette: match &silhouette {
+                    Ok(None) => Silhouette::Casting,
+                    Ok(Some(_)) => Silhouette::Cast,
+                    Err(_) => Silhouette::Failed,
+                },
             })
         });
         match from {
             None => self.shown = None,
             Some(from) if self.shown.as_ref().is_none_or(|(f, ..)| *f != from) => {
-                let shown = shown::shown(doc, setup, from.op, prepared, scene, m);
+                let shown = shown::shown(doc, setup, from.op, (prepared, silhouette), scene, m);
                 self.shown = Some((from.into_owned(), shown, next_key()));
             }
             Some(_) => {}

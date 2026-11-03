@@ -67,6 +67,9 @@ topics! {
     STEPDOWN: "Stepdown",
         "The deepest each level may be. Levels are spaced evenly down to the Bottom.",
         Figure::Stepdown;
+    FINE_STEPDOWN: "Fine stepdown",
+        "Levels this far apart between the stepdowns, each cutting only what those below left: terraces on a slope come down to steps this tall.",
+        Figure::Stepdown;
     STOCK_TO_LEAVE: "Stock to leave",
         "Leaves a skin of material for a finishing pass to clean up.",
         Figure::Leave(LeaveOn::Both);

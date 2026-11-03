@@ -13,6 +13,7 @@ use super::{ViewPicks, header, renamed};
 use crate::document::{Document, Selection};
 use crate::help::Help;
 use crate::help::topics::stock as topics;
+use crate::ui::defaults::Defaults;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
 use crate::ui::widgets::{self, Size, Variant, form, hint};
@@ -44,9 +45,10 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
     let Some(spec) = doc.job.stocks.get_mut(i).map(|s| &mut s.spec) else {
         return;
     };
+    let mut shape = Defaults::of(&*spec, &StockSpec::default());
     form(ui, "stock", |ui| {
         let around = matches!(spec, StockSpec::AroundModels { .. });
-        widgets::row(ui, &topics::SHAPE, |ui| {
+        shape.row(ui, &topics::SHAPE, "kind", |ui| {
             egui::ComboBox::from_id_salt("stock-kind")
                 .selected_text(if around { "around models" } else { "fixed box" })
                 .show_ui(ui, |ui| {
@@ -60,6 +62,7 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
                 });
         });
     });
+    shape.apply(spec);
     ui.add_space(theme::SPACE_4);
 
     // The block as it stands before this frame's edits: drawn, then edited.
@@ -79,13 +82,28 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
     let Some(spec) = doc.job.stocks.get_mut(i).map(|s| &mut s.spec) else {
         return;
     };
+    let def = match &*spec {
+        StockSpec::AroundModels { models, .. } => match StockSpec::default() {
+            StockSpec::AroundModels { margin, below, .. } => StockSpec::AroundModels {
+                models: models.clone(),
+                margin,
+                below,
+            },
+            other => other,
+        },
+        StockSpec::FixedBox(b) => StockSpec::FixedBox(FixedBox {
+            models: b.models.clone(),
+            ..FixedBox::centred(fit.map_or([100.0, 100.0, 25.0], |f| f.extent().to_array()))
+        }),
+    };
+    let mut d = Defaults::of(&*spec, &def);
     match spec {
         StockSpec::AroundModels {
             models,
             margin,
             below,
         } => {
-            margins(ui, m, margin, below);
+            margins(ui, &mut d, m, margin, below);
             ui.add_space(theme::SPACE_4);
             names(
                 ui,
@@ -103,7 +121,7 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
             );
         }
         StockSpec::FixedBox(b) => {
-            axes(ui, m, b);
+            axes(ui, &mut d, m, b);
             ui.add_space(theme::SPACE_3);
             if ui
                 .add_enabled_ui(fit.is_some(), |ui| {
@@ -136,6 +154,7 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
             );
         }
     }
+    d.apply(spec);
     ui.add_space(theme::SPACE_3);
     used_by(
         ui,
@@ -181,7 +200,7 @@ const AXES: [Axis; 3] = [
 
 /// A fixed box's size and place, a row an axis: the size, where it sits against
 /// the models, and by how much.
-fn axes(ui: &mut egui::Ui, m: Measure, b: &mut FixedBox) {
+fn axes(ui: &mut egui::Ui, d: &mut Defaults<StockSpec>, m: Measure, b: &mut FixedBox) {
     egui::Grid::new("stock-axes")
         .num_columns(4)
         .spacing([theme::SPACE_3, 6.0])
@@ -191,24 +210,28 @@ fn axes(ui: &mut egui::Ui, m: Measure, b: &mut FixedBox) {
                 ui.label(widgets::section_label(topic.title)).help(topic);
             }
             ui.end_row();
-            for ((axis, size), place) in AXES.iter().zip(&mut b.size).zip(&mut b.place) {
-                ui.label(widgets::mono(axis.letter, theme::TEXT_SM));
+            for (k, ((axis, size), place)) in
+                AXES.iter().zip(&mut b.size).zip(&mut b.place).enumerate()
+            {
+                let path = format!("size.{k},{}", axis.letter.to_lowercase());
+                ui.label(d.tint(widgets::mono(axis.letter, theme::TEXT_SM), &path));
                 m.length_field(ui, size, 0.1, 10_000.0, "")
                     .help(&topics::SIZE);
                 place_choice(ui, axis, place);
-                match place {
-                    Place::Center {} => {
-                        ui.label("");
+                ui.horizontal(|ui| {
+                    match place {
+                        Place::Center {} => {}
+                        Place::Min { offset: v } | Place::Max { offset: v } => {
+                            m.signed_length_field(ui, v, 0.1, 10_000.0, "")
+                                .help(&topics::OFFSET);
+                        }
+                        Place::At { coordinate: v } => {
+                            m.signed_length_field(ui, v, 0.1, 10_000.0, "")
+                                .help(&topics::OFFSET);
+                        }
                     }
-                    Place::Min { offset: v } | Place::Max { offset: v } => {
-                        m.signed_length_field(ui, v, 0.1, 10_000.0, "")
-                            .help(&topics::OFFSET);
-                    }
-                    Place::At { coordinate: v } => {
-                        m.signed_length_field(ui, v, 0.1, 10_000.0, "")
-                            .help(&topics::OFFSET);
-                    }
-                }
+                    d.reset(ui, &path);
+                });
                 ui.end_row();
             }
         });
@@ -254,7 +277,13 @@ fn place_choice(ui: &mut egui::Ui, axis: &Axis, p: &mut Place) {
 }
 
 /// A box around models' margins, a row each, by the axis it grows along.
-fn margins(ui: &mut egui::Ui, m: Measure, margin: &mut [f64; 3], below: &mut f64) {
+fn margins(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<StockSpec>,
+    m: Measure,
+    margin: &mut [f64; 3],
+    below: &mut f64,
+) {
     egui::Grid::new("stock-margins")
         .num_columns(3)
         .spacing([theme::SPACE_3, 6.0])
@@ -264,15 +293,19 @@ fn margins(ui: &mut egui::Ui, m: Measure, margin: &mut [f64; 3], below: &mut f64
             ui.label("");
             ui.end_row();
             let [x, y, z] = margin;
-            for (letter, side, v, topic) in [
-                ("X", "each side", x, &topics::MARGIN_X),
-                ("Y", "each side", y, &topics::MARGIN_Y),
-                ("Z", "on top", z, &topics::MARGIN_TOP),
-                ("", "underneath", below, &topics::MARGIN_UNDER),
+            for (letter, side, v, topic, path) in [
+                ("X", "each side", x, &topics::MARGIN_X, "margin.0"),
+                ("Y", "each side", y, &topics::MARGIN_Y, "margin.1"),
+                ("Z", "on top", z, &topics::MARGIN_TOP, "margin.2"),
+                ("", "underneath", below, &topics::MARGIN_UNDER, "below"),
             ] {
                 ui.label(widgets::mono(letter, theme::TEXT_SM));
-                widgets::field_label_as(ui, side, topic);
-                m.length_field(ui, v, 0.1, 1000.0, "").help(topic);
+                let label = egui::RichText::new(side).color(theme::egui_color(theme::TEXT_3));
+                ui.label(d.tint(label, path)).help(topic);
+                ui.horizontal(|ui| {
+                    m.length_field(ui, v, 0.1, 1000.0, "").help(topic);
+                    d.reset(ui, path);
+                });
                 ui.end_row();
             }
         });

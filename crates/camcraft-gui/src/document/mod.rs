@@ -24,14 +24,14 @@ mod setup_state;
 )]
 mod tests;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use camcraft_core::job::{Job, LengthUnit, ModelDef, Origin, Setup, StockDef, StockSpec};
 use camcraft_geom::bvh::MeshBvh;
-use camcraft_session::fs::{job_dir, relative_path, resolve, with_job_extension};
+use camcraft_session::fs::{job_dir, real, relative_path, resolve, with_job_extension};
 use camcraft_session::{Model, SessionError, write_job};
 
 use crate::worker::DocId;
@@ -63,7 +63,8 @@ pub enum Level {
 /// loaded again, or only placed again when its file is the same.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelKey {
-    /// The file.
+    /// The file, as the file system names it ([`real`]): a job saved
+    /// elsewhere names it another way, and it is still the same file.
     pub path: PathBuf,
     /// What an STL's numbers mean.
     pub units: Option<LengthUnit>,
@@ -85,7 +86,7 @@ impl ModelKey {
             *bits = v.to_bits();
         }
         Self {
-            path: resolve(dir, &def.path),
+            path: real_once(resolve(dir, &def.path)),
             units: def.units,
             tolerance: tolerance.to_bits(),
             transform,
@@ -97,6 +98,17 @@ impl ModelKey {
     pub fn same_file(&self, other: &ModelKey) -> bool {
         self.path == other.path && self.units == other.units && self.tolerance == other.tolerance
     }
+}
+
+/// `path` as the file system names it ([`real`]), asked of it once per path:
+/// the keys are made every frame, and a file system can be slow to answer, as a
+/// network drive gone away is.
+fn real_once(path: PathBuf) -> PathBuf {
+    static SEEN: LazyLock<Mutex<HashMap<PathBuf, PathBuf>>> = LazyLock::new(Mutex::default);
+    let mut seen = SEEN.lock().unwrap_or_else(PoisonError::into_inner);
+    seen.entry(path)
+        .or_insert_with_key(|path| real(path))
+        .clone()
 }
 
 /// A model, as far as loading it has got.
@@ -193,6 +205,11 @@ pub struct Document {
     pub asked_missing: bool,
     /// Runs asked for so far, to tell the latest.
     seq: u64,
+    /// Parts' shadows from above, each in its setup's turned frame, by what
+    /// they were cast from, the latest last: a layout or a run of the same
+    /// models turned the same way takes one rather than casting it again,
+    /// whatever its stock or work zero ([`run::ShadowKey`]).
+    turned_shadows: Vec<(run::ShadowKey, Arc<camcraft_geom::shadow::Shadow>)>,
 }
 
 impl Document {
@@ -233,6 +250,7 @@ impl Document {
             log: Vec::new(),
             asked_missing: false,
             seq: 0,
+            turned_shadows: Vec::new(),
         }
     }
 
@@ -294,7 +312,8 @@ impl Document {
                 }
             }
         }
-        // The keys are unchanged, since each still resolves to the same file.
+        // The keys are unchanged, since each still resolves to the same file,
+        // which is what a key holds ([`ModelKey::path`]).
         self.job = job.clone();
         self.checkpoint = job.clone();
         self.saved = job;

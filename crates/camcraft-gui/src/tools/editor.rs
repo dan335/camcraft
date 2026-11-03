@@ -12,10 +12,13 @@ use camcraft_core::job::{
     ToolFieldError, ToolKind, ToolMaterial, ToolSpec, free_preset_name,
 };
 use eframe::egui;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use crate::help::topics::{feeds, library as lib, passes as pass};
 use crate::help::{Help, Topic};
 use crate::tools::drawing::kind_name;
+use crate::ui::defaults::Defaults;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
 use crate::ui::widgets::{self, Icon, Size, Tab, Variant, form};
@@ -77,32 +80,59 @@ pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, editable:
     let page = widgets::remembered_tabs(ui, ui.id().with("tool-page"), &tabs, 1, None);
 
     let page = PAGES.get(page).copied().unwrap_or(Page::Cutter);
+    // What a new tool of its kind has: what its settings show as changed
+    // from, and go back to. Its presets are its own.
+    let mut new = ToolSpec {
+        kind: tool.kind,
+        number: tool.number,
+        presets: tool.presets.clone(),
+        ..ToolSpec::default()
+    };
+    fit_kind(&mut new);
+    let mut d = Defaults::of(&*tool, &new);
     if page == Page::Presets {
         // Its list of presets is picked from even when nothing can be changed.
-        speeds(ui, tool, m, &errors, &preset_errors, editable);
+        speeds(ui, &mut d, tool, m, &errors, &preset_errors, editable);
+        d.apply(tool);
         return;
     }
     ui.add_enabled_ui(editable, |ui| match page {
-        Page::General => form(ui, "general", |ui| general(ui, tool)),
-        Page::Cutter => form(ui, "cutter", |ui| cutter(ui, tool, m, &errors)),
-        Page::Holder => holder(ui, tool, m, &errors),
+        Page::General => form(ui, "general", |ui| general(ui, &mut d, tool)),
+        Page::Cutter => form(ui, "cutter", |ui| cutter(ui, &mut d, tool, m, &errors)),
+        Page::Holder => holder(ui, &mut d, tool, m, &errors),
         Page::Presets => {}
-        Page::Post => form(ui, "post", |ui| post(ui, tool)),
+        Page::Post => form(ui, "post", |ui| post(ui, &mut d, tool)),
     });
+    d.apply(tool);
 }
 
-fn general(ui: &mut egui::Ui, tool: &mut ToolSpec) {
-    widgets::row(ui, &lib::DESCRIPTION, |ui| {
+/// What a tool of its kind must have that a tool may be without, as choosing
+/// the kind gives it: a cone's angle, 90° until set.
+fn fit_kind(tool: &mut ToolSpec) {
+    if tool.kind == ToolKind::Cone && tool.angle.is_none() {
+        tool.angle = Some(90.0);
+    }
+}
+
+fn general(ui: &mut egui::Ui, d: &mut Defaults<ToolSpec>, tool: &mut ToolSpec) {
+    d.row(ui, &lib::DESCRIPTION, "comment", |ui| {
         ui.add(egui::TextEdit::singleline(&mut tool.comment).desired_width(220.0));
     });
-    opt_text(ui, &lib::VENDOR, &mut tool.vendor, "e.g. Amana");
     opt_text(
         ui,
-        &lib::PRODUCT,
+        d,
+        (&lib::VENDOR, "vendor"),
+        &mut tool.vendor,
+        "e.g. Amana",
+    );
+    opt_text(
+        ui,
+        d,
+        (&lib::PRODUCT, "product"),
         &mut tool.product,
         "the maker's part number",
     );
-    widgets::row(ui, &lib::MATERIAL, |ui| {
+    d.row(ui, &lib::MATERIAL, "material", |ui| {
         widgets::select(
             ui,
             "material",
@@ -117,8 +147,14 @@ fn general(ui: &mut egui::Ui, tool: &mut ToolSpec) {
     });
 }
 
-fn cutter(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFieldError]) {
-    widgets::row(ui, &lib::KIND, |ui| {
+fn cutter(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<ToolSpec>,
+    tool: &mut ToolSpec,
+    m: Measure,
+    errors: &[ToolFieldError],
+) {
+    d.row(ui, &lib::KIND, "kind", |ui| {
         widgets::select(
             ui,
             "kind",
@@ -133,11 +169,10 @@ fn cutter(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
             |k| kind_name(*k),
         );
     });
-    if tool.kind == ToolKind::Cone && tool.angle.is_none() {
-        tool.angle = Some(90.0);
-    }
+    fit_kind(tool);
     length(
         ui,
+        d,
         m,
         &lib::DIAMETER,
         &mut tool.diameter,
@@ -145,14 +180,14 @@ fn cutter(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
         "diameter",
     );
     if tool.kind == ToolKind::Bullnose {
-        length(ui, m, &lib::CORNER, &mut tool.corner, errors, "corner");
+        length(ui, d, m, &lib::CORNER, &mut tool.corner, errors, "corner");
     }
     if tool.kind == ToolKind::Drill {
-        row(ui, &lib::POINT_ANGLE, errors, "angle", |ui| {
+        row(ui, d, &lib::POINT_ANGLE, errors, "angle", |ui| {
             let mut a = tool.angle.unwrap_or(DRILL_POINT);
             if ui
                 .add(
-                    egui::DragValue::new(&mut a)
+                    widgets::number(&mut a)
                         .speed(0.5)
                         .range(60.0..=179.0)
                         .suffix("°"),
@@ -164,10 +199,10 @@ fn cutter(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
         });
     }
     if tool.kind == ToolKind::Cone {
-        row(ui, &lib::ANGLE, errors, "angle", |ui| {
+        row(ui, d, &lib::ANGLE, errors, "angle", |ui| {
             if let Some(a) = tool.angle.as_mut() {
                 ui.add(
-                    egui::DragValue::new(a)
+                    widgets::number(a)
                         .speed(0.5)
                         .range(1.0..=179.0)
                         .suffix("° included"),
@@ -176,6 +211,7 @@ fn cutter(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
         });
         length(
             ui,
+            d,
             m,
             &lib::TIP_DIAMETER,
             &mut tool.tip_diameter,
@@ -183,61 +219,67 @@ fn cutter(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
             "tip_diameter",
         );
     }
-    row(ui, &lib::FLUTES, errors, "flutes", |ui| {
+    row(ui, d, &lib::FLUTES, errors, "flutes", |ui| {
         widgets::optional(ui, &mut tool.flutes, 2, NOT_GIVEN, |ui, f| {
-            ui.add(egui::DragValue::new(f).range(0..=16));
+            ui.add(widgets::number(f).range(0..=16));
         });
     });
     opt_length(
         ui,
+        d,
         m,
         &lib::FLUTE_LENGTH,
-        &mut tool.flute_length,
-        2.0 * tool.diameter,
+        (&mut tool.flute_length, 2.0 * tool.diameter),
         errors,
         "flute_length",
     );
     opt_length(
         ui,
+        d,
         m,
         &lib::SHOULDER,
-        &mut tool.shoulder_length,
-        2.5 * tool.diameter,
+        (&mut tool.shoulder_length, 2.5 * tool.diameter),
         errors,
         "shoulder_length",
     );
 }
 
-fn holder(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFieldError]) {
+fn holder(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<ToolSpec>,
+    tool: &mut ToolSpec,
+    m: Measure,
+    errors: &[ToolFieldError],
+) {
     form(ui, "shank", |ui| {
         opt_length(
             ui,
+            d,
             m,
             &lib::SHANK,
-            &mut tool.shank_diameter,
-            tool.diameter,
+            (&mut tool.shank_diameter, tool.diameter),
             errors,
             "shank_diameter",
         );
         opt_length(
             ui,
+            d,
             m,
             &lib::STICKOUT,
-            &mut tool.stickout,
-            4.0 * tool.diameter,
+            (&mut tool.stickout, 4.0 * tool.diameter),
             errors,
             "stickout",
         );
         opt_length(
             ui,
+            d,
             m,
             &lib::OVERALL,
-            &mut tool.overall_length,
-            8.0 * tool.diameter,
+            (&mut tool.overall_length, 8.0 * tool.diameter),
             errors,
             "overall_length",
         );
-        row(ui, &lib::HOLDER, errors, "holder", |ui| {
+        row(ui, d, &lib::HOLDER, errors, "holder", |ui| {
             let default = Holder {
                 name: String::new(),
                 segments: vec![HolderSegment {
@@ -308,6 +350,7 @@ fn holder(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, errors: &[ToolFiel
 /// from, and the one picked below it.
 fn speeds(
     ui: &mut egui::Ui,
+    d: &mut Defaults<ToolSpec>,
     tool: &mut ToolSpec,
     m: Measure,
     errors: &[ToolFieldError],
@@ -316,15 +359,15 @@ fn speeds(
 ) {
     ui.add_enabled_ui(editable, |ui| {
         form(ui, "spindle", |ui| {
-            row(ui, &lib::TOOL_SPINDLE, errors, "rpm", |ui| {
+            row(ui, d, &lib::TOOL_SPINDLE, errors, "rpm", |ui| {
                 ui.add(
-                    egui::DragValue::new(&mut tool.rpm)
+                    widgets::number(&mut tool.rpm)
                         .range(0..=60000)
                         .suffix(" rev/min"),
                 );
             });
             let mut rpm = Some(tool.rpm);
-            surface_speed_row(ui, &mut rpm, tool.diameter, m);
+            surface_speed_row(ui, (d, "rpm"), &mut rpm, tool.diameter, m);
             if let Some(r) = rpm {
                 tool.rpm = r;
             }
@@ -334,16 +377,16 @@ fn speeds(
     presets(ui, tool, m, preset_errors, editable);
 }
 
-fn post(ui: &mut egui::Ui, tool: &mut ToolSpec) {
+fn post(ui: &mut egui::Ui, d: &mut Defaults<ToolSpec>, tool: &mut ToolSpec) {
     widgets::row(ui, &lib::NUMBER, |ui| {
         ui.add(
-            egui::DragValue::new(&mut tool.number)
+            widgets::number(&mut tool.number)
                 .range(1..=9999)
                 .prefix("T"),
         );
     });
     // A left-hand cutter's counter-clockwise is in the row's help.
-    widgets::row(ui, &lib::SPINDLE_TURNS, |ui| {
+    d.row(ui, &lib::SPINDLE_TURNS, "spindle", |ui| {
         widgets::select(
             ui,
             "spindle",
@@ -358,7 +401,7 @@ fn post(ui: &mut egui::Ui, tool: &mut ToolSpec) {
             },
         );
     });
-    widgets::row(ui, &lib::COOLANT, |ui| {
+    d.row(ui, &lib::COOLANT, "coolant", |ui| {
         widgets::select(
             ui,
             "coolant",
@@ -507,9 +550,15 @@ fn preset_card(
                 None,
                 |_| {},
                 |ui| {
+                    let new = Preset {
+                        name: p.name.clone(),
+                        ..Preset::default()
+                    };
+                    let mut d = Defaults::of(&*p, &new);
                     form(ui, "preset-fields", |ui| {
-                        preset_fields(ui, p, (diameter, flutes, rpm), m, &mine);
+                        preset_fields(ui, &mut d, p, (diameter, flutes, rpm), m, &mine);
                     });
+                    d.apply(p);
                 },
             );
         });
@@ -566,42 +615,41 @@ fn preset_summary(p: &Preset, m: Measure) -> String {
 
 fn preset_fields(
     ui: &mut egui::Ui,
+    d: &mut Defaults<Preset>,
     p: &mut Preset,
     (diameter, flutes, tool_rpm): (f64, Option<u32>, u32),
     m: Measure,
     errors: &[ToolFieldError],
 ) {
-    row(ui, &lib::PRESET_NAME, errors, "presets.name", |ui| {
+    row(ui, d, &lib::PRESET_NAME, errors, "presets.name", |ui| {
         ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(180.0));
     });
-    widgets::row(ui, &lib::NOTE, |ui| {
+    d.row(ui, &lib::NOTE, "comment", |ui| {
         ui.add(
             egui::TextEdit::singleline(&mut p.comment)
                 .hint_text("e.g. from the maker's chart")
                 .desired_width(180.0),
         );
     });
-    row(ui, &lib::PRESET_SPINDLE, errors, "presets.rpm", |ui| {
+    row(ui, d, &lib::PRESET_SPINDLE, errors, "presets.rpm", |ui| {
         widgets::optional(ui, &mut p.rpm, tool_rpm, NOT_GIVEN, |ui, rpm| {
-            ui.add(
-                egui::DragValue::new(rpm)
-                    .range(0..=60000)
-                    .suffix(" rev/min"),
-            );
+            ui.add(widgets::number(rpm).range(0..=60000).suffix(" rev/min"));
         });
     });
-    surface_speed_row(ui, &mut p.rpm, diameter, m);
+    surface_speed_row(ui, (d, "rpm"), &mut p.rpm, diameter, m);
     opt_feed(
         ui,
+        d,
         m,
         &feeds::CUTTING_FEED,
         &mut p.feed,
         errors,
         "presets.feed",
     );
-    chip_load_row(ui, &mut p.feed, p.rpm, flutes, m);
+    chip_load_row(ui, (d, "feed"), &mut p.feed, p.rpm, flutes, m);
     opt_feed(
         ui,
+        d,
         m,
         &feeds::PLUNGE_FEED,
         &mut p.plunge_feed,
@@ -610,6 +658,7 @@ fn preset_fields(
     );
     opt_feed(
         ui,
+        d,
         m,
         &lib::PRESET_RAMP_FEED,
         &mut p.ramp_feed,
@@ -618,24 +667,25 @@ fn preset_fields(
     );
     opt_length(
         ui,
+        d,
         m,
         &pass::STEPDOWN,
-        &mut p.stepdown,
-        0.5 * diameter,
+        (&mut p.stepdown, 0.5 * diameter),
         errors,
         "presets.stepdown",
     );
     opt_length(
         ui,
+        d,
         m,
         &pass::STEPOVER,
-        &mut p.stepover,
-        0.4 * diameter,
+        (&mut p.stepover, 0.4 * diameter),
         errors,
         "presets.stepover",
     );
     row(
         ui,
+        d,
         &lib::PRESET_STOCK_TO_LEAVE,
         errors,
         "presets.stock_to_leave",
@@ -660,13 +710,19 @@ fn preset_fields(
 
 /// The surface speed at `rpm`, which sets `rpm` when edited. Makers chart
 /// cutters in this, and it holds across diameters.
-pub fn surface_speed_row(ui: &mut egui::Ui, rpm: &mut Option<u32>, diameter: f64, m: Measure) {
-    widgets::row(ui, &feeds::SURFACE_SPEED, |ui| match *rpm {
+pub fn surface_speed_row<T: Serialize + DeserializeOwned>(
+    ui: &mut egui::Ui,
+    (d, path): (&mut Defaults<T>, &str),
+    rpm: &mut Option<u32>,
+    diameter: f64,
+    m: Measure,
+) {
+    d.row(ui, &feeds::SURFACE_SPEED, path, |ui| match *rpm {
         Some(r) if diameter > 0.0 => {
             let vc = cutting::surface_speed(diameter, f64::from(r));
             let mut shown = m.show_surface(vc);
             let response = ui.add(
-                egui::DragValue::new(&mut shown)
+                widgets::number(&mut shown)
                     .speed(1.0)
                     .range(0.0..=m.show_surface(cutting::surface_speed(diameter, 60000.0)))
                     .max_decimals(1)
@@ -683,34 +739,37 @@ pub fn surface_speed_row(ui: &mut egui::Ui, rpm: &mut Option<u32>, diameter: f64
 }
 
 /// The chip load at `feed` and `rpm`, which sets the feed when edited.
-pub fn chip_load_row(
+pub fn chip_load_row<T: Serialize + DeserializeOwned>(
     ui: &mut egui::Ui,
+    (d, path): (&mut Defaults<T>, &str),
     feed: &mut Option<f64>,
     rpm: Option<u32>,
     flutes: Option<u32>,
     m: Measure,
 ) {
-    widgets::row(ui, &feeds::CHIP_LOAD, |ui| match (*feed, rpm, flutes) {
-        (Some(now), Some(rpm), Some(z)) if rpm > 0 && z > 0 => {
-            let fz = cutting::chip_load(now, f64::from(rpm), z);
-            let mut shown = m.show(fz);
-            let response = ui.add(
-                egui::DragValue::new(&mut shown)
-                    .speed(m.show(0.001))
-                    .range(0.0..=m.show(2.0))
-                    .min_decimals(m.decimals(3))
-                    .max_decimals(m.decimals(4))
-                    .suffix(format!(" {}/tooth", m.unit())),
-            );
-            if response.changed() {
-                *feed = Some(cutting::feed_for(m.read(shown), f64::from(rpm), z));
+    d.row(ui, &feeds::CHIP_LOAD, path, |ui| {
+        match (*feed, rpm, flutes) {
+            (Some(now), Some(rpm), Some(z)) if rpm > 0 && z > 0 => {
+                let fz = cutting::chip_load(now, f64::from(rpm), z);
+                let mut shown = m.show(fz);
+                let response = ui.add(
+                    widgets::number(&mut shown)
+                        .speed(m.show(0.001))
+                        .range(0.0..=m.show(2.0))
+                        .min_decimals(m.decimals(3))
+                        .max_decimals(m.decimals(4))
+                        .suffix(format!(" {}/tooth", m.unit())),
+                );
+                if response.changed() {
+                    *feed = Some(cutting::feed_for(m.read(shown), f64::from(rpm), z));
+                }
             }
-        }
-        (_, _, None) | (_, _, Some(0)) => {
-            widgets::hint(ui, "needs the tool's flutes");
-        }
-        _ => {
-            widgets::hint(ui, "needs a spindle speed and cutting feed");
+            (_, _, None) | (_, _, Some(0)) => {
+                widgets::hint(ui, "needs the tool's flutes");
+            }
+            _ => {
+                widgets::hint(ui, "needs a spindle speed and cutting feed");
+            }
         }
     });
 }
@@ -727,8 +786,9 @@ fn whole_rpm(rpm: f64) -> u32 {
 /// One row of a form, [`widgets::row`]: the label, then what `add` puts in,
 /// bordered in red when the checks find `field` wrong, with why on the line
 /// under it.
-fn row(
+fn row<T: Serialize + DeserializeOwned>(
     ui: &mut egui::Ui,
+    d: &mut Defaults<T>,
     topic: &Topic,
     errors: &[ToolFieldError],
     field: &str,
@@ -739,7 +799,10 @@ fn row(
         .filter(|e| e.field == field)
         .map(|e| e.why.as_str())
         .collect();
-    widgets::row(ui, topic, |ui| {
+    // A preset's fields are named from the tool, as its checks name them; its
+    // own form has them from the preset.
+    let path = field.strip_prefix("presets.").unwrap_or(field);
+    d.row(ui, topic, path, |ui| {
         if !why.is_empty() {
             // The system's `invalid` field: an `--err` border, nothing louder.
             let err = egui::Stroke::new(1.0, widgets::Level::Err.color());
@@ -757,52 +820,61 @@ fn row(
     }
 }
 
-fn length(
+fn length<T: Serialize + DeserializeOwned>(
     ui: &mut egui::Ui,
+    d: &mut Defaults<T>,
     m: Measure,
     topic: &Topic,
     value: &mut f64,
     errors: &[ToolFieldError],
     field: &str,
 ) {
-    row(ui, topic, errors, field, |ui| {
+    row(ui, d, topic, errors, field, |ui| {
         m.length_field(ui, value, 0.05, 1000.0, "");
     });
 }
 
-fn opt_length(
+/// A length that need not be given: `value`, starting from `start` when it is.
+fn opt_length<T: Serialize + DeserializeOwned>(
     ui: &mut egui::Ui,
+    d: &mut Defaults<T>,
     m: Measure,
     topic: &Topic,
-    value: &mut Option<f64>,
-    default: f64,
+    (value, start): (&mut Option<f64>, f64),
     errors: &[ToolFieldError],
     field: &str,
 ) {
-    row(ui, topic, errors, field, |ui| {
-        widgets::optional(ui, value, default, NOT_GIVEN, |ui, v| {
+    row(ui, d, topic, errors, field, |ui| {
+        widgets::optional(ui, value, start, NOT_GIVEN, |ui, v| {
             m.length_field(ui, v, 0.1, 1000.0, "");
         });
     });
 }
 
-fn opt_feed(
+fn opt_feed<T: Serialize + DeserializeOwned>(
     ui: &mut egui::Ui,
+    d: &mut Defaults<T>,
     m: Measure,
     topic: &Topic,
     value: &mut Option<f64>,
     errors: &[ToolFieldError],
     field: &str,
 ) {
-    row(ui, topic, errors, field, |ui| {
+    row(ui, d, topic, errors, field, |ui| {
         widgets::optional(ui, value, 1000.0, NOT_GIVEN, |ui, v| {
             m.feed_field(ui, v, 50000.0);
         });
     });
 }
 
-fn opt_text(ui: &mut egui::Ui, topic: &Topic, value: &mut Option<String>, hint: &str) {
-    widgets::row(ui, topic, |ui| {
+fn opt_text(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<ToolSpec>,
+    (topic, path): (&Topic, &str),
+    value: &mut Option<String>,
+    hint: &str,
+) {
+    d.row(ui, topic, path, |ui| {
         let mut text = value.clone().unwrap_or_default();
         if ui
             .add(

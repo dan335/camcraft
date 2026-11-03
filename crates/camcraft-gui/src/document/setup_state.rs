@@ -1,15 +1,17 @@
 //! What a setup keeps that is not in the job: its last run, how it is laid out,
 //! and how it is being looked at and played.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use camcraft_core::job::Job;
 use camcraft_core::run::Stage;
 use camcraft_core::setup::Prepared;
+use camcraft_geom::contour::Region;
 use camcraft_session::Ran;
 
 use super::next_key;
-use super::run::SetupInputs;
+use super::run::{SetupInputs, ShadowKey};
 use crate::stock::live::LiveStock;
 use crate::stock::stock_view::ColorMode;
 use crate::transport::{Mark, marks};
@@ -53,12 +55,33 @@ pub struct RanSetup {
 pub struct Layout {
     /// What it was laid out from, and which of its models had loaded.
     pub(super) inputs: (SetupInputs, Vec<String>),
-    /// The part and stock in the setup's frame, or why not.
-    pub prepared: Result<Prepared, String>,
+    /// The part and stock in the setup's frame, or why not. Shared with the
+    /// worker that casts its shadow ([`Document::shadows_wanted`]).
+    ///
+    /// [`Document::shadows_wanted`]: super::Document::shadows_wanted
+    pub prepared: Result<Arc<Prepared>, String>,
+    /// Why the part's shadow could not be cast, once the worker has tried.
+    pub(super) shadow_failed: Option<String>,
+    /// What its part's shadow is cast from, to keep it by and find it again.
+    pub(super) shadow_key: ShadowKey,
     /// Stock edges and the work-zero axes.
     pub outline: Vec<Outline>,
     /// Tells this layout's uploads from any other.
     pub key: u64,
+}
+
+impl Layout {
+    /// The part's silhouette, its shadow from above: `Ok(None)` while it is
+    /// being cast, off the window's thread, since a large part takes a while.
+    /// Never casts it here.
+    pub fn silhouette(&self) -> Result<Option<&Region>, String> {
+        let prepared = self.prepared.as_ref().map_err(Clone::clone)?;
+        match (prepared.cast_shadow(), &self.shadow_failed) {
+            (Some(shadow), _) => Ok(Some(shadow.area())),
+            (None, Some(why)) => Err(format!("the part's silhouette: {why}")),
+            (None, None) => Ok(None),
+        }
+    }
 }
 
 /// How a setup is being looked at: its own camera, playhead and choices, kept
@@ -149,6 +172,10 @@ pub struct SetupState {
     pub progress: Option<(Stage, Instant)>,
     /// How it is laid out now.
     pub layout: Option<Layout>,
+    /// The layout, by its key, whose part's shadow a worker is casting: one at
+    /// a time, so a layout made again and again while one is cast (a stock's
+    /// size typed in) waits for it rather than starting more.
+    pub(super) casting: Option<(u64, ShadowKey)>,
     /// How it is being looked at.
     pub view: SetupView,
     /// Its material during playback, once it has been followed.

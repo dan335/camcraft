@@ -36,8 +36,10 @@
 //!
 //! The drop-cutter's surface cannot show a wall: the tool goes from its top to its
 //! foot at once. Passes bunch up there; any stretch steeper than a plunge
-//! ([`PLUNGE_RATIO`](crate::path::toolpath::PLUNGE_RATIO)) is left out, for a waterline pass, and the slope limits leave
-//! out what is outside the range asked for.
+//! ([`PLUNGE_RATIO`](crate::path::toolpath::PLUNGE_RATIO)) is left out, and the
+//! operation cuts those walls with rings round them, a stepover apart down
+//! them, which is a stepover apart along a wall ([`ScallopReport::walls`]). The
+//! slope limits leave out what is outside the range asked for.
 //!
 //! # Order and direction
 //!
@@ -48,7 +50,7 @@
 //! out. Both ways keeps closed rings climbing, and starts an open pass at whichever
 //! end is nearer.
 
-use camcraft_geom::contour::{Region, polyline_length};
+use camcraft_geom::contour::{Indexed, Region, polyline_length};
 use camcraft_geom::geodesic::{Seed, march};
 use camcraft_geom::isoline::{IsoLine, nest};
 use camcraft_geom::shadow::Shadow;
@@ -64,8 +66,8 @@ pub use crate::strategy::nesting::Order;
 use crate::strategy::nesting::{Cuts, Nested, distance, nearest};
 use crate::strategy::parallel::{ParallelParams, ParallelReport, Run, sweep_polyline};
 use crate::strategy::projected::{Emit, simplify};
-use crate::strategy::slope::{self, SlopeCounts, Sloped};
-use crate::strategy::{StrategyError, check};
+use crate::strategy::slope::{self, SlopeCounts, Sloped, banded, steep_band};
+use crate::strategy::{StrategyError, check, with_edge};
 
 /// The most levels of passes: far past any real part.
 const MAX_LEVELS: u32 = 100_000;
@@ -132,6 +134,9 @@ pub struct ScallopReport {
     pub coarsened: bool,
     /// Stretches left out for being steeper than a plunge.
     pub too_steep: u64,
+    /// Rings cut round those walls instead, a stepover apart down them: by the
+    /// operation that runs it, which has the part to find them on.
+    pub walls: u64,
     /// Stretches left out for being outside the slope range asked for.
     pub outside_slope: u64,
     /// Stretches too short to be worth cutting.
@@ -172,6 +177,18 @@ pub fn scallop_finish<T: DropTest + Sync>(
     area: &Region,
     params: &ScallopParams,
 ) -> Result<(Toolpath, ScallopReport), StrategyError> {
+    scallop_finish_banded(cutter, tool, area, params).map(|(path, report, _)| (path, report))
+}
+
+/// As [`scallop_finish`], with the band its passes leave out as steeper than a
+/// plunge, as the tool's centre goes ([`steep_band`]): for rings round the walls
+/// there to finish, so what the passes leave is exactly what they cut.
+pub fn scallop_finish_banded<T: DropTest + Sync>(
+    cutter: &DropCutter<'_>,
+    tool: &T,
+    area: &Region,
+    params: &ScallopParams,
+) -> Result<(Toolpath, ScallopReport, Region), StrategyError> {
     check("stepover", params.stepover)?;
     check("tolerance", params.tolerance)?;
     check("feed", params.feed)?;
@@ -179,13 +196,16 @@ pub fn scallop_finish<T: DropTest + Sync>(
     slope::check_range(params.slope_from, params.slope_to)?;
     let mut report = ScallopReport::default();
     let Some((lo, hi)) = area.bounds() else {
-        return Ok((Toolpath::new(), report));
+        return Ok((Toolpath::new(), report, Region::default()));
     };
     let s = params.stepover;
 
     let field = Field::build(cutter, tool, area, lo, hi, params, &mut report)?;
     let grid = &field.grid;
     let d = &field.d;
+    let band = steep_band(grid, tool.max_radius(), area, &field.leaving)?;
+    let in_band = Indexed::of(&band);
+    let on_edge = with_edge(area, params.tolerance);
 
     // The lines at each level, found level by level in parallel.
     let top = d
@@ -274,6 +294,7 @@ pub fn scallop_finish<T: DropTest + Sync>(
             let mut w = Worked::default();
             let mut stretches: Vec<(Vec<DVec2>, bool)> = Vec::new();
             for line in std::mem::take(&mut plan.lines) {
+                let line = banded(line, &in_band, grid.pitch());
                 stretches.extend(line.within(
                     params.slope_from,
                     ceiling,
@@ -281,7 +302,9 @@ pub fn scallop_finish<T: DropTest + Sync>(
                     &mut w.slopes,
                 ));
             }
-            let clipped = area.clip_lines(&stretches)?;
+            // The first lines are the area's own edge: a point on it is in, or
+            // clipping it to the area cuts it into bits ([`with_edge`]).
+            let clipped = on_edge.clip_lines(&stretches)?;
             for (points, closed) in clipped {
                 if !closed && polyline_length(&points) < 2.0 * grid.pitch() {
                     w.fragments += 1;
@@ -333,7 +356,7 @@ pub fn scallop_finish<T: DropTest + Sync>(
         tree.cut(roots.remove(k), &mut cut)?;
     }
     report.passes = cut.emit.passes;
-    Ok((cut.emit.path, report))
+    Ok((cut.emit.path, report, band))
 }
 
 /// The field of distances along the surface from the boundary, on its grid.
@@ -341,6 +364,8 @@ struct Field {
     grid: TriGrid,
     /// Each node's distance: negative outside the area, infinite where unknown.
     d: Vec<f64>,
+    /// The cells where the tool leaves the part ([`AreaGrid::leaving_part`]).
+    leaving: Vec<[u32; 4]>,
 }
 
 impl Field {
@@ -396,7 +421,12 @@ impl Field {
                 *d = -*d;
             }
         }
-        Ok(Self { grid: on.grid, d })
+        let leaving = on.leaving_part();
+        Ok(Self {
+            grid: on.grid,
+            d,
+            leaving,
+        })
     }
 }
 
