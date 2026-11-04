@@ -1,17 +1,8 @@
 use std::f64::consts::FRAC_PI_4;
 
 use super::*;
+use crate::fixture::cut_through;
 use glam::dvec3;
-
-/// Cuts through `points` from a rapid to the first, at `feed`.
-fn cut_through(points: &[DVec3], feed: f64) -> Toolpath {
-    let mut p = Toolpath::new();
-    p.rapid_to(points[0]).unwrap();
-    for &q in &points[1..] {
-        p.feed_to(q, MoveRole::Cut, feed).unwrap();
-    }
-    p
-}
 
 fn params(material_on_right: Option<bool>) -> CornerParams {
     CornerParams {

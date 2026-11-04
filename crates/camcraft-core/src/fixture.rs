@@ -1,4 +1,19 @@
-//! A job the tests share.
+//! A job, and paths, the tests share.
+
+use glam::DVec3;
+
+use crate::path::toolpath::{MoveRole, Toolpath};
+
+/// A rapid to the first of `points`, then cuts at `feed` through the rest.
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+pub(crate) fn cut_through(points: &[DVec3], feed: f64) -> Toolpath {
+    let mut p = Toolpath::new();
+    p.rapid_to(points[0]).unwrap();
+    for &q in &points[1..] {
+        p.feed_to(q, MoveRole::Cut, feed).unwrap();
+    }
+    p
+}
 
 /// A dome, roughed in Z levels leaving stock with a flat mill, then finished with
 /// a ball in parallel passes; traverses 6 mm over the stock. Its model is called

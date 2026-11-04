@@ -477,14 +477,13 @@ fn post(args: PostArgs) -> Fallible<usize> {
         .map_or_else(|| "camcraft".into(), |s| s.to_string_lossy().to_string());
     let (text, report) = program(op, args.wcs, &profile, &name)?;
     write_atomically(out, &text)?;
-    tracing::info!(
-        "{}: {} lines, {} motion blocks for {} -> {}",
-        op.name,
-        report.lines,
-        report.motion_blocks,
-        profile.name,
-        out.display()
-    );
+    report_program(&Program {
+        path: out.clone(),
+        text,
+        op: op.name.clone(),
+        profile: profile.name.clone(),
+        report,
+    });
     Ok(ran.warnings.len() + ran.checks.failures().count())
 }
 

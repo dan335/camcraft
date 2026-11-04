@@ -522,11 +522,7 @@ fn stocks(
             in_setup: true,
         })
         .collect();
-    let bodies: camcraft_core::setup::Bodies<'_> = doc
-        .models
-        .iter()
-        .filter_map(|(n, slot)| Some((n.as_str(), &slot.model()?.body)))
-        .collect();
+    let bodies = doc.bodies();
     for def in doc
         .job
         .stocks

@@ -375,10 +375,7 @@ impl Lap {
     fn from(ring: &[DVec2], centre: DVec2, toward: DVec2, seam_at: &mut f64) -> Self {
         let n = ring.len();
         let mut best: Option<(usize, f64, DVec2)> = None;
-        for i in 0..n {
-            let (Some(&a), Some(&b)) = (ring.get(i), ring.get((i + 1) % n)) else {
-                continue;
-            };
+        for (i, (a, b)) in camcraft_geom::contour::closed_edges(ring).enumerate() {
             let (da, db) = ((a - centre).perp_dot(toward), (b - centre).perp_dot(toward));
             if (da > 0.0) == (db > 0.0) {
                 continue;

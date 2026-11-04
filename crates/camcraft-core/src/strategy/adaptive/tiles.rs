@@ -12,6 +12,14 @@ pub(super) struct Window {
     pub(super) allowed: Region,
 }
 
+/// How wide a tile is, in tool radii: wide enough that a pass's step reads
+/// few, narrow enough that each holds little.
+pub(super) const TILE_RADII: f64 = 16.0;
+
+/// Points of a line swept at once: a whole path's sweep is one very large
+/// polygon, and slow to take away.
+pub(super) const SWEPT_AT_ONCE: usize = 48;
+
 /// A region cut into square tiles, so what is near a point is found, and
 /// changed, without touching the rest: a level of a whole sheet has a great
 /// deal of rest.
@@ -25,6 +33,26 @@ pub(super) struct Tiles {
 }
 
 impl Tiles {
+    /// Take what a tool `radius` wide sweeps along `line` away, a little at a
+    /// time: [`SWEPT_AT_ONCE`] points, each piece from the last point of the
+    /// one before.
+    pub(super) fn subtract_swept(
+        &mut self,
+        line: &[DVec2],
+        radius: f64,
+        arc: f64,
+    ) -> Result<(), StrategyError> {
+        let mut start = 0;
+        while start + 1 < line.len() {
+            let end = (start + SWEPT_AT_ONCE).min(line.len());
+            if let Some(piece) = line.get(start..end) {
+                self.subtract(&Region::around_polylines(&[piece.to_vec()], radius, arc))?;
+            }
+            start = end - 1;
+        }
+        Ok(())
+    }
+
     /// `region` in tiles of `size`.
     // Tile counts are clamped to 4096 a side, so the conversions are exact.
     #[allow(

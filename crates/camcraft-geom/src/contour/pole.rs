@@ -14,10 +14,17 @@ use std::collections::BinaryHeap;
 use glam::DVec2;
 
 use super::{Contour, Region};
+use crate::mesh::distance_to_segment;
 
 /// The most cells searched, so a pathological shape asked for a tiny precision
 /// cannot run away: the best found by then is given.
 const MAX_CELLS: usize = 1 << 20;
+
+/// The most cells the search starts from along the longer side of the bounds.
+const SEED_ROWS: u32 = 1024;
+
+/// [`SEED_ROWS`], to divide by.
+const MOST_SEEDS: f64 = SEED_ROWS as f64;
 
 /// A square cell: its centre, half its side, how far inside its centre is
 /// (negative outside), and the most any point of it could be.
@@ -76,8 +83,10 @@ impl Region {
     }
 
     /// The point deepest inside, and how deep it is: no shallower than the
-    /// deepest point there is by more than `precision`. `None` for a region
-    /// with no area, or a precision that is not a positive number.
+    /// deepest point there is by more than `precision`, unless a shape so
+    /// awkward it needs more than a million cells searched, when it is the
+    /// deepest found by then. `None` for a region with no area, or a precision
+    /// that is not a positive number.
     pub fn deepest_point(&self, precision: f64) -> Option<(DVec2, f64)> {
         if !(precision.is_finite() && precision > 0.0) {
             return None;
@@ -89,13 +98,25 @@ impl Region {
         if side.is_nan() || side <= 0.0 {
             return None;
         }
+        // Square cells as wide as the bounds are narrow, to start: no more
+        // than so many along the bounds, which a sliver would otherwise need
+        // as many of as it is long for wide.
+        let side = side.max(size.x.max(size.y) / MOST_SEEDS);
         let half = side / 2.0;
         let edges = Indexed::of(self);
         let mut queue = BinaryHeap::new();
+        // Counted too, so bounds far from the origin, where a step is lost
+        // to rounding, cannot run away either.
         let mut y = lo.y;
-        while y < hi.y {
+        for _ in 0..SEED_ROWS {
+            if y >= hi.y {
+                break;
+            }
             let mut x = lo.x;
-            while x < hi.x {
+            for _ in 0..SEED_ROWS {
+                if x >= hi.x {
+                    break;
+                }
                 queue.push(Cell::new(DVec2::new(x + half, y + half), half, &edges));
                 x += side;
             }
@@ -278,18 +299,6 @@ impl Indexed {
         }
         best
     }
-}
-
-/// How far `p` is from the segment `a`–`b`.
-fn distance_to_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
-    let ab = b - a;
-    let length = ab.length_squared();
-    let t = if length > 0.0 {
-        ((p - a).dot(ab) / length).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    p.distance(a + ab * t)
 }
 
 #[cfg(test)]

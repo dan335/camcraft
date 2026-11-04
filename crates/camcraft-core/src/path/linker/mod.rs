@@ -52,6 +52,7 @@ pub use world::{Air, Material, NoPart, Surface, Unchanging};
 
 use crate::control::{Watch, share};
 use crate::is_positive;
+use crate::must::{AT_LEAST_ZERO, POSITIVE};
 use crate::path::toolpath::{Arc, Move, MoveRole, PLUNGE_RATIO, Toolpath, steep};
 
 /// Resolve every [`MoveRole::Link`], cutting what is linked into `material` as it
@@ -94,14 +95,14 @@ pub fn link_watched<C: Clearance, M: Material, S: Surface>(
     if !params.safe_distance.is_finite() || params.safe_distance < 0.0 {
         return Err(LinkError::BadParameter {
             name: "safe_distance",
-            must: NOT_NEGATIVE,
+            must: AT_LEAST_ZERO,
             value: params.safe_distance,
         });
     }
     if !params.lead_radius.is_finite() || params.lead_radius < 0.0 {
         return Err(LinkError::BadParameter {
             name: "lead_radius",
-            must: NOT_NEGATIVE,
+            must: AT_LEAST_ZERO,
             value: params.lead_radius,
         });
     }
@@ -672,13 +673,6 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
     }
 }
 
-/// Whether a move falls steeply at the cutting feed, as the gate judges one:
-/// see [`Toolpath::steep_descents`].
-fn falls(m: &Move, at: DVec3) -> bool {
-    matches!(m.role, MoveRole::Cut | MoveRole::Transition)
-        && steep(at.z - m.to.z, m.flat_length(at), PLUNGE_RATIO)
-}
-
 /// How far `moves` have been falling steeply at the cutting feed at their end:
 /// a cut coming down a wall, which a link going on down would add to.
 fn trailing_fall(moves: &[Move]) -> f64 {
@@ -686,7 +680,7 @@ fn trailing_fall(moves: &[Move]) -> f64 {
         .windows(2)
         .rev()
         .map_while(|w| match w {
-            [a, m] if falls(m, a.to) => Some(a.to.z - m.to.z),
+            [a, m] if m.falls_steeply(a.to, PLUNGE_RATIO) => Some(a.to.z - m.to.z),
             _ => None,
         })
         .sum()
@@ -715,7 +709,7 @@ fn falls_steeply(fallen: f64, from: DVec3, way: &[DVec3], pass: &[Move], max: f6
     }
     // And on into the pass, while it keeps falling.
     for m in pass {
-        if depth <= 0.0 || !falls(m, at) {
+        if depth <= 0.0 || !m.falls_steeply(at, PLUNGE_RATIO) {
             break;
         }
         depth += at.z - m.to.z;
@@ -726,12 +720,6 @@ fn falls_steeply(fallen: f64, from: DVec3, way: &[DVec3], pass: &[Move], max: f6
     }
     false
 }
-
-/// What a feed, a tool's radius or a tolerance must be.
-const POSITIVE: &str = "finite and greater than zero";
-
-/// What a distance that may be nothing must be.
-const NOT_NEGATIVE: &str = "finite and not negative";
 
 /// `value`, for the parameter called `name`, if it is usable: finite and
 /// greater than zero.

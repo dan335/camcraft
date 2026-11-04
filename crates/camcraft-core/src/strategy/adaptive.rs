@@ -74,7 +74,8 @@ use crate::cutter::tool::{Cutter, ToolProfile};
 use crate::path::toolpath::{MoveRole, Toolpath};
 use crate::strategy::reach::LevelReach;
 use crate::strategy::{
-    MATERIAL_THICKNESS, SAME_LEVEL, StrategyError, check, check_levels, slabs, with_fine_levels,
+    MATERIAL_THICKNESS, SAME_LEVEL, StrategyError, check, check_levels, merged_highest, slabs,
+    sort_levels, with_fine_levels,
 };
 
 mod clearing;
@@ -86,7 +87,7 @@ mod tiles;
 use clearing::Clearing;
 pub use levels::{Shallow, peak_heights};
 use rest::Earlier;
-use tiles::Tiles;
+use tiles::{SWEPT_AT_ONCE, TILE_RADII, Tiles};
 
 /// The most a pass turns in one step, toward or away from the material, in
 /// radians.
@@ -282,24 +283,16 @@ pub struct AdaptiveReport {
 pub fn flat_heights(mesh: &TriMesh, tolerance: f64) -> Vec<f64> {
     // Within half a degree of level.
     let level = (0.5f64).to_radians().cos();
-    let mut zs: Vec<f64> = (0..mesh.len())
+    let zs: Vec<f64> = (0..mesh.len())
         .filter_map(|i| mesh.triangle(i))
         .filter_map(|[a, b, c]| {
             let n = (b - a).cross(c - a).try_normalize()?;
             (n.z >= level).then_some((a.z + b.z + c.z) / 3.0)
         })
         .collect();
-    zs.sort_by(f64::total_cmp);
-    let mut out: Vec<f64> = Vec::new();
-    for z in zs {
-        match out.last_mut() {
-            // One face, tessellated at a rounding error's difference in height,
-            // is one level: the highest of it, so the floor is never cut into.
-            Some(last) if z - *last <= tolerance * 0.1 => *last = z,
-            _ => out.push(z),
-        }
-    }
-    out
+    // One face, tessellated at a rounding error's difference in height, is
+    // one level: the highest of it, so the floor is never cut into.
+    merged_highest(zs, tolerance * 0.1)
 }
 
 /// Clear material in Z levels, holding the tool's engagement constant.
@@ -369,8 +362,7 @@ pub fn adaptive_rough(
             zones.push((a.z, a.zone));
         }
         for (_, fills) in &mut slabs {
-            fills.sort_by(f64::total_cmp);
-            fills.dedup_by(|a, b| (*a - *b).abs() < SAME_LEVEL);
+            sort_levels(fills, false);
         }
     }
     let zone_of = |z: f64| {
@@ -734,7 +726,7 @@ fn clear_flat(
     cutter: &Cutter,
     p: &LevelParams,
 ) -> Result<LevelCut, StrategyError> {
-    let mut uncut = Tiles::new(standing, 16.0 * p.radius)?;
+    let mut uncut = Tiles::new(standing, TILE_RADII * p.radius)?;
     for cut in below {
         // The real tool's width that far above its tip.
         let wide = cutter.radius_at(f - cut.z);
@@ -743,17 +735,7 @@ fn clear_flat(
         }
         // A little at a time, as the level itself was cleared: the whole sweep
         // at once is a very large polygon.
-        cut.swept(|line| {
-            for chunk in line.chunks(48).enumerate().map(|(k, c)| {
-                // Each chunk from the last point of the one before.
-                let from = (k * 48).saturating_sub(1);
-                line.get(from..(k * 48 + c.len()).min(line.len()))
-                    .unwrap_or(c)
-            }) {
-                uncut.subtract(&Region::around_polylines(&[chunk.to_vec()], wide, p.arc))?;
-            }
-            Ok(())
-        })?;
+        cut.swept(|line| uncut.subtract_swept(line, wide, p.arc))?;
         for &(c, r) in &cut.helixes {
             if let Some(d) = disc(c, r + wide, p.arc) {
                 uncut.subtract(&Region::union_of(&[d])?)?;

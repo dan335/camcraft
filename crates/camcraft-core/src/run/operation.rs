@@ -31,7 +31,6 @@ use crate::path::toolpath::{Move, Toolpath};
 use crate::path::trim::within_heights;
 use crate::setup::features::{Chain, FeatureError, Picking, picked_chains};
 use crate::setup::{Bodies, Prepared};
-use crate::strategy::StrategyError;
 use crate::strategy::adaptive::rest::Earlier;
 use crate::strategy::adaptive::{
     AdaptiveParams, Shallow, adaptive_rough, flat_heights, peak_heights,
@@ -331,7 +330,7 @@ pub(super) fn plan_operation(
             op.heights.bottom.map(|_| bottom),
             work.job.tolerance,
         )
-        .map_err(|e| in_op(op)(StrategyError::from(e)))?;
+        .map_err(in_op(op))?;
         if report.after == 0 && report.before > 0 {
             warnings.push("found nothing to finish between the Top and Bottom".into());
         }
@@ -347,7 +346,7 @@ pub(super) fn plan_operation(
     // part, a pocket's middle before its walls.
     let (ordered, order) = if op.linking.reorder && op.strategy.uses().reorder {
         let by_level = op.strategy.uses().depths != Depths::None;
-        order_passes(&raw, op.linking.allow_reverse, by_level)?
+        order_passes(&raw, op.linking.allow_reverse, by_level).map_err(in_op(op))?
     } else {
         (raw, Default::default())
     };
@@ -363,8 +362,7 @@ pub(super) fn plan_operation(
                 tool_radius: work.tool.cutter_radius(),
                 plunge_feed: op.linking.plunge_feed,
             };
-            let (tabbed, report) =
-                add_tabs(&ordered, &params).map_err(|e| in_op(op)(StrategyError::from(e)))?;
+            let (tabbed, report) = add_tabs(&ordered, &params).map_err(in_op(op))?;
             if report.tabs == 0 {
                 warnings
                     .push("no tabs: no closed loop at the deepest level has room for one".into());
@@ -384,7 +382,7 @@ pub(super) fn plan_operation(
     // what is verified is the program.
     let (ordered, smoothing) = match op.smoothing(work.job.tolerance) {
         Some(tolerance) => {
-            let (fitted, report) = fit_arcs(&ordered, tolerance)?;
+            let (fitted, report) = fit_arcs(&ordered, tolerance).map_err(in_op(op))?;
             (fitted, Some(report))
         }
         None => (ordered, None),
@@ -402,7 +400,7 @@ pub(super) fn plan_operation(
                 only_inner: f.only_inner_corners,
                 material_on_right: op.strategy.one_way().then(|| work.kept_on_right()),
             };
-            let (slowed, report) = slow_corners(&ordered, &params)?;
+            let (slowed, report) = slow_corners(&ordered, &params).map_err(in_op(op))?;
             (slowed, Some(report))
         }
         None => (ordered, None),

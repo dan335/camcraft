@@ -327,10 +327,7 @@ fn models(
         |ui| {
             let r = row(ui, d, Selection::Models, "Models", edits);
             r.context_menu(|ui| {
-                if ui.button("Add models…").clicked() {
-                    actions.borrow_mut().push(BrowserAction::AddModels);
-                    ui.close();
-                }
+                item(ui, "Add models…", actions, || BrowserAction::AddModels);
             });
         },
         |ui| {
@@ -350,22 +347,13 @@ fn models(
                         _ => r.on_hover_text(&m.path),
                     };
                     r.context_menu(|ui| {
-                        if ui.button("Duplicate").clicked() {
-                            edits
-                                .borrow_mut()
-                                .push(Edit::DuplicateModel(m.name.clone()));
-                            ui.close();
-                        }
-                        if ui.button("Find it elsewhere…").clicked() {
-                            actions
-                                .borrow_mut()
-                                .push(BrowserAction::Locate(m.name.clone()));
-                            ui.close();
-                        }
-                        if ui.button("Remove").clicked() {
-                            edits.borrow_mut().push(Edit::RemoveModel(m.name.clone()));
-                            ui.close();
-                        }
+                        item(ui, "Duplicate", edits, || {
+                            Edit::DuplicateModel(m.name.clone())
+                        });
+                        item(ui, "Find it elsewhere…", actions, || {
+                            BrowserAction::Locate(m.name.clone())
+                        });
+                        item(ui, "Remove", edits, || Edit::RemoveModel(m.name.clone()));
                     });
                 });
             }
@@ -381,10 +369,7 @@ fn stocks(ui: &mut egui::Ui, d: &Document, edits: &RefCell<Vec<Edit>>) {
         |ui| {
             let r = row(ui, d, Selection::Stocks, "Stocks", edits);
             r.context_menu(|ui| {
-                if ui.button("New stock").clicked() {
-                    edits.borrow_mut().push(Edit::AddStock);
-                    ui.close();
-                }
+                item(ui, "New stock", edits, || Edit::AddStock);
             });
         },
         |ui| {
@@ -392,16 +377,10 @@ fn stocks(ui: &mut egui::Ui, d: &Document, edits: &RefCell<Vec<Edit>>) {
                 leaf(ui, |ui| {
                     let r = row(ui, d, Selection::Stock(s.name.clone()), &s.name, edits);
                     r.context_menu(|ui| {
-                        if ui.button("Duplicate").clicked() {
-                            edits
-                                .borrow_mut()
-                                .push(Edit::DuplicateStock(s.name.clone()));
-                            ui.close();
-                        }
-                        if ui.button("Remove").clicked() {
-                            edits.borrow_mut().push(Edit::RemoveStock(s.name.clone()));
-                            ui.close();
-                        }
+                        item(ui, "Duplicate", edits, || {
+                            Edit::DuplicateStock(s.name.clone())
+                        });
+                        item(ui, "Remove", edits, || Edit::RemoveStock(s.name.clone()));
                     });
                 });
             }
@@ -422,10 +401,7 @@ fn setups(
         |ui| {
             let r = row(ui, d, Selection::Setups, "Setups", edits);
             r.context_menu(|ui| {
-                if ui.button("New setup").clicked() {
-                    edits.borrow_mut().push(Edit::AddSetup);
-                    ui.close();
-                }
+                item(ui, "New setup", edits, || Edit::AddSetup);
             });
         },
         |ui| {
@@ -551,30 +527,18 @@ fn operation_menu(
         ui.close();
     }
     ui.separator();
-    if ui.button("Duplicate").clicked() {
-        edits
-            .borrow_mut()
-            .push(Edit::DuplicateOperation(name.to_string(), i));
-        ui.close();
-    }
-    if ui.button("Move up").clicked() {
-        edits
-            .borrow_mut()
-            .push(Edit::MoveOperation(name.to_string(), i, -1));
-        ui.close();
-    }
-    if ui.button("Move down").clicked() {
-        edits
-            .borrow_mut()
-            .push(Edit::MoveOperation(name.to_string(), i, 1));
-        ui.close();
-    }
-    if ui.button("Delete").clicked() {
-        edits
-            .borrow_mut()
-            .push(Edit::RemoveOperation(name.to_string(), i));
-        ui.close();
-    }
+    item(ui, "Duplicate", edits, || {
+        Edit::DuplicateOperation(name.to_string(), i)
+    });
+    item(ui, "Move up", edits, || {
+        Edit::MoveOperation(name.to_string(), i, -1)
+    });
+    item(ui, "Move down", edits, || {
+        Edit::MoveOperation(name.to_string(), i, 1)
+    });
+    item(ui, "Delete", edits, || {
+        Edit::RemoveOperation(name.to_string(), i)
+    });
 }
 
 /// Stop generating setup `name`, from its menu, while it is generated; or
@@ -706,28 +670,16 @@ fn setup_menu(
             .push(Edit::AddOperation(name.to_string(), strategy));
     });
     ui.separator();
-    if ui.button("Duplicate").clicked() {
-        edits
-            .borrow_mut()
-            .push(Edit::DuplicateSetup(name.to_string()));
-        ui.close();
-    }
-    if ui.button("Move up").clicked() {
-        edits
-            .borrow_mut()
-            .push(Edit::MoveSetup(name.to_string(), -1));
-        ui.close();
-    }
-    if ui.button("Move down").clicked() {
-        edits
-            .borrow_mut()
-            .push(Edit::MoveSetup(name.to_string(), 1));
-        ui.close();
-    }
-    if ui.button("Delete").clicked() {
-        edits.borrow_mut().push(Edit::RemoveSetup(name.to_string()));
-        ui.close();
-    }
+    item(ui, "Duplicate", edits, || {
+        Edit::DuplicateSetup(name.to_string())
+    });
+    item(ui, "Move up", edits, || {
+        Edit::MoveSetup(name.to_string(), -1)
+    });
+    item(ui, "Move down", edits, || {
+        Edit::MoveSetup(name.to_string(), 1)
+    });
+    item(ui, "Delete", edits, || Edit::RemoveSetup(name.to_string()));
 }
 
 fn apply(doc: &mut Document, edit: Edit) {
@@ -884,6 +836,14 @@ mod tests {
             .collect();
         assert_eq!(names(h.state()), ["finish copy", "finish"]);
         assert_eq!(other, ["finish copy", "rough", "finish", "rough 2"]);
+    }
+}
+
+/// A menu item that, clicked, asks for what `then` makes and closes the menu.
+fn item<T>(ui: &mut egui::Ui, label: &str, queue: &RefCell<Vec<T>>, then: impl FnOnce() -> T) {
+    if ui.button(label).clicked() {
+        queue.borrow_mut().push(then());
+        ui.close();
     }
 }
 

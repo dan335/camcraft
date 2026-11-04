@@ -19,7 +19,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use toml::{Table, Value};
 
-use crate::help::Topic;
+use crate::help::{Help, Topic};
 use crate::ui::widgets;
 
 /// A form's thing and its default, as a job file has them, and the settings
@@ -209,6 +209,33 @@ impl<T: Serialize + DeserializeOwned> Defaults<T> {
     pub fn reset_group(&mut self, ui: &mut egui::Ui, path: &str) {
         if self.group_changed(path) && widgets::reset_button(ui).clicked() {
             self.push(path, Layer::Default);
+        }
+    }
+
+    /// A box ticked to give the optional group at `path`, labelled `label`,
+    /// with its ↺ beside it: ticked, the group is given as it starts;
+    /// unticked, it is taken away. Its rows, if it is given, follow a little
+    /// below.
+    pub fn optional_group<G: Default>(
+        &mut self,
+        ui: &mut egui::Ui,
+        topic: &Topic,
+        path: &str,
+        label: &str,
+        group: &mut Option<G>,
+    ) {
+        let mut on = group.is_some();
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut on, label).help(topic);
+            self.reset_group(ui, path);
+        });
+        match (on, group.is_some()) {
+            (true, false) => *group = Some(G::default()),
+            (false, true) => *group = None,
+            _ => {}
+        }
+        if group.is_some() {
+            ui.add_space(crate::ui::theme::SPACE_2);
         }
     }
 

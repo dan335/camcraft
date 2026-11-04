@@ -273,6 +273,12 @@ impl App {
         self.viewport.camera()
     }
 
+    /// Orbit the camera as a drag of `dx`, `dy` points would. Only the
+    /// snapshot harness asks.
+    pub fn orbit_for_snapshot(&mut self, dx: f32, dy: f32) {
+        self.viewport.orbit_for_snapshot(dx, dy);
+    }
+
     /// Bring the camera in on `at`. Only the snapshot harness asks.
     pub fn focus_for_snapshot(&mut self, at: glam::DVec3, radius: f32) {
         self.viewport.focus(at, radius);

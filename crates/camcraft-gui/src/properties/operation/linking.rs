@@ -3,6 +3,8 @@
 
 use camcraft_core::job::{Entry, HelixSize, Leads, Operation, Reach, Retraction, StrategySpec};
 
+use super::{across, left_out};
+
 use crate::ui::defaults::Defaults;
 use eframe::egui;
 
@@ -23,12 +25,9 @@ pub(super) fn linking(
 ) {
     let uses = op.strategy.uses();
     // Where a value is left out, the strategy's own for the tool, or for a
-    // 6 mm one before a tool is chosen.
-    let across = diameter.unwrap_or(6.0);
-    let of_tool = |part: f64, what: &str| match diameter {
-        Some(d) => format!("{what}: {}", m.length(part * d, 2)),
-        None => what.to_string(),
-    };
+    // tool of a usual size before one is chosen.
+    let across = across(diameter);
+    let of_tool = |part: f64, what: &str| left_out(m, diameter, part * across, what);
     form(ui, "linking", |ui| {
         d.row(ui, &link::RETRACT_FEED, "linking.retract_feed", |ui| {
             m.feed_field(ui, &mut op.linking.retract_feed, 50_000.0);
@@ -199,7 +198,8 @@ pub(super) fn linking(
                 _ => {}
             }
             if let Some(l) = &mut op.linking.leads {
-                let start = 0.1 * diameter.unwrap_or(6.0);
+                // What each value left out comes to, as the engine has it.
+                let start = Leads::default().sizes(across).straight;
                 let tenth = of_tool(0.1, "a tenth of the tool");
                 // A pocket's finishing passes are entered level, beside the
                 // wall: their leads have no vertical arc.

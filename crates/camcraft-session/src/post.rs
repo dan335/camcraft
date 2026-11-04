@@ -13,6 +13,7 @@ use camcraft_core::job::Setup;
 use camcraft_core::run::{OperationResult, StrategyDetail};
 use camcraft_post::op::{DrillCycles, ProgramSpec, lower};
 use camcraft_post::profile::Profile;
+use camcraft_post::readback;
 use camcraft_post::render::{RenderReport, render};
 
 use crate::{Ran, SessionError, fs};
@@ -99,15 +100,25 @@ pub fn program_spec(op: &OperationResult, wcs: u8, profile: &Profile) -> Program
     }
 }
 
-/// Render one operation as a program for `profile`.
+/// Render one operation as a program for `profile`, and read it back as a
+/// controller would: a program that does not cut the path it was posted from
+/// is refused, never written.
 pub fn program(
     op: &OperationResult,
     wcs: u8,
     profile: &Profile,
     name: &str,
 ) -> Result<(String, RenderReport), SessionError> {
-    let ops = lower(&op.path, &program_spec(op, wcs, profile))?;
-    Ok(render(&ops, profile, name))
+    let spec = program_spec(op, wcs, profile);
+    let ops = lower(&op.path, &spec)?;
+    let (text, report) = render(&ops, profile, name);
+    readback::check(&text, &op.path, &spec, profile).map_err(|problem| {
+        SessionError::ReadsBackWrong {
+            name: name.to_string(),
+            problem,
+        }
+    })?;
+    Ok((text, report))
 }
 
 /// One program, rendered.
@@ -219,11 +230,7 @@ pub fn write_posting(posting: &Posting) -> Result<usize, SessionError> {
         move |source| SessionError::ProgramWrite { path, source }
     };
     std::fs::create_dir_all(&posting.dir).map_err(failed(&posting.dir))?;
-    let temp = |path: &Path| {
-        let mut t = path.as_os_str().to_owned();
-        t.push(".camcraft-posting");
-        std::path::PathBuf::from(t)
-    };
+    let temp = |path: &Path| fs::beside(path, "posting");
     let clean = || {
         for p in &posting.programs {
             let _ = std::fs::remove_file(temp(&p.path));

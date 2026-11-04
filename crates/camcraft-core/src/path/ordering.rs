@@ -1,6 +1,6 @@
 //! Reordering passes to cut down travel.
 //!
-//! The first `Toolpath -> Toolpath` transform, and the stage the pipeline was shaped
+//! A `Toolpath -> Toolpath` transform, and the stage the pipeline was shaped
 //! for. Strategies emit passes in whatever order suits their own geometry — a raster
 //! sweeps line by line, roughing works ring by ring — and that order is rarely the
 //! cheapest to travel. Pngcam names this as its own weakness: *"it still spends more
@@ -180,9 +180,7 @@ pub fn order_passes(
     }
 
     for p in &ordered {
-        for m in &p.moves {
-            out.push(*m)?;
-        }
+        out.append(&p.moves)?;
     }
     report.travel_after_mm = travel(&ordered);
     Ok((out, report))

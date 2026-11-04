@@ -4,7 +4,7 @@
 use serde::de::value::MapDeserializer;
 use serde::{Deserialize, Serialize};
 
-use super::{Depths, StockToLeave, is_default, is_yes, yes};
+use super::{Containment, Depths, StockToLeave, is_default, is_ninety, is_yes, ninety, yes};
 
 /// Strategy and the parameters only it has.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
@@ -316,47 +316,74 @@ impl StrategySpec {
         }
     }
 
-    /// Whether it cuts conventional rather than climb, where that is a setting of
-    /// its own. Facing's direction is its passes' own, and not asked here.
-    pub fn conventional(&self) -> bool {
+    /// How a new operation of it keeps to the part's silhouette, as Fusion
+    /// starts one: finishing by a pattern dropped onto the part keeps the
+    /// tool's centre inside it; pocket and adaptive clearing, contour and flat
+    /// finishing reach in from outside, since kept inside the part's outline
+    /// the tool would never reach its walls. `None` for a 2D operation, whose
+    /// outline starts as the silhouette already, and for facing and drilling,
+    /// which have no boundary.
+    pub fn starting_containment(&self) -> Option<Containment> {
+        match *self {
+            StrategySpec::Parallel { .. }
+            | StrategySpec::Scallop { .. }
+            | StrategySpec::Spiral { .. }
+            | StrategySpec::Radial { .. }
+            | StrategySpec::MorphedSpiral { .. } => Some(Containment::Center),
+            StrategySpec::PocketClearing { .. }
+            | StrategySpec::Adaptive { .. }
+            | StrategySpec::Contour { .. }
+            | StrategySpec::Flat { .. } => Some(Containment::Outside),
+            StrategySpec::Profile { .. }
+            | StrategySpec::Pocket { .. }
+            | StrategySpec::Face { .. }
+            | StrategySpec::Drill { .. } => None,
+        }
+    }
+
+    /// Which way its passes cut, where that is a setting of its own: a 2D
+    /// operation's or pocket clearing's one way or the other, or the
+    /// direction it is given. `None` where it is not a setting, as parallel's,
+    /// radial's and facing's passes go their own ways.
+    pub fn direction(&self) -> Option<CutDirection> {
+        let one_way = |conventional: bool| {
+            if conventional {
+                CutDirection::Conventional
+            } else {
+                CutDirection::Climb
+            }
+        };
         match *self {
             StrategySpec::Profile { conventional, .. }
             | StrategySpec::Pocket { conventional }
-            | StrategySpec::PocketClearing { conventional, .. } => conventional,
+            | StrategySpec::PocketClearing { conventional, .. } => Some(one_way(conventional)),
             StrategySpec::Adaptive { direction, .. }
             | StrategySpec::Scallop { direction, .. }
             | StrategySpec::Contour { direction, .. }
             | StrategySpec::Flat { direction, .. }
             | StrategySpec::Spiral { direction, .. }
-            | StrategySpec::MorphedSpiral { direction, .. } => {
-                direction == CutDirection::Conventional
-            }
+            | StrategySpec::MorphedSpiral { direction, .. } => Some(direction),
             StrategySpec::Parallel { .. }
             | StrategySpec::Radial { .. }
             | StrategySpec::Face { .. }
-            | StrategySpec::Drill { .. } => false,
+            | StrategySpec::Drill { .. } => None,
         }
+    }
+
+    /// Whether it cuts conventional rather than climb, where that is a setting of
+    /// its own. Facing's direction is its passes' own, and not asked here.
+    pub fn conventional(&self) -> bool {
+        self.direction() == Some(CutDirection::Conventional)
     }
 
     /// Whether every pass cuts the same way, climbing or conventional, so the
     /// material is on the same side of each: not where they cut both ways, or
     /// where which way is not a setting.
     pub fn one_way(&self) -> bool {
-        match *self {
-            StrategySpec::Profile { .. }
-            | StrategySpec::Pocket { .. }
-            | StrategySpec::PocketClearing { .. } => true,
-            StrategySpec::Adaptive { direction, .. }
-            | StrategySpec::Scallop { direction, .. }
-            | StrategySpec::Contour { direction, .. }
-            | StrategySpec::Flat { direction, .. }
-            | StrategySpec::Spiral { direction, .. }
-            | StrategySpec::MorphedSpiral { direction, .. } => direction != CutDirection::BothWays,
-            StrategySpec::Parallel { .. }
-            | StrategySpec::Radial { .. }
-            | StrategySpec::Face { .. }
-            | StrategySpec::Drill { .. } => false,
-        }
+        matches!(
+            self.direction(),
+            Some(CutDirection::Climb | CutDirection::Conventional)
+        )
     }
 
     /// The range of slopes it keeps to, in degrees from level, where it has one.
@@ -543,69 +570,36 @@ pub enum ProfileSide {
     On,
 }
 
-fn ninety() -> f64 {
-    90.0
-}
-
-fn full_turn() -> f64 {
-    360.0
-}
-
-// A signature serde's `skip_serializing_if` requires.
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_full_turn(v: &f64) -> bool {
-    (*v - 360.0).abs() < f64::EPSILON
-}
+default_number!(full_turn, is_full_turn = 360.0);
 
 fn climb() -> CutDirection {
     CutDirection::Climb
 }
 
-// A signature serde's `skip_serializing_if` requires.
+// Serde's `skip_serializing_if` hands the field by reference.
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_climb(d: &CutDirection) -> bool {
     *d == CutDirection::Climb
 }
 
-// A signature serde's `skip_serializing_if` requires.
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_ninety(v: &f64) -> bool {
-    (*v - 90.0).abs() < f64::EPSILON
-}
+default_number!(
+    /// Fusion's Minimum Shallow Stepdown, in millimetres.
+    default_min_shallow_stepdown,
+    is_default_min_shallow_stepdown = 0.5
+);
 
-/// Fusion's Minimum Shallow Stepdown, in millimetres.
-pub fn default_min_shallow_stepdown() -> f64 {
-    0.5
-}
+default_number!(
+    /// Fusion's Maximum Shallow Stepover, in millimetres.
+    default_max_shallow_stepover,
+    is_default_max_shallow_stepover = 2.0
+);
 
-// A signature serde's `skip_serializing_if` requires.
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_default_min_shallow_stepdown(v: &f64) -> bool {
-    (*v - default_min_shallow_stepdown()).abs() < f64::EPSILON
-}
-
-/// Fusion's Maximum Shallow Stepover, in millimetres.
-pub fn default_max_shallow_stepover() -> f64 {
-    2.0
-}
-
-// A signature serde's `skip_serializing_if` requires.
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_default_max_shallow_stepover(v: &f64) -> bool {
-    (*v - default_max_shallow_stepover()).abs() < f64::EPSILON
-}
-
-/// Staying down round what stands between as far as the maximum stay-down
-/// distance allows, in percent.
-fn default_stay_down_level() -> f64 {
-    100.0
-}
-
-// A signature serde's `skip_serializing_if` requires.
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_default_stay_down_level(v: &f64) -> bool {
-    (*v - default_stay_down_level()).abs() < f64::EPSILON
-}
+default_number!(
+    /// Staying down round what stands between as far as the maximum
+    /// stay-down distance allows, in percent.
+    default_stay_down_level,
+    is_default_stay_down_level = 100.0
+);
 
 fn default_min_ring() -> f64 {
     3.0

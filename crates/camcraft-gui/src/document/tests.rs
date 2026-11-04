@@ -409,17 +409,17 @@ fn room_is_made_only_where_there_is_none() {
         containment: Containment::Outside,
         margin: 0.0,
     };
-    assert!(needs_room(&b));
+    assert!(b.needs_room());
     b.kind = Boundary::BoundingBox;
-    assert!(needs_room(&b));
+    assert!(b.needs_room());
     b.margin = -0.5;
-    assert!(!needs_room(&b), "an offset in is chosen");
+    assert!(!b.needs_room(), "an offset in is chosen");
     b.margin = 0.0;
     b.containment = Containment::Center;
-    assert!(!needs_room(&b));
+    assert!(!b.needs_room());
     b.containment = Containment::Outside;
     b.kind = Boundary::Stock;
-    assert!(!needs_room(&b));
+    assert!(!b.needs_room());
 }
 
 /// Saving drops tools no operation uses.

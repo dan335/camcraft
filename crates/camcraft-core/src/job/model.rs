@@ -122,6 +122,25 @@ impl Default for StockSpec {
     }
 }
 
+impl StockSpec {
+    /// The models it is placed against, by name. Empty means the models of
+    /// whichever setup uses it.
+    pub fn models(&self) -> &[String] {
+        match self {
+            StockSpec::AroundModels { models, .. }
+            | StockSpec::FixedBox(FixedBox { models, .. }) => models,
+        }
+    }
+
+    /// The models it is placed against, to change.
+    pub fn models_mut(&mut self) -> &mut Vec<String> {
+        match self {
+            StockSpec::AroundModels { models, .. }
+            | StockSpec::FixedBox(FixedBox { models, .. }) => models,
+        }
+    }
+}
+
 /// A block of a fixed size, as a board bought to size is: on each axis it is
 /// placed against the box of the models, the way Fusion's fixed size box is, so
 /// it follows them when they move.

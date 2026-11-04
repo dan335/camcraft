@@ -37,6 +37,15 @@ the same notes at more length.
 - **Feed optimisation**, as Fusion's, on every operation but drilling and
   adaptive clearing: cuts slowed into and out of sharp corners and round tight
   arcs, only those turning into the material unless asked.
+- **Every program is read back before it is written**, as a controller would
+  read it, and refused if it does not cut the path it was posted from. Until
+  now only the tests did this.
+- **The stock's underside is no longer shaded** by what is cut in its top, in
+  playback seen from below.
+- **Renaming or removing a model follows fixed-size stocks too**: a stock of a
+  fixed size placed against a model kept the old name.
+- **A failure in ordering, smoothing or feed optimisation names the operation**
+  it happened in.
 - **A link staying down keeps clear of the material** between the passes it
   joins, where it could come a tenth of the tool into it.
 

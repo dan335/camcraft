@@ -13,6 +13,8 @@ use crate::help::{Help, Topic};
 use crate::ui::defaults::Defaults;
 use crate::ui::measure::{Measure, follow_radial};
 use crate::ui::theme;
+
+use super::{across, left_out};
 use crate::ui::widgets::{self, form, hint};
 
 pub(super) fn passes(
@@ -162,11 +164,15 @@ pub(super) fn passes(
                 ..
             } => {
                 d.row(ui, &pass::MIN_CUTTING_RADIUS, "min_cutting_radius", |ui| {
-                    let mut given = (*min_cutting_radius > 0.0).then_some(*min_cutting_radius);
-                    widgets::optional(ui, &mut given, 1.0, "none: into every corner", |ui, r| {
-                        m.length_field(ui, r, 0.05, 100.0, "");
-                    });
-                    *min_cutting_radius = given.unwrap_or(0.0);
+                    widgets::optional_positive(
+                        ui,
+                        min_cutting_radius,
+                        1.0,
+                        "none: into every corner",
+                        |ui, r| {
+                            m.length_field(ui, r, 0.05, 100.0, "");
+                        },
+                    );
                 });
                 d.row(ui, &pass::MACHINE_CAVITIES, "machine_cavities", |ui| {
                     ui.checkbox(machine_cavities, "go down into closed pockets");
@@ -177,18 +183,16 @@ pub(super) fn passes(
                     });
                     if *slot_clearing {
                         d.row(ui, &pass::SLOT_WIDTH, "slot_width", |ui| {
-                            let start = diameter.map_or(6.0, |d| d * 1.5);
-                            let mut given = (*slot_width > 0.0).then_some(*slot_width);
-                            widgets::optional(
+                            let start = 1.5 * across(diameter);
+                            widgets::optional_positive(
                                 ui,
-                                &mut given,
+                                slot_width,
                                 start,
                                 "the tool's width",
                                 |ui, w| {
                                     m.length_field(ui, w, 0.05, 1000.0, "");
                                 },
                             );
-                            *slot_width = given.unwrap_or(0.0);
                         });
                     }
                 }
@@ -218,11 +222,9 @@ pub(super) fn passes(
                 });
                 if *flat_areas {
                     d.row(ui, &pass::MIN_FLAT_STEPDOWN, "min_flat_stepdown", |ui| {
-                        let mut given = (*min_flat_stepdown > 0.0).then_some(*min_flat_stepdown);
-                        widgets::optional(ui, &mut given, 0.5, "none", |ui, v| {
+                        widgets::optional_positive(ui, min_flat_stepdown, 0.5, "none", |ui, v| {
                             m.length_field(ui, v, 0.01, 100.0, "");
                         });
-                        *min_flat_stepdown = given.unwrap_or(0.0);
                     });
                 }
             }
@@ -288,39 +290,27 @@ pub(super) fn passes(
         }
     });
     if uses.depths != Depths::None {
-        ui.add_space(theme::SPACE_4);
-        ui.label(widgets::section_label("Multiple depths"));
-        ui.add_space(theme::SPACE_2);
+        widgets::section(ui, "Multiple depths");
         multiple_depths(ui, d, m, op);
     }
     if uses.stock_to_leave != Leave::None {
-        ui.add_space(theme::SPACE_4);
-        ui.label(widgets::section_label("Stock to leave"));
-        ui.add_space(theme::SPACE_2);
+        widgets::section(ui, "Stock to leave");
         stock_to_leave(ui, d, m, op, least);
     }
     if uses.tabs {
-        ui.add_space(theme::SPACE_4);
-        ui.label(widgets::section_label("Tabs"));
-        ui.add_space(theme::SPACE_2);
+        widgets::section(ui, "Tabs");
         tabs(ui, d, m, &mut op.passes.tabs);
     }
     if uses.finishing {
-        ui.add_space(theme::SPACE_4);
-        ui.label(widgets::section_label("Finishing passes"));
-        ui.add_space(theme::SPACE_2);
+        widgets::section(ui, "Finishing passes");
         finishing(ui, d, m, &mut op.passes, diameter);
     }
     if uses.smoothing {
-        ui.add_space(theme::SPACE_4);
-        ui.label(widgets::section_label("Smoothing"));
-        ui.add_space(theme::SPACE_2);
+        widgets::section(ui, "Smoothing");
         smoothing(ui, d, m, &mut op.passes);
     }
     if uses.feed_optimization {
-        ui.add_space(theme::SPACE_4);
-        ui.label(widgets::section_label("Feed optimization"));
-        ui.add_space(theme::SPACE_2);
+        widgets::section(ui, "Feed optimization");
         feed_optimization(ui, d, m, &mut op.passes, diameter);
     }
 }
@@ -335,28 +325,21 @@ fn feed_optimization(
     passes: &mut Passes,
     diameter: Option<f64>,
 ) {
-    let mut on = passes.feed_optimization.is_some();
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut on, "Slow down in corners")
-            .help(&pass::FEED_OPTIMIZATION);
-        d.reset_group(ui, "passes.feed_optimization");
-    });
-    match (on, passes.feed_optimization.is_some()) {
-        (true, false) => passes.feed_optimization = Some(FeedOptimization::default()),
-        (false, true) => passes.feed_optimization = None,
-        _ => {}
-    }
+    d.optional_group(
+        ui,
+        &pass::FEED_OPTIMIZATION,
+        "passes.feed_optimization",
+        "Slow down in corners",
+        &mut passes.feed_optimization,
+    );
     let feed = passes.feed;
     let Some(f) = passes.feed_optimization.as_mut() else {
         return;
     };
-    let radius = diameter.map(|d| d / 2.0);
-    let tool_radius = match radius {
-        Some(r) => format!("the tool's radius: {}", m.length(r, 2)),
-        None => "the tool's radius".to_string(),
-    };
-    let start = radius.unwrap_or(3.0);
-    ui.add_space(theme::SPACE_2);
+    // What each value left out comes to, as the engine has it.
+    let given = FeedOptimization::default().sizes(across(diameter) / 2.0, feed);
+    let tool_radius = left_out(m, diameter, given.radius, "the tool's radius");
+    let start = given.radius;
     form(ui, "feed_optimization", |ui| {
         d.row(
             ui,
@@ -410,10 +393,10 @@ fn feed_optimization(
             |ui| {
                 let half = format!(
                     "half the cutting feed: {} {}",
-                    m.feed_number(0.5 * feed),
+                    m.feed_number(given.feed),
                     m.feed_unit()
                 );
-                widgets::optional(ui, &mut f.reduced_feed, 0.5 * feed, &half, |ui, v| {
+                widgets::optional(ui, &mut f.reduced_feed, given.feed, &half, |ui, v| {
                     m.feed_field(ui, v, 50_000.0);
                 });
             },
@@ -467,26 +450,20 @@ fn finishing(
     passes: &mut Passes,
     diameter: Option<f64>,
 ) {
-    let mut on = passes.finishing.is_some();
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut on, "Finish the walls with the side of the tool")
-            .help(&pass::FINISHING);
-        d.reset_group(ui, "passes.finishing");
-    });
-    match (on, passes.finishing.is_some()) {
-        (true, false) => passes.finishing = Some(Finishing::default()),
-        (false, true) => passes.finishing = None,
-        _ => {}
-    }
+    d.optional_group(
+        ui,
+        &pass::FINISHING,
+        "passes.finishing",
+        "Finish the walls with the side of the tool",
+        &mut passes.finishing,
+    );
     let feed = passes.feed;
     let Some(f) = passes.finishing.as_mut() else {
         return;
     };
-    let tenth = match diameter {
-        Some(d) => format!("a tenth of the tool: {}", m.length(0.1 * d, 2)),
-        None => "a tenth of the tool".to_string(),
-    };
-    ui.add_space(theme::SPACE_2);
+    // What each value left out comes to, as the engine has it.
+    let given = Finishing::default().sizes(across(diameter), feed);
+    let tenth = left_out(m, diameter, given.stepover, "a tenth of the tool");
     form(ui, "finishing", |ui| {
         d.row(
             ui,
@@ -503,8 +480,7 @@ fn finishing(
             &pass::FINISHING_STEPOVER,
             "passes.finishing.stepover",
             |ui| {
-                let start = 0.1 * diameter.unwrap_or(6.0);
-                widgets::optional(ui, &mut f.stepover, start, &tenth, |ui, v| {
+                widgets::optional(ui, &mut f.stepover, given.stepover, &tenth, |ui, v| {
                     m.length_field(ui, v, 0.01, 100.0, "");
                 });
             },
@@ -608,11 +584,9 @@ fn multiple_depths(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, o
                 &pass::MIN_AXIAL_ENGAGEMENT,
                 "min_axial_engagement",
                 |ui| {
-                    let mut given = (*min_axial_engagement > 0.0).then_some(*min_axial_engagement);
-                    widgets::optional(ui, &mut given, 0.5, "none", |ui, v| {
+                    widgets::optional_positive(ui, min_axial_engagement, 0.5, "none", |ui, v| {
                         m.length_field(ui, v, 0.01, 100.0, "");
                     });
-                    *min_axial_engagement = given.unwrap_or(0.0);
                 },
             );
         }
@@ -727,21 +701,16 @@ fn stock_to_leave(
 
 /// Tabs left across the deepest cut to hold what it frees, and their size.
 fn tabs(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, tabs: &mut Option<Tabs>) {
-    let mut on = tabs.is_some();
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut on, "Leave tabs to hold the part")
-            .help(&pass::TABS);
-        d.reset_group(ui, "passes.tabs");
-    });
-    match (on, tabs.is_some()) {
-        (true, false) => *tabs = Some(Tabs::default()),
-        (false, true) => *tabs = None,
-        _ => {}
-    }
+    d.optional_group(
+        ui,
+        &pass::TABS,
+        "passes.tabs",
+        "Leave tabs to hold the part",
+        tabs,
+    );
     let Some(t) = tabs else {
         return;
     };
-    ui.add_space(theme::SPACE_2);
     form(ui, "tabs", |ui| {
         d.row(ui, &pass::TAB_SHAPE, "passes.tabs.shape", |ui| {
             widgets::select(

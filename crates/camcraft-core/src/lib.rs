@@ -6,9 +6,10 @@
 //!
 //! # Pipeline stages
 //!
-//! These stay distinct. Arc fitting, tabs, lead in/out, feed optimisation and
-//! cutter compensation are every one of them a `Toolpath -> Toolpath` transform,
-//! and they have nowhere to live if a strategy emits instructions directly:
+//! These stay distinct. Trimming to heights, ordering, tabs, arc fitting and
+//! feed optimisation are every one of them a `Toolpath -> Toolpath` transform,
+//! and they would have nowhere to live if a strategy emitted instructions
+//! directly:
 //!
 //! ```text
 //! Strategy -> Toolpath -> transforms -> Linker -> IR -> Post
@@ -44,6 +45,17 @@ pub mod strategy;
 
 #[cfg(test)]
 pub(crate) mod fixture;
+
+/// What a value must be, as an error says it: one wording for each rule,
+/// wherever it is checked.
+pub(crate) mod must {
+    /// A length, feed or tolerance: [`is_positive`](crate::is_positive).
+    pub const POSITIVE: &str = "finite and greater than zero";
+    /// A distance that may be nothing.
+    pub const AT_LEAST_ZERO: &str = "finite and at least zero";
+    /// A height or a position.
+    pub const FINITE: &str = "finite";
+}
 
 /// Whether `v` is a usable size: finite and greater than zero, the test every
 /// length, feed and tolerance the engine is given must pass.

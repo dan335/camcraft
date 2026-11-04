@@ -27,6 +27,24 @@ use crate::ui::widgets::{self, Tab, form};
 /// them keeps the place.
 const TAB: &str = "operation-tab";
 
+/// The diameter a value of the tool's stands for before a tool is chosen: a
+/// usual router bit's, 6 mm.
+const ASSUMED_DIAMETER: f64 = 6.0;
+
+/// The tool's diameter, or [`ASSUMED_DIAMETER`] before one is chosen.
+fn across(diameter: Option<f64>) -> f64 {
+    diameter.unwrap_or(ASSUMED_DIAMETER)
+}
+
+/// What a value left out comes to, as said beside its field: `what` and,
+/// with a tool chosen, the `length` it is for that tool.
+fn left_out(m: Measure, diameter: Option<f64>, length: f64, what: &str) -> String {
+    match diameter {
+        Some(_) => format!("{what}: {}", m.length(length, 2)),
+        None => what.to_string(),
+    }
+}
+
 /// An operation's tabs, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationTab {

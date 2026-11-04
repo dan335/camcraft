@@ -194,7 +194,7 @@ mod tests {
         // Its chords within a quarter of the tolerance of it: the spiral's point
         // halfway round each, whose radius is halfway too, is that near the chord.
         for w in points.windows(2) {
-            let turn = w[0].perp_dot(w[1]).atan2(w[0].dot(w[1]));
+            let turn = camcraft_geom::arc::turn(w[0], w[1]);
             let r = 0.5 * (w[0].length() + w[1].length());
             let a = w[0].y.atan2(w[0].x) + 0.5 * turn;
             let on = DVec2::new(a.cos(), a.sin()) * r;

@@ -476,8 +476,6 @@ pub fn cutting_tool(job: &Job, op: &Operation) -> Result<EffectiveTool, RunError
     tool_of(job, op).map(|(_, tool)| tool)
 }
 
-/// The tool `op` names, both as the job describes it and as it cuts
-/// ([`cutting_tool`]), looked up and built once.
 /// The operations of `setup` made so far (`made`), as cut, each with the real
 /// tool it was cut with: what a rest operation clears after.
 fn earlier(job: &Job, setup: &Setup, made: &[OperationResult]) -> Result<Vec<Earlier>, RunError> {
@@ -496,6 +494,8 @@ fn earlier(job: &Job, setup: &Setup, made: &[OperationResult]) -> Result<Vec<Ear
         .collect()
 }
 
+/// The tool `op` names, both as the job describes it and as it cuts
+/// ([`cutting_tool`]), looked up and built once.
 fn tool_of<'j>(job: &'j Job, op: &Operation) -> Result<(&'j ToolSpec, EffectiveTool), RunError> {
     let spec = job.tool_for(op).ok_or_else(|| unknown_tool(op))?;
     let base = spec.build()?;

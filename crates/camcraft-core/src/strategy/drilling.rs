@@ -12,12 +12,19 @@ use glam::{DVec2, DVec3, dvec3};
 
 use crate::path::toolpath::{MoveRole, Toolpath};
 use crate::setup::features::Chain;
-use crate::strategy::nesting::nearest;
+use crate::strategy::nesting::take_nearest;
 use crate::strategy::{StrategyError, check};
 
 /// How far above a hole's top a drill starts feeding, and backs out to between
 /// pecks: the R plane of a canned cycle.
 pub const RETRACT_GAP: f64 = 2.0;
+
+/// How far above the bottom of the last peck the tool comes back down to at
+/// the plunge feed, in millimetres.
+const PECK_GAP: f64 = 0.5;
+
+/// The most pecks down one hole.
+const MOST_PECKS: u32 = 10_000;
 
 /// One hole to drill, in the setup's frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -157,8 +164,7 @@ pub fn nearest_first(holes: &[Hole]) -> Vec<Hole> {
         Some(h) => h.at,
         None => return out,
     };
-    while !left.is_empty() {
-        let h = left.remove(nearest(&left, |h| h.at.distance_squared(at)));
+    while let Some(h) = take_nearest(&mut left, |h| h.at.distance_squared(at)) {
         at = h.at;
         out.push(h);
     }
@@ -191,8 +197,16 @@ pub fn drill(holes: &[Hole], params: &DrillParams) -> Result<Toolpath, StrategyE
         let (x, y) = (h.at.x, h.at.y);
         let r = h.retract();
         path.feed_to(dvec3(x, y, r), MoveRole::Link, params.feed)?;
+        // As many pecks as the hole needs, and no more than so many.
+        let pecks = params.peck.map_or(1.0, |p| ((h.top - h.bottom) / p).ceil());
+        if pecks.is_nan() || pecks > f64::from(MOST_PECKS) {
+            return Err(StrategyError::BadParameter {
+                name: "peck",
+                value: params.peck.unwrap_or(f64::NAN),
+            });
+        }
         let mut depth = h.top;
-        loop {
+        for _ in 0..MOST_PECKS {
             depth = match params.peck {
                 Some(p) => (depth - p).max(h.bottom),
                 None => h.bottom,
@@ -204,7 +218,7 @@ pub fn drill(holes: &[Hole], params: &DrillParams) -> Result<Toolpath, StrategyE
             }
             // Back down to just above the last peck, and on from there.
             path.feed_to(
-                dvec3(x, y, (depth + 0.5).min(r)),
+                dvec3(x, y, (depth + PECK_GAP).min(r)),
                 MoveRole::Plunge,
                 params.feed,
             )?;

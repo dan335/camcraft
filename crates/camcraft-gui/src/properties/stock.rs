@@ -325,11 +325,7 @@ struct Placement {
 /// same block share one; a stock no setup uses is placed only when it names its
 /// own models. One around a model not loaded is left out.
 fn placements(doc: &Document, name: &str, spec: &StockSpec) -> Vec<Placement> {
-    let bodies: camcraft_core::setup::Bodies<'_> = doc
-        .models
-        .iter()
-        .filter_map(|(n, slot)| Some((n.as_str(), &slot.model()?.body)))
-        .collect();
+    let bodies = doc.bodies();
     let bounds = |models: &[String]| {
         models
             .iter()
@@ -338,11 +334,7 @@ fn placements(doc: &Document, name: &str, spec: &StockSpec) -> Vec<Placement> {
             .into_iter()
             .reduce(|a, b| a.union(&b))
     };
-    let own = match spec {
-        StockSpec::AroundModels { models, .. } | StockSpec::FixedBox(FixedBox { models, .. }) => {
-            models
-        }
-    };
+    let own = spec.models();
     let place = |setup: &str, models: &[String]| {
         let stock = camcraft_core::setup::stock_block(spec, models, &bodies).ok()?;
         let part = Some(bounds(if own.is_empty() { models } else { own })?);

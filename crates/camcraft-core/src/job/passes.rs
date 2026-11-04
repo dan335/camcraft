@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Depths, Leave, Operation, StrategySpec, ToolKind, ToolSpec, is_default};
+use super::{Depths, Leave, Operation, StrategySpec, ToolKind, ToolSpec, is_default, is_yes, yes};
 
 /// How the passes are laid out.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -107,6 +107,19 @@ pub struct Finishing {
     pub repeat: bool,
 }
 
+impl Finishing {
+    /// Every value its own, or Fusion's for a tool `diameter` across cutting
+    /// at `feed`.
+    pub fn sizes(&self, diameter: f64, feed: f64) -> FinishingSizes {
+        FinishingSizes {
+            passes: self.passes.unwrap_or(1),
+            stepover: self.stepover.unwrap_or(0.1 * diameter),
+            feed: self.feed.unwrap_or(feed),
+            repeat: self.repeat,
+        }
+    }
+}
+
 /// A pocket's finishing passes, every value its own or its default for the
 /// tool.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -164,6 +177,20 @@ impl Default for FeedOptimization {
     }
 }
 
+impl FeedOptimization {
+    /// Every value its own, or its default for a tool of `radius` cutting at
+    /// `feed`.
+    pub fn sizes(&self, radius: f64, feed: f64) -> FeedOptimizationSizes {
+        FeedOptimizationSizes {
+            max_directional_change: self.max_directional_change,
+            radius: self.reduced_feed_radius.unwrap_or(radius),
+            distance: self.reduced_feed_distance.unwrap_or(radius),
+            feed: self.reduced_feed.unwrap_or(0.5 * feed),
+            only_inner_corners: self.only_inner_corners,
+        }
+    }
+}
+
 /// Fusion's Feed Optimization, every value its own or its default for the
 /// tool and the cutting feed.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -180,23 +207,10 @@ pub struct FeedOptimizationSizes {
     pub only_inner_corners: bool,
 }
 
-fn default_max_directional_change() -> f64 {
-    45.0
-}
-
-#[allow(clippy::trivially_copy_pass_by_ref, clippy::float_cmp)]
-fn is_default_max_directional_change(v: &f64) -> bool {
-    *v == default_max_directional_change()
-}
-
-fn yes() -> bool {
-    true
-}
-
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_yes(v: &bool) -> bool {
-    *v
-}
+default_number!(
+    default_max_directional_change,
+    is_default_max_directional_change = 45.0
+);
 
 /// Tabs: bridges of material left standing across the deepest cut, so a part cut
 /// free of its sheet stays held in it. Fusion's holding tabs, placed by distance.
@@ -285,12 +299,7 @@ impl Operation {
             .passes
             .finishing
             .filter(|_| self.strategy.uses().finishing)?;
-        Some(FinishingSizes {
-            passes: f.passes.unwrap_or(1),
-            stepover: f.stepover.unwrap_or(0.1 * diameter),
-            feed: f.feed.unwrap_or(self.passes.feed),
-            repeat: f.repeat,
-        })
+        Some(f.sizes(diameter, self.passes.feed))
     }
 
     /// The tallest near-vertical drop it may cut down at the cutting feed: its
@@ -327,13 +336,7 @@ impl Operation {
             .passes
             .feed_optimization
             .filter(|_| self.strategy.uses().feed_optimization)?;
-        Some(FeedOptimizationSizes {
-            max_directional_change: f.max_directional_change,
-            radius: f.reduced_feed_radius.unwrap_or(radius),
-            distance: f.reduced_feed_distance.unwrap_or(radius),
-            feed: f.reduced_feed.unwrap_or(0.5 * self.passes.feed),
-            only_inner_corners: f.only_inner_corners,
-        })
+        Some(f.sizes(radius, self.passes.feed))
     }
 
     /// Its fine stepdown, when its strategy has one and it cuts in levels: its
@@ -362,11 +365,7 @@ impl Operation {
     /// lower than minus a round end's corner radius in 3D, where the end has to
     /// stay round, and in 2D or with a flat end as low as it likes.
     pub fn least_stock_to_leave(&self, tool: &ToolSpec) -> StockToLeave {
-        let corner = match tool.kind {
-            ToolKind::Ball => tool.diameter / 2.0,
-            ToolKind::Bullnose => tool.corner,
-            ToolKind::Flat | ToolKind::Cone | ToolKind::Drill => 0.0,
-        };
+        let corner = tool.corner_radius();
         StockToLeave {
             radial: -tool.diameter / 2.0,
             axial: if !self.strategy.uses().outline && corner > 0.0 {
@@ -395,11 +394,7 @@ impl Operation {
             | StrategySpec::Spiral { .. }
             | StrategySpec::Radial { .. }
             | StrategySpec::MorphedSpiral { .. } => {
-                let r = match tool.kind {
-                    ToolKind::Ball => d / 2.0,
-                    ToolKind::Bullnose => tool.corner,
-                    ToolKind::Flat | ToolKind::Cone | ToolKind::Drill => 0.0,
-                };
+                let r = tool.corner_radius();
                 let over = if r > tolerance && r > 0.0 {
                     2.0 * (r * r - (r - tolerance).powi(2)).sqrt() / 2f64.sqrt()
                 } else {

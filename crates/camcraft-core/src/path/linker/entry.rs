@@ -7,7 +7,7 @@ use camcraft_geom::arc::Arc;
 use glam::{DVec2, DVec3, dvec3};
 
 use super::{Clearance, EntryKind, Linker, Material, Ramp, Surface};
-use crate::path::toolpath::{Move, MoveKind, MoveRole, turns_about_z};
+use crate::path::toolpath::{Move, MoveKind, MoveRole, starting_at, turns_about_z};
 
 /// How a pass is entered, planned before the height it starts from is known.
 pub(super) enum Way {
@@ -134,13 +134,8 @@ impl Seg {
 
 /// The pieces of `moves`, the first starting at `from`.
 fn segs(from: DVec3, moves: &[Move]) -> Vec<Seg> {
-    let mut at = from;
-    moves
-        .iter()
-        .map(|m| Seg {
-            from: std::mem::replace(&mut at, m.to),
-            m: *m,
-        })
+    starting_at(from, moves)
+        .map(|(from, m)| Seg { from, m: *m })
         .collect()
 }
 

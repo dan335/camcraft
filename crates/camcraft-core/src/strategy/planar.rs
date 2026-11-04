@@ -42,8 +42,8 @@ use glam::{DVec2, DVec3, dvec3};
 
 use crate::job::{Operation, Picks, ProfileSide, StrategySpec};
 use crate::path::toolpath::{Arc, MoveRole, Toolpath};
-use crate::strategy::nesting::{distance, nearest};
-use crate::strategy::{StrategyError, check, innermost};
+use crate::strategy::nesting::{distance, nearest, take_nearest};
+use crate::strategy::{StrategyError, at_least_zero, check, innermost};
 
 /// One connected piece of where the tool's centre goes, and the levels it is cut
 /// between.
@@ -338,37 +338,15 @@ pub fn profile(
         let Some((ring, levels, area)) = rings.get(i) else {
             continue;
         };
-        let mut ring = at.map_or_else(|| ring.clone(), |p| ring.starting_near(p));
+        let ring = at.map_or_else(|| ring.clone(), |p| ring.starting_near(p));
         report.rings += 1;
         // The waste is on the side away from what is kept: the left, when what
         // is kept is on the right. A lead joins a ring where it runs smoothly
         // on: where the ring starts at a corner, or has no room for a lead there,
         // it starts instead halfway along its longest span.
         let asked = params.leads.filter(|_| side != ProfileSide::On);
-        // The region is the clipping's, out by up to the tolerance round the
-        // exact ring: a point on the ring, or that near it, is beside it.
-        let beside = 2.0 * params.arc + 1e-3;
-        let fit = |r: &Ring| {
-            asked.and_then(|l| {
-                leads_for(r, l, params.kept_on_right, |p| {
-                    waste(*area, p) || r.distance_to(p) <= beside
-                })
-            })
-        };
-        if asked.is_some() && ring.starts_at_corner() {
-            ring = ring.longest_middle();
-        }
-        let mut leads = fit(&ring);
-        if asked.is_some() && leads.is_none() {
-            let middle = ring.longest_middle();
-            leads = fit(&middle);
-            if leads.is_some() {
-                ring = middle;
-            }
-        }
-        if asked.is_some() && leads.is_none() {
-            report.no_room_to_lead += 1;
-        }
+        let fit = lead_fit(asked, params, |p| waste(*area, p));
+        let (ring, leads) = fitted_leads(ring, asked.is_some(), &fit, &mut report);
         if let (Some(spiral), Some(area)) = (params.spiral, areas.get(*area)) {
             let end = emit_spiral(
                 &ring,
@@ -439,6 +417,60 @@ impl RingLeads {
 /// `left`, else its right; and off it the same, mirrored. The largest of the
 /// arc's radius, its half and its quarter whose lead stays in the waste, as
 /// `waste` says; `None` where none does.
+/// How near a ring a point may be and still be beside it: the regions are
+/// the clipping's, out by up to the arc tolerance `arc` round the exact rings.
+fn beside_ring(arc: f64) -> f64 {
+    2.0 * arc + 1e-3
+}
+
+/// Leads of the shape `asked` for, if any, onto and off a ring, in what
+/// `waste` says is waste or beside the ring.
+fn lead_fit<'a>(
+    asked: Option<LeadArc>,
+    params: &'a PlanarParams,
+    waste: impl Fn(DVec2) -> bool + 'a,
+) -> impl Fn(&Ring) -> Option<RingLeads> + 'a {
+    let beside = beside_ring(params.arc);
+    move |r: &Ring| {
+        asked.and_then(|l| {
+            leads_for(r, l, params.kept_on_right, |p| {
+                waste(p) || r.distance_to(p) <= beside
+            })
+        })
+    }
+}
+
+/// `ring`, and the leads onto and off it that `fit` finds, where they are
+/// `asked` for. A lead joins a ring where it runs smoothly on: where the ring
+/// starts at a corner, or has no room for a lead there, it starts instead
+/// halfway along its longest span. A ring asked for leads that has no room
+/// for them is counted in `report`.
+fn fitted_leads(
+    mut ring: Ring,
+    asked: bool,
+    fit: &impl Fn(&Ring) -> Option<RingLeads>,
+    report: &mut PlanarReport,
+) -> (Ring, Option<RingLeads>) {
+    if !asked {
+        return (ring, None);
+    }
+    if ring.starts_at_corner() {
+        ring = ring.longest_middle();
+    }
+    let mut leads = fit(&ring);
+    if leads.is_none() {
+        let middle = ring.longest_middle();
+        leads = fit(&middle);
+        if leads.is_some() {
+            ring = middle;
+        }
+    }
+    if leads.is_none() {
+        report.no_room_to_lead += 1;
+    }
+    (ring, leads)
+}
+
 fn leads_for(
     ring: &Ring,
     lead: LeadArc,
@@ -534,7 +566,7 @@ pub fn pocket(
             continue;
         }
         // What the clearing leaves the finishing passes: their stepovers.
-        let close = 2.0 * params.arc + 1e-3;
+        let close = beside_ring(params.arc);
         let inset = |d: f64| {
             let region = area.region.offset(-d, params.arc);
             let rings = exact_rings(&region, &moved(&area.rings, -d), close);
@@ -602,22 +634,19 @@ pub fn pocket(
     let mut path = Toolpath::new();
     let mut at: Option<DVec2> = None;
     let mut left: Vec<usize> = (0..cleared.len()).collect();
-    while !left.is_empty() {
-        // The nearest area next, by where its middle is first cut.
-        let pick = nearest(&left, |&i| {
-            ring_distance(cleared.get(i).map(|a| a.middle.as_slice()), at)
-        });
-        let i = left.remove(pick);
+    // The nearest area next, by where its middle is first cut.
+    while let Some(i) = take_nearest(&mut left, |&i| {
+        ring_distance(cleared.get(i).map(|a| a.middle.as_slice()), at)
+    }) {
         let Some(area) = cleared.get(i) else {
             continue;
         };
         for &z in &area.levels {
             for set in &area.sets {
                 let mut todo: Vec<usize> = (0..set.len()).collect();
-                while !todo.is_empty() {
-                    let k = todo.remove(nearest(&todo, |&j| {
-                        ring_distance(set.get(j).map(|(_, p)| p.as_slice()), at)
-                    }));
+                while let Some(k) = take_nearest(&mut todo, |&j| {
+                    ring_distance(set.get(j).map(|(_, p)| p.as_slice()), at)
+                }) {
                     let Some((ring, _)) = set.get(k) else {
                         continue;
                     };
@@ -654,45 +683,22 @@ fn finish_walls(
         return Ok(at);
     };
     let count = area.finish.len();
-    let beside = 2.0 * params.arc + 1e-3;
     for (k, (rings, feed)) in area.finish.iter().enumerate() {
         let (first, last) = (k == 0, k + 1 == count);
         let mut todo: Vec<usize> = (0..rings.len()).collect();
-        while !todo.is_empty() {
-            let points: Vec<Vec<DVec2>> = rings.iter().map(|r| r.points(params.arc)).collect();
-            let j = todo.remove(nearest(&todo, |&j| {
-                ring_distance(points.get(j).map(Vec::as_slice), at)
-            }));
+        let points: Vec<Vec<DVec2>> = rings.iter().map(|r| r.points(params.arc)).collect();
+        while let Some(j) = take_nearest(&mut todo, |&j| {
+            ring_distance(points.get(j).map(Vec::as_slice), at)
+        }) {
             let Some(ring) = rings.get(j) else {
                 continue;
             };
-            let mut ring = at.map_or_else(|| ring.clone(), |p| ring.starting_near(p));
+            let ring = at.map_or_else(|| ring.clone(), |p| ring.starting_near(p));
             // On along a lead to the first pass and off along one from the
-            // last, in the area cleared, as the profile's: where the ring
-            // starts at a corner, or a lead has no room there, halfway along
-            // its longest span instead.
+            // last, in the area cleared, as the profile's.
             let asked = params.leads.filter(|_| first || last);
-            let fit = |r: &Ring| {
-                asked.and_then(|l| {
-                    leads_for(r, l, params.kept_on_right, |p| {
-                        own.region.contains(p) || r.distance_to(p) <= beside
-                    })
-                })
-            };
-            if asked.is_some() && ring.starts_at_corner() {
-                ring = ring.longest_middle();
-            }
-            let mut leads = fit(&ring);
-            if asked.is_some() && leads.is_none() {
-                let middle = ring.longest_middle();
-                leads = fit(&middle);
-                if leads.is_some() {
-                    ring = middle;
-                }
-            }
-            if asked.is_some() && leads.is_none() {
-                report.no_room_to_lead += 1;
-            }
+            let fit = lead_fit(asked, params, |p| own.region.contains(p));
+            let (ring, leads) = fitted_leads(ring, asked.is_some(), &fit, report);
             let leads = leads.map(|l| RingLeads {
                 start: if first { l.start } else { ring.start() },
                 lead_in: if first { l.lead_in } else { Vec::new() },
@@ -748,6 +754,30 @@ fn check_params(params: &PlanarParams, areas: &[Area]) -> Result<(), StrategyErr
     check("feed", params.feed)?;
     check("arc tolerance", params.arc)?;
     check("tool radius", params.radius)?;
+    if let Some(s) = &params.spiral {
+        // Steeper than level and short of straight down, or the laps down a
+        // ring are endless or none.
+        if !(s.angle > 0.0 && s.angle < std::f64::consts::FRAC_PI_2) {
+            return Err(StrategyError::BadParameter {
+                name: "ramp angle",
+                value: s.angle,
+            });
+        }
+        check("ramp feed", s.feed)?;
+        if let Some(most) = s.most {
+            check("ramp stepdown", most)?;
+        }
+        at_least_zero("ramp above", s.above)?;
+    }
+    if let Some(l) = &params.leads {
+        check("lead radius", l.radius)?;
+        check("lead sweep", l.sweep)?;
+        at_least_zero("lead straight", l.straight)?;
+    }
+    if let Some(f) = &params.finishing {
+        check("finishing stepover", f.stepover)?;
+        check("finishing feed", f.feed)?;
+    }
     if let Some(a) = areas.iter().find(|a| !a.top.is_finite()) {
         return Err(StrategyError::BadParameter {
             name: "top",
@@ -807,7 +837,7 @@ fn middle_out(area: &Area, params: &PlanarParams, reverse: bool) -> Vec<RingSet>
         let delta = delta - further;
         sets.push((middle, delta));
     }
-    let close = 2.0 * params.arc + 1e-3;
+    let close = beside_ring(params.arc);
     sets.iter()
         .rev()
         .map(|(r, delta)| {
@@ -928,12 +958,8 @@ fn ring_distance(ring: Option<&[DVec2]>, at: Option<DVec2>) -> f64 {
 
 /// The point of closed ring `ring` nearest `at`.
 fn nearest_point(ring: &[DVec2], at: DVec2) -> Option<DVec2> {
-    let n = ring.len();
     let mut best: Option<(DVec2, f64)> = None;
-    for i in 0..n {
-        let (Some(&a), Some(&b)) = (ring.get(i), ring.get((i + 1) % n)) else {
-            continue;
-        };
+    for (a, b) in camcraft_geom::contour::closed_edges(ring) {
         let ab = b - a;
         let t = if ab.length_squared() > 0.0 {
             ((at - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0)

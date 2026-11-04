@@ -155,6 +155,15 @@ pub enum SessionError {
     /// The job did not verify, and nobody insisted.
     #[error("verification failed")]
     Refused,
+    /// A program, read back as a controller would, does not cut the path it
+    /// was posted from: the post wrote something else.
+    #[error("program {name} does not read back to its path: {problem}")]
+    ReadsBackWrong {
+        /// The program.
+        name: String,
+        /// The first thing found wrong.
+        problem: camcraft_post::readback::Problem,
+    },
 }
 
 impl SessionError {

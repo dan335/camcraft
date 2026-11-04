@@ -38,7 +38,7 @@ impl Units {
     pub fn to_mm(self) -> f64 {
         match self {
             Self::Millimetres => 1.0,
-            Self::Inches => 25.4,
+            Self::Inches => camcraft_geom::MM_PER_INCH,
         }
     }
 }

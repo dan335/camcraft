@@ -159,6 +159,16 @@ pub(crate) fn nearest<T>(items: &[T], distance: impl Fn(&T) -> f64) -> usize {
         .0
 }
 
+/// The nearest of `items` by `distance`, taken out of them, ties to the
+/// earlier; `None` once there are none. Taken one at a time, from wherever
+/// the last left the tool, they are in nearest-next order.
+pub(crate) fn take_nearest<T>(items: &mut Vec<T>, distance: impl Fn(&T) -> f64) -> Option<T> {
+    if items.is_empty() {
+        return None;
+    }
+    Some(items.remove(nearest(items, distance)))
+}
+
 /// How far `to` is from the tool at `at`: from nowhere everything is as near, and
 /// nowhere is as far as can be.
 pub(crate) fn distance(to: Option<DVec2>, at: Option<DVec2>) -> f64 {

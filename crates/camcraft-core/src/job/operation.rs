@@ -5,8 +5,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Depths, Heights, Linking, MachiningBoundary, Outline, Passes, Preset, ProfileSide, Selection,
-    StrategySpec, ToolKind, ToolSpec, is_default, is_yes, yes,
+    Boundary, Depths, Heights, Linking, MachiningBoundary, Outline, Passes, Preset, ProfileSide,
+    Selection, StrategySpec, ToolKind, ToolSpec, is_default, is_yes, yes,
 };
 
 /// One operation.
@@ -151,6 +151,64 @@ impl Operation {
             return Some("a V-bit or chamfer mill cuts to size: set stock to leave to zero");
         }
         None
+    }
+
+    /// A new operation called `name` of `strategy`, cutting with the job's tool
+    /// `tool`, described by `spec`, and its preset `preset`: as
+    /// [`Operation::new`] starts one, with the preset's values, the stepover
+    /// Fusion gives the strategy with the tool, on the part's silhouette as
+    /// Fusion starts it ([`StrategySpec::starting_containment`]), and with room
+    /// round the part for the tool ([`Operation::fit_channel`]).
+    pub fn fresh(
+        name: impl Into<String>,
+        strategy: StrategySpec,
+        (tool, spec, preset): (Option<String>, Option<&ToolSpec>, Option<&Preset>),
+        tolerance: f64,
+    ) -> Self {
+        let mut op = Self {
+            tool,
+            ..Self::new(name, strategy)
+        };
+        if let Some(p) = preset {
+            op.apply_preset(p);
+        }
+        op.fit_stepover(spec, preset, tolerance);
+        if let Some(containment) = strategy.starting_containment() {
+            op.boundary.kind = Boundary::Silhouette;
+            op.boundary.containment = containment;
+        }
+        op.fit_channel(spec);
+        op
+    }
+
+    /// The stepover Fusion gives its strategy with `tool`, unless `preset` set
+    /// one: a fixed millimetre suits a 1/32" cutter and starves a 1/4" one.
+    pub fn fit_stepover(
+        &mut self,
+        tool: Option<&ToolSpec>,
+        preset: Option<&Preset>,
+        tolerance: f64,
+    ) {
+        // A preset's stepover is not an adaptive operation's load, which it keeps.
+        if preset.is_some_and(|p| p.stepover.is_some()) && !self.strategy.uses().load {
+            return;
+        }
+        if let Some(over) = tool.and_then(|t| self.default_stepover(t, tolerance)) {
+            self.passes.stepover = over;
+        }
+    }
+
+    /// Room for `tool` round the part, as the Geometry tab gives it: a 3D
+    /// boundary that [`MachiningBoundary::needs_room`] is offset by the tool's
+    /// diameter, a channel two tools wide. Set once, as a number, so changing
+    /// the tool later does not move it.
+    pub fn fit_channel(&mut self, tool: Option<&ToolSpec>) {
+        if self.strategy.uses().boundary
+            && self.boundary.needs_room()
+            && let Some(t) = tool
+        {
+            self.boundary.margin = t.diameter;
+        }
     }
 
     /// Copy the values `preset` has into this operation, leaving the rest, and

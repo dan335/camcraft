@@ -18,12 +18,7 @@ pub(super) fn clear_of(region: &Region, a: DVec2, b: DVec2, distance: f64) -> bo
     let reach = DVec2::splat(distance + 1e-6);
     let (lo, hi) = (a.min(b) - reach, a.max(b) + reach);
     for ring in region.rings() {
-        let pts = ring.points();
-        let n = pts.len();
-        for i in 0..n {
-            let (Some(&c), Some(&d)) = (pts.get(i), pts.get((i + 1) % n)) else {
-                continue;
-            };
+        for (c, d) in ring.edges() {
             if c.max(d).cmplt(lo).any() || c.min(d).cmpgt(hi).any() {
                 continue;
             }

@@ -91,6 +91,32 @@ impl From<crate::strategy::reach::ReachError> for StrategyError {
 /// Levels closer than this are one, in millimetres.
 pub(crate) const SAME_LEVEL: f64 = 1.0e-6;
 
+/// `levels` in order, highest first when `down`, those within [`SAME_LEVEL`]
+/// of the one before left out.
+pub(crate) fn sort_levels(levels: &mut Vec<f64>, down: bool) {
+    if down {
+        levels.sort_by(|a, b| b.total_cmp(a));
+    } else {
+        levels.sort_by(f64::total_cmp);
+    }
+    levels.dedup_by(|a, b| (*a - *b).abs() < SAME_LEVEL);
+}
+
+/// `heights`, lowest first, each run of them no more than `within` above the
+/// one before made one: the highest of the run, so what is at it is never cut
+/// into.
+pub(crate) fn merged_highest(mut heights: Vec<f64>, within: f64) -> Vec<f64> {
+    heights.sort_by(f64::total_cmp);
+    let mut out: Vec<f64> = Vec::new();
+    for z in heights {
+        match out.last_mut() {
+            Some(last) if z - *last <= within => *last = z,
+            _ => out.push(z),
+        }
+    }
+    out
+}
+
 /// Stock standing less than this above a level is not material to cut there, in
 /// millimetres. Far below any tolerance, far above the grid's f32 storage error.
 pub(crate) const MATERIAL_THICKNESS: f64 = 1.0e-3;
@@ -135,8 +161,7 @@ pub(crate) fn slabs(top: f64, bottom: f64, stepdown: f64, flats: &[f64]) -> Vec<
         }
     }
     for (_, flats) in &mut slabs {
-        flats.sort_by(f64::total_cmp);
-        flats.dedup_by(|a, b| (*a - *b).abs() < SAME_LEVEL);
+        sort_levels(flats, false);
     }
     slabs
 }
@@ -167,8 +192,7 @@ pub(crate) fn with_fine_levels(
                 fills.push(f);
             }
         }
-        fills.sort_by(f64::total_cmp);
-        fills.dedup_by(|a, b| (*a - *b).abs() < SAME_LEVEL);
+        sort_levels(fills, false);
         above = *z;
     }
     slabs
@@ -178,6 +202,14 @@ pub(crate) fn with_fine_levels(
 /// than zero.
 pub(crate) fn check(name: &'static str, value: f64) -> Result<(), StrategyError> {
     is_positive(value)
+        .then_some(())
+        .ok_or(StrategyError::BadParameter { name, value })
+}
+
+/// `value` if it is usable as a length that may be nothing: finite and not
+/// negative.
+pub(crate) fn at_least_zero(name: &'static str, value: f64) -> Result<(), StrategyError> {
+    (value.is_finite() && value >= 0.0)
         .then_some(())
         .ok_or(StrategyError::BadParameter { name, value })
 }

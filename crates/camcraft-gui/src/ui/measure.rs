@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ui::widgets;
 
-const MM_PER_INCH: f64 = 25.4;
+use camcraft_geom::MM_PER_INCH;
 
 /// How lengths are shown.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

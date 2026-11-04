@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use camcraft_geom::contour::{Region, polyline_length};
+use camcraft_geom::contour::{Region, closed_edges, polyline_length, simplify};
 use camcraft_geom::mesh::distance_to_segment;
 use glam::{DVec2, DVec3};
 use rayon::prelude::*;
@@ -23,12 +23,15 @@ use crate::control::{Watch, share};
 use crate::cutter::dropcutter::{DropCutter, DropTest};
 use crate::path::toolpath::{MoveRole, Toolpath};
 use crate::strategy::field;
-use crate::strategy::nesting::nearest;
+use crate::strategy::nesting::take_nearest;
 use crate::strategy::parallel::{
     ParallelParams, ParallelReport, Run, sweep_open_polyline, sweep_polyline,
 };
 use crate::strategy::slope::{self, SlopeCounts};
 use crate::strategy::{StrategyError, check};
+
+/// The most laps of a ring a ramp down onto it may take.
+const MOST_RAMP_LAPS: f64 = 100.0;
 
 /// A line of a pattern, seen from above.
 #[derive(Debug, Clone, PartialEq)]
@@ -375,13 +378,16 @@ impl Emit {
         let n = points.len();
         let first = start;
         let drop = left.z - first.z;
-        let lap: f64 = (0..n)
-            .filter_map(|i| Some(points.get(i)?.distance(*points.get((i + 1) % n)?)))
-            .sum();
+        let lap: f64 = closed_edges(&points).map(|(a, b)| a.distance(b)).sum();
         if n < 3 || drop <= 1e-9 || lap <= 1e-9 || gap > near {
             return Ok(false);
         }
+        // A ramp too shallow to reach the ring within so many laps of it is
+        // not one: the tool goes down another way.
         let length = drop / angle.tan();
+        if length.is_nan() || length > MOST_RAMP_LAPS * lap {
+            return Ok(false);
+        }
         let ramp = MoveRole::Transition;
         // Over to the ring, at the height the tool left.
         let mut at = left;
@@ -441,12 +447,13 @@ impl Emit {
         mut runs: Vec<Run>,
         both_ways: bool,
     ) -> Result<(), StrategyError> {
-        while !runs.is_empty() {
+        loop {
             let at = self.at;
-            let k = nearest(&runs, |r| {
+            let Some(mut run) = take_nearest(&mut runs, |r| {
                 at.map_or(0.0, |a| start_distance(r, a, both_ways))
-            });
-            let mut run = runs.remove(k);
+            }) else {
+                break;
+            };
             if let Some(at) = at {
                 if run.closed {
                     start_near(&mut run, at);
@@ -490,70 +497,6 @@ fn start_near(run: &mut Run, at: DVec2) {
     if let Some(i) = nearest {
         run.points.rotate_left(i);
     }
-}
-
-/// `line`, thinned: each point dropped that is within `tolerance` of the line
-/// through the ones kept either side of it, seen from above (Douglas and Peucker).
-pub(crate) fn simplify(line: &[DVec2], closed: bool, tolerance: f64) -> Vec<DVec2> {
-    let mut points = line.to_vec();
-    if closed && let Some(&first) = line.first() {
-        points.push(first);
-    }
-    if points.len() < 3 {
-        return line.to_vec();
-    }
-    let mut keep = vec![false; points.len()];
-    if let Some(k) = keep.first_mut() {
-        *k = true;
-    }
-    if let Some(k) = keep.last_mut() {
-        *k = true;
-    }
-    let mut spans = vec![(0usize, points.len() - 1)];
-    // A closed line starts and ends at one point: split it at the point furthest
-    // from there first, so the rest is judged against a real chord.
-    if closed && let Some(&start) = points.first() {
-        let far = points
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.distance(start).total_cmp(&b.1.distance(start)))
-            .map_or(0, |(i, _)| i);
-        if far > 0 && far < points.len() - 1 {
-            if let Some(k) = keep.get_mut(far) {
-                *k = true;
-            }
-            spans = vec![(0, far), (far, points.len() - 1)];
-        }
-    }
-    while let Some((a, b)) = spans.pop() {
-        let (Some(&pa), Some(&pb)) = (points.get(a), points.get(b)) else {
-            continue;
-        };
-        let mut worst = (0usize, 0.0f64);
-        for i in a + 1..b {
-            let Some(&p) = points.get(i) else { continue };
-            let d = distance_to_segment(p, pa, pb);
-            if d > worst.1 {
-                worst = (i, d);
-            }
-        }
-        if worst.1 > tolerance {
-            if let Some(k) = keep.get_mut(worst.0) {
-                *k = true;
-            }
-            spans.push((a, worst.0));
-            spans.push((worst.0, b));
-        }
-    }
-    let mut out: Vec<DVec2> = points
-        .iter()
-        .zip(&keep)
-        .filter_map(|(&p, &k)| k.then_some(p))
-        .collect();
-    if closed {
-        out.pop();
-    }
-    out
 }
 
 #[cfg(test)]

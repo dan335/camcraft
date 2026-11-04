@@ -27,8 +27,7 @@ use crate::fs::write_atomically;
 pub mod fusion_csv;
 pub mod system;
 
-/// Millimetres in an inch, as tool makers' tables give sizes.
-const MM_PER_INCH: f64 = 25.4;
+use camcraft_geom::MM_PER_INCH;
 
 /// Overrides where the library lives.
 pub const LIBRARY_ENV: &str = "CAMCRAFT_TOOL_LIBRARY";

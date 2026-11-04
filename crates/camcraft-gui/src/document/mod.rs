@@ -36,7 +36,7 @@ use camcraft_session::{Model, SessionError, write_job};
 
 use crate::worker::DocId;
 
-pub use edit::{Wanted, is_stl, needs_room};
+pub use edit::{Wanted, is_stl};
 pub use run::{OpStatus, Status};
 pub use setup_state::{
     Halt, Layout, OpWork, RanSetup, Running, SetupState, SetupView, Transport, ViewMode,
@@ -225,6 +225,14 @@ pub struct Document {
 }
 
 impl Document {
+    /// Every model loaded, by name, as the engine takes them.
+    pub fn bodies(&self) -> camcraft_core::setup::Bodies<'_> {
+        self.models
+            .iter()
+            .filter_map(|(n, slot)| Some((n.as_str(), &slot.model()?.body)))
+            .collect()
+    }
+
     /// A new, empty job: one stock around whatever models are added, and one setup
     /// using it.
     pub fn untitled(id: DocId) -> Self {

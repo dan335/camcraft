@@ -33,6 +33,7 @@
 
 use std::f64::consts::{FRAC_PI_2, PI};
 
+use camcraft_geom::arc::turn;
 use glam::{DVec2, DVec3};
 
 use super::toolpath::{Arc, Move, MoveKind, MoveRole, Toolpath, ToolpathError};
@@ -66,8 +67,7 @@ pub fn fit_arcs(path: &Toolpath, tolerance: f64) -> Result<(Toolpath, FitReport)
     // The run being gathered: its role and feed, and its points, from where it
     // starts.
     let mut run: Option<(MoveRole, f64, Vec<DVec3>)> = None;
-    let mut at: Option<DVec3> = None;
-    for m in path.moves() {
+    for (at, m) in path.steps() {
         let fits = fittable(m) && at.is_some();
         let joins = match (&run, m.feed) {
             (Some((role, feed, _)), Some(f)) => {
@@ -88,7 +88,6 @@ pub fn fit_arcs(path: &Toolpath, tolerance: f64) -> Result<(Toolpath, FitReport)
                 _ => out.push(*m)?,
             }
         }
-        at = Some(m.to);
     }
     if let Some((role, feed, points)) = run.take() {
         report.arcs += emit(&mut out, role, feed, &points, tolerance)?;
@@ -100,12 +99,7 @@ pub fn fit_arcs(path: &Toolpath, tolerance: f64) -> Result<(Toolpath, FitReport)
 /// Whether `m` may be fitted: straight, feeding, and of a role that may be an
 /// arc.
 fn fittable(m: &Move) -> bool {
-    m.kind == MoveKind::Linear
-        && m.feed.is_some()
-        && matches!(
-            m.role,
-            MoveRole::Cut | MoveRole::Transition | MoveRole::Lead | MoveRole::Ramp
-        )
+    m.kind == MoveKind::Linear && m.feed.is_some() && m.role.along_the_work()
 }
 
 /// Append the run through `points`, from its first, to `out` as arcs and lines
@@ -273,7 +267,7 @@ fn fit_arc(points: &[DVec3], tolerance: f64) -> Option<Arc> {
     for &p in points.iter().skip(1) {
         let q = flat(p);
         let (from, to) = (prev - c, q - c);
-        let turn = from.perp_dot(to).atan2(from.dot(to));
+        let turn = turn(from, to);
         if turn.abs() <= f64::EPSILON
             || turn.abs() >= FRAC_PI_2
             || ccw.is_some_and(|c| c != (turn > 0.0))

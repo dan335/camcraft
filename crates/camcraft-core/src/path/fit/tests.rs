@@ -1,17 +1,8 @@
 use super::*;
+use crate::fixture::cut_through;
 use glam::dvec3;
 
-/// A path from a rapid to the first point, then cuts through the rest.
-fn cut_through(points: &[DVec3], feed: f64) -> Toolpath {
-    let mut p = Toolpath::new();
-    p.rapid_to(points[0]).unwrap();
-    for &q in &points[1..] {
-        p.feed_to(q, MoveRole::Cut, feed).unwrap();
-    }
-    p
-}
-
-/// Points every `step` radians round a circle of `r` about `c`, level at `z`,
+/// `n + 1` points evenly round a circle of `r` about `c`, level at `z`,
 /// from `from` to `to` radians.
 fn round(c: DVec2, r: f64, z: f64, from: f64, to: f64, n: usize) -> Vec<DVec3> {
     (0..=n)

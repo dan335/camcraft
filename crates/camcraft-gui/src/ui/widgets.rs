@@ -201,9 +201,17 @@ pub fn section_label(text: &str) -> egui::RichText {
         .color(theme::egui_color(theme::TEXT_3))
 }
 
+/// A section of a panel's form starting: a gap above, its label, and a
+/// smaller gap before what is in it.
+pub fn section(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(theme::SPACE_4);
+    ui.label(section_label(title));
+    ui.add_space(theme::SPACE_2);
+}
+
 /// A key in a form: `--text-3`, as `KeyValue.jsx` sets its keys. For what is
-/// only shown; a field that edits is labelled by [`field_label`] or [`row`],
-/// which give it its help.
+/// only shown; a field that edits is labelled by [`row`], which gives it its
+/// help.
 pub fn key_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.label(egui::RichText::new(text).color(theme::egui_color(theme::TEXT_3)))
 }
@@ -289,6 +297,20 @@ pub fn error_text(text: impl Into<String>) -> egui::RichText {
 /// [`error_text`] on its own line, wrapped to the width there is.
 pub fn error(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(egui::Label::new(error_text(text)).wrap())
+}
+
+/// As [`optional`], for a value kept as zero when it is left out: a setting
+/// the job file holds as a number, with none for nothing.
+pub fn optional_positive(
+    ui: &mut egui::Ui,
+    value: &mut f64,
+    default: f64,
+    absent: &str,
+    add: impl FnOnce(&mut egui::Ui, &mut f64),
+) {
+    let mut given = (*value > 0.0).then_some(*value);
+    optional(ui, &mut given, default, absent, add);
+    *value = given.unwrap_or(0.0);
 }
 
 /// A value that may be left out: `absent`, quiet, saying what is used without it,

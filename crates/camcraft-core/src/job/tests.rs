@@ -1306,6 +1306,39 @@ fn renaming_a_model_carries_its_picks() {
     );
 }
 
+/// A model is named by the setups it is in and by stocks of either kind
+/// placed against it: renaming it renames it in all of them, and while any
+/// names it, it is in use.
+#[test]
+fn renaming_a_model_carries_its_setups_and_stocks() {
+    let mut j = picked();
+    j.stocks.push(StockDef {
+        name: "board".into(),
+        spec: StockSpec::FixedBox(FixedBox {
+            models: vec!["part".into()],
+            ..FixedBox::centred([10.0, 10.0, 10.0])
+        }),
+    });
+    j.stocks.push(StockDef {
+        name: "around".into(),
+        spec: StockSpec::AroundModels {
+            models: vec!["part".into()],
+            margin: [1.0; 3],
+            below: 0.0,
+        },
+    });
+    assert_eq!(
+        j.model_users("part"),
+        ["setup 'top'", "stock 'board'", "stock 'around'"]
+    );
+    j.rename_model_refs("part", "bracket");
+    assert!(j.model_users("part").is_empty());
+    assert_eq!(j.setups[0].models, ["bracket"]);
+    for s in &j.stocks[1..] {
+        assert_eq!(s.spec.models(), ["bracket"]);
+    }
+}
+
 #[test]
 fn an_origin_keeps_its_kind_when_its_offset_changes() {
     let o = picked().setups[0].origin.clone();

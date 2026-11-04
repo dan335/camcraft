@@ -32,14 +32,13 @@ use glam::{DVec2, DVec3, dvec3};
 use crate::op::{DrillCycles, ProgramSpec};
 use crate::profile::{Profile, ProgramUnits};
 
-/// Millimetres in an inch.
-const MM_PER_INCH: f64 = 25.4;
+use camcraft_geom::MM_PER_INCH;
 
-/// How far straight moves may stray from a short arc they are written for, in
-/// millimetres, beyond rounding: Fusion's posts write an arc shorter than
-/// 0.25 mm across that way, within their `tolerance` of 0.002 mm, as an arc
-/// whose ends round together would read as a full circle.
-const STRAIGHTENED: f64 = 0.002;
+// How far straight moves may stray from a short arc they are written for,
+// beyond rounding: Fusion's posts write an arc shorter than 0.25 mm across that
+// way, as an arc whose ends round together would read as a full circle. The
+// one figure the renderer writes them to.
+use crate::render::STRAIGHTENED;
 
 /// Where the machine is in work coordinates, an axis at a time: `None` where
 /// that is not known, as after a tool change or a move in machine coordinates.
@@ -747,6 +746,11 @@ impl Reader {
         match g {
             83 => {
                 let q = peck.filter(|q| *q > 0.0).ok_or("G83 with no peck")?;
+                // As a controller would, once a peck, and no more than so many.
+                let pecks = (r - bottom) / q;
+                if pecks.is_nan() || pecks > MOST_PECKS {
+                    return Err(format!("G83 with a peck of {q}, too small to drill with"));
+                }
                 let mut depth = r;
                 while depth > bottom {
                     if depth < r {
@@ -772,6 +776,9 @@ impl Reader {
         Ok(())
     }
 }
+
+/// The most pecks a `G83` is read back as taking.
+const MOST_PECKS: f64 = 100_000.0;
 
 /// How many points to compare along a move: the end and the middle of a
 /// straight one, and eight a quarter turn along an arc.

@@ -16,7 +16,7 @@ use rayon::prelude::*;
 
 use super::material;
 use crate::strategy::reach::LevelReach;
-use crate::strategy::{MATERIAL_THICKNESS, SAME_LEVEL, StrategyError};
+use crate::strategy::{MATERIAL_THICKNESS, SAME_LEVEL, StrategyError, merged_highest, sort_levels};
 
 /// The most levels shallow areas may add to a run, so a tiny minimum against a
 /// tall part cannot run away.
@@ -76,7 +76,7 @@ pub fn peak_heights(mesh: &TriMesh, tolerance: f64, radius: f64) -> Vec<f64> {
     for &(v, ..) in corners.values() {
         grid.entry(cell_of(v)).or_default().push(v);
     }
-    let mut zs: Vec<f64> = peaks
+    let zs: Vec<f64> = peaks
         .par_iter()
         .filter(|p| {
             let (cx, cy) = cell_of(**p);
@@ -88,17 +88,9 @@ pub fn peak_heights(mesh: &TriMesh, tolerance: f64, radius: f64) -> Vec<f64> {
         })
         .map(|p| p.z)
         .collect();
-    zs.sort_by(f64::total_cmp);
-    let mut out: Vec<f64> = Vec::new();
-    for z in zs {
-        match out.last_mut() {
-            // Peaks at a rounding error's difference in height are one level,
-            // the highest's, so none is cut into.
-            Some(last) if z - *last <= rise => *last = z,
-            _ => out.push(z),
-        }
-    }
-    out
+    // Peaks at a rounding error's difference in height are one level, the
+    // highest's, so none is cut into.
+    merged_highest(zs, rise)
 }
 
 /// Leave out of each of `slabs` the levels between its own and the one above
@@ -191,8 +183,7 @@ pub(super) fn shallow_levels(
     let mut regions: Vec<Region> = known.iter().map(|(_, r)| r.clone()).collect();
     let find = |z: f64| known.iter().position(|(at, _)| (at - z).abs() < SAME_LEVEL);
     let mut uppers: Vec<f64> = gaps.iter().map(|&(_, b)| b - MATERIAL_THICKNESS).collect();
-    uppers.sort_by(|a, b| b.total_cmp(a));
-    uppers.dedup_by(|a, b| (*a - *b).abs() < SAME_LEVEL);
+    sort_levels(&mut uppers, true);
     let first = regions.len();
     regions.extend(reach.forbidden_all(&uppers)?);
     let upper_of = |b: f64| {

@@ -22,8 +22,9 @@ use crate::profile::{ArcStyle, Profile, ProgramUnits, ToolChangeStyle};
 const SHORTEST_CHORD: f64 = 0.25;
 
 /// How far the straight moves written for such an arc may stray from it, in
-/// millimetres: Fusion's posts' `tolerance`.
-const STRAIGHTENED: f64 = 0.002;
+/// millimetres: Fusion's posts' `tolerance`. Reading a program back allows
+/// for it ([`readback`](crate::readback)).
+pub(crate) const STRAIGHTENED: f64 = 0.002;
 
 /// What rendering produced besides the text.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

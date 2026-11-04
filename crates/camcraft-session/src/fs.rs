@@ -6,13 +6,23 @@
 
 use std::path::{Component, Path, PathBuf};
 
-/// Write `text` beside `path` and move it into place.
-pub fn write_atomically(path: &Path, text: &str) -> std::io::Result<()> {
+/// Where a file is written before it is moved to `path`: beside it, so the
+/// move is a rename within one folder, named for what is `doing` it.
+pub(crate) fn beside(path: &Path, doing: &str) -> PathBuf {
     let mut temp = path.as_os_str().to_owned();
-    temp.push(".camcraft-saving");
-    let temp = std::path::PathBuf::from(temp);
-    std::fs::write(&temp, text)?;
-    std::fs::rename(&temp, path)
+    temp.push(format!(".camcraft-{doing}"));
+    PathBuf::from(temp)
+}
+
+/// Write `text` beside `path` and move it into place; on failure, nothing is
+/// left beside it.
+pub fn write_atomically(path: &Path, text: &str) -> std::io::Result<()> {
+    let temp = beside(path, "saving");
+    let written = std::fs::write(&temp, text).and_then(|()| std::fs::rename(&temp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    written
 }
 
 /// Where a path a job gives is, from the job's folder. An absolute path is where

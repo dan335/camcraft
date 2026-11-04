@@ -7,7 +7,6 @@ use camcraft_core::job::{
 };
 use eframe::egui;
 
-use crate::document::needs_room;
 use crate::help::Help;
 use crate::help::topics::geometry as geo;
 use crate::picking::slots::{Kind, Slot};
@@ -348,7 +347,7 @@ fn boundary_form(
     // new operation's is: set once, as a number, so changing the tool later
     // does not move it.
     if (g.kind, g.containment) != before
-        && needs_room(g)
+        && g.needs_room()
         && let Some(d) = diameter
     {
         g.margin = d;
@@ -357,7 +356,7 @@ fn boundary_form(
 
 /// What the view shows for an operation's boundary.
 fn boundary_hint(g: &MachiningBoundary) -> &'static str {
-    if needs_room(g) {
+    if g.needs_room() {
         "The tool only touches the part's walls: nothing outside them is cut. An \
          additional offset makes room for a channel round the part."
     } else {

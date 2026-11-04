@@ -32,6 +32,8 @@ pub use stock::contour_above;
 use clipper2_rust::{Path64, PointInPolygonResult, point_in_polygon};
 use glam::{DVec2, dvec2};
 
+use crate::mesh::distance_to_segment;
+
 /// A closed ring of points, in millimetres.
 ///
 /// The closing edge is implicit: the last point joins the first.
@@ -65,6 +67,14 @@ pub struct Region {
     rings: Vec<Contour>,
 }
 
+/// The edges of the closed ring through `points`, in order, each from a point
+/// to the next: the closing one, from the last point back to the first, comes
+/// last.
+pub fn closed_edges<T: Copy>(points: &[T]) -> impl Iterator<Item = (T, T)> + '_ {
+    let next = points.iter().cycle().skip(1);
+    points.iter().zip(next).map(|(&a, &b)| (a, b))
+}
+
 impl Contour {
     /// A ring from points. Fewer than three is not an area.
     pub fn new(points: Vec<DVec2>) -> Option<Self> {
@@ -89,8 +99,7 @@ impl Contour {
     /// Its edges, in order, each from a point to the next: the closing one, from
     /// the last point back to the first, comes last.
     pub fn edges(&self) -> impl Iterator<Item = (DVec2, DVec2)> + '_ {
-        let next = self.points.iter().cycle().skip(1);
-        self.points.iter().zip(next).map(|(&a, &b)| (a, b))
+        closed_edges(&self.points)
     }
 
     /// Signed area. Positive is counter-clockwise; the sign distinguishes an outer
@@ -269,6 +278,70 @@ pub fn polyline_length(points: &[DVec2]) -> f64 {
         .zip(points.iter().skip(1))
         .map(|(a, b)| a.distance(*b))
         .sum()
+}
+
+/// `line`, thinned: each point dropped that is within `tolerance` of the line
+/// through the ones kept either side of it, seen from above (Douglas and Peucker).
+pub fn simplify(line: &[DVec2], closed: bool, tolerance: f64) -> Vec<DVec2> {
+    let mut points = line.to_vec();
+    if closed && let Some(&first) = line.first() {
+        points.push(first);
+    }
+    if points.len() < 3 {
+        return line.to_vec();
+    }
+    let mut keep = vec![false; points.len()];
+    if let Some(k) = keep.first_mut() {
+        *k = true;
+    }
+    if let Some(k) = keep.last_mut() {
+        *k = true;
+    }
+    let mut spans = vec![(0usize, points.len() - 1)];
+    // A closed line starts and ends at one point: split it at the point furthest
+    // from there first, so the rest is judged against a real chord.
+    if closed && let Some(&start) = points.first() {
+        let far = points
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.distance(start).total_cmp(&b.1.distance(start)))
+            .map_or(0, |(i, _)| i);
+        if far > 0 && far < points.len() - 1 {
+            if let Some(k) = keep.get_mut(far) {
+                *k = true;
+            }
+            spans = vec![(0, far), (far, points.len() - 1)];
+        }
+    }
+    while let Some((a, b)) = spans.pop() {
+        let (Some(&pa), Some(&pb)) = (points.get(a), points.get(b)) else {
+            continue;
+        };
+        let mut worst = (0usize, 0.0f64);
+        for i in a + 1..b {
+            let Some(&p) = points.get(i) else { continue };
+            let d = distance_to_segment(p, pa, pb);
+            if d > worst.1 {
+                worst = (i, d);
+            }
+        }
+        if worst.1 > tolerance {
+            if let Some(k) = keep.get_mut(worst.0) {
+                *k = true;
+            }
+            spans.push((a, worst.0));
+            spans.push((worst.0, b));
+        }
+    }
+    let mut out: Vec<DVec2> = points
+        .iter()
+        .zip(&keep)
+        .filter_map(|(&p, &k)| k.then_some(p))
+        .collect();
+    if closed {
+        out.pop();
+    }
+    out
 }
 
 #[cfg(test)]

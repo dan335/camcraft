@@ -60,10 +60,11 @@ use crate::path::toolpath::Toolpath;
 use crate::strategy::adaptive::Direction;
 use crate::strategy::nesting::nearest;
 use crate::strategy::parallel::Run;
-use crate::strategy::projected::{Emit, simplify, start_distance};
+use crate::strategy::projected::{Emit, start_distance};
 use crate::strategy::reach::LevelReach;
 use crate::strategy::slope::{self, SlopeCounts};
-use crate::strategy::{SAME_LEVEL, StrategyError, check, with_edge};
+use crate::strategy::{StrategyError, check, sort_levels, with_edge};
+use camcraft_geom::contour::simplify;
 
 /// How many times a chord is halved at most, to put it on the part.
 const MAX_SPLITS: u32 = 16;
@@ -173,6 +174,14 @@ pub fn waterline<T: DropTest + Sync>(
     check("stepdown", params.stepdown)?;
     check("tolerance", params.tolerance)?;
     check("feed", params.feed)?;
+    if let Some(angle) = params.ramp
+        && !(angle > 0.0 && angle < std::f64::consts::FRAC_PI_2)
+    {
+        return Err(StrategyError::BadParameter {
+            name: "ramp",
+            value: angle,
+        });
+    }
     slope::check_range(params.slope_from, params.slope_to)?;
     if !(params.top.is_finite() && params.bottom.is_finite()) {
         return Err(StrategyError::BadParameter {
@@ -356,8 +365,7 @@ fn levels(params: &WaterlineParams) -> Vec<f64> {
             .into_iter()
             .flat_map(|(z, flats)| std::iter::once(z).chain(flats))
             .collect();
-    out.sort_by(|a, b| b.total_cmp(a));
-    out.dedup_by(|a, b| (*a - *b).abs() < SAME_LEVEL);
+    sort_levels(&mut out, true);
     out.truncate(MAX_LEVELS);
     out
 }

@@ -4,8 +4,8 @@
 use camcraft_core::job::{
     self, Height, HeightContext, HeightRef, Heights, Links, Operation, Outline, StrategySpec,
 };
+use camcraft_core::setup::Prepared;
 use camcraft_core::setup::features;
-use camcraft_core::setup::{Bodies, Prepared};
 use eframe::egui;
 use glam::DVec2;
 
@@ -226,11 +226,7 @@ fn planes(doc: &Document, m: Measure, s: &Shown<'_>) -> Vec<Plane> {
     // How high the picks go, when a height is measured from them. One that
     // cannot be found leaves the height where it would be with none.
     let picked = if op.heights.measured_from_selection() || down_to_picks(op) {
-        let bodies: Bodies<'_> = doc
-            .models
-            .iter()
-            .filter_map(|(n, slot)| Some((n.as_str(), &slot.model()?.body)))
-            .collect();
+        let bodies = doc.bodies();
         features::picks(&op.selection, prepared, &bodies, doc.job.tolerance)
             .ok()
             .flatten()

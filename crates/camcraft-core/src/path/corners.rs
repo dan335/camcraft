@@ -30,7 +30,7 @@
 
 use glam::DVec3;
 
-use super::toolpath::{Arc, Move, MoveKind, MoveRole, Toolpath, ToolpathError};
+use super::toolpath::{Arc, Move, MoveKind, MoveRole, Toolpath, ToolpathError, starting_at};
 
 /// Pieces shorter than this, in millimetres, are not cut off a move.
 const SHORTEST: f64 = 1.0e-6;
@@ -113,15 +113,12 @@ fn slow_run(
 ) -> Result<(), ToolpathError> {
     // Where each move starts along the run, and its length.
     let mut starts = Vec::with_capacity(run.len());
-    let mut at = from;
-    let mut gone = 0.0;
-    for m in run {
+    let mut total = 0.0;
+    for (at, m) in starting_at(from, run) {
         let length = m.length(at);
-        starts.push((at, gone, length));
-        gone += length;
-        at = m.to;
+        starts.push((at, total, length));
+        total += length;
     }
-    let total = gone;
 
     // The spans to slow, along the run.
     let d = params.distance.max(0.0);
@@ -152,21 +149,25 @@ fn slow_run(
 
     // Each move, cut where a span starts or ends along it.
     for (m, &(at, s, length)) in run.iter().zip(&starts) {
-        let Some(feed) = m.feed else { continue };
+        // A run is of cuts, which feed; were one not to, it is kept as it is.
+        let Some(feed) = m.feed else {
+            out.push(*m)?;
+            continue;
+        };
         let slow = params.feed.min(feed);
-        let mut cuts: Vec<f64> = vec![0.0];
+        let mut breaks: Vec<f64> = vec![0.0];
         for &(a, b) in &spans {
             for edge in [a, b] {
                 let t = edge - s;
                 if t > SHORTEST && t < length - SHORTEST {
-                    cuts.push(t / length);
+                    breaks.push(t / length);
                 }
             }
         }
-        cuts.push(1.0);
-        cuts.sort_by(f64::total_cmp);
-        for w in cuts.windows(2) {
-            let (&[t0, t1], Some(&last)) = (w, cuts.last()) else {
+        breaks.push(1.0);
+        breaks.sort_by(f64::total_cmp);
+        for w in breaks.windows(2) {
+            let (&[t0, t1], Some(&last)) = (w, breaks.last()) else {
                 continue;
             };
             let to = if t1 >= last { m.to } else { m.point_at(at, t1) };

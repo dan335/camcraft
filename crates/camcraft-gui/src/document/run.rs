@@ -11,7 +11,7 @@ use camcraft_core::control::{Control, share};
 use camcraft_core::job::{Job, ModelDef, Operation, Origin, Setup, StockDef, ToolSpec};
 use camcraft_core::run::{Made, OperationResult, Plan, Stage};
 use camcraft_core::setup::frame::Orientation;
-use camcraft_core::setup::{Bodies, PrepareError, Prepared, prepare};
+use camcraft_core::setup::{PrepareError, Prepared, prepare};
 use camcraft_geom::shadow::Shadow;
 use camcraft_session::{Model, Ran, SessionError, check_runnable};
 use glam::DVec3;
@@ -891,11 +891,7 @@ impl Document {
         }
         let inputs = SetupInputs::of(&self.job, &self.models, index)?.into_layout();
         let inputs = (inputs, ready().cloned().collect());
-        let meshes: Bodies<'_> = self
-            .models
-            .iter()
-            .filter_map(|(n, s)| Some((n.as_str(), &s.model()?.body)))
-            .collect();
+        let meshes = self.bodies();
         let prepared = match prepare(&self.job, index, &meshes) {
             // A work zero picked on something no longer there: draw the part from
             // the model's own zero instead, without the axes, which would be a lie,

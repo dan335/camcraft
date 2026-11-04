@@ -10,7 +10,7 @@
 
 use glam::DVec3;
 
-use super::toolpath::{Move, MoveKind, MoveRole, Toolpath, ToolpathError};
+use super::toolpath::{Move, MoveKind, MoveRole, Toolpath, ToolpathError, starting_at};
 
 /// How far past a height a point may be and still count as on it, in
 /// millimetres: a pass along a floor at the Bottom is kept.
@@ -49,24 +49,20 @@ pub fn within_heights(
         let Some((first, rest)) = pass.split_first() else {
             continue;
         };
-        let mut at = first.to;
-        if (lo..=hi).contains(&at.z) {
-            pieces.start(at, first.feed);
+        if (lo..=hi).contains(&first.to.z) {
+            pieces.start(first.to, first.feed);
         }
-        for m in rest {
+        for (at, m) in starting_at(first.to, rest) {
             let mut from = at;
             for to in m.chords(from, tolerance) {
                 pieces.segment((from, to), (lo, hi), m);
                 from = to;
             }
-            at = m.to;
         }
         pieces.close();
     }
     let mut out = Toolpath::new();
-    for m in pieces.kept {
-        out.push(m)?;
-    }
+    out.append(&pieces.kept)?;
     Ok((
         out,
         Trimmed {

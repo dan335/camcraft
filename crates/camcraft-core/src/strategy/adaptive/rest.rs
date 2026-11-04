@@ -15,9 +15,8 @@
 use camcraft_geom::steps::bounded_count;
 use glam::DVec3;
 
-use super::tiles::Tiles;
+use super::tiles::{TILE_RADII, Tiles};
 use super::*;
-use crate::path::toolpath::MoveKind;
 
 /// An operation cut before this one: its path, and the real tool it was cut
 /// with.
@@ -46,10 +45,6 @@ struct Op<'a> {
 /// The most pieces a move close below a level is cut into, to take the tool's
 /// width at each as it is there.
 const MOST_SLICES: f64 = 32.0;
-
-/// Points to a polyline swept at once: a whole path's sweep is a very large
-/// polygon.
-const CHUNK: usize = 48;
 
 /// The material at each of `levels`, in any order: the blocks (`stocks`), less
 /// what the operations `before` swept there, less what they left thinner than
@@ -106,13 +101,13 @@ pub(super) fn material_at(
 
     // From the lowest level up: the material standing at each as the full
     // width sweeps leave it, every level's own.
-    let size = 16.0
+    let size = TILE_RADII
         * ops
             .iter()
             .map(|o| o.cutter.max_radius())
             .fold(1.0, f64::max);
-    let mut standing = Tiles::new(&material(stocks, lowest)?, size)?;
     let mut blocks = material(stocks, lowest)?;
+    let mut standing = Tiles::new(&blocks, size)?;
     let mut swept_full: Vec<Region> = Vec::with_capacity(n);
     for (k, &z) in zs.iter().enumerate() {
         watch.check()?;
@@ -127,7 +122,7 @@ pub(super) fn material_at(
                 continue;
             };
             for line in polylines(&op.pieces, these) {
-                sweep_line(&mut standing, &line, op.cutter.max_radius(), arc)?;
+                standing.subtract_swept(&line, op.cutter.max_radius(), arc)?;
             }
         }
         swept_full.push(standing.whole()?);
@@ -168,31 +163,15 @@ pub(super) fn material_at(
 /// within `tolerance` of them.
 fn pieces(path: &Toolpath, tolerance: f64) -> Vec<Piece> {
     let mut out = Vec::new();
-    let mut at: Option<DVec3> = None;
-    for m in path.moves() {
-        let from = at;
-        at = Some(m.to);
+    for (from, m) in path.steps() {
         let (Some(from), Some(_)) = (from, m.feed) else {
             continue;
         };
-        match m.kind {
-            MoveKind::Linear => out.push(Piece { a: from, b: m.to }),
-            MoveKind::Arc(a) => {
-                let r = (from - a.centre).reject_from(a.axis).length();
-                // Chords that fall short of the arc by at most the tolerance.
-                let half = if r > tolerance {
-                    (1.0 - tolerance / r).acos()
-                } else {
-                    FRAC_PI_4
-                };
-                let n = bounded_count((a.sweep.abs() / (2.0 * half.max(1e-3))).ceil().max(1.0));
-                let mut prev = from;
-                for k in 1..=n {
-                    let p = m.point_at(from, f64::from(k) / f64::from(n));
-                    out.push(Piece { a: prev, b: p });
-                    prev = p;
-                }
-            }
+        // An arc by chords that fall short of it by at most the tolerance.
+        let mut prev = from;
+        for p in m.chords(from, tolerance) {
+            out.push(Piece { a: prev, b: p });
+            prev = p;
         }
     }
     out
@@ -217,26 +196,6 @@ fn polylines(pieces: &[Piece], which: &[usize]) -> Vec<Vec<DVec2>> {
         last = Some((i, p.b));
     }
     lines
-}
-
-/// Take what a tool `radius` wide sweeps along `line` out of `standing`, a
-/// little at a time.
-fn sweep_line(
-    standing: &mut Tiles,
-    line: &[DVec2],
-    radius: f64,
-    arc: f64,
-) -> Result<(), StrategyError> {
-    let mut start = 0;
-    while start + 1 < line.len() {
-        let end = (start + CHUNK).min(line.len());
-        if let Some(chunk) = line.get(start..end) {
-            standing.subtract(&Region::around_polylines(&[chunk.to_vec()], radius, arc))?;
-        }
-        // Each chunk from the last point of the one before.
-        start = end - 1;
-    }
-    Ok(())
 }
 
 /// What `cutter` cuts at level `z` along `p`, a piece whose tip comes within

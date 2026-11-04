@@ -251,6 +251,11 @@ fn fs(i: BoxOut) -> Hit {
     let at = eye + dir * (start + t);
     let on_grid = vec2<f32>((at.x - o.x) / o.z + 0.5, (at.y - o.y) / o.z + 0.5);
     var seen = open_between(on_grid, cell);
+    if (!up && n.z < -0.5) {
+        // The stock's bottom, seen from below: what a cell's sky says is how
+        // open its top is, and nothing of the material shades its underside.
+        seen = 1.0;
+    }
     if (!up && n.z == 0.0) {
         // A step too small to be a wall is the surface's slope, seen edge on.
         let behind = cell + vec2<i32>(i32(n.x), i32(n.y));

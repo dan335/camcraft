@@ -89,7 +89,7 @@ fn a_refusal_says_what_was_wanted() {
             safe_distance: -1.0,
             ..params()
         }),
-        "safe_distance must be finite and not negative, got -1"
+        "safe_distance must be finite and at least zero, got -1"
     );
     assert_eq!(
         refusal(LinkParams {

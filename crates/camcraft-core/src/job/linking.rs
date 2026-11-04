@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Operation, is_default, yes};
+use super::{Operation, is_default, is_ninety, ninety, yes};
 
 /// How the tool moves between cuts.
 ///
@@ -136,10 +136,7 @@ pub struct Leads {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radius: Option<f64>,
     /// How far round the level arc turns, in degrees: Fusion's sweep angle.
-    #[serde(
-        default = "default_lead_sweep",
-        skip_serializing_if = "is_default_lead_sweep"
-    )]
+    #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
     pub sweep: f64,
     /// The straight before the level arc in and after it out, in millimetres:
     /// Fusion's linear lead-in distance; zero for none.
@@ -156,7 +153,7 @@ impl Default for Leads {
     fn default() -> Self {
         Self {
             radius: None,
-            sweep: default_lead_sweep(),
+            sweep: ninety(),
             straight: None,
             vertical: None,
         }
@@ -212,11 +209,6 @@ mod leads_setting {
     }
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_default_lead_sweep(v: &f64) -> bool {
-    v.to_bits() == default_lead_sweep().to_bits()
-}
-
 impl Leads {
     /// Fusion's leads for a tool `diameter` across: a quarter turn, and a tenth
     /// of the diameter each.
@@ -244,10 +236,6 @@ pub struct LeadSizes {
     pub vertical: f64,
 }
 
-fn default_lead_sweep() -> f64 {
-    90.0
-}
-
 impl Default for Linking {
     fn default() -> Self {
         Self {
@@ -273,24 +261,9 @@ impl Default for Linking {
 /// program for the lego ramps at 90 in/min to its 150.
 const RAMP_SHARE: f64 = 0.6;
 
-fn default_safe_distance() -> f64 {
-    2.0
-}
+default_number!(default_safe_distance, is_default_safe_distance = 2.0);
 
-// Serde's `skip_serializing_if` hands the field by reference.
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_default_safe_distance(v: &f64) -> bool {
-    v.to_bits() == default_safe_distance().to_bits()
-}
-
-fn default_ramp_angle() -> f64 {
-    2.0
-}
-
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_default_ramp_angle(v: &f64) -> bool {
-    v.to_bits() == default_ramp_angle().to_bits()
-}
+default_number!(default_ramp_angle, is_default_ramp_angle = 2.0);
 
 fn default_retract_feed() -> f64 {
     1500.0

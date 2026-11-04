@@ -183,8 +183,7 @@ pub enum ProfileError {
     },
 }
 
-/// Millimetres in an inch.
-const MM_PER_INCH: f64 = 25.4;
+use camcraft_geom::MM_PER_INCH;
 
 /// The profiles compiled in, by name: each a file of its own in `profiles/`.
 const BUILTIN: &[(&str, &str)] = &[

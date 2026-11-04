@@ -14,7 +14,13 @@
 
 use std::f64::consts::{FRAC_PI_2, TAU};
 
-use glam::DVec3;
+use glam::{DVec2, DVec3};
+
+/// How far `from` turns to point along `to`, in radians: counter-clockwise
+/// positive, at most a half turn either way. Exact for vectors of any length.
+pub fn turn(from: DVec2, to: DVec2) -> f64 {
+    from.perp_dot(to).atan2(from.dot(to))
+}
 
 /// A circular arc or a helix, less its ends.
 #[derive(Debug, Clone, Copy, PartialEq)]

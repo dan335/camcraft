@@ -1,8 +1,9 @@
 //! Toolpaths: what a strategy produces, and what every later transform operates on.
 //!
-//! A strategy never emits machine instructions. It emits one of these, and arc
-//! fitting, tabs, lead in and out, feed optimisation and cutter compensation are all
-//! `Toolpath -> Toolpath` transforms layered on top. Only at the very end does
+//! A strategy never emits machine instructions. It emits one of these, and
+//! trimming, ordering, tabs, arc fitting and feed optimisation are all
+//! `Toolpath -> Toolpath` transforms layered on top, before the linker joins
+//! the passes. Only at the very end does
 //! `camcraft-post` turn one into an instruction stream. That ordering is enforced by
 //! the crate graph — this crate cannot see `camcraft-post`, so it could not emit
 //! G-code if it tried.
@@ -63,6 +64,14 @@ pub const PLUNGE_RATIO: f64 = 10.0;
 /// `ratio`, fall per unit of travel: at [`PLUNGE_RATIO`], a plunge.
 pub(crate) fn steep(drop: f64, flat: f64, ratio: f64) -> bool {
     drop > 0.0 && drop > flat * ratio
+}
+
+/// `moves`, each with where it starts: the first at `from`, each after it
+/// where the one before ends.
+pub fn starting_at(from: DVec3, moves: &[Move]) -> impl Iterator<Item = (DVec3, &Move)> {
+    moves
+        .iter()
+        .scan(from, |at, m| Some((std::mem::replace(at, m.to), m)))
 }
 
 /// One continuous steep descent: moves `first..=last`, falling `depth` in all.
@@ -136,6 +145,19 @@ impl MoveRole {
     /// Whether the linker still has to resolve this move.
     pub fn is_unplanned(&self) -> bool {
         matches!(self, Self::Link)
+    }
+
+    /// Whether it runs at the cutting feed through whatever it meets: a cut,
+    /// or a transition between cuts. One that falls steeply is a plunge at
+    /// the cutting feed ([`Move::falls_steeply`]).
+    pub fn at_cutting_feed(&self) -> bool {
+        matches!(self, Self::Cut | Self::Transition)
+    }
+
+    /// Whether it runs along the work, and may be an arc: a cut, transition,
+    /// lead or ramp. Smoothing fits these, and tabs carry them over.
+    pub fn along_the_work(&self) -> bool {
+        matches!(self, Self::Cut | Self::Transition | Self::Lead | Self::Ramp)
     }
 }
 
@@ -214,6 +236,13 @@ impl Move {
             MoveKind::Linear => vec![self.to],
             MoveKind::Arc(a) => a.chords(from, self.to, tolerance),
         }
+    }
+
+    /// Whether, from `from`, it falls more steeply than `ratio` at the
+    /// cutting feed: the one test the linker and the release gate share
+    /// ([`Toolpath::steep_descents`]).
+    pub(crate) fn falls_steeply(&self, from: DVec3, ratio: f64) -> bool {
+        self.role.at_cutting_feed() && steep(from.z - self.to.z, self.flat_length(from), ratio)
     }
 
     /// The same move run backwards, from its end to `from`, with the same role
@@ -327,6 +356,11 @@ impl Toolpath {
         Ok(())
     }
 
+    /// Append every move of `moves`, in order, validating each.
+    pub fn append(&mut self, moves: &[Move]) -> Result<(), ToolpathError> {
+        moves.iter().try_for_each(|m| self.push(*m))
+    }
+
     /// Append a straight rapid.
     pub fn rapid_to(&mut self, to: DVec3) -> Result<(), ToolpathError> {
         self.push(Move {
@@ -392,6 +426,14 @@ impl Toolpath {
         self.moves.iter().any(|m| m.role.is_unplanned())
     }
 
+    /// Its moves, each with where it starts: `None` for the first, which
+    /// starts wherever the tool is.
+    pub fn steps(&self) -> impl Iterator<Item = (Option<DVec3>, &Move)> {
+        self.moves
+            .iter()
+            .scan(None, |at, m| Some((at.replace(m.to), m)))
+    }
+
     /// The path in passes: each from a [`MoveRole::Link`] up to the next, and
     /// first whatever comes before the first link, if anything does.
     pub fn passes(&self) -> impl Iterator<Item = &[Move]> {
@@ -416,16 +458,9 @@ impl Toolpath {
     /// surface. Only the *connection* between them is unmachinable.
     pub fn steep_descents(&self, from: DVec3, max_ratio: f64) -> Vec<Descent> {
         let mut out = Vec::new();
-        let mut at = from;
         let mut run = SteepRun::default();
-        for (i, m) in self.moves.iter().enumerate() {
-            let drop = at.z - m.to.z;
-            // A transition runs at the cutting feed too, so a steep one is the
-            // same plunge.
-            let cutting = matches!(m.role, MoveRole::Cut | MoveRole::Transition);
-            let falling = cutting && steep(drop, m.flat_length(at), max_ratio);
-            out.extend(run.step(i, drop, falling));
-            at = m.to;
+        for (i, (at, m)) in starting_at(from, &self.moves).enumerate() {
+            out.extend(run.step(i, at.z - m.to.z, m.falls_steeply(at, max_ratio)));
         }
         out.extend(run.finish());
         out
@@ -443,22 +478,12 @@ impl Toolpath {
     /// ramps, plunges, leads and transitions.
     #[cfg(test)]
     pub(crate) fn cutting_length(&self, from: DVec3) -> f64 {
-        let mut at = from;
-        let mut total = 0.0;
-        for m in &self.moves {
-            if matches!(
-                m.role,
-                MoveRole::Cut
-                    | MoveRole::Ramp
-                    | MoveRole::Plunge
-                    | MoveRole::Lead
-                    | MoveRole::Transition
-            ) {
-                total += m.length(at);
-            }
-            at = m.to;
-        }
-        total
+        starting_at(from, &self.moves)
+            .filter(|(_, m)| {
+                !matches!(m.role, MoveRole::Rapid | MoveRole::Retract | MoveRole::Link)
+            })
+            .map(|(at, m)| m.length(at))
+            .sum()
     }
 }
 

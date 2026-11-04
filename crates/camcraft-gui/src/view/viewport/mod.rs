@@ -165,6 +165,14 @@ impl Viewport {
         viewcube::point_of(self.rect?, &self.camera, viewcube::Region(region))
     }
 
+    /// Orbit the view as a drag of `dx`, `dy` points would. Only the snapshot
+    /// harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn orbit_for_snapshot(&mut self, dx: f32, dy: f32) {
+        self.turn = None;
+        self.camera.orbit(dx, dy);
+    }
+
     /// Turn the view smoothly to `to`, from where it is.
     fn turn_to(&mut self, ui: &egui::Ui, to: Camera) {
         self.turn = Some(Turn {

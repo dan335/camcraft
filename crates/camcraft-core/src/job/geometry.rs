@@ -108,6 +108,19 @@ pub struct MachiningBoundary {
     pub margin: f64,
 }
 
+impl MachiningBoundary {
+    /// Whether it leaves the tool no room round the part: a boundary round
+    /// the part that the tool reaches in from outside, with no additional
+    /// offset. Its centre stops a radius outside the part's walls, so it only
+    /// touches them and clears nothing past them. A new operation's boundary
+    /// is given room ([`Operation::fit_channel`]).
+    pub fn needs_room(&self) -> bool {
+        matches!(self.kind, Boundary::BoundingBox | Boundary::Silhouette)
+            && self.containment == Containment::Outside
+            && self.margin == 0.0
+    }
+}
+
 impl Default for MachiningBoundary {
     fn default() -> Self {
         Self {

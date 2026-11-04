@@ -28,7 +28,7 @@
 //! climbs and descends at 45°, so the tab is `width` wide at its top and wider
 //! below.
 
-use camcraft_geom::arc::Arc;
+use camcraft_geom::arc::{Arc, turn};
 use glam::{DVec2, DVec3, dvec3};
 
 use crate::cutter::dropcutter::segment_in_disc;
@@ -136,8 +136,7 @@ pub fn add_tabs(path: &Toolpath, p: &TabParams) -> Result<(Toolpath, TabReport),
         half,
     };
     let mut out = Toolpath::new();
-    let mut at: Option<DVec3> = None;
-    for m in path.moves() {
+    for (at, m) in path.steps() {
         match (m.role, at) {
             (MoveRole::Link, _) => {
                 let to = raised(m.to, field.height_at(m.to.truncate()));
@@ -146,10 +145,7 @@ pub fn add_tabs(path: &Toolpath, p: &TabParams) -> Result<(Toolpath, TabReport),
             // A lead runs on from the ring, towards the first tab or from the
             // last, at the ring's depth: it rides over them as the cut does.
             // A spiral's ramp onto the deepest level rides over them too.
-            (
-                MoveRole::Cut | MoveRole::Transition | MoveRole::Lead | MoveRole::Ramp,
-                Some(from),
-            ) => match m.kind {
+            (role, Some(from)) if role.along_the_work() => match m.kind {
                 MoveKind::Arc(a) if !turns_about_z(&a) => {
                     // Not turning about Z, it is followed by its chords.
                     let mut at = from;
@@ -167,7 +163,6 @@ pub fn add_tabs(path: &Toolpath, p: &TabParams) -> Result<(Toolpath, TabReport),
             },
             _ => out.push(*m)?,
         }
-        at = Some(m.to);
     }
     Ok((out, report))
 }
@@ -375,7 +370,7 @@ fn fraction_at(from: DVec3, a: &Arc, p: DVec2) -> Option<f64> {
     let centre = a.centre.truncate();
     let (r0, v) = (from.truncate() - centre, p - centre);
     // Counter-clockwise seen from above, whichever way up the axis is.
-    let mut angle = r0.perp_dot(v).atan2(r0.dot(v)) * a.axis.z.signum();
+    let mut angle = turn(r0, v) * a.axis.z.signum();
     let tau = std::f64::consts::TAU;
     if a.sweep > 0.0 {
         angle = angle.rem_euclid(tau);

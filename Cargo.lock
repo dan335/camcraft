@@ -740,6 +740,7 @@ name = "camcraft-post"
 version = "0.4.0"
 dependencies = [
  "camcraft-core",
+ "camcraft-geom",
  "glam 0.33.9",
  "serde",
  "thiserror 2.0.20",

@@ -7,15 +7,7 @@ use super::{
     StockToLeave, StrategySpec, ToolSpec,
 };
 use crate::is_positive;
-
-/// What a length, a feed or a count must be.
-const POSITIVE: &str = "finite and greater than zero";
-
-/// What a size that may be nothing must be.
-const AT_LEAST_ZERO: &str = "finite and at least zero";
-
-/// What a coordinate, an angle or an offset either way must be.
-const FINITE: &str = "finite";
+use crate::must::{AT_LEAST_ZERO, FINITE, POSITIVE};
 
 impl Job {
     /// Check the whole job is runnable before anything is computed: everything
@@ -75,37 +67,14 @@ impl Job {
 
         for stock in &self.stocks {
             let field = |f: &str| format!("stock '{}'.{f}", stock.name);
+            self.known_models(&format!("stock '{}'", stock.name), stock.spec.models())?;
             match &stock.spec {
-                StockSpec::AroundModels {
-                    models,
-                    margin,
-                    below,
-                } => {
-                    for m in models {
-                        if self.model(m).is_none() {
-                            return Err(JobError::UnknownModel {
-                                owner: format!("stock '{}'", stock.name),
-                                model: m.clone(),
-                            });
-                        }
-                    }
+                StockSpec::AroundModels { margin, below, .. } => {
                     for (i, v) in margin.iter().chain(std::iter::once(below)).enumerate() {
                         at_least_zero(&field(if i < 3 { "margin" } else { "below" }), *v)?;
                     }
                 }
-                StockSpec::FixedBox(FixedBox {
-                    size,
-                    models,
-                    place,
-                }) => {
-                    for m in models {
-                        if self.model(m).is_none() {
-                            return Err(JobError::UnknownModel {
-                                owner: format!("stock '{}'", stock.name),
-                                model: m.clone(),
-                            });
-                        }
-                    }
+                StockSpec::FixedBox(FixedBox { size, place, .. }) => {
                     for v in place.iter().filter_map(|p| p.value()) {
                         finite(&field("place"), v)?;
                     }
@@ -181,14 +150,7 @@ impl Job {
         if setup.models.is_empty() {
             return Err(JobError::NoModels(name.clone()));
         }
-        for m in &setup.models {
-            if self.model(m).is_none() {
-                return Err(JobError::UnknownModel {
-                    owner: format!("setup '{name}'"),
-                    model: m.clone(),
-                });
-            }
-        }
+        self.known_models(&format!("setup '{name}'"), &setup.models)?;
         if setup.stocks.is_empty() {
             return Err(JobError::NoStock(name.clone()));
         }
@@ -246,6 +208,19 @@ fn unique<'a>(what: &'static str, names: impl Iterator<Item = &'a str>) -> Resul
         }
     }
     Ok(())
+}
+
+impl Job {
+    /// Check every one of `models`, named by `owner`, is a model of the job.
+    fn known_models(&self, owner: &str, models: &[String]) -> Result<(), JobError> {
+        match models.iter().find(|m| self.model(m).is_none()) {
+            Some(m) => Err(JobError::UnknownModel {
+                owner: owner.to_string(),
+                model: m.clone(),
+            }),
+            None => Ok(()),
+        }
+    }
 }
 
 /// `field`'s `value`, which is not `range`.

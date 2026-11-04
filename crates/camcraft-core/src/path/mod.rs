@@ -1,6 +1,7 @@
-//! The toolpath, and what works on it once a strategy has made it: reordering,
-//! tabs, the linker that joins its passes, and the adapters that hand it to the
-//! simulator.
+//! The toolpath, and what works on it once a strategy has made it, in the
+//! order a run applies them: trimming to heights, reordering, tabs, smoothing
+//! and feed optimisation; then the linker that joins its passes, and the
+//! adapters that hand it to the simulator.
 
 pub mod corners;
 pub mod fit;

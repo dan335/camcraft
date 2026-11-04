@@ -163,6 +163,14 @@ fn main_window_after_a_run() {
         shoot(&mut h, name);
     }
 
+    // From below, part-way through roughing: nothing of the material shades
+    // its underside, however its top is cut.
+    h.state_mut().set_view_for_snapshot(0, 0.3, u32::MAX);
+    h.state_mut().orbit_for_snapshot(0.0, -180.0);
+    catch_up(&mut h, 60);
+    shoot(&mut h, "playback_mid_rough_below");
+    h.state_mut().orbit_for_snapshot(0.0, 180.0);
+
     // Space plays: the playhead moves on in machining time, and Space again stops
     // it where it is.
     let (before, _) = h.state_mut().playhead_for_snapshot().unwrap();

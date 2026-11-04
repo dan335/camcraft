@@ -120,8 +120,9 @@ is what enforces the pipeline:
 Strategy -> Toolpath -> transforms -> Linker -> IR -> Post
 ```
 
-Arc fitting, tabs, leads, feed optimisation and cutter compensation are each a
-`Toolpath -> Toolpath` transform, so no strategy ever emits instructions directly.
+Trimming to heights, ordering, tabs, arc fitting and feed optimisation are each
+a `Toolpath -> Toolpath` transform, so no strategy ever emits instructions
+directly.
 
 Only the two binaries reach `import`, through `session`, so work on `geom`, `sim`,
 `core` and `post` never waits for a STEP kernel to build. `step-check` depends on

@@ -100,10 +100,7 @@ fn with_walls(
         return Ok(0);
     };
     let (walls, rings) = steep_walls(work, limit, band, (CutDirection::Climb, slope_to))?;
-    for m in walls.moves() {
-        path.push(*m)
-            .map_err(|e| in_op(work.op)(StrategyError::from(e)))?;
-    }
+    path.append(walls.moves()).map_err(in_op(work.op))?;
     Ok(rings)
 }
 
@@ -175,10 +172,7 @@ pub(super) fn scallop_paths(
     // down it, each going no deeper than the last by more than that, as
     // Fusion's scallop finishes them.
     let (walls, rings) = steep_walls(work, limit, &band, (direction, slope_to))?;
-    for m in walls.moves() {
-        path.push(*m)
-            .map_err(|e| in_op(op)(StrategyError::from(e)))?;
-    }
+    path.append(walls.moves()).map_err(in_op(op))?;
     report.passes += rings;
     report.walls = rings;
     if report.passes == 0 {

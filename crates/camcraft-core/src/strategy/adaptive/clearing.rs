@@ -84,7 +84,7 @@ impl<'a> Clearing<'a> {
         // What the tool cannot reach from where it may be, it never touches.
         let reach = allowed.offset(p.radius, p.arc);
         let uncut = uncut.intersection(&reach)?;
-        let size = 16.0 * p.radius;
+        let size = TILE_RADII * p.radius;
         // Each in tiles on its own, in parallel.
         let (room, (inner, uncut)) = rayon::join(
             || Tiles::new(allowed, size),
@@ -773,7 +773,7 @@ impl<'a> Clearing<'a> {
             } else {
                 step
             };
-            if self.trail_length > self.p.radius || self.trail.len() > 48 {
+            if self.trail_length > self.p.radius || self.trail.len() > SWEPT_AT_ONCE {
                 self.flush()?;
                 if self.taken() > self.p.sliver * since {
                     idle = 0.0;
@@ -827,12 +827,7 @@ fn longest_way(region: &Region) -> Option<DVec2> {
     let (mut area, mut cx, mut cy) = (0.0, 0.0, 0.0);
     let (mut xx, mut yy, mut xy) = (0.0, 0.0, 0.0);
     for ring in region.rings() {
-        let pts = ring.points();
-        let n = pts.len();
-        for i in 0..n {
-            let (Some(&p), Some(&q)) = (pts.get(i), pts.get((i + 1) % n)) else {
-                continue;
-            };
+        for (p, q) in ring.edges() {
             let c = p.perp_dot(q);
             area += c * 0.5;
             cx += (p.x + q.x) * c / 6.0;
@@ -959,7 +954,7 @@ pub(super) fn route(
             // The region on a ring's left: turning right, it turns away from
             // itself.
             let (into, out) = (v - prev, next - v);
-            let turn = into.perp_dot(out).atan2(into.dot(out));
+            let turn = camcraft_geom::arc::turn(into, out);
             if turn >= 0.0 {
                 turned = 0.0;
                 continue;

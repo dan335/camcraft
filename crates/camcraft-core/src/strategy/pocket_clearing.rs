@@ -61,7 +61,7 @@ use rayon::prelude::*;
 use crate::control::{Watch, share};
 use crate::cutter::tool::{Cutter, ToolProfile};
 use crate::path::toolpath::Toolpath;
-use crate::strategy::nesting::{Cuts, Nested, distance, nearest};
+use crate::strategy::nesting::{Cuts, Nested, distance, take_nearest};
 use crate::strategy::parallel::Run;
 use crate::strategy::projected::Emit;
 use crate::strategy::reach::LevelReach;
@@ -431,9 +431,10 @@ pub(crate) struct Cut {
 impl Cut {
     /// Each of `pieces`' rings, the nearest piece next, by where it is first cut.
     pub(crate) fn pieces(&mut self, mut pieces: Vec<Nested<Run>>) -> Result<(), StrategyError> {
-        while !pieces.is_empty() {
-            let pick = nearest(&pieces, |tree| distance(tree.anchor(0), self.emit.at));
-            pieces.remove(pick).cut(0, self)?;
+        while let Some(mut piece) =
+            take_nearest(&mut pieces, |tree| distance(tree.anchor(0), self.emit.at))
+        {
+            piece.cut(0, self)?;
         }
         Ok(())
     }

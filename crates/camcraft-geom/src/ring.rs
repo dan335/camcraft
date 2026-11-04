@@ -27,7 +27,7 @@ use std::f64::consts::{FRAC_PI_2, TAU};
 
 use glam::DVec2;
 
-use crate::arc::chord_count;
+use crate::arc::{chord_count, turn};
 use crate::mesh::segment_distance2;
 
 /// One piece of a ring, from where the piece before it ended.
@@ -130,7 +130,7 @@ impl Span {
             }
             Span::Arc { to, centre, sweep } => {
                 let (r0, v) = (from - centre, p - centre);
-                let mut angle = r0.perp_dot(v).atan2(r0.dot(v)) * sweep.signum();
+                let mut angle = turn(r0, v) * sweep.signum();
                 angle = angle.rem_euclid(TAU);
                 if angle <= sweep.abs() {
                     let t = angle / sweep.abs();
@@ -367,7 +367,7 @@ impl Ring {
                     return None;
                 }
                 let (ra, rb) = (a - c, b - c);
-                let turn = ra.perp_dot(rb).atan2(ra.dot(rb));
+                let turn = turn(ra, rb);
                 let chord_sag = r * (1.0 - (turn / 2.0).cos());
                 (turn.abs() > 1e-12 && turn.abs() < FRAC_PI_2 && chord_sag <= sag)
                     .then_some((k, turn))
@@ -473,7 +473,7 @@ impl Ring {
             let (&(from_i, span_i), &(from_k, span_k)) = (pieces.get(i)?, pieces.get(k)?);
             let t1 = span_i.tangent_at(from_i, 1.0);
             let t2 = span_k.tangent_at(from_k, 0.0);
-            let turn = t1.perp_dot(t2).atan2(t1.dot(t2));
+            let turn = turn(t1, t2);
             let (e, f) = (*ends.get(i)?, *starts.get(k)?);
             let corner: (DVec2, Option<Span>) = if e.distance(f) < 1e-9 {
                 (e, None)
@@ -627,7 +627,7 @@ fn trimmed(from: DVec2, s: Span, a: DVec2, b: DVec2) -> Option<Span> {
         }
         Span::Arc { centre, sweep, .. } => {
             let (ra, rb) = (a - centre, b - centre);
-            let mut turn = ra.perp_dot(rb).atan2(ra.dot(rb)) * sweep.signum();
+            let mut turn = turn(ra, rb) * sweep.signum();
             turn = turn.rem_euclid(TAU);
             // A full turn stays one.
             if turn < 1e-9 && sweep.abs() > TAU - 1e-6 {

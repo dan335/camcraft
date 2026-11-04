@@ -383,7 +383,9 @@ impl Topology {
         };
         let [origin, start] = first.ends?;
         let (p, at) = away(e, origin)?;
-        debug_assert_eq!(at, start);
+        if at != start {
+            return None;
+        }
         let mut heading = arriving(&p)?;
         let mut at = start;
         let mut out = vec![e];
@@ -505,7 +507,7 @@ fn arriving(p: &[DVec3]) -> Option<glam::DVec2> {
 
 /// How far, in radians either way, heading `from` turns to go `to`.
 fn turn(from: glam::DVec2, to: glam::DVec2) -> f64 {
-    from.perp_dot(to).atan2(from.dot(to)).abs()
+    crate::arc::turn(from, to).abs()
 }
 
 fn pair(w: &[DVec3]) -> Option<(DVec3, DVec3)> {

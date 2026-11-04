@@ -53,6 +53,30 @@
 //! There is one job file format, [`JOB_VERSION`]. A file of any other version is
 //! refused by name rather than read as something it may not mean.
 
+/// A number's default in a job file, and the test that leaves it out of the
+/// file when it is that default: `default_fn()` and `is_default_fn(&v)`, for
+/// serde's `default` and `skip_serializing_if`. Compared exactly, as a value
+/// read back is the value written.
+macro_rules! default_number {
+    ($(#[$doc:meta])* $vis:vis $default:ident, $is_default:ident = $value:expr) => {
+        $(#[$doc])*
+        $vis fn $default() -> f64 {
+            $value
+        }
+
+        // Serde's `skip_serializing_if` hands the field by reference.
+        #[allow(clippy::trivially_copy_pass_by_ref)]
+        fn $is_default(v: &f64) -> bool {
+            v.to_bits() == $default().to_bits()
+        }
+    };
+}
+
+default_number!(
+    /// A quarter turn, in degrees.
+    ninety, is_ninety = 90.0
+);
+
 mod error;
 mod geometry;
 mod heights;
@@ -169,10 +193,19 @@ fn yes() -> bool {
 }
 
 impl Job {
-    /// Every pick on model `from` names model `to` instead, for when a model is
-    /// renamed.
+    /// Everything that names model `from` names model `to` instead, for when a
+    /// model is renamed: the setups and stocks it is in, and every pick on it.
     pub fn rename_model_refs(&mut self, from: &str, to: &str) {
+        let rename = |names: &mut Vec<String>| {
+            for n in names.iter_mut().filter(|n| *n == from) {
+                *n = to.to_string();
+            }
+        };
+        for stock in &mut self.stocks {
+            rename(stock.spec.models_mut());
+        }
         for setup in &mut self.setups {
+            rename(&mut setup.models);
             if let Origin::Point { point, .. } = &mut setup.origin
                 && point.model == from
             {
@@ -187,6 +220,22 @@ impl Job {
                 }
             }
         }
+    }
+
+    /// What names model `name`, said as "setup 'top'" or "stock 'block'":
+    /// what has to let go of it before it is removed.
+    pub fn model_users(&self, name: &str) -> Vec<String> {
+        let setups = self
+            .setups
+            .iter()
+            .filter(|s| s.models.iter().any(|m| m == name))
+            .map(|s| format!("setup '{}'", s.name));
+        let stocks = self
+            .stocks
+            .iter()
+            .filter(|s| s.spec.models().iter().any(|m| m == name))
+            .map(|s| format!("stock '{}'", s.name));
+        setups.chain(stocks).collect()
     }
 
     /// The tool an operation names, if it names one the job has.
@@ -212,9 +261,7 @@ impl Job {
         };
         let mut want: BTreeSet<&str> = setup.models.iter().map(String::as_str).collect();
         for s in setup.stocks.iter().filter_map(|s| self.stock(s)) {
-            let (StockSpec::AroundModels { models, .. }
-            | StockSpec::FixedBox(FixedBox { models, .. })) = &s.spec;
-            want.extend(models.iter().map(String::as_str));
+            want.extend(s.spec.models().iter().map(String::as_str));
         }
         self.models
             .iter()

@@ -5,8 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use camcraft_core::job::{
-    Boundary, Containment, LengthUnit, MachiningBoundary, ModelDef, Operation, Origin, Preset,
-    Setup, StockDef, StockSpec, StrategySpec, ToolSpec,
+    LengthUnit, ModelDef, Operation, Origin, Setup, StockDef, StockSpec, StrategySpec, ToolSpec,
 };
 use camcraft_geom::bvh::MeshBvh;
 use camcraft_session::fs::relative_path;
@@ -203,14 +202,6 @@ impl Document {
             return Err(format!("there is no model '{from}'"));
         };
         m.name.clone_from(&to);
-        for s in &mut self.job.setups {
-            rename_in(&mut s.models, from, &to);
-        }
-        for s in &mut self.job.stocks {
-            if let StockSpec::AroundModels { models, .. } = &mut s.spec {
-                rename_in(models, from, &to);
-            }
-        }
         self.job.rename_model_refs(from, &to);
         if let Some(slot) = self.models.remove(from) {
             self.models.insert(to.clone(), slot);
@@ -249,10 +240,7 @@ impl Document {
             }
         }
         for s in &mut self.job.stocks {
-            let models = match &mut s.spec {
-                StockSpec::AroundModels { models, .. } => models,
-                StockSpec::FixedBox(b) => &mut b.models,
-            };
+            let models = s.spec.models_mut();
             if models.iter().any(|m| m == name) {
                 models.push(new.clone());
             }
@@ -267,23 +255,7 @@ impl Document {
 
     /// Remove a model nothing uses.
     pub fn remove_model(&mut self, name: &str) -> Result<(), String> {
-        let users: Vec<String> = self
-            .job
-            .setups
-            .iter()
-            .filter(|s| s.models.iter().any(|m| m == name))
-            .map(|s| format!("setup '{}'", s.name))
-            .chain(
-                self.job
-                    .stocks
-                    .iter()
-                    .filter(|s| {
-                        matches!(&s.spec, StockSpec::AroundModels { models, .. }
-                            if models.iter().any(|m| m == name))
-                    })
-                    .map(|s| format!("stock '{}'", s.name)),
-            )
-            .collect();
+        let users = self.job.model_users(name);
         if !users.is_empty() {
             return Err(format!("'{name}' is used by {}", users.join(", ")));
         }
@@ -493,16 +465,7 @@ impl Document {
         let tool = last.and_then(|o| o.tool.clone());
         let spec = last.and_then(|o| self.job.tool_for(o));
         let preset = spec.and_then(|t| t.presets.first());
-        let mut op = Operation {
-            tool,
-            ..Operation::new(name, strategy)
-        };
-        if let Some(p) = preset {
-            op.apply_preset(p);
-        }
-        fit_stepover(&mut op, spec, preset, self.job.tolerance);
-        start_on_silhouette(&mut op);
-        fit_channel(&mut op, spec);
+        let op = Operation::fresh(name, strategy, (tool, spec, preset), self.job.tolerance);
         let s = self.setup_mut(setup)?;
         s.operations.push(op);
         let i = s.operations.len() - 1;
@@ -639,17 +602,12 @@ impl Document {
         let strategy = StrategySpec::named(op.strategy.name()).unwrap_or(op.strategy);
         let spec = self.job.tool_for(op);
         let preset = spec.and_then(|t| op.preset.as_deref().and_then(|p| t.preset(p)));
-        let mut fresh = Operation {
-            tool: op.tool.clone(),
-            ..Operation::new(op.name.clone(), strategy)
-        };
-        if let Some(p) = preset {
-            fresh.apply_preset(p);
-        }
-        fit_stepover(&mut fresh, spec, preset, self.job.tolerance);
-        start_on_silhouette(&mut fresh);
-        fit_channel(&mut fresh, spec);
-        Some(fresh)
+        Some(Operation::fresh(
+            op.name.clone(),
+            strategy,
+            (op.tool.clone(), spec, preset),
+            self.job.tolerance,
+        ))
     }
 
     /// Give operation `op` of `setup` the job's tool `tool`, and copy in the values
@@ -668,11 +626,11 @@ impl Document {
             Some(p) => o.apply_preset(p),
             None => o.preset = None,
         }
-        fit_stepover(o, spec.as_ref(), preset.as_ref(), tolerance);
+        o.fit_stepover(spec.as_ref(), preset.as_ref(), tolerance);
         // The channel is made once, for the first tool: an offset of zero after
         // that is one chosen, and a new tool keeps it.
         if first {
-            fit_channel(o, spec.as_ref());
+            o.fit_channel(spec.as_ref());
         }
     }
 
@@ -713,74 +671,4 @@ fn fresh_setup(name: &str) -> Setup {
     let mut setup = Setup::new(name);
     setup.origin = Origin::stock_corner();
     setup
-}
-
-/// Start a new 3D operation on the part's silhouette, as Fusion does. Finishing
-/// by a pattern dropped onto the part keeps the tool's centre inside it. Pocket
-/// and adaptive clearing, contour and flat finishing reach in from outside: kept inside the part's outline, the tool never reaches
-/// its walls, as its centre sits a radius outside them ([`fit_channel`] makes
-/// room round them).
-/// A 2D operation's outline starts as the silhouette already. Facing and
-/// drilling have no boundary.
-fn start_on_silhouette(op: &mut Operation) {
-    let containment = match op.strategy {
-        StrategySpec::Parallel { .. }
-        | StrategySpec::Scallop { .. }
-        | StrategySpec::Spiral { .. }
-        | StrategySpec::Radial { .. }
-        | StrategySpec::MorphedSpiral { .. } => Containment::Center,
-        StrategySpec::PocketClearing { .. }
-        | StrategySpec::Adaptive { .. }
-        | StrategySpec::Contour { .. }
-        | StrategySpec::Flat { .. } => Containment::Outside,
-        StrategySpec::Profile { .. }
-        | StrategySpec::Pocket { .. }
-        | StrategySpec::Face { .. }
-        | StrategySpec::Drill { .. } => {
-            return;
-        }
-    };
-    op.boundary.kind = Boundary::Silhouette;
-    op.boundary.containment = containment;
-}
-
-/// Whether `b` leaves the tool no room round the part: a boundary round the part
-/// that the tool reaches in from outside, with no additional offset. Its centre
-/// stops a radius outside the part's walls, so it only touches them and clears
-/// nothing past them. A new operation's boundary ([`fit_channel`]) and one
-/// chosen in the Geometry tab are given room; the tab says what this one does.
-pub fn needs_room(b: &MachiningBoundary) -> bool {
-    matches!(b.kind, Boundary::BoundingBox | Boundary::Silhouette)
-        && b.containment == Containment::Outside
-        && b.margin == 0.0
-}
-
-/// Room for `tool` round the part, as the Geometry tab gives it: a boundary that
-/// [`needs_room`] is offset by the tool's diameter, a channel two tools wide. Set
-/// once, as a number, so changing the tool later does not move it.
-fn fit_channel(op: &mut Operation, tool: Option<&ToolSpec>) {
-    // Only a 3D boundary has an additional offset to make room with.
-    if op.strategy.uses().boundary
-        && needs_room(&op.boundary)
-        && let Some(t) = tool
-    {
-        op.boundary.margin = t.diameter;
-    }
-}
-
-/// Give `op` the stepover Fusion gives its strategy with `tool`, unless `preset`
-/// set one: a fixed millimetre suits a 1/32" cutter and starves a 1/4" one.
-fn fit_stepover(
-    op: &mut Operation,
-    tool: Option<&ToolSpec>,
-    preset: Option<&Preset>,
-    tolerance: f64,
-) {
-    // A preset's stepover is not an adaptive operation's load, which it keeps.
-    if preset.is_some_and(|p| p.stepover.is_some()) && !op.strategy.uses().load {
-        return;
-    }
-    if let Some(over) = tool.and_then(|t| op.default_stepover(t, tolerance)) {
-        op.passes.stepover = over;
-    }
 }

@@ -64,11 +64,12 @@ use crate::path::toolpath::Toolpath;
 use crate::strategy::adaptive::Direction;
 use crate::strategy::field::{self, AreaGrid, count, level_lines};
 pub use crate::strategy::nesting::Order;
-use crate::strategy::nesting::{Cuts, Nested, distance, nearest};
+use crate::strategy::nesting::{Cuts, Nested, distance, take_nearest};
 use crate::strategy::parallel::{ParallelParams, ParallelReport, Run, sweep_polyline};
-use crate::strategy::projected::{Emit, simplify};
+use crate::strategy::projected::Emit;
 use crate::strategy::slope::{self, SlopeCounts, Sloped, banded, steep_band};
 use crate::strategy::{StrategyError, check, with_edge};
+use camcraft_geom::contour::simplify;
 
 /// The most levels of passes: far past any real part.
 const MAX_LEVELS: u32 = 100_000;
@@ -365,10 +366,12 @@ pub fn scallop_finish_banded<T: DropTest + Sync>(
         reverse: (params.order == Order::OutsideIn) == (params.climb_right != conventional),
         both_ways: params.direction == Direction::BothWays,
     };
-    while !roots.is_empty() {
+    loop {
         let at = cut.emit.at;
-        let k = nearest(&roots, |&r| distance(tree.anchor(r), at));
-        tree.cut(roots.remove(k), &mut cut)?;
+        let Some(root) = take_nearest(&mut roots, |&r| distance(tree.anchor(r), at)) else {
+            break;
+        };
+        tree.cut(root, &mut cut)?;
     }
     report.passes = cut.emit.passes;
     Ok((cut.emit.path, report, band))

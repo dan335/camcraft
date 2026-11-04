@@ -69,9 +69,7 @@ pub(super) fn tool(
     };
     paint_tool(ui, spec, m);
     let cutter = (spec.rpm, spec.diameter, spec.flutes);
-    ui.add_space(theme::SPACE_4);
-    ui.label(widgets::section_label("Feed and speed"));
-    ui.add_space(theme::SPACE_2);
+    widgets::section(ui, "Feed and speed");
     // What the preset, or a fresh operation, gives each: what it shows as
     // changed from, and goes back to.
     let Some(def) = doc.operation_defaults(setup, index) else {

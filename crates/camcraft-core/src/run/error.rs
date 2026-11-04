@@ -149,6 +149,12 @@ impl OperationError for RegionError {
     }
 }
 
+impl OperationError for ToolpathError {
+    fn named(self, op: String) -> RunError {
+        StrategyError::from(self).named(op)
+    }
+}
+
 /// Name `op` in whatever its work failed with, for `map_err`.
 pub(super) fn in_op<E: OperationError>(op: &Operation) -> impl Fn(E) -> RunError + '_ {
     move |source| source.named(op.name.clone())

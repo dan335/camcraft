@@ -208,6 +208,11 @@ pub enum LowerError {
     /// machine can cut as an arc.
     #[error("the arc to {0:?} is not in the XY, XZ or YZ plane")]
     ArcOutOfPlane(DVec3),
+    /// A move that feeds has no feed: one
+    /// [`Toolpath::push`](camcraft_core::path::toolpath::Toolpath::push) would
+    /// have refused.
+    #[error("the move to {0:?} has no feed it can be written with")]
+    NoFeed(DVec3),
 }
 
 /// Turn a linked toolpath into an instruction stream.
@@ -266,7 +271,7 @@ pub fn lower(path: &Toolpath, spec: &ProgramSpec) -> Result<Vec<Op>, LowerError>
     if let Some(d) = &spec.drill {
         cycles(d, &mut out);
     } else {
-        moves(path, &mut out);
+        moves(path, &mut out)?;
     }
 
     if coolant {
@@ -313,7 +318,7 @@ fn cycles(d: &DrillCycles, out: &mut Vec<Op>) {
     out.push(Op::CycleEnd);
 }
 
-fn moves(path: &Toolpath, out: &mut Vec<Op>) {
+fn moves(path: &Toolpath, out: &mut Vec<Op>) -> Result<(), LowerError> {
     for m in path.moves() {
         match (m.kind, m.role, m.feed) {
             (MoveKind::Linear, MoveRole::Rapid, _) => out.push(Op::Rapid { to: m.to }),
@@ -328,12 +333,12 @@ fn moves(path: &Toolpath, out: &mut Vec<Op>) {
                 feed,
                 role,
             }),
-            // A feeding move with no feed cannot be constructed: Toolpath::push
-            // rejects it. Skipping is unreachable, and silently emitting a rapid
-            // here would be the dangerous choice.
-            _ => {}
+            // Toolpath::push refuses these, so a path never has one; were it
+            // to, a rapid in its place would be the dangerous guess.
+            (_, _, None) => return Err(LowerError::NoFeed(m.to)),
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

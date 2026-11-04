@@ -38,6 +38,9 @@
 //! Collapsing the height maps and the contours into one would leave the entire 2D
 //! half of a CAM system with nowhere to live.
 
+/// Millimetres in an inch, exactly: every conversion between the two.
+pub const MM_PER_INCH: f64 = 25.4;
+
 pub mod arc;
 pub mod mesh;
 pub mod synthetic;

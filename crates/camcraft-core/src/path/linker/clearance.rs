@@ -4,11 +4,9 @@ use camcraft_geom::heightmap::{HeightMap, cell_index};
 use camcraft_geom::mesh::distance_to_segment;
 use glam::DVec2;
 
-use super::{LinkError, NOT_NEGATIVE};
+use super::LinkError;
 use crate::is_positive;
-
-/// What a height must be.
-const FINITE: &str = "finite";
+use crate::must::{AT_LEAST_ZERO, FINITE};
 
 /// How high the tool must be to cross safely.
 pub trait Clearance {
@@ -79,7 +77,7 @@ impl ClearanceField {
         if !margin.is_finite() || margin < 0.0 {
             return Err(LinkError::BadParameter {
                 name: "margin",
-                must: NOT_NEGATIVE,
+                must: AT_LEAST_ZERO,
                 value: margin,
             });
         }
