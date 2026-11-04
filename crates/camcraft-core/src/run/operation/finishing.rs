@@ -244,7 +244,11 @@ fn steep_walls(
         stepdown: op.passes.stepover * steep.sin(),
         top,
         bottom,
-        flats: Vec::new(),
+        // A ring at each flat face as well, as contour finishing has: the
+        // floor beside a wall is the rings' where the band takes it in, as in
+        // a channel narrower than the tool's width twice over, and a ring a
+        // level above it leaves a step on it.
+        flats: work.flat_levels(true),
         tolerance: job.tolerance,
         feed: op.passes.feed,
         direction: direction.engine(),
