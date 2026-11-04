@@ -22,6 +22,10 @@ topics! {
     STOCK_OFFSET: "Stock offset",
         "How far past the stock's edges facing reaches, so the edges are faced clean.",
         Figure::Facing(Facing::StockOffset);
+    REST_MACHINING: "Rest machining",
+        "Clears only what the operations before it in the setup left: rough with a big tool, then follow with a smaller one.";
+    IGNORE_LESS_THAN: "Ignore stock less than",
+        "Material the operations before left thinner than this is let be, for a finish to take, rather than chased.";
     FACES: "Faces",
         "Faces picked in the view. Their outline seen from above is what the operation cuts or keeps to.";
     EDGES: "Edges",

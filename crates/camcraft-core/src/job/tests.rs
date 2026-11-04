@@ -670,6 +670,25 @@ fn stock_to_leave_is_what_the_strategy_uses() {
     j.validate().unwrap();
 }
 
+/// Adaptive clearing has no deepest step cut of its own, as Fusion's has
+/// none: its passes stay on their levels. Its links and the check cut with
+/// the default, whatever is set, and what is set is kept, unchecked, for a
+/// strategy that has one.
+#[test]
+fn adaptive_has_no_deepest_step_cut() {
+    let mut j = sample();
+    let op = &mut j.setups[0].operations[0];
+    op.passes.max_cut_step = 3.0;
+    assert!(op.strategy.uses().cut_step);
+    assert_eq!(op.max_cut_step(), 3.0);
+    op.strategy = StrategySpec::named("adaptive").unwrap();
+    assert!(!op.strategy.uses().cut_step);
+    assert_eq!(op.max_cut_step(), Passes::default().max_cut_step);
+    op.passes.max_cut_step = -1.0;
+    assert_eq!(op.max_cut_step(), Passes::default().max_cut_step);
+    j.validate().unwrap();
+}
+
 /// Negative stock to leave cuts past the part, as Fusion's does: by less than
 /// the tool's radius beside, and in 3D by no more than a round end's corner
 /// radius down. Anything but a number is refused.

@@ -8,6 +8,7 @@ use camcraft_core::job::{
 use eframe::egui;
 
 use crate::document::needs_room;
+use crate::help::Help;
 use crate::help::topics::geometry as geo;
 use crate::picking::slots::{Kind, Slot};
 use crate::properties::{PropAction, ViewPicks};
@@ -48,6 +49,9 @@ pub(super) fn geometry(
     } else if uses.boundary {
         boundary_form(ui, d, m, &mut op.boundary, diameter);
         ui.add_space(theme::SPACE_3);
+        if rest_form(ui, d, m, op) {
+            ui.add_space(theme::SPACE_3);
+        }
     }
     if op.cuts_selection() {
         pick_cards(ui, setup, index, &mut op.selection, picks, actions);
@@ -248,6 +252,43 @@ fn face_form(
         "Faces the stock's top flat, down to the Bottom height. The tool reaches a \
          radius past what is faced, and every pass runs off the stock.",
     );
+}
+
+/// Rest machining, as Fusion's Geometry tab has it, for a strategy that has
+/// it: ticked to clear only what the operations before left, then how thin a
+/// skin of it is let be. Whether it was shown.
+fn rest_form(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    m: Measure,
+    op: &mut Operation,
+) -> bool {
+    let StrategySpec::Adaptive {
+        rest_machining,
+        ignore_stock_less_than,
+        ..
+    } = &mut op.strategy
+    else {
+        return false;
+    };
+    ui.horizontal(|ui| {
+        ui.checkbox(rest_machining, "Rest machining: only what was left")
+            .help(&geo::REST_MACHINING);
+        d.reset(ui, "rest_machining");
+    });
+    if *rest_machining {
+        ui.add_space(theme::SPACE_2);
+        form(ui, "rest", |ui| {
+            d.row(ui, &geo::IGNORE_LESS_THAN, "ignore_stock_less_than", |ui| {
+                m.length_field(ui, ignore_stock_less_than, 0.01, 100.0, "");
+            });
+        });
+        hint(
+            ui,
+            "What the operations above this one cut is not material: it waits for them.",
+        );
+    }
+    true
 }
 
 /// The machining boundary, where the tool may go against it, and how far past it:

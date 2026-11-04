@@ -1076,10 +1076,15 @@ fn adaptive_job() -> Job {
     use crate::job::CutDirection;
     let mut job: Job = toml::from_str(JOB).unwrap();
     let rough = &mut job.setups[0].operations[0];
-    rough.strategy = StrategySpec::Adaptive {
-        direction: CutDirection::Climb,
-        flat_areas: true,
-    };
+    rough.strategy = StrategySpec::named("adaptive").unwrap();
+    assert!(matches!(
+        rough.strategy,
+        StrategySpec::Adaptive {
+            direction: CutDirection::Climb,
+            flat_areas: true,
+            ..
+        }
+    ));
     rough.passes.stepover = 0.6;
     job
 }
@@ -1138,10 +1143,7 @@ fn adaptive_clears_what_zlevel_roughing_does() {
 fn adaptive_goes_down_a_helix_where_it_cannot_come_from_the_side() {
     let (mut job, body) = kept_to_plateau("rough", crate::job::Containment::Center);
     let op = &mut job.setups[0].operations[0];
-    op.strategy = StrategySpec::Adaptive {
-        direction: crate::job::CutDirection::Climb,
-        flat_areas: true,
-    };
+    op.strategy = StrategySpec::named("adaptive").unwrap();
     op.passes.stepover = 0.6;
     let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
     let result = run_setup(&job, 0, &bodies).unwrap();
@@ -1165,6 +1167,48 @@ fn adaptive_runs_are_deterministic() {
     };
     let (one, eight) = (on(1), on(8));
     assert_eq!(one.operations[0].path, eight.operations[0].path);
+}
+
+/// The dome roughed adaptive 2.5 mm a level, then again 1 mm a level to take
+/// the terraces down: with rest machining, the second clears only what the
+/// first left, in far fewer passes than starting from the block, taking about
+/// as much, and the result verifies.
+#[test]
+fn rest_machining_clears_only_what_the_operations_before_left() {
+    let second = |rest: bool| {
+        let mut job = adaptive_job();
+        job.setups[0].operations.retain(|op| op.name == "rough");
+        let mut again = job.setups[0].operations[0].clone();
+        again.name = "rest".into();
+        again.passes.stepdown = Some(1.0);
+        if let StrategySpec::Adaptive { rest_machining, .. } = &mut again.strategy {
+            *rest_machining = rest;
+        }
+        assert_eq!(again.strategy.uses().rest, rest);
+        job.setups[0].operations.push(again);
+        let result = run_job(&job, &dome()).unwrap();
+        assert!(result.is_clean(), "{:?}", result.warnings());
+        let op = result.operations[1].clone();
+        assert!(op.sim.is_clean(), "{:?}", op.warnings);
+        op
+    };
+    let (rest, all) = (second(true), second(false));
+    let StrategyDetail::Adaptive(r) = rest.detail else {
+        panic!("{:?}", rest.detail);
+    };
+    assert!(r.passes > 0, "{r:?}");
+    assert!(
+        rest.passes * 2 < all.passes,
+        "rest machining made {} passes, from the block {}",
+        rest.passes,
+        all.passes
+    );
+    assert!(
+        rest.sim.removed_mm3 > 0.9 * all.sim.removed_mm3,
+        "rest machining took {} mm3, from the block {}",
+        rest.sim.removed_mm3,
+        all.sim.removed_mm3
+    );
 }
 
 /// An operation turned off or skipped cuts nothing, so the material after it

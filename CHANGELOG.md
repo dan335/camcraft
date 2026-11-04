@@ -4,6 +4,23 @@ What changed in each release, newest first. Each release's page
 ([Releases](https://github.com/dan335/camcraft/releases)) has the downloads and
 the same notes at more length.
 
+## Unreleased
+
+- **Adaptive clearing gets Fusion's rest machining**, from the operations before
+  it in the setup, each swept exactly with the tool it was cut with, and its
+  *Ignore stock less than*.
+- **And its minimum cutting radius, machine cavities and order by area.** A
+  minimum cutting radius blends every sharper inside corner, leaving it for a
+  smaller tool; machine cavities unticked leaves the pockets it could only go
+  down into; by area clears each pocket all the way down before the next.
+- **Adaptive stays down round what stands between passes**, through what it has
+  cleared, rather than lifting wherever the way straight is blocked.
+- **Adaptive has no Deepest step cut**, as Fusion's has none: its passes stay on
+  their levels.
+- **Better help for adaptive's Passes tab**: sketches for fine stepdown, flat
+  areas, deepest step cut, both ways, minimum cutting radius and machine
+  cavities.
+
 ## 0.4.0 — 2026-11-04
 
 - **Toolpaths show as they are worked out.** Each operation's passes are drawn as

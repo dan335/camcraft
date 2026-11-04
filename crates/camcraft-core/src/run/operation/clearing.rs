@@ -45,16 +45,36 @@ pub(super) fn pocket_clearing_paths(
     Ok((path, report.rings, StrategyDetail::PocketClearing(report)))
 }
 
-/// Adaptive clearing of the stock's blocks, a level each stepdown and one on
-/// each flat face, within the sweep and `limit`.
+/// What an adaptive clearing operation asks of its strategy.
+pub(super) struct AdaptiveAsked {
+    pub(super) direction: CutDirection,
+    pub(super) flat_areas: bool,
+    pub(super) machine_cavities: bool,
+    pub(super) min_cutting_radius: f64,
+    pub(super) order: ContourOrder,
+    pub(super) rest_machining: bool,
+    pub(super) ignore_stock_less_than: f64,
+}
+
+/// Adaptive clearing of the stock's blocks, or with rest machining of what the
+/// operations before it left, a level each stepdown and one on each flat face,
+/// within the sweep and `limit`.
 pub(super) fn adaptive_paths(
     work: &Work<'_>,
-    direction: CutDirection,
-    flat_areas: bool,
+    asked: AdaptiveAsked,
     limit: Option<&Region>,
     warnings: &mut Vec<String>,
 ) -> Result<Paths, RunError> {
     let (job, op) = (work.job, work.op);
+    let AdaptiveAsked {
+        direction,
+        flat_areas,
+        machine_cavities,
+        min_cutting_radius,
+        order,
+        rest_machining,
+        ignore_stock_less_than,
+    } = asked;
     let mut reach =
         LevelReach::new(&work.prepared.part, work.tool, job.tolerance).map_err(in_op(op))?;
     let diameter = work.spec.diameter;
@@ -83,6 +103,15 @@ pub(super) fn adaptive_paths(
         safe_distance: op.linking.safe_distance,
         flats,
         fine_stepdown: op.fine_stepdown(),
+        machine_cavities,
+        min_cutting_radius,
+        by_area: order == ContourOrder::ByArea,
+        before: if rest_machining {
+            work.before.to_vec()
+        } else {
+            Vec::new()
+        },
+        ignore_less_than: ignore_stock_less_than,
         watch: work.watch.clone(),
     };
     // Room past the stock's sides for the whole tool, so a pass can start

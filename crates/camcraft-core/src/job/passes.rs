@@ -31,7 +31,8 @@ pub struct Passes {
     /// the operation cuts with is [`Operation::stock_to_leave`].
     #[serde(default, skip_serializing_if = "is_default")]
     pub stock_to_leave: StockToLeave,
-    /// Largest Z drop that may be traversed as a cut.
+    /// Largest Z drop that may be traversed as a cut: Fusion has none. What
+    /// the operation cuts with is [`Operation::max_cut_step`].
     #[serde(default = "default_max_cut_step")]
     pub max_cut_step: f64,
     /// Spindle speed; the tool's own when not given.
@@ -195,6 +196,17 @@ impl Operation {
             feed: f.feed.unwrap_or(self.passes.feed),
             repeat: f.repeat,
         })
+    }
+
+    /// The tallest near-vertical drop it may cut down at the cutting feed: its
+    /// own, unless its strategy has none ([`Uses::cut_step`](super::Uses::cut_step)),
+    /// when it is the default.
+    pub fn max_cut_step(&self) -> f64 {
+        if self.strategy.uses().cut_step {
+            self.passes.max_cut_step
+        } else {
+            default_max_cut_step()
+        }
     }
 
     /// The deepest each of its levels may be, when it cuts in levels: its own,

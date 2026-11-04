@@ -79,7 +79,7 @@ pub(super) fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         helix_ccw: work.kept_on_right(),
         ramp_stepdown: Some(op.ramp_stepdown(diameter)),
         lead_in_material: leads.is_some(),
-        max_cut_step: op.passes.max_cut_step,
+        max_cut_step: op.max_cut_step(),
         tolerance: work.job.tolerance,
         end_z: Some(clearance_z),
         start_z: Some(clearance_z),

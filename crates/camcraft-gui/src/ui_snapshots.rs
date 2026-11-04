@@ -436,6 +436,25 @@ fn setup_panel() {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 3_usize));
     h.run_steps(3);
     shoot(&mut h, "operation_passes_rough");
+    // Made adaptive, with rest machining and Fusion's corner, cavity and order
+    // settings: its passes, and rest machining on its geometry.
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        let op = &mut doc.job.setups[0].operations[0];
+        op.strategy = camcraft_core::job::StrategySpec::Adaptive {
+            direction: camcraft_core::job::CutDirection::Climb,
+            flat_areas: true,
+            machine_cavities: false,
+            min_cutting_radius: 1.0,
+            order: camcraft_core::job::ContourOrder::ByArea,
+            rest_machining: true,
+            ignore_stock_less_than: 0.2,
+        };
+    }
+    h.run_steps(3);
+    shoot(&mut h, "operation_passes_adaptive");
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 1_usize));
+    h.run_steps(3);
+    shoot(&mut h, "operation_geometry_adaptive");
 
     // A fixed box at a corner, wherever the models are; then one placed against the
     // setup's models the way Fusion places one, with the block it comes to.

@@ -153,7 +153,21 @@ pub(super) fn passes(
             StrategySpec::Adaptive {
                 direction,
                 flat_areas,
+                machine_cavities,
+                min_cutting_radius,
+                order,
+                ..
             } => {
+                d.row(ui, &pass::MIN_CUTTING_RADIUS, "min_cutting_radius", |ui| {
+                    let mut given = (*min_cutting_radius > 0.0).then_some(*min_cutting_radius);
+                    widgets::optional(ui, &mut given, 1.0, "none: into every corner", |ui, r| {
+                        m.length_field(ui, r, 0.05, 100.0, "");
+                    });
+                    *min_cutting_radius = given.unwrap_or(0.0);
+                });
+                d.row(ui, &pass::MACHINE_CAVITIES, "machine_cavities", |ui| {
+                    ui.checkbox(machine_cavities, "go down into closed pockets");
+                });
                 d.row(ui, &pass::DIRECTION_ADAPTIVE, "direction", |ui| {
                     widgets::segmented(
                         ui,
@@ -162,6 +176,16 @@ pub(super) fn passes(
                             (CutDirection::Climb, "climb"),
                             (CutDirection::Conventional, "conventional"),
                             (CutDirection::BothWays, "both ways"),
+                        ],
+                    );
+                });
+                d.row(ui, &pass::ADAPTIVE_ORDER, "order", |ui| {
+                    widgets::segmented(
+                        ui,
+                        order,
+                        &[
+                            (ContourOrder::ByDepth, "by depth"),
+                            (ContourOrder::ByArea, "by area"),
                         ],
                     );
                 });
@@ -224,9 +248,11 @@ pub(super) fn passes(
                 });
             }
         }
-        d.row(ui, &pass::DEEPEST_STEP, "passes.max_cut_step", |ui| {
-            m.length_field(ui, &mut op.passes.max_cut_step, 0.05, 50.0, "");
-        });
+        if uses.cut_step {
+            d.row(ui, &pass::DEEPEST_STEP, "passes.max_cut_step", |ui| {
+                m.length_field(ui, &mut op.passes.max_cut_step, 0.05, 50.0, "");
+            });
+        }
     });
     if uses.depths != Depths::None {
         ui.add_space(theme::SPACE_4);

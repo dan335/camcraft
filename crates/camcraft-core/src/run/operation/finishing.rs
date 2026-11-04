@@ -32,7 +32,7 @@ pub(super) fn parallel_paths(
         angle: angle.to_radians(),
         tolerance: job.tolerance,
         feed: op.passes.feed,
-        max_cut_step: op.passes.max_cut_step,
+        max_cut_step: op.max_cut_step(),
         ..Default::default()
     };
     let (mut path, mut report) = parallel_finish_within(
@@ -157,7 +157,7 @@ pub(super) fn scallop_paths(
         stepover: op.passes.stepover,
         tolerance: job.tolerance,
         feed: op.passes.feed,
-        max_cut_step: op.passes.max_cut_step,
+        max_cut_step: op.max_cut_step(),
         order: order.engine(),
         direction: direction.engine(),
         climb_right: work.clockwise(),
@@ -380,7 +380,7 @@ pub(super) fn project_params(work: &Work<'_>) -> ProjectParams {
         stepover: work.op.passes.stepover,
         tolerance: work.job.tolerance,
         feed: work.op.passes.feed,
-        max_cut_step: work.op.passes.max_cut_step,
+        max_cut_step: work.op.max_cut_step(),
         slope_from,
         slope_to,
     }

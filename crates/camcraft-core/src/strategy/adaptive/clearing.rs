@@ -40,6 +40,8 @@ pub(super) struct Clearing<'a> {
     pub(super) steps: usize,
     pub(super) left: f64,
     pub(super) no_room: u64,
+    /// Whether closed areas were left, as it is not to machine cavities.
+    pub(super) cavities: bool,
     pub(super) overloads: u64,
     /// How much of the material the window holds every flush has taken out
     /// since it was last asked ([`Clearing::taken`]).
@@ -116,6 +118,7 @@ impl<'a> Clearing<'a> {
             steps: 0,
             left: 0.0,
             no_room: 0,
+            cavities: false,
             overloads: 0,
             taken: 0.0,
         })
@@ -154,11 +157,17 @@ impl<'a> Clearing<'a> {
             };
             let (start, dir, side, arrive, entered) = match found {
                 Some((start, dir, side)) => {
-                    let arrive = match at {
-                        Some(from) if self.stays_down(&s, from, start) => Arrive::Stay,
-                        _ => Arrive::Link,
+                    let arrive = match at.and_then(|from| self.stay_route(&s, from, start)) {
+                        Some(via) => Arrive::Stay { via },
+                        None => Arrive::Link,
                     };
                     (start, dir, side, arrive, false)
+                }
+                // What is left has no way in from the side: a cavity, left
+                // where it is not to go down into one.
+                None if !self.p.machine_cavities => {
+                    self.cavities = true;
+                    break;
                 }
                 None => match self.enter(&s)? {
                     Some((start, dir, side, arrive)) => (start, dir, side, arrive, true),
@@ -209,7 +218,7 @@ impl<'a> Clearing<'a> {
             let lifts_after = self
                 .passes
                 .get(k + 1)
-                .is_none_or(|(a, _)| *a != Arrive::Stay);
+                .is_none_or(|(a, _)| !matches!(a, Arrive::Stay { .. }));
             let Some((arrive, points)) = self.passes.get_mut(k) else {
                 continue;
             };
@@ -481,16 +490,25 @@ impl<'a> Clearing<'a> {
         Ok(best.map(|(_, p, dir, side)| (p, dir, side)))
     }
 
-    /// Whether the way from `from` to `to` may be made at the level: short
-    /// enough, clear of the part, and through what is cleared.
-    pub(super) fn stays_down(&self, s: &Situation, from: DVec2, to: DVec2) -> bool {
-        if from.distance(to) > self.p.stay_down || !s.knows(from) || !s.knows(to) {
-            return false;
+    /// The way from `from` to `to` at the level without lifting, through what
+    /// is cleared, as the corners it turns at between: straight where it can
+    /// be, and otherwise round what stands between, the shortest way by the
+    /// corners of where the tool stands clear of the material. `None` where
+    /// there is none within the stay-down distance, clear of the part.
+    pub(super) fn stay_route(&self, s: &Situation, from: DVec2, to: DVec2) -> Option<Vec<DVec2>> {
+        let most = self.p.stay_down;
+        if from.distance(to) > most || !s.knows(from) || !s.knows(to) {
+            return None;
         }
         // Where the passes end and start the tool only grazes the material, so
         // it may come a little into the tool's reach.
-        s.allowed.contains_segment(from, to)
-            && clear_of(&s.remaining, from, to, self.p.radius * 0.9)
+        let clear = |a: DVec2, b: DVec2| {
+            s.allowed.contains_segment(a, b) && clear_of(&s.remaining, a, b, self.p.radius * 0.9)
+        };
+        if clear(from, to) {
+            return Some(Vec::new());
+        }
+        route(&s.free, from, to, most, self.p, |p| s.knows(p), clear)
     }
 
     /// Go down into material there is no way into from the side: a helix, or a
@@ -694,4 +712,141 @@ fn nearest_to(points: &[DVec2], from: Option<DVec2>) -> usize {
         .enumerate()
         .min_by(|a, b| a.1.distance(from).total_cmp(&b.1.distance(from)))
         .map_or(0, |(k, _)| k)
+}
+
+/// The most corners a way round is looked for among: the nearest to going
+/// straight, by how much further they take it.
+const ROUTE_CORNERS: usize = 64;
+
+/// How far round a curve the corners a way round may turn at are apart, in
+/// radians: the chord between two falls short of the curve by less than the
+/// room it is kept inside it by.
+const ROUTE_TURN: f64 = 0.26;
+
+/// The most legs of a way round tried, each asked of the material and the
+/// part.
+const ROUTE_TRIES: usize = 400;
+
+/// The shortest way from `from` to `to` no longer than `most`, by corners of
+/// `free` that `known` says are so, each leg `clear`; the corners it turns at.
+/// The shortest way round what stands between bends only where the region it
+/// keeps to turns away from itself, so those are its corners, a little inside
+/// it.
+pub(super) fn route(
+    free: &Region,
+    from: DVec2,
+    to: DVec2,
+    most: f64,
+    p: &LevelParams,
+    known: impl Fn(DVec2) -> bool,
+    clear: impl Fn(DVec2, DVec2) -> bool,
+) -> Option<Vec<DVec2>> {
+    let inside = free.offset(-0.05 * p.radius, p.coarse);
+    let mut corners: Vec<(f64, DVec2)> = Vec::new();
+    for ring in inside.rings() {
+        let pts = ring.points();
+        let n = pts.len();
+        // A curve round what stands is many corners a little apart: one each
+        // so far round it is enough to go round it by.
+        let mut turned = 0.0;
+        for i in 0..n {
+            let (Some(&prev), Some(&v), Some(&next)) =
+                (pts.get((i + n - 1) % n), pts.get(i), pts.get((i + 1) % n))
+            else {
+                continue;
+            };
+            // The region on a ring's left: turning right, it turns away from
+            // itself.
+            let (into, out) = (v - prev, next - v);
+            let turn = into.perp_dot(out).atan2(into.dot(out));
+            if turn >= 0.0 {
+                turned = 0.0;
+                continue;
+            }
+            turned -= turn;
+            let ends = pts
+                .get((i + 1) % n)
+                .zip(pts.get((i + 2) % n))
+                .is_none_or(|(&a, &b)| (a - v).perp_dot(b - a) >= 0.0);
+            if turned < ROUTE_TURN && !ends {
+                continue;
+            }
+            turned = 0.0;
+            let via = from.distance(v) + v.distance(to);
+            if via <= most && known(v) {
+                corners.push((via, v));
+            }
+        }
+    }
+    corners.sort_by(|a, b| a.0.total_cmp(&b.0));
+    corners.truncate(ROUTE_CORNERS);
+    // From, to, then the corners; the shortest way, best first, each leg asked
+    // only when it could make a way short enough.
+    let nodes: Vec<DVec2> = [from, to]
+        .into_iter()
+        .chain(corners.into_iter().map(|(_, v)| v))
+        .collect();
+    let n = nodes.len();
+    let mut best = vec![f64::INFINITY; n];
+    let mut came: Vec<Option<usize>> = vec![None; n];
+    let mut done = vec![false; n];
+    if let Some(b) = best.first_mut() {
+        *b = 0.0;
+    }
+    let mut tries = 0;
+    loop {
+        // The nearest not done, by the way so far and straight on from it.
+        let next = (0..n)
+            .filter(|&k| !done.get(k).copied().unwrap_or(true))
+            .filter_map(|k| {
+                let g = *best.get(k)?;
+                let v = *nodes.get(k)?;
+                g.is_finite().then_some((k, g + v.distance(to)))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        let (u, _) = next?;
+        if u == 1 {
+            break;
+        }
+        if let Some(d) = done.get_mut(u) {
+            *d = true;
+        }
+        let (Some(&at), Some(&g)) = (nodes.get(u), best.get(u)) else {
+            return None;
+        };
+        for w in 1..n {
+            let (Some(&v), Some(&was), Some(&finished)) = (nodes.get(w), best.get(w), done.get(w))
+            else {
+                continue;
+            };
+            let through = g + at.distance(v);
+            if finished || through >= was || through + v.distance(to) > most {
+                continue;
+            }
+            if tries >= ROUTE_TRIES {
+                return None;
+            }
+            tries += 1;
+            if clear(at, v) {
+                if let Some(b) = best.get_mut(w) {
+                    *b = through;
+                }
+                if let Some(c) = came.get_mut(w) {
+                    *c = Some(u);
+                }
+            }
+        }
+    }
+    // Back from `to`, the corners on the way.
+    let mut via = Vec::new();
+    let mut k = came.get(1).copied().flatten();
+    while let Some(c) = k {
+        if c == 0 {
+            break;
+        }
+        via.push(*nodes.get(c)?);
+        k = came.get(c).copied().flatten();
+    }
+    via.reverse();
+    Some(via)
 }

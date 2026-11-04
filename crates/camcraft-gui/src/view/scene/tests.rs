@@ -115,7 +115,7 @@ fn no_segment_joins_two_operations() {
 fn steep_descents_are_the_ones_the_core_found() {
     let (job, result, scene) = scene();
     for (i, run) in result.operations.iter().enumerate() {
-        let allowance = job.setups[0].operations[i].passes.max_cut_step;
+        let allowance = job.setups[0].operations[i].max_cut_step();
         let mine: Vec<&Steep> = scene.steep.iter().filter(|s| s.op == i).collect();
         if run.deepest_cut_descent_mm > allowance {
             let deepest = mine.iter().map(|s| s.drop).fold(0.0, f64::max);

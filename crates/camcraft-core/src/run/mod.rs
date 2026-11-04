@@ -40,6 +40,7 @@ use crate::job::{HeightContext, Job, JobError, Operation, Setup, ToolSpec};
 use crate::path::simadapt::sim_moves;
 use crate::setup::features::Picking;
 use crate::setup::{Bodies, Prepared};
+use crate::strategy::adaptive::rest::Earlier;
 
 pub use crate::path::toolpath::PLUNGE_RATIO;
 pub use error::RunError;
@@ -170,7 +171,7 @@ pub fn run_prepared_planned(
             scope.spawn(move || {
                 // Gone only if the run ended first, when the answer is wanted
                 // by no one.
-                let _ = tx.send(shared.plan(op, watch, uncut));
+                let _ = tx.send(shared.plan(op, watch, uncut, &[]));
             });
             progress(Progress::Stage(Stage::Operation(i)));
         }
@@ -249,8 +250,15 @@ type Keyframes = Vec<Arc<PackedStock>>;
 
 impl<'a> Shared<'a> {
     /// Operation `op`'s work, with `tooled`, telling `watch`.
-    fn work<'s>(&'s self, op: &'s Operation, tooled: &'s Tooled<'a>, watch: Watch) -> Work<'s> {
+    fn work<'s>(
+        &'s self,
+        op: &'s Operation,
+        tooled: &'s Tooled<'a>,
+        before: &'s [Earlier],
+        watch: Watch,
+    ) -> Work<'s> {
         Work {
+            before,
             job: self.job,
             op,
             spec: tooled.spec,
@@ -266,8 +274,15 @@ impl<'a> Shared<'a> {
     }
 
     /// Work out `op`'s passes, telling `watch`, over `stock`, the material as
-    /// it stands, which only a strategy that clears what is left reads.
-    fn plan(&self, op: &'a Operation, watch: Watch, stock: &Stock) -> Planning<'a> {
+    /// it stands, and after `before`, the operations before it as cut, which
+    /// only a strategy that clears what is left reads.
+    fn plan(
+        &self,
+        op: &'a Operation,
+        watch: Watch,
+        stock: &Stock,
+        before: &[Earlier],
+    ) -> Planning<'a> {
         let (spec, tool) = tool_of(self.job, op)?;
         // Its picks, found once, however many of its settings read them.
         let picking = Picking::new(
@@ -312,7 +327,7 @@ impl<'a> Shared<'a> {
             tool,
             heights,
         };
-        let planned = plan_operation(&self.work(op, &tooled, watch), &target, stock)?;
+        let planned = plan_operation(&self.work(op, &tooled, before, watch), &target, stock)?;
         Ok((tooled, planned))
     }
 
@@ -388,12 +403,17 @@ impl<'a> Shared<'a> {
                     }),
                     None => {
                         progress(Progress::Stage(Stage::Operation(i)));
-                        self.plan(op, watch.part(0.0, PLANNING), stock)
+                        let before = if op.strategy.uses().rest {
+                            earlier(job, setup, &operations)?
+                        } else {
+                            Vec::new()
+                        };
+                        self.plan(op, watch.part(0.0, PLANNING), stock, &before)
                     }
                 };
                 let (tooled, planned) = planned?;
                 progress(Progress::Stage(Stage::Cutting(i)));
-                let work = self.work(op, &tooled, Watch::default());
+                let work = self.work(op, &tooled, &[], Watch::default());
                 let made = cut_operation(&work, planned, stock, &watch.part(PLANNING, 1.0))?;
                 operations.push(made);
                 keyframes.push(Arc::new(PackedStock::pack(stock)));
@@ -451,6 +471,24 @@ pub fn cutting_tool(job: &Job, op: &Operation) -> Result<EffectiveTool, RunError
 
 /// The tool `op` names, both as the job describes it and as it cuts
 /// ([`cutting_tool`]), looked up and built once.
+/// The operations of `setup` made so far (`made`), as cut, each with the real
+/// tool it was cut with: what a rest operation clears after.
+fn earlier(job: &Job, setup: &Setup, made: &[OperationResult]) -> Result<Vec<Earlier>, RunError> {
+    setup
+        .operations
+        .iter()
+        .zip(made)
+        .filter(|(_, r)| !r.path.is_empty())
+        .map(|(op, r)| {
+            let (_, tool) = tool_of(job, op)?;
+            Ok(Earlier {
+                path: r.path.clone(),
+                cutter: *tool.base(),
+            })
+        })
+        .collect()
+}
+
 fn tool_of<'j>(job: &'j Job, op: &Operation) -> Result<(&'j ToolSpec, EffectiveTool), RunError> {
     let spec = job.tool_for(op).ok_or_else(|| unknown_tool(op))?;
     let base = spec.build()?;

@@ -9,9 +9,17 @@ topics! {
         Figure::PassAngle;
     SHORTEST_RING: "Shortest ring",
         "Rings shorter than this are skipped: too small to be worth entering.";
+    MIN_CUTTING_RADIUS: "Minimum cutting radius",
+        "The tightest the tool turns in an inside corner. Sharper corners are blended, leaving material in them for a smaller tool.",
+        Figure::MinCuttingRadius;
+    MACHINE_CAVITIES: "Machine cavities",
+        "Goes down a helix into pockets it cannot reach from the side. Unticked, it only cuts from the outside in and leaves them.",
+        Figure::Cavities;
+    ADAPTIVE_ORDER: "Order",
+        "By depth cuts each level everywhere before the next down. By area clears each pocket or area all the way down first.";
     DIRECTION_ADAPTIVE: "Direction",
-        "Climb gives the better finish and tool life. Both ways cuts in either direction, for less linking.",
-        Figure::Climb;
+        "Climb gives the better finish and tool life. Both ways turns at the end of a pass and cuts back conventional, rather than linking round to climb.",
+        Figure::BothWays;
     DIRECTION_2D: "Direction",
         "Climb gives the better finish on most machines. Conventional can suit a flexible machine.",
         Figure::Climb;
@@ -44,7 +52,8 @@ topics! {
     RADIAL_DIRECTION: "Direction",
         "Both ways cuts out along one spoke and back in along the next. Outward or inward cuts every spoke one way.";
     FLAT_AREAS: "Flat areas",
-        "Adds a level at each flat face, so floors are left just the stock to leave, not a stepdown's terrace.";
+        "Adds a level at each flat face, so floors are left just the stock to leave, not a stepdown's terrace.",
+        Figure::FlatAreas;
     PASS_EXTENSION: "Pass extension",
         "How far each pass runs on past the faced area before it turns.",
         Figure::Facing(Facing::PassExtension);
@@ -57,10 +66,11 @@ topics! {
         "The distance between side-by-side passes. Smaller leaves a smoother finish but takes longer.",
         Figure::Stepover;
     OPTIMAL_LOAD: "Optimal load",
-        "How wide a cut each pass is steered to hold. About a tenth of the tool's diameter is a safe start.",
+        "The width of cut each pass is steered to hold, so the tool never slots. A tenth of the diameter is a safe start, with a deep stepdown.",
         Figure::OptimalLoad;
     DEEPEST_STEP: "Deepest step cut",
-        "The biggest drop the tool may take while it stays down and cuts. A link that would fall further lifts clear.";
+        "The tallest near-vertical drop the tool may cut straight down at the cutting feed. Taller ones lift, and plunge at the plunge feed.",
+        Figure::CutStep;
     MULTIPLE_DEPTHS: "Multiple depths",
         "Cuts down in several levels. Unticked, the whole depth is cut in one pass.",
         Figure::Stepdown;
@@ -68,8 +78,8 @@ topics! {
         "The deepest each level may be. Levels are spaced evenly down to the Bottom.",
         Figure::Stepdown;
     FINE_STEPDOWN: "Fine stepdown",
-        "Levels this far apart between the stepdowns, each cutting only what those below left: terraces on a slope come down to steps this tall.",
-        Figure::Stepdown;
+        "Extra levels this far apart between the stepdowns, each cutting only what was left: a slope's terraces come down to steps this tall.",
+        Figure::FineStepdown;
     STOCK_TO_LEAVE: "Stock to leave",
         "Leaves a skin of material for a finishing pass to clean up.",
         Figure::Leave(LeaveOn::Both);

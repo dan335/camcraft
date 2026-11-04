@@ -166,7 +166,7 @@ impl Scene {
             let allowance = setup
                 .operations
                 .get(i)
-                .map_or(f64::INFINITY, |o| o.passes.max_cut_step);
+                .map_or(f64::INFINITY, |o| o.max_cut_step());
             for pair in run.path.moves().windows(2) {
                 let [from, to] = pair else { continue };
                 let segment = Segment {

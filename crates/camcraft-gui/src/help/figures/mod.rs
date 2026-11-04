@@ -25,10 +25,22 @@ pub enum Figure {
     OptimalLoad,
     /// Levels down a wall and the depth of each.
     Stepdown,
+    /// The finer levels between those, cutting a slope's terraces down.
+    FineStepdown,
+    /// A drop a pass cuts down, and a taller one it lifts over.
+    CutStep,
+    /// A level added on a flat face between two others.
+    FlatAreas,
+    /// An inside corner blended at the minimum cutting radius, from above.
+    MinCuttingRadius,
+    /// A closed pocket cleared, and left.
+    Cavities,
     /// Passes at an angle to X, from above.
     PassAngle,
     /// Climb and conventional milling, from above.
     Climb,
+    /// Climb, conventional and both ways, from above: adaptive's directions.
+    BothWays,
     /// The bite each tooth takes, from above.
     ChipLoad,
     /// A drill pecking down a hole.
@@ -190,8 +202,14 @@ impl Figure {
             Figure::Stepover => passes::stepover(painter, rect),
             Figure::OptimalLoad => passes::optimal_load(painter, rect),
             Figure::Stepdown => passes::stepdown(painter, rect),
+            Figure::FineStepdown => passes::fine_stepdown(painter, rect),
+            Figure::CutStep => passes::cut_step(painter, rect),
+            Figure::FlatAreas => passes::flat_areas(painter, rect),
+            Figure::MinCuttingRadius => passes::min_cutting_radius(painter, rect),
+            Figure::Cavities => passes::cavities(painter, rect),
             Figure::PassAngle => passes::pass_angle(painter, rect),
             Figure::Climb => passes::climb(painter, rect),
+            Figure::BothWays => passes::both_ways(painter, rect),
             Figure::ChipLoad => passes::chip_load(painter, rect),
             Figure::Peck => passes::peck(painter, rect),
             Figure::Facing(f) => passes::facing(painter, rect, f),
@@ -226,8 +244,14 @@ mod tests {
             Figure::Stepover,
             Figure::OptimalLoad,
             Figure::Stepdown,
+            Figure::FineStepdown,
+            Figure::CutStep,
+            Figure::FlatAreas,
+            Figure::MinCuttingRadius,
+            Figure::Cavities,
             Figure::PassAngle,
             Figure::Climb,
+            Figure::BothWays,
             Figure::ChipLoad,
             Figure::Peck,
             Figure::Retraction,

@@ -379,7 +379,9 @@ impl Operation {
         if self.passes.rpm == Some(0) {
             return Err(bad(field("passes.rpm"), 0.0, "greater than zero"));
         }
-        positive(&field("passes.max_cut_step"), self.passes.max_cut_step)?;
+        if uses.cut_step {
+            positive(&field("passes.max_cut_step"), self.passes.max_cut_step)?;
+        }
         self.stock_to_leave()
             .check(&field("passes.stock_to_leave"))?;
         if let Some(t) = self.passes.tabs.filter(|_| uses.tabs) {
@@ -529,6 +531,19 @@ impl Operation {
                     angle_to,
                     "greater than angle_from and at most a turn past it",
                 ));
+            }
+        }
+        if let StrategySpec::Adaptive {
+            min_cutting_radius,
+            rest_machining,
+            ignore_stock_less_than,
+            ..
+        } = self.strategy
+        {
+            at_least_zero(&field("min_cutting_radius"), min_cutting_radius)?;
+            // Read only with rest machining.
+            if rest_machining {
+                at_least_zero(&field("ignore_stock_less_than"), ignore_stock_less_than)?;
             }
         }
         if let StrategySpec::Drill { peck, dwell } = self.strategy {

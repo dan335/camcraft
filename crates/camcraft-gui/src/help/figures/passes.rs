@@ -352,3 +352,229 @@ pub fn tabs(painter: &egui::Painter, rect: egui::Rect, which: Tab) {
         lit(Tab::Spacing),
     );
 }
+
+/// A slope in section, roughed in levels: the terraces a stepdown apart leave,
+/// dashed, the fine levels between in amber, and the smaller steps they leave.
+pub fn fine_stepdown(painter: &egui::Painter, rect: egui::Rect) {
+    let s = Sketch::new(painter, rect, [0.0, 0.0], [100.0, 44.0]);
+    let (step, fine) = (12.0_f32, 6.0_f32);
+    // Where the slope is at height `y`: it rises to the right, the part under it.
+    let at = |y: f32| 14.0 + 2.0 * (y - 4.0);
+    s.ground(
+        &[[0.0, 4.0], [at(4.0), 4.0], [at(40.0), 40.0], [100.0, 40.0]],
+        0.0,
+        Tone::Part,
+    );
+    // What is left over the slope: a step above each level, fine or not.
+    for z in [4.0_f32, 10.0, 16.0, 22.0, 28.0, 34.0] {
+        s.polygon(
+            &[[at(z), z], [at(z), z + fine], [at(z + fine), z + fine]],
+            Tone::Stock,
+        );
+    }
+    // What the stepdown's levels alone would leave.
+    let mut stair = Vec::new();
+    for z in [4.0_f32, 16.0, 28.0] {
+        stair.extend([[at(z), z], [at(z), z + step]]);
+    }
+    stair.push([at(40.0), 40.0]);
+    s.dashed(&stair, quiet(), 1.0);
+    // The fine levels, each across the terrace above a level.
+    for z in [10.0_f32, 22.0, 34.0] {
+        s.line(&[[at(z - fine), z], [at(z), z]], hot(), 1.5);
+    }
+    s.dashed(&[[6.0, 28.0], [at(28.0), 28.0]], faint(), 1.0);
+    s.dashed(&[[6.0, 40.0], [at(28.0), 40.0]], faint(), 1.0);
+    s.dim(
+        [9.0, 28.0],
+        [9.0, 40.0],
+        "stepdown",
+        Align2::LEFT_CENTER,
+        false,
+    );
+    s.dim(
+        [at(16.0) - 3.0, 16.0],
+        [at(16.0) - 3.0, 22.0],
+        "fine stepdown",
+        Align2::RIGHT_CENTER,
+        true,
+    );
+}
+
+/// A pass over the part in section: a small drop it cuts down, within the
+/// deepest step, in amber, and a taller one it lifts over and plunges down.
+pub fn cut_step(painter: &egui::Painter, rect: egui::Rect) {
+    let s = Sketch::new(painter, rect, [0.0, 0.0], [100.0, 44.0]);
+    let (high, mid, low) = (30.0_f32, 22.0_f32, 4.0_f32);
+    s.ground(
+        &[
+            [0.0, high],
+            [20.0, high],
+            [20.0, mid],
+            [66.0, mid],
+            [70.0, low],
+            [100.0, low],
+        ],
+        0.0,
+        Tone::Part,
+    );
+    let lift = 38.0_f32;
+    s.path(
+        &[[2.0, high], [20.0, high], [20.0, mid], [66.0, mid]],
+        Move::Cut,
+        false,
+    );
+    s.path(
+        &[[66.0, mid], [66.0, lift], [72.0, lift]],
+        Move::Rapid,
+        false,
+    );
+    s.path(&[[72.0, lift], [72.0, low]], Move::Lead, false);
+    s.path(&[[72.0, low], [98.0, low]], Move::Cut, false);
+    s.dashed(&[[20.0, high], [30.0, high]], faint(), 1.0);
+    s.dim(
+        [26.0, mid],
+        [26.0, high],
+        "deepest step cut",
+        Align2::LEFT_CENTER,
+        true,
+    );
+    s.text([72.0, lift], Align2::LEFT_CENTER, "taller: lifts", false);
+    s.text([72.0, 14.0], Align2::LEFT_CENTER, "plunge feed", false);
+}
+
+/// A shelf between two levels in section: the terrace the levels alone leave
+/// on it, and the level flat area detection adds on it, in amber.
+pub fn flat_areas(painter: &egui::Painter, rect: egui::Rect) {
+    let s = Sketch::new(painter, rect, [0.0, 0.0], [100.0, 44.0]);
+    let (shelf, above, below) = (22.0_f32, 34.0_f32, 10.0_f32);
+    let (from, to) = (32.0_f32, 66.0_f32);
+    s.ground(
+        &[
+            [0.0, below],
+            [from, below],
+            [from, shelf],
+            [to, shelf],
+            [to, 42.0],
+            [100.0, 42.0],
+        ],
+        0.0,
+        Tone::Part,
+    );
+    s.dashed(&[[0.0, above], [to, above]], faint(), 1.0);
+    s.text([0.0, above], Align2::LEFT_BOTTOM, "levels", false);
+    // Left on the shelf by the levels alone: the one below cannot reach it.
+    s.rect([from, shelf], [to, above], Tone::Stock);
+    s.text(
+        [(from + to) / 2.0, (shelf + above) / 2.0],
+        Align2::CENTER_CENTER,
+        "terrace",
+        false,
+    );
+    s.line(&[[from, shelf], [to, shelf]], hot(), 2.0);
+    s.text([from, shelf], Align2::RIGHT_CENTER, "flat level", true);
+}
+
+/// Adaptive's three directions from above, a clockwise tool beside the
+/// material: climbing, conventional, and both ways, up climbing and back down
+/// conventional rather than going round.
+pub fn both_ways(painter: &egui::Painter, rect: egui::Rect) {
+    let s = Sketch::new(painter, rect, [0.0, 0.0], [100.0, 44.0]);
+    let r = 6.0_f32;
+    for (cx, right, name) in [(14.0_f32, true, "climb"), (48.0, false, "conventional")] {
+        let (x0, x1) = if right {
+            (cx + 4.0, cx + 14.0)
+        } else {
+            (cx - 14.0, cx - 4.0)
+        };
+        s.rect([x0, 8.0], [x1, 44.0], Tone::Stock);
+        s.path(&[[cx, 8.0], [cx, 42.0]], Move::Cut, false);
+        s.circle([cx, 24.0], r, Tone::Tool);
+        s.arrow(
+            &arc([cx, 24.0], 3.8, 160.0, 20.0),
+            theme::egui_color(theme::BG),
+            1.25,
+        );
+        s.text([cx, 1.0], Align2::CENTER_BOTTOM, name, true);
+    }
+    // Both ways: up beside the material, climbing, then round and back down
+    // into it, the material now on its left: conventional.
+    let cx = 76.0_f32;
+    s.rect([cx + 4.0, 8.0], [cx + 14.0, 44.0], Tone::Stock);
+    let mut way = vec![[cx, 8.0], [cx, 36.0]];
+    way.extend(arc([cx + 3.0, 36.0], 3.0, 180.0, 0.0));
+    way.push([cx + 6.0, 8.0]);
+    s.path(&way, Move::Cut, false);
+    s.circle([cx, 20.0], r, Tone::Tool);
+    s.arrow(
+        &arc([cx, 20.0], 3.8, 160.0, 20.0),
+        theme::egui_color(theme::BG),
+        1.25,
+    );
+    s.text([cx + 3.0, 1.0], Align2::CENTER_BOTTOM, "both ways", true);
+}
+
+/// An inside corner of a pocket from above: the tool's centre blended round it
+/// at the minimum cutting radius, in amber, rather than into it, dashed, and
+/// the material that leaves in the corner.
+pub fn min_cutting_radius(painter: &egui::Painter, rect: egui::Rect) {
+    let s = Sketch::new(painter, rect, [0.0, 0.0], [100.0, 44.0]);
+    let (r, blend) = (6.0_f32, 14.0_f32);
+    let (wall_x, wall_y) = (10.0_f32, 6.0_f32);
+    let (x, y) = (wall_x + r, wall_y + r);
+    let c = [x + blend, y + blend];
+    // What the tool reaches round the blend, and the corner it leaves.
+    let reach = arc(c, blend + r, 180.0, 270.0);
+    let corner: Vec<P> = reach.iter().map(|_| [wall_x, wall_y]).collect();
+    s.band(&reach, &corner, Tone::Stock.fill());
+    s.rect([0.0, 0.0], [100.0, wall_y], Tone::Part);
+    s.rect([0.0, 0.0], [wall_x, 44.0], Tone::Part);
+    s.dashed(&[[x, c[1]], [x, y], [c[0], y]], faint(), 1.0);
+    let mut way = vec![[x, 42.0]];
+    way.extend(arc(c, blend, 180.0, 270.0));
+    way.push([96.0, y]);
+    s.path(&way, Move::Cut, false);
+    let mid = arc(c, blend, 225.0, 225.0);
+    if let Some(&m) = mid.first() {
+        s.circle(m, r, Tone::Ghost);
+        s.dim(c, m, "", Align2::CENTER_BOTTOM, true);
+    }
+    s.text(
+        [c[0] + 1.0, c[1]],
+        Align2::LEFT_CENTER,
+        "minimum radius",
+        true,
+    );
+    s.text([100.0, 44.0], Align2::RIGHT_TOP, "from above", false);
+}
+
+/// A closed pocket from above, twice: cleared, gone down into by a helix,
+/// and left, as it is with machine cavities unticked.
+pub fn cavities(painter: &egui::Painter, rect: egui::Rect) {
+    let s = Sketch::new(painter, rect, [0.0, 0.0], [100.0, 44.0]);
+    for (x0, cleared, name) in [(4.0_f32, true, "ticked"), (54.0, false, "unticked")] {
+        let (lo, hi) = ([x0, 8.0], [x0 + 42.0, 42.0]);
+        s.rect(lo, hi, Tone::Part);
+        let (plo, phi) = ([x0 + 8.0, 15.0], [x0 + 34.0, 35.0]);
+        if cleared {
+            s.rect(plo, phi, Tone::Air);
+            let c = [x0 + 21.0, 25.0];
+            s.path(&arc(c, 3.0, 0.0, 330.0), Move::Lead, false);
+            for k in 1..=2_u8 {
+                let w = 3.0 + 3.0 * f32::from(k);
+                s.line(
+                    &square(
+                        [c[0] - w - 2.0, c[1] - w + 1.0],
+                        [c[0] + w + 2.0, c[1] + w - 1.0],
+                    ),
+                    Move::Cut.color(),
+                    1.25,
+                );
+            }
+        } else {
+            s.rect(plo, phi, Tone::Stock);
+            s.text([x0 + 21.0, 25.0], Align2::CENTER_CENTER, "left", false);
+        }
+        s.text([x0 + 21.0, 1.0], Align2::CENTER_BOTTOM, name, true);
+    }
+}

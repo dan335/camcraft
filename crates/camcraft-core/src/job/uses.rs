@@ -23,6 +23,7 @@ impl StrategySpec {
             finishing: false,
             links: Links::Level,
             stay_down: true,
+            cut_step: true,
             reach: Reach::Tools(5),
             helix: HelixSize::Tool,
             lead_radius: false,
@@ -125,8 +126,15 @@ impl StrategySpec {
             // 3D Adaptive's ramp types (its Predrill aside): it has no ring to
             // ramp along. Its passes are in the order it steers them, linked at
             // the level where it has cleared the way.
-            StrategySpec::Adaptive { .. } => Uses {
+            // Every pass of its stays on its level, so it has no drop of its own
+            // to cut down: its links and the check have the default deepest
+            // step cut ([`Operation::max_cut_step`](super::Operation::max_cut_step)).
+            // With rest machining, it clears what the operations before it
+            // left, so it waits for them to be cut.
+            StrategySpec::Adaptive { rest_machining, .. } => Uses {
                 load: true,
+                cut_step: false,
+                rest: rest_machining,
                 depths: Depths::Required,
                 // Fusion's 3D Adaptive's, between its levels.
                 fine_stepdown: true,
@@ -185,6 +193,7 @@ impl StrategySpec {
                 // Up out of each hole, and across to the next.
                 links: Links::Own,
                 stay_down: false,
+                cut_step: true,
                 reach: Reach::Tools(0),
                 helix: HelixSize::Tool,
                 lead_radius: false,
@@ -241,6 +250,11 @@ pub struct Uses {
     pub links: Links,
     /// Links made without lifting.
     pub stay_down: bool,
+    /// A deepest step cut of its own
+    /// ([`Passes::max_cut_step`](super::Passes::max_cut_step)): the tallest
+    /// near-vertical drop it cuts down at the cutting feed. Without one, the
+    /// default ([`Operation::max_cut_step`](super::Operation::max_cut_step)).
+    pub cut_step: bool,
     /// The longest of them when not given: Fusion's Maximum Stay-Down
     /// Distance for the strategy.
     pub reach: Reach,

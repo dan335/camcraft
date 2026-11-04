@@ -243,7 +243,7 @@ fn steep(ui: &mut egui::Ui, ran: &RanSetup, m: Measure) -> Option<Steep> {
             let deepest = mine.iter().map(|s| s.drop).fold(0.0, f64::max);
             let allowance = setup
                 .and_then(|s| s.operations.get(i))
-                .map_or(0.0, |o| o.passes.max_cut_step);
+                .map_or(0.0, |o| o.max_cut_step());
             ui.label(format!(
                 "{}. {}: {} descent(s), deepest {} of {} allowed",
                 i + 1,

@@ -171,9 +171,24 @@ tool to start). Passes start beside the block where they can, and go down a heli
 (`linking.helix_diameter`, Fusion's: 0.95 × the tool less its corners, no less
 than a quarter of the tool) where they cannot; `direction` is
 `"climb"` (the default), `"conventional"` or `"both-ways"`; `flat_areas` (on by
-default) adds a level on each flat face, raised by the stock to leave down. It
-clears the stock's block as it starts: an operation before it is not yet taken
-into account, so after one it cuts some air.
+default) adds a level on each flat face, raised by the stock to leave down.
+Where the straight way between two passes runs through what is still standing, it
+stays down round it, through what is cleared, if that is no longer than the
+stay-down distance. As Fusion's 3D Adaptive:
+
+- `machine_cavities` (on by default): off, it only cuts from the outside in, and
+  leaves the areas it could only go down into, saying how much it left.
+- `min_cutting_radius` (none by default): the tightest its centre turns in an
+  inside corner. Every sharper corner is blended, leaving material in it for a
+  smaller tool, and nothing narrower than the tool and twice this is cut.
+- `order`: `"by-depth"` (the default), each level everywhere before the next
+  down, or `"by-area"`, each area a level splits into, such as a pocket, cleared
+  all the way down before the next.
+- `rest_machining` (off by default): it clears only what the operations before
+  it in the setup left, each swept exactly with the tool it was cut with, so it
+  waits for them; `ignore_stock_less_than` lets be what they left thinner than
+  that. Off, it clears the stock's block as it starts, so after another
+  operation it cuts air where that one cleared.
 
 ```toml
 [[setup.operation]]
@@ -181,6 +196,16 @@ name = "adaptive"
 strategy = "adaptive"
 tool = "rough-6-flat"
 passes = { stepover = 0.6, stepdown = 12.0, stock_to_leave = { radial = 0.5, axial = 0.5 } }
+
+[[setup.operation]]
+name = "rest"
+strategy = "adaptive"
+tool = "rough-3-flat"
+rest_machining = true
+ignore_stock_less_than = 0.2
+min_cutting_radius = 0.5
+order = "by-area"
+passes = { stepover = 0.3, stepdown = 6.0, stock_to_leave = { radial = 0.5, axial = 0.5 } }
 ```
 
 **Stock to leave** (`passes.stock_to_leave`) is Fusion's radial and axial
@@ -361,7 +386,10 @@ with.
 A **plunge** is a continuous descent steeper than `PLUNGE_RATIO` (10:1) that falls
 further than `max_cut_step`, measured over the whole run of moves, not move by
 move. Finishing breaks its passes there, and the gate refuses any that remain; the
-checks and the app measure it the same way.
+checks and the app measure it the same way. Adaptive clearing has no
+`max_cut_step` of its own, as Fusion's has none: its passes stay on their levels,
+so it is not shown and not read, and its links and the check use the default,
+0.5 mm.
 
 ## The command line
 

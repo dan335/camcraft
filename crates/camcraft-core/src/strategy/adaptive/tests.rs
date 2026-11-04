@@ -20,6 +20,11 @@ fn params() -> AdaptiveParams {
         safe_distance: 2.0,
         flats: Vec::new(),
         fine_stepdown: None,
+        machine_cavities: true,
+        min_cutting_radius: 0.0,
+        by_area: false,
+        before: Vec::new(),
+        ignore_less_than: 0.0,
         watch: crate::control::Watch::default(),
     }
 }
@@ -138,19 +143,26 @@ fn measured(cut: &LevelCut, material: &Region, target: f64) -> (f64, f64, Raster
     let mut cutting = 0;
     let mut at: Option<DVec2> = None;
     for (arrive, points) in &cut.passes {
-        if let (Arrive::Stay, Some(a), Some(&b)) = (arrive, at, points.first()) {
+        if let (Arrive::Stay { via }, Some(a), Some(&b)) = (arrive, at, points.first()) {
             // A link at the level only grazes the material: nowhere along it does
             // the tool take more than a pass would.
-            let n = (a.distance(b) / 0.1).ceil().max(1.0) as usize;
-            for k in 0..=n {
-                let c = a.lerp(b, k as f64 / n as f64);
-                let e = raster.engagement(c, R);
-                assert!(
-                    e <= target + 0.12,
-                    "a stay-down link from {a} to {b} takes {e} rad of material at {c}"
-                );
+            let way: Vec<DVec2> = std::iter::once(a)
+                .chain(via.iter().copied())
+                .chain(std::iter::once(b))
+                .collect();
+            for leg in way.windows(2) {
+                let (a, b) = (leg[0], leg[1]);
+                let n = (a.distance(b) / 0.1).ceil().max(1.0) as usize;
+                for k in 0..=n {
+                    let c = a.lerp(b, k as f64 / n as f64);
+                    let e = raster.engagement(c, R);
+                    assert!(
+                        e <= target + 0.12,
+                        "a stay-down link from {a} to {b} takes {e} rad of material at {c}"
+                    );
+                }
+                raster.sweep(a, b, R);
             }
-            raster.sweep(a, b, R);
         }
         let entered = cut.helixes.iter().any(|(c, r)| {
             points
@@ -395,4 +407,251 @@ fn a_fine_stepdown_cuts_the_terraces_on_a_slope() {
         xs.iter()
             .fold((f64::MAX, f64::MIN), |(a, b), &x| (a.min(x), b.max(x)))
     );
+}
+
+/// A frame 60 by 20 with a divider down its middle, standing on a floor: two
+/// pockets, 24 by 12 and 8 deep, side by side, the stock its outline.
+fn two_pockets() -> TriMesh {
+    use camcraft_geom::synthetic::cuboid;
+    let parts = [
+        cuboid(dvec3(0.0, 0.0, -10.0), dvec3(60.0, 20.0, -8.0)),
+        cuboid(dvec3(0.0, 0.0, -8.0), dvec3(4.0, 20.0, 0.0)),
+        cuboid(dvec3(56.0, 0.0, -8.0), dvec3(60.0, 20.0, 0.0)),
+        cuboid(dvec3(4.0, 0.0, -8.0), dvec3(56.0, 4.0, 0.0)),
+        cuboid(dvec3(4.0, 16.0, -8.0), dvec3(56.0, 20.0, 0.0)),
+        cuboid(dvec3(28.0, 4.0, -8.0), dvec3(32.0, 16.0, 0.0)),
+    ];
+    let refs: Vec<&TriMesh> = parts.iter().collect();
+    TriMesh::merged(&refs).unwrap()
+}
+
+/// The two pockets roughed 3 mm a level with a 6 mm flat, as `p` asks.
+fn rough_pockets(p: &AdaptiveParams) -> (Toolpath, AdaptiveReport) {
+    use crate::cutter::allowance::{Allowance, EffectiveTool};
+    use crate::cutter::tool::Flat;
+    let mesh = two_pockets();
+    let flat = Flat::new(R).unwrap();
+    let tool = EffectiveTool::new(&flat, Allowance::new(0.0, 0.0).unwrap()).unwrap();
+    let mut reach = LevelReach::new(&mesh, &tool, 0.01).unwrap();
+    let mut p = p.clone();
+    p.top = 0.0;
+    p.bottom = -8.0;
+    p.stepdown = 3.0;
+    let area = rect(-10.0, -10.0, 70.0, 30.0);
+    let stocks = [(dvec2(0.0, 0.0), dvec2(60.0, 20.0), 0.0)];
+    adaptive_rough(&mut reach, &area, &stocks, tool.base(), &p).unwrap()
+}
+
+/// Which pocket each cutting move is in, in order, each change once: 0 for the
+/// first, 1 for the second.
+fn pockets_in_order(path: &Toolpath) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    for m in path.moves().iter().filter(|m| m.role == MoveRole::Cut) {
+        let k = u8::from(m.to.x > 30.0);
+        if out.last() != Some(&k) {
+            out.push(k);
+        }
+    }
+    out
+}
+
+/// By depth, each level goes round both pockets before the next down; by
+/// area, one pocket is cleared all the way down before the other.
+#[test]
+fn by_area_each_pocket_is_cleared_all_the_way_down_first() {
+    let (by_depth, report) = rough_pockets(&params());
+    assert!(report.levels >= 3 && report.helixes >= 6, "{report:?}");
+    assert!(
+        pockets_in_order(&by_depth).len() > 2,
+        "by depth went between them at every level"
+    );
+    let mut p = params();
+    p.by_area = true;
+    let (by_area, area_report) = rough_pockets(&p);
+    assert_eq!(pockets_in_order(&by_area).len(), 2, "one, then the other");
+    // The same passes, only in another order.
+    assert_eq!(area_report.passes, report.passes);
+    assert_eq!(area_report.helixes, report.helixes);
+    // Each pocket from the top down.
+    for k in [0u8, 1] {
+        let zs: Vec<f64> = by_area
+            .moves()
+            .iter()
+            .filter(|m| m.role == MoveRole::Cut && u8::from(m.to.x > 30.0) == k)
+            .map(|m| m.to.z)
+            .collect();
+        assert!(zs.windows(2).all(|w| w[1] <= w[0] + 1e-9), "pocket {k}");
+    }
+}
+
+/// Not to machine cavities, pockets with no way in from the side are left,
+/// and said to be.
+#[test]
+fn without_cavities_closed_pockets_are_left() {
+    let mut p = params();
+    p.machine_cavities = false;
+    let (path, report) = rough_pockets(&p);
+    assert_eq!(report.passes, 0, "{report:?}");
+    assert_eq!(report.entries, 0, "{report:?}");
+    assert!(report.cavities >= 3, "{report:?}");
+    assert!(report.cavity_mm2 > 100.0, "{report:?}");
+    assert!(
+        report.left_mm2 < 1.0,
+        "left as asked, not missed: {report:?}"
+    );
+    assert!(path.moves().iter().all(|m| m.role != MoveRole::Cut));
+
+    // Open on every side, a block is still cleared.
+    let level = LevelParams::new(&p, R);
+    let block = rect(0.0, 0.0, 40.0, 25.0);
+    let cut = clear_level(-6.0, &rect(-8.0, -8.0, 48.0, 33.0), &block, &level).unwrap();
+    assert!(!cut.passes.is_empty() && !cut.cavities && cut.left < 1.0);
+}
+
+/// A minimum cutting radius rounds the corners of where the tool may be: it
+/// never comes nearer an inside corner than the blend lets it.
+#[test]
+fn a_minimum_cutting_radius_keeps_out_of_the_corners() {
+    let square = rect(0.0, 0.0, 20.0, 10.0);
+    let round = blended(&square, 2.0, 1e-3).unwrap();
+    // Nearest the corner: the blend's arc, 2(sqrt 2 - 1) from it.
+    assert!(!round.contains(dvec2(0.3, 0.3)));
+    assert!(round.contains(dvec2(0.9, 0.9)));
+    assert!(round.contains(dvec2(10.0, 0.01)), "the sides are kept");
+    assert!((square.area() - round.area() - 4.0 * (4.0 - PI)).abs() < 0.05);
+    // Too narrow for it, nothing is left.
+    assert!(
+        blended(&rect(0.0, 0.0, 20.0, 3.0), 2.0, 1e-3)
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut p = params();
+    p.min_cutting_radius = 2.0;
+    let (path, report) = rough_pockets(&p);
+    assert!(report.passes > 0, "{report:?}");
+    // Where the tool's centre may be in the first pocket: 7 to 25 by 7 to 13.
+    let corners = [
+        dvec2(7.0, 7.0),
+        dvec2(25.0, 7.0),
+        dvec2(7.0, 13.0),
+        dvec2(25.0, 13.0),
+    ];
+    let nearest = path
+        .moves()
+        .iter()
+        .filter(|m| m.role == MoveRole::Cut)
+        .flat_map(|m| corners.map(|c| m.to.truncate().distance(c)))
+        .fold(f64::INFINITY, f64::min);
+    assert!(
+        nearest > 2.0 * (2f64.sqrt() - 1.0) - 0.02,
+        "came within {nearest} of a corner"
+    );
+}
+
+/// Where the way straight between two passes runs through what stands, a
+/// stay-down link goes round it, by the corners of what is clear, as short as
+/// it can and no longer than the stay-down distance.
+#[test]
+fn a_stay_down_link_goes_round_what_stands_between() {
+    let p = LevelParams::new(&params(), R);
+    // Clear of the material: all of it but a block in the way, grown by the
+    // tool.
+    let block = rect(10.0, -5.0, 14.0, 5.0);
+    let free = rect(-20.0, -20.0, 40.0, 20.0)
+        .difference(&block.offset(R, 1e-3))
+        .unwrap();
+    let clear = |a: DVec2, b: DVec2| steer::clear_of(&block, a, b, 0.9 * R);
+    let (from, to) = (dvec2(0.0, 0.0), dvec2(24.0, 0.0));
+    assert!(!clear(from, to));
+    let via = clearing::route(&free, from, to, 60.0, &p, |_| true, clear).unwrap();
+    assert!(!via.is_empty());
+    let way: Vec<DVec2> = std::iter::once(from)
+        .chain(via.iter().copied())
+        .chain(std::iter::once(to))
+        .collect();
+    let length: f64 = way.windows(2).map(|w| w[0].distance(w[1])).sum();
+    assert!(way.windows(2).all(|w| clear(w[0], w[1])));
+    // Round the block's end, 5 + 3 from the line: about 2 x sqrt(12^2 + 8^2).
+    assert!(length < 31.0, "{length}");
+    // Too far round for the distance allowed, it lifts.
+    assert!(clearing::route(&free, from, to, 26.0, &p, |_| true, clear).is_none());
+}
+
+/// Rest machining's material: what an earlier pass swept is gone at its level
+/// and every level above, the tool's width at each; the levels below it keep
+/// it; and what is left thinner than the stock to ignore is let be.
+#[test]
+fn rest_material_is_what_the_operations_before_left() {
+    use crate::cutter::tool::{Bullnose, Cutter};
+    let stocks = [(dvec2(0.0, 0.0), dvec2(40.0, 20.0), 0.0)];
+    // A 6 mm flat once along the middle at -6.
+    let mut flat_path = Toolpath::new();
+    flat_path.rapid_to(dvec3(-5.0, 10.0, 5.0)).unwrap();
+    flat_path
+        .feed_to(dvec3(-5.0, 10.0, -6.0), MoveRole::Plunge, 300.0)
+        .unwrap();
+    flat_path
+        .feed_to(dvec3(45.0, 10.0, -6.0), MoveRole::Cut, 1000.0)
+        .unwrap();
+    let flat = Earlier {
+        path: flat_path,
+        cutter: Cutter::Bullnose(Bullnose::new(R, 0.0).unwrap()),
+    };
+    let watch = crate::control::Watch::default();
+    let area_at = |left: &[(f64, Region)], z: f64| {
+        left.iter()
+            .find(|(at, _)| (*at - z).abs() < 1e-9)
+            .unwrap()
+            .1
+            .area()
+    };
+    let left = rest::material_at(
+        &stocks,
+        &[-8.0, -6.0, -3.0],
+        std::slice::from_ref(&flat),
+        0.0,
+        0.01,
+        &watch,
+    )
+    .unwrap();
+    assert!(
+        (area_at(&left, -8.0) - 800.0).abs() < 0.5,
+        "below it, untouched"
+    );
+    assert!((area_at(&left, -6.0) - 560.0).abs() < 0.5);
+    assert!((area_at(&left, -3.0) - 560.0).abs() < 0.5);
+
+    // A 6 mm ball the same way: at its tip it cuts nothing, and wider up it.
+    let ball = Earlier {
+        cutter: Cutter::Bullnose(Bullnose::new(R, R).unwrap()),
+        ..flat.clone()
+    };
+    let left = rest::material_at(&stocks, &[-6.0, -5.0, -3.0], &[ball], 0.0, 0.01, &watch).unwrap();
+    let w5 = (2.0 * R - 1.0f64).sqrt();
+    assert!((area_at(&left, -6.0) - 800.0).abs() < 0.5);
+    let cut5 = 800.0 - area_at(&left, -5.0);
+    assert!(cut5 > 0.0 && cut5 <= 40.0 * 2.0 * w5 + 0.5, "{cut5}");
+    assert!((area_at(&left, -3.0) - 560.0).abs() < 0.5);
+
+    // A second pass 5.8 mm over leaves a strip 0.2 mm wide: ignored at 0.5.
+    let mut twice = flat.clone();
+    for x in [45.0, -5.0] {
+        twice
+            .path
+            .feed_to(dvec3(x, 7.0 - 0.2 - R, -6.0), MoveRole::Cut, 1000.0)
+            .unwrap();
+    }
+    let kept = rest::material_at(
+        &stocks,
+        &[-6.0],
+        std::slice::from_ref(&twice),
+        0.0,
+        0.01,
+        &watch,
+    )
+    .unwrap();
+    let let_be = rest::material_at(&stocks, &[-6.0], &[twice], 0.5, 0.01, &watch).unwrap();
+    let strip = area_at(&kept, -6.0) - area_at(&let_be, -6.0);
+    assert!((strip - 40.0 * 0.2).abs() < 0.5, "{strip}");
 }

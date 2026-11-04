@@ -80,14 +80,47 @@ the whole wall at the plunge feed: a pass it lifts for now starts and ends a thi
 of the tool off the material, clear of every simulator cell, and the linker comes
 down at rapid to the safe distance (16.6 min of plunging became 4.2).
 
+## Taken since
+
+- **Fine stepdown** (0.3), back up each slab over slopes, seeded as the flat
+  levels are.
+- **Rest machining** from the operations before it in the setup, as Fusion's
+  from previous operations, with its Ignore Stock Less Than. Each earlier
+  operation's moves are swept exactly at every level, with the real tool it
+  was cut with, as wide as it is that far above its tip, so the grid rule holds:
+  what the simulator's stock says is not read. A tool only widens going up, so
+  a move far enough below a level to cut it at its full width cuts every level
+  above too, and is swept once, from the lowest level up; only the moves close
+  below a level are swept for it alone, each piece at its narrowest, so nothing
+  is taken as cut that was not. What is left thinner than the stock to ignore
+  goes by an opening of half of it. With it on, the operation waits for those
+  before it.
+- **Minimum cutting radius**: an opening of where the tool may be by it, kept
+  inside it. Its inside corners are rounded, so the tool never turns tighter
+  there, and the material in them is left, as Fusion's leaves it; nothing
+  narrower than the tool and twice the radius is cut, which is Fusion's too.
+- **Machine cavities**: off, a level ends where what is left has no way in
+  from the side, and what it left is counted apart from what it missed.
+- **Order by area**: each pass is placed by the piece of where the tool may be
+  at its slab's own level that its start is in, and at every level above;
+  where the tool may be only shrinks going down, so those pieces nest. Areas
+  are cut depth first, each before the areas below it and those before the
+  next beside it, side by side in the order they were first come to. A slab's
+  flat and fine levels stay after its own in each area, as each cuts what that
+  one left; a level's passes keep their order, so a stay-down link still
+  follows the pass it was found after.
+- **Stay-down links round what stands between**, through what is cleared: the
+  shortest way by the corners of where the tool stands clear of the material,
+  where it turns away from itself, one each quarter-radian round a curve,
+  within the stay-down distance, every leg held to what a straight link is.
+
 ## Not taken yet
 
-- **Rest material from earlier operations.** The block is cleared as it starts;
-  after another operation it cuts air. Sweeping the earlier operations' moves
-  exactly, level by level, keeps to the grid rule.
-- **Fine stepdown**, back up each slab over slopes: the flat levels' seeding is
-  the same mechanism.
-- Shallow areas, slot clearing, minimum cutting radius, order by area.
-- Stay-down links routed through what is cleared, rather than only straight.
+- Shallow areas and slot clearing. Fusion's flat area detection also finds
+  peaks, and has a minimum stepdown and minimum axial engagement.
+- Rest machining from a file, bodies or the setup stock, and from earlier
+  setups (that needs [the volumetric stock](../../STATUS.md)).
+- Fusion's stay-down level and minimum stay-down clearance, which say how hard it
+  tries to stay down, and its lift height.
 - Arc fitting of the steps: a pass is its steps, as the rule against smoothing
   says.

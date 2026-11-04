@@ -30,6 +30,7 @@ use crate::path::trim::within_heights;
 use crate::setup::features::{Chain, FeatureError, Picking, picked_chains};
 use crate::setup::{Bodies, Prepared};
 use crate::strategy::StrategyError;
+use crate::strategy::adaptive::rest::Earlier;
 use crate::strategy::adaptive::{AdaptiveParams, adaptive_rough, flat_heights};
 use crate::strategy::drilling::{DrillParams, DrillReport, Hole, drill, holes, nearest_first};
 use crate::strategy::face::{FaceParams, LevelsAsked, face};
@@ -52,7 +53,9 @@ mod clearing;
 mod finishing;
 mod link;
 
-use clearing::{adaptive_paths, drill_paths, face_paths, planar_paths, pocket_clearing_paths};
+use clearing::{
+    AdaptiveAsked, adaptive_paths, drill_paths, face_paths, planar_paths, pocket_clearing_paths,
+};
 pub(super) use clearing::{drill_holes, heights_of, planar_areas};
 use finishing::{
     contour_paths, flat_paths, morphed_spiral_paths, parallel_paths, radial_paths, scallop_paths,
@@ -84,6 +87,10 @@ pub(super) struct Work<'a> {
     /// The heights of the part's flat faces, found for the setup when an
     /// operation first needs them.
     pub(super) flats: &'a OnceLock<Vec<f64>>,
+    /// The operations before it in the setup, as cut, for a strategy that
+    /// clears what they left ([`Uses::rest`](crate::job::Uses::rest)); none
+    /// for any other.
+    pub(super) before: &'a [Earlier],
     /// What its work tells how far it has got, and asks whether to stop.
     pub(super) watch: Watch,
 }
@@ -245,7 +252,25 @@ pub(super) fn plan_operation(
         StrategySpec::Adaptive {
             direction,
             flat_areas,
-        } => adaptive_paths(work, direction, flat_areas, limit, &mut warnings)?,
+            machine_cavities,
+            min_cutting_radius,
+            order,
+            rest_machining,
+            ignore_stock_less_than,
+        } => adaptive_paths(
+            work,
+            AdaptiveAsked {
+                direction,
+                flat_areas,
+                machine_cavities,
+                min_cutting_radius,
+                order,
+                rest_machining,
+                ignore_stock_less_than,
+            },
+            limit,
+            &mut warnings,
+        )?,
         StrategySpec::Profile { .. } | StrategySpec::Pocket { .. } => {
             planar_paths(work, found, &mut warnings)?
         }
@@ -415,11 +440,11 @@ pub(super) fn cut_operation(
     }
     let start = path.moves().first().map_or(glam::DVec3::ZERO, |m| m.to);
     let (steep, deepest) = path.steep_cut_descents(start, PLUNGE_RATIO);
-    if deepest > op.passes.max_cut_step {
+    if deepest > op.max_cut_step() {
         warnings.push(format!(
             "a steep cutting descent of {deepest:.2} mm exceeds the {:.2} mm \
              allowance: a plunge at cutting feed ({steep} steep descent(s))",
-            op.passes.max_cut_step
+            op.max_cut_step()
         ));
     }
 
@@ -482,7 +507,7 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
         clearance_z: 0.0,
         steep_cut_descents: 0,
         deepest_cut_descent_mm: 0.0,
-        max_cut_step: op.passes.max_cut_step,
+        max_cut_step: op.max_cut_step(),
         warnings: Vec::new(),
         made,
     }

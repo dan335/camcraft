@@ -162,6 +162,30 @@ pub enum StrategySpec {
         /// leave down. Fusion's flat area detection.
         #[serde(default = "yes", skip_serializing_if = "is_yes")]
         flat_areas: bool,
+        /// Go down into what cannot be reached from the side, a closed pocket:
+        /// Fusion's Machine Cavities. Off, it only cuts from the outside in,
+        /// and leaves them.
+        #[serde(default = "yes", skip_serializing_if = "is_yes")]
+        machine_cavities: bool,
+        /// The tightest the tool's centre turns in an inside corner, in
+        /// millimetres: Fusion's Minimum Cutting Radius. Every corner sharper
+        /// is blended, leaving material in it for a smaller tool; nothing
+        /// narrower than the tool and twice this is cut. None when zero.
+        #[serde(default, skip_serializing_if = "is_default")]
+        min_cutting_radius: f64,
+        /// Level by level, or each area cleared all the way down before the
+        /// next: Fusion's Order by Depth and Order by Area.
+        #[serde(default, skip_serializing_if = "is_default")]
+        order: ContourOrder,
+        /// Clear only what the operations before it in the setup left: Fusion's
+        /// Rest Machining from previous operations.
+        #[serde(default, skip_serializing_if = "is_default")]
+        rest_machining: bool,
+        /// With rest machining, material the operations before left thinner
+        /// than this is let be, in millimetres: Fusion's Ignore Stock Less
+        /// Than.
+        #[serde(default, skip_serializing_if = "is_default")]
+        ignore_stock_less_than: f64,
     },
     /// A 2D contour: the tool run round the boundary, beside it or on it, level
     /// by level down to its floor. Fusion's 2D Contour.
@@ -383,7 +407,7 @@ impl PassOrder {
     }
 }
 
-/// Which order a contour's levels are cut in.
+/// Which order a contour's levels are cut in, or adaptive clearing's.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ContourOrder {
