@@ -18,6 +18,12 @@ pub(super) struct Clearing<'a> {
     pub(super) whole_inner: Region,
     /// Material still standing, less what `trail` has swept.
     pub(super) uncut: Tiles,
+    /// The material worth a pass grown by the tool's radius, where the tool
+    /// may not stand ([`Clearing::situation`]), tile by tile of `uncut`, each
+    /// once worked out and until a cut comes within reach of it: growing the
+    /// whole level's every time it is asked for is most of a large level's
+    /// work.
+    pub(super) grown: Vec<Option<Region>>,
     /// Swept since the material was last brought up to date, the last point
     /// where the tool is.
     pub(super) trail: Vec<DVec2>,
@@ -35,6 +41,9 @@ pub(super) struct Clearing<'a> {
     pub(super) left: f64,
     pub(super) no_room: u64,
     pub(super) overloads: u64,
+    /// How much of the material the window holds every flush has taken out
+    /// since it was last asked ([`Clearing::taken`]).
+    taken: f64,
 }
 
 /// What a part of a level looks like, between passes.
@@ -87,13 +96,15 @@ impl<'a> Clearing<'a> {
             },
         );
         let (inner, whole_inner) = inner?;
+        let uncut = uncut?;
         Ok(Self {
             p,
             allowed,
             room: room?,
             inner,
             whole_inner,
-            uncut: uncut?,
+            grown: vec![None; uncut.cells.len()],
+            uncut,
             trail: Vec::new(),
             trail_length: 0.0,
             trying: Vec::new(),
@@ -106,6 +117,7 @@ impl<'a> Clearing<'a> {
             left: 0.0,
             no_room: 0,
             overloads: 0,
+            taken: 0.0,
         })
     }
 
@@ -237,7 +249,74 @@ impl<'a> Clearing<'a> {
                 (lo - grow, hi + grow)
             });
         let inner = self.whole_inner.clone();
-        self.situation(lo, hi, self.allowed.clone(), inner, &uncut, 0.0)
+        let grown = self.grown_whole()?;
+        self.situation_with(
+            (lo, hi),
+            self.allowed.clone(),
+            inner,
+            &uncut,
+            0.0,
+            Some(grown),
+        )
+    }
+
+    /// How far a tile's growth reads the material round it: the tool and the
+    /// sliver it is shrunk by and grown back, each to its arcs, and a margin.
+    fn grown_reach(&self) -> f64 {
+        self.p.radius + 4.0 * (self.p.sliver + self.p.coarse)
+    }
+
+    /// The material worth a pass grown by the tool's radius, over the whole
+    /// level: each tile's as kept, those since cut within its reach worked
+    /// out again, in parallel.
+    fn grown_whole(&mut self) -> Result<Region, StrategyError> {
+        let reach = self.grown_reach();
+        let missing: Vec<usize> = (0..self.grown.len())
+            .filter(|&k| self.grown.get(k).is_some_and(Option::is_none))
+            .collect();
+        let (uncut, p) = (&self.uncut, self.p);
+        let made: Vec<(usize, Region)> = missing
+            .par_iter()
+            .map(|&k| {
+                let (lo, hi) = uncut.square(k);
+                let around = uncut.window(lo - DVec2::splat(reach), hi + DVec2::splat(reach))?;
+                // Its own, and past the tiles where it is on their edge: the
+                // material grows beyond them by the tool.
+                let (own_lo, own_hi) = uncut.square_beyond(k, reach);
+                let piece = around
+                    .offset(-p.sliver, p.coarse)
+                    .offset(p.radius + p.sliver, p.coarse)
+                    .intersection(&Region::rectangle(own_lo, own_hi))?;
+                Ok((k, piece))
+            })
+            .collect::<Result<_, StrategyError>>()?;
+        for (k, piece) in made {
+            if let Some(slot) = self.grown.get_mut(k) {
+                *slot = Some(piece);
+            }
+        }
+        let pieces: Vec<Region> = self
+            .grown
+            .iter()
+            .flatten()
+            .filter(|r| !r.is_empty())
+            .cloned()
+            .collect();
+        Ok(Region::union_all(&pieces)?)
+    }
+
+    /// Take `cut` out of the material, and forget the growth of every tile
+    /// within reach of it.
+    fn cut_material(&mut self, cut: &Region) -> Result<(), StrategyError> {
+        if let Some((lo, hi)) = cut.bounds() {
+            let reach = DVec2::splat(self.grown_reach());
+            for k in self.uncut.within(lo - reach, hi + reach) {
+                if let Some(slot) = self.grown.get_mut(k) {
+                    *slot = None;
+                }
+            }
+        }
+        self.uncut.subtract(cut)
     }
 
     /// The level as it stands in a box `half` each way of `at`.
@@ -266,11 +345,28 @@ impl<'a> Clearing<'a> {
         uncut: &Region,
         exact: f64,
     ) -> Result<Situation, StrategyError> {
+        self.situation_with((lo, hi), allowed, inner, uncut, exact, None)
+    }
+
+    /// As [`Clearing::situation`], with the material worth a pass already
+    /// grown by the tool's radius, where it is known.
+    fn situation_with(
+        &self,
+        (lo, hi): (DVec2, DVec2),
+        allowed: Region,
+        inner: Region,
+        uncut: &Region,
+        exact: f64,
+        grown: Option<Region>,
+    ) -> Result<Situation, StrategyError> {
         // Shrunk, so slivers a rounding error wide are not passes.
         let remaining = uncut.offset(-self.p.sliver, self.p.coarse);
         // A radius clear of the material, grown back by what it was shrunk.
-        let free =
-            allowed.difference(&remaining.offset(self.p.radius + self.p.sliver, self.p.coarse))?;
+        let grown = match grown {
+            Some(grown) => grown,
+            None => remaining.offset(self.p.radius + self.p.sliver, self.p.coarse),
+        };
+        let free = allowed.difference(&grown)?;
         Ok(Situation {
             lo,
             hi,
@@ -312,7 +408,7 @@ impl<'a> Clearing<'a> {
                     .iter()
                     .take(64)
                     .position(|p| !touching.contains(*p))
-                    .unwrap_or(0);
+                    .unwrap_or_else(|| nearest_to(pts, from));
                 let mut l: Vec<DVec2> = pts
                     .iter()
                     .skip(k)
@@ -433,7 +529,7 @@ impl<'a> Clearing<'a> {
             let heading = DVec2::X;
             let start = centre - side.away(heading) * r;
             if let Some(d) = disc(centre, r + self.p.radius, self.p.arc) {
-                self.uncut.subtract(&Region::union_of(&[d])?)?;
+                self.cut_material(&Region::union_of(&[d])?)?;
                 self.window = None;
             }
             self.helixes.push((centre, r));
@@ -449,13 +545,21 @@ impl<'a> Clearing<'a> {
             let lines = vec![std::mem::take(&mut self.trail)];
             let swept = Region::around_polylines(&lines, self.p.radius, self.p.swept_arc);
             if let Some(w) = &mut self.window {
+                let before = w.uncut.area();
                 w.uncut = w.uncut.difference(&swept)?;
+                self.taken += (before - w.uncut.area()).max(0.0);
             }
-            self.uncut.subtract(&swept)?;
+            self.cut_material(&swept)?;
             self.trail = last.into_iter().collect();
         }
         self.trail_length = 0.0;
         Ok(())
+    }
+
+    /// How much of the material the window holds has been taken out since
+    /// this was last asked, by every flush, whatever asked for it.
+    fn taken(&mut self) -> f64 {
+        std::mem::take(&mut self.taken)
     }
 
     /// Make sure the window holds everything a step from `at` reads.
@@ -502,6 +606,15 @@ impl<'a> Clearing<'a> {
         let mut air = 0.0;
         let mut last_cut = 0;
         let mut lenient = if entered { 2.0 * self.p.radius } else { 0.0 };
+        // How far it has gone engaged, as it measures, since the material
+        // last went down by more than a sliver's width along the way, and
+        // where that was: what it touches can be a sliver no sweep takes, and
+        // a pass that takes nothing is over, however engaged it says it is.
+        // Going through air is the air's to end, above.
+        let (mut idle, mut last_taken) = (0.0, 0);
+        // How far it has gone engaged since that was last looked at.
+        let mut since = 0.0;
+        self.taken = 0.0;
         while self.steps < MAX_STEPS {
             self.steps += 1;
             self.window_at(at)?;
@@ -535,6 +648,7 @@ impl<'a> Clearing<'a> {
             } else {
                 air = 0.0;
                 last_cut = points.len() - 1;
+                since += step;
             }
             // Short steps where it turns, long where it runs straight.
             step = if chosen.turn.abs() > 0.3 {
@@ -546,6 +660,17 @@ impl<'a> Clearing<'a> {
             };
             if self.trail_length > self.p.radius || self.trail.len() > 48 {
                 self.flush()?;
+                if self.taken() > self.p.sliver * since {
+                    idle = 0.0;
+                    last_taken = points.len() - 1;
+                } else {
+                    idle += since;
+                    if idle > self.p.radius {
+                        last_cut = last_cut.min(last_taken);
+                        break;
+                    }
+                }
+                since = 0.0;
             }
         }
         self.flush()?;
@@ -556,4 +681,17 @@ impl<'a> Clearing<'a> {
             Vec::new()
         })
     }
+}
+
+/// The point of `points` nearest `from`, by its place: the first without a
+/// `from`.
+fn nearest_to(points: &[DVec2], from: Option<DVec2>) -> usize {
+    let Some(from) = from else {
+        return 0;
+    };
+    points
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.distance(from).total_cmp(&b.1.distance(from)))
+        .map_or(0, |(k, _)| k)
 }

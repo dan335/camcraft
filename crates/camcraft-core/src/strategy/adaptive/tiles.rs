@@ -116,6 +116,42 @@ impl Tiles {
         Region::union_all(&self.cells).map_err(StrategyError::from)
     }
 
+    /// The square of tile `k`, its lower and upper corner.
+    #[allow(clippy::cast_precision_loss)]
+    pub(super) fn square(&self, k: usize) -> (DVec2, DVec2) {
+        let (i, j) = ((k % self.nx.max(1)) as f64, (k / self.nx.max(1)) as f64);
+        let lo = self.lo + DVec2::new(i, j) * self.size;
+        (lo, lo + DVec2::splat(self.size))
+    }
+
+    /// The square of tile `k`, and beyond the tiles by `beyond` where it is on
+    /// their edge: what of a region grown by up to `beyond` is the tile's own,
+    /// none of it lost past the outermost tiles.
+    pub(super) fn square_beyond(&self, k: usize, beyond: f64) -> (DVec2, DVec2) {
+        let (mut lo, mut hi) = self.square(k);
+        let (i, j) = (k % self.nx.max(1), k / self.nx.max(1));
+        if i == 0 {
+            lo.x -= beyond;
+        }
+        if j == 0 {
+            lo.y -= beyond;
+        }
+        if i + 1 >= self.nx {
+            hi.x += beyond;
+        }
+        if j + 1 >= self.ny {
+            hi.y += beyond;
+        }
+        (lo, hi)
+    }
+
+    /// Each tile's place within the box from `lo` to `hi`, in order.
+    pub(super) fn within(&self, lo: DVec2, hi: DVec2) -> Vec<usize> {
+        let (xs, ys) = self.range(lo, hi);
+        ys.flat_map(|j| xs.clone().map(move |i| j * self.nx + i))
+            .collect()
+    }
+
     /// Take `cut` out of every tile it touches.
     pub(super) fn subtract(&mut self, cut: &Region) -> Result<(), StrategyError> {
         let Some((lo, hi)) = cut.bounds() else {
