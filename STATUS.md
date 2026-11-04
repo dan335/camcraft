@@ -1,6 +1,17 @@
 # Where this is
 
-Last updated 2026-11-03. Read this before picking the work back up.
+Last updated 2026-11-04. Read this before picking the work back up.
+
+**0.4 shows toolpaths as they are found, and finishes walls everywhere.** Each
+operation's passes are drawn as its strategy finds them, before it is made.
+Parallel, spiral, radial and morphed spiral leave ground steeper than a plunge
+to rings round the walls, as scallop does
+([decision 0014](docs/decisions/0014-walls-for-every-finish-over-the-part.md)):
+on the serving tray each now leaves 11 columns more than 1 mm above the part
+where they left 1,263 to 7,690. Adaptive keeps the material grown by the tool
+tile by tile, so finding the next pass on a large level costs what changed
+since: the tray's roughing went from 246 s to 153 s. A stay-down link never
+starts or ends where nothing is under the tool, which let one climb a wall.
 
 **0.3 generates by itself.** A setup's toolpaths are worked out as soon as
 editing settles, every operation that reads the part alone at once, each shown

@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "camcraft-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "camcraft-core",
  "camcraft-geom",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "camcraft-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "approx",
  "camcraft-geom",
@@ -686,7 +686,7 @@ dependencies = [
 
 [[package]]
 name = "camcraft-geom"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clipper2-rust",
  "glam 0.33.9",
@@ -697,7 +697,7 @@ dependencies = [
 
 [[package]]
 name = "camcraft-gui"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bytemuck",
  "camcraft-core",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "camcraft-import"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "camcraft-geom",
  "glam 0.33.9",
@@ -737,7 +737,7 @@ dependencies = [
 
 [[package]]
 name = "camcraft-post"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "camcraft-core",
  "glam 0.33.9",
@@ -748,7 +748,7 @@ dependencies = [
 
 [[package]]
 name = "camcraft-session"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "camcraft-core",
  "camcraft-geom",
@@ -766,7 +766,7 @@ dependencies = [
 
 [[package]]
 name = "camcraft-sim"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "camcraft-geom",
  "glam 0.33.9",
@@ -4194,7 +4194,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "step-check"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "glam 0.33.9",
  "thiserror 2.0.20",
