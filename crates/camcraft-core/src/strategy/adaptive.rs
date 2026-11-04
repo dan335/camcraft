@@ -35,10 +35,13 @@
 //! Where the tool can stand clear of material, beside the block or in what it
 //! has cleared, a pass starts at the edge of the material, with the material on
 //! its climbing side. Where it cannot, as in a closed pocket, it goes down a helix
-//! in the widest place, and spirals out, unless it is not to machine cavities. A
+//! in the widest place, and spirals out, unless it is not to machine cavities;
+//! with slot clearing, it first cuts a slot along the pocket's longest way. A
 //! pass ends when it runs out of material, or would overload the tool; the next
 //! starts at the nearest edge of what is left, reached without lifting where the
-//! way is clear, straight or round what stands between through what is cleared.
+//! way is clear, straight or round what stands between through what is cleared,
+//! as far round as the stay-down level allows, kept the clearance off the
+//! material, and lifted off the level if asked.
 //!
 //! # Corners, and order
 //!
@@ -50,9 +53,12 @@
 //! # Levels, and flat areas
 //!
 //! Levels are a stepdown apart, from the top. Each is cleared on its own: the
-//! slab above it was untouched when it is cut. Each flat face of the part adds a
-//! level on it (raised by the stock to leave down), cut after the level below it,
-//! so it only removes the terrace that level left over the face.
+//! slab above it was untouched when it is cut. Each flat face and peak of the
+//! part adds a level on it (raised by the stock to leave down), cut after the
+//! level below it, so it only removes the terrace that level left over the face.
+//! A fine stepdown adds levels up each slab, and shallow areas add them where
+//! the terraces are wide, cutting only there; those that would cut
+//! too little depth are left out.
 
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
@@ -72,11 +78,13 @@ use crate::strategy::{
 };
 
 mod clearing;
+mod levels;
 pub mod rest;
 mod steer;
 mod tiles;
 
 use clearing::Clearing;
+pub use levels::{Shallow, peak_heights};
 use rest::Earlier;
 use tiles::Tiles;
 
@@ -136,6 +144,22 @@ pub struct AdaptiveParams {
     pub helix_radius: f64,
     /// The longest link made without lifting, in millimetres.
     pub stay_down: f64,
+    /// How far round what stands between a link stays down, from none, 0,
+    /// straight only, to 1, as far as `stay_down` allows: Fusion's Stay-Down
+    /// Level. A way round may be longer than straight by this much of what
+    /// `stay_down` leaves.
+    pub stay_down_level: f64,
+    /// How far the tool stays off the material along a link it stays down
+    /// for, in millimetres, but where it leaves a pass and comes to the next:
+    /// Fusion's Minimum Stay-Down Clearance.
+    pub stay_down_clearance: f64,
+    /// How far the tool rises off the level for a link it stays down for, in
+    /// millimetres: Fusion's Lift Height. No higher than the level above.
+    pub lift_height: f64,
+    /// Fusion's Slot Clearing: a closed area gone down into is first cut a
+    /// slot this wide along its middle, in millimetres, no narrower than the
+    /// tool; none when `None`.
+    pub slot_width: Option<f64>,
     /// How steeply a helix goes down, in radians from level.
     pub ramp_angle: f64,
     /// The feed down a helix, in mm/min.
@@ -152,6 +176,17 @@ pub struct AdaptiveParams {
     /// each level and flat, cut as flats are ([`with_fine_levels`]); none
     /// when `None`.
     pub fine_stepdown: Option<f64>,
+    /// Flat levels, `flats`, less than this below the level above their own,
+    /// in millimetres, are left out: Fusion's flat area Minimum Stepdown.
+    pub min_flat_stepdown: f64,
+    /// Fine and shallow levels less than this below the level above their
+    /// own, in millimetres, are left out: Fusion's Minimum Axial Engagement.
+    /// Every level between two a stepdown apart cuts into material standing
+    /// up to the upper one.
+    pub min_axial_engagement: f64,
+    /// Fusion's Machine Shallow Areas: levels added between two where the
+    /// terrace between them is too wide. None when `None`.
+    pub shallow: Option<Shallow>,
     /// Whether to go down into material there is no way into from the side:
     /// Fusion's Machine Cavities. Off, such areas are left.
     pub machine_cavities: bool,
@@ -184,12 +219,19 @@ impl Default for AdaptiveParams {
             direction: Direction::Climb,
             helix_radius: 2.7,
             stay_down: 30.0,
+            stay_down_level: 1.0,
+            stay_down_clearance: 0.0,
+            lift_height: 0.0,
+            slot_width: None,
             ramp_angle: 2f64.to_radians(),
             ramp_feed: 900.0,
             ramp_stepdown: None,
             safe_distance: 2.0,
             flats: Vec::new(),
             fine_stepdown: None,
+            min_flat_stepdown: 0.0,
+            min_axial_engagement: 0.0,
+            shallow: None,
             machine_cavities: true,
             min_cutting_radius: 0.0,
             by_area: false,
@@ -209,6 +251,8 @@ pub struct AdaptiveReport {
     pub flat_levels: u64,
     /// Of them, levels of the fine stepdown.
     pub fine_levels: u64,
+    /// Of them, levels added in shallow areas.
+    pub shallow_levels: u64,
     /// Passes emitted.
     pub passes: u64,
     /// Links between passes made without lifting.
@@ -217,6 +261,8 @@ pub struct AdaptiveReport {
     pub entries: u64,
     /// Of them, entered down a helix.
     pub helixes: u64,
+    /// Of them, first cut a slot along their middle.
+    pub slots: u64,
     /// Areas with no room to go down into, left uncut.
     pub no_room: u64,
     /// Levels where closed areas were left, as it was not to machine
@@ -285,34 +331,77 @@ pub fn adaptive_rough(
     check("tool radius", radius)?;
 
     // Levels from the top down, a stepdown apart, each flat level in the slab of
-    // the one just below it, cut after it from the bottom up.
-    let slabs = slabs(params.top, params.bottom, params.stepdown, &params.flats);
-    let slabs = match params.fine_stepdown {
+    // the one just below it, cut after it from the bottom up: those too near
+    // the level above to be worth one left out.
+    let mut slabs = slabs(params.top, params.bottom, params.stepdown, &params.flats);
+    levels::without_thin(&mut slabs, params.top, params.min_flat_stepdown, |_| true);
+    let mut slabs = match params.fine_stepdown {
         Some(fine) => with_fine_levels(slabs, params.top, fine),
         None => slabs,
     };
     let is_flat = |z: f64| params.flats.iter().any(|f| (f - z).abs() < SAME_LEVEL);
+    let levels_of = |slabs: &[(f64, Vec<f64>)]| -> Vec<f64> {
+        let mut all: Vec<f64> = slabs
+            .iter()
+            .flat_map(|(z, flats)| std::iter::once(*z).chain(flats.iter().copied()))
+            .collect();
+        all.sort_by(|a, b| b.total_cmp(a));
+        all
+    };
 
     // Where the tool may not be at every level, from the top: the shadows are
-    // cheapest asked for in descending order. What that leaves of the area,
-    // each level's own, in parallel.
-    let mut all: Vec<f64> = slabs
-        .iter()
-        .flat_map(|(z, flats)| std::iter::once(*z).chain(flats.iter().copied()))
-        .collect();
-    all.sort_by(|a, b| b.total_cmp(a));
-    let mut forbidden = Vec::with_capacity(all.len());
-    for &z in &all {
+    // cheapest asked for in descending order.
+    let mut forbidden = Vec::new();
+    for z in levels_of(&slabs) {
         forbidden.push((z, reach.forbidden(z)?));
     }
-    // Inside corners rounded to the minimum cutting radius: an opening, kept
-    // within where the tool may be, so it never turns tighter, and nothing
-    // narrower than the tool and twice the radius is cut.
-    let blend = params.min_cutting_radius;
+    // Levels added where the terraces are wide, each to cut only there.
     let arc = params.tolerance * 0.1;
+    let mut zones: Vec<(f64, Region)> = Vec::new();
+    if let Some(shallow) = params.shallow {
+        let added =
+            levels::shallow_levels(&slabs, params.top, shallow, reach, &forbidden, stocks, arc)?;
+        for a in added {
+            if let Some(slab) = slabs.iter_mut().find(|(z, _)| *z < a.z) {
+                slab.1.push(a.z);
+            }
+            forbidden.push((a.z, a.forbidden));
+            zones.push((a.z, a.zone));
+        }
+        for (_, fills) in &mut slabs {
+            fills.sort_by(f64::total_cmp);
+            fills.dedup_by(|a, b| (*a - *b).abs() < SAME_LEVEL);
+        }
+    }
+    let zone_of = |z: f64| {
+        zones
+            .iter()
+            .find(|(at, _)| (at - z).abs() < SAME_LEVEL)
+            .map(|(_, r)| r)
+    };
+    // Levels between that would cut too little depth left out.
+    levels::without_thin(&mut slabs, params.top, params.min_axial_engagement, |f| {
+        !is_flat(f)
+    });
+    let all = levels_of(&slabs);
+    forbidden.retain(|(z, _)| all.iter().any(|a| (a - z).abs() < SAME_LEVEL));
+
+    // What that leaves of the area, each level's own, in parallel: a shallow
+    // level's only where its terraces are wide, and as far again as the
+    // tool's radius to come at them from. Inside corners rounded to the
+    // minimum cutting radius: an opening, kept within where the tool may be,
+    // so it never turns tighter, and nothing narrower than the tool and twice
+    // the radius is cut.
+    let blend = params.min_cutting_radius;
     let allowed: Vec<(f64, Region)> = forbidden
         .into_par_iter()
-        .map(|(z, forbidden)| Ok((z, blended(&area.difference(&forbidden)?, blend, arc)?)))
+        .map(|(z, forbidden)| {
+            let mut room = area.difference(&forbidden)?;
+            if let Some(zone) = zone_of(z) {
+                room = room.intersection(&zone.offset(radius + params.tolerance, arc))?;
+            }
+            Ok((z, blended(&room, blend, arc)?))
+        })
         .collect::<Result<_, StrategyError>>()?;
     let allowed_at = |z: f64| {
         allowed
@@ -382,6 +471,7 @@ pub fn adaptive_rough(
         }
         report.no_room += cut.no_room;
         report.entries += cut.helixes.len() as u64;
+        report.slots += cut.slots;
         report.overloads += cut.overloads;
         if cut.passes.is_empty() {
             continue;
@@ -391,6 +481,8 @@ pub fn adaptive_rough(
         if k > 0 {
             if is_flat(cut.z) {
                 report.flat_levels += 1;
+            } else if zone_of(cut.z).is_some() {
+                report.shallow_levels += 1;
             } else {
                 report.fine_levels += 1;
             }
@@ -441,10 +533,17 @@ pub fn adaptive_rough(
         match arrive {
             Arrive::Stay { via } if follows => {
                 report.stayed_down += 1;
-                for v in via {
-                    path.feed_to(dvec3(v.x, v.y, cut.z), MoveRole::Transition, params.feed)?;
+                // Lifted no higher than the material the level stands under.
+                let top = above.get(place.slab).copied().unwrap_or(params.top);
+                let lift = params.lift_height.min(top - cut.z).max(0.0);
+                let from = path.end().map_or(first.truncate(), |e| e.truncate());
+                let way: Vec<DVec2> = std::iter::once(from)
+                    .chain(via.iter().copied())
+                    .chain(std::iter::once(first.truncate()))
+                    .collect();
+                for p in lifted(&way, cut.z, lift) {
+                    path.feed_to(p, MoveRole::Transition, params.feed)?;
                 }
-                path.feed_to(first, MoveRole::Transition, params.feed)?;
             }
             Arrive::Link | Arrive::Stay { .. } => {
                 path.feed_to(first, MoveRole::Link, params.feed)?;
@@ -477,6 +576,59 @@ pub fn adaptive_rough(
         last = Some(place);
     }
     Ok((path, report))
+}
+
+/// The way along `way`, from its first point, at level `z`, lifted `lift` off
+/// it between: up and down again each as steeply as a link may be without
+/// being taken for a plunge ([`crate::path::toolpath::PLUNGE_RATIO`]), half
+/// that, and lower where the way is too short to rise so far and come down.
+fn lifted(way: &[DVec2], z: f64, lift: f64) -> Vec<glam::DVec3> {
+    use crate::path::toolpath::PLUNGE_RATIO;
+    let length: f64 = way
+        .windows(2)
+        .map(|w| match w {
+            [a, b] => a.distance(*b),
+            _ => 0.0,
+        })
+        .sum();
+    let ramp_per_mm = 2.0 / PLUNGE_RATIO;
+    let lift = lift.min(length / (2.0 * ramp_per_mm)).max(0.0);
+    let Some(&last) = way.last() else {
+        return Vec::new();
+    };
+    if lift <= MATERIAL_THICKNESS {
+        return way.iter().skip(1).map(|p| p.extend(z)).collect();
+    }
+    let ramp = lift * ramp_per_mm;
+    // Where it is up: past the rise, and short of the fall.
+    let (up, down) = (ramp, length - ramp);
+    let mut out = Vec::new();
+    let mut gone = 0.0;
+    for w in way.windows(2) {
+        let [a, b] = w else {
+            continue;
+        };
+        let leg = a.distance(*b);
+        for at in [up, down]
+            .into_iter()
+            .take(if down - up > 1e-9 { 2 } else { 1 })
+        {
+            if at > gone + 1e-9 && at < gone + leg - 1e-9 {
+                out.push(a.lerp(*b, (at - gone) / leg).extend(z + lift));
+            }
+        }
+        gone += leg;
+        if *b != last {
+            let h = if gone <= up || gone >= down {
+                z + lift * (gone.min(length - gone) / ramp).min(1.0)
+            } else {
+                z + lift
+            };
+            out.push(b.extend(h));
+        }
+    }
+    out.push(last.extend(z));
+    out
 }
 
 /// Where the tool may be, `allowed`, with its inside corners rounded to
@@ -741,6 +893,14 @@ struct LevelParams {
     both_ways: bool,
     helix_radius: f64,
     stay_down: f64,
+    /// How much of what the stay-down distance leaves past going straight a
+    /// way round may take.
+    stay_down_level: f64,
+    /// How far a link keeps off the material between the passes it joins.
+    stay_down_clearance: f64,
+    /// How wide a slot a closed area is first cut along its middle; none
+    /// when `None`.
+    slot_width: Option<f64>,
     /// Whether to go down into what has no way in from the side.
     machine_cavities: bool,
     /// Asked whether to stop before each pass.
@@ -772,6 +932,9 @@ impl LevelParams {
             both_ways: p.direction == Direction::BothWays,
             helix_radius: p.helix_radius,
             stay_down: p.stay_down,
+            stay_down_level: p.stay_down_level.clamp(0.0, 1.0),
+            stay_down_clearance: p.stay_down_clearance.max(0.0),
+            slot_width: p.slot_width.map(|w| w.max(2.0 * radius)),
             machine_cavities: p.machine_cavities,
             watch: p.watch.clone(),
         }
@@ -811,6 +974,8 @@ struct LevelCut {
     /// Whether closed areas were left, as it was not to machine cavities.
     cavities: bool,
     overloads: u64,
+    /// Closed areas first cut a slot along their middle.
+    slots: u64,
 }
 
 impl LevelCut {
@@ -887,6 +1052,7 @@ fn clear_level(
         no_room: c.no_room,
         cavities: c.cavities,
         overloads: c.overloads,
+        slots: c.slots,
     })
 }
 

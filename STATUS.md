@@ -116,10 +116,12 @@ Fusion's post does. The lego contour posts block for block as Fusion's does.
    measures along where the tool's tip rides, not the part itself.
    Adaptive clearing, as Fusion's 3D Adaptive,
    is done ([decision 0007](docs/decisions/0007-adaptive-clearing.md)), with
-   Fusion's fine stepdown, rest machining from the operations before it,
-   minimum cutting radius, machine cavities and order by area, and stay-down
-   links round what stands between; without yet shallow areas, slot clearing
-   or shaft and holder clearance. Its levels
+   Fusion's fine stepdown, shallow areas, flat areas with peaks, a minimum
+   stepdown and minimum axial engagement, rest machining from the operations
+   before it, minimum cutting radius, machine cavities, slot clearing and order
+   by area, and stay-down links round what stands between, with Fusion's
+   stay-down level, clearance and lift height; without yet shaft and holder
+   clearance, or rest machining from the setup's stock or a file. Its levels
    are worked out at once, each on one core, so the slowest is the time it
    takes ([decision 0013](docs/decisions/0013-generating-by-itself.md)). Pocket clearing, as
    Fusion's 3D Pocket Clearing, is Z-level roughing renamed, now cutting each

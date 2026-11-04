@@ -20,6 +20,16 @@ the same notes at more length.
 - **Better help for adaptive's Passes tab**: sketches for fine stepdown, flat
   areas, deepest step cut, both ways, minimum cutting radius and machine
   cavities.
+- **Adaptive machines shallow areas**, as Fusion's: where the levels leave a
+  terrace wider than the most asked, levels are added between, cutting only
+  there. On a serving tray the scallop finish after it takes 15% less.
+- **And the rest of Fusion's adaptive settings**: flat area detection finds
+  peaks too, with a minimum stepdown, and a minimum axial engagement leaves out
+  levels that would only skim; slot clearing cuts a slot along a pocket's middle
+  before clearing out from it; and on the Linking tab, the stay-down level,
+  stay-down clearance and lift height.
+- **A link staying down keeps clear of the material** between the passes it
+  joins, where it could come a tenth of the tool into it.
 
 ## 0.4.0 — 2026-11-04
 

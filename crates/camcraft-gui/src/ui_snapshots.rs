@@ -436,22 +436,43 @@ fn setup_panel() {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 3_usize));
     h.run_steps(3);
     shoot(&mut h, "operation_passes_rough");
-    // Made adaptive, with rest machining and Fusion's corner, cavity and order
-    // settings: its passes, and rest machining on its geometry.
+    // Made adaptive, with rest machining and Fusion's corner, cavity, slot,
+    // order, flat and shallow area settings: its passes, rest machining on its
+    // geometry, and how its links stay down.
     if let Some(doc) = h.state_mut().doc_for_snapshot() {
         let op = &mut doc.job.setups[0].operations[0];
-        op.strategy = camcraft_core::job::StrategySpec::Adaptive {
-            direction: camcraft_core::job::CutDirection::Climb,
-            flat_areas: true,
-            machine_cavities: false,
-            min_cutting_radius: 1.0,
-            order: camcraft_core::job::ContourOrder::ByArea,
-            rest_machining: true,
-            ignore_stock_less_than: 0.2,
-        };
+        op.strategy = camcraft_core::job::StrategySpec::named("adaptive").unwrap_or(op.strategy);
+        if let camcraft_core::job::StrategySpec::Adaptive {
+            min_cutting_radius,
+            order,
+            rest_machining,
+            ignore_stock_less_than,
+            slot_clearing,
+            min_flat_stepdown,
+            shallow_areas,
+            min_axial_engagement,
+            stay_down_level,
+            lift_height,
+            ..
+        } = &mut op.strategy
+        {
+            *min_cutting_radius = 1.0;
+            *order = camcraft_core::job::ContourOrder::ByArea;
+            *rest_machining = true;
+            *ignore_stock_less_than = 0.2;
+            *slot_clearing = true;
+            *min_flat_stepdown = 0.5;
+            *shallow_areas = true;
+            *min_axial_engagement = 0.5;
+            *stay_down_level = 50.0;
+            *lift_height = 1.0;
+        }
     }
     h.run_steps(3);
     shoot(&mut h, "operation_passes_adaptive");
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 4_usize));
+    h.run_steps(3);
+    shoot(&mut h, "operation_linking_adaptive");
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 1_usize));
     h.run_steps(3);
     shoot(&mut h, "operation_geometry_adaptive");

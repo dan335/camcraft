@@ -14,12 +14,19 @@ fn params() -> AdaptiveParams {
         direction: Direction::Climb,
         helix_radius: 2.7,
         stay_down: 30.0,
+        stay_down_level: 1.0,
+        stay_down_clearance: 0.0,
+        lift_height: 0.0,
+        slot_width: None,
         ramp_angle: 2f64.to_radians(),
         ramp_feed: 500.0,
         ramp_stepdown: None,
         safe_distance: 2.0,
         flats: Vec::new(),
         fine_stepdown: None,
+        min_flat_stepdown: 0.0,
+        min_axial_engagement: 0.0,
+        shallow: None,
         machine_cavities: true,
         min_cutting_radius: 0.0,
         by_area: false,
@@ -654,4 +661,256 @@ fn rest_material_is_what_the_operations_before_left() {
     let let_be = rest::material_at(&stocks, &[-6.0], &[twice], 0.5, 0.01, &watch).unwrap();
     let strip = area_at(&kept, -6.0) - area_at(&let_be, -6.0);
     assert!((strip - 40.0 * 0.2).abs() < 0.5, "{strip}");
+}
+
+/// Peaks are where nothing within the tool's width stands higher, on a face
+/// that faces up: a sphere's top, a block's top, a slope's top edge; never
+/// its bottom.
+#[test]
+fn peaks_are_where_nothing_near_stands_higher() {
+    use camcraft_geom::synthetic;
+    let sphere = synthetic::uv_sphere(10.0, 16, 32);
+    assert_eq!(peak_heights(&sphere, 0.01, R), vec![10.0]);
+    let block = synthetic::cuboid(dvec3(0.0, 0.0, -5.0), dvec3(10.0, 10.0, 2.0));
+    assert_eq!(peak_heights(&block, 0.01, R), vec![2.0]);
+    let slope = synthetic::inclined_plane(0.5, 0.0, 0.0, 20.0);
+    assert_eq!(peak_heights(&slope, 0.01, R), vec![10.0]);
+}
+
+/// The slope `z = x / 2`, from -10 to 10, roughed 6 mm a level with a 6 mm
+/// flat as `p` asks.
+fn rough_slope(p: &AdaptiveParams) -> (Toolpath, AdaptiveReport) {
+    use crate::cutter::allowance::{Allowance, EffectiveTool};
+    use crate::cutter::tool::Flat;
+    use camcraft_geom::synthetic;
+    let mesh = synthetic::inclined_plane(0.5, 0.0, 0.0, 20.0);
+    let flat = Flat::new(R).unwrap();
+    let tool = EffectiveTool::new(&flat, Allowance::new(0.0, 0.0).unwrap()).unwrap();
+    let mut reach = LevelReach::new(&mesh, &tool, 0.01).unwrap();
+    let mut p = p.clone();
+    p.top = 10.0;
+    p.bottom = -10.0;
+    p.stepdown = 6.0;
+    let area = rect(-30.0, -30.0, 30.0, 30.0);
+    let stocks = [(dvec2(-20.0, -20.0), dvec2(20.0, 20.0), 10.0)];
+    adaptive_rough(&mut reach, &area, &stocks, tool.base(), &p).unwrap()
+}
+
+/// The heights of the levels a path cuts at, highest first.
+fn cut_levels(path: &Toolpath) -> Vec<f64> {
+    let mut zs: Vec<f64> = path
+        .moves()
+        .iter()
+        .filter(|m| m.role == MoveRole::Cut)
+        .map(|m| m.to.z)
+        .collect();
+    zs.sort_by(|a, b| b.total_cmp(a));
+    zs.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    zs
+}
+
+/// On a slope rising 1 in 2, a level 6 mm down leaves terraces 12 mm wide:
+/// shallow areas add levels halfway, and halfway again, until they are no
+/// wider than the most allowed, or the levels would come closer than the
+/// least; each cutting only on the slope.
+#[test]
+fn shallow_areas_add_levels_where_the_terraces_are_wide() {
+    let (plain, report) = rough_slope(&params());
+    assert_eq!(report.shallow_levels, 0);
+    let mut p = params();
+    p.shallow = Some(Shallow {
+        min_stepdown: 0.5,
+        max_stepover: 2.0,
+    });
+    let (path, report) = rough_slope(&p);
+    assert!(report.shallow_levels > 0, "{report:?}");
+    let zs = cut_levels(&path);
+    assert!(zs.len() > cut_levels(&plain).len(), "{zs:?}");
+    // 6 mm halved three times leaves terraces 1.5 mm wide, 0.75 mm apart;
+    // once more would leave levels nearer than 0.5.
+    let gaps: Vec<f64> = zs.windows(2).map(|w| w[0] - w[1]).collect();
+    assert!(
+        gaps.iter().all(|g| *g > 0.5 - 1e-9 && *g < 1.0 + 1e-6),
+        "{zs:?}"
+    );
+    // Each level added cuts only on the slope: where the terrace it was
+    // added for is, and the tool's width beside it.
+    let own = |z: f64| {
+        [4.0, -2.0, -8.0, -10.0]
+            .iter()
+            .any(|l| (l - z).abs() < 1e-9)
+    };
+    for m in path
+        .moves()
+        .iter()
+        .filter(|m| m.role == MoveRole::Cut && !own(m.to.z))
+    {
+        // The slope stands at x = 2z; at a level halfway between two 6 mm
+        // apart, the terrace runs 6 mm either side of it.
+        assert!(
+            (m.to.x - 2.0 * m.to.z).abs() < 12.0 + 2.0 * R + 0.5,
+            "{m:?}"
+        );
+    }
+
+    // Walls and a flat top with a level of its own leave no terraces.
+    use crate::cutter::allowance::{Allowance, EffectiveTool};
+    use crate::cutter::tool::Flat;
+    use camcraft_geom::synthetic;
+    let mesh = synthetic::cuboid(dvec3(0.0, 0.0, 0.0), dvec3(40.0, 20.0, 10.0));
+    let flat = Flat::new(R).unwrap();
+    let tool = EffectiveTool::new(&flat, Allowance::new(0.5, 0.5).unwrap()).unwrap();
+    let block = |flats: Vec<f64>| {
+        let mut reach = LevelReach::new(&mesh, &tool, 0.01).unwrap();
+        let mut p = p.clone();
+        p.top = 14.0;
+        p.bottom = 0.0;
+        p.flats = flats;
+        let area = rect(-20.0, -20.0, 60.0, 40.0);
+        let stocks = [(dvec2(-10.0, -10.0), dvec2(50.0, 30.0), 14.0)];
+        adaptive_rough(&mut reach, &area, &stocks, tool.base(), &p)
+            .unwrap()
+            .1
+    };
+    assert_eq!(block(vec![10.5]).shallow_levels, 0);
+    // Without, its top between two levels is a terrace too.
+    assert!(block(Vec::new()).shallow_levels > 0);
+}
+
+/// A flat face too near the level above for a level of its own to be worth
+/// cutting is left out, as is a fine level cutting too little depth.
+#[test]
+fn levels_too_thin_are_left_out() {
+    let mut slabs = vec![(8.0, vec![9.0, 13.5]), (2.0, vec![5.0, 7.8])];
+    levels::without_thin(&mut slabs, 14.0, 1.0, |z| z != 5.0);
+    assert_eq!(slabs, vec![(8.0, vec![9.0]), (2.0, vec![5.0])]);
+
+    let mut p = params();
+    p.fine_stepdown = Some(2.0);
+    let (_, all) = rough_slope(&p);
+    p.min_axial_engagement = 3.0;
+    let (path, fewer) = rough_slope(&p);
+    assert!(fewer.fine_levels < all.fine_levels, "{fewer:?} {all:?}");
+    // Levels at 4, -2, -8 and -10; none between less than 3 below one.
+    for z in cut_levels(&path) {
+        let above = [10.0, 4.0, -2.0, -8.0]
+            .into_iter()
+            .filter(|a| *a > z + 1e-9)
+            .fold(f64::INFINITY, f64::min);
+        let own = [4.0, -2.0, -8.0, -10.0]
+            .iter()
+            .any(|l| (l - z).abs() < 1e-9);
+        assert!(own || above - z >= 3.0 - 1e-9, "{z}");
+    }
+}
+
+/// Lifted, a link it stays down for rises off the level and comes down again
+/// no more steeply than a link may, so it is never taken for a plunge.
+#[test]
+fn a_lift_height_lifts_the_links_it_stays_down_for() {
+    use crate::path::toolpath::PLUNGE_RATIO;
+    let way = [dvec2(0.0, 0.0), dvec2(10.0, 0.0), dvec2(10.0, 10.0)];
+    let up = lifted(&way, -3.0, 1.0);
+    assert_eq!(up.last(), Some(&dvec3(10.0, 10.0, -3.0)));
+    assert!(up.iter().any(|q| (q.z + 2.0).abs() < 1e-9), "{up:?}");
+    // Too short to rise so far and come down, lower.
+    let short = lifted(&[dvec2(0.0, 0.0), dvec2(0.2, 0.0)], 0.0, 1.0);
+    let top = short.iter().map(|q| q.z).fold(0.0, f64::max);
+    assert!(top > 0.0 && top < 1.0, "{short:?}");
+
+    let (flat, report) = rough_pockets(&params());
+    let mut p = params();
+    p.lift_height = 1.0;
+    let (path, lifted_report) = rough_pockets(&p);
+    assert_eq!(lifted_report.stayed_down, report.stayed_down);
+    assert!(report.stayed_down > 0, "{report:?}");
+    let highest = |path: &Toolpath| {
+        path.moves()
+            .iter()
+            .filter(|m| m.role == MoveRole::Transition)
+            .map(|m| m.to.z)
+            .fold(f64::MIN, f64::max)
+    };
+    assert!(highest(&path) > highest(&flat) + 0.5);
+    let start = path.moves()[0].to;
+    let (_, deepest) = path.steep_cut_descents(start, PLUNGE_RATIO);
+    let (_, before) = flat.steep_cut_descents(flat.moves()[0].to, PLUNGE_RATIO);
+    assert!(deepest <= before + 1e-9, "{deepest} against {before}");
+}
+
+/// At the least stay-down level, links stay down only straight; and a way
+/// round keeps the clearance asked for off the material.
+#[test]
+fn the_stay_down_level_and_clearance_say_how_links_stay_down() {
+    let routed = |level: f64| {
+        let mut p = params();
+        p.stay_down_level = level;
+        let level = LevelParams::new(&p, R);
+        let block = rect(0.0, 0.0, 50.0, 40.0);
+        let island = rect(20.0, 15.0, 30.0, 25.0);
+        let allowed = rect(-8.0, -8.0, 58.0, 48.0)
+            .difference(&island.offset(R, 1e-3))
+            .unwrap();
+        let cut = clear_level(-6.0, &allowed, &block.difference(&island).unwrap(), &level).unwrap();
+        cut.passes
+            .iter()
+            .filter(|(a, _)| matches!(a, Arrive::Stay { via } if !via.is_empty()))
+            .count()
+    };
+    assert!(routed(1.0) > 0);
+    assert_eq!(routed(0.0), 0);
+
+    let mut p = params();
+    p.stay_down_clearance = 1.0;
+    let p = LevelParams::new(&p, R);
+    let block = rect(10.0, -5.0, 14.0, 5.0);
+    let free = rect(-20.0, -20.0, 40.0, 20.0)
+        .difference(&block.offset(R, 1e-3))
+        .unwrap();
+    let clear = |a: DVec2, b: DVec2| steer::clear_of(&block, a, b, R + 1.0);
+    let (from, to) = (dvec2(0.0, 0.0), dvec2(24.0, 0.0));
+    let via = clearing::route(&free, from, to, 60.0, &p, |_| true, clear).unwrap();
+    assert!(!via.is_empty());
+    let (lo, hi) = (dvec2(10.0, -5.0), dvec2(14.0, 5.0));
+    for v in &via {
+        let d = (*v - v.clamp(lo, hi)).length();
+        assert!(d >= R + 1.0, "{v} is {d} from the block");
+    }
+}
+
+/// With slot clearing, a closed pocket gone down into is first cut a slot
+/// along its long way, through the middle, then out to the width asked for;
+/// it is all cleared still, and the tool kept where it may be.
+#[test]
+fn slot_clearing_cuts_a_slot_along_the_middle_first() {
+    let block = rect(-10.0, -10.0, 60.0, 50.0);
+    let allowed = rect(3.0, 3.0, 37.0, 27.0);
+    for width in [6.0, 12.0] {
+        let mut p = params();
+        p.slot_width = Some(width);
+        let level = LevelParams::new(&p, R);
+        let cut = clear_level(-6.0, &allowed, &block, &level).unwrap();
+        assert_eq!(cut.slots, 1, "{width}");
+        let (arrive, points) = &cut.passes[0];
+        assert!(matches!(arrive, Arrive::Enter { .. }));
+        // Along the pocket's long way, the whole length of where the tool
+        // may be, less the width beyond the tool's.
+        let out = width / 2.0 - R;
+        let (a, b) = (points[1], points[2]);
+        assert!((a.y - b.y).abs() < 1e-6, "{a} {b}");
+        assert!((a.x.min(b.x) - (3.0 + out)).abs() < 5e-3, "{a} {b}");
+        assert!((a.x.max(b.x) - (37.0 - out)).abs() < 5e-3, "{a} {b}");
+        // Rings out to the width, if wider.
+        let widest = points[1..]
+            .iter()
+            .map(|q| (q.y - a.y).abs())
+            .fold(0.0, f64::max);
+        assert!((widest - out).abs() < 5e-3, "{width}: {widest}");
+        assert!(cut.left < 1.0, "left {}", cut.left);
+        for (_, points) in &cut.passes {
+            for w in points.windows(2) {
+                assert!(allowed.offset(1e-3, 1e-4).contains_segment(w[0], w[1]));
+            }
+        }
+    }
 }

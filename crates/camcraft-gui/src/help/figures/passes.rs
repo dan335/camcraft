@@ -578,3 +578,114 @@ pub fn cavities(painter: &egui::Painter, rect: egui::Rect) {
         s.text([x0 + 21.0, 1.0], Align2::CENTER_BOTTOM, name, true);
     }
 }
+
+/// A wall, then a shallow slope, in section: the stepdown's levels leave a
+/// narrow step on the wall and a wide terrace on the slope; shallow areas add
+/// levels, in amber, over the slope only, until its terraces are no wider
+/// than the most.
+pub fn shallow_areas(painter: &egui::Painter, rect: egui::Rect) {
+    let s = Sketch::new(painter, rect, [0.0, 0.0], [100.0, 44.0]);
+    // Where the part stands at height `y`: steep up to 22, then shallow to 34.
+    let at = |y: f32| {
+        if y <= 22.0 {
+            18.0 + (y - 4.0) * (4.0 / 18.0)
+        } else {
+            22.0 + (y - 22.0) * (74.0 / 12.0)
+        }
+    };
+    s.ground(
+        &[
+            [0.0, 4.0],
+            [at(4.0), 4.0],
+            [at(22.0), 22.0],
+            [96.0, 34.0],
+            [100.0, 34.0],
+        ],
+        0.0,
+        Tone::Part,
+    );
+    // What is left over it: a step above each level, the wall's narrow, the
+    // slope's cut down by the levels added.
+    s.polygon(
+        &[[at(4.0), 4.0], [at(4.0), 14.0], [at(14.0), 14.0]],
+        Tone::Stock,
+    );
+    s.polygon(
+        &[
+            [at(14.0), 14.0],
+            [at(14.0), 24.0],
+            [at(24.0), 24.0],
+            [at(22.0), 22.0],
+        ],
+        Tone::Stock,
+    );
+    for z in [24.0_f32, 26.5, 29.0, 31.5] {
+        s.polygon(
+            &[[at(z), z], [at(z), z + 2.5], [at(z + 2.5), z + 2.5]],
+            Tone::Stock,
+        );
+    }
+    // What the stepdown's levels alone would leave.
+    s.dashed(
+        &[
+            [at(4.0), 4.0],
+            [at(4.0), 14.0],
+            [at(14.0), 14.0],
+            [at(14.0), 24.0],
+            [at(24.0), 24.0],
+            [at(24.0), 34.0],
+            [96.0, 34.0],
+        ],
+        quiet(),
+        1.0,
+    );
+    // The levels added over the slope, each across its terrace.
+    for z in [26.5_f32, 29.0, 31.5] {
+        s.line(&[[at(z - 2.5), z], [at(z), z]], hot(), 1.5);
+    }
+    s.text(
+        [at(14.0) + 4.0, 10.0],
+        Align2::LEFT_CENTER,
+        "steep: none",
+        false,
+    );
+    s.dashed(&[[at(29.0), 29.0], [at(29.0), 39.0]], faint(), 1.0);
+    s.dashed(&[[at(31.5), 31.5], [at(31.5), 39.0]], faint(), 1.0);
+    s.dim(
+        [at(29.0), 39.0],
+        [at(31.5), 39.0],
+        "max stepover",
+        Align2::RIGHT_CENTER,
+        true,
+    );
+}
+
+/// A closed pocket from above: a slot down its middle first, the tool's
+/// width, then rings out to the slot's width, before clearing out from it.
+pub fn slot_clearing(painter: &egui::Painter, rect: egui::Rect) {
+    let s = Sketch::new(painter, rect, [0.0, 0.0], [100.0, 44.0]);
+    s.rect([2.0, 2.0], [72.0, 42.0], Tone::Part);
+    s.rect([8.0, 8.0], [66.0, 36.0], Tone::Stock);
+    let y = 22.0_f32;
+    let (a, b) = (20.0_f32, 54.0_f32);
+    // The slot cut, as wide as asked.
+    s.rect([a - 5.0, y - 5.0], [b + 5.0, y + 5.0], Tone::Air);
+    s.path(&arc([a, y], 2.5, 0.0, 330.0), Move::Lead, false);
+    s.path(&[[a, y], [b, y]], Move::Cut, true);
+    let mut ring = arc([b, y], 3.0, -90.0, 90.0);
+    ring.extend(arc([a, y], 3.0, 90.0, 270.0));
+    if let Some(&first) = ring.first() {
+        ring.push(first);
+    }
+    s.path(&ring, Move::Cut, false);
+    s.dim(
+        [75.0, y - 5.0],
+        [75.0, y + 5.0],
+        "slot width",
+        Align2::LEFT_CENTER,
+        true,
+    );
+    s.dashed(&[[b + 5.0, y - 5.0], [75.0, y - 5.0]], faint(), 1.0);
+    s.dashed(&[[b + 5.0, y + 5.0], [75.0, y + 5.0]], faint(), 1.0);
+    s.text([76.0, 40.0], Align2::LEFT_TOP, "from above", false);
+}

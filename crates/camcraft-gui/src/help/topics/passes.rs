@@ -52,8 +52,27 @@ topics! {
     RADIAL_DIRECTION: "Direction",
         "Both ways cuts out along one spoke and back in along the next. Outward or inward cuts every spoke one way.";
     FLAT_AREAS: "Flat areas",
-        "Adds a level at each flat face, so floors are left just the stock to leave, not a stepdown's terrace.",
+        "Adds a level at each flat face and peak, so floors are left just the stock to leave, not a stepdown's terrace.",
         Figure::FlatAreas;
+    MIN_FLAT_STEPDOWN: "Minimum stepdown",
+        "A flat or peak less than this below the level above gets no level of its own: that much is left on it. Empty for none.";
+    MIN_AXIAL_ENGAGEMENT: "Minimum axial engagement",
+        "Fine and shallow levels cutting less depth than this are left out, so the flutes never just skim. Empty for none.";
+    SHALLOW_AREAS: "Shallow areas",
+        "Adds levels between the stepdowns where the slope is shallow and their terraces wide, cutting only there.",
+        Figure::ShallowAreas;
+    MIN_SHALLOW_STEPDOWN: "Minimum shallow stepdown",
+        "The closest an added level comes to another. It wins over the maximum stepover.",
+        Figure::ShallowAreas;
+    MAX_SHALLOW_STEPOVER: "Maximum shallow stepover",
+        "Where a terrace between two levels is wider than this, a level is added halfway, then again, until none is.",
+        Figure::ShallowAreas;
+    SLOT_CLEARING: "Slot clearing",
+        "A pocket gone down into is first cut a slot along its middle, then cleared out from it.",
+        Figure::SlotClearing;
+    SLOT_WIDTH: "Slot width",
+        "How wide that slot is cut. Empty, or less than the tool, the tool's own width.",
+        Figure::SlotClearing;
     PASS_EXTENSION: "Pass extension",
         "How far each pass runs on past the faced area before it turns.",
         Figure::Facing(Facing::PassExtension);

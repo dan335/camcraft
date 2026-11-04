@@ -156,6 +156,9 @@ pub(super) fn passes(
                 machine_cavities,
                 min_cutting_radius,
                 order,
+                slot_clearing,
+                slot_width,
+                min_flat_stepdown,
                 ..
             } => {
                 d.row(ui, &pass::MIN_CUTTING_RADIUS, "min_cutting_radius", |ui| {
@@ -168,6 +171,27 @@ pub(super) fn passes(
                 d.row(ui, &pass::MACHINE_CAVITIES, "machine_cavities", |ui| {
                     ui.checkbox(machine_cavities, "go down into closed pockets");
                 });
+                if *machine_cavities {
+                    d.row(ui, &pass::SLOT_CLEARING, "slot_clearing", |ui| {
+                        ui.checkbox(slot_clearing, "a slot along the middle first");
+                    });
+                    if *slot_clearing {
+                        d.row(ui, &pass::SLOT_WIDTH, "slot_width", |ui| {
+                            let start = diameter.map_or(6.0, |d| d * 1.5);
+                            let mut given = (*slot_width > 0.0).then_some(*slot_width);
+                            widgets::optional(
+                                ui,
+                                &mut given,
+                                start,
+                                "the tool's width",
+                                |ui, w| {
+                                    m.length_field(ui, w, 0.05, 1000.0, "");
+                                },
+                            );
+                            *slot_width = given.unwrap_or(0.0);
+                        });
+                    }
+                }
                 d.row(ui, &pass::DIRECTION_ADAPTIVE, "direction", |ui| {
                     widgets::segmented(
                         ui,
@@ -190,8 +214,17 @@ pub(super) fn passes(
                     );
                 });
                 d.row(ui, &pass::FLAT_AREAS, "flat_areas", |ui| {
-                    ui.checkbox(flat_areas, "a level on each flat face");
+                    ui.checkbox(flat_areas, "a level on each flat face and peak");
                 });
+                if *flat_areas {
+                    d.row(ui, &pass::MIN_FLAT_STEPDOWN, "min_flat_stepdown", |ui| {
+                        let mut given = (*min_flat_stepdown > 0.0).then_some(*min_flat_stepdown);
+                        widgets::optional(ui, &mut given, 0.5, "none", |ui, v| {
+                            m.length_field(ui, v, 0.01, 100.0, "");
+                        });
+                        *min_flat_stepdown = given.unwrap_or(0.0);
+                    });
+                }
             }
             StrategySpec::Profile { conventional, .. } | StrategySpec::Pocket { conventional } => {
                 climb_or_conventional(ui, d, (&pass::DIRECTION_2D, "conventional"), conventional);
@@ -411,7 +444,69 @@ fn multiple_depths(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, o
                 });
             });
         }
+        if let StrategySpec::Adaptive {
+            shallow_areas,
+            min_shallow_stepdown,
+            max_shallow_stepover,
+            min_axial_engagement,
+            ..
+        } = &mut op.strategy
+        {
+            shallow(
+                ui,
+                d,
+                m,
+                *stepdown,
+                (shallow_areas, min_shallow_stepdown, max_shallow_stepover),
+            );
+            d.row(
+                ui,
+                &pass::MIN_AXIAL_ENGAGEMENT,
+                "min_axial_engagement",
+                |ui| {
+                    let mut given = (*min_axial_engagement > 0.0).then_some(*min_axial_engagement);
+                    widgets::optional(ui, &mut given, 0.5, "none", |ui, v| {
+                        m.length_field(ui, v, 0.01, 100.0, "");
+                    });
+                    *min_axial_engagement = given.unwrap_or(0.0);
+                },
+            );
+        }
     });
+}
+
+/// Adaptive clearing's shallow areas, as Fusion's Passes tab has them: ticked
+/// to add levels where the terraces are wide, then the closest they come and
+/// the widest a terrace may be.
+fn shallow(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    m: Measure,
+    stepdown: f64,
+    (on, min_stepdown, max_stepover): (&mut bool, &mut f64, &mut f64),
+) {
+    d.row(ui, &pass::SHALLOW_AREAS, "shallow_areas", |ui| {
+        ui.checkbox(on, "levels between where the slope is shallow");
+    });
+    if !*on {
+        return;
+    }
+    d.row(
+        ui,
+        &pass::MIN_SHALLOW_STEPDOWN,
+        "min_shallow_stepdown",
+        |ui| {
+            m.length_field(ui, min_stepdown, 0.01, stepdown.max(0.01), "");
+        },
+    );
+    d.row(
+        ui,
+        &pass::MAX_SHALLOW_STEPOVER,
+        "max_shallow_stepover",
+        |ui| {
+            m.length_field(ui, max_stepover, 0.01, 1000.0, "");
+        },
+    );
 }
 
 /// Whether `op` leaves any stock: of what its strategy cuts with, so a wall's

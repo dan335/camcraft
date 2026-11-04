@@ -99,8 +99,12 @@ it.
   their angles and go both ways, outward or inward. A morphed spiral's has a
   *Centre* (the point furthest inside unless given), climb or conventional, its
   order and the slopes. Adaptive's *Passes* has a *Minimum cutting radius*,
-  *Machine cavities*, climb, conventional or both ways, by depth or by area, and
-  *Flat areas*, and no *Deepest step cut*; its *Geometry* has *Rest machining*
+  *Machine cavities* and, ticked, *Slot clearing* and its width, climb,
+  conventional or both ways, by depth or by area, and *Flat areas* with its
+  *Minimum stepdown*, and no *Deepest step cut*; under *Multiple depths*,
+  *Shallow areas*, ticked, with its minimum stepdown and maximum stepover, and
+  *Minimum axial engagement*. Its *Linking* has the *Stay-down level*,
+  *Stay-down clearance* and *Lift height*; its *Geometry* has *Rest machining*
   and, ticked, *Ignore stock less than*; pocket clearing's climb or conventional, *Flat areas* and the
   shortest ring worth cutting. A 2D operation's *Passes* has climb
   or conventional; a profile has no stepover. *Multiple depths*, as Fusion's,

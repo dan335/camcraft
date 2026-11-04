@@ -186,6 +186,60 @@ pub enum StrategySpec {
         /// Than.
         #[serde(default, skip_serializing_if = "is_default")]
         ignore_stock_less_than: f64,
+        /// With flat areas, a level on a flat face or a peak less than this
+        /// below the level above it is left out, leaving that much on it, in
+        /// millimetres: Fusion's flat area Minimum Stepdown. None when zero.
+        #[serde(default, skip_serializing_if = "is_default")]
+        min_flat_stepdown: f64,
+        /// A level between two a stepdown apart, a fine or a shallow one,
+        /// cutting less deep than this is left out, in millimetres: Fusion's
+        /// Minimum Axial Engagement. None when zero.
+        #[serde(default, skip_serializing_if = "is_default")]
+        min_axial_engagement: f64,
+        /// Add levels where the terraces between two are wide: Fusion's
+        /// Machine Shallow Areas.
+        #[serde(default, skip_serializing_if = "is_default")]
+        shallow_areas: bool,
+        /// The closest the levels shallow areas add come to another, in
+        /// millimetres: Fusion's Minimum Shallow Stepdown.
+        #[serde(
+            default = "default_min_shallow_stepdown",
+            skip_serializing_if = "is_default_min_shallow_stepdown"
+        )]
+        min_shallow_stepdown: f64,
+        /// The widest a terrace between two levels may be before shallow
+        /// areas add one between, in millimetres: Fusion's Maximum Shallow
+        /// Stepover.
+        #[serde(
+            default = "default_max_shallow_stepover",
+            skip_serializing_if = "is_default_max_shallow_stepover"
+        )]
+        max_shallow_stepover: f64,
+        /// A closed pocket gone down into is first cut a slot along its
+        /// middle, and cleared out from it: Fusion's Use Slot Clearing.
+        #[serde(default, skip_serializing_if = "is_default")]
+        slot_clearing: bool,
+        /// How wide that slot is, in millimetres: the tool's diameter when
+        /// zero, and never narrower. Fusion's Slot Clearing Width.
+        #[serde(default, skip_serializing_if = "is_default")]
+        slot_width: f64,
+        /// How hard a link tries to stay down round what stands between, in
+        /// percent: none, 0, goes only straight; 100 goes round as far as the
+        /// maximum stay-down distance allows. Fusion's Stay-Down Level.
+        #[serde(
+            default = "default_stay_down_level",
+            skip_serializing_if = "is_default_stay_down_level"
+        )]
+        stay_down_level: f64,
+        /// How far the tool keeps off the material along a link it stays
+        /// down for, but where it leaves a pass and comes to the next, in
+        /// millimetres: Fusion's Minimum Stay-Down Clearance.
+        #[serde(default, skip_serializing_if = "is_default")]
+        stay_down_clearance: f64,
+        /// How far the tool rises for a link it stays down for, in
+        /// millimetres: Fusion's Lift Height.
+        #[serde(default, skip_serializing_if = "is_default")]
+        lift_height: f64,
     },
     /// A 2D contour: the tool run round the boundary, beside it or on it, level
     /// by level down to its floor. Fusion's 2D Contour.
@@ -496,6 +550,40 @@ fn is_climb(d: &CutDirection) -> bool {
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_ninety(v: &f64) -> bool {
     (*v - 90.0).abs() < f64::EPSILON
+}
+
+/// Fusion's Minimum Shallow Stepdown, in millimetres.
+pub fn default_min_shallow_stepdown() -> f64 {
+    0.5
+}
+
+// A signature serde's `skip_serializing_if` requires.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_min_shallow_stepdown(v: &f64) -> bool {
+    (*v - default_min_shallow_stepdown()).abs() < f64::EPSILON
+}
+
+/// Fusion's Maximum Shallow Stepover, in millimetres.
+pub fn default_max_shallow_stepover() -> f64 {
+    2.0
+}
+
+// A signature serde's `skip_serializing_if` requires.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_max_shallow_stepover(v: &f64) -> bool {
+    (*v - default_max_shallow_stepover()).abs() < f64::EPSILON
+}
+
+/// Staying down round what stands between as far as the maximum stay-down
+/// distance allows, in percent.
+fn default_stay_down_level() -> f64 {
+    100.0
+}
+
+// A signature serde's `skip_serializing_if` requires.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_stay_down_level(v: &f64) -> bool {
+    (*v - default_stay_down_level()).abs() < f64::EPSILON
 }
 
 fn default_min_ring() -> f64 {

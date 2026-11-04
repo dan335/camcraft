@@ -248,3 +248,63 @@ pub fn helix(painter: &egui::Painter, rect: egui::Rect, which: Helix) {
     }
     s.text([x, 0.0], Align2::CENTER_BOTTOM, "side", false);
 }
+
+/// Two passes at a level, side on, and the link between them made staying
+/// down: lifted off the floor by the lift height, in amber, and down again.
+pub fn lift_height(painter: &egui::Painter, rect: egui::Rect) {
+    let s = Sketch::new(painter, rect, [0.0, 0.0], [100.0, 44.0]);
+    let (y, lift) = (14.0_f32, 8.0_f32);
+    s.ground(&[[0.0, y], [100.0, y]], 0.0, Tone::Part);
+    s.path(&[[4.0, y], [30.0, y]], Move::Cut, false);
+    s.path(
+        &[[30.0, y], [36.0, y + lift], [64.0, y + lift], [70.0, y]],
+        Move::Lead,
+        true,
+    );
+    s.path(&[[70.0, y], [96.0, y]], Move::Cut, false);
+    s.dashed(&[[30.0, y + lift], [36.0, y + lift]], faint(), 1.0);
+    s.dim(
+        [26.0, y],
+        [26.0, y + lift],
+        "lift height",
+        Align2::RIGHT_CENTER,
+        true,
+    );
+    s.text(
+        [50.0, y + lift + 2.0],
+        Align2::CENTER_BOTTOM,
+        "staying down",
+        false,
+    );
+}
+
+/// From above: a link staying down round material between two passes, kept
+/// the clearance off it, in amber, but where it leaves one and comes to the
+/// next.
+pub fn stay_down_clearance(painter: &egui::Painter, rect: egui::Rect) {
+    let s = Sketch::new(painter, rect, [0.0, 0.0], [100.0, 44.0]);
+    s.rect([40.0, 0.0], [60.0, 22.0], Tone::Stock);
+    let (gap, r) = (5.0_f32, 4.0_f32);
+    let top = 22.0 + r + gap;
+    s.path(&[[8.0, 8.0], [24.0, 8.0]], Move::Cut, false);
+    s.path(
+        &[
+            [24.0, 8.0],
+            [36.0 - gap, top],
+            [64.0 + gap, top],
+            [76.0, 8.0],
+        ],
+        Move::Lead,
+        false,
+    );
+    s.path(&[[76.0, 8.0], [92.0, 8.0]], Move::Cut, false);
+    s.circle([50.0, top], r, Tone::Ghost);
+    s.dim(
+        [50.0, 22.0],
+        [50.0, top - r],
+        "clearance",
+        Align2::LEFT_CENTER,
+        true,
+    );
+    s.text([2.0, 42.0], Align2::LEFT_TOP, "from above", false);
+}

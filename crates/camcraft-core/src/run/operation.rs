@@ -31,7 +31,9 @@ use crate::setup::features::{Chain, FeatureError, Picking, picked_chains};
 use crate::setup::{Bodies, Prepared};
 use crate::strategy::StrategyError;
 use crate::strategy::adaptive::rest::Earlier;
-use crate::strategy::adaptive::{AdaptiveParams, adaptive_rough, flat_heights};
+use crate::strategy::adaptive::{
+    AdaptiveParams, Shallow, adaptive_rough, flat_heights, peak_heights,
+};
 use crate::strategy::drilling::{DrillParams, DrillReport, Hole, drill, holes, nearest_first};
 use crate::strategy::face::{FaceParams, LevelsAsked, face};
 use crate::strategy::flat::{FlatParams, flat_finish};
@@ -257,6 +259,16 @@ pub(super) fn plan_operation(
             order,
             rest_machining,
             ignore_stock_less_than,
+            min_flat_stepdown,
+            min_axial_engagement,
+            shallow_areas,
+            min_shallow_stepdown,
+            max_shallow_stepover,
+            slot_clearing,
+            slot_width,
+            stay_down_level,
+            stay_down_clearance,
+            lift_height,
         } => adaptive_paths(
             work,
             AdaptiveAsked {
@@ -267,6 +279,16 @@ pub(super) fn plan_operation(
                 order,
                 rest_machining,
                 ignore_stock_less_than,
+                min_flat_stepdown,
+                min_axial_engagement,
+                shallow_areas,
+                min_shallow_stepdown,
+                max_shallow_stepover,
+                slot_clearing,
+                slot_width,
+                stay_down_level,
+                stay_down_clearance,
+                lift_height,
             },
             limit,
             &mut warnings,

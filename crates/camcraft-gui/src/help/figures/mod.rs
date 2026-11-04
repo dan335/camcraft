@@ -35,6 +35,10 @@ pub enum Figure {
     MinCuttingRadius,
     /// A closed pocket cleared, and left.
     Cavities,
+    /// Levels added over a shallow slope, not a wall.
+    ShallowAreas,
+    /// A slot down a pocket's middle first.
+    SlotClearing,
     /// Passes at an angle to X, from above.
     PassAngle,
     /// Climb and conventional milling, from above.
@@ -57,6 +61,10 @@ pub enum Figure {
     SafeDistance,
     /// A short link made without lifting, and a long one that lifts.
     StayDown,
+    /// A link staying down, lifted off the floor.
+    LiftHeight,
+    /// A link staying down round material, kept off it.
+    StayDownClearance,
     /// The vertical arcs a parallel pass rolls in and out on.
     LeadRadius,
     /// A profile's lead onto its ring.
@@ -207,6 +215,8 @@ impl Figure {
             Figure::FlatAreas => passes::flat_areas(painter, rect),
             Figure::MinCuttingRadius => passes::min_cutting_radius(painter, rect),
             Figure::Cavities => passes::cavities(painter, rect),
+            Figure::ShallowAreas => passes::shallow_areas(painter, rect),
+            Figure::SlotClearing => passes::slot_clearing(painter, rect),
             Figure::PassAngle => passes::pass_angle(painter, rect),
             Figure::Climb => passes::climb(painter, rect),
             Figure::BothWays => passes::both_ways(painter, rect),
@@ -218,6 +228,8 @@ impl Figure {
             Figure::Retraction => linking::retraction(painter, rect),
             Figure::SafeDistance => linking::safe_distance(painter, rect),
             Figure::StayDown => linking::stay_down(painter, rect),
+            Figure::LiftHeight => linking::lift_height(painter, rect),
+            Figure::StayDownClearance => linking::stay_down_clearance(painter, rect),
             Figure::LeadRadius => linking::lead_radius(painter, rect),
             Figure::Lead(l) => linking::lead(painter, rect, l),
             Figure::RampAngle => linking::ramp_angle(painter, rect),
@@ -249,6 +261,8 @@ mod tests {
             Figure::FlatAreas,
             Figure::MinCuttingRadius,
             Figure::Cavities,
+            Figure::ShallowAreas,
+            Figure::SlotClearing,
             Figure::PassAngle,
             Figure::Climb,
             Figure::BothWays,
@@ -257,6 +271,8 @@ mod tests {
             Figure::Retraction,
             Figure::SafeDistance,
             Figure::StayDown,
+            Figure::LiftHeight,
+            Figure::StayDownClearance,
             Figure::LeadRadius,
             Figure::RampAngle,
             Figure::Entry,

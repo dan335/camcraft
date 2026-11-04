@@ -54,6 +54,16 @@ pub(super) struct AdaptiveAsked {
     pub(super) order: ContourOrder,
     pub(super) rest_machining: bool,
     pub(super) ignore_stock_less_than: f64,
+    pub(super) min_flat_stepdown: f64,
+    pub(super) min_axial_engagement: f64,
+    pub(super) shallow_areas: bool,
+    pub(super) min_shallow_stepdown: f64,
+    pub(super) max_shallow_stepover: f64,
+    pub(super) slot_clearing: bool,
+    pub(super) slot_width: f64,
+    pub(super) stay_down_level: f64,
+    pub(super) stay_down_clearance: f64,
+    pub(super) lift_height: f64,
 }
 
 /// Adaptive clearing of the stock's blocks, or with rest machining of what the
@@ -74,12 +84,32 @@ pub(super) fn adaptive_paths(
         order,
         rest_machining,
         ignore_stock_less_than,
+        min_flat_stepdown,
+        min_axial_engagement,
+        shallow_areas,
+        min_shallow_stepdown,
+        max_shallow_stepover,
+        slot_clearing,
+        slot_width,
+        stay_down_level,
+        stay_down_clearance,
+        lift_height,
     } = asked;
     let mut reach =
         LevelReach::new(&work.prepared.part, work.tool, job.tolerance).map_err(in_op(op))?;
     let diameter = work.spec.diameter;
     let (top, bottom) = op.levels_3d(work.heights);
-    let flats = work.flat_levels(flat_areas);
+    // Flat area detection finds peaks too, each a level as a flat face is.
+    let mut flats = work.flat_levels(flat_areas);
+    if flat_areas {
+        let axial = op.stock_to_leave().axial;
+        let radius = work.tool.cutter_radius();
+        flats.extend(
+            peak_heights(&work.prepared.part, job.tolerance, radius)
+                .into_iter()
+                .map(|z| z + axial),
+        );
+    }
     // Into a closed area it goes down a helix, or straight: it offers no ramp.
     let helix_radius = match op.entry() {
         Some(Entry::Plunge) => 0.0,
@@ -97,12 +127,22 @@ pub(super) fn adaptive_paths(
         direction: direction.engine(),
         helix_radius,
         stay_down: op.stay_down(diameter),
+        stay_down_level: stay_down_level / 100.0,
+        stay_down_clearance,
+        lift_height,
+        slot_width: slot_clearing.then_some(slot_width.max(diameter)),
         ramp_angle: op.linking.ramp_angle.to_radians(),
         ramp_feed: op.ramp_feed(),
         ramp_stepdown: Some(op.ramp_stepdown(diameter)),
         safe_distance: op.linking.safe_distance,
         flats,
         fine_stepdown: op.fine_stepdown(),
+        min_flat_stepdown,
+        min_axial_engagement,
+        shallow: shallow_areas.then_some(Shallow {
+            min_stepdown: min_shallow_stepdown,
+            max_stepover: max_shallow_stepover,
+        }),
         machine_cavities,
         min_cutting_radius,
         by_area: order == ContourOrder::ByArea,

@@ -171,7 +171,8 @@ tool to start). Passes start beside the block where they can, and go down a heli
 (`linking.helix_diameter`, Fusion's: 0.95 × the tool less its corners, no less
 than a quarter of the tool) where they cannot; `direction` is
 `"climb"` (the default), `"conventional"` or `"both-ways"`; `flat_areas` (on by
-default) adds a level on each flat face, raised by the stock to leave down.
+default) adds a level on each flat face and on each peak, raised by the stock to
+leave down.
 Where the straight way between two passes runs through what is still standing, it
 stays down round it, through what is cleared, if that is no longer than the
 stay-down distance. As Fusion's 3D Adaptive:
@@ -189,6 +190,28 @@ stay-down distance. As Fusion's 3D Adaptive:
   waits for them; `ignore_stock_less_than` lets be what they left thinner than
   that. Off, it clears the stock's block as it starts, so after another
   operation it cuts air where that one cleared.
+- `min_flat_stepdown` (none by default): with flat areas, a flat face or a peak
+  less than this below the level above gets no level of its own, and that much
+  is left on it.
+- `min_axial_engagement` (none by default): a fine or shallow level cutting less
+  depth than this is left out. Every level between two a stepdown apart cuts
+  into material standing up to the upper one, so this is how far below it it is.
+- `shallow_areas` (off by default): where the terrace two levels leave between
+  them is wider than `max_shallow_stepover` (2 mm), as the tool's centre goes, a
+  level is added halfway, then halfway again, until none is, or levels would
+  come closer than `min_shallow_stepdown` (0.5 mm). Each added level cuts only
+  where its terrace is that wide.
+- `slot_clearing` (off by default): a pocket gone down into is first cut a slot
+  along its longest way through its middle, `slot_width` wide (the tool's width
+  when 0, and never narrower), then cleared out from it.
+- `stay_down_level` (100 by default), in percent: how far round what stands
+  between a link stays down. 0 stays down only going straight; 100 goes round
+  as far as the stay-down distance allows.
+- `stay_down_clearance` (0 by default): how far a link staying down keeps off the
+  material, but where it leaves one pass and comes to the next.
+- `lift_height` (0 by default): how far a link staying down lifts off the level,
+  up and down again no steeper than a link may be, and no higher than the
+  level above.
 
 ```toml
 [[setup.operation]]
@@ -205,6 +228,9 @@ rest_machining = true
 ignore_stock_less_than = 0.2
 min_cutting_radius = 0.5
 order = "by-area"
+shallow_areas = true
+slot_clearing = true
+lift_height = 0.5
 passes = { stepover = 0.3, stepdown = 6.0, stock_to_leave = { radial = 0.5, axial = 0.5 } }
 ```
 

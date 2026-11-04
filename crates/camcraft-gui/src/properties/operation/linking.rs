@@ -1,7 +1,7 @@
 //! An operation's Linking tab: how it moves between cuts, and into and out of
 //! them.
 
-use camcraft_core::job::{Entry, HelixSize, Leads, Operation, Reach, Retraction};
+use camcraft_core::job::{Entry, HelixSize, Leads, Operation, Reach, Retraction, StrategySpec};
 
 use crate::ui::defaults::Defaults;
 use eframe::egui;
@@ -61,6 +61,37 @@ pub(super) fn linking(
                 widgets::optional(ui, &mut op.linking.stay_down, start, &absent, |ui, v| {
                     m.length_field(ui, v, 0.5, 10_000.0, "up to ");
                 });
+            });
+        }
+        if let StrategySpec::Adaptive {
+            stay_down_level,
+            stay_down_clearance,
+            lift_height,
+            ..
+        } = &mut op.strategy
+        {
+            d.row(ui, &link::STAY_DOWN_LEVEL, "stay_down_level", |ui| {
+                ui.add(
+                    egui::Slider::new(stay_down_level, 0.0..=100.0)
+                        .step_by(10.0)
+                        .suffix("%")
+                        .custom_formatter(|v, _| match v {
+                            v if v <= 0.0 => "least".into(),
+                            v if v >= 100.0 => "most".into(),
+                            v => format!("{v:.0}"),
+                        }),
+                );
+            });
+            d.row(
+                ui,
+                &link::STAY_DOWN_CLEARANCE,
+                "stay_down_clearance",
+                |ui| {
+                    m.length_field(ui, stay_down_clearance, 0.05, 100.0, "");
+                },
+            );
+            d.row(ui, &link::LIFT_HEIGHT, "lift_height", |ui| {
+                m.length_field(ui, lift_height, 0.05, 100.0, "");
             });
         }
         if uses.lead_radius {

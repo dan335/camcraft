@@ -1381,3 +1381,45 @@ fn a_finish_over_the_part_leaves_its_walls_to_rings_round_them() {
         assert!(result.is_clean(), "{strategy}: {:?}", result.warnings());
     }
 }
+
+/// The dome roughed adaptive with Fusion's other settings on: levels added
+/// in its shallow areas and on its peak, those cutting too little left out,
+/// links lifted and kept off the material, staying down round what stands
+/// between only half as far: the result still verifies.
+#[test]
+fn adaptive_with_shallow_areas_and_lifted_links_is_finished_to_the_part() {
+    let mut job = adaptive_job();
+    let rough = &mut job.setups[0].operations[0];
+    if let StrategySpec::Adaptive {
+        shallow_areas,
+        min_axial_engagement,
+        slot_clearing,
+        stay_down_level,
+        stay_down_clearance,
+        lift_height,
+        ..
+    } = &mut rough.strategy
+    {
+        *shallow_areas = true;
+        *min_axial_engagement = 0.3;
+        *slot_clearing = true;
+        *stay_down_level = 50.0;
+        *stay_down_clearance = 0.5;
+        *lift_height = 1.0;
+    }
+    job.validate().unwrap();
+    let result = run_job(&job, &dome()).unwrap();
+    let rough = &result.operations[0];
+    let StrategyDetail::Adaptive(r) = rough.detail else {
+        panic!("rough reported {:?}", rough.detail);
+    };
+    assert!(r.shallow_levels > 0, "{r:?}");
+    assert!(r.left_mm2 < 1.0, "{r:?}");
+    assert!(!rough.path.has_unplanned_links());
+    assert!(rough.sim.is_clean(), "{:?}", rough.warnings);
+    assert!(
+        result.is_clean(),
+        "job did not verify: {:?}",
+        result.warnings()
+    );
+}

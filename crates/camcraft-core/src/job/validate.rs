@@ -537,6 +537,16 @@ impl Operation {
             min_cutting_radius,
             rest_machining,
             ignore_stock_less_than,
+            min_flat_stepdown,
+            min_axial_engagement,
+            shallow_areas,
+            min_shallow_stepdown,
+            max_shallow_stepover,
+            slot_clearing,
+            slot_width,
+            stay_down_level,
+            stay_down_clearance,
+            lift_height,
             ..
         } = self.strategy
         {
@@ -545,6 +555,26 @@ impl Operation {
             if rest_machining {
                 at_least_zero(&field("ignore_stock_less_than"), ignore_stock_less_than)?;
             }
+            at_least_zero(&field("min_flat_stepdown"), min_flat_stepdown)?;
+            at_least_zero(&field("min_axial_engagement"), min_axial_engagement)?;
+            // Read only with shallow areas.
+            if shallow_areas {
+                positive(&field("min_shallow_stepdown"), min_shallow_stepdown)?;
+                positive(&field("max_shallow_stepover"), max_shallow_stepover)?;
+            }
+            // Read only with slot clearing.
+            if slot_clearing {
+                at_least_zero(&field("slot_width"), slot_width)?;
+            }
+            if !(0.0..=100.0).contains(&stay_down_level) {
+                return Err(bad(
+                    field("stay_down_level"),
+                    stay_down_level,
+                    "a percentage from 0 to 100",
+                ));
+            }
+            at_least_zero(&field("stay_down_clearance"), stay_down_clearance)?;
+            at_least_zero(&field("lift_height"), lift_height)?;
         }
         if let StrategySpec::Drill { peck, dwell } = self.strategy {
             if let Some(p) = peck {

@@ -15,6 +15,14 @@ topics! {
     STAY_DOWN: "Stay down",
         "Links this long or shorter are made without lifting. 0 always lifts. Left empty, the strategy's own.",
         Figure::StayDown;
+    STAY_DOWN_LEVEL: "Stay-down level",
+        "How far round what stands between a link stays down. None goes only straight; most, as far as stay down allows.";
+    STAY_DOWN_CLEARANCE: "Stay-down clearance",
+        "How far a link that stays down keeps off the material, but where it leaves one pass and comes to the next.",
+        Figure::StayDownClearance;
+    LIFT_HEIGHT: "Lift height",
+        "How far a link that stays down lifts off the floor, so it does not rub. No higher than the level above.",
+        Figure::LiftHeight;
     LEAD_RADIUS: "Lead radius",
         "The vertical arcs the tool rolls into and out of each pass on. 0 for none. Left empty, a tenth of the tool.",
         Figure::LeadRadius;

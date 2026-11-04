@@ -43,6 +43,8 @@ pub(super) struct Clearing<'a> {
     /// Whether closed areas were left, as it is not to machine cavities.
     pub(super) cavities: bool,
     pub(super) overloads: u64,
+    /// Closed areas first cut a slot along their middle.
+    pub(super) slots: u64,
     /// How much of the material the window holds every flush has taken out
     /// since it was last asked ([`Clearing::taken`]).
     taken: f64,
@@ -120,6 +122,7 @@ impl<'a> Clearing<'a> {
             no_room: 0,
             cavities: false,
             overloads: 0,
+            slots: 0,
             taken: 0.0,
         })
     }
@@ -163,6 +166,10 @@ impl<'a> Clearing<'a> {
                     };
                     (start, dir, side, arrive, false)
                 }
+                // Nothing left but crumbs, where an edge of where the tool
+                // may be cuts across the material within its reach: what
+                // is left, not an area to go down into.
+                None if crumbs(&s.remaining, self.p.radius * 0.25) => break,
                 // What is left has no way in from the side: a cavity, left
                 // where it is not to go down into one.
                 None if !self.p.machine_cavities => {
@@ -177,6 +184,18 @@ impl<'a> Clearing<'a> {
                     }
                 },
             };
+            // Gone down into a closed area: a slot along its middle first,
+            // where it is to cut one and there is room.
+            if let (Arrive::Enter { centre }, Some(width)) = (&arrive, self.p.slot_width)
+                && let Some(points) = self.slot(&s, *centre, start, side, width)?
+            {
+                futile = 0;
+                self.slots += 1;
+                at = points.last().copied();
+                self.passes.push((arrive, points));
+                self.sides.push(side);
+                continue;
+            }
             let points = self.pass(start, dir, side, entered)?;
             if points.len() < 2 {
                 futile += 1;
@@ -497,18 +516,30 @@ impl<'a> Clearing<'a> {
     /// there is none within the stay-down distance, clear of the part.
     pub(super) fn stay_route(&self, s: &Situation, from: DVec2, to: DVec2) -> Option<Vec<DVec2>> {
         let most = self.p.stay_down;
-        if from.distance(to) > most || !s.knows(from) || !s.knows(to) {
+        let straight = from.distance(to);
+        if straight > most || !s.knows(from) || !s.knows(to) {
             return None;
         }
         // Where the passes end and start the tool only grazes the material, so
-        // it may come a little into the tool's reach.
+        // it may come a little into the tool's reach; between, it keeps the
+        // clearance off it.
+        let keep = self.p.radius + self.p.stay_down_clearance;
         let clear = |a: DVec2, b: DVec2| {
-            s.allowed.contains_segment(a, b) && clear_of(&s.remaining, a, b, self.p.radius * 0.9)
+            s.allowed.contains_segment(a, b)
+                && clear_of(&s.remaining, a, b, self.p.radius * 0.9)
+                && away_from(a, b, &[from, to], keep)
+                    .into_iter()
+                    .all(|(p, q)| clear_of(&s.remaining, p, q, keep))
         };
         if clear(from, to) {
             return Some(Vec::new());
         }
-        route(&s.free, from, to, most, self.p, |p| s.knows(p), clear)
+        // Round what stands between, as much longer as the level allows.
+        let longest = straight + self.p.stay_down_level * (most - straight);
+        if longest <= straight + 1e-9 {
+            return None;
+        }
+        route(&s.free, from, to, longest, self.p, |p| s.knows(p), clear)
     }
 
     /// Go down into material there is no way into from the side: a helix, or a
@@ -554,6 +585,72 @@ impl<'a> Clearing<'a> {
             return Ok(Some((start, heading, side, Arrive::Enter { centre })));
         }
         Ok(None)
+    }
+
+    /// A slot `width` wide along the middle of the closed area gone down into
+    /// about `centre`, from `start`, where the helix ends: straight along the
+    /// area's longest way through `centre`, the whole tool in the material,
+    /// to one end and back to the other; then, wider than the tool, rings
+    /// round it out to the width, each no more than the optimal load further
+    /// out, with the material on `side`. Cut out of the material. `None` where
+    /// the slot would not fit, or be shorter than the tool's radius.
+    fn slot(
+        &mut self,
+        s: &Situation,
+        centre: DVec2,
+        start: DVec2,
+        side: Side,
+        width: f64,
+    ) -> Result<Option<Vec<DVec2>>, StrategyError> {
+        let r = self.p.radius;
+        let out = (width * 0.5 - r).max(0.0);
+        let core = if out > 0.0 {
+            s.allowed.offset(-out, self.p.arc)
+        } else {
+            s.allowed.clone()
+        };
+        let Some(piece) = core.pieces().into_iter().find(|p| p.contains(centre)) else {
+            return Ok(None);
+        };
+        let Some(u) = longest_way(&piece) else {
+            return Ok(None);
+        };
+        let Some((lo, hi)) = piece.bounds() else {
+            return Ok(None);
+        };
+        // As far as the piece goes each way from the centre.
+        let reach = |dir: DVec2| -> f64 {
+            let (mut inside, mut outside) = (0.0, lo.distance(hi) + 1.0);
+            for _ in 0..40 {
+                let mid = (inside + outside) * 0.5;
+                if piece.contains_segment(centre, centre + dir * mid) {
+                    inside = mid;
+                } else {
+                    outside = mid;
+                }
+            }
+            inside
+        };
+        let (a, b) = (centre - u * reach(-u), centre + u * reach(u));
+        if a.distance(b) < r || !s.allowed.contains_segment(start, a) {
+            return Ok(None);
+        }
+        let mut points = vec![start, a, b];
+        // Rings round it out to the width, each no more than the load out.
+        let load = (r * (1.0 - self.p.target.cos())).max(self.p.sliver * 4.0);
+        let rings = if out > 0.0 {
+            camcraft_geom::steps::bounded_count((out / load - 1e-9).ceil())
+        } else {
+            0
+        };
+        for k in 1..=rings {
+            let rho = out * f64::from(k) / f64::from(rings);
+            points.extend(stadium(a, b, rho, side == Side::Right, self.p.arc));
+        }
+        let swept = Region::around_polylines(&[points.clone()], r, self.p.swept_arc);
+        self.cut_material(&swept)?;
+        self.window = None;
+        Ok(Some(points))
     }
 
     /// Take what the trail has swept out of the material.
@@ -701,6 +798,14 @@ impl<'a> Clearing<'a> {
     }
 }
 
+/// Whether every piece of `remaining` is smaller across than `size`.
+fn crumbs(remaining: &Region, size: f64) -> bool {
+    remaining
+        .pieces()
+        .iter()
+        .all(|p| p.bounds().is_none_or(|(lo, hi)| lo.distance(hi) < size))
+}
+
 /// The point of `points` nearest `from`, by its place: the first without a
 /// `from`.
 fn nearest_to(points: &[DVec2], from: Option<DVec2>) -> usize {
@@ -712,6 +817,101 @@ fn nearest_to(points: &[DVec2], from: Option<DVec2>) -> usize {
         .enumerate()
         .min_by(|a, b| a.1.distance(from).total_cmp(&b.1.distance(from)))
         .map_or(0, |(k, _)| k)
+}
+
+/// The way `region` is longest, as a unit vector: the axis its area spreads
+/// furthest along. `None` for a region with no area.
+fn longest_way(region: &Region) -> Option<DVec2> {
+    // Its area, and its moments about the origin, over every ring: holes run
+    // the other way round, and take theirs away.
+    let (mut area, mut cx, mut cy) = (0.0, 0.0, 0.0);
+    let (mut xx, mut yy, mut xy) = (0.0, 0.0, 0.0);
+    for ring in region.rings() {
+        let pts = ring.points();
+        let n = pts.len();
+        for i in 0..n {
+            let (Some(&p), Some(&q)) = (pts.get(i), pts.get((i + 1) % n)) else {
+                continue;
+            };
+            let c = p.perp_dot(q);
+            area += c * 0.5;
+            cx += (p.x + q.x) * c / 6.0;
+            cy += (p.y + q.y) * c / 6.0;
+            xx += (p.x * p.x + p.x * q.x + q.x * q.x) * c / 12.0;
+            yy += (p.y * p.y + p.y * q.y + q.y * q.y) * c / 12.0;
+            xy += (p.x * q.y + 2.0 * p.x * p.y + 2.0 * q.x * q.y + q.x * p.y) * c / 24.0;
+        }
+    }
+    if area.abs() < 1e-12 {
+        return None;
+    }
+    let (mx, my) = (cx / area, cy / area);
+    // About its centroid.
+    let sxx = xx - area * mx * mx;
+    let syy = yy - area * my * my;
+    let sxy = xy - area * mx * my;
+    let angle = 0.5 * (2.0 * sxy).atan2(sxx - syy);
+    Some(DVec2::from_angle(angle))
+}
+
+/// A ring `rho` round the segment `a`-`b`, two straights and two half
+/// circles, as chords within `arc` of them, starting and ending beside `b`:
+/// counter-clockwise when `ccw`, so what is outside is on its right.
+fn stadium(a: DVec2, b: DVec2, rho: f64, ccw: bool, arc: f64) -> Vec<DVec2> {
+    let Some(u) = (b - a).try_normalize() else {
+        return Vec::new();
+    };
+    let turn = if ccw { 1.0 } else { -1.0 };
+    // Beside `b`, on the side it leaves from going round.
+    let n = u.perp() * turn;
+    let half = (1.0 - arc.min(rho) / rho).clamp(-1.0, 1.0).acos().max(1e-3);
+    let steps = camcraft_geom::steps::bounded_count((PI / (2.0 * half)).ceil().clamp(4.0, 512.0));
+    let round = |c: DVec2, from: DVec2| -> Vec<DVec2> {
+        (0..=steps)
+            .map(|k| {
+                let angle = turn * PI * f64::from(k) / f64::from(steps);
+                c + DVec2::from_angle(angle).rotate(from) * rho
+            })
+            .collect()
+    };
+    let mut out = round(b, -n);
+    out.extend(round(a, n));
+    out.push(b - n * rho);
+    out
+}
+
+/// The pieces of the segment `a`–`b` further than `distance` from every one of
+/// `ends`.
+fn away_from(a: DVec2, b: DVec2, ends: &[DVec2], distance: f64) -> Vec<(DVec2, DVec2)> {
+    let d = b - a;
+    let dd = d.length_squared();
+    let mut keep: Vec<(f64, f64)> = vec![(0.0, 1.0)];
+    for &c in ends {
+        // Where along it it is within the distance of `c`: |a + t d - c| < r.
+        let f = a - c;
+        let (qa, qb, qc) = (dd, 2.0 * f.dot(d), f.length_squared() - distance * distance);
+        let (t0, t1) = if qa <= 1e-18 {
+            if qc < 0.0 { (0.0, 1.0) } else { continue }
+        } else {
+            let disc = qb * qb - 4.0 * qa * qc;
+            if disc <= 0.0 {
+                continue;
+            }
+            let root = disc.sqrt();
+            ((-qb - root) / (2.0 * qa), (-qb + root) / (2.0 * qa))
+        };
+        keep = keep
+            .into_iter()
+            .flat_map(|(s, e)| {
+                [(s, e.min(t0)), (s.max(t1), e)]
+                    .into_iter()
+                    .filter(|(s, e)| e - s > 1e-9)
+            })
+            .collect();
+    }
+    keep.into_iter()
+        .map(|(s, e)| (a + d * s, a + d * e))
+        .collect()
 }
 
 /// The most corners a way round is looked for among: the nearest to going
@@ -741,7 +941,8 @@ pub(super) fn route(
     known: impl Fn(DVec2) -> bool,
     clear: impl Fn(DVec2, DVec2) -> bool,
 ) -> Option<Vec<DVec2>> {
-    let inside = free.offset(-0.05 * p.radius, p.coarse);
+    // Off the edge, and the clearance the link keeps off the material.
+    let inside = free.offset(-(0.05 * p.radius + p.stay_down_clearance), p.coarse);
     let mut corners: Vec<(f64, DVec2)> = Vec::new();
     for ring in inside.rings() {
         let pts = ring.points();

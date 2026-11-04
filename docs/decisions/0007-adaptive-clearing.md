@@ -114,13 +114,53 @@ down at rapid to the safe distance (16.6 min of plunging became 4.2).
   where it turns away from itself, one each quarter-radian round a curve,
   within the stay-down distance, every leg held to what a straight link is.
 
+- **Machine shallow areas**: between every two levels of a slab, and its
+  highest and the level above, where the terrace between them is wider than
+  the maximum shallow stepover, a level halfway; and halfway again, until none
+  is, or the levels would come nearer than the minimum shallow stepdown. The
+  terrace is where the tool may be at the upper level, a hair below it so a flat
+  face there is the part's, and not at the lower, where there is stock: as the
+  tool's centre goes, so its width is the horizontal step Fusion measures. Each
+  level added cuts only where the terrace it was added for is that wide, and as
+  far again as the tool's radius to come at it from: where the tool may be is
+  kept to there, never the material, so the tool is never steered into material
+  it was told is not there. Material left in crumbs where that edge crosses the
+  material within the tool's reach, smaller across than a quarter of the tool,
+  is counted left, not an area to go down into. On the serving tray, 32 levels
+  were added; the scallop finish after the roughing took 277,406 mm³ where it
+  took 327,528.
+- **Flat area detection finds peaks**, as Fusion's does: each corner of the
+  mesh, found by where it is, that no corner within the tool's width stands
+  above, on a face that faces up, is a level as a flat face is. Its **minimum
+  stepdown** leaves out a flat or peak level less than it below the level above
+  its slab. Every level of a slab cuts into material standing up to that
+  level, as nothing above the slab's levels is cut until it is, so that is how
+  deep the level cuts, however near the levels between. The **minimum axial
+  engagement** leaves out fine and shallow levels so: those too near the level
+  above would only skim with the flutes.
+- **Slot clearing**: going down into a closed area, a slot along its longest way
+  through where the helix went down, the axis its area spreads furthest along,
+  out to its ends; then, wider than the tool, rings round it, each no more than
+  the optimal load out, to the width. One pass, cut out of the material, then
+  the clearing goes on from it. A slot that does not fit, or would be shorter
+  than the tool's radius, is not cut, and the pass starts from the helix.
+- **The stay-down level, minimum stay-down clearance and lift height.** The
+  level is how much of what the stay-down distance leaves past going straight a
+  way round may take: none stays down only straight. The clearance is kept
+  along every leg but within the tool and it of the passes the link joins,
+  where the tool grazes the material it leaves and comes to; with none, that is
+  the tool's radius, where it was 0.9 of it all along: a way round now keeps
+  clear of the material. A lifted link rises and comes down again over a fifth
+  of its height each way, half as steep as a link may be without being taken
+  for a plunge, lower on a link too short for that, and no higher than the
+  level above.
+
 ## Not taken yet
 
-- Shallow areas and slot clearing. Fusion's flat area detection also finds
-  peaks, and has a minimum stepdown and minimum axial engagement.
 - Rest machining from a file, bodies or the setup stock, and from earlier
   setups (that needs [the volumetric stock](../../STATUS.md)).
-- Fusion's stay-down level and minimum stay-down clearance, which say how hard it
-  tries to stay down, and its lift height.
+- Shaft and holder clearance.
+- A slot along a pocket's middle that bends with it, as a medial axis would: the
+  slot is straight, along the pocket's longest way.
 - Arc fitting of the steps: a pass is its steps, as the rule against smoothing
   says.
