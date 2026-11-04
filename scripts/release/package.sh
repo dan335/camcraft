@@ -63,7 +63,8 @@ cd "$smoke"
 if [ "$platform" = linux-x86_64 ]; then
     tar xzf "$out/$archive"
 else
-    powershell.exe -NoProfile -Command "Expand-Archive -Path '$out/$archive' -DestinationPath '.'"
+    # PowerShell reads Windows paths, not Git Bash's.
+    powershell.exe -NoProfile -Command "Expand-Archive -Path '$(cygpath -w "$out/$archive")' -DestinationPath '.'"
 fi
 cd "$name"
 "./camcraft$exe" --version
