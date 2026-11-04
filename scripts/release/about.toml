@@ -1,0 +1,10 @@
+# cargo-about: the licences camcraft's executables may ship under. Each release's
+# THIRD-PARTY-LICENSES.txt lists every crate built into them under one of these,
+# with the licence's text as the crate ships it (scripts/release/README.md).
+accepted = [
+    "MIT", "Apache-2.0", "Unicode-3.0", "Zlib", "Unlicense", "BSL-1.0",
+    "BSD-3-Clause", "BSD-2-Clause", "0BSD", "MPL-2.0", "ISC", "CC0-1.0",
+    "MIT-0", "OFL-1.1", "Ubuntu-font-1.0", "Unicode-DFS-2016",
+]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
