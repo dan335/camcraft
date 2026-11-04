@@ -9,12 +9,18 @@
 //! the next point it asks, and the run with it; everything made before it
 //! stands.
 //!
+//! Work also shows its passes as it finds them ([`Watch::show`]), before they
+//! are linked and cut: for whoever watches to draw while the rest is worked
+//! out, as Fusion draws a toolpath as it generates it.
+//!
 //! A [`Watch`] by default watches nothing: it never stops, and what it is told
 //! goes nowhere. So a strategy run on its own, as the tests and the command
 //! line run them, behaves as it always has.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+
+use glam::DVec3;
 
 /// How finely how far an operation has got is kept: in ten-thousandths, the
 /// whole being this many.
@@ -44,6 +50,9 @@ struct Shared {
     stop_from: AtomicUsize,
     /// How far each operation has got, in [`SHARES`], by its place.
     done: Vec<AtomicU32>,
+    /// The passes each operation's work has shown so far, by its place, in the
+    /// order shown.
+    shown: Vec<Mutex<Vec<Vec<DVec3>>>>,
 }
 
 /// A run, as whoever started it holds it: to stop it, and to see how far each
@@ -60,6 +69,7 @@ impl Control {
             shared: Arc::new(Shared {
                 stop_from: AtomicUsize::new(usize::MAX),
                 done: (0..operations).map(|_| AtomicU32::new(0)).collect(),
+                shown: (0..operations).map(|_| Mutex::new(Vec::new())).collect(),
             }),
         }
     }
@@ -88,6 +98,24 @@ impl Control {
             .done
             .get(op)
             .map_or(0.0, |d| f64::from(d.load(Ordering::Relaxed)) / SHARES)
+    }
+
+    /// The passes operation `op`'s work has shown after its first `seen`, as
+    /// many as there are: for whoever draws them to take what is new.
+    pub fn shown_since(&self, op: usize, seen: usize) -> Vec<Vec<DVec3>> {
+        self.shared.shown.get(op).map_or_else(Vec::new, |shown| {
+            let shown = shown.lock().unwrap_or_else(PoisonError::into_inner);
+            shown.get(seen..).map_or_else(Vec::new, <[_]>::to_vec)
+        })
+    }
+
+    /// Let go of the passes operation `op`'s work showed: it is made, and what
+    /// it made is drawn instead.
+    pub fn forget_shown(&self, op: usize) {
+        if let Some(shown) = self.shared.shown.get(op) {
+            let mut shown = shown.lock().unwrap_or_else(PoisonError::into_inner);
+            *shown = Vec::new();
+        }
     }
 
     /// The watch operation `op`'s work is given.
@@ -184,6 +212,28 @@ impl Watch {
         });
     }
 
+    /// Whether anyone watches what this work shows ([`Watch::show`]): where no
+    /// one does, the passes to show need not be made.
+    pub fn showing(&self) -> bool {
+        self.shared.is_some()
+    }
+
+    /// Show `passes`, each a line of points on the part, as this work has found
+    /// them: what it will cut, before it is linked.
+    pub fn show(&self, passes: impl IntoIterator<Item = Vec<DVec3>>) {
+        let Some(shown) = self.shared.as_ref().and_then(|s| s.shown.get(self.op)) else {
+            return;
+        };
+        let passes: Vec<Vec<DVec3>> = passes.into_iter().filter(|p| p.len() >= 2).collect();
+        if passes.is_empty() {
+            return;
+        }
+        shown
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(passes);
+    }
+
     /// The part of this work from `from` to `to` of the way through it, as a
     /// watch of its own: its work's 0 to 1 is this one's `from` to `to`.
     #[must_use]
@@ -234,6 +284,26 @@ mod tests {
         assert_eq!(c.done(0), 0.75, "no step back");
         w.report(1.0);
         assert_eq!(c.done(0), 1.0);
+    }
+
+    #[test]
+    fn what_is_shown_is_taken_as_it_comes_and_let_go_once_made() {
+        let c = Control::new(2);
+        let w = c.watch(1);
+        assert!(w.showing() && !Watch::default().showing());
+        let line = |x: f64| vec![DVec3::new(x, 0.0, 0.0), DVec3::new(x, 1.0, 0.0)];
+        w.show([line(0.0), vec![DVec3::ZERO]]);
+        w.part(0.5, 1.0).show([line(1.0)]);
+        assert_eq!(
+            c.shown_since(1, 0),
+            [line(0.0), line(1.0)],
+            "a point is no pass"
+        );
+        assert_eq!(c.shown_since(1, 1), [line(1.0)]);
+        assert!(c.shown_since(0, 0).is_empty());
+        c.forget_shown(1);
+        assert!(c.shown_since(1, 0).is_empty());
+        Watch::default().show([line(2.0)]);
     }
 
     #[test]

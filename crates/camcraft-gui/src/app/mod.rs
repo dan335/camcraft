@@ -333,8 +333,9 @@ impl App {
     }
 
     /// Generate, by themselves, the setups of every open job that want it
-    /// ([`Document::wanting_runs`]), once editing each has settled; and stop
-    /// each run in flight from whatever has changed since it was sent.
+    /// ([`Document::wanting_runs`]), once editing each has settled; stop each
+    /// run in flight from whatever has changed since it was sent; and take
+    /// what each has shown of the passes it is working out, to draw.
     fn generate_wanted(&mut self, ctx: &egui::Context, editing: bool) {
         let now = std::time::Instant::now();
         for at in 0..self.docs.len() {
@@ -342,6 +343,8 @@ impl App {
                 continue;
             };
             doc.stop_changed_runs();
+            // What is being worked out, drawn as it is found.
+            doc.take_previews(now);
             if !self.settings.generate || !doc.settled(now, editing) {
                 continue;
             }

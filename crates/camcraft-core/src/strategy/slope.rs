@@ -11,9 +11,11 @@ use camcraft_geom::trigrid::TriGrid;
 use glam::DVec2;
 use rayon::prelude::*;
 
+use crate::control::Watch;
 use crate::cutter::dropcutter::{DropCutter, DropTest};
 use crate::path::toolpath::PLUNGE_RATIO;
 use crate::strategy::StrategyError;
+use crate::strategy::field::{self, AreaGrid};
 
 /// Stretches left out, and why.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -137,6 +139,36 @@ pub(crate) fn steep_band(
         .offset(radius, arc)
         .difference(area)?;
     Ok(closed.union(&beyond)?)
+}
+
+/// Where, as the tool's centre goes over `area`, the surface it rides is
+/// steeper than a plunge ([`steep_band`]), found on a grid of drops over it:
+/// for passes laid over the part without a field of their own, as parallel's
+/// and the patterns' are, to leave to rings round the walls. The grid is as
+/// fine as scallop's for `stepover`, coarsened to stay within `max_nodes`
+/// but no further than half the tool, telling `watch` row by row.
+pub(crate) fn steep_ground<T: DropTest + Sync>(
+    cutter: &DropCutter<'_>,
+    tool: &T,
+    area: &Region,
+    stepover: f64,
+    max_nodes: u32,
+    watch: &Watch,
+) -> Result<Region, StrategyError> {
+    let Some(bounds) = area.bounds() else {
+        return Ok(Region::default());
+    };
+    let radius = tool.max_radius();
+    let on = AreaGrid::over(
+        area,
+        bounds,
+        field::pitch(stepover, radius),
+        (stepover / 2.0).max(radius / 2.0),
+        max_nodes,
+        watch,
+        |x, y, scratch| cutter.drop_at_in(tool, x, y, scratch),
+    )?;
+    steep_band(&on.grid, radius, area, &on.leaving_part())
 }
 
 /// How steep, as a rise over a run, ground next to a wall may be and still be

@@ -69,7 +69,7 @@ const fn ticked(outline: OutlineKind, color: [u8; 3], shown: ShownWith) -> LineK
 
 /// Every kind of line that is not a move. The kind the shader knows one by is
 /// its place here, after the move roles ([`theme::ROLES`]).
-const LINE_KINDS: [LineKind; 14] = [
+const LINE_KINDS: [LineKind; 15] = [
     ticked(OutlineKind::Stock, theme::MATERIAL, ShownWith::Stock),
     ticked(OutlineKind::AxisX, theme::AXIS_X, ShownWith::Origin),
     ticked(OutlineKind::AxisY, theme::AXIS_Y, ShownWith::Origin),
@@ -83,6 +83,8 @@ const LINE_KINDS: [LineKind; 14] = [
     thin(OutlineKind::Channel, theme::CHANNEL),
     // Only uploaded while a stock is being picked.
     thin(OutlineKind::Ghost, theme::GHOST),
+    // Only uploaded while a setup is being generated.
+    thin(OutlineKind::Preview, theme::PATH_PREVIEW),
     plane(PlaneKind::Clearance),
     plane(PlaneKind::Retract),
     plane(PlaneKind::Top),

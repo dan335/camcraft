@@ -22,7 +22,7 @@ use super::{
 };
 use crate::transport::marks;
 use crate::view::scene::{Scene, box_edges};
-use crate::view::viewport::{Outline, OutlineKind};
+use crate::view::viewport::{Highlight, Outline, OutlineKind};
 
 /// Everything a setup's run was made from. When this differs from what the job
 /// holds now, the result is out of date.
@@ -189,6 +189,36 @@ impl SetupInputs {
 pub struct ShadowKey {
     orientation: Orientation,
     models: Vec<Option<ModelKey>>,
+}
+
+/// How often what operations being worked out have shown is drawn again: a
+/// large one shows a million segments, each drawing of which is uploaded
+/// whole.
+pub const PREVIEW_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// How far apart the points of a pass being worked out are drawn, at least:
+/// finer than shows at any zoom a part is looked at, and far fewer.
+const PREVIEW_POINTS: f64 = 0.25;
+
+/// `pass`, a line of points, as lines to draw in its preview: its points no
+/// nearer than [`PREVIEW_POINTS`] to the last drawn, but its last.
+fn preview_lines(pass: &[DVec3]) -> Vec<Outline> {
+    let mut out = Vec::new();
+    let Some((&first, rest)) = pass.split_first() else {
+        return out;
+    };
+    let mut at = first;
+    for (i, &p) in rest.iter().enumerate() {
+        if p.distance(at) >= PREVIEW_POINTS || i + 1 == rest.len() {
+            out.push(Outline {
+                a: at,
+                b: p,
+                kind: OutlineKind::Preview,
+            });
+            at = p;
+        }
+    }
+    out
 }
 
 /// How many parts' shadows a job keeps: enough for its setups and an undo or
@@ -450,6 +480,10 @@ impl Document {
             ops: vec![None; count],
             kept,
             made: 0,
+            shown: vec![(Vec::new(), 0); count],
+            preview: Highlight::default(),
+            preview_key: next_key(),
+            previewed: Instant::now(),
         });
         // Asked for, so whatever held it back is let go.
         state.halted = None;
@@ -509,6 +543,8 @@ impl Document {
             return;
         };
         running.made = ran.result.operations.len();
+        // What is made is drawn as made: its preview goes.
+        running.preview_again();
         let (inputs, job) = (running.inputs.clone(), running.job.clone());
         state.show_run(RanSetup {
             inputs,
@@ -549,6 +585,34 @@ impl Document {
             })
             .sum();
         Some((done * each).clamp(0.0, 1.0))
+    }
+
+    /// Take into each run in flight the passes its operations' work has shown
+    /// since it was last asked, as of `now`, and draw them again: no more
+    /// often than [`PREVIEW_EVERY`], since a large operation shows many.
+    pub fn take_previews(&mut self, now: Instant) {
+        for state in self.setups.values_mut() {
+            let Some(running) = state.running.as_mut() else {
+                continue;
+            };
+            if now.saturating_duration_since(running.previewed) < PREVIEW_EVERY {
+                continue;
+            }
+            let mut grew = false;
+            for (op, (lines, taken)) in running.shown.iter_mut().enumerate() {
+                if op < running.made || running.kept.get(op).copied().unwrap_or(false) {
+                    continue;
+                }
+                let new = running.control.shown_since(op, *taken);
+                *taken += new.len();
+                grew |= !new.is_empty();
+                lines.extend(new.iter().flat_map(|pass| preview_lines(pass)));
+            }
+            running.previewed = now;
+            if grew {
+                running.preview_again();
+            }
+        }
     }
 
     /// Where operation `index` of setup `name` stands: one of

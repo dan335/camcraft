@@ -3,7 +3,9 @@
 
 use super::*;
 
-/// Raster finishing, with the tool's centre kept to `limit` as well as the sweep.
+/// Raster finishing, with the tool's centre kept to `limit` as well as the
+/// sweep, and off the steep ground, which rings round the walls finish
+/// ([`steep_band_of`]).
 pub(super) fn parallel_paths(
     work: &Work<'_>,
     angle: f64,
@@ -12,8 +14,20 @@ pub(super) fn parallel_paths(
 ) -> Result<Paths, RunError> {
     let (job, op) = (work.job, work.op);
     let (sweep_lo, sweep_hi) = work.sweep();
+    let (_, slope_to) = work.slopes();
+    let band = steep_band_of(work, limit, slope_to)?;
+    let kept = match &band {
+        Some(band) => Some(
+            limit
+                .cloned()
+                .unwrap_or_else(|| Region::rectangle(sweep_lo, sweep_hi))
+                .difference(band)
+                .map_err(in_op(op))?,
+        ),
+        None => limit.cloned(),
+    };
     let params = ParallelParams {
-        watch: work.watch.clone(),
+        watch: work.watch.part(BAND_SHARE, PASSES_SHARE),
         stepover: op.passes.stepover,
         angle: angle.to_radians(),
         tolerance: job.tolerance,
@@ -21,11 +35,76 @@ pub(super) fn parallel_paths(
         max_cut_step: op.passes.max_cut_step,
         ..Default::default()
     };
-    let (path, report) =
-        parallel_finish_within(work.cutter, work.tool, sweep_lo, sweep_hi, limit, &params)
-            .map_err(in_op(op))?;
+    let (mut path, mut report) = parallel_finish_within(
+        work.cutter,
+        work.tool,
+        sweep_lo,
+        sweep_hi,
+        kept.as_ref(),
+        &params,
+    )
+    .map_err(in_op(op))?;
+    report.walls = with_walls(work, limit, band.as_ref(), slope_to, &mut path)?;
+    report.passes += report.walls;
     sampling_warnings(&report, warnings);
     Ok((path, report.passes, StrategyDetail::Parallel(report)))
+}
+
+/// How much of a finish over the part finding its steep ground is, as it says
+/// how far it has got; then its passes, to [`PASSES_SHARE`]; then the rings
+/// round its walls.
+const BAND_SHARE: f64 = 0.15;
+
+/// See [`BAND_SHARE`].
+const PASSES_SHARE: f64 = 0.75;
+
+/// The ground passes laid over the part leave to rings round the walls
+/// ([`steep_walls`]), as scallop's do: where the surface the tool's centre
+/// rides is steeper than a plunge, over where it touches the part
+/// ([`steep_ground`]). A pass cut down such ground touches a wall only where
+/// it crosses it, so a wall along the passes is left in steps a stepover deep;
+/// rings round it, a stepover apart down it, finish it all. `None` where the
+/// slope range asked for stops short of a plunge's: the passes keep to it, and
+/// there are no walls.
+fn steep_band_of(
+    work: &Work<'_>,
+    limit: Option<&Region>,
+    slope_to: f64,
+) -> Result<Option<Region>, RunError> {
+    if slope_to <= PLUNGE_RATIO.atan() {
+        return Ok(None);
+    }
+    let area = finish_area(work, limit, true)?;
+    steep_ground(
+        work.cutter,
+        work.tool,
+        &area,
+        work.op.passes.stepover,
+        ScallopParams::default().max_nodes,
+        &work.watch.part(0.0, BAND_SHARE),
+    )
+    .map(Some)
+    .map_err(in_op(work.op))
+}
+
+/// Rings round the walls of `band` ([`steep_walls`]) after `path`, up to
+/// `slope_to`; how many. None without a band.
+fn with_walls(
+    work: &Work<'_>,
+    limit: Option<&Region>,
+    band: Option<&Region>,
+    slope_to: f64,
+    path: &mut Toolpath,
+) -> Result<u64, RunError> {
+    let Some(band) = band else {
+        return Ok(0);
+    };
+    let (walls, rings) = steep_walls(work, limit, band, (CutDirection::Climb, slope_to))?;
+    for m in walls.moves() {
+        path.push(*m)
+            .map_err(|e| in_op(work.op)(StrategyError::from(e)))?;
+    }
+    Ok(rings)
 }
 
 /// What sampling passes on the part found that the path should say.
@@ -74,7 +153,7 @@ pub(super) fn scallop_paths(
     let (slope_from, slope_to) = work.slopes();
     let params = ScallopParams {
         // The passes most of the work, the rings round the walls the rest.
-        watch: work.watch.part(0.0, 0.75),
+        watch: work.watch.part(0.0, PASSES_SHARE),
         stepover: op.passes.stepover,
         tolerance: job.tolerance,
         feed: op.passes.feed,
@@ -161,7 +240,7 @@ fn steep_walls(
         .map_err(in_op(op))?;
     let (top, bottom) = op.levels_3d(work.heights);
     let params = WaterlineParams {
-        watch: work.watch.part(0.75, 1.0),
+        watch: work.watch.part(PASSES_SHARE, 1.0),
         stepdown: op.passes.stepover * steep.sin(),
         top,
         bottom,
@@ -303,15 +382,30 @@ pub(super) fn project_params(work: &Work<'_>) -> ProjectParams {
     }
 }
 
-/// `curves` dropped onto the part within `area`, and what that found to say.
+/// `curves` dropped onto the part within `area`, kept to `limit`, off the
+/// steep ground, which rings round the walls finish ([`steep_band_of`]); and
+/// what that found to say.
 pub(super) fn projected(
     work: &Work<'_>,
-    area: &Region,
+    (area, limit): (&Region, Option<&Region>),
     curves: &[Curve],
     warnings: &mut Vec<String>,
 ) -> Result<(Toolpath, ProjectReport), RunError> {
-    let (path, report) = project(work.cutter, work.tool, area, curves, &project_params(work))
-        .map_err(in_op(work.op))?;
+    let op = work.op;
+    let (_, slope_to) = work.slopes();
+    let band = steep_band_of(work, limit, slope_to)?;
+    let kept = match &band {
+        Some(band) => area.difference(band).map_err(in_op(op))?,
+        None => area.clone(),
+    };
+    let params = ProjectParams {
+        watch: work.watch.part(BAND_SHARE, PASSES_SHARE),
+        ..project_params(work)
+    };
+    let (mut path, mut report) =
+        project(work.cutter, work.tool, &kept, curves, &params).map_err(in_op(op))?;
+    report.walls = with_walls(work, limit, band.as_ref(), slope_to, &mut path)?;
+    report.passes += report.walls;
     if report.passes == 0 {
         warnings.push("found nothing to finish: nothing within the boundary and slopes".into());
     }
@@ -337,7 +431,7 @@ pub(super) fn spiral_paths(
         }
         None => Vec::new(),
     };
-    let (path, report) = projected(work, &area, &curves, warnings)?;
+    let (path, report) = projected(work, (&area, limit), &curves, warnings)?;
     Ok((path, report.passes, StrategyDetail::Spiral(report)))
 }
 
@@ -362,7 +456,7 @@ pub(super) fn radial_paths(
         .map_err(in_op(op))?,
         None => Vec::new(),
     };
-    let (path, report) = projected(work, &area, &curves, warnings)?;
+    let (path, report) = projected(work, (&area, limit), &curves, warnings)?;
     Ok((path, report.passes, StrategyDetail::Radial(report)))
 }
 
@@ -393,7 +487,7 @@ pub(super) fn morphed_spiral_paths(
             pattern.widest
         ));
     }
-    let (path, cut) = projected(work, &area, &curves, warnings)?;
+    let (path, cut) = projected(work, (&area, limit), &curves, warnings)?;
     Ok((
         path,
         cut.passes,

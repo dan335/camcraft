@@ -331,6 +331,9 @@ pub fn scallop_finish_banded<T: DropTest + Sync>(
                     &mut w.sweep,
                 ));
             }
+            if params.watch.showing() {
+                params.watch.show(w.runs.iter().map(Run::shown));
+            }
             each.add(share);
             Ok(w)
         })

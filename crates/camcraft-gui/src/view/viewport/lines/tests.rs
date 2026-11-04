@@ -110,6 +110,7 @@ fn every_line_has_a_kind_and_a_colour_of_its_own() {
         OutlineKind::Limit,
         OutlineKind::Channel,
         OutlineKind::Ghost,
+        OutlineKind::Preview,
     ];
     all.extend(PlaneKind::ALL.map(OutlineKind::Plane));
     assert_eq!(all.len(), LINE_KINDS.len());

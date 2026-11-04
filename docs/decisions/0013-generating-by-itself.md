@@ -60,6 +60,13 @@ at once, its playhead where it was, and says in the tree and the operation's
 panel what each operation is doing and how far it has got. A result told part
 way is never finished, so never passes the gate to be posted.
 
+**What is being worked out shows as it is found** (0.4). A strategy shows each
+pass to its `Watch` as soon as it has it, before it is linked: a level of
+adaptive, a region of scallop, a line of parallel, a level of contour, a
+stretch of a pattern. The app takes what is new twice a second and draws it,
+its points no nearer than 0.25 mm, in a quieter green than a cut, until the
+operation is made and drawn as made.
+
 **One core is left for the window.** The global pool takes every core but one,
 so the window keeps drawing however long generating takes.
 
@@ -72,8 +79,13 @@ so the window keeps drawing however long generating takes.
 - Finer progress than each strategy's own loop: adaptive says how far it has
   got level by level, so on a part with few levels it moves in steps.
 - Working out one adaptive level on more than one core. Its levels are worked
-  out at once, but the slowest is left alone at the end: on the tray, at a
-  tenth of the tool's width, two of twenty cores were busy for the last few
-  minutes, and the same run took twice as long when that level fell to one of
-  the processor's efficiency cores. Splitting a level's clearing is next.
+  out at once, but the slowest is left alone at the end. In 0.4, what made a
+  large level slow went instead: the material grown by the tool's radius, which
+  every search for where the next pass starts across the whole level asks for,
+  is kept tile by tile and worked out again only where a cut has come within
+  reach, in parallel. On the tray, at a tenth of the tool's width, the slowest
+  level went from 190 s to 80 s and the roughing from 246 s to 153 s. A pass
+  now also ends once it has taken less than a sliver's width along a tool's
+  width of travel, however engaged it measures: one had stood rocking on a
+  sliver no sweep takes until the level's step limit.
 - Keeping results between sessions: they are worked out again on opening.

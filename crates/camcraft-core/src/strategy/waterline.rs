@@ -281,6 +281,11 @@ pub fn waterline<T: DropTest + Sync>(
                     }
                 }
             }
+            if params.watch.showing() {
+                params
+                    .watch
+                    .show(level.runs.iter().map(|(_, run)| run.shown()));
+            }
             params.watch.add(share);
             Ok(level)
         })

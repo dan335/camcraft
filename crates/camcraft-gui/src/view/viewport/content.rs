@@ -35,6 +35,8 @@ pub enum OutlineKind {
     Channel,
     /// A stock that could be picked into the setup.
     Ghost,
+    /// A pass being worked out, before it is linked and cut.
+    Preview,
     /// The edge of one of an operation's height planes.
     Plane(PlaneKind),
 }
@@ -217,6 +219,9 @@ pub struct Content<'a> {
     pub hover: Option<(u64, &'a Highlight)>,
     /// What could be picked into the setup but is not in it, drawn faintly.
     pub ghost: Option<(u64, &'a Highlight)>,
+    /// The passes of operations being worked out, as found so far, before
+    /// they are made: lines of [`OutlineKind::Preview`].
+    pub preview: Option<(u64, &'a Highlight)>,
     /// What to tell the person, over the view: what a click does now.
     pub hint: Option<&'a str>,
     /// An operation's heights, as planes across the stock.
@@ -275,6 +280,7 @@ impl Content<'_> {
             selection: None,
             hover: None,
             ghost: None,
+            preview: None,
             hint: None,
             planes: &[],
         }

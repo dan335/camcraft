@@ -671,7 +671,12 @@ impl Gpu {
             pass.set_vertex_buffer(0, buffer.slice(..));
             pass.draw(0..6, 0..*n);
         }
-        for up in [&self.up.ghost, &self.up.selection, &self.up.hover] {
+        for up in [
+            &self.up.preview,
+            &self.up.ghost,
+            &self.up.selection,
+            &self.up.hover,
+        ] {
             if let Some(HighlightGpu {
                 lines: Some((buffer, n)),
                 ..

@@ -103,6 +103,8 @@ pub struct ProjectReport {
     pub fragments: u64,
     /// What sampling the passes on the part found, as for parallel finishing.
     pub sweep: ParallelReport,
+    /// Rings round the walls the passes leave to them.
+    pub walls: u64,
 }
 
 impl ProjectReport {
@@ -198,6 +200,9 @@ pub fn project<T: DropTest + Sync>(
             } else {
                 sweep_open_polyline(cutter, tool, points, &sweep, &mut found)
             };
+            if params.watch.showing() {
+                params.watch.show(runs.iter().map(Run::shown));
+            }
             (runs, found)
         })
         .collect();

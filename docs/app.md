@@ -187,8 +187,9 @@ drawing.
 
 While it runs, the tree says how far the setup has got, and each operation a dot
 that fills as it is worked out, how far it is through and for how long; one
-waiting for the operations before it says so. Each operation is drawn as soon as
-it is made, before the rest are, and the playhead stays where it was. The
+waiting for the operations before it says so. Each operation's passes are drawn
+as they are found, in a quieter green than a cut, and the operation itself as
+soon as it is made, before the rest are; the playhead stays where it was. The
 operation's panel says what it is doing: working out its passes, or linking them
 and cutting them into the material.
 

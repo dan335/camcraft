@@ -406,6 +406,8 @@ impl<'a> Shared<'a> {
                     after,
                 });
             }
+            // Made, it is drawn as made: what it showed while worked out goes.
+            control.forget_shown(i);
         }
         Ok((operations, keyframes, base))
     }

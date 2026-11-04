@@ -19,7 +19,7 @@ use crate::transport::{Mark, marks};
 use crate::ui::theme;
 use crate::view::camera::Camera;
 use crate::view::scene::{Playhead, Scene};
-use crate::view::viewport::{Outline, View};
+use crate::view::viewport::{Highlight, Outline, View};
 
 /// What the view is for: setting the setup up, or playing its program back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -182,6 +182,31 @@ pub struct Running {
     pub kept: Vec<bool>,
     /// How many operations it has made so far, from the first.
     pub made: usize,
+    /// Each operation's passes shown while being worked out
+    /// ([`camcraft_core::control::Watch::show`]), as lines to draw, by its
+    /// place; and how many passes of each have been taken.
+    pub(super) shown: Vec<(Vec<Outline>, usize)>,
+    /// Those of the operations not yet made, together, as drawn.
+    pub preview: Highlight,
+    /// Tells this preview's upload from any other.
+    pub preview_key: u64,
+    /// When the preview was last made again.
+    pub(super) previewed: Instant,
+}
+
+impl Running {
+    /// Draw again what the operations not yet made have shown.
+    pub(super) fn preview_again(&mut self) {
+        let made = self.made;
+        self.preview.lines = self
+            .shown
+            .iter()
+            .enumerate()
+            .filter(|(op, _)| *op >= made)
+            .flat_map(|(_, (lines, _))| lines.iter().copied())
+            .collect();
+        self.preview_key = next_key();
+    }
 }
 
 /// What an operation's work is doing.

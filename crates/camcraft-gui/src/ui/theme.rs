@@ -43,6 +43,9 @@ pub const PATH_RAPID: [u8; 3] = [0xFF, 0x5C, 0x5C];
 pub const PATH_PLUNGE: [u8; 3] = [0xF5, 0xA5, 0x24];
 /// `--path-lead`, also used for ramps.
 pub const PATH_LEAD: [u8; 3] = [0x4F, 0xD1, 0xFF];
+/// A pass being worked out, drawn before it is linked: the cut's green,
+/// quieter, as it is not yet what will be cut.
+pub const PATH_PREVIEW: [u8; 3] = [0x3A, 0x94, 0x50];
 /// `--amber-5`, the accent: the spindle-warning colour. The cutter is drawn in it,
 /// and material left above the part at its thickest.
 pub const AMBER_5: [u8; 3] = [0xF5, 0xA5, 0x24];

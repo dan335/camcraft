@@ -194,6 +194,12 @@ pub fn content<'a>(state: &'a SetupState, name: &str, selection: &Selection) -> 
         selection: None,
         hover: None,
         ghost: None,
+        // Setting up, what is being worked out shows as it is found.
+        preview: state
+            .running
+            .as_ref()
+            .filter(|r| !back && show_paths && !r.preview.lines.is_empty())
+            .map(|r| (r.preview_key, &r.preview)),
         hint: None,
         planes: &[],
     }

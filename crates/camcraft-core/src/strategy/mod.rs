@@ -25,7 +25,7 @@ pub mod drilling;
 mod field;
 pub(crate) mod nesting;
 pub mod reach;
-mod slope;
+pub(crate) mod slope;
 
 use camcraft_geom::contour::Region;
 use glam::DVec2;

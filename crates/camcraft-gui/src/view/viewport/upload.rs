@@ -53,6 +53,7 @@ pub(super) struct Uploaded {
     pub(super) selection: Option<HighlightGpu>,
     pub(super) hover: Option<HighlightGpu>,
     pub(super) ghost: Option<HighlightGpu>,
+    pub(super) preview: Option<HighlightGpu>,
     pub(super) scene: Option<SceneGpu>,
     pub(super) outline: Option<(u64, wgpu::Buffer, u32)>,
     /// The height planes as uploaded: each one's fill, and all their edges.
@@ -67,6 +68,7 @@ impl Uploaded {
             selection: None,
             hover: None,
             ghost: None,
+            preview: None,
             scene: None,
             outline: None,
             planes: None,
@@ -153,6 +155,7 @@ impl Gpu {
             (&mut self.up.selection, content.selection),
             (&mut self.up.hover, content.hover),
             (&mut self.up.ghost, content.ghost),
+            (&mut self.up.preview, content.preview),
         ] {
             keep_up(
                 slot,

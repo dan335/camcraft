@@ -110,6 +110,9 @@ pub struct ParallelReport {
     /// Not a fault. Each one is a plunge that would otherwise have been cut at
     /// feed, and is now a retract and a controlled re-entry.
     pub wall_breaks: u64,
+    /// Rings round the walls the passes leave to them, as an operation finishes
+    /// its steep ground: none for a sweep alone.
+    pub walls: u64,
 }
 
 impl std::ops::AddAssign for ParallelReport {
@@ -120,7 +123,9 @@ impl std::ops::AddAssign for ParallelReport {
             passes,
             coverage_breaks,
             wall_breaks,
+            walls,
         } = other;
+        self.walls += walls;
         self.refinement_limited += refinement_limited;
         self.discontinuities += discontinuities;
         self.passes += passes;
@@ -264,6 +269,9 @@ pub fn parallel_finish_within<T: DropTest + Sync>(
                 .sweep(a, b);
                 runs.extend(runs_of(samples, false, params, &mut found));
             }
+            if params.watch.showing() {
+                params.watch.show(runs.iter().map(Run::shown));
+            }
             (runs, found)
         })
         .collect();
@@ -321,6 +329,20 @@ pub(crate) struct Run {
     pub(crate) points: Vec<DVec3>,
     /// Whether it closes on itself.
     pub(crate) closed: bool,
+}
+
+impl Run {
+    /// Its points as a line to show, back to its first where it closes
+    /// ([`Watch::show`]).
+    pub(crate) fn shown(&self) -> Vec<DVec3> {
+        let mut line = self.points.clone();
+        if self.closed
+            && let Some(&first) = self.points.first()
+        {
+            line.push(first);
+        }
+        line
+    }
 }
 
 /// The tool's tip on the part along the polyline `points`, closed back to its

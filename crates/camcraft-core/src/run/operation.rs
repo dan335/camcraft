@@ -45,6 +45,7 @@ use crate::strategy::pocket_clearing::{ClearingParams, pocket_clearing};
 use crate::strategy::projected::{Curve, ProjectParams, ProjectReport, project};
 use crate::strategy::reach::LevelReach;
 use crate::strategy::scallop::{ScallopParams, contact_region, scallop_finish_banded};
+use crate::strategy::slope::steep_ground;
 use crate::strategy::waterline::{WaterlineParams, waterline};
 
 mod clearing;

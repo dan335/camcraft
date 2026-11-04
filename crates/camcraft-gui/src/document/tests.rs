@@ -1387,3 +1387,41 @@ fn what_a_run_has_made_so_far_shows_at_once() {
     assert_eq!(state.ran.as_ref().unwrap().ran.result.operations.len(), 1);
     assert_eq!(state.view.at, Playhead::at(3), "kept where it was");
 }
+
+/// What an operation's work shows of its passes as it finds them is drawn,
+/// no more often than a preview is made again; and once the operation is
+/// made, its preview goes, since what it made is drawn instead.
+#[test]
+fn passes_show_as_they_are_found_until_their_operation_is_made() {
+    use std::time::{Duration, Instant};
+    let (mut doc, dir) = quick_example();
+    let operations = doc.setup("top").map_or(0, |s| s.operations.len());
+    let control = Control::new(operations);
+    let seq = doc.started("top", control.clone(), &[]);
+    let line = |y: f64| vec![DVec3::new(0.0, y, 0.0), DVec3::new(10.0, y, 0.0)];
+    control.watch(1).show([line(0.0), line(1.0)]);
+    let preview = |doc: &Document| {
+        let r = doc.setups["top"].running.as_ref().unwrap();
+        (r.preview.lines.len(), r.preview_key)
+    };
+    let (none, key) = preview(&doc);
+    assert_eq!(none, 0);
+    let later = Instant::now() + Duration::from_secs(1);
+    doc.take_previews(later);
+    let (lines, shown) = preview(&doc);
+    assert!(lines >= 2, "{lines}");
+    assert_ne!(shown, key, "drawn again");
+    // Not made again before its time, whatever has come since.
+    control.watch(1).show([line(2.0)]);
+    doc.take_previews(later + Duration::from_millis(10));
+    assert_eq!(preview(&doc).0, lines);
+    doc.take_previews(later + Duration::from_secs(1));
+    assert!(preview(&doc).0 > lines);
+
+    // Both operations made: nothing is left to preview.
+    let (ran, scene) = ran_zero(&doc.job, &dir).unwrap();
+    let mut both = ran;
+    both.finished = false;
+    doc.so_far(seq, both, scene);
+    assert_eq!(preview(&doc).0, 0);
+}

@@ -1279,44 +1279,61 @@ fn a_run_stopped_from_the_start_makes_nothing() {
     );
 }
 
-/// A box with walls straight down, roughed and then finished by scallop: its
-/// passes, laid on the surface as the drop-cutter sees it, stop at the top of
-/// the walls, which it then finishes with rings round them, a stepover apart
-/// down them, and the job still lands on the part.
+/// A box with walls straight down, roughed and then finished by each strategy
+/// that lays passes over the part: their passes leave the walls, steeper than
+/// a plunge, to rings round them, a stepover apart down them, and the job
+/// still lands on the part. A pass down such a wall would touch it only where
+/// it crossed it.
 #[test]
-fn a_scallop_finishes_the_walls_its_passes_leave() {
-    let text = JOB
-        .replace("margin = [1.0, 1.0, 2.0]", "margin = [6.0, 6.0, 2.0]")
-        .replace("strategy = \"parallel\"", "strategy = \"scallop\"");
-    assert_ne!(text, JOB, "the edits must land");
-    let job: Job = toml::from_str(&text).unwrap();
-    let block = synthetic::cuboid(DVec3::new(-6.0, -6.0, -4.0), DVec3::new(6.0, 6.0, 4.0));
-    let result = run_job(&job, &block).unwrap();
-    let finish = &result.operations[1];
-    let StrategyDetail::Scallop(r) = &finish.detail else {
-        panic!("finish reported {:?}", finish.detail);
-    };
-    assert!(r.walls > 0, "{r:?}");
-    // Rings beside the walls, the ball's radius out from them, at levels a
-    // stepover or less apart all the way down: from the bottom to where the
-    // ball's centre is level with the box's top edge, 2 below it, above which
-    // the ball rolls over the edge and no ring is that far out.
-    let mut levels: Vec<f64> = finish
-        .path
-        .moves()
-        .iter()
-        .filter(|m| m.role == crate::path::toolpath::MoveRole::Cut)
-        .filter(|m| (m.to.x.abs().max(m.to.y.abs()) - 8.0).abs() < 0.05)
-        .map(|m| m.to.z)
-        .collect();
-    levels.sort_by(f64::total_cmp);
-    levels.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
-    let (lowest, highest) = (levels.first().copied(), levels.last().copied());
-    assert!(lowest.is_some_and(|z| z <= -4.0 + 0.8), "{levels:?}");
-    assert!(highest.is_some_and(|z| z >= 2.0), "{levels:?}");
-    assert!(
-        levels.windows(2).all(|w| w[1] - w[0] <= 0.8 + 1e-6),
-        "{levels:?}"
-    );
-    assert!(result.is_clean(), "{:?}", result.warnings());
+fn a_finish_over_the_part_leaves_its_walls_to_rings_round_them() {
+    for strategy in ["scallop", "parallel", "spiral", "radial", "morphed-spiral"] {
+        let text = JOB
+            .replace("margin = [1.0, 1.0, 2.0]", "margin = [6.0, 6.0, 2.0]")
+            .replace(
+                "strategy = \"parallel\"",
+                &format!("strategy = \"{strategy}\""),
+            );
+        assert!(
+            text.contains("margin = [6.0, 6.0, 2.0]"),
+            "the edits must land"
+        );
+        let job: Job = toml::from_str(&text).unwrap();
+        let block = synthetic::cuboid(DVec3::new(-6.0, -6.0, -4.0), DVec3::new(6.0, 6.0, 4.0));
+        let result = run_job(&job, &block).unwrap();
+        let finish = &result.operations[1];
+        let walls = match &finish.detail {
+            StrategyDetail::Scallop(r) => r.walls,
+            StrategyDetail::Parallel(r) => r.walls,
+            StrategyDetail::Spiral(r) | StrategyDetail::Radial(r) => r.walls,
+            StrategyDetail::MorphedSpiral(r) => r.cut.walls,
+            other => panic!("{strategy} reported {other:?}"),
+        };
+        assert!(walls > 0, "{strategy}: {:?}", finish.detail);
+        // Rings beside the walls, the ball's radius out from them, at levels
+        // a stepover or less apart all the way down: from the bottom to where
+        // the ball's centre is level with the box's top edge, 2 below it,
+        // above which the ball rolls over the edge and no ring is that far
+        // out.
+        let mut levels: Vec<f64> = finish
+            .path
+            .moves()
+            .iter()
+            .filter(|m| m.role == crate::path::toolpath::MoveRole::Cut)
+            .filter(|m| (m.to.x.abs().max(m.to.y.abs()) - 8.0).abs() < 0.05)
+            .map(|m| m.to.z)
+            .collect();
+        levels.sort_by(f64::total_cmp);
+        levels.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        let (lowest, highest) = (levels.first().copied(), levels.last().copied());
+        assert!(
+            lowest.is_some_and(|z| z <= -4.0 + 0.8),
+            "{strategy}: {levels:?}"
+        );
+        assert!(highest.is_some_and(|z| z >= 2.0), "{strategy}: {levels:?}");
+        assert!(
+            levels.windows(2).all(|w| w[1] - w[0] <= 0.8 + 1e-6),
+            "{strategy}: {levels:?}"
+        );
+        assert!(result.is_clean(), "{strategy}: {:?}", result.warnings());
+    }
 }

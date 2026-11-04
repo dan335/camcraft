@@ -294,6 +294,7 @@ pub fn adaptive_rough(
                 return Ok(cuts);
             };
             cuts.push(clear_level(*z, region, &material(stocks, *z)?, &level)?);
+            show_level(&params.watch, cuts.last());
             params.watch.add(share);
             // Each flat level over what the levels of the slab below it left.
             for &f in flats {
@@ -301,6 +302,7 @@ pub fn adaptive_rough(
                     continue;
                 };
                 let cut = clear_flat(f, region, stocks, &cuts, cutter, &level)?;
+                show_level(&params.watch, Some(&cut));
                 cuts.push(cut);
                 params.watch.add(share);
             }
@@ -496,6 +498,18 @@ fn disc(centre: DVec2, radius: f64, tolerance: f64) -> Option<Contour> {
             .map(|k| centre + DVec2::from_angle(TAU * f64::from(k) / f64::from(n)) * radius)
             .collect(),
     )
+}
+
+/// Show `cut`'s passes, at its level, to `watch` ([`Watch::show`]).
+fn show_level(watch: &Watch, cut: Option<&LevelCut>) {
+    let Some(cut) = cut.filter(|_| watch.showing()) else {
+        return;
+    };
+    watch.show(
+        cut.passes
+            .iter()
+            .map(|(_, points)| points.iter().map(|p| dvec3(p.x, p.y, cut.z)).collect()),
+    );
 }
 
 /// What a level's clearing is held to, worked out once.
