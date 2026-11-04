@@ -77,6 +77,11 @@ impl Way {
     }
 }
 
+/// The most times a ramp goes along an open pass, one way or back, before going
+/// straight down is taken instead: a ramp is always gentler, so the limit is
+/// only on how many moves the program takes for it, each a tiny way down.
+const MAX_RAMP_LEGS: f64 = 1000.0;
+
 /// A helix, as the tool goes down it.
 pub(super) struct Helix {
     /// Where it starts.
@@ -364,15 +369,25 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
     /// shape, arcs as helices, no steeper round a closed pass than the ramp's
     /// most in one lap. Where it starts, and its moves.
     ///
-    /// `None` where the pass is too short to ramp along: under a quarter of the
-    /// tool's width round, as Fusion's smallest helix.
+    /// `None` where the pass is too short to ramp along. A closed one is gone
+    /// round, a helix, so one under a quarter of the tool's width round is too
+    /// small, as Fusion's smallest helix. An open one is gone back and forth
+    /// along, each way a little lower, which is gentler however short it is,
+    /// going down no faster than the ramp's feed down its slope, where a plunge
+    /// goes straight in at the plunge feed: too short only where it is next to
+    /// nothing, or the ramp would go along it more than [`MAX_RAMP_LEGS`] times.
     fn ramp_down(&self, to: DVec3, pass: &[Seg], ramp: Ramp) -> Option<(DVec3, Vec<Move>)> {
         let length: f64 = pass.iter().map(Seg::flat_length).sum();
-        if length < PI * 0.5 * self.p.tool_radius {
-            return None;
-        }
         let end = pass.last()?.m.to;
         let closed = end.truncate().distance(to.truncate()) < 1e-6;
+        let least = if closed {
+            PI * 0.5 * self.p.tool_radius
+        } else {
+            2.0 * self.p.tolerance
+        };
+        if length.is_nan() || length < least {
+            return None;
+        }
         // Start above the highest material anywhere along the pass, so the ramp
         // never begins inside it: the material the tool would cut, a tolerance
         // in from its edge, as an arc's chords stray that far inside it and the
@@ -394,6 +409,9 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
             _ => ramp.angle,
         };
         let run = (high - to.z) / angle.tan();
+        if !closed && run > MAX_RAMP_LEGS * length {
+            return None;
+        }
         // Walk away from the start: back round a closed pass, out along an open
         // one and back.
         let lap: Vec<Seg> = if closed {

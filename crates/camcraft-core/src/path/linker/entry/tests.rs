@@ -374,6 +374,82 @@ fn a_pass_up_a_slope_is_ramped_into_never_below_itself() {
     );
 }
 
+/// A pass far shorter than the ramp it needs, under material left over it, as
+/// a scallop's top-up on a crest under a roughing's terrace: gone back and
+/// forth along, each way lower, never below the pass and never straight down
+/// into the material.
+#[test]
+fn a_short_pass_under_material_is_ramped_back_and_forth_along() {
+    let plane = ClearancePlane::new(10.0).unwrap();
+    let mut t = Toolpath::new();
+    t.feed_to(dvec3(0.0, 0.0, -2.0), MoveRole::Link, 1000.0)
+        .unwrap();
+    t.feed_to(dvec3(1.2, 0.0, -2.0), MoveRole::Cut, 1000.0)
+        .unwrap();
+    let ramping = LinkParams {
+        ramp: Some(Ramp {
+            angle: 4f64.to_radians(),
+            feed: 250.0,
+        }),
+        stay_down: StayDown::OverPart { max: 30.0 },
+        ..params()
+    };
+    let (out, report) = link(&t, &plane, &mut level_material(), &NoPart, &ramping).unwrap();
+    assert_eq!(report.ramps, 1, "{:?}", out.moves());
+    let moves = out.moves();
+    let first_cut = moves.iter().position(|m| m.role == MoveRole::Cut).unwrap();
+    let ramp: Vec<_> = moves[..first_cut]
+        .iter()
+        .filter(|m| m.role == MoveRole::Ramp)
+        .collect();
+    assert!(ramp.len() > 10, "back and forth: {ramp:?}");
+    assert!(
+        !moves[..first_cut]
+            .iter()
+            .any(|m| m.role == MoveRole::Plunge && m.to.z < 0.0),
+        "plunged into the material"
+    );
+    for m in &ramp {
+        assert!(m.to.z >= -2.0 - 1e-9, "{:?} is below the pass", m.to);
+        assert!(
+            (-1e-9..=1.2 + 1e-9).contains(&m.to.x),
+            "{:?} is off it",
+            m.to
+        );
+    }
+}
+
+/// An open pass is ramped into back and forth along, however short, while
+/// that takes the program no more than a thousand moves; one shorter still is
+/// gone straight down into.
+#[test]
+fn a_pass_too_short_to_go_back_and_forth_along_is_plunged() {
+    let plane = ClearancePlane::new(10.0).unwrap();
+    let ramping = LinkParams {
+        ramp: Some(Ramp {
+            angle: 2f64.to_radians(),
+            feed: 250.0,
+        }),
+        stay_down: StayDown::OverPart { max: 30.0 },
+        ..params()
+    };
+    for (length, ramps) in [(0.05, 0), (0.3, 1)] {
+        let mut t = Toolpath::new();
+        t.feed_to(dvec3(0.0, 0.0, -2.0), MoveRole::Link, 1000.0)
+            .unwrap();
+        t.feed_to(dvec3(length, 0.0, -2.0), MoveRole::Cut, 1000.0)
+            .unwrap();
+        let (out, report) = link(&t, &plane, &mut level_material(), &NoPart, &ramping).unwrap();
+        assert_eq!(report.ramps, ramps, "{length} mm long");
+        let legs = out
+            .moves()
+            .iter()
+            .filter(|m| m.role == MoveRole::Ramp)
+            .count();
+        assert!(legs <= 1001, "{legs} legs");
+    }
+}
+
 /// A ramp rides over a tab on the pass, as the pass does, and comes straight
 /// down off it as the pass does: at the plunge feed, not the ramp's.
 #[test]
