@@ -19,6 +19,7 @@ use camcraft_geom::mesh::distance_to_segment;
 use glam::{DVec2, DVec3};
 use rayon::prelude::*;
 
+use crate::control::{Watch, share};
 use crate::cutter::dropcutter::{DropCutter, DropTest};
 use crate::path::toolpath::{MoveRole, Toolpath};
 use crate::strategy::field;
@@ -57,7 +58,7 @@ impl Curve {
 }
 
 /// How a pattern is dropped onto the part.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProjectParams {
     /// Distance between neighbouring passes, in millimetres: slopes are judged
     /// every third of it, or every half of the tool's radius where that is less,
@@ -73,6 +74,8 @@ pub struct ProjectParams {
     pub slope_from: f64,
     /// And at most this steep.
     pub slope_to: f64,
+    /// What it tells how far it has got, and asks whether to stop.
+    pub watch: Watch,
 }
 
 impl Default for ProjectParams {
@@ -84,6 +87,7 @@ impl Default for ProjectParams {
             max_cut_step: 0.5,
             slope_from: 0.0,
             slope_to: std::f64::consts::FRAC_PI_2,
+            watch: Watch::default(),
         }
     }
 }
@@ -144,10 +148,15 @@ pub fn project<T: DropTest + Sync>(
     // Each stage in parallel over what the last gave, and in its order: a
     // spiral is one line, but many stretches once kept to the area. The
     // stretches within the slopes asked for...
+    let share = share(1, curves.len());
     let kept: Vec<(Vec<Stretch>, SlopeCounts)> = curves
         .par_iter()
         .map(|curve| {
             let mut counts = SlopeCounts::default();
+            if params.watch.stopped() {
+                return (Vec::new(), counts);
+            }
+            params.watch.add(share);
             let points = simplify(&curve.points, curve.closed, thin);
             let stretches = slope::keep(
                 cutter,
@@ -160,6 +169,7 @@ pub fn project<T: DropTest + Sync>(
             (stretches, counts)
         })
         .collect();
+    params.watch.check()?;
     let mut stretches = Vec::new();
     for (some, counts) in kept {
         report.outside_slope += counts.outside_slope;

@@ -58,6 +58,7 @@ use camcraft_geom::trigrid::TriGrid;
 use glam::DVec2;
 use rayon::prelude::*;
 
+use crate::control::{Watch, share};
 use crate::cutter::dropcutter::{DropCutter, DropTest};
 use crate::path::toolpath::Toolpath;
 use crate::strategy::adaptive::Direction;
@@ -73,7 +74,7 @@ use crate::strategy::{StrategyError, check, with_edge};
 const MAX_LEVELS: u32 = 100_000;
 
 /// How to lay out the passes.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScallopParams {
     /// Distance between neighbouring passes along the surface, in millimetres.
     pub stepover: f64,
@@ -96,6 +97,8 @@ pub struct ScallopParams {
     pub slope_to: f64,
     /// The most grid nodes the field may have; past it the grid is coarsened.
     pub max_nodes: u32,
+    /// What it tells how far it has got, and asks whether to stop.
+    pub watch: Watch,
 }
 
 impl Default for ScallopParams {
@@ -111,6 +114,7 @@ impl Default for ScallopParams {
             slope_from: 0.0,
             slope_to: std::f64::consts::FRAC_PI_2,
             max_nodes: 1 << 23,
+            watch: Watch::default(),
         }
     }
 }
@@ -288,9 +292,16 @@ pub fn scallop_finish_banded<T: DropTest + Sync>(
     };
     let ceiling = slope::ceiling(params.slope_to);
     let thin = (0.25 * params.tolerance).min(0.05 * grid.pitch());
+    // The field and its lines are done: what is left is laying each node's
+    // lines on the part, an equal share of the rest each.
+    params.watch.check()?;
+    params.watch.report(0.4);
+    let each = params.watch.part(0.4, 1.0);
+    let share = share(1, nodes.len());
     let worked: Vec<Result<Worked, StrategyError>> = nodes
         .par_iter_mut()
         .map(|plan| {
+            params.watch.check()?;
             let mut w = Worked::default();
             let mut stretches: Vec<(Vec<DVec2>, bool)> = Vec::new();
             for line in std::mem::take(&mut plan.lines) {
@@ -320,6 +331,7 @@ pub fn scallop_finish_banded<T: DropTest + Sync>(
                     &mut w.sweep,
                 ));
             }
+            each.add(share);
             Ok(w)
         })
         .collect();
@@ -388,6 +400,9 @@ impl Field {
             field::pitch(s, tool.max_radius()),
             s / 2.0,
             params.max_nodes,
+            // The drops are most of the field's work; the field, a third of
+            // the whole.
+            &params.watch.part(0.0, 0.3),
             |x, y, scratch| cutter.drop_at_in(tool, x, y, scratch),
         )?;
         report.pitch = on.grid.pitch();
@@ -413,6 +428,7 @@ impl Field {
             })
             .collect();
 
+        params.watch.check()?;
         let mut d = march(grid, &seeds, |n| grid.point(n)).d;
         report.unreached = on.unreached(&d);
         // Outside the area, negative: only the lines inside it are passes.

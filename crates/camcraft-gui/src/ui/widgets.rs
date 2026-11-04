@@ -68,6 +68,8 @@ pub enum Icon {
     MousePointerClick,
     /// Back to the default: Lucide's rotate-ccw.
     RotateCcw,
+    /// Stop: Lucide's square.
+    Square,
 }
 
 impl Icon {
@@ -76,6 +78,7 @@ impl Icon {
         match self {
             Icon::Plus => '\u{e13d}',
             Icon::RotateCcw => '\u{e148}',
+            Icon::Square => '\u{e167}',
             Icon::X => '\u{e1b2}',
             Icon::ChevronUp => '\u{e070}',
             Icon::ChevronDown => '\u{e06d}',
@@ -576,6 +579,40 @@ pub fn status_dot(ui: &mut egui::Ui, color: egui::Color32, filled: bool) -> egui
         );
     }
     response
+}
+
+/// How far something has got, `done` from 0 to 1, as a status dot that fills
+/// from the bottom: the dot's outline in `color`, and as much of it filled as
+/// is done.
+pub fn status_gauge(ui: &mut egui::Ui, color: egui::Color32, done: f64) -> egui::Response {
+    let (slot, response) =
+        ui.allocate_exact_size(egui::vec2(DOT_SLOT, DOT_SLOT), egui::Sense::hover());
+    let rect = egui::Rect::from_center_size(slot.center(), egui::vec2(DOT, DOT));
+    // Within the dot, so the conversion loses nothing that shows.
+    #[allow(clippy::cast_possible_truncation)]
+    let filled = rect.height() * done.clamp(0.0, 1.0) as f32;
+    if filled > 0.0 {
+        let level = egui::Rect::from_min_max(egui::pos2(rect.min.x, rect.max.y - filled), rect.max);
+        ui.painter().rect_filled(level, 0.0, color);
+    }
+    ui.painter().rect_stroke(
+        rect,
+        0.0,
+        egui::Stroke::new(1.25, color),
+        egui::StrokeKind::Inside,
+    );
+    response
+}
+
+/// How long since `since`, as a person reads it: seconds under a minute, then
+/// minutes and seconds.
+pub fn elapsed(since: std::time::Instant) -> String {
+    let s = since.elapsed().as_secs();
+    if s < 60 {
+        format!("{s} s")
+    } else {
+        format!("{}:{:02}", s / 60, s % 60)
+    }
 }
 
 /// One structured finding, as `Diagnostic.jsx`: a 2 px edge in the level's

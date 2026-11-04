@@ -265,7 +265,7 @@ fn a_wall_breaks_the_pass_instead_of_plunging_through_it() {
     // Allowance larger than the step: nothing breaks, and the wall gets cut.
     let through = ParallelParams {
         max_cut_step: 50.0,
-        ..base
+        ..base.clone()
     };
     let (before, before_report) = parallel_finish(&dc, &tool, lo, hi, &through).unwrap();
     let b_start = before.moves().first().unwrap().to;
@@ -388,7 +388,7 @@ fn the_threshold_actually_governs_breaking() {
         dvec2(10.0, 6.0),
         &ParallelParams {
             max_cut_step: 0.1,
-            ..base
+            ..base.clone()
         },
     )
     .unwrap()
@@ -400,7 +400,7 @@ fn the_threshold_actually_governs_breaking() {
         dvec2(10.0, 6.0),
         &ParallelParams {
             max_cut_step: 50.0,
-            ..base
+            ..base.clone()
         },
     )
     .unwrap()

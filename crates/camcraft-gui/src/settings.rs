@@ -12,11 +12,23 @@ use crate::ui::measure::Measure;
 use crate::ui::widgets;
 
 /// What is remembered.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// Millimetres or inches, everywhere a length, feed or volume is shown.
     pub measure: Measure,
+    /// Generate each setup as soon as editing it settles, rather than only
+    /// when asked: on unless turned off.
+    pub generate: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            measure: Measure::default(),
+            generate: true,
+        }
+    }
 }
 
 impl Settings {
@@ -35,6 +47,9 @@ impl Settings {
                                 ui.radio_value(&mut self.measure, m, m.name());
                             }
                         });
+                    });
+                    d.row(ui, &app::GENERATE, "generate", |ui| {
+                        ui.checkbox(&mut self.generate, "as soon as editing settles");
                     });
                 });
                 d.apply(self);
@@ -56,6 +71,7 @@ mod tests {
     fn settings_are_remembered_and_old_storage_still_reads() {
         let imperial = Settings {
             measure: Measure::Imperial,
+            generate: false,
         };
         let stored = toml::to_string(&imperial).unwrap();
         assert_eq!(toml::from_str::<Settings>(&stored).unwrap(), imperial);

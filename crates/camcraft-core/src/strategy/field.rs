@@ -13,6 +13,7 @@ use camcraft_geom::trigrid::TriGrid;
 use glam::DVec2;
 use rayon::prelude::*;
 
+use crate::control::Watch;
 use crate::strategy::StrategyError;
 
 /// The pitch of a grid that places passes `stepover` apart for a tool
@@ -56,13 +57,16 @@ impl AreaGrid {
     /// A grid over `area`, whose bounds are `lo` to `hi`, `pitch` apart, coarsened
     /// a tenth at a time until it has no more than `max_nodes`, and too large past
     /// `coarsest`. Each node inside the area and beside it has `height` there,
-    /// asked row by row in parallel, each row with scratch space of its own.
+    /// asked row by row in parallel, each row with scratch space of its own:
+    /// each row told to `watch` as it is done, and none asked once it is to
+    /// stop.
     pub(crate) fn over(
         area: &Region,
         (lo, hi): (DVec2, DVec2),
         mut pitch: f64,
         coarsest: f64,
         max_nodes: u32,
+        watch: &Watch,
         height: impl Fn(f64, f64, &mut Vec<u32>) -> Option<f64> + Sync,
     ) -> Result<Self, StrategyError> {
         let size = |pitch: f64| {
@@ -133,9 +137,14 @@ impl AreaGrid {
 
         // The height at each, row by row in parallel.
         let mut z = vec![f32::NAN; count_nodes];
+        let rows = 1.0 / f64::from(ny.max(1));
         z.par_chunks_mut(wide.max(1))
             .enumerate()
             .for_each_init(Vec::new, |scratch, (iy, row)| {
+                if watch.stopped() {
+                    return;
+                }
+                watch.add(rows);
                 let y = origin.y + f64::from(u32::try_from(iy).unwrap_or(0)) * pitch;
                 for (ix, cell) in row.iter_mut().enumerate() {
                     if !asked.get(iy * wide + ix).copied().unwrap_or(false) {
@@ -147,6 +156,7 @@ impl AreaGrid {
                     }
                 }
             });
+        watch.check()?;
         // A node not beside the area was given no height, so takes no part.
         let grid = TriGrid::new(origin, pitch, nx, ny, z)
             .ok_or_else(|| StrategyError::Region("the field's grid could not be made".into()))?;

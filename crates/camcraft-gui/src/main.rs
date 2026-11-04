@@ -54,6 +54,7 @@ fn icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result {
+    leave_a_core_for_the_window();
     let jobs = jobs_from_args();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -68,6 +69,18 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| Ok(Box::new(app::App::with_jobs(cc, jobs)))),
     )
+}
+
+/// Generating works every core it is given, for as long as it takes; the
+/// window must still draw each frame meanwhile. So the work gets every core
+/// but one, which is the window's.
+pub(crate) fn leave_a_core_for_the_window() {
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    // Already built only if something ran before main, which nothing does;
+    // then the pool it built stands.
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(cores.saturating_sub(1).max(1))
+        .build_global();
 }
 
 #[cfg(test)]

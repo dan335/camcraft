@@ -203,15 +203,41 @@ impl SetupResult {
     }
 }
 
-/// Where a run has got to, as it goes: what it is doing now.
+/// Where a run has got to, as it goes: what it has started on. Operations'
+/// passes are worked out at once, so several may be under way together;
+/// they are cut into the material one after another, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
     /// Laying the models and stock out in the setup's frame.
     Preparing,
-    /// Running operation `i`, from 0: its paths, then cutting them.
+    /// Working out operation `i`'s passes, from 0.
     Operation(usize),
+    /// Linking operation `i`'s passes over the material the ones before it
+    /// left, and cutting them into it.
+    Cutting(usize),
     /// Measuring the finished material against the part.
     Verifying,
     /// Running the setup's checks on what it made.
     Checking,
+}
+
+/// What a run tells as it goes.
+#[derive(Debug, Clone, Copy)]
+pub enum Progress<'a> {
+    /// It has started on a [`Stage`].
+    Stage(Stage),
+    /// The setup's material and part are laid out: a result with all a
+    /// result holds but its operations, which come as each is made, and its
+    /// verification, which comes at the end.
+    Begun(&'a SetupResult),
+    /// Operation `index` is done with, made, kept or left out, and this is
+    /// the material after it.
+    Made {
+        /// Which operation, from 0.
+        index: usize,
+        /// What it is.
+        op: &'a OperationResult,
+        /// The material after it.
+        after: &'a Arc<PackedStock>,
+    },
 }

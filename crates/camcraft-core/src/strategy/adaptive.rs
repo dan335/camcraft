@@ -54,6 +54,7 @@ use camcraft_geom::mesh::TriMesh;
 use glam::{DVec2, dvec3};
 use rayon::prelude::*;
 
+use crate::control::{Watch, share};
 use crate::cutter::tool::{Cutter, ToolProfile};
 use crate::path::toolpath::{MoveRole, Toolpath};
 use crate::strategy::reach::LevelReach;
@@ -140,6 +141,8 @@ pub struct AdaptiveParams {
     /// each level and flat, cut as flats are ([`with_fine_levels`]); none
     /// when `None`.
     pub fine_stepdown: Option<f64>,
+    /// What it tells how far it has got, and asks whether to stop.
+    pub watch: Watch,
 }
 
 impl Default for AdaptiveParams {
@@ -161,6 +164,7 @@ impl Default for AdaptiveParams {
             safe_distance: 2.0,
             flats: Vec::new(),
             fine_stepdown: None,
+            watch: Watch::default(),
         }
     }
 }
@@ -277,6 +281,8 @@ pub fn adaptive_rough(
     };
 
     let level = LevelParams::new(params, radius);
+    // Each level an equal share of the work, told as it is done.
+    let share = share(1, all.len());
     // Slabs depend on nothing but their own regions, so they are worked in
     // parallel and emitted in order: the result is the same on any number of
     // cores.
@@ -288,6 +294,7 @@ pub fn adaptive_rough(
                 return Ok(cuts);
             };
             cuts.push(clear_level(*z, region, &material(stocks, *z)?, &level)?);
+            params.watch.add(share);
             // Each flat level over what the levels of the slab below it left.
             for &f in flats {
                 let Some(region) = allowed_at(f) else {
@@ -295,6 +302,7 @@ pub fn adaptive_rough(
                 };
                 let cut = clear_flat(f, region, stocks, &cuts, cutter, &level)?;
                 cuts.push(cut);
+                params.watch.add(share);
             }
             Ok(cuts)
         })
@@ -522,6 +530,8 @@ struct LevelParams {
     both_ways: bool,
     helix_radius: f64,
     stay_down: f64,
+    /// Asked whether to stop before each pass.
+    watch: Watch,
 }
 
 impl LevelParams {
@@ -549,6 +559,7 @@ impl LevelParams {
             both_ways: p.direction == Direction::BothWays,
             helix_radius: p.helix_radius,
             stay_down: p.stay_down,
+            watch: p.watch.clone(),
         }
     }
 }

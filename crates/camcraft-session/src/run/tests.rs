@@ -307,3 +307,59 @@ fn a_failed_check_closes_the_gate() {
     assert!(matches!(gate(&ran, false), Err(SessionError::Refused)));
     assert_eq!(gate(&ran, true).unwrap(), Passed::Forced);
 }
+
+/// Watched, a run tells what it has made each time it makes an operation:
+/// one more each time, the material after each, never finished and never
+/// passing; and the result at the end is finished.
+#[test]
+fn a_watched_run_tells_what_it_has_made_so_far() {
+    let mut job = small_job();
+    let mut second = job.setups[0].operations[0].clone();
+    second.name = "across".into();
+    second.strategy = StrategySpec::Parallel { angle: 90.0 };
+    job.setups[0].operations.push(second);
+    let model = load_job_model(Path::new("."), &job.models[0], job.tolerance).unwrap();
+    let models: Models<'_> = [("hinge", &model)].into_iter().collect();
+    let control = Control::new(2);
+    let mut so_far = Vec::new();
+    let ran = run_setup_watched(&job, 0, &models, &[], None, &control, &mut |u| {
+        if let Underway::SoFar(ran) = u {
+            so_far.push(ran);
+        }
+    })
+    .unwrap();
+    assert_eq!(so_far.len(), 2);
+    for (k, partial) in so_far.iter().enumerate() {
+        assert_eq!(partial.result.operations.len(), k + 1);
+        assert_eq!(partial.result.keyframes.len(), k + 2);
+        assert!(!partial.finished && !partial.passed());
+    }
+    assert!(ran.finished);
+    assert_eq!(
+        so_far[1].result.operations[1].path,
+        ran.result.operations[1].path
+    );
+}
+
+/// Stopped from its second operation, a watched run has told its first, and
+/// ends stopped.
+#[test]
+fn a_watched_run_stopped_ends_stopped_with_what_it_made_told() {
+    let mut job = small_job();
+    let mut second = job.setups[0].operations[0].clone();
+    second.name = "across".into();
+    job.setups[0].operations.push(second);
+    let model = load_job_model(Path::new("."), &job.models[0], job.tolerance).unwrap();
+    let models: Models<'_> = [("hinge", &model)].into_iter().collect();
+    let control = Control::new(2);
+    control.stop_from(1);
+    let mut told = 0;
+    let err = run_setup_watched(&job, 0, &models, &[], None, &control, &mut |u| {
+        if let Underway::SoFar(ran) = u {
+            told = ran.result.operations.len();
+        }
+    })
+    .unwrap_err();
+    assert!(err.is_stopped(), "{err}");
+    assert_eq!(told, 1);
+}

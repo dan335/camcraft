@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+use camcraft_core::control::{Control, share};
 use camcraft_core::job::{Job, ModelDef, Operation, Origin, Setup, StockDef, ToolSpec};
 use camcraft_core::run::{Made, OperationResult, Plan, Stage};
 use camcraft_core::setup::frame::Orientation;
@@ -15,9 +16,12 @@ use camcraft_geom::shadow::Shadow;
 use camcraft_session::{Model, Ran, SessionError, check_runnable};
 use glam::DVec3;
 
-use super::{Document, Layout, Level, ModelKey, ModelSlot, RanSetup, next_key};
+use super::{
+    Document, Halt, Layout, Level, ModelKey, ModelSlot, OpWork, RanSetup, Running, SetupState,
+    next_key,
+};
 use crate::transport::marks;
-use crate::view::scene::{Playhead, Scene, box_edges};
+use crate::view::scene::{Scene, box_edges};
 use crate::view::viewport::{Outline, OutlineKind};
 
 /// Everything a setup's run was made from. When this differs from what the job
@@ -127,6 +131,26 @@ impl SetupInputs {
         then == now && tool_then == tool_now
     }
 
+    /// The first operation of setup `index` of `job`, with the models
+    /// `loaded`, that would cut otherwise now than these took it: changed,
+    /// retooled or removed; the first of all with what shapes every cut
+    /// changed, or the setup gone. `None` where every one would cut the same,
+    /// one added after them all included.
+    pub(super) fn first_changed(
+        &self,
+        job: &Job,
+        loaded: &BTreeMap<String, ModelSlot>,
+        index: usize,
+    ) -> Option<usize> {
+        let Some(setup) = job.setups.get(index) else {
+            return Some(0);
+        };
+        if !self.cut_is_now(job, loaded, index) {
+            return Some(0);
+        }
+        (0..self.setup.operations.len()).find(|&i| !self.op_is_now(job, setup, i))
+    }
+
     /// Whether what shapes the cuts, not what is only posted with them, is as
     /// setup `index` of `job` has it now: the tolerance, how the part sits, and
     /// the stocks and models. A setup renamed, or given another work offset or
@@ -194,14 +218,25 @@ fn same_but_operations(a: &Setup, b: &Setup) -> bool {
 }
 
 /// Where an operation stands, for the tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OpStatus {
     /// Its setup has never run, or ran before it was added.
     NotRun,
-    /// Its setup is running, and has not reached it yet.
+    /// Its setup is running, and has not started on it yet: it waits for the
+    /// operations before it.
     Waiting,
-    /// Running now, since then.
-    Running(Instant),
+    /// Under way: doing `work` since `since`, `done` of the way through, from
+    /// 0 to 1.
+    Running {
+        /// Since when.
+        since: Instant,
+        /// What it is doing.
+        work: OpWork,
+        /// How far it has got.
+        done: f64,
+    },
+    /// Its run failed here.
+    Failed,
     /// Made, in this run or the last.
     Done,
     /// Made, with warnings worth reading.
@@ -225,8 +260,14 @@ pub enum Status {
     Warnings,
     /// Ran and did not verify, or a check failed: it would be refused.
     Refused,
-    /// Ran, but has changed since.
+    /// Ran, but has changed since, or did not run to the end: generated again
+    /// by itself, as soon as editing settles.
     Stale,
+    /// Stopped, and not generated again by itself until it changes.
+    Stopped,
+    /// Its run failed, and it is not generated again by itself until it
+    /// changes.
+    Failed,
 }
 
 impl Document {
@@ -281,23 +322,26 @@ impl Document {
         None
     }
 
-    /// What a run of setup `index` does with each operation: works them all out;
-    /// or, for operation `only`, works it out alone, keeps every other one made
-    /// before and unchanged since, and leaves out the rest.
+    /// What a run of setup `index` does with each operation: keeps every one
+    /// made before and unchanged since, up to the first that is not, and works
+    /// out that one and every one after it, since each cuts what the ones
+    /// before it left; or, for operation `only`, works it out alone, keeps the
+    /// others it can, and leaves out the rest.
     pub fn plans(&self, index: usize, only: Option<usize>) -> Vec<Plan> {
-        let (Some(k), Some(setup)) = (only, self.job.setups.get(index)) else {
+        let Some(setup) = self.job.setups.get(index) else {
             return Vec::new();
         };
         let kept = self.kept(setup);
+        let standing = (0..setup.operations.len())
+            .take_while(|&i| kept.get(i).copied().flatten().is_some())
+            .count();
         (0..setup.operations.len())
-            .map(|i| {
-                if i == k {
-                    return Plan::Generate;
-                }
-                match kept.get(i).copied().flatten() {
-                    Some(op) => Plan::Keep(Box::new(op.clone())),
-                    None => Plan::Skip,
-                }
+            .map(|i| match (only, kept.get(i).copied().flatten()) {
+                (Some(k), _) if i == k => Plan::Generate,
+                (Some(_), Some(op)) => Plan::Keep(Box::new(op.clone())),
+                (Some(_), None) => Plan::Skip,
+                (None, Some(op)) if i < standing => Plan::Keep(Box::new(op.clone())),
+                (None, _) => Plan::Generate,
             })
             .collect()
     }
@@ -379,15 +423,36 @@ impl Document {
         }
     }
 
-    /// Note that setup `name` has started running from the job as it is now, and
-    /// say which run it is.
-    pub fn started(&mut self, name: &str) -> u64 {
+    /// Note that setup `name` has started running from the job as it is now,
+    /// with `control` to stop it and see how far it has got, keeping each
+    /// operation `plans` keeps, and say which run it is.
+    pub fn started(&mut self, name: &str, control: Control, plans: &[Plan]) -> u64 {
         self.seq += 1;
         let seq = self.seq;
         let job = self.job.clone();
+        let Some(inputs) = self
+            .setup_index(name)
+            .and_then(|i| SetupInputs::of(&job, &self.models, i))
+        else {
+            return seq;
+        };
+        let count = inputs.setup.operations.len();
+        let kept = (0..count)
+            .map(|i| matches!(plans.get(i), Some(Plan::Keep(_))))
+            .collect();
         let state = self.setups.entry(name.to_string()).or_default();
-        state.running = Some((seq, job));
-        state.progress = Some((Stage::Preparing, Instant::now()));
+        state.running = Some(Running {
+            seq,
+            job,
+            inputs,
+            control,
+            stage: (Stage::Preparing, Instant::now()),
+            ops: vec![None; count],
+            kept,
+            made: 0,
+        });
+        // Asked for, so whatever held it back is let go.
+        state.halted = None;
         seq
     }
 
@@ -397,18 +462,93 @@ impl Document {
     fn running_as(&self, seq: u64) -> Option<String> {
         self.setups
             .iter()
-            .find(|(_, s)| s.running.as_ref().is_some_and(|(r, _)| *r == seq))
+            .find(|(_, s)| s.running.as_ref().is_some_and(|r| r.seq == seq))
             .map(|(name, _)| name.clone())
     }
 
-    /// Run `seq` has got to `stage`. Word from a run since superseded is
+    /// The run in flight that is `seq`: `None` for a run since superseded.
+    fn running_mut(&mut self, seq: u64) -> Option<&mut SetupState> {
+        let name = self.running_as(seq)?;
+        self.setups.get_mut(&name)
+    }
+
+    /// Run `seq` has started on `stage`. Word from a run since superseded is
     /// dropped.
     pub fn progressed(&mut self, seq: u64, stage: Stage) {
-        if let Some(name) = self.running_as(seq)
-            && let Some(state) = self.setups.get_mut(&name)
-        {
-            state.progress = Some((stage, Instant::now()));
+        let Some(running) = self.running_mut(seq).and_then(|s| s.running.as_mut()) else {
+            return;
+        };
+        let now = Instant::now();
+        match stage {
+            Stage::Operation(i) => {
+                if let Some(op) = running.ops.get_mut(i) {
+                    *op = Some((OpWork::Planning, now));
+                }
+            }
+            Stage::Cutting(i) => {
+                if let Some(op) = running.ops.get_mut(i) {
+                    // Since its work began, not since its turn came.
+                    let since = op.map_or(now, |(_, since)| since);
+                    *op = Some((OpWork::Cutting, since));
+                }
+            }
+            Stage::Preparing | Stage::Verifying | Stage::Checking => {
+                running.stage = (stage, now);
+            }
         }
+    }
+
+    /// Run `seq` has made its first operations, what it has made so far, with
+    /// their toolpaths laid out for drawing: shown at once, before the rest are
+    /// made. Word from a run since superseded is dropped.
+    pub fn so_far(&mut self, seq: u64, ran: Ran, scene: Scene) {
+        let Some(state) = self.running_mut(seq) else {
+            return;
+        };
+        let Some(running) = state.running.as_mut() else {
+            return;
+        };
+        running.made = ran.result.operations.len();
+        let (inputs, job) = (running.inputs.clone(), running.job.clone());
+        state.show_run(RanSetup {
+            inputs,
+            job,
+            marks: marks(&ran, &scene),
+            ran,
+            scene,
+            scene_key: next_key(),
+        });
+    }
+
+    /// How far setup `name`'s run in flight has got with its operations
+    /// together, from 0 to 1: each operation it makes an equal share, one
+    /// made or kept all of its own, one under way as far as it has got.
+    /// `None` until it has started on one.
+    pub fn generated_share(&self, name: &str) -> Option<f64> {
+        let running = self.setups.get(name)?.running.as_ref()?;
+        let ops = &running.inputs.setup.operations;
+        let kept = |i: usize| running.kept.get(i).copied().unwrap_or(false);
+        let started = running.made > 0
+            || running.ops.iter().any(Option::is_some)
+            || running.kept.iter().any(|k| *k);
+        let making: Vec<usize> = (0..ops.len())
+            .filter(|&i| ops.get(i).is_some_and(|o| o.enabled))
+            .collect();
+        if !started || making.is_empty() {
+            return None;
+        }
+        let each = share(1, making.len());
+        let done: f64 = making
+            .iter()
+            .map(|&i| {
+                if i < running.made || kept(i) {
+                    1.0
+                } else {
+                    running.control.done(i)
+                }
+            })
+            .sum();
+        Some((done * each).clamp(0.0, 1.0))
     }
 
     /// Where operation `index` of setup `name` stands: one of
@@ -428,23 +568,41 @@ impl Document {
             return Vec::new();
         };
         let state = self.setups.get(name);
-        let running = state.filter(|s| s.running.is_some());
+        let running = state.and_then(|s| s.running.as_ref());
         let ran = state.and_then(|s| s.ran.as_ref());
-        let unchanged = match (running, ran) {
-            (None, Some(_)) => self.unchanged(name),
-            _ => Vec::new(),
+        let unchanged = if ran.is_some() {
+            self.unchanged(name)
+        } else {
+            Vec::new()
         };
+        let failed_at = state
+            .and_then(|s| s.halted.as_ref())
+            .zip(self.setup_index(name))
+            .and_then(|((inputs, halt), i)| match halt {
+                Halt::Failed { at, .. } if inputs.is_now(&self.job, &self.models, i) => Some(*at),
+                _ => None,
+            });
         let status = |(index, op): (usize, &Operation)| {
             if !op.enabled {
                 return OpStatus::Disabled;
             }
-            if let Some(state) = running {
-                return match state.progress {
-                    Some((Stage::Operation(at), since)) if at == index => OpStatus::Running(since),
-                    Some((Stage::Operation(at), _)) if at > index => OpStatus::Done,
-                    Some((Stage::Verifying | Stage::Checking, _)) => OpStatus::Done,
-                    _ => OpStatus::Waiting,
+            // In flight: what it has made is as it stands, below; what it keeps
+            // stands as it was; the rest is under way or waiting its turn.
+            if let Some(r) = running
+                && index >= r.made
+                && !r.kept.get(index).copied().unwrap_or(false)
+            {
+                return match r.ops.get(index).copied().flatten() {
+                    Some((work, since)) => OpStatus::Running {
+                        since,
+                        work,
+                        done: r.control.done(index),
+                    },
+                    None => OpStatus::Waiting,
                 };
+            }
+            if failed_at == Some(index) {
+                return OpStatus::Failed;
             }
             match ran.and_then(|r| r.ran.result.operations.get(index)) {
                 None => OpStatus::NotRun,
@@ -457,28 +615,20 @@ impl Document {
         setup.operations.iter().enumerate().map(status).collect()
     }
 
-    /// Run `seq`, sent for setup `sent`, has finished: what it made, with its
-    /// toolpaths laid out for drawing ([`Scene::build`]) where it ran. A reply
-    /// for a run since superseded, or for a setup since removed, is dropped; one
-    /// for a setup renamed since goes to it by its new name.
-    pub fn finished(&mut self, sent: &str, seq: u64, result: Result<(Ran, Scene), SessionError>) {
+    /// Run `seq` has finished: what it made, with its
+    /// toolpaths laid out for drawing ([`Scene::build`]) where it ran; or it
+    /// was stopped, and what it made so far stands; or it failed, and the
+    /// setup is left as it is until it changes. A reply for a run since
+    /// superseded, or for a setup since removed, is dropped; one for a setup
+    /// renamed since goes to it by its new name.
+    pub fn finished(&mut self, seq: u64, result: Result<(Ran, Scene), SessionError>) {
         let Some(name) = self.running_as(seq) else {
             return;
         };
         let name = name.as_str();
-        let Some(state) = self.setups.get_mut(name) else {
+        let Some(running) = self.setups.get_mut(name).and_then(|s| s.running.take()) else {
             return;
         };
-        let Some((_, job)) = state.running.take() else {
-            return;
-        };
-        state.progress = None;
-        // What the run was made from: the job as sent, with the models as they
-        // were loaded then, found in it by the name it was sent with.
-        let Some(index) = job.setups.iter().position(|s| s.name == sent) else {
-            return;
-        };
-        let inputs = SetupInputs::of(&job, &self.models, index);
         let Some(state) = self.setups.get_mut(name) else {
             return;
         };
@@ -498,29 +648,115 @@ impl Document {
                         format!("'{name}' did NOT pass its checks: it would be refused"),
                     )
                 });
-                let view = &mut state.view;
-                // A new run plays back from its first move, the stock uncut, with
-                // every operation visible.
-                view.at = Playhead::default();
-                view.transport.playing = false;
-                view.view.ops = u32::MAX;
-                if let Some(inputs) = inputs {
-                    state.ran = Some(RanSetup {
-                        inputs,
-                        job,
-                        marks: marks(&ran, &scene),
-                        ran,
-                        scene,
-                        scene_key: next_key(),
-                    });
-                }
+                state.show_run(RanSetup {
+                    inputs: running.inputs,
+                    job: running.job,
+                    marks: marks(&ran, &scene),
+                    ran,
+                    scene,
+                    scene_key: next_key(),
+                });
                 self.log.extend(lines);
             }
-            Err(e) => self.note(
-                Level::Error,
-                format!("'{name}': {}", crate::app::explain(&e)),
-            ),
+            // What it made before it was stopped stands, as it was told.
+            Err(e) if e.is_stopped() => {}
+            Err(e) => {
+                let why = crate::app::explain(&e);
+                state.halted = Some((
+                    running.inputs,
+                    Halt::Failed {
+                        at: running.made,
+                        why: why.clone(),
+                    },
+                ));
+                self.note(Level::Error, format!("'{name}': {why}"));
+            }
         }
+    }
+
+    /// Run `seq` ended without a word, for `why`: the setup is left as it is
+    /// until it changes, as for a run that failed.
+    pub fn lost(&mut self, seq: u64, why: String) {
+        let Some(state) = self.running_mut(seq) else {
+            return;
+        };
+        if let Some(running) = state.running.take() {
+            state.halted = Some((
+                running.inputs,
+                Halt::Failed {
+                    at: running.made,
+                    why,
+                },
+            ));
+        }
+    }
+
+    /// Stop generating setup `name`: its run in flight, if any, and any run of
+    /// it by itself until something it is made from changes. What it has made
+    /// stands.
+    pub fn stop_generating(&mut self, name: &str) {
+        let Some(index) = self.setup_index(name) else {
+            return;
+        };
+        let Some(inputs) = SetupInputs::of(&self.job, &self.models, index) else {
+            return;
+        };
+        let state = self.setups.entry(name.to_string()).or_default();
+        if let Some(running) = &state.running {
+            running.control.stop();
+        }
+        state.halted = Some((inputs, Halt::Stopped));
+    }
+
+    /// Generate setup `name` by itself again, as it stands: let go of whatever
+    /// stopped it, or the failure it is left at.
+    pub fn resume_generating(&mut self, name: &str) {
+        if let Some(state) = self.setups.get_mut(name) {
+            state.halted = None;
+        }
+    }
+
+    /// Stop each run in flight from the first of its operations that has
+    /// changed since it was sent: each one after a changed one cuts what it
+    /// leaves, so none of them stands, while the ones before it go on and do.
+    /// With what every cut is made from changed, the whole run stops.
+    pub fn stop_changed_runs(&self) {
+        for (index, setup) in self.job.setups.iter().enumerate() {
+            let Some(running) = self
+                .setups
+                .get(&setup.name)
+                .and_then(|s| s.running.as_ref())
+            else {
+                continue;
+            };
+            if let Some(first) = running.inputs.first_changed(&self.job, &self.models, index) {
+                running.control.stop_from(first);
+            }
+        }
+    }
+
+    /// The setups that want generating now, by themselves: each that has
+    /// something to make and is out of date or has never been generated, that
+    /// can be, and is neither running nor left as it is where it stands.
+    pub fn wanting_runs(&self) -> Vec<String> {
+        self.job
+            .setups
+            .iter()
+            .enumerate()
+            .filter(|(index, setup)| {
+                let state = self.setups.get(&setup.name);
+                let busy = state.is_some_and(|s| s.running.is_some());
+                let held = state
+                    .and_then(|s| s.halted.as_ref())
+                    .is_some_and(|(inputs, _)| inputs.is_now(&self.job, &self.models, *index));
+                !busy
+                    && !held
+                    && setup.operations.iter().any(|o| o.enabled)
+                    && matches!(self.status(&setup.name), Status::NotRun | Status::Stale)
+                    && self.cannot_generate(&setup.name, None).is_none()
+            })
+            .map(|(_, setup)| setup.name.clone())
+            .collect()
     }
 
     /// Where setup `name` stands.
@@ -531,19 +767,28 @@ impl Document {
         if state.running.is_some() {
             return Status::Running;
         }
+        let index = self.setup_index(name);
+        if let Some((inputs, halt)) = &state.halted
+            && index.is_some_and(|i| inputs.is_now(&self.job, &self.models, i))
+        {
+            return match halt {
+                Halt::Stopped => Status::Stopped,
+                Halt::Failed { .. } => Status::Failed,
+            };
+        }
         let Some(ran) = &state.ran else {
             return Status::NotRun;
         };
-        let now = self
-            .setup_index(name)
-            .is_some_and(|i| ran.inputs.is_now(&self.job, &self.models, i));
-        // Anything changed, or an operation that should run left out of it.
-        let partial = ran
-            .ran
-            .result
-            .operations
-            .iter()
-            .any(|o| o.made == Made::Skipped);
+        let now = index.is_some_and(|i| ran.inputs.is_now(&self.job, &self.models, i));
+        // Anything changed, an operation that should run left out of it, or
+        // not run to the end.
+        let partial = !ran.ran.finished
+            || ran
+                .ran
+                .result
+                .operations
+                .iter()
+                .any(|o| o.made == Made::Skipped);
         if !now || partial {
             Status::Stale
         } else if !ran.ran.passed() {

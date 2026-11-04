@@ -71,6 +71,9 @@ pub enum StrategyError {
     /// which is indistinguishable from a correct answer.
     #[error("region operation failed: {0}")]
     Region(String),
+    /// Its run was stopped while it worked ([`crate::control`]).
+    #[error(transparent)]
+    Stopped(#[from] crate::control::Stopped),
 }
 
 impl From<camcraft_geom::contour::RegionError> for StrategyError {

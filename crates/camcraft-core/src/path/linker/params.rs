@@ -147,6 +147,9 @@ pub enum LinkError {
     /// A move could not be added.
     #[error(transparent)]
     Toolpath(#[from] ToolpathError),
+    /// Its run was stopped while it linked ([`crate::control`]).
+    #[error(transparent)]
+    Stopped(#[from] crate::control::Stopped),
 }
 
 /// What linking did.

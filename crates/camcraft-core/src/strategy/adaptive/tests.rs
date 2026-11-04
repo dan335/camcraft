@@ -20,6 +20,7 @@ fn params() -> AdaptiveParams {
         safe_distance: 2.0,
         flats: Vec::new(),
         fine_stepdown: None,
+        watch: crate::control::Watch::default(),
     }
 }
 

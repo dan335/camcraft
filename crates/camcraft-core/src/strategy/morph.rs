@@ -156,6 +156,7 @@ fn morph_piece(
         field::pitch(s, f64::INFINITY),
         s / 2.0,
         params.max_nodes,
+        &crate::control::Watch::default(),
         |_, _, _| Some(0.0),
     )?;
     report.nodes += u64::from(on.grid.nodes());

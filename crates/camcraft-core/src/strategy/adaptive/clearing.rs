@@ -113,6 +113,7 @@ impl<'a> Clearing<'a> {
         let mut at: Option<DVec2> = None;
         let mut futile = 0;
         for _ in 0..MAX_PASSES {
+            self.p.watch.check()?;
             if self.steps >= MAX_STEPS || futile >= MAX_FUTILE {
                 break;
             }

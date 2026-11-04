@@ -33,6 +33,7 @@ impl StrategySpec {
             reorder: false,
             top: Some(HeightRef::StockTop),
             bottom: Some(HeightRef::ModelBottom),
+            rest: false,
         };
         match *self {
             // Down the surface in one pass, as Fusion's 3D finishing: it
@@ -110,7 +111,10 @@ impl StrategySpec {
             // rings from the middle out, and each the way it cuts. Into
             // material it goes down a helix, as Fusion's 3D pocket does by
             // default, or ramps along its ring, or plunges.
+            // It clears what the operations before it left, ring by ring
+            // round it, so it waits for them to be cut.
             StrategySpec::PocketClearing { .. } => Uses {
+                rest: true,
                 depths: Depths::Required,
                 entries: &[Entry::Helix, Entry::Ramp, Entry::Plunge],
                 helix: HelixSize::Flat,
@@ -192,6 +196,7 @@ impl StrategySpec {
                 // Each from its rim, to its bottom edge or the Bottom.
                 top: None,
                 bottom: Some(HeightRef::ModelBottom),
+                rest: false,
             },
         }
     }
@@ -259,6 +264,11 @@ pub struct Uses {
     /// A Bottom it cuts down to, and where that is without one; as `top`, for
     /// one linked over the part.
     pub bottom: Option<HeightRef>,
+    /// Its passes are worked out from the material the operations before it
+    /// left, so they wait for those to be cut; every other strategy's are
+    /// worked out from the part alone, at once with the others'. Linking and
+    /// cutting are always in order.
+    pub rest: bool,
 }
 
 /// How a strategy's passes are linked, where the linker links them.

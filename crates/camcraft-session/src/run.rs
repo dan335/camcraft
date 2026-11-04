@@ -1,7 +1,8 @@
 //! Running a setup: the one engine path, and the one verification policy.
 
+use camcraft_core::control::Control;
 use camcraft_core::job::{Job, JobError};
-use camcraft_core::run::{Made, Plan, SetupResult, Stage, run_prepared_planned};
+use camcraft_core::run::{Made, Plan, Progress, SetupResult, Stage, run_prepared_planned};
 use camcraft_core::setup::{Bodies, prepare};
 use camcraft_geom::mesh::TriMesh;
 use camcraft_geom::shadow::Shadow;
@@ -23,6 +24,21 @@ pub struct Ran {
     pub warnings: Vec<String>,
     /// What the checks found. The gate is "no failures here".
     pub checks: Checks,
+    /// Whether the run got to the end: every operation made, the material
+    /// verified and the checks run. What a run tells while it goes is not,
+    /// and never passes ([`Ran::passed`]).
+    pub finished: bool,
+}
+
+/// What a setup's run tells as it goes ([`run_setup_watched`]).
+#[derive(Debug, Clone)]
+pub enum Underway {
+    /// It has started on a [`Stage`].
+    Stage(Stage),
+    /// What it has made so far: every operation made, in order, with the
+    /// material after each, drawn against the part as the finished result
+    /// will be; neither verified nor checked, so not [`Ran::finished`].
+    SoFar(Box<Ran>),
 }
 
 /// The one engine path: setup `index` of `job`, with its models.
@@ -56,21 +72,33 @@ pub fn run_setup_planned(
     plans: &[Plan],
     progress: &mut dyn FnMut(Stage),
 ) -> Result<Ran, SessionError> {
-    run_setup_shadowed(job, index, models, plans, None, progress)
+    let operations = job.setups.get(index).map_or(0, |s| s.operations.len());
+    let control = Control::new(operations);
+    run_setup_watched(job, index, models, plans, None, &control, &mut |u| {
+        if let Underway::Stage(stage) = u {
+            progress(stage);
+        }
+    })
 }
 
-/// As [`run_setup_planned`], with the part's shadow from above already cast
-/// in the setup's turned frame, `turned`, as
+/// As [`run_setup_planned`], as `control` lets it and telling it how far each
+/// operation has got, and telling `underway` each stage it starts and what it
+/// has made so far, each time an operation is made. Stopped, it ends with
+/// an error that [`SessionError::is_stopped`]; what it made before was told.
+///
+/// The part's shadow from above, already cast in the setup's turned frame, is
+/// `turned`, as
 /// [`Prepared::turned_shadow`](camcraft_core::setup::Prepared::turned_shadow)
 /// gives it for the same models turned the same way: taken rather than cast
 /// again.
-pub fn run_setup_shadowed(
+pub fn run_setup_watched(
     job: &Job,
     index: usize,
     models: &Models<'_>,
     plans: &[Plan],
     turned: Option<&Shadow>,
-    progress: &mut dyn FnMut(Stage),
+    control: &Control,
+    underway: &mut dyn FnMut(Underway),
 ) -> Result<Ran, SessionError> {
     // Validation happens before anything is computed, so a bad job fails on its own
     // terms rather than part-way through an operation.
@@ -83,21 +111,52 @@ pub fn run_setup_shadowed(
         job.tolerance
     )];
     let bodies: Bodies<'_> = models.iter().map(|(n, m)| (*n, &m.body)).collect();
-    progress(Stage::Preparing);
+    underway(Underway::Stage(Stage::Preparing));
     let prepared = prepare(job, index, &bodies)?;
     if let Some(turned) = turned {
         prepared.adopt_shadow(turned);
     }
-    let result = run_prepared_planned(job, index, &prepared, &bodies, plans, progress)?;
-    notes.extend(summary(&result));
-
     let mut model_warnings = Vec::new();
     for m in job.models_for(index) {
         if let Some(model) = models.get(m.name.as_str()) {
             model_warnings.extend(model.warnings.iter().map(|w| format!("{}: {w}", m.name)));
         }
     }
-    progress(Stage::Checking);
+    // What it has made so far, grown as each operation is made.
+    let mut so_far: Option<SetupResult> = None;
+    let result =
+        run_prepared_planned(
+            job,
+            index,
+            &prepared,
+            &bodies,
+            plans,
+            control,
+            &mut |p| match p {
+                Progress::Stage(stage) => underway(Underway::Stage(stage)),
+                Progress::Begun(begun) => so_far = Some(begun.clone()),
+                Progress::Made { op, after, .. } => {
+                    let Some(result) = so_far.as_mut() else {
+                        return;
+                    };
+                    result.operations.push(op.clone());
+                    result.keyframes.push(std::sync::Arc::clone(after));
+                    let mut warnings = result.warnings();
+                    warnings.extend(model_warnings.iter().cloned());
+                    underway(Underway::SoFar(Box::new(Ran {
+                        result: result.clone(),
+                        part: prepared.part.clone(),
+                        notes: notes.clone(),
+                        warnings,
+                        checks: Checks::default(),
+                        finished: false,
+                    })));
+                }
+            },
+        )?;
+    notes.extend(summary(&result));
+
+    underway(Underway::Stage(Stage::Checking));
     let checks = checks::check(
         job,
         index,
@@ -115,6 +174,7 @@ pub fn run_setup_shadowed(
         notes,
         warnings,
         checks,
+        finished: true,
     })
 }
 
@@ -165,9 +225,10 @@ pub enum Passed {
 }
 
 impl Ran {
-    /// Whether it may be posted: it verified, and no check fails.
+    /// Whether it may be posted: it got to the end, it verified, and no check
+    /// fails.
     pub fn passed(&self) -> bool {
-        self.result.is_clean() && self.checks.passed()
+        self.finished && self.result.is_clean() && self.checks.passed()
     }
 }
 

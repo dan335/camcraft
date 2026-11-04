@@ -49,7 +49,10 @@ fn ogeom_agrees_with_opencascade() {
     assert!(!parts.is_empty());
     for part in parts {
         let name = part.display();
-        let file = part.file_name().and_then(|f| f.to_str()).unwrap_or_default();
+        let file = part
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or_default();
         if let Some((_, why)) = REFUSED_BY_OGEOM.iter().find(|(f, _)| *f == file) {
             assert!(
                 load_step_with(&part, TOLERANCE, "ogeom", |p, _| ogeom(p, TOLERANCE)).is_err(),

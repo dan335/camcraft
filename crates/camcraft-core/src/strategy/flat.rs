@@ -19,6 +19,7 @@
 use camcraft_geom::contour::Region;
 use rayon::prelude::*;
 
+use crate::control::{Watch, share};
 use crate::path::toolpath::Toolpath;
 use crate::strategy::nesting::{Nested, Order};
 use crate::strategy::parallel::Run;
@@ -45,6 +46,8 @@ pub struct FlatParams {
     pub order: Order,
     /// Stretches shorter than this are not worth the entry.
     pub min_ring_length: f64,
+    /// What it tells how far it has got, and asks whether to stop.
+    pub watch: Watch,
 }
 
 impl Default for FlatParams {
@@ -57,6 +60,7 @@ impl Default for FlatParams {
             kept_on_right: true,
             order: Order::OutsideIn,
             min_ring_length: 0.0,
+            watch: Watch::default(),
         }
     }
 }
@@ -127,10 +131,13 @@ pub fn flat_finish(
     // nothing beyond it still rests on it.
     let (overstated, arc) = (reach.overstates(), reach.arc_tolerance());
     // Each flat's pieces cleared on its own, in parallel, and cut in order.
+    let share = share(1, flats.len());
     let worked: Vec<Result<Cleared, StrategyError>> = flats
         .par_iter()
         .zip(regions.par_chunks(2))
         .map(|(&z, pair)| {
+            params.watch.check()?;
+            params.watch.add(share);
             let [clear, on] = pair else {
                 return Ok((Vec::new(), 0));
             };

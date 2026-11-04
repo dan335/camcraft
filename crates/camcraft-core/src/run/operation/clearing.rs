@@ -19,6 +19,7 @@ pub(super) fn pocket_clearing_paths(
         LevelReach::new(&work.prepared.part, work.tool, job.tolerance).map_err(in_op(op))?;
     let (top, bottom) = op.levels_3d(work.heights);
     let params = ClearingParams {
+        watch: work.watch.clone(),
         // Checked with the job: it always has one.
         stepdown: op.stepdown().unwrap_or(f64::NAN),
         stepover: op.passes.stepover,
@@ -82,6 +83,7 @@ pub(super) fn adaptive_paths(
         safe_distance: op.linking.safe_distance,
         flats,
         fine_stepdown: op.fine_stepdown(),
+        watch: work.watch.clone(),
     };
     // Room past the stock's sides for the whole tool, so a pass can start
     // beside the block rather than going down into it.

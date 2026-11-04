@@ -53,9 +53,9 @@ pub fn playing_back(state: &SetupState) -> bool {
 /// Why it cannot be played back, if it cannot.
 pub fn cannot_play_back(state: &SetupState) -> Option<&'static str> {
     if state.ran.is_none() {
-        Some("Generate the setup to play it back.")
+        Some("It plays back once it is generated.")
     } else if !paths_fit(state) {
-        Some("Out of date: generate it again to play it back.")
+        Some("Out of date: it plays back once it is generated again.")
     } else {
         None
     }

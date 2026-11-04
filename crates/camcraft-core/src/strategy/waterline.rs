@@ -54,6 +54,7 @@ use camcraft_geom::mesh::distance_to_segment;
 use glam::DVec2;
 use rayon::prelude::*;
 
+use crate::control::{Watch, share};
 use crate::cutter::dropcutter::{DropCutter, DropTest};
 use crate::path::toolpath::Toolpath;
 use crate::strategy::adaptive::Direction;
@@ -113,6 +114,8 @@ pub struct WaterlineParams {
     /// How steeply, in radians from level, the tool ramps down along the wall
     /// from a level's last ring onto the next: `None` leaves it to the linker.
     pub ramp: Option<f64>,
+    /// What it tells how far it has got, and asks whether to stop.
+    pub watch: Watch,
 }
 
 impl Default for WaterlineParams {
@@ -130,6 +133,7 @@ impl Default for WaterlineParams {
             slope_from: 0.0,
             slope_to: std::f64::consts::FRAC_PI_2,
             ramp: None,
+            watch: Watch::default(),
         }
     }
 }
@@ -210,10 +214,12 @@ pub fn waterline<T: DropTest + Sync>(
     let within = with_edge(area, params.tolerance);
 
     // Each level's passes, in parallel.
+    let share = share(1, levels.len());
     let worked: Vec<Result<Level, StrategyError>> = levels
         .par_iter()
         .zip(&forbidden)
         .map(|(&z, region)| {
+            params.watch.check()?;
             let mut level = Level::default();
             for ring in region.rings() {
                 let island = island_of(ring.points(), &footprint);
@@ -275,6 +281,7 @@ pub fn waterline<T: DropTest + Sync>(
                     }
                 }
             }
+            params.watch.add(share);
             Ok(level)
         })
         .collect();

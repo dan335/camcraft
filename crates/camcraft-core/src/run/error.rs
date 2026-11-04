@@ -75,6 +75,35 @@ pub enum RunError {
     /// A move could not be added.
     #[error(transparent)]
     Toolpath(#[from] ToolpathError),
+    /// The run was stopped ([`crate::control`]): what was made before stands,
+    /// and was told as it was made.
+    #[error("stopped")]
+    Stopped,
+    /// An operation's work ended without an answer: it panicked.
+    #[error("operation '{op}': its work ended without an answer")]
+    Lost {
+        /// Which operation.
+        op: String,
+    },
+}
+
+impl RunError {
+    /// Whether this is the run being stopped, however deep in an operation's
+    /// work it was found, rather than anything gone wrong.
+    pub fn is_stopped(&self) -> bool {
+        matches!(
+            self,
+            RunError::Stopped
+                | RunError::Strategy {
+                    source: StrategyError::Stopped(_),
+                    ..
+                }
+                | RunError::Link {
+                    source: LinkError::Stopped(_),
+                    ..
+                }
+        )
+    }
 }
 
 /// What an operation's own work can fail with, which a [`RunError`] carries

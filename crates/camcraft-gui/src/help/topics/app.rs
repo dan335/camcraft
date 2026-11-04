@@ -7,6 +7,8 @@ topics! {
         "How closely toolpaths follow the part. Smaller is more accurate but slower to work out.";
     UNITS: "Units",
         "How the app shows lengths and feeds. Jobs and programs stay in millimetres.";
+    GENERATE: "Generate",
+        "Works out each setup's toolpaths by itself as soon as an edit settles, keeping what still stands. Off, a setup is generated only when asked.";
     STOP_AT_PROBLEMS: "Stop at problems",
         "Pauses playback on reaching a failed check, a warning or a steep descent.";
     STOP_AT_OPERATION_END: "Stop at each operation's end",

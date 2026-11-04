@@ -11,7 +11,7 @@ use camcraft_core::job::{Operation, Setup, StrategySpec};
 use camcraft_core::run::Stage;
 use eframe::egui;
 
-use crate::document::{Document, Level, ModelSlot, OpStatus, Selection, Status};
+use crate::document::{Document, Level, ModelSlot, OpStatus, OpWork, Selection, Status};
 use crate::ui::theme;
 use crate::ui::widgets::{self, hint_text};
 
@@ -22,10 +22,10 @@ pub enum BrowserAction {
     AddModels,
     /// Find model `name`'s file.
     Locate(String),
-    /// Run setup `name`: all its operations.
+    /// Generate setup `name` again, as asked: whatever stopped it let go.
     Generate(String),
-    /// Run operation `.1` of setup `.0` alone.
-    GenerateOperation(String, usize),
+    /// Stop generating setup `name`.
+    Stop(String),
 }
 
 /// A change to the job, applied once the tree is drawn.
@@ -58,7 +58,9 @@ pub fn status_text(status: Status) -> &'static str {
         Status::Verified => "passed its checks",
         Status::Warnings => "passed its checks, with warnings",
         Status::Refused => "checks FAILED: it would be refused",
-        Status::Stale => "out of date",
+        Status::Stale => "out of date: generating again once editing settles",
+        Status::Stopped => "stopped: generates again once it changes",
+        Status::Failed => "generating it FAILED: tries again once it changes",
     }
 }
 
@@ -79,21 +81,23 @@ fn status_dot(ui: &mut egui::Ui, status: Status) {
         Status::NotRun => (none_yet(), false),
         Status::Verified => (widgets::Level::Ok.color(), true),
         Status::Warnings => (widgets::Level::Warn.color(), true),
-        Status::Stale => (widgets::Level::Warn.color(), false),
+        Status::Stale | Status::Stopped => (widgets::Level::Warn.color(), false),
         Status::Refused => (widgets::Level::Err.color(), true),
+        Status::Failed => (widgets::Level::Err.color(), false),
     };
     widgets::status_dot(ui, color, filled).on_hover_text(status_text(status));
 }
 
-/// Where an operation stands: a spinner while it runs, a hollow dot while it
-/// waits or has not been made, a filled one once made (amber with warnings), a
-/// hollow amber one once its setup has changed since, and a dash while it is
-/// turned off.
+/// Where an operation stands: a dot filling as far as it has got while it is
+/// generated, a hollow dot while it waits or has not been made, a filled one
+/// once made (amber with warnings), a hollow amber one once its setup has
+/// changed since, a hollow red one where its run failed, and a dash while it
+/// is turned off.
 fn op_marker(ui: &mut egui::Ui, status: OpStatus) {
     let (color, filled, text) = match status {
-        OpStatus::Running(_) => {
-            ui.add(egui::Spinner::new().size(10.0))
-                .on_hover_text("generating");
+        OpStatus::Running { work, done, .. } => {
+            widgets::status_gauge(ui, widgets::Level::Ok.color(), done)
+                .on_hover_text(work_text(work));
             return;
         }
         OpStatus::Disabled => {
@@ -108,7 +112,12 @@ fn op_marker(ui: &mut egui::Ui, status: OpStatus) {
             return;
         }
         OpStatus::NotRun => (none_yet(), false, "not generated"),
-        OpStatus::Waiting => (theme::egui_color(theme::TEXT_3), false, "waiting its turn"),
+        OpStatus::Waiting => (
+            theme::egui_color(theme::TEXT_3),
+            false,
+            "waiting for the operations before it",
+        ),
+        OpStatus::Failed => (widgets::Level::Err.color(), false, "generating it failed"),
         OpStatus::Done => (widgets::Level::Ok.color(), true, "generated"),
         OpStatus::Warnings => (
             widgets::Level::Warn.color(),
@@ -120,15 +129,31 @@ fn op_marker(ui: &mut egui::Ui, status: OpStatus) {
     widgets::status_dot(ui, color, filled).on_hover_text(text);
 }
 
-/// What a running setup is doing, in a few words: which operation of how many,
-/// or the steps either side.
-fn stage_text(stage: Stage, operations: usize) -> String {
-    match stage {
-        Stage::Preparing => "laying out".into(),
-        Stage::Operation(i) => format!("{} of {operations}", i + 1),
+/// What an operation being generated is doing, in a few words.
+pub fn work_text(work: OpWork) -> &'static str {
+    match work {
+        OpWork::Planning => "working out its passes",
+        OpWork::Cutting => "linking its passes and cutting them into the material",
+    }
+}
+
+/// How far an operation being generated has got, and for how long: beside it.
+pub fn running_text(done: f64, since: std::time::Instant) -> String {
+    format!("{:.0}% · {}", done * 100.0, widgets::elapsed(since))
+}
+
+/// What a running setup is doing, in a few words: how far its operations have
+/// got together, or the steps either side of them.
+fn stage_text(d: &Document, name: &str) -> Option<String> {
+    let running = d.setups.get(name)?.running.as_ref()?;
+    Some(match running.stage.0 {
         Stage::Verifying => "verifying".into(),
         Stage::Checking => "checking".into(),
-    }
+        _ => match d.generated_share(name) {
+            Some(share) => format!("generating {:.0}%", share * 100.0),
+            None => "laying out".into(),
+        },
+    })
 }
 
 /// Text quieter than a row's, and smaller, beside it.
@@ -437,16 +462,15 @@ fn setup(
             if let Some(edit) = setup_drop(ui, &name, s.operations.len(), line) {
                 edits.borrow_mut().push(edit);
             }
-            let progress = d.setups.get(&name).and_then(|st| st.progress);
-            if let Some((stage, _)) = progress {
-                beside(ui, stage_text(stage, s.operations.len()));
+            if let Some(text) = stage_text(d, &name) {
+                beside(ui, text);
             }
         },
         |ui| {
             let statuses = d.op_statuses(&name);
             for (i, op) in s.operations.iter().enumerate() {
                 let status = statuses.get(i).copied().unwrap_or(OpStatus::NotRun);
-                let line = operation_row(ui, d, (&name, i, status), op, edits, actions);
+                let line = operation_row(ui, d, (&name, i, status), op, edits);
                 if let Some(edit) = drop_target(ui, &name, i, line) {
                     edits.borrow_mut().push(edit);
                 }
@@ -469,7 +493,6 @@ fn operation_row(
     (name, i, status): (&str, usize, OpStatus),
     op: &Operation,
     edits: &RefCell<Vec<Edit>>,
-    actions: &RefCell<Vec<BrowserAction>>,
 ) -> egui::Rect {
     leaf(ui, |ui| {
         op_marker(ui, status);
@@ -498,25 +521,21 @@ fn operation_row(
         if op.tool.is_none() {
             widgets::badge(ui, widgets::Level::Warn, "no tool");
         }
-        if let OpStatus::Running(since) = status {
-            beside(ui, format!("{} s", since.elapsed().as_secs()));
+        if let OpStatus::Running { since, done, .. } = status {
+            beside(ui, running_text(done, since));
         }
-        r.context_menu(|ui| operation_menu(ui, d, name, i, op, edits, actions));
+        r.context_menu(|ui| operation_menu(ui, name, i, op, edits));
     })
 }
 
-/// An operation's menu: generate it alone, turn it off or on, duplicate, move or
-/// delete it.
+/// An operation's menu: turn it off or on, duplicate, move or delete it.
 fn operation_menu(
     ui: &mut egui::Ui,
-    d: &Document,
     name: &str,
     i: usize,
     op: &Operation,
     edits: &RefCell<Vec<Edit>>,
-    actions: &RefCell<Vec<BrowserAction>>,
 ) {
-    generate_op_item(ui, d, name, i, actions);
     let label = if op.enabled { "Turn off" } else { "Turn on" };
     if ui
         .button(label)
@@ -558,40 +577,33 @@ fn operation_menu(
     }
 }
 
-/// Generate operation `index` of setup `name` alone: the others keep what they
-/// have.
-fn generate_op_item(
-    ui: &mut egui::Ui,
-    doc: &Document,
-    name: &str,
-    index: usize,
-    actions: &RefCell<Vec<BrowserAction>>,
-) {
-    let why_not = doc.cannot_generate(name, Some(index));
-    if ui
-        .add_enabled(why_not.is_none(), egui::Button::new("Generate"))
-        .on_hover_text("generates this operation alone: the others keep what they have")
-        .on_disabled_hover_text(why_not.unwrap_or_default())
-        .clicked()
-    {
-        actions
-            .borrow_mut()
-            .push(BrowserAction::GenerateOperation(name.to_string(), index));
-        ui.close();
-    }
-}
-
-/// Generate setup `name`, from its menu: all its operations.
+/// Stop generating setup `name`, from its menu, while it is generated; or
+/// generate it again, as it stands.
 fn generate_item(
     ui: &mut egui::Ui,
     doc: &Document,
     name: &str,
     actions: &RefCell<Vec<BrowserAction>>,
 ) {
+    if doc.status(name) == Status::Running {
+        if ui
+            .button("Stop generating")
+            .on_hover_text("what it has made stands; it generates again once it changes")
+            .clicked()
+        {
+            actions
+                .borrow_mut()
+                .push(BrowserAction::Stop(name.to_string()));
+            ui.close();
+        }
+        return;
+    }
     let why_not = doc.cannot_generate(name, None);
     if ui
-        .add_enabled(why_not.is_none(), egui::Button::new("Generate"))
-        .on_hover_text(format!("generates setup '{name}', all its operations"))
+        .add_enabled(why_not.is_none(), egui::Button::new("Generate again"))
+        .on_hover_text(format!(
+            "generates setup '{name}' now, keeping what still stands"
+        ))
         .on_disabled_hover_text(why_not.unwrap_or_default())
         .clicked()
     {

@@ -1177,12 +1177,106 @@ fn an_operation_left_out_keeps_the_keyframe_before_it() {
     let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
     let prepared = crate::setup::prepare(&job, 0, &bodies).unwrap();
     let plans = [Plan::Generate, Plan::Skip];
-    let result = run_prepared_planned(&job, 0, &prepared, &bodies, &plans, &mut |_| {}).unwrap();
+    let result = run_prepared_planned(
+        &job,
+        0,
+        &prepared,
+        &bodies,
+        &plans,
+        &crate::control::Control::new(plans.len()),
+        &mut |_| {},
+    )
+    .unwrap();
     let k = &result.keyframes;
     assert_eq!(k.len(), 3);
     assert!(Arc::ptr_eq(&k[0], &k[1]) && Arc::ptr_eq(&k[1], &k[2]));
     assert_eq!(result.operations[0].made, Made::Disabled);
     assert_eq!(result.operations[1].made, Made::Skipped);
+}
+
+/// What a run tells, in a form to compare: each stage started, the setup
+/// begun, and each operation made by its place.
+#[derive(Debug, Clone, PartialEq)]
+enum Told {
+    Stage(Stage),
+    Begun,
+    Made(usize, Made),
+}
+
+/// Setup 0 of `job` on the dome, as `control` lets it, and what it told.
+fn told(job: &Job, control: &Control) -> (Result<SetupResult, RunError>, Vec<Told>) {
+    let body = Body::derived(dome());
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let prepared = crate::setup::prepare(job, 0, &bodies).unwrap();
+    let mut said = Vec::new();
+    let result = run_prepared_planned(job, 0, &prepared, &bodies, &[], control, &mut |p| {
+        said.push(match p {
+            Progress::Stage(s) => Told::Stage(s),
+            Progress::Begun(r) => {
+                assert!(r.operations.is_empty() && r.keyframes.len() == 1);
+                Told::Begun
+            }
+            Progress::Made { index, op, .. } => Told::Made(index, op.made),
+        });
+    });
+    (result, said)
+}
+
+/// The finish's passes, worked out from the part alone, are worked out from
+/// the start, while the roughing, which clears what is left, waits its turn;
+/// each is cut in order and told as soon as it is made, before the material
+/// is verified; and each has got all the way, as it says.
+#[test]
+fn every_operation_is_worked_out_as_soon_as_it_can_and_told_as_it_is_made() {
+    let job: Job = toml::from_str(JOB).unwrap();
+    let control = Control::new(2);
+    let (result, said) = told(&job, &control);
+    let result = result.unwrap();
+    assert_eq!(
+        said,
+        vec![
+            Told::Stage(Stage::Operation(1)),
+            Told::Begun,
+            Told::Stage(Stage::Operation(0)),
+            Told::Stage(Stage::Cutting(0)),
+            Told::Made(0, Made::Generated),
+            Told::Stage(Stage::Cutting(1)),
+            Told::Made(1, Made::Generated),
+            Told::Stage(Stage::Verifying),
+        ]
+    );
+    assert_eq!(result.operations.len(), 2);
+    assert!((control.done(0) - 1.0).abs() < 1e-9 && (control.done(1) - 1.0).abs() < 1e-9);
+}
+
+/// Stopped from its second operation on, a run still makes its first, tells
+/// it, and ends there: stopped, not failed.
+#[test]
+fn a_run_stopped_from_an_operation_makes_the_ones_before_it() {
+    let job: Job = toml::from_str(JOB).unwrap();
+    let control = Control::new(2);
+    control.stop_from(1);
+    let (result, said) = told(&job, &control);
+    assert!(matches!(result, Err(RunError::Stopped)), "{result:?}");
+    assert!(said.contains(&Told::Made(0, Made::Generated)), "{said:?}");
+    assert!(
+        !said.iter().any(|t| matches!(t, Told::Made(1, _))),
+        "{said:?}"
+    );
+}
+
+/// Stopped from the start, nothing is made.
+#[test]
+fn a_run_stopped_from_the_start_makes_nothing() {
+    let job: Job = toml::from_str(JOB).unwrap();
+    let control = Control::new(2);
+    control.stop();
+    let (result, said) = told(&job, &control);
+    assert!(matches!(result, Err(RunError::Stopped)), "{result:?}");
+    assert!(
+        !said.iter().any(|t| matches!(t, Told::Made(..))),
+        "{said:?}"
+    );
 }
 
 /// A box with walls straight down, roughed and then finished by scallop: its

@@ -374,3 +374,22 @@ fn contact_is_the_part_grown_by_the_tool() {
     );
     assert!(lo.x > -7.0 && hi.y < 7.0);
 }
+
+/// Stopped while it works, it ends there, stopped: it makes no passes.
+#[test]
+fn a_stopped_scallop_ends_stopped() {
+    let mesh = synthetic::uv_sphere(10.0, 60, 90);
+    let cutter = DropCutter::new(&mesh);
+    let tool = Ball::new(2.0).unwrap();
+    let control = crate::control::Control::new(1);
+    control.stop();
+    let params = ScallopParams {
+        watch: control.watch(0),
+        ..params(0.5)
+    };
+    let found = scallop_finish(&cutter, &tool, &disc(7.0), &params);
+    assert_eq!(
+        found.unwrap_err(),
+        StrategyError::Stopped(crate::control::Stopped)
+    );
+}

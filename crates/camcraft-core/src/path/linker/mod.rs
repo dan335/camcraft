@@ -50,6 +50,7 @@ use entry::{Way, lead_out};
 pub use params::{EntryKind, LinkError, LinkParams, LinkReport, Ramp, StayDown};
 pub use world::{Air, Material, NoPart, Surface, Unchanging};
 
+use crate::control::{Watch, share};
 use crate::is_positive;
 use crate::path::toolpath::{Arc, Move, MoveRole, PLUNGE_RATIO, Toolpath, steep};
 
@@ -64,6 +65,26 @@ pub fn link<C: Clearance, M: Material, S: Surface>(
     material: &mut M,
     surface: &S,
     params: &LinkParams,
+) -> Result<(Toolpath, LinkReport), LinkError> {
+    link_watched(
+        path,
+        clearance,
+        material,
+        surface,
+        params,
+        &Watch::default(),
+    )
+}
+
+/// As [`link`], telling `watch` how far it has got, pass by pass, and stopping
+/// between passes once it is to.
+pub fn link_watched<C: Clearance, M: Material, S: Surface>(
+    path: &Toolpath,
+    clearance: &C,
+    material: &mut M,
+    surface: &S,
+    params: &LinkParams,
+    watch: &Watch,
 ) -> Result<(Toolpath, LinkReport), LinkError> {
     check("retract_feed", params.retract_feed)?;
     check("plunge_feed", params.plunge_feed)?;
@@ -105,7 +126,10 @@ pub fn link<C: Clearance, M: Material, S: Surface>(
         cut: 0,
     };
     let mut at: Option<DVec3> = None;
-    for moves in path.passes() {
+    let passes = path.passes().count();
+    for (done, moves) in path.passes().enumerate() {
+        watch.check()?;
+        watch.report(share(done, passes));
         match moves.split_first() {
             // A link, and the pass it leads into: every move up to the next.
             Some((m, pass)) if m.role == MoveRole::Link => {

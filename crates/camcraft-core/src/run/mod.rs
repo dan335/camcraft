@@ -27,25 +27,29 @@ mod result;
 )]
 mod tests;
 
-use std::cell::OnceCell;
-use std::sync::Arc;
+use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, OnceLock};
 
 use camcraft_sim::stock::{PackedStock, PartSurface, Stock};
 use glam::DVec2;
 
+use crate::control::{Control, Watch};
 use crate::cutter::allowance::{Allowance, EffectiveTool};
 use crate::cutter::dropcutter::DropCutter;
-use crate::job::{Job, JobError, Operation, Setup, ToolSpec};
+use crate::job::{HeightContext, Job, JobError, Operation, Setup, ToolSpec};
 use crate::path::simadapt::sim_moves;
 use crate::setup::features::Picking;
 use crate::setup::{Bodies, Prepared};
 
 pub use crate::path::toolpath::PLUNGE_RATIO;
 pub use error::RunError;
-pub use result::{Made, OperationResult, Plan, SetupResult, Stage, StrategyDetail};
+pub use result::{Made, OperationResult, Plan, Progress, SetupResult, Stage, StrategyDetail};
 
 use error::in_op;
-use operation::{Target, Work, drill_holes, heights_of, not_made, planar_areas, run_operation};
+use operation::{
+    Planned, Target, Work, cut_operation, drill_holes, heights_of, not_made, plan_operation,
+    planar_areas,
+};
 use pitch::sim_pitch;
 
 /// Material further above the part than this, in millimetres, counts as left over.
@@ -65,25 +69,50 @@ pub(crate) fn run_setup(
     job.check_common()?;
     job.check_setup(index)?;
     let prepared = crate::setup::prepare(job, index, bodies)?;
-    run_prepared_planned(job, index, &prepared, bodies, &[], &mut |_| {})
+    let operations = job.setups.get(index).map_or(0, |s| s.operations.len());
+    run_prepared_planned(
+        job,
+        index,
+        &prepared,
+        bodies,
+        &[],
+        &Control::new(operations),
+        &mut |_| {},
+    )
 }
 
+/// How much of an operation working out its passes is, as it says how far it
+/// has got: the rest is linking them and cutting them into the material.
+const PLANNING: f64 = 0.85;
+
 /// Run every operation of setup `index` against its block of material, already
-/// laid out in its frame, telling `progress` each [`Stage`] as it starts. The job
-/// must have been checked. `bodies` are the models it was laid out from, where
-/// picked faces and edges are found.
+/// laid out in its frame, telling `progress` what it starts on and each
+/// operation as it is made ([`Progress`]), and `control` how far each has got.
+/// The job must have been checked. `bodies` are the models it was laid out
+/// from, where picked faces and edges are found.
 ///
 /// Each operation is done as `plans` says, by its place: an operation with no
 /// plan is worked out, and one turned off is left out whatever its plan. Kept
 /// operations are cut into the material again, so what comes after them is
 /// planned against what they leave.
+///
+/// Every operation's passes that are worked out from the part alone are
+/// worked out at once, each on a thread of its own; one that clears what the
+/// ones before it left ([`Uses::rest`](crate::job::Uses::rest)) waits for
+/// them. Each is linked over the material and cut into it in order, as soon as
+/// its passes and the ones before it are done, so the result is the same
+/// however the threads go.
+///
+/// Stopped from an operation on (`control`), the run ends there with
+/// [`RunError::Stopped`]: every operation before it was made, and told.
 pub fn run_prepared_planned(
     job: &Job,
     index: usize,
     prepared: &Prepared,
     bodies: &Bodies<'_>,
     plans: &[Plan],
-    progress: &mut dyn FnMut(Stage),
+    control: &Control,
+    progress: &mut dyn FnMut(Progress<'_>),
 ) -> Result<SetupResult, RunError> {
     let setup = job.setups.get(index).ok_or(JobError::NoSetups)?;
     let mesh = &prepared.part;
@@ -105,85 +134,70 @@ pub fn run_prepared_planned(
         .map(|b| (b.min.truncate(), b.max.truncate(), b.max.z))
         .collect();
     let mut stock = Stock::from_boxes(&blocks, ctx.stock_bottom - 1.0, sim_pitch)?;
+    // What an operation worked out at once with the ones before it is given:
+    // the stock uncut, which none of them reads.
+    let uncut = stock.clone();
     let cutter = DropCutter::new(mesh);
-    // Found once for the setup, when an operation first needs them.
-    let flats = OnceCell::new();
+    let shared = Shared {
+        job,
+        prepared,
+        bodies,
+        cutter: &cutter,
+        bounds: (lo, hi),
+        blocks: &blocks,
+        // Found once for the setup, when an operation first needs them.
+        flats: OnceLock::new(),
+        heights: &ctx,
+    };
+    let plan_of = |i: usize| plans.get(i).unwrap_or(&Plan::Generate);
+    let budget = job.tolerance + sim_pitch;
 
-    let mut operations = Vec::with_capacity(setup.operations.len());
-    let mut keyframes = Vec::with_capacity(setup.operations.len() + 1);
-    keyframes.push(Arc::new(PackedStock::pack(&stock)));
-    for (i, op) in setup.operations.iter().enumerate() {
-        let plan = plans.get(i).unwrap_or(&Plan::Generate);
-        if !op.enabled || matches!(plan, Plan::Skip) {
-            let made = if op.enabled {
-                Made::Skipped
-            } else {
-                Made::Disabled
-            };
-            operations.push(not_made(op, job.tool_for(op), made));
-            // Nothing cut: the material is as it was, and so is its keyframe.
-            let same = keyframes
-                .last()
-                .map_or_else(|| Arc::new(PackedStock::pack(&stock)), Arc::clone);
-            keyframes.push(same);
-            continue;
+    let ran = std::thread::scope(|scope| {
+        // Every operation worked out from the part alone, at once.
+        let mut early: Vec<Option<Receiver<Planning<'_>>>> =
+            setup.operations.iter().map(|_| None).collect();
+        for (i, op) in setup.operations.iter().enumerate() {
+            let made_here = op.enabled && matches!(plan_of(i), Plan::Generate);
+            if !made_here || op.strategy.uses().rest {
+                continue;
+            }
+            let (tx, rx) = channel();
+            if let Some(slot) = early.get_mut(i) {
+                *slot = Some(rx);
+            }
+            let (shared, uncut) = (&shared, &uncut);
+            let watch = control.watch(i).part(0.0, PLANNING);
+            scope.spawn(move || {
+                // Gone only if the run ended first, when the answer is wanted
+                // by no one.
+                let _ = tx.send(shared.plan(op, watch, uncut));
+            });
+            progress(Progress::Stage(Stage::Operation(i)));
         }
-        progress(Stage::Operation(i));
-        let (spec, tool) = tool_of(job, op)?;
-        if let Plan::Keep(before) = plan {
-            let mut kept = (**before).clone();
-            kept.sim = stock.apply(&sim_moves(&kept.path), &tool);
-            kept.made = Made::Kept;
-            operations.push(kept);
-            keyframes.push(Arc::new(PackedStock::pack(&stock)));
-            continue;
+        let ran = shared.run(
+            setup,
+            (plan_of, &mut early),
+            (&mut stock, sim_pitch, budget),
+            control,
+            progress,
+        );
+        // Whatever ended it, nothing still being worked out is wanted.
+        if ran.is_err() {
+            control.stop();
         }
-        // Its picks, found once, however many of its settings read them.
-        let picking = Picking::new(&op.selection, prepared, bodies, job.tolerance);
-        let ctx = heights_of(op, &picking, &ctx)?;
-        // A drilling operation's picked edges are its holes, and a 2D one's
-        // outline is what it cuts round or clears, not a limit.
-        let uses = op.strategy.uses();
-        let target = if uses.boundary {
-            Target::Limit(
-                picking
-                    .machining_boundary(&op.boundary, tool.cutter_radius())
-                    .map_err(in_op(op))?,
-            )
-        } else if uses.outline {
-            Target::Areas(planar_areas(job, op, &picking, bodies, &ctx, &tool)?)
-        } else if uses.holes {
-            Target::Holes(drill_holes(job, op, prepared, bodies, &ctx)?)
-        } else {
-            // Facing works from the stock alone.
-            Target::Limit(None)
-        };
-        let work = Work {
-            job,
-            op,
-            spec,
-            tool: &tool,
-            heights: &ctx,
-            prepared,
-            cutter: &cutter,
-            bounds: (lo, hi),
-            blocks: &blocks,
-            flats: &flats,
-        };
-        operations.push(run_operation(&work, &target, &mut stock)?);
-        keyframes.push(Arc::new(PackedStock::pack(&stock)));
-    }
+        ran
+    });
+    let (operations, keyframes, base) = match ran {
+        Ok(ran) => ran,
+        Err(e) if e.is_stopped() => return Err(RunError::Stopped),
+        Err(e) => return Err(e),
+    };
 
     // The simulator resolves the surface on a grid, so it cannot be held finer than
     // one cell plus the chordal tolerance the paths were built to; and that holds
     // across as well as down, or every vertical wall is a gouge beside it.
-    progress(Stage::Verifying);
-    let budget = job.tolerance + sim_pitch;
-    let part = cut_past(
-        setup,
-        PartSurface::from_mesh(mesh, lo, hi, sim_pitch)?,
-        &keyframes,
-    )?;
+    progress(Progress::Stage(Stage::Verifying));
+    let part = cut_past(setup, base, &keyframes)?;
     let part = Arc::new(part.reaching(budget));
     let verify = stock.verify(&part, budget, LEFTOVER_LIMIT);
 
@@ -200,6 +214,201 @@ pub fn run_prepared_planned(
         heights: ctx,
         keyframes,
     })
+}
+
+/// An operation's passes, worked out, with what they were worked out with.
+type Planning<'j> = Result<(Tooled<'j>, Planned), RunError>;
+
+/// What an operation is worked out and cut with, found once for it: its tool,
+/// as the job describes it and as it cuts, and what its heights resolve
+/// against.
+struct Tooled<'j> {
+    spec: &'j ToolSpec,
+    tool: EffectiveTool,
+    heights: HeightContext,
+}
+
+/// What a setup's operations share while it runs.
+struct Shared<'a> {
+    job: &'a Job,
+    prepared: &'a Prepared,
+    bodies: &'a Bodies<'a>,
+    cutter: &'a DropCutter<'a>,
+    bounds: (DVec2, DVec2),
+    blocks: &'a [(DVec2, DVec2, f64)],
+    flats: OnceLock<Vec<f64>>,
+    heights: &'a HeightContext,
+}
+
+/// The material a run cuts into, the grid's pitch it is simulated at, and the
+/// budget it is verified to.
+type Material<'s> = (&'s mut Stock, f64, f64);
+
+/// The material after each operation, the first the stock uncut.
+type Keyframes = Vec<Arc<PackedStock>>;
+
+impl<'a> Shared<'a> {
+    /// Operation `op`'s work, with `tooled`, telling `watch`.
+    fn work<'s>(&'s self, op: &'s Operation, tooled: &'s Tooled<'a>, watch: Watch) -> Work<'s> {
+        Work {
+            job: self.job,
+            op,
+            spec: tooled.spec,
+            tool: &tooled.tool,
+            heights: &tooled.heights,
+            prepared: self.prepared,
+            cutter: self.cutter,
+            bounds: self.bounds,
+            blocks: self.blocks,
+            flats: &self.flats,
+            watch,
+        }
+    }
+
+    /// Work out `op`'s passes, telling `watch`, over `stock`, the material as
+    /// it stands, which only a strategy that clears what is left reads.
+    fn plan(&self, op: &'a Operation, watch: Watch, stock: &Stock) -> Planning<'a> {
+        let (spec, tool) = tool_of(self.job, op)?;
+        // Its picks, found once, however many of its settings read them.
+        let picking = Picking::new(
+            &op.selection,
+            self.prepared,
+            self.bodies,
+            self.job.tolerance,
+        );
+        let heights = heights_of(op, &picking, self.heights)?;
+        // A drilling operation's picked edges are its holes, and a 2D one's
+        // outline is what it cuts round or clears, not a limit.
+        let uses = op.strategy.uses();
+        let target = if uses.boundary {
+            Target::Limit(
+                picking
+                    .machining_boundary(&op.boundary, tool.cutter_radius())
+                    .map_err(in_op(op))?,
+            )
+        } else if uses.outline {
+            Target::Areas(planar_areas(
+                self.job,
+                op,
+                &picking,
+                self.bodies,
+                &heights,
+                &tool,
+            )?)
+        } else if uses.holes {
+            Target::Holes(drill_holes(
+                self.job,
+                op,
+                self.prepared,
+                self.bodies,
+                &heights,
+            )?)
+        } else {
+            // Facing works from the stock alone.
+            Target::Limit(None)
+        };
+        let tooled = Tooled {
+            spec,
+            tool,
+            heights,
+        };
+        let planned = plan_operation(&self.work(op, &tooled, watch), &target, stock)?;
+        Ok((tooled, planned))
+    }
+
+    /// Cut each of `setup`'s operations into the material in order, each as
+    /// `plan_of` says, those worked out already (`early`) waited for, telling
+    /// `progress` each as it is made. Each operation's result, the material
+    /// after each, and the part as the simulator sees it.
+    fn run<'p>(
+        &self,
+        setup: &'a Setup,
+        (plan_of, early): (
+            impl Fn(usize) -> &'p Plan,
+            &mut [Option<Receiver<Planning<'a>>>],
+        ),
+        (stock, sim_pitch, budget): Material<'_>,
+        control: &Control,
+        progress: &mut dyn FnMut(Progress<'_>),
+    ) -> Result<(Vec<OperationResult>, Keyframes, PartSurface), RunError> {
+        let job = self.job;
+        let (lo, hi) = self.bounds;
+        // The part as the simulator sees it: worked out while the operations'
+        // passes are, and what a result is drawn against from its first.
+        let base = PartSurface::from_mesh(&self.prepared.part, lo, hi, sim_pitch)?;
+        let mut keyframes = vec![Arc::new(PackedStock::pack(stock))];
+        let begun = SetupResult {
+            setup: setup.name.clone(),
+            frame: self.prepared.frame,
+            operations: Vec::new(),
+            part: Arc::new(base.clone().reaching(budget)),
+            verify: Default::default(),
+            verify_budget: budget,
+            stocks: self.prepared.stocks.clone(),
+            stock_min: lo,
+            stock_max: hi,
+            heights: *self.heights,
+            keyframes: keyframes.clone(),
+        };
+        progress(Progress::Begun(&begun));
+
+        let mut operations: Vec<OperationResult> = Vec::with_capacity(setup.operations.len());
+        for (i, op) in setup.operations.iter().enumerate() {
+            let watch = control.watch(i);
+            if watch.stopped() {
+                return Err(RunError::Stopped);
+            }
+            let plan = plan_of(i);
+            if !op.enabled || matches!(plan, Plan::Skip) {
+                let made = if op.enabled {
+                    Made::Skipped
+                } else {
+                    Made::Disabled
+                };
+                operations.push(not_made(op, job.tool_for(op), made));
+                // Nothing cut: the material is as it was, and so is its keyframe.
+                let same = keyframes
+                    .last()
+                    .map_or_else(|| Arc::new(PackedStock::pack(stock)), Arc::clone);
+                keyframes.push(same);
+            } else if let Plan::Keep(before) = plan {
+                progress(Progress::Stage(Stage::Cutting(i)));
+                let (_, tool) = tool_of(job, op)?;
+                let mut kept = (**before).clone();
+                kept.sim = stock.apply(&sim_moves(&kept.path), &tool);
+                kept.made = Made::Kept;
+                operations.push(kept);
+                keyframes.push(Arc::new(PackedStock::pack(stock)));
+            } else {
+                let planned = match early.get_mut(i).and_then(Option::take) {
+                    Some(rx) => rx.recv().unwrap_or_else(|_| {
+                        Err(RunError::Lost {
+                            op: op.name.clone(),
+                        })
+                    }),
+                    None => {
+                        progress(Progress::Stage(Stage::Operation(i)));
+                        self.plan(op, watch.part(0.0, PLANNING), stock)
+                    }
+                };
+                let (tooled, planned) = planned?;
+                progress(Progress::Stage(Stage::Cutting(i)));
+                let work = self.work(op, &tooled, Watch::default());
+                let made = cut_operation(&work, planned, stock, &watch.part(PLANNING, 1.0))?;
+                operations.push(made);
+                keyframes.push(Arc::new(PackedStock::pack(stock)));
+            }
+            watch.report(1.0);
+            if let (Some(op), Some(after)) = (operations.last(), keyframes.last()) {
+                progress(Progress::Made {
+                    index: i,
+                    op,
+                    after,
+                });
+            }
+        }
+        Ok((operations, keyframes, base))
+    }
 }
 
 /// The part as the setup's operations mean to leave it: cut past where one with

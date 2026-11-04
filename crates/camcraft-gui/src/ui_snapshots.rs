@@ -88,11 +88,17 @@ fn shoot(harness: &mut Harness<'_, App>, name: &str) {
     }
 }
 
+/// The app, generating only when a picture asks it to, so a setup pictured
+/// before it is generated never races a run.
 fn harness() -> Harness<'static, App> {
-    Harness::builder()
+    // As the app has it, so a picture taken while it generates is drawn.
+    crate::leave_a_core_for_the_window();
+    let mut h = Harness::builder()
         .with_size(egui::vec2(1400.0, 1250.0))
         .wgpu()
-        .build_eframe(|cc| App::new(cc))
+        .build_eframe(|cc| App::new(cc));
+    h.state_mut().generate_by_itself_for_snapshot(false);
+    h
 }
 
 /// The router jig from STEP with the example job, run: the view a person gets
@@ -1435,4 +1441,99 @@ passes = {{ stepdown = 12.7, fine_stepdown = 3.25 }}
         doc.job.setups[0].operations[0].passes.fine_stepdown,
         Some(2.54)
     );
+}
+
+/// The example opened with generating by itself on, as a person has it: it
+/// generates as soon as its models load, the tree and the operation's panel
+/// saying how far each operation has got, and each operation drawn as soon as
+/// it is made; then a change to the finish generates the finish again alone,
+/// the roughing kept as it was.
+#[test]
+#[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
+fn generating_as_it_goes() {
+    use crate::document::Selection;
+    let mut h = harness();
+    h.state_mut().generate_by_itself_for_snapshot(true);
+    let ctx = h.ctx.clone();
+    h.state_mut()
+        .open_job(&ctx, repo("examples/rail-jig.camcraft"));
+    // Opened on the worker: the finish selected once it is.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while h.state_mut().doc_for_snapshot().is_none() {
+        assert!(Instant::now() < deadline, "the job never opened");
+        std::thread::sleep(Duration::from_millis(20));
+        h.step();
+    }
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.selection = Selection::Operation("top".into(), 1);
+        doc.active = Some("top".into());
+    }
+    // Under way, and then with the roughing made but the finish not.
+    let deadline = Instant::now() + Duration::from_secs(600);
+    let (mut started, mut part_way) = (false, false);
+    loop {
+        h.step();
+        let made = h
+            .state()
+            .outcome()
+            .map(|r| (r.finished, r.result.operations.len()));
+        let busy = h.state().busy().is_some();
+        let generating = h.state().generating_for_snapshot();
+        if generating && made.is_none() && !started {
+            // A moment in, so how far it has got shows.
+            for _ in 0..20 {
+                std::thread::sleep(Duration::from_millis(50));
+                h.step();
+            }
+            shoot(&mut h, "generating_started");
+            started = true;
+        }
+        if let Some((false, n)) = made
+            && n >= 1
+            && !part_way
+        {
+            h.run_steps(2);
+            shoot(&mut h, "generating_part_way");
+            part_way = true;
+        }
+        if matches!(made, Some((true, _))) && !busy {
+            break;
+        }
+        assert!(Instant::now() < deadline, "it never finished generating");
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    h.run_steps(3);
+    shoot(&mut h, "generated_by_itself");
+
+    // The finish changed: it alone is generated again, once editing settles.
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.job.setups[0].operations[1].passes.stepover *= 1.5;
+    }
+    let deadline = Instant::now() + Duration::from_secs(600);
+    let mut shot = false;
+    loop {
+        h.step();
+        let busy = h.state().busy().is_some();
+        if busy && !shot {
+            for _ in 0..10 {
+                std::thread::sleep(Duration::from_millis(50));
+                h.step();
+            }
+            shoot(&mut h, "regenerating_the_finish");
+            shot = true;
+        }
+        if shot && !busy {
+            break;
+        }
+        assert!(Instant::now() < deadline, "it never generated the change");
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    let kept = h.state().outcome().map(|r| r.result.operations[0].made);
+    assert_eq!(
+        kept,
+        Some(camcraft_core::run::Made::Kept),
+        "the roughing kept"
+    );
+    h.run_steps(3);
+    shoot(&mut h, "regenerated_the_finish");
 }

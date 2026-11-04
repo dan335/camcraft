@@ -3,8 +3,9 @@
 
 use super::run::SetupInputs;
 use super::*;
+use camcraft_core::control::Control;
 use camcraft_core::job::{Preset, StrategySpec, ToolSpec};
-use camcraft_core::run::{Plan, Stage};
+use camcraft_core::run::{Plan, RunError, Stage};
 use camcraft_session::Ran;
 use glam::DVec3;
 
@@ -13,6 +14,12 @@ use crate::view::viewport::OutlineKind;
 
 /// What the worker hands back for a run of `job`'s first setup, its models found
 /// from `dir`: what the run made, with its toolpaths laid out for drawing.
+/// Start a run of setup `name`, as the app does, generating everything.
+fn start(doc: &mut Document, name: &str) -> u64 {
+    let operations = doc.setup(name).map_or(0, |s| s.operations.len());
+    doc.started(name, Control::new(operations), &[])
+}
+
 fn ran_zero(job: &Job, dir: &Path) -> Result<(Ran, Scene), SessionError> {
     let ran = crate::test_jobs::run_setup_zero(job, dir);
     let scene = Scene::build(job, &job.setups[0], &ran.result);
@@ -357,7 +364,7 @@ fn a_file_named_another_way_is_the_same_key() {
 #[test]
 fn a_rename_undone_keeps_the_setup_run() {
     let mut doc = example();
-    let seq = doc.started("top");
+    let seq = start(&mut doc, "top");
     doc.checkpoint();
     doc.rename_setup("top", "side").unwrap();
     doc.checkpoint();
@@ -368,7 +375,7 @@ fn a_rename_undone_keeps_the_setup_run() {
         doc.setups["top"]
             .running
             .as_ref()
-            .is_some_and(|(s, _)| *s == seq)
+            .is_some_and(|r| r.seq == seq)
     );
     assert_eq!(doc.selection, Selection::Setup("top".into()));
     doc.redo();
@@ -529,27 +536,42 @@ fn a_model_is_duplicated_beside_itself() {
     assert!(doc.duplicate_model("nothing").is_none());
 }
 
-/// While a setup runs, its operations wait, run and are done in turn as
-/// word comes in; word from a run since superseded is dropped.
+/// While a setup runs, each operation waits until its work starts, then says
+/// what it is doing, working out its passes at once with the others or
+/// cutting them in its turn; word from a run since superseded is dropped. A
+/// run that fails leaves the operation it failed at marked, and the setup as
+/// it is.
 #[test]
 fn operations_follow_their_run() {
     let mut doc = example();
     assert_eq!(doc.op_status("top", 0), OpStatus::NotRun);
-    let seq = doc.started("top");
+    let seq = start(&mut doc, "top");
     assert_eq!(doc.op_status("top", 0), OpStatus::Waiting);
-    doc.progressed(seq, Stage::Operation(0));
-    assert!(matches!(doc.op_status("top", 0), OpStatus::Running(_)));
-    assert_eq!(doc.op_status("top", 1), OpStatus::Waiting);
-    doc.progressed(seq + 1, Stage::Operation(1));
-    assert!(matches!(doc.op_status("top", 0), OpStatus::Running(_)));
     doc.progressed(seq, Stage::Operation(1));
-    assert_eq!(doc.op_status("top", 0), OpStatus::Done);
-    assert!(matches!(doc.op_status("top", 1), OpStatus::Running(_)));
-    doc.progressed(seq, Stage::Checking);
-    assert_eq!(doc.op_status("top", 1), OpStatus::Done);
-    doc.finished("top", seq, Err(SessionError::Refused));
-    assert_eq!(doc.op_status("top", 0), OpStatus::NotRun);
-    assert!(doc.setups["top"].progress.is_none());
+    assert!(matches!(
+        doc.op_status("top", 1),
+        OpStatus::Running {
+            work: OpWork::Planning,
+            ..
+        }
+    ));
+    assert_eq!(doc.op_status("top", 0), OpStatus::Waiting);
+    doc.progressed(seq + 1, Stage::Operation(0));
+    assert_eq!(doc.op_status("top", 0), OpStatus::Waiting, "superseded");
+    doc.progressed(seq, Stage::Operation(0));
+    doc.progressed(seq, Stage::Cutting(0));
+    assert!(matches!(
+        doc.op_status("top", 0),
+        OpStatus::Running {
+            work: OpWork::Cutting,
+            ..
+        }
+    ));
+    assert_eq!(doc.status("top"), Status::Running);
+    doc.finished(seq, Err(SessionError::Refused));
+    assert!(doc.setups["top"].running.is_none());
+    assert_eq!(doc.op_status("top", 0), OpStatus::Failed);
+    assert_eq!(doc.status("top"), Status::Failed);
 }
 
 /// A setup renamed while it runs keeps its run: word from it, and its end, go
@@ -557,13 +579,13 @@ fn operations_follow_their_run() {
 #[test]
 fn a_setup_renamed_while_it_runs_keeps_its_run() {
     let mut doc = example();
-    let seq = doc.started("top");
+    let seq = start(&mut doc, "top");
     doc.rename_setup("top", "side").unwrap();
     doc.progressed(seq, Stage::Operation(0));
-    assert!(matches!(doc.op_status("side", 0), OpStatus::Running(_)));
-    doc.finished("top", seq, Err(SessionError::Refused));
+    assert!(matches!(doc.op_status("side", 0), OpStatus::Running { .. }));
+    doc.finished(seq, Err(SessionError::Refused));
     assert_ne!(doc.status("side"), Status::Running);
-    assert!(doc.setups["side"].progress.is_none());
+    assert!(doc.setups["side"].running.is_none());
 }
 
 /// An operation dragged to a new place takes it, the others close up, and
@@ -631,9 +653,9 @@ fn a_changed_operation_takes_its_toolpath_with_it() {
     let job = camcraft_session::parse_job(&text, "rail-jig").unwrap();
     let mut doc = Document::opened(1, Some(dir.join("rail-jig.camcraft")), job);
     let run = |doc: &mut Document| {
-        let seq = doc.started("top");
+        let seq = start(doc, "top");
         let ran = ran_zero(&doc.job, &dir);
-        doc.finished("top", seq, ran);
+        doc.finished(seq, ran);
     };
     let ops = |doc: &Document| {
         doc.setups["top"]
@@ -721,9 +743,9 @@ fn the_view_sets_up_or_plays_back() {
     let job = camcraft_session::parse_job(&text, "rail-jig").unwrap();
     let mut doc = Document::opened(1, Some(dir.join("rail-jig.camcraft")), job);
     assert!(cannot_play_back(doc.setups.entry("top".into()).or_default()).is_some());
-    let seq = doc.started("top");
+    let seq = start(&mut doc, "top");
     let ran = ran_zero(&doc.job, &dir);
-    doc.finished("top", seq, ran);
+    doc.finished(seq, ran);
     let whole = doc.setups["top"].ran.as_ref().unwrap().scene.segments.len();
 
     let state = doc.setups.get_mut("top").unwrap();
@@ -798,9 +820,9 @@ fn one_operation_is_generated_alone() {
     let text = text.replace("sled_base.step", "hinge_jig.step");
     let job = camcraft_session::parse_job(&text, "rail-jig").unwrap();
     let mut doc = Document::opened(1, Some(dir.join("rail-jig.camcraft")), job);
-    let seq = doc.started("top");
+    let seq = start(&mut doc, "top");
     let ran = ran_zero(&doc.job, &dir);
-    doc.finished("top", seq, ran);
+    doc.finished(seq, ran);
     let kinds = |plans: &[Plan]| -> Vec<&'static str> {
         plans
             .iter()
@@ -816,9 +838,10 @@ fn one_operation_is_generated_alone() {
         OpStatus::Done | OpStatus::Warnings
     ));
     assert_eq!(kinds(&doc.plans(0, Some(1))), ["keep", "generate"]);
-    assert!(
-        doc.plans(0, None).is_empty(),
-        "the setup generates everything"
+    assert_eq!(
+        kinds(&doc.plans(0, None)),
+        ["keep", "keep"],
+        "the setup keeps what stands"
     );
 
     doc.job.setups[0].operations[0].passes.feed += 100.0;
@@ -828,6 +851,11 @@ fn one_operation_is_generated_alone() {
         OpStatus::Done | OpStatus::Warnings
     ));
     assert_eq!(kinds(&doc.plans(0, Some(1))), ["skip", "generate"]);
+    assert_eq!(
+        kinds(&doc.plans(0, None)),
+        ["generate", "generate"],
+        "what comes after a changed operation cuts what it leaves"
+    );
     assert_eq!(doc.status("top"), Status::Stale);
 
     doc.set_enabled("top", 0, false);
@@ -1067,18 +1095,22 @@ fn undo_and_redo_step_through_finished_edits() {
 #[test]
 fn results_know_when_they_are_out_of_date() {
     let mut doc = example();
-    let first = doc.started("top");
-    let second = doc.started("top");
+    let first = start(&mut doc, "top");
+    let second = start(&mut doc, "top");
     assert_eq!(doc.status("top"), Status::Running);
     let failed = || Err(SessionError::Refused);
-    doc.finished("top", first, failed());
+    doc.finished(first, failed());
     assert_eq!(
         doc.status("top"),
         Status::Running,
         "a superseded reply is dropped"
     );
-    doc.finished("top", second, failed());
-    assert_eq!(doc.status("top"), Status::NotRun);
+    doc.finished(second, failed());
+    assert_eq!(
+        doc.status("top"),
+        Status::Failed,
+        "a failed run leaves the setup as it is until it changes"
+    );
 
     // A stand-in result, as a run would leave it.
     let inputs = SetupInputs::of(&doc.job, &doc.models, 0).unwrap();
@@ -1246,4 +1278,112 @@ fn an_operations_defaults_are_a_new_one_with_its_tool() {
         doc.operation_defaults(&setup, i).unwrap().passes.feed,
         900.0
     );
+}
+
+/// A setup that can be generated and has not been wants a run, until it is
+/// running; stopped, it waits as it is until it changes; and one whose run
+/// failed is not tried again until it changes either.
+#[test]
+fn a_setup_wants_generating_until_it_runs_or_is_left_as_it_is() {
+    let (mut doc, setup) = with_plate();
+    doc.job.tools.insert("t".into(), ToolSpec::default());
+    let op = doc
+        .add_operation(&setup, StrategySpec::Parallel { angle: 0.0 })
+        .unwrap();
+    doc.job.setups[0].operations[op].tool = Some("t".into());
+    assert_eq!(doc.wanting_runs(), vec![setup.clone()]);
+
+    let seq = start(&mut doc, &setup);
+    assert!(doc.wanting_runs().is_empty(), "running");
+    doc.stop_generating(&setup);
+    let running = doc.setups[&setup].running.as_ref().unwrap();
+    assert_eq!(running.control.stopped_from(), Some(0));
+    doc.finished(seq, Err(SessionError::Run(RunError::Stopped)));
+    assert_eq!(doc.status(&setup), Status::Stopped);
+    assert!(doc.wanting_runs().is_empty(), "stopped where it stands");
+    doc.job.setups[0].operations[op].passes.feed += 1.0;
+    assert_eq!(doc.wanting_runs(), vec![setup.clone()], "changed since");
+
+    let seq = start(&mut doc, &setup);
+    doc.finished(seq, Err(SessionError::Refused));
+    assert_eq!(doc.status(&setup), Status::Failed);
+    assert!(doc.wanting_runs().is_empty(), "failed where it stands");
+    doc.resume_generating(&setup);
+    assert_eq!(doc.wanting_runs(), vec![setup], "asked for again");
+}
+
+/// A run in flight is stopped from the first of its operations changed since
+/// it was sent, the ones before it going on; from the first of all when what
+/// shapes every cut changes; and not at all for an operation added after them.
+#[test]
+fn a_run_is_stopped_from_what_changed() {
+    let mut doc = example();
+    let _ = start(&mut doc, "top");
+    let stopped = |doc: &Document| {
+        doc.setups["top"]
+            .running
+            .as_ref()
+            .unwrap()
+            .control
+            .stopped_from()
+    };
+    doc.stop_changed_runs();
+    assert_eq!(stopped(&doc), None);
+    doc.duplicate_operation("top", 1);
+    doc.stop_changed_runs();
+    assert_eq!(stopped(&doc), None, "added after them all");
+    doc.job.setups[0].operations[1].passes.feed += 1.0;
+    doc.stop_changed_runs();
+    assert_eq!(stopped(&doc), Some(1));
+    doc.job.tolerance *= 2.0;
+    doc.stop_changed_runs();
+    assert_eq!(stopped(&doc), Some(0));
+}
+
+/// Editing settles once the job has stayed as it is a moment, or longer while
+/// a field is still being typed in.
+#[test]
+fn editing_settles_after_a_moment_as_it_is() {
+    use std::time::{Duration, Instant};
+    let mut doc = example();
+    let t = Instant::now() + Duration::from_secs(10);
+    assert!(doc.settled(t, false), "nothing changed since it opened");
+    doc.job.tolerance *= 2.0;
+    assert!(!doc.settled(t, false), "just changed");
+    assert!(!doc.settled(t + Duration::from_millis(100), false));
+    assert!(doc.settled(t + Duration::from_millis(400), false));
+    assert!(
+        !doc.settled(t + Duration::from_millis(400), true),
+        "still typing"
+    );
+    assert!(doc.settled(t + Duration::from_millis(1600), true));
+}
+
+/// What a run has made so far shows as it is made: the operations made are
+/// done, the rest still under way, and the setup still running; the
+/// playhead of a setup shown before stays where it was.
+#[test]
+fn what_a_run_has_made_so_far_shows_at_once() {
+    let (mut doc, dir) = quick_example();
+    let seq = start(&mut doc, "top");
+    let (ran, scene) = ran_zero(&doc.job, &dir).unwrap();
+    doc.finished(seq, Ok((ran.clone(), scene.clone())));
+    doc.setups.get_mut("top").unwrap().view.at = Playhead::at(3);
+
+    let seq = start(&mut doc, "top");
+    let mut first = ran.clone();
+    first.result.operations.truncate(1);
+    first.result.keyframes.truncate(2);
+    first.finished = false;
+    let scene = Scene::build(&doc.job, &doc.job.setups[0], &first.result);
+    doc.so_far(seq, first, scene);
+    assert_eq!(doc.status("top"), Status::Running);
+    assert!(matches!(
+        doc.op_status("top", 0),
+        OpStatus::Done | OpStatus::Warnings
+    ));
+    assert_eq!(doc.op_status("top", 1), OpStatus::Waiting);
+    let state = &doc.setups["top"];
+    assert_eq!(state.ran.as_ref().unwrap().ran.result.operations.len(), 1);
+    assert_eq!(state.view.at, Playhead::at(3), "kept where it was");
 }

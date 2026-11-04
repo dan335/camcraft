@@ -58,6 +58,7 @@ use camcraft_geom::heightmap::HeightMap;
 use glam::DVec2;
 use rayon::prelude::*;
 
+use crate::control::{Watch, share};
 use crate::cutter::tool::{Cutter, ToolProfile};
 use crate::path::toolpath::Toolpath;
 use crate::strategy::nesting::{Cuts, Nested, distance, nearest};
@@ -94,6 +95,8 @@ pub struct ClearingParams {
     /// Extra levels, each on a flat face of the part, raised by the stock to
     /// leave down: cut after the level below each, over what it left.
     pub flats: Vec<f64>,
+    /// What it tells how far it has got, and asks whether to stop.
+    pub watch: Watch,
 }
 
 impl Default for ClearingParams {
@@ -107,6 +110,7 @@ impl Default for ClearingParams {
             min_ring_length: 2.0,
             kept_on_right: true,
             flats: Vec::new(),
+            watch: Watch::default(),
         }
     }
 }
@@ -204,9 +208,12 @@ pub fn pocket_clearing(
     // Each level's rings depend on nothing but its own regions, so the levels are
     // worked in parallel and emitted in order: the result is the same on any number
     // of cores.
+    let share = share(1, levels.len());
     let worked: Vec<Result<Option<Level>, StrategyError>> = levels
         .par_iter()
         .map(|&(z, below)| {
+            params.watch.check()?;
+            params.watch.add(share);
             let Some((reachable, kept)) = regions_at(z) else {
                 return Ok(None);
             };

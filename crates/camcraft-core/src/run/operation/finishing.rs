@@ -13,6 +13,7 @@ pub(super) fn parallel_paths(
     let (job, op) = (work.job, work.op);
     let (sweep_lo, sweep_hi) = work.sweep();
     let params = ParallelParams {
+        watch: work.watch.clone(),
         stepover: op.passes.stepover,
         angle: angle.to_radians(),
         tolerance: job.tolerance,
@@ -72,6 +73,8 @@ pub(super) fn scallop_paths(
     let area = finish_area(work, limit, true)?;
     let (slope_from, slope_to) = work.slopes();
     let params = ScallopParams {
+        // The passes most of the work, the rings round the walls the rest.
+        watch: work.watch.part(0.0, 0.75),
         stepover: op.passes.stepover,
         tolerance: job.tolerance,
         feed: op.passes.feed,
@@ -158,6 +161,7 @@ fn steep_walls(
         .map_err(in_op(op))?;
     let (top, bottom) = op.levels_3d(work.heights);
     let params = WaterlineParams {
+        watch: work.watch.part(0.75, 1.0),
         stepdown: op.passes.stepover * steep.sin(),
         top,
         bottom,
@@ -197,6 +201,7 @@ pub(super) fn contour_paths(
     let (top, bottom) = op.levels_3d(work.heights);
     let (slope_from, slope_to) = work.slopes();
     let params = WaterlineParams {
+        watch: work.watch.clone(),
         // Checked with the job: it always has one.
         stepdown: op.stepdown().unwrap_or(f64::NAN),
         top,
@@ -238,6 +243,7 @@ pub(super) fn flat_paths(
     let (top, bottom) = op.levels_3d(work.heights);
     let slack = job.tolerance;
     let params = FlatParams {
+        watch: work.watch.clone(),
         stepover: op.passes.stepover,
         tolerance: job.tolerance,
         feed: op.passes.feed,
@@ -287,6 +293,7 @@ pub(super) fn centred(
 pub(super) fn project_params(work: &Work<'_>) -> ProjectParams {
     let (slope_from, slope_to) = work.slopes();
     ProjectParams {
+        watch: work.watch.clone(),
         stepover: work.op.passes.stepover,
         tolerance: work.job.tolerance,
         feed: work.op.passes.feed,

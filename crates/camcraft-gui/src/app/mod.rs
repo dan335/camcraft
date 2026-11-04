@@ -13,6 +13,7 @@
 //! The menu bar, the job tabs and the start screen are in [`menu`], the questions
 //! the app stops to ask in [`prompts`], and posting in [`post`].
 
+mod generating;
 mod menu;
 mod post;
 mod prompts;
@@ -21,6 +22,7 @@ mod snapshot;
 
 use std::path::{Path, PathBuf};
 
+use camcraft_core::control::Control;
 use camcraft_session::{Posting, SessionError};
 use eframe::egui;
 
@@ -261,35 +263,36 @@ impl App {
 
     // ---- work -----------------------------------------------------------------
 
-    /// Generate setup `setup` of the showing job: all its operations, or its
-    /// operation `only` alone, keeping the others as they were made.
-    fn generate(&mut self, ctx: &egui::Context, setup: &str, only: Option<usize>) {
-        let Some(doc) = self.docs.get_mut(self.active) else {
+    /// Generate setup `setup` of job `at`, by its place among the open jobs:
+    /// every operation not still standing from before, keeping those that are.
+    /// Asked for, it says why it cannot be where it cannot.
+    fn generate_in(&mut self, ctx: &egui::Context, at: usize, setup: &str, asked: bool) {
+        let Some(doc) = self.docs.get_mut(at) else {
             return;
         };
         let Some(index) = doc.setup_index(setup) else {
             return;
         };
-        if let Some(why) = doc.cannot_generate(setup, only) {
-            doc.note(Level::Warn, format!("'{setup}' cannot run: {why}"));
+        if let Some(why) = doc.cannot_generate(setup, None) {
+            if asked {
+                doc.note(Level::Warn, format!("'{setup}' cannot run: {why}"));
+            }
             return;
         }
         let Some(models) = doc.models_for_run(index) else {
             return;
         };
-        let plans = doc.plans(index, only);
-        let what = only.and_then(|k| doc.operation(setup, k)).map_or_else(
-            || format!("'{setup}'"),
-            |op| format!("'{setup}/{}'", op.name),
-        );
-        let seq = doc.started(setup);
-        doc.note(Level::Info, format!("generating {what}…"));
+        let plans = doc.plans(index, None);
+        let operations = doc.setup(setup).map_or(0, |s| s.operations.len());
+        let control = Control::new(operations);
+        let seq = doc.started(setup, control.clone(), &plans);
         let request = Request::Run {
             job: Box::new(doc.job.clone()),
             setup: index,
             models,
             plans,
             shadow: doc.turned_shadow(index),
+            control,
         };
         let task = Task::Run {
             setup: setup.to_string(),
@@ -298,14 +301,53 @@ impl App {
         self.worker.start(ctx, doc.id, task, request);
     }
 
-    /// Run every setup of the showing job.
+    /// Generate setup `setup` of the showing job again, as asked: let go of
+    /// whatever stopped it, and start it now if it is not running.
+    fn generate(&mut self, ctx: &egui::Context, setup: &str) {
+        let Some(doc) = self.docs.get_mut(self.active) else {
+            return;
+        };
+        doc.resume_generating(setup);
+        if doc.status(setup) != Status::Running {
+            self.generate_in(ctx, self.active, setup, true);
+        }
+    }
+
+    /// Generate every setup of the showing job again, as asked.
     fn generate_all(&mut self, ctx: &egui::Context) {
         let names: Vec<String> = self
             .doc()
             .map(|d| d.job.setups.iter().map(|s| s.name.clone()).collect())
             .unwrap_or_default();
         for name in names {
-            self.generate(ctx, &name, None);
+            self.generate(ctx, &name);
+        }
+    }
+
+    /// Stop generating setup `setup` of the showing job: what it has made
+    /// stands, and it is left as it is until it changes or is asked for.
+    fn stop_generating(&mut self, setup: &str) {
+        if let Some(doc) = self.docs.get_mut(self.active) {
+            doc.stop_generating(setup);
+        }
+    }
+
+    /// Generate, by themselves, the setups of every open job that want it
+    /// ([`Document::wanting_runs`]), once editing each has settled; and stop
+    /// each run in flight from whatever has changed since it was sent.
+    fn generate_wanted(&mut self, ctx: &egui::Context, editing: bool) {
+        let now = std::time::Instant::now();
+        for at in 0..self.docs.len() {
+            let Some(doc) = self.docs.get_mut(at) else {
+                continue;
+            };
+            doc.stop_changed_runs();
+            if !self.settings.generate || !doc.settled(now, editing) {
+                continue;
+            }
+            for name in doc.wanting_runs() {
+                self.generate_in(ctx, at, &name, false);
+            }
         }
     }
 
@@ -340,9 +382,15 @@ impl App {
                     doc.progressed(seq, stage);
                 }
             }
-            (Task::Run { setup, seq }, Reply::Ran(ran)) => {
+            (Task::Run { seq, .. }, Reply::SoFar(so_far)) => {
                 if let Some(doc) = self.find(id) {
-                    doc.finished(&setup, seq, *ran);
+                    let (ran, scene) = *so_far;
+                    doc.so_far(seq, ran, scene);
+                }
+            }
+            (Task::Run { seq, .. }, Reply::Ran(ran)) => {
+                if let Some(doc) = self.find(id) {
+                    doc.finished(seq, *ran);
                 }
             }
             (Task::Shadow { layout }, Reply::Shadowed(result)) => {
@@ -361,8 +409,8 @@ impl App {
                 );
                 match self.find(id) {
                     Some(doc) => {
-                        if let Task::Run { setup, seq } = &task {
-                            doc.finished(setup, *seq, Err(SessionError::Refused));
+                        if let Task::Run { seq, .. } = &task {
+                            doc.lost(*seq, text.clone());
                         }
                         // Not waited for again, nor asked for again.
                         if let Task::Shadow { layout } = &task {
@@ -497,16 +545,12 @@ impl App {
                     return;
                 };
                 let status = doc.status(&name);
+                let share = doc.generated_share(&name);
                 let state = doc.setups.entry(name.clone()).or_default();
+                if state.ran.is_some() || status == Status::Running {
+                    generating::banner(ui, status, share);
+                }
                 if state.ran.is_some() {
-                    if status == Status::Stale {
-                        widgets::diagnostic(
-                            ui,
-                            widgets::Level::Warn,
-                            "Out of date: the setup has changed since this ran. Generate it again.",
-                            |_| {},
-                        );
-                    }
                     playback::result(ui, state, m);
                     ui.separator();
                 }
@@ -520,10 +564,8 @@ impl App {
             match a {
                 BrowserAction::AddModels => self.dialog.open(FileRequest::AddModels(id, None), ""),
                 BrowserAction::Locate(name) => self.dialog.open(FileRequest::Locate(id, name), ""),
-                BrowserAction::Generate(name) => self.generate(&ctx, &name, None),
-                BrowserAction::GenerateOperation(name, i) => {
-                    self.generate(&ctx, &name, Some(i));
-                }
+                BrowserAction::Generate(name) => self.generate(&ctx, &name),
+                BrowserAction::Stop(name) => self.stop_generating(&name),
             }
         }
     }
@@ -539,42 +581,17 @@ impl App {
             armed: self.picking.armed(id),
             shown: self.picking.shown(id),
         };
-        // An operation's panel ends with a way to generate it, kept in sight
-        // below its fields however far they scroll.
-        let mut generate = None;
+        // An operation's panel ends with where generating it stands, kept in
+        // sight below its fields however far they scroll.
+        let mut asked = None;
+        let auto = self.settings.generate;
         if let Selection::Operation(setup, index) = &doc.selection {
             egui::Panel::bottom("operation-generate")
                 .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 8)))
                 .show(ui, |ui| {
-                    let why = doc.cannot_generate(setup, Some(*index));
-                    let running = doc.status(setup) == Status::Running;
-                    ui.horizontal(|ui| {
-                        let label = if running { "Generating…" } else { "Generate" };
-                        let clicked = ui
-                            .add_enabled_ui(why.is_none() && !running, |ui| {
-                                widgets::button(
-                                    ui,
-                                    widgets::Variant::Primary,
-                                    widgets::Size::Md,
-                                    Some(widgets::Icon::Play),
-                                    label,
-                                )
-                            })
-                            .inner
-                            .on_hover_text(
-                                "Generate this operation alone: the others keep what they \
-                                 have, and are cut again into the material, so it cuts what \
-                                 they leave",
-                            )
-                            .on_disabled_hover_text(why.unwrap_or_default())
-                            .clicked();
-                        if running {
-                            ui.spinner();
-                        }
-                        if clicked {
-                            generate = Some((setup.clone(), *index));
-                        }
-                    });
+                    if let Some(what) = generating::footer(ui, doc, (setup, *index), auto) {
+                        asked = Some((setup.clone(), what));
+                    }
                 });
         }
         let panel = egui::ScrollArea::vertical()
@@ -582,8 +599,10 @@ impl App {
             .show(ui, |ui| properties::show(ui, doc, m, picks))
             .inner;
         self.operation_tab = panel.operation_tab;
-        if let Some((setup, index)) = generate {
-            self.generate(&ctx, &setup, Some(index));
+        match asked {
+            Some((setup, generating::Asked::Stop)) => self.stop_generating(&setup),
+            Some((setup, generating::Asked::Generate)) => self.generate(&ctx, &setup),
+            None => {}
         }
         for a in panel.actions {
             match a {
@@ -821,13 +840,16 @@ impl eframe::App for App {
         if !editing {
             self.load_models(&ctx);
         }
+        for doc in &mut self.docs {
+            doc.invalidate_changed_operations();
+        }
+        self.generate_wanted(&ctx, editing);
         self.shortcuts(&ctx);
         if self.active >= self.docs.len() {
             self.active = self.docs.len().saturating_sub(1);
         }
         if let Some(doc) = self.docs.get_mut(self.active) {
             doc.tidy_selection();
-            doc.invalidate_changed_operations();
             if let Some(name) = doc.active.clone() {
                 // The work zero moved: keep the view on the part, which moved with
                 // it. The camera is the viewport's if this setup is showing, else

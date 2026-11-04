@@ -19,14 +19,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
+use camcraft_core::control::Control;
 use camcraft_core::job::{Job, ModelDef, Setup, Transform};
 use camcraft_core::run::{Plan, Stage};
 use camcraft_core::setup::Prepared;
 use camcraft_geom::bvh::MeshBvh;
 use camcraft_geom::shadow::Shadow;
 use camcraft_session::{
-    Model, Models, Posting, Ran, SessionError, load_job_model, plan_posting, read_job,
-    run_setup_shadowed, write_posting,
+    Model, Models, Posting, Ran, SessionError, Underway, load_job_model, plan_posting, read_job,
+    run_setup_watched, write_posting,
 };
 use eframe::egui;
 
@@ -108,6 +109,9 @@ pub enum Request {
         /// a layout of the same models turned the same way: taken rather than
         /// cast again.
         shadow: Option<Arc<Shadow>>,
+        /// What stops it, and is told how far each operation has got: the
+        /// window holds the same.
+        control: Control,
     },
     /// Cast a setup's part's shadow from above, into the setup as laid out,
     /// where the window finds it once it is cast ([`Prepared::shadow`]).
@@ -150,8 +154,11 @@ pub enum Reply {
     Planned(Box<Result<Posting, SessionError>>),
     /// Programs written: how many.
     Written(Result<usize, SessionError>),
-    /// Where a run has got to: sent as it goes, before [`Reply::Ran`].
+    /// What a run has started on: sent as it goes, before [`Reply::Ran`].
     Progress(Stage),
+    /// What a run has made so far, with its toolpaths laid out for drawing:
+    /// sent each time it makes an operation, before [`Reply::Ran`].
+    SoFar(Box<(Ran, Scene)>),
     /// The thread stopped without replying: it panicked, most likely inside the
     /// geometry kernel. What it was doing.
     Died(&'static str),
@@ -190,9 +197,9 @@ impl Worker {
         let (tx, rx) = channel();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let reply = execute(request, &mut |stage| {
+            let reply = execute(request, &mut |word| {
                 // The receiver is gone only if the app is closing; nothing to tell.
-                let _ = tx.send(Reply::Progress(stage));
+                let _ = tx.send(word);
                 ctx.request_repaint();
             });
             let _ = tx.send(reply);
@@ -218,7 +225,7 @@ impl Worker {
                     // Say so rather than wait forever for a reply that cannot come.
                     Err(TryRecvError::Disconnected) => Reply::Died(p.what),
                 };
-                let done = !matches!(reply, Reply::Progress(_));
+                let done = !matches!(reply, Reply::Progress(_) | Reply::SoFar(_));
                 out.push((p.doc, p.task.clone(), reply));
                 if done {
                     return false;
@@ -229,7 +236,8 @@ impl Worker {
     }
 }
 
-fn execute(request: Request, progress: &mut dyn FnMut(Stage)) -> Reply {
+/// Do `request`, telling `word` what it has got to as it goes, where it says.
+fn execute(request: Request, word: &mut dyn FnMut(Reply)) -> Reply {
     match request {
         Request::Open { path } => Reply::Opened(Box::new(read_job(&path).map(|job| (path, job)))),
         Request::Load {
@@ -250,15 +258,32 @@ fn execute(request: Request, progress: &mut dyn FnMut(Stage)) -> Reply {
             models,
             plans,
             shadow,
+            control,
         } => {
             let refs: Models<'_> = models.iter().map(|(n, m)| (n.as_str(), &**m)).collect();
-            let ran = run_setup_shadowed(&job, setup, &refs, &plans, shadow.as_deref(), progress);
-            Reply::Ran(Box::new(ran.map(|ran| {
-                let scene = job
-                    .setups
+            let scene_of = |ran: &Ran| {
+                job.setups
                     .get(setup)
                     .map(|s| Scene::build(&job, s, &ran.result))
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+            };
+            let ran = run_setup_watched(
+                &job,
+                setup,
+                &refs,
+                &plans,
+                shadow.as_deref(),
+                &control,
+                &mut |u| match u {
+                    Underway::Stage(stage) => word(Reply::Progress(stage)),
+                    Underway::SoFar(ran) => {
+                        let scene = scene_of(&ran);
+                        word(Reply::SoFar(Box::new((*ran, scene))));
+                    }
+                },
+            );
+            Reply::Ran(Box::new(ran.map(|ran| {
+                let scene = scene_of(&ran);
                 (ran, scene)
             })))
         }

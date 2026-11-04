@@ -1,7 +1,7 @@
 //! Running one operation: its strategy's paths, ordered, linked over the material
 //! as it stands, and cut into it.
 
-use std::cell::OnceCell;
+use std::sync::OnceLock;
 
 use camcraft_geom::contour::Region;
 use camcraft_geom::topology::EdgeKind;
@@ -10,6 +10,7 @@ use glam::{DVec2, DVec3, dvec2};
 
 use super::error::in_op;
 use super::{Made, OperationResult, PLUNGE_RATIO, RunError, StrategyDetail};
+use crate::control::Watch;
 use crate::cutter::allowance::{Allowance, EffectiveTool};
 use crate::cutter::dropcutter::DropCutter;
 use crate::cutter::tool::ToolProfile;
@@ -19,7 +20,7 @@ use crate::job::{
 };
 use crate::path::linker::{
     ClearanceField, EntryKind, LinkParams, LinkReport, Material, Ramp, StayDown, Surface,
-    highest_under, link,
+    highest_under, link_watched,
 };
 use crate::path::ordering::order_passes;
 use crate::path::simadapt::sim_moves_of;
@@ -81,7 +82,9 @@ pub(super) struct Work<'a> {
     pub(super) blocks: &'a [(DVec2, DVec2, f64)],
     /// The heights of the part's flat faces, found for the setup when an
     /// operation first needs them.
-    pub(super) flats: &'a OnceCell<Vec<f64>>,
+    pub(super) flats: &'a OnceLock<Vec<f64>>,
+    /// What its work tells how far it has got, and asks whether to stop.
+    pub(super) watch: Watch,
 }
 
 impl Work<'_> {
@@ -152,13 +155,31 @@ pub(super) enum Target {
     Areas(Vec<Area>),
 }
 
-/// Work out one operation's paths, link them over the material as it stands, and
-/// cut them into it, to `target`.
-pub(super) fn run_operation(
+/// An operation's passes, worked out and put in order, its tabs on them: ready
+/// to be linked over the material and cut into it ([`cut_operation`]).
+pub(super) struct Planned {
+    /// The passes, with the links between them still to make.
+    ordered: Toolpath,
+    /// How many passes the strategy made.
+    passes: u64,
+    /// What the strategy reported.
+    detail: StrategyDetail,
+    /// What is worth a person's attention so far.
+    warnings: Vec<String>,
+    /// How much shorter ordering made the travel between passes, as a share.
+    travel_saved: f64,
+}
+
+/// Work out one operation's passes, to `target`, and put them in order. Only a
+/// strategy that clears what the operations before it left
+/// ([`Uses::rest`](crate::job::Uses::rest)) reads `stock`, the material as it
+/// stands; every other works from the part alone, so may be worked out at once
+/// with the operations before it.
+pub(super) fn plan_operation(
     work: &Work<'_>,
     target: &Target,
-    stock: &mut Stock,
-) -> Result<OperationResult, RunError> {
+    stock: &Stock,
+) -> Result<Planned, RunError> {
     let op = work.op;
     let ctx = work.heights;
     let mut warnings = Vec::new();
@@ -303,6 +324,33 @@ pub(super) fn run_operation(
         }
         _ => ordered,
     };
+    Ok(Planned {
+        ordered,
+        passes,
+        detail,
+        warnings,
+        travel_saved: order.saved(),
+    })
+}
+
+/// Link `planned`, operation `work`'s passes, over `stock`, the material as the
+/// operations before it left it, and cut them into it as they are linked,
+/// telling `watch` how far it has got.
+pub(super) fn cut_operation(
+    work: &Work<'_>,
+    planned: Planned,
+    stock: &mut Stock,
+    watch: &Watch,
+) -> Result<OperationResult, RunError> {
+    let op = work.op;
+    let ctx = work.heights;
+    let Planned {
+        ordered,
+        passes,
+        detail,
+        mut warnings,
+        travel_saved,
+    } = planned;
 
     // Traverses clear the material as it stood before the operation: never lower
     // than it will stand, so they are safe whatever the operation cuts first.
@@ -328,12 +376,13 @@ pub(super) fn run_operation(
         rapid_contacts: 0,
         deepest: 0.0,
     };
-    let (path, mut links) = link(
+    let (path, mut links) = link_watched(
         &ordered,
         &clearance,
         &mut cutting,
         &surface,
         &link_params(work, clearance_z),
+        watch,
     )
     .map_err(in_op(op))?;
     // Adaptive clearing makes its own links at the level, and its own helixes:
@@ -377,7 +426,7 @@ pub(super) fn run_operation(
         path,
         sim,
         passes,
-        travel_saved: order.saved(),
+        travel_saved,
         detail,
         links,
         clearance_z,

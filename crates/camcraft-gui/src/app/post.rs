@@ -22,7 +22,9 @@ pub(super) fn post_blocker(doc: &Document, names: &[String]) -> Option<String> {
     names.iter().find_map(|n| match doc.status(n) {
         Status::NotRun => Some(format!("'{n}' has not been generated")),
         Status::Running => Some(format!("'{n}' is still generating")),
-        Status::Stale => Some(format!("'{n}' is out of date: generate it again")),
+        Status::Stale => Some(format!("'{n}' is out of date: it is generated again first")),
+        Status::Stopped => Some(format!("'{n}' was stopped before it was all generated")),
+        Status::Failed => Some(format!("generating '{n}' failed")),
         Status::Verified | Status::Warnings | Status::Refused => None,
     })
 }

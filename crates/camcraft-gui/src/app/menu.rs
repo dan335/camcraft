@@ -6,7 +6,7 @@ use eframe::egui;
 use super::post::post_blocker;
 use super::{App, log_color};
 use crate::browser;
-use crate::document::Selection;
+use crate::document::{Selection, Status};
 use crate::file_dialog::FileRequest;
 use crate::ui::theme;
 use crate::ui::widgets::{self, Icon, Size, Variant};
@@ -77,16 +77,34 @@ impl App {
             });
             ui.menu_button("Setup", |ui| {
                 let active = self.doc().and_then(|d| d.active.clone());
-                if ui
-                    .add_enabled(active.is_some(), egui::Button::new("Generate"))
+                let running = active
+                    .as_ref()
+                    .zip(self.doc())
+                    .is_some_and(|(n, d)| d.status(n) == Status::Running);
+                if running {
+                    if ui
+                        .button("Stop generating")
+                        .on_hover_text(
+                            "what it has made stands; it generates again once it changes",
+                        )
+                        .clicked()
+                        && let Some(name) = &active
+                    {
+                        self.stop_generating(name);
+                        ui.close();
+                    }
+                } else if ui
+                    .add_enabled(active.is_some(), egui::Button::new("Generate again"))
+                    .on_hover_text("generates the setup now, keeping what still stands")
                     .clicked()
-                    && let Some(name) = active
+                    && let Some(name) = &active
                 {
-                    self.generate(&ctx, &name, None);
+                    self.generate(&ctx, name);
                     ui.close();
                 }
                 if ui
-                    .add_enabled(id.is_some(), egui::Button::new("Generate all"))
+                    .add_enabled(id.is_some(), egui::Button::new("Generate all again"))
+                    .on_hover_text("generates every setup now, keeping what still stands")
                     .clicked()
                 {
                     self.generate_all(&ctx);

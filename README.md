@@ -74,8 +74,9 @@ cd camcraft
 cargo run --release -- examples/rail-jig.camcraft
 ```
 
-Press Generate, read the checks, play the program back, then Post. A plain
-`cargo run` opens the app too, but a debug build is slower.
+It generates the toolpaths by itself as soon as the models load, showing each
+operation as it is made; read the checks, play the program back, then Post. A
+plain `cargo run` opens the app too, but a debug build is slower.
 
 Or use the command line:
 

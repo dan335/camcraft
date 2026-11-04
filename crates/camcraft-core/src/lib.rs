@@ -32,6 +32,7 @@
 //!   core count. Parallel map-and-collect preserves order and is fine;
 //!   order-dependent floating point reductions are not.
 
+pub mod control;
 pub mod cutter;
 pub mod job;
 pub mod path;

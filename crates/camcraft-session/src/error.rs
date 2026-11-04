@@ -156,3 +156,11 @@ pub enum SessionError {
     #[error("verification failed")]
     Refused,
 }
+
+impl SessionError {
+    /// Whether this is a run being stopped ([`RunError::is_stopped`]), not
+    /// anything gone wrong.
+    pub fn is_stopped(&self) -> bool {
+        matches!(self, SessionError::Run(e) if e.is_stopped())
+    }
+}

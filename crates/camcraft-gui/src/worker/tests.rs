@@ -3,15 +3,20 @@ use camcraft_session::fs::job_dir;
 use std::time::{Duration, Instant};
 
 fn wait(worker: &mut Worker) -> (DocId, Task, Reply) {
+    wait_telling(worker, &mut |_| {})
+}
+
+/// The answer, telling `word` each word that comes on the way to it.
+fn wait_telling(worker: &mut Worker, word: &mut dyn FnMut(&Reply)) -> (DocId, Task, Reply) {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
-        // Progress on the way is not the answer.
-        if let Some(reply) = worker
-            .poll()
-            .into_iter()
-            .find(|(_, _, r)| !matches!(r, Reply::Progress(_)))
-        {
-            return reply;
+        for reply in worker.poll() {
+            // Word on the way is not the answer.
+            if matches!(reply.2, Reply::Progress(_) | Reply::SoFar(_)) {
+                word(&reply.2);
+            } else {
+                return reply;
+            }
         }
         assert!(Instant::now() < deadline, "the worker never replied");
         std::thread::sleep(Duration::from_millis(20));
@@ -71,12 +76,21 @@ fn a_run_through_the_worker_matches_the_session_directly() {
             models: models.clone(),
             plans: Vec::new(),
             shadow: None,
+            control: camcraft_core::control::Control::new(job.setups[0].operations.len()),
         },
     );
     assert!(!worker.idle());
-    let (_, _, Reply::Ran(ran)) = wait(&mut worker) else {
+    // What it has made comes as it is made, laid out for drawing, before the
+    // answer.
+    let mut so_far = Vec::new();
+    let (_, _, Reply::Ran(ran)) = wait_telling(&mut worker, &mut |r| {
+        if let Reply::SoFar(s) = r {
+            so_far.push(s.0.result.operations.len());
+        }
+    }) else {
         panic!("expected a run");
     };
+    assert_eq!(so_far, [1], "one operation, told once it was made");
     let (ran, scene) = (*ran).unwrap();
     assert!(worker.idle());
 

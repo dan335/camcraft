@@ -34,13 +34,14 @@ use camcraft_geom::steps::bounded_count;
 use glam::{DVec2, DVec3, dvec2, dvec3};
 use rayon::prelude::*;
 
+use crate::control::Watch;
 use crate::cutter::dropcutter::{DropCutter, DropTest};
 use crate::path::toolpath::{PLUNGE_RATIO, Toolpath};
 use crate::strategy::projected::Emit;
 use crate::strategy::{StrategyError, check};
 
 /// How to lay out the passes.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParallelParams {
     /// Distance between neighbouring passes, in millimetres.
     pub stepover: f64,
@@ -60,6 +61,8 @@ pub struct ParallelParams {
     /// at cutting feed. Past this drop the pass is broken instead, and the linker
     /// turns the break into a retract, a traverse and a controlled plunge.
     pub max_cut_step: f64,
+    /// What it tells how far it has got, and asks whether to stop.
+    pub watch: Watch,
 }
 
 impl Default for ParallelParams {
@@ -71,6 +74,7 @@ impl Default for ParallelParams {
             feed: 1000.0,
             max_depth: 12,
             max_cut_step: 0.5,
+            watch: Watch::default(),
         }
     }
 }
@@ -216,11 +220,16 @@ pub fn parallel_finish_within<T: DropTest + Sync>(
 
     let lines = bounded_count(((v1 - start) / params.stepover).floor() + 1.0);
 
-    // Each line's runs, in order.
+    // Each line's runs, in order; none once it is to stop.
+    let share = 1.0 / f64::from(lines.max(1));
     let swept: Vec<(Vec<Run>, ParallelReport)> = (0..lines)
         .into_par_iter()
         .map_init(Vec::new, |scratch, i| {
             let mut found = ParallelReport::default();
+            if params.watch.stopped() {
+                return (Vec::new(), found);
+            }
+            params.watch.add(share);
             let v = start + f64::from(i) * params.stepover;
             // Zigzag: reverse alternate passes so the tool does not traverse back.
             let reversed = i % 2 == 1;
@@ -258,6 +267,7 @@ pub fn parallel_finish_within<T: DropTest + Sync>(
             (runs, found)
         })
         .collect();
+    params.watch.check()?;
 
     let mut emit = Emit::new(params.feed);
     let mut report = ParallelReport::default();
