@@ -598,15 +598,18 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                     return Ok(false);
                 }
                 // Only between points on the part. A pass beside a wall, below
-                // where the tool would come to rest from above, is not on it: the
-                // way from it to another is through the wall, however short, and
-                // the part sampled between them may not show it.
-                let below = |p: DVec3| {
+                // where the tool would come to rest from above, is not on it:
+                // the way from it to another is through the wall, however
+                // short, and the part sampled between them may not show it.
+                // Nor is one with nothing under the tool, as a ring round a
+                // wall's foot beyond the part: the way up from it is up the
+                // wall.
+                let off = |p: DVec3| {
                     self.surface
                         .at(p.truncate())
-                        .is_some_and(|z| z > p.z + self.p.tolerance)
+                        .is_none_or(|z| z > p.z + self.p.tolerance)
                 };
-                if below(from) || below(to) {
+                if off(from) || off(to) {
                     return Ok(false);
                 }
                 // Fusion's default transition, smooth: a half turn tangent to
