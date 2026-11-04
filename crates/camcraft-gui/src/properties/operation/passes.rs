@@ -2,8 +2,8 @@
 //! apart they are, the levels it cuts in, the stock it leaves and its tabs.
 
 use camcraft_core::job::{
-    ContourOrder, CutDirection, Depths, FaceDirection, Finishing, Leave, Operation, PassOrder,
-    Passes, RadialDirection, StockToLeave, StrategySpec, TabShape, Tabs,
+    ContourOrder, CutDirection, Depths, FaceDirection, FeedOptimization, Finishing, Leave,
+    Operation, PassOrder, Passes, RadialDirection, StockToLeave, StrategySpec, TabShape, Tabs,
 };
 use eframe::egui;
 
@@ -317,6 +317,116 @@ pub(super) fn passes(
         ui.add_space(theme::SPACE_2);
         smoothing(ui, d, m, &mut op.passes);
     }
+    if uses.feed_optimization {
+        ui.add_space(theme::SPACE_4);
+        ui.label(widgets::section_label("Feed optimization"));
+        ui.add_space(theme::SPACE_2);
+        feed_optimization(ui, d, m, &mut op.passes, diameter);
+    }
+}
+
+/// Fusion's Feed Optimization: ticked to slow the cuts at their corners,
+/// then where and to what. A value left out is camcraft's default, and says
+/// what it comes to.
+fn feed_optimization(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    m: Measure,
+    passes: &mut Passes,
+    diameter: Option<f64>,
+) {
+    let mut on = passes.feed_optimization.is_some();
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut on, "Slow down in corners")
+            .help(&pass::FEED_OPTIMIZATION);
+        d.reset_group(ui, "passes.feed_optimization");
+    });
+    match (on, passes.feed_optimization.is_some()) {
+        (true, false) => passes.feed_optimization = Some(FeedOptimization::default()),
+        (false, true) => passes.feed_optimization = None,
+        _ => {}
+    }
+    let feed = passes.feed;
+    let Some(f) = passes.feed_optimization.as_mut() else {
+        return;
+    };
+    let radius = diameter.map(|d| d / 2.0);
+    let tool_radius = match radius {
+        Some(r) => format!("the tool's radius: {}", m.length(r, 2)),
+        None => "the tool's radius".to_string(),
+    };
+    let start = radius.unwrap_or(3.0);
+    ui.add_space(theme::SPACE_2);
+    form(ui, "feed_optimization", |ui| {
+        d.row(
+            ui,
+            &pass::MAX_DIRECTIONAL_CHANGE,
+            "passes.feed_optimization.max_directional_change",
+            |ui| {
+                ui.add(
+                    widgets::number(&mut f.max_directional_change)
+                        .speed(1.0)
+                        .range(1.0..=179.0)
+                        .suffix("°"),
+                );
+            },
+        );
+        d.row(
+            ui,
+            &pass::REDUCED_FEED_RADIUS,
+            "passes.feed_optimization.reduced_feed_radius",
+            |ui| {
+                widgets::optional(
+                    ui,
+                    &mut f.reduced_feed_radius,
+                    start,
+                    &tool_radius,
+                    |ui, v| {
+                        m.length_field(ui, v, 0.01, 100.0, "");
+                    },
+                );
+            },
+        );
+        d.row(
+            ui,
+            &pass::REDUCED_FEED_DISTANCE,
+            "passes.feed_optimization.reduced_feed_distance",
+            |ui| {
+                widgets::optional(
+                    ui,
+                    &mut f.reduced_feed_distance,
+                    start,
+                    &tool_radius,
+                    |ui, v| {
+                        m.length_field(ui, v, 0.01, 100.0, "");
+                    },
+                );
+            },
+        );
+        d.row(
+            ui,
+            &pass::REDUCED_FEED,
+            "passes.feed_optimization.reduced_feed",
+            |ui| {
+                let half = format!(
+                    "half the cutting feed: {} {}",
+                    m.feed_number(0.5 * feed),
+                    m.feed_unit()
+                );
+                widgets::optional(ui, &mut f.reduced_feed, 0.5 * feed, &half, |ui, v| {
+                    m.feed_field(ui, v, 50_000.0);
+                });
+            },
+        );
+        d.row(
+            ui,
+            &pass::ONLY_INNER_CORNERS,
+            "passes.feed_optimization.only_inner_corners",
+            |ui| {
+                ui.checkbox(&mut f.only_inner_corners, "those turning into the material");
+            },
+        );
+    });
 }
 
 /// Fusion's Smoothing: ticked to fit the passes with arcs and longer lines,

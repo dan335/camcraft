@@ -36,6 +36,7 @@ impl StrategySpec {
             bottom: Some(HeightRef::ModelBottom),
             rest: false,
             smoothing: true,
+            feed_optimization: true,
         };
         match *self {
             // Down the surface in one pass, as Fusion's 3D finishing: it
@@ -142,6 +143,10 @@ impl StrategySpec {
                 links: Links::Own,
                 helix: HelixSize::Flat,
                 entries: &[Entry::Helix, Entry::Plunge],
+                // It holds the load at every step, round its tight loops too:
+                // a corner of its never loads the tool more than its walls,
+                // so slowing there would only lose time.
+                feed_optimization: false,
                 ..cuts_loops
             },
             // A 2D operation's order is its own: what is inside before what frees
@@ -209,6 +214,7 @@ impl StrategySpec {
                 rest: false,
                 // A hole is straight down and up.
                 smoothing: false,
+                feed_optimization: false,
             },
         }
     }
@@ -289,6 +295,9 @@ pub struct Uses {
     /// Its passes may be smoothed, fitted with arcs and longer lines
     /// ([`Passes::smoothing`](super::Passes::smoothing)).
     pub smoothing: bool,
+    /// Its cuts may be slowed at their corners
+    /// ([`Operation::feed_optimization`](super::Operation::feed_optimization)).
+    pub feed_optimization: bool,
 }
 
 /// How a strategy's passes are linked, where the linker links them.

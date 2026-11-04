@@ -715,3 +715,28 @@ pub fn smoothing(painter: &egui::Painter, rect: egui::Rect) {
     }
     s.text([74.0, 2.0], Align2::CENTER_BOTTOM, "one arc", true);
 }
+
+/// A pass round a pocket's corner, from above: up its right wall and along
+/// its top, climbing, the material on its right. The span either side of the
+/// corner, slowed, in amber, with the distance it starts before it.
+pub fn feed_optimization(painter: &egui::Painter, rect: egui::Rect) {
+    let s = Sketch::new(painter, rect, [0.0, 0.0], [100.0, 44.0]);
+    s.rect([0.0, 0.0], [96.0, 44.0], Tone::Part);
+    s.rect([0.0, 0.0], [66.0, 38.0], Tone::Stock);
+    let corner = [60.0_f32, 32.0];
+    let (before, after) = ([60.0_f32, 20.0], [48.0_f32, 32.0]);
+    s.path(&[[60.0, 4.0], before], Move::Cut, false);
+    s.line(&[before, corner, after], hot(), 2.0);
+    s.path(&[after, [6.0, 32.0]], Move::Cut, false);
+    s.ring(corner, 6.0, faint(), 1.0);
+    s.text([46.0, 26.0], Align2::RIGHT_TOP, "slowed", true);
+    s.dim(
+        [70.0, 20.0],
+        [70.0, 32.0],
+        "distance",
+        Align2::LEFT_CENTER,
+        true,
+    );
+    s.dashed(&[before, [70.0, 20.0]], faint(), 1.0);
+    s.text([2.0, 43.0], Align2::LEFT_TOP, "from above", false);
+}

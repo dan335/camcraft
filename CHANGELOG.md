@@ -32,6 +32,11 @@ the same notes at more length.
   moves fitted with arcs and longer lines within a tolerance, before linking,
   so what is simulated and checked is the program. On a serving tray the
   adaptive program went from 34 MB to 6 MB, and 1.3 million lines to 181,000.
+- **Smoothing fits helices**, about Z: a ramp round a ring is a few arcs
+  falling as they turn, rather than lines.
+- **Feed optimisation**, as Fusion's, on every operation but drilling and
+  adaptive clearing: cuts slowed into and out of sharp corners and round tight
+  arcs, only those turning into the material unless asked.
 - **A link staying down keeps clear of the material** between the passes it
   joins, where it could come a tenth of the tool into it.
 

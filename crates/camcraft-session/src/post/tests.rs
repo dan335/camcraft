@@ -1,7 +1,7 @@
 use super::*;
 use crate::test_support::run_small;
 use crate::{load_models, parse_job, run_setup};
-use camcraft_core::job::{Coolant, SpindleDirection};
+use camcraft_core::job::{Coolant, FeedOptimization, SpindleDirection};
 
 #[test]
 fn program_names_are_numbered_and_file_safe() {
@@ -190,17 +190,22 @@ fn every_program_reads_back_to_its_path() {
     assert!(reads_back_for_every_post(&job, 0, &ran) > 1000);
 }
 
-/// The example job with every operation smoothed: its arcs, level and
-/// upright, read back for every post, each a cut of the path, and the job is
-/// fewer moves than without, all of it still verified.
+/// The example job with every operation smoothed and slowed at every corner:
+/// its arcs, level and upright, and its moves cut where the feed changes,
+/// read back for every post, each a cut of the path, and the job is fewer
+/// moves than without, all of it still verified.
 #[test]
-fn smoothed_programs_read_back_to_their_paths() {
+fn smoothed_and_slowed_programs_read_back_to_their_paths() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let text = std::fs::read_to_string(dir.join("rail-jig.camcraft")).unwrap();
     let text = text.replace("sled_base.step", "hinge_jig.step");
     let mut job = parse_job(&text, "rail-jig").unwrap();
     for op in &mut job.setups[0].operations {
         op.passes.smoothing = true;
+        op.passes.feed_optimization = Some(FeedOptimization {
+            only_inner_corners: false,
+            ..FeedOptimization::default()
+        });
     }
     let loaded = load_models(&job, &dir, &[0]).unwrap();
     let ran = run_setup(&job, 0, &crate::models_of(&loaded)).unwrap();
@@ -214,6 +219,14 @@ fn smoothed_programs_read_back_to_their_paths() {
     assert!(!fitted.is_empty());
     assert!(fitted.iter().any(|f| f.arcs > 0), "{fitted:?}");
     assert!(fitted.iter().all(|f| f.after <= f.before), "{fitted:?}");
+    let slowed: u64 = ran
+        .result
+        .operations
+        .iter()
+        .filter_map(|op| op.corners)
+        .map(|c| c.corners + c.arcs)
+        .sum();
+    assert!(slowed > 0);
     assert!(reads_back_for_every_post(&job, 0, &ran) > 100);
 }
 

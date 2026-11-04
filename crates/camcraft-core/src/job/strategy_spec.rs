@@ -338,6 +338,27 @@ impl StrategySpec {
         }
     }
 
+    /// Whether every pass cuts the same way, climbing or conventional, so the
+    /// material is on the same side of each: not where they cut both ways, or
+    /// where which way is not a setting.
+    pub fn one_way(&self) -> bool {
+        match *self {
+            StrategySpec::Profile { .. }
+            | StrategySpec::Pocket { .. }
+            | StrategySpec::PocketClearing { .. } => true,
+            StrategySpec::Adaptive { direction, .. }
+            | StrategySpec::Scallop { direction, .. }
+            | StrategySpec::Contour { direction, .. }
+            | StrategySpec::Flat { direction, .. }
+            | StrategySpec::Spiral { direction, .. }
+            | StrategySpec::MorphedSpiral { direction, .. } => direction != CutDirection::BothWays,
+            StrategySpec::Parallel { .. }
+            | StrategySpec::Radial { .. }
+            | StrategySpec::Face { .. }
+            | StrategySpec::Drill { .. } => false,
+        }
+    }
+
     /// The range of slopes it keeps to, in degrees from level, where it has one.
     pub fn slopes(&self) -> Option<(f64, f64)> {
         match *self {

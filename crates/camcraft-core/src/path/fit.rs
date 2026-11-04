@@ -18,9 +18,10 @@
 //! changes what it is for is still a point of the path.
 //!
 //! An arc is only fitted where a three-axis machine cuts one: the points level,
-//! or square to X or Y ([`principal`](super::toolpath::principal)), never
-//! turning more than a half turn, so an arc written by its radius is not
-//! ambiguous. A line or arc stands for the moves it replaces only if every one
+//! or square to X or Y ([`principal`](super::toolpath::principal)), or round a
+//! circle seen from above while climbing or falling steadily as they turn, a
+//! helix about Z, as a ramp round a ring is; never turning more than a half
+//! turn, so an arc written by its radius is not ambiguous. A line or arc stands for the moves it replaces only if every one
 //! of their points is within the tolerance of it, and every one of its points
 //! within the tolerance of them: going the same way along it, never back.
 //!
@@ -240,16 +241,21 @@ fn plane_of(points: &[DVec3]) -> Option<(DVec3, DVec3, DVec3, f64)> {
 
 /// The arc from the first of `points` to the last, through the middle one,
 /// that stands for the moves through them: in a plane a machine cuts arcs in,
-/// going round one way, by less than a quarter turn a move and at most a half
-/// turn in all, every move within `tolerance` of it. `None` where there is
-/// none, as where they are in a line.
+/// or else a helix about Z, round a circle seen from above and climbing
+/// steadily as it turns; going round one way, by less than a quarter turn a
+/// move and at most a half turn in all, every move within `tolerance` of it.
+/// `None` where there is none, as where they are in a line.
 fn fit_arc(points: &[DVec3], tolerance: f64) -> Option<Arc> {
     if points.len() < 3 {
         return None;
     }
-    let (axis, u, v, along) = plane_of(points)?;
+    let first = *points.first()?;
+    let (axis, u, v, along, helix) = match plane_of(points) {
+        Some((axis, u, v, along)) => (axis, u, v, along, false),
+        None => (DVec3::Z, DVec3::X, DVec3::Y, first.z, true),
+    };
     let flat = |p: DVec3| DVec2::new(p.dot(u), p.dot(v));
-    let a = flat(*points.first()?);
+    let a = flat(first);
     let m = flat(*points.get(points.len() / 2)?);
     let b = flat(*points.last()?);
     let c = circumcentre(a, m, b)?;
@@ -257,9 +263,13 @@ fn fit_arc(points: &[DVec3], tolerance: f64) -> Option<Arc> {
     if !(r > 4.0 * tolerance && r <= LARGEST_RADIUS) {
         return None;
     }
+    // Each move's turn about the centre, and how far its chord strays from
+    // the circle across the axis: by its ends' distances from it and by how
+    // far the circle bows out past it.
     let mut sweep = 0.0;
     let mut ccw: Option<bool> = None;
     let mut prev = a;
+    let mut strays = Vec::with_capacity(points.len());
     for &p in points.iter().skip(1) {
         let q = flat(p);
         let (from, to) = (prev - c, q - c);
@@ -272,18 +282,31 @@ fn fit_arc(points: &[DVec3], tolerance: f64) -> Option<Arc> {
         }
         ccw = Some(turn > 0.0);
         sweep += turn;
-        // The move's chord strays from the circle by its ends' distances from
-        // it and by how far the circle bows out past it.
         let half = prev.distance(q) * 0.5;
         let bow = r - (r * r - half * half).max(0.0).sqrt();
         let off = (prev.distance(c) - r).abs().max((q.distance(c) - r).abs());
         if off + bow > tolerance {
             return None;
         }
+        strays.push((off + bow, sweep));
         prev = q;
     }
-    if sweep.abs() > PI {
+    if sweep.abs() > PI + 1e-9 {
         return None;
+    }
+    if helix {
+        // A helix climbs as it turns, so each point is where it is along Z
+        // by how far round it has turned; a chord between two points climbs
+        // as steadily, so strays along Z no further than its ends.
+        let rise = points.last()?.z - first.z;
+        let mut was = 0.0;
+        for (&(across, turned), p) in strays.iter().zip(points.iter().skip(1)) {
+            let off = (p.z - (first.z + rise * turned / sweep)).abs();
+            if across + off.max(was) > tolerance {
+                return None;
+            }
+            was = off;
+        }
     }
     let centre = u * c.x + v * c.y + axis * along;
     Some(Arc {

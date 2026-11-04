@@ -18,6 +18,7 @@ use crate::job::{
     ContourOrder, CutDirection, Depths, Entry, FaceDirection, HeightContext, Job, Links, Operation,
     PassOrder, Picks, RadialDirection, Retraction, SpindleDirection, StrategySpec, ToolSpec,
 };
+use crate::path::corners::{CornerParams, CornerReport, slow_corners};
 use crate::path::fit::{FitReport, fit_arcs};
 use crate::path::linker::{
     ClearanceField, EntryKind, LinkParams, LinkReport, Material, Ramp, StayDown, Surface,
@@ -181,6 +182,8 @@ pub(super) struct Planned {
     travel_saved: f64,
     /// What smoothing did, where it was asked for.
     smoothing: Option<FitReport>,
+    /// What feed optimisation did, where it was asked for.
+    corners: Option<CornerReport>,
 }
 
 /// Work out one operation's passes, to `target`, and put them in order. Only a
@@ -386,6 +389,24 @@ pub(super) fn plan_operation(
         }
         None => (ordered, None),
     };
+
+    // Feed optimisation, on the fitted passes, whose arcs say how tight they
+    // turn: the corners the program has are the ones slowed.
+    let (ordered, corners) = match op.feed_optimization(work.tool.cutter_radius()) {
+        Some(f) => {
+            let params = CornerParams {
+                most_turn: f.max_directional_change.to_radians(),
+                radius: f.radius,
+                distance: f.distance,
+                feed: f.feed,
+                only_inner: f.only_inner_corners,
+                material_on_right: op.strategy.one_way().then(|| work.kept_on_right()),
+            };
+            let (slowed, report) = slow_corners(&ordered, &params)?;
+            (slowed, Some(report))
+        }
+        None => (ordered, None),
+    };
     Ok(Planned {
         ordered,
         passes,
@@ -393,6 +414,7 @@ pub(super) fn plan_operation(
         warnings,
         travel_saved: order.saved(),
         smoothing,
+        corners,
     })
 }
 
@@ -414,6 +436,7 @@ pub(super) fn cut_operation(
         mut warnings,
         travel_saved,
         smoothing,
+        corners,
     } = planned;
 
     // Traverses clear the material as it stood before the operation: never lower
@@ -497,6 +520,7 @@ pub(super) fn cut_operation(
         steep_cut_descents: steep,
         deepest_cut_descent_mm: deepest,
         smoothing,
+        corners,
         warnings,
         // The rest is the operation's own: its name, strategy and tool.
         ..not_made(op, Some(work.spec), Made::Generated)
@@ -544,6 +568,7 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
         detail,
         links: LinkReport::default(),
         smoothing: None,
+        corners: None,
         clearance_z: 0.0,
         steep_cut_descents: 0,
         deepest_cut_descent_mm: 0.0,

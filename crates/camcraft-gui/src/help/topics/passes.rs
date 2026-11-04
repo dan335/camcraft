@@ -73,6 +73,24 @@ topics! {
     SMOOTHING_TOLERANCE: "Smoothing tolerance",
         "How far the fitted moves may stray from the passes, either way. Empty, the job's tolerance.",
         Figure::Smoothing;
+    FEED_OPTIMIZATION: "Feed optimization",
+        "Slows the cuts into and out of sharp corners and round tight arcs, where the tool is wrapped in more material than along the walls either side.",
+        Figure::FeedOptimization;
+    MAX_DIRECTIONAL_CHANGE: "Maximum directional change",
+        "The most a cut may turn into the next without slowing. A sharper turn is a corner.",
+        Figure::FeedOptimization;
+    REDUCED_FEED_RADIUS: "Reduced feed radius",
+        "An arc tighter than this is slowed along. Empty, the tool's radius.",
+        Figure::FeedOptimization;
+    REDUCED_FEED_DISTANCE: "Reduced feed distance",
+        "How far before a corner the cut slows, and after it it speeds up again. Empty, the tool's radius.",
+        Figure::FeedOptimization;
+    REDUCED_FEED: "Reduced feedrate",
+        "The feed at corners. A cut already slower keeps its own. Empty, half the cutting feed.",
+        Figure::FeedOptimization;
+    ONLY_INNER_CORNERS: "Only inner corners",
+        "Slows only the corners that turn into the material, as a pocket's do, not a boss's. Where the passes cut both ways, every corner is slowed.",
+        Figure::FeedOptimization;
     SLOT_CLEARING: "Slot clearing",
         "A pocket gone down into is first cut a slot along its middle, then cleared out from it.",
         Figure::SlotClearing;

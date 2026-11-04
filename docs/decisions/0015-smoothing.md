@@ -29,7 +29,10 @@ is off unless asked for, as Fusion's is.
   else, or a change of role or feed, ends a run and is kept, so every pass
   starts and ends where it did.
 - **Arcs only where a three-axis machine cuts them:** the points level, or
-  square to X or Y (`G17`, `G18`, `G19`), never more than a half turn, so an
+  square to X or Y (`G17`, `G18`, `G19`), or round a circle seen from above and
+  climbing or falling steadily as they turn, a helix about Z, as a ramp round a
+  ring is (taken 2026-11-04: each point is held to where the helix is at the
+  angle it has turned to, along Z as well as across); never more than a half turn, so an
   arc written by its radius is not ambiguous, and no larger than 2 m across,
   where a line does. Each move turns by less than a quarter turn, all the same
   way.
@@ -55,5 +58,6 @@ read back as a controller would, cuts the paths it was posted from.
 
 ## Not taken yet
 
-- Helical arcs: a ramp round a ring stays lines.
-- Feed optimisation at corners, Fusion's other filter on the same tab.
+- Helices about X or Y: a helix is fitted only about Z.
+- Feed optimisation at corners, Fusion's other filter on the same tab, is
+  taken: [decision 0016](0016-feed-optimisation.md).

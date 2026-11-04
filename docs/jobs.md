@@ -267,6 +267,26 @@ tray, adaptive's program went from 1,307,065 lines to 181,294 and scallop's from
 passes = { smoothing = true, smoothing_tolerance = 0.01 }
 ```
 
+Helices are fitted too, about Z: a ramp round a ring is a few `G2`s or `G3`s
+falling as they turn.
+
+**Feed optimisation** (`passes.feed_optimization`, off by default) is Fusion's
+Feed Optimization: cuts are slowed into and out of their sharp corners and round
+their tight arcs, where the tool is wrapped in more material than along the
+walls ([decision 0016](decisions/0016-feed-optimisation.md)). A corner turns by
+more than `max_directional_change` (degrees, 45); an arc tighter than
+`reduced_feed_radius` is slowed along; the cut slows `reduced_feed_distance`
+before each and speeds up as far after; and it slows to `reduced_feed` (mm/min).
+The radius and distance are the tool's radius when not given, the feed half the
+cutting feed. With `only_inner_corners` (on unless turned off), only the corners
+turning into the material are slowed, judged from which side of the passes the
+material is on: where they cut both ways, every corner is. Every strategy but
+drilling and adaptive clearing has it; adaptive holds its load at every step.
+
+```toml
+passes = { feed_optimization = { reduced_feed = 600, reduced_feed_distance = 2 } }
+```
+
 **Leads** (`linking.leads`) are how a profile comes onto each ring and goes off
 it, in the waste beside it, as Fusion's lead-in and lead-out, the same both ways:
 down a vertical arc (`vertical`), along a straight (`straight`), and round a level

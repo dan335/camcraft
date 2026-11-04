@@ -117,7 +117,10 @@ it.
   wall until it is given its own. A drill has none, and a profile on the
   boundary only a floor. Every strategy but drilling has *Smoothing* at the
   foot of *Passes*, ticked to fit arcs and longer lines, then its tolerance,
-  the job's unless given. Profiles can leave tabs, from *Passes*: shape,
+  the job's unless given; and below it, all but adaptive, *Feed optimization*,
+  ticked to slow down in corners, then the most a cut may turn, the reduced
+  feed's radius, distance and feed, each saying its default, and whether only
+  inner corners are slowed. Profiles can leave tabs, from *Passes*: shape,
   width, height and spacing. Which rows a
   strategy shows is the core's to say (`StrategySpec::uses`), as is which
   settings it reads. The panel's foot says where generating the operation

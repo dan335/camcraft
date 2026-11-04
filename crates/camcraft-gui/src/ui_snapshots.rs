@@ -432,7 +432,12 @@ fn setup_panel() {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 2_usize));
     h.run_steps(3);
     shoot(&mut h, "operation_heights_rough");
-    // And its passes: stock to leave ticked, the wall's and the floor's.
+    // And its passes: stock to leave ticked, the wall's and the floor's, and
+    // slowing down in corners.
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.job.setups[0].operations[0].passes.feed_optimization =
+            Some(camcraft_core::job::FeedOptimization::default());
+    }
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 3_usize));
     h.run_steps(3);
     shoot(&mut h, "operation_passes_rough");

@@ -41,6 +41,8 @@ pub enum Figure {
     SlotClearing,
     /// Short moves round a curve, and the arc that stands for them.
     Smoothing,
+    /// A pass slowed into and out of a pocket's corner, from above.
+    FeedOptimization,
     /// Passes at an angle to X, from above.
     PassAngle,
     /// Climb and conventional milling, from above.
@@ -220,6 +222,7 @@ impl Figure {
             Figure::ShallowAreas => passes::shallow_areas(painter, rect),
             Figure::SlotClearing => passes::slot_clearing(painter, rect),
             Figure::Smoothing => passes::smoothing(painter, rect),
+            Figure::FeedOptimization => passes::feed_optimization(painter, rect),
             Figure::PassAngle => passes::pass_angle(painter, rect),
             Figure::Climb => passes::climb(painter, rect),
             Figure::BothWays => passes::both_ways(painter, rect),
@@ -267,6 +270,7 @@ mod tests {
             Figure::ShallowAreas,
             Figure::SlotClearing,
             Figure::Smoothing,
+            Figure::FeedOptimization,
             Figure::PassAngle,
             Figure::Climb,
             Figure::BothWays,

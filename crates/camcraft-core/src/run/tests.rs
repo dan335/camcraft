@@ -1476,3 +1476,58 @@ fn a_smoothed_profile_is_arcs_and_still_verifies() {
         .count();
     assert!(leads >= 12, "{leads} leads");
 }
+
+/// A pocket's rings slowed at its corners: each slowed cut is at the reduced
+/// feed and goes where it went, so the pocket is cleared as it was, and it
+/// still verifies.
+#[test]
+fn a_pockets_corners_are_slowed_and_it_still_verifies() {
+    use crate::job::{FeatureRef, FeedOptimization};
+    use crate::path::toolpath::MoveRole;
+    use crate::setup::features::find_face;
+    let body = Body::derived(synthetic::step(5.0, 10.0));
+    let pick = FeatureRef {
+        model: "dome".into(),
+        index: 0,
+        at: [5.0, 0.0, 0.0],
+    };
+    let face = find_face(&body, &pick, 0.01).unwrap().index;
+    let pocket = StrategySpec::Pocket {
+        conventional: false,
+    };
+    let (mut job, _) = in_a_sheet(pocket, &body);
+    job.stocks[0].spec = crate::job::StockSpec::AroundModels {
+        models: vec![],
+        margin: [0.0, 0.0, 0.0],
+        below: 0.0,
+    };
+    let op = &mut job.setups[0].operations[0];
+    op.selection.faces.push(FeatureRef {
+        index: face,
+        ..pick
+    });
+    op.outline = Outline::Selection;
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let plain = run_setup(&job, 0, &bodies).unwrap();
+    job.setups[0].operations[0].passes.feed_optimization = Some(FeedOptimization {
+        reduced_feed: Some(250.0),
+        ..FeedOptimization::default()
+    });
+    job.validate().unwrap();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let op = &result.operations[0];
+    let corners = op.corners.unwrap();
+    assert!(corners.corners > 0 && corners.slowed > 0.0, "{corners:?}");
+    let slowed = op
+        .path
+        .moves()
+        .iter()
+        .filter(|m| m.role == MoveRole::Cut && m.feed == Some(250.0))
+        .count();
+    assert!(slowed > 0);
+    let before = plain.operations[0].sim.removed_mm3;
+    assert!((op.sim.removed_mm3 - before).abs() < 1e-6 * before);
+    assert!(result.is_clean(), "{:?}", result.warnings());
+    assert_eq!(result.verify.gouged, 0);
+    assert!(plain.operations[0].corners.is_none());
+}

@@ -379,6 +379,29 @@ impl Operation {
         if let Some(t) = self.passes.smoothing_tolerance.filter(|_| uses.smoothing) {
             positive(&field("passes.smoothing_tolerance"), t)?;
         }
+        if let Some(f) = self
+            .passes
+            .feed_optimization
+            .filter(|_| uses.feed_optimization)
+        {
+            let turn = f.max_directional_change;
+            if !(turn > 0.0 && turn < 180.0) {
+                return Err(bad(
+                    field("passes.feed_optimization.max_directional_change"),
+                    turn,
+                    "between 0 and 180 degrees",
+                ));
+            }
+            if let Some(r) = f.reduced_feed_radius {
+                at_least_zero(&field("passes.feed_optimization.reduced_feed_radius"), r)?;
+            }
+            if let Some(d) = f.reduced_feed_distance {
+                at_least_zero(&field("passes.feed_optimization.reduced_feed_distance"), d)?;
+            }
+            if let Some(feed) = f.reduced_feed {
+                positive(&field("passes.feed_optimization.reduced_feed"), feed)?;
+            }
+        }
         if self.passes.rpm == Some(0) {
             return Err(bad(field("passes.rpm"), 0.0, "greater than zero"));
         }

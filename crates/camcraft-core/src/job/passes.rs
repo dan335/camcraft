@@ -58,6 +58,12 @@ pub struct Passes {
     /// Fusion's Smoothing Tolerance. The job's tolerance when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smoothing_tolerance: Option<f64>,
+    /// Cuts slowed into and out of their sharp corners and round their tight
+    /// arcs, for a strategy that may be
+    /// ([`Uses::feed_optimization`](super::Uses::feed_optimization)): Fusion's
+    /// Feed Optimization, off until asked ([`crate::path::corners`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feed_optimization: Option<FeedOptimization>,
 }
 
 impl Default for Passes {
@@ -74,6 +80,7 @@ impl Default for Passes {
             finishing: None,
             smoothing: false,
             smoothing_tolerance: None,
+            feed_optimization: None,
         }
     }
 }
@@ -112,6 +119,83 @@ pub struct FinishingSizes {
     pub feed: f64,
     /// Whether the last is cut twice.
     pub repeat: bool,
+}
+
+/// Fusion's Feed Optimization: where cuts slow, and to what. Fusion's
+/// reference gives no defaults; these are camcraft's.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeedOptimization {
+    /// The most a cut may turn into the next without slowing, in degrees:
+    /// Fusion's Maximum Directional Change. 45 degrees when not given.
+    #[serde(
+        default = "default_max_directional_change",
+        skip_serializing_if = "is_default_max_directional_change"
+    )]
+    pub max_directional_change: f64,
+    /// An arc tighter than this is slowed along, in millimetres: Fusion's
+    /// Reduced Feed Radius. The tool's radius when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduced_feed_radius: Option<f64>,
+    /// How far before a corner the cut slows, and after it speeds up again,
+    /// in millimetres: Fusion's Reduced Feed Distance. The tool's radius when
+    /// not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduced_feed_distance: Option<f64>,
+    /// The feed slowed to, in mm/min: Fusion's Reduced Feedrate. Half the
+    /// cutting feed when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduced_feed: Option<f64>,
+    /// Only the corners that turn into the material: Fusion's Only Inner
+    /// Corners, on unless turned off.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub only_inner_corners: bool,
+}
+
+impl Default for FeedOptimization {
+    fn default() -> Self {
+        Self {
+            max_directional_change: default_max_directional_change(),
+            reduced_feed_radius: None,
+            reduced_feed_distance: None,
+            reduced_feed: None,
+            only_inner_corners: true,
+        }
+    }
+}
+
+/// Fusion's Feed Optimization, every value its own or its default for the
+/// tool and the cutting feed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FeedOptimizationSizes {
+    /// The most a cut may turn without slowing, in degrees.
+    pub max_directional_change: f64,
+    /// An arc tighter than this is slowed along, in millimetres.
+    pub radius: f64,
+    /// How far either side of a corner the cut is slowed, in millimetres.
+    pub distance: f64,
+    /// The feed slowed to, in mm/min.
+    pub feed: f64,
+    /// Only corners that turn into the material.
+    pub only_inner_corners: bool,
+}
+
+fn default_max_directional_change() -> f64 {
+    45.0
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref, clippy::float_cmp)]
+fn is_default_max_directional_change(v: &f64) -> bool {
+    *v == default_max_directional_change()
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_yes(v: &bool) -> bool {
+    *v
 }
 
 /// Tabs: bridges of material left standing across the deepest cut, so a part cut
@@ -234,6 +318,22 @@ impl Operation {
     pub fn smoothing(&self, tolerance: f64) -> Option<f64> {
         (self.passes.smoothing && self.strategy.uses().smoothing)
             .then(|| self.passes.smoothing_tolerance.unwrap_or(tolerance))
+    }
+
+    /// Its feed optimisation, sized for a tool of `radius`, when it is asked
+    /// for and its strategy may have it.
+    pub fn feed_optimization(&self, radius: f64) -> Option<FeedOptimizationSizes> {
+        let f = self
+            .passes
+            .feed_optimization
+            .filter(|_| self.strategy.uses().feed_optimization)?;
+        Some(FeedOptimizationSizes {
+            max_directional_change: f.max_directional_change,
+            radius: f.reduced_feed_radius.unwrap_or(radius),
+            distance: f.reduced_feed_distance.unwrap_or(radius),
+            feed: f.reduced_feed.unwrap_or(0.5 * self.passes.feed),
+            only_inner_corners: f.only_inner_corners,
+        })
     }
 
     /// Its fine stepdown, when its strategy has one and it cuts in levels: its

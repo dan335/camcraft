@@ -159,3 +159,48 @@ fn a_wandering_pass_is_fewer_moves_within_the_tolerance() {
         assert!(off < tolerance + 1e-6, "{tolerance}: strayed {off}");
     }
 }
+
+/// A ramp round a ring, falling steadily as it turns, comes out as helices
+/// about Z, falling as the ramp does; a path that rises and falls as it turns
+/// stays lines.
+#[test]
+fn a_ramp_round_a_ring_becomes_helices() {
+    let n = 240;
+    let ramp: Vec<DVec3> = (0..=n)
+        .map(|k| {
+            let t = k as f64 / n as f64;
+            (DVec2::new(1.0, 2.0) + DVec2::from_angle(t * 4.0 * PI) * 6.0).extend(-2.0 * t)
+        })
+        .collect();
+    let mut path = Toolpath::new();
+    path.rapid_to(ramp[0]).unwrap();
+    for &q in &ramp[1..] {
+        path.feed_to(q, MoveRole::Ramp, 500.0).unwrap();
+    }
+    let (fitted, report) = fit_arcs(&path, 0.01).unwrap();
+    assert!(report.arcs >= 4 && report.after <= 6, "{report:?}");
+    assert_eq!(fitted.end(), path.end());
+    let mut at = fitted.moves()[0].to;
+    for m in &fitted.moves()[1..] {
+        let axis = match m.kind {
+            MoveKind::Arc(a) => Some(a.axis),
+            MoveKind::Linear => None,
+        };
+        assert_eq!(axis, Some(DVec3::Z), "{m:?}");
+        assert!(m.to.z < at.z, "falls as it turns");
+        assert_eq!(m.role, MoveRole::Ramp);
+        at = m.to;
+    }
+    assert!(strays(&path, &fitted) < 0.01 + 1e-6);
+
+    // Up and down a millimetre twice a turn: no helix stands for it.
+    let wavy: Vec<DVec3> = (0..=n)
+        .map(|k| {
+            let t = k as f64 / n as f64;
+            (DVec2::from_angle(t * 2.0 * PI) * 6.0).extend((t * 8.0 * PI).sin())
+        })
+        .collect();
+    let (fitted, report) = fit_arcs(&cut_through(&wavy, 500.0), 0.01).unwrap();
+    assert!(report.after > 40, "{report:?}");
+    assert!(strays(&cut_through(&wavy, 500.0), &fitted) < 0.01 + 1e-6);
+}

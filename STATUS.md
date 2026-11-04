@@ -123,8 +123,10 @@ Fusion's post does. The lego contour posts block for block as Fusion's does.
    stay-down level, clearance and lift height; without yet shaft and holder
    clearance, or rest machining from the setup's stock or a file. Every
    strategy but drilling has Fusion's Smoothing, arcs and longer lines fitted
-   to its passes before they are linked
-   ([decision 0015](docs/decisions/0015-smoothing.md)). Its levels
+   to its passes before they are linked, helices about Z among them
+   ([decision 0015](docs/decisions/0015-smoothing.md)), and all but adaptive
+   Fusion's Feed Optimization, slowing into and out of corners
+   ([decision 0016](docs/decisions/0016-feed-optimisation.md)). Its levels
    are worked out at once, each on one core, so the slowest is the time it
    takes ([decision 0013](docs/decisions/0013-generating-by-itself.md)). Pocket clearing, as
    Fusion's 3D Pocket Clearing, is Z-level roughing renamed, now cutting each
