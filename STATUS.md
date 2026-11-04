@@ -1,6 +1,18 @@
 # Where this is
 
-Last updated 2026-09-26. Read this before picking the work back up.
+Last updated 2026-11-03. Read this before picking the work back up.
+
+**0.3 generates by itself.** A setup's toolpaths are worked out as soon as
+editing settles, every operation that reads the part alone at once, each shown
+as it is made, and a run is stopped from whatever changed
+([decision 0013](docs/decisions/0013-generating-by-itself.md)). It came with a
+serving tray machined in Fusion and camcraft side by side: adaptive's fine
+stepdown, a Top and Bottom on every 3D finish, finishing ramped into, scallop
+leaving its steep ground (where the tool falls off the part included) to rings
+round the walls, the part's shadow cast in a strip-wise exact union (24 s to
+0.45 s) and kept per orientation, and every input showing and resetting its
+default. The tray's finished stock is Fusion's to 0.03 mm at the 99th
+percentile.
 
 **0.2 is done: the desktop app runs, checks, plays back and posts jobs**, and some
 of 0.3 came in with it (drilling, 2D profiles and pockets, V-bits and chamfer
@@ -26,7 +38,7 @@ machine can tell us.
 ## Running it
 
 ```sh
-bash scripts/run.sh examples/rail-jig.camcraft        # the app: Generate, read the checks, play, Post
+bash scripts/run.sh examples/rail-jig.camcraft        # the app: it generates; read the checks, play, Post
 cargo run --release -p camcraft-cli -- job examples/rail-jig.camcraft            # run and check
 cargo run --release -p camcraft-cli -- job examples/rail-jig.camcraft --out out  # and write programs
 bash scripts/check.sh                                 # the gates, for what changed
@@ -87,13 +99,16 @@ Fusion's post does. The lego contour posts block for block as Fusion's does.
    without yet a centre picked on the model. Still to come: steep and shallow,
    pencil, ramp, and rest machining. Scallop,
    as Fusion's, is done
-   ([decision 0009](docs/decisions/0009-scallop-distance-field.md)), without
-   yet a limit on its stepovers, rest machining, smoothing or a contact point
-   boundary; it measures along where the tool's tip rides, not the part itself.
+   ([decision 0009](docs/decisions/0009-scallop-distance-field.md)), leaving
+   its steep ground to rings round the walls, without yet a limit on its
+   stepovers, rest machining, smoothing or a contact point boundary; it
+   measures along where the tool's tip rides, not the part itself.
    Adaptive clearing, as Fusion's 3D Adaptive,
-   is done ([decision 0007](docs/decisions/0007-adaptive-clearing.md)), without
-   yet rest material from earlier operations, fine stepdown, shallow areas or
-   slot clearing; its stay-down links are straight. Pocket clearing, as
+   is done ([decision 0007](docs/decisions/0007-adaptive-clearing.md)), with
+   Fusion's fine stepdown, without yet rest material from earlier operations,
+   shallow areas or slot clearing; its stay-down links are straight. Its levels
+   are worked out at once, each on one core, so the slowest is the time it
+   takes ([decision 0013](docs/decisions/0013-generating-by-itself.md)). Pocket clearing, as
    Fusion's 3D Pocket Clearing, is Z-level roughing renamed, now cutting each
    level's rings from the middle out, the ring along the walls last, climb or
    conventional, with flat areas
