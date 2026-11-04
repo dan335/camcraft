@@ -118,6 +118,8 @@ pub struct OperationResult {
     pub detail: StrategyDetail,
     /// What linking did.
     pub links: LinkReport,
+    /// What smoothing did, where it was asked for.
+    pub smoothing: Option<crate::path::fit::FitReport>,
     /// The clearance height, resolved: where the tool arrives and leaves. Between
     /// cuts it flies over the material by the safe distance (or at the retract
     /// height, with a full retraction), and never lower than this where the

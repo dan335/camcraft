@@ -376,6 +376,9 @@ impl Operation {
         if uses.feed {
             positive(&field("passes.feed"), self.passes.feed)?;
         }
+        if let Some(t) = self.passes.smoothing_tolerance.filter(|_| uses.smoothing) {
+            positive(&field("passes.smoothing_tolerance"), t)?;
+        }
         if self.passes.rpm == Some(0) {
             return Err(bad(field("passes.rpm"), 0.0, "greater than zero"));
         }

@@ -1423,3 +1423,56 @@ fn adaptive_with_shallow_areas_and_lifted_links_is_finished_to_the_part() {
         result.warnings()
     );
 }
+
+/// Smoothed, a profile round a plate and its hole, with leads and tabs: its
+/// rings, already arcs and lines from the offsetting, are fewer moves, the
+/// leads still go onto and off each ring, the tabs still stand, and the result
+/// verifies.
+#[test]
+fn a_smoothed_profile_is_arcs_and_still_verifies() {
+    use crate::job::{Leads, ProfileSide, Tabs};
+    use crate::path::toolpath::{MoveKind, MoveRole};
+    let plate = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
+    let profile = StrategySpec::Profile {
+        side: ProfileSide::Outside,
+        conventional: false,
+    };
+    let (mut job, _) = in_a_sheet(profile, &plate);
+    let op = &mut job.setups[0].operations[0];
+    op.linking.leads = Some(Leads::default());
+    op.passes.tabs = Some(Tabs {
+        width: 4.0,
+        height: 2.0,
+        spacing: 60.0,
+        ..Default::default()
+    });
+    op.passes.smoothing = true;
+    job.validate().unwrap();
+    let bodies: Bodies<'_> = [("dome", &plate)].into_iter().collect();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let op = &result.operations[0];
+    assert!(result.is_clean(), "{:?}", result.warnings());
+    assert_eq!(result.verify.gouged, 0);
+    assert_eq!(op.sim.rapid_contacts, 0);
+    let fit = op.smoothing.unwrap();
+    assert!(fit.after < fit.before, "{fit:?}");
+    assert!(
+        op.path
+            .moves()
+            .iter()
+            .any(|m| m.role == MoveRole::Cut && matches!(m.kind, MoveKind::Arc(_)))
+    );
+    assert!(
+        op.path
+            .moves()
+            .iter()
+            .any(|m| m.role == MoveRole::Cut && (m.to.z - 2.0).abs() < 1e-9)
+    );
+    let leads = op
+        .path
+        .moves()
+        .iter()
+        .filter(|m| m.role == MoveRole::Lead)
+        .count();
+    assert!(leads >= 12, "{leads} leads");
+}

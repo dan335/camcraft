@@ -115,7 +115,9 @@ it.
   leave*, as Fusion's, is ticked to leave any (starting at 0.5 mm), then its
   wall and floor amounts, negative to cut past the part; the floor follows the
   wall until it is given its own. A drill has none, and a profile on the
-  boundary only a floor. Profiles can leave tabs, from *Passes*: shape,
+  boundary only a floor. Every strategy but drilling has *Smoothing* at the
+  foot of *Passes*, ticked to fit arcs and longer lines, then its tolerance,
+  the job's unless given. Profiles can leave tabs, from *Passes*: shape,
   width, height and spacing. Which rows a
   strategy shows is the core's to say (`StrategySpec::uses`), as is which
   settings it reads. The panel's foot says where generating the operation

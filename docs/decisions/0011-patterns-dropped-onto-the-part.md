@@ -95,4 +95,4 @@ how is a spiral that follows any boundary laid out?
 - The pattern strategies share the linker's stay-down-over-the-part arm with
   parallel and scallop.
 - Still to do: picking the centre on the model; Fusion's spiral limits by
-  contact point; smoothing.
+  contact point. Smoothing since, in [decision 0015](0015-smoothing.md).

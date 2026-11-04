@@ -467,6 +467,7 @@ fn setup_panel() {
             *stay_down_level = 50.0;
             *lift_height = 1.0;
         }
+        op.passes.smoothing = true;
     }
     h.run_steps(3);
     shoot(&mut h, "operation_passes_adaptive");

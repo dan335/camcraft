@@ -67,6 +67,12 @@ topics! {
     MAX_SHALLOW_STEPOVER: "Maximum shallow stepover",
         "Where a terrace between two levels is wider than this, a level is added halfway, then again, until none is.",
         Figure::ShallowAreas;
+    SMOOTHING: "Smoothing",
+        "Fits runs of short moves with arcs and longer lines: a smaller program the controller keeps up with, for a smoother cut.",
+        Figure::Smoothing;
+    SMOOTHING_TOLERANCE: "Smoothing tolerance",
+        "How far the fitted moves may stray from the passes, either way. Empty, the job's tolerance.",
+        Figure::Smoothing;
     SLOT_CLEARING: "Slot clearing",
         "A pocket gone down into is first cut a slot along its middle, then cleared out from it.",
         Figure::SlotClearing;

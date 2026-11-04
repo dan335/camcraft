@@ -49,6 +49,15 @@ pub struct Passes {
     /// ([`Uses::finishing`](super::Uses::finishing)).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finishing: Option<Finishing>,
+    /// Fit the passes' runs of short moves with arcs and longer lines, for a
+    /// strategy that may be ([`Uses::smoothing`](super::Uses::smoothing)):
+    /// Fusion's Smoothing, off until asked ([`crate::path::fit`]).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub smoothing: bool,
+    /// How far the fitted moves may stray from the passes, in millimetres:
+    /// Fusion's Smoothing Tolerance. The job's tolerance when not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing_tolerance: Option<f64>,
 }
 
 impl Default for Passes {
@@ -63,6 +72,8 @@ impl Default for Passes {
             rpm: None,
             tabs: None,
             finishing: None,
+            smoothing: false,
+            smoothing_tolerance: None,
         }
     }
 }
@@ -215,6 +226,14 @@ impl Operation {
         self.passes
             .stepdown
             .filter(|_| self.strategy.uses().depths != Depths::None)
+    }
+
+    /// How far its passes' fitted moves may stray from them, in millimetres,
+    /// with smoothing on and a strategy that may be smoothed: its own, or the
+    /// job's `tolerance`. `None` for no smoothing.
+    pub fn smoothing(&self, tolerance: f64) -> Option<f64> {
+        (self.passes.smoothing && self.strategy.uses().smoothing)
+            .then(|| self.passes.smoothing_tolerance.unwrap_or(tolerance))
     }
 
     /// Its fine stepdown, when its strategy has one and it cuts in levels: its

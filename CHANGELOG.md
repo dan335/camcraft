@@ -28,6 +28,10 @@ the same notes at more length.
   levels that would only skim; slot clearing cuts a slot along a pocket's middle
   before clearing out from it; and on the Linking tab, the stay-down level,
   stay-down clearance and lift height.
+- **Smoothing**, as Fusion's, on every operation but drilling: runs of short
+  moves fitted with arcs and longer lines within a tolerance, before linking,
+  so what is simulated and checked is the program. On a serving tray the
+  adaptive program went from 34 MB to 6 MB, and 1.3 million lines to 181,000.
 - **A link staying down keeps clear of the material** between the passes it
   joins, where it could come a tenth of the tool into it.
 

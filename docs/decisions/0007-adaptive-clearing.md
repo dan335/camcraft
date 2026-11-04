@@ -162,5 +162,5 @@ down at rapid to the safe distance (16.6 min of plunging became 4.2).
 - Shaft and holder clearance.
 - A slot along a pocket's middle that bends with it, as a medial axis would: the
   slot is straight, along the pocket's longest way.
-- Arc fitting of the steps: a pass is its steps, as the rule against smoothing
-  says.
+- Arc fitting of the steps is every strategy's smoothing since
+  ([decision 0015](0015-smoothing.md)).

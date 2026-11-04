@@ -188,7 +188,7 @@ fn summary(result: &SetupResult) -> Vec<String> {
             Made::Disabled => format!("{}: turned off", op.name),
             Made::Generated | Made::Kept => format!(
                 "{}: {} passes, {} links stayed down, {} ramped, {} down a helix, \
-                 removed {:.0} mm3, travel saved {:.0}%, rapid contacts {}{}",
+                 removed {:.0} mm3, travel saved {:.0}%, rapid contacts {}{}{}",
                 op.name,
                 op.passes,
                 op.links.stayed_down,
@@ -197,6 +197,10 @@ fn summary(result: &SetupResult) -> Vec<String> {
                 op.sim.removed_mm3,
                 op.travel_saved * 100.0,
                 op.sim.rapid_contacts,
+                op.smoothing.map_or(String::new(), |f| format!(
+                    ", smoothed {} moves to {} ({} arcs)",
+                    f.before, f.after, f.arcs
+                )),
                 if op.made == Made::Kept {
                     ", kept from before"
                 } else {

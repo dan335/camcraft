@@ -190,6 +190,33 @@ fn every_program_reads_back_to_its_path() {
     assert!(reads_back_for_every_post(&job, 0, &ran) > 1000);
 }
 
+/// The example job with every operation smoothed: its arcs, level and
+/// upright, read back for every post, each a cut of the path, and the job is
+/// fewer moves than without, all of it still verified.
+#[test]
+fn smoothed_programs_read_back_to_their_paths() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let text = std::fs::read_to_string(dir.join("rail-jig.camcraft")).unwrap();
+    let text = text.replace("sled_base.step", "hinge_jig.step");
+    let mut job = parse_job(&text, "rail-jig").unwrap();
+    for op in &mut job.setups[0].operations {
+        op.passes.smoothing = true;
+    }
+    let loaded = load_models(&job, &dir, &[0]).unwrap();
+    let ran = run_setup(&job, 0, &crate::models_of(&loaded)).unwrap();
+    assert_eq!(ran.result.verify.gouged, 0);
+    let fitted: Vec<_> = ran
+        .result
+        .operations
+        .iter()
+        .filter_map(|op| op.smoothing)
+        .collect();
+    assert!(!fitted.is_empty());
+    assert!(fitted.iter().any(|f| f.arcs > 0), "{fitted:?}");
+    assert!(fitted.iter().all(|f| f.after <= f.before), "{fitted:?}");
+    assert!(reads_back_for_every_post(&job, 0, &ran) > 100);
+}
+
 /// The lego brick's contour, as the command line's comparison with Fusion
 /// runs it: ramped down round the ring at three depths, with Fusion's leads,
 /// upright arcs among them.

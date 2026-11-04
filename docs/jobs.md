@@ -252,6 +252,21 @@ on purpose is not called a gouge.
 passes = { stock_to_leave = { radial = 0.5, axial = 0.25 } }
 ```
 
+**Smoothing** (`passes.smoothing`, off by default) is Fusion's Smoothing: the
+passes' runs of short moves are fitted with arcs, where they lie on a circle in
+a plane a three-axis machine cuts arcs in, and with longer lines, none further
+than `passes.smoothing_tolerance` (the job's `tolerance` when not given) from
+the moves it stands for ([decision 0015](decisions/0015-smoothing.md)). Every
+strategy but drilling has it. The passes are fitted before they are linked, so
+what is simulated and checked is what is written, and the setup is verified to
+the job's tolerance and the largest smoothing tolerance together. On a serving
+tray, adaptive's program went from 1,307,065 lines to 181,294 and scallop's from
+193,295 to 17,260.
+
+```toml
+passes = { smoothing = true, smoothing_tolerance = 0.01 }
+```
+
 **Leads** (`linking.leads`) are how a profile comes onto each ring and goes off
 it, in the waste beside it, as Fusion's lead-in and lead-out, the same both ways:
 down a vertical arc (`vertical`), along a straight (`straight`), and round a level

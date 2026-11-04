@@ -78,4 +78,5 @@ it square with decision 0003, that grids are only for stock?
   exact. A part too large for the grid's budget (2²³ nodes) is coarsened and said
   so, and one needing a pitch over half a stepover is refused.
 - Not yet Fusion's: a limit on the number of stepovers, rest machining,
-  smoothing, a contact point boundary, and up/down milling.
+  a contact point boundary, and up/down milling (smoothing since, in
+  [decision 0015](0015-smoothing.md)).

@@ -2,6 +2,7 @@
 //! tabs, the linker that joins its passes, and the adapters that hand it to the
 //! simulator.
 
+pub mod fit;
 pub mod linker;
 pub mod ordering;
 pub mod simadapt;

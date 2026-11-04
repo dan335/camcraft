@@ -105,4 +105,5 @@ for stock?
   ball at a fine tolerance has many bands. Exact slicing of the offset
   surface, still open under 0003, would make it cheaper.
 - Still to do: Fusion's contour ramps from one level to the next, a helix round
-  the wall, rather than stepping down; smoothing; a flat's own multiple depths.
+  the wall, rather than stepping down; a flat's own multiple depths. Smoothing
+  since, in [decision 0015](0015-smoothing.md).

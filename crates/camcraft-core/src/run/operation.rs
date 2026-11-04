@@ -18,6 +18,7 @@ use crate::job::{
     ContourOrder, CutDirection, Depths, Entry, FaceDirection, HeightContext, Job, Links, Operation,
     PassOrder, Picks, RadialDirection, Retraction, SpindleDirection, StrategySpec, ToolSpec,
 };
+use crate::path::fit::{FitReport, fit_arcs};
 use crate::path::linker::{
     ClearanceField, EntryKind, LinkParams, LinkReport, Material, Ramp, StayDown, Surface,
     highest_under, link_watched,
@@ -178,6 +179,8 @@ pub(super) struct Planned {
     warnings: Vec<String>,
     /// How much shorter ordering made the travel between passes, as a share.
     travel_saved: f64,
+    /// What smoothing did, where it was asked for.
+    smoothing: Option<FitReport>,
 }
 
 /// Work out one operation's passes, to `target`, and put them in order. Only a
@@ -372,12 +375,24 @@ pub(super) fn plan_operation(
         }
         _ => ordered,
     };
+
+    // Smoothing, last, on the passes as they will be cut: the linker joins
+    // them, and the simulator cuts and checks them, as they are fitted, so
+    // what is verified is the program.
+    let (ordered, smoothing) = match op.smoothing(work.job.tolerance) {
+        Some(tolerance) => {
+            let (fitted, report) = fit_arcs(&ordered, tolerance)?;
+            (fitted, Some(report))
+        }
+        None => (ordered, None),
+    };
     Ok(Planned {
         ordered,
         passes,
         detail,
         warnings,
         travel_saved: order.saved(),
+        smoothing,
     })
 }
 
@@ -398,6 +413,7 @@ pub(super) fn cut_operation(
         detail,
         mut warnings,
         travel_saved,
+        smoothing,
     } = planned;
 
     // Traverses clear the material as it stood before the operation: never lower
@@ -480,6 +496,7 @@ pub(super) fn cut_operation(
         clearance_z,
         steep_cut_descents: steep,
         deepest_cut_descent_mm: deepest,
+        smoothing,
         warnings,
         // The rest is the operation's own: its name, strategy and tool.
         ..not_made(op, Some(work.spec), Made::Generated)
@@ -526,6 +543,7 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
         travel_saved: 0.0,
         detail,
         links: LinkReport::default(),
+        smoothing: None,
         clearance_z: 0.0,
         steep_cut_descents: 0,
         deepest_cut_descent_mm: 0.0,

@@ -689,3 +689,29 @@ pub fn slot_clearing(painter: &egui::Painter, rect: egui::Rect) {
     s.dashed(&[[b + 5.0, y + 5.0], [75.0, y + 5.0]], faint(), 1.0);
     s.text([76.0, 40.0], Align2::LEFT_TOP, "from above", false);
 }
+
+/// A curve as a strategy makes it, many short moves, each end a dot; and the
+/// same curve smoothed, one arc, in amber, from end to end.
+pub fn smoothing(painter: &egui::Painter, rect: egui::Rect) {
+    let s = Sketch::new(painter, rect, [0.0, 0.0], [100.0, 44.0]);
+    let curve = |c: P| -> Vec<P> {
+        (0..=12_u8)
+            .map(|k| {
+                let a = (200.0 - 160.0 * f32::from(k) / 12.0).to_radians();
+                [c[0] + 18.0 * a.cos(), c[1] + 18.0 * a.sin()]
+            })
+            .collect()
+    };
+    let before = curve([26.0, 12.0]);
+    s.path(&before, Move::Cut, false);
+    for &p in &before {
+        s.circle(p, 0.8, Tone::Stock);
+    }
+    s.text([26.0, 2.0], Align2::CENTER_BOTTOM, "13 moves", false);
+    let after = curve([74.0, 12.0]);
+    s.path(&arc([74.0, 12.0], 18.0, 200.0, 40.0), Move::Cut, true);
+    for p in [after.first(), after.last()].into_iter().flatten() {
+        s.circle(*p, 0.8, Tone::Stock);
+    }
+    s.text([74.0, 2.0], Align2::CENTER_BOTTOM, "one arc", true);
+}

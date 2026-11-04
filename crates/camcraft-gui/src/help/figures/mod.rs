@@ -39,6 +39,8 @@ pub enum Figure {
     ShallowAreas,
     /// A slot down a pocket's middle first.
     SlotClearing,
+    /// Short moves round a curve, and the arc that stands for them.
+    Smoothing,
     /// Passes at an angle to X, from above.
     PassAngle,
     /// Climb and conventional milling, from above.
@@ -217,6 +219,7 @@ impl Figure {
             Figure::Cavities => passes::cavities(painter, rect),
             Figure::ShallowAreas => passes::shallow_areas(painter, rect),
             Figure::SlotClearing => passes::slot_clearing(painter, rect),
+            Figure::Smoothing => passes::smoothing(painter, rect),
             Figure::PassAngle => passes::pass_angle(painter, rect),
             Figure::Climb => passes::climb(painter, rect),
             Figure::BothWays => passes::both_ways(painter, rect),
@@ -263,6 +266,7 @@ mod tests {
             Figure::Cavities,
             Figure::ShallowAreas,
             Figure::SlotClearing,
+            Figure::Smoothing,
             Figure::PassAngle,
             Figure::Climb,
             Figure::BothWays,

@@ -311,6 +311,40 @@ pub(super) fn passes(
         ui.add_space(theme::SPACE_2);
         finishing(ui, d, m, &mut op.passes, diameter);
     }
+    if uses.smoothing {
+        ui.add_space(theme::SPACE_4);
+        ui.label(widgets::section_label("Smoothing"));
+        ui.add_space(theme::SPACE_2);
+        smoothing(ui, d, m, &mut op.passes);
+    }
+}
+
+/// Fusion's Smoothing: ticked to fit the passes with arcs and longer lines,
+/// then how far they may stray, the job's tolerance unless given.
+fn smoothing(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, passes: &mut Passes) {
+    form(ui, "smoothing", |ui| {
+        d.row(ui, &pass::SMOOTHING, "passes.smoothing", |ui| {
+            ui.checkbox(&mut passes.smoothing, "fit arcs and longer lines");
+        });
+        if passes.smoothing {
+            d.row(
+                ui,
+                &pass::SMOOTHING_TOLERANCE,
+                "passes.smoothing_tolerance",
+                |ui| {
+                    widgets::optional(
+                        ui,
+                        &mut passes.smoothing_tolerance,
+                        0.01,
+                        "the job's tolerance",
+                        |ui, t| {
+                            m.length_field(ui, t, 0.001, 1.0, "");
+                        },
+                    );
+                },
+            );
+        }
+    });
 }
 
 /// A pocket's finishing passes along its walls, off until asked for, as

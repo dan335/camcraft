@@ -151,7 +151,14 @@ pub fn run_prepared_planned(
         heights: &ctx,
     };
     let plan_of = |i: usize| plans.get(i).unwrap_or(&Plan::Generate);
-    let budget = job.tolerance + sim_pitch;
+    // Smoothing strays from the passes by up to its tolerance, on top of the
+    // job's, as Fusion's total tolerance is the two together.
+    let smoothing = setup
+        .operations
+        .iter()
+        .filter_map(|op| op.smoothing(job.tolerance))
+        .fold(0.0, f64::max);
+    let budget = job.tolerance + smoothing + sim_pitch;
 
     let ran = std::thread::scope(|scope| {
         // Every operation worked out from the part alone, at once.

@@ -35,6 +35,7 @@ impl StrategySpec {
             top: Some(HeightRef::StockTop),
             bottom: Some(HeightRef::ModelBottom),
             rest: false,
+            smoothing: true,
         };
         match *self {
             // Down the surface in one pass, as Fusion's 3D finishing: it
@@ -206,6 +207,8 @@ impl StrategySpec {
                 top: None,
                 bottom: Some(HeightRef::ModelBottom),
                 rest: false,
+                // A hole is straight down and up.
+                smoothing: false,
             },
         }
     }
@@ -283,6 +286,9 @@ pub struct Uses {
     /// worked out from the part alone, at once with the others'. Linking and
     /// cutting are always in order.
     pub rest: bool,
+    /// Its passes may be smoothed, fitted with arcs and longer lines
+    /// ([`Passes::smoothing`](super::Passes::smoothing)).
+    pub smoothing: bool,
 }
 
 /// How a strategy's passes are linked, where the linker links them.
