@@ -251,7 +251,11 @@ impl App {
         if let Some(state) = self.state_for_snapshot() {
             crate::playback::set_mode(state, crate::document::ViewMode::Playback);
             state.view.view.roles = u32::MAX;
-            state.view.paths_in_playback = paths;
+            state
+                .view
+                .looks
+                .of_mut(crate::document::Look::Playback)
+                .toolpaths = paths;
         }
     }
 

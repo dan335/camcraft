@@ -465,12 +465,14 @@ impl Document {
         let tool = last.and_then(|o| o.tool.clone());
         let spec = last.and_then(|o| self.job.tool_for(o));
         let preset = spec.and_then(|t| t.presets.first());
-        let op = Operation::fresh(name, strategy, (tool, spec, preset), self.job.tolerance);
+        let op = Operation::fresh(name, strategy, (tool, spec, preset));
         let s = self.setup_mut(setup)?;
         s.operations.push(op);
         let i = s.operations.len() - 1;
         self.active = Some(setup.to_string());
         self.selection = Selection::Operation(setup.to_string(), i);
+        // Its settings worked out from its tool at once, not a frame later.
+        self.work_out_expressions();
         Some(i)
     }
 
@@ -602,12 +604,10 @@ impl Document {
         let strategy = StrategySpec::named(op.strategy.name()).unwrap_or(op.strategy);
         let spec = self.job.tool_for(op);
         let preset = spec.and_then(|t| op.preset.as_deref().and_then(|p| t.preset(p)));
-        Some(Operation::fresh(
-            op.name.clone(),
-            strategy,
-            (op.tool.clone(), spec, preset),
-            self.job.tolerance,
-        ))
+        let mut fresh =
+            Operation::fresh(op.name.clone(), strategy, (op.tool.clone(), spec, preset));
+        fresh.work_out_expressions(spec, self.job.tolerance);
+        Some(fresh)
     }
 
     /// Give operation `op` of `setup` the job's tool `tool`, and copy in the values
@@ -616,7 +616,6 @@ impl Document {
     pub fn use_tool(&mut self, setup: &str, op: usize, tool: String, preset: Option<&str>) {
         let spec = self.job.tools.get(&tool).cloned();
         let preset = preset.and_then(|p| spec.as_ref()?.preset(p).cloned());
-        let tolerance = self.job.tolerance;
         let Some(o) = self.operation_mut(setup, op) else {
             return;
         };
@@ -626,13 +625,13 @@ impl Document {
             Some(p) => o.apply_preset(p),
             None => o.preset = None,
         }
-        o.fit_stepover(spec.as_ref(), preset.as_ref(), tolerance);
-        o.fit_stepdown(spec.as_ref(), preset.as_ref());
         // The channel is made once, for the first tool: an offset of zero after
         // that is one chosen, and a new tool keeps it.
         if first {
             o.fit_channel(spec.as_ref());
         }
+        // What follows the tool follows it at once, not a frame later.
+        self.work_out_expressions();
     }
 
     /// Another tool the job's operations use with the same number as tool `name`,

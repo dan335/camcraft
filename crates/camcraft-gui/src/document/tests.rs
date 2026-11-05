@@ -783,7 +783,7 @@ fn the_view_sets_up_or_plays_back() {
     assert!(!c.view.part && !c.view.stock && !c.view.origin);
     assert!(c.view.cutter.is_none());
     assert_eq!(c.view.roles, 0, "no toolpaths over it until asked for");
-    state.view.paths_over_material = true;
+    state.view.looks.of_mut(Look::CutStock).toolpaths = true;
     let c = content(state, "top", &finish);
     assert!(c.view.roles != 0 && c.view.ops == 0b10, "the selection's");
     state.view.material = false;
@@ -800,7 +800,7 @@ fn the_view_sets_up_or_plays_back() {
     );
     assert!(c.view.cutter.is_some());
     assert!(!c.view.part && c.view.roles == 0, "the material alone");
-    state.view.paths_in_playback = true;
+    state.view.looks.of_mut(Look::Playback).toolpaths = true;
     assert_ne!(content(state, "top", &finish).view.roles, 0);
 
     state.view.transport.playing = true;
@@ -1380,22 +1380,27 @@ fn a_run_is_stopped_from_what_changed() {
 }
 
 /// Editing settles once the job has stayed as it is a moment, or longer while
-/// a field is still being typed in.
+/// a field is still being typed in; until then it says how long is left, for
+/// a frame to be drawn then, though nothing else moves.
 #[test]
 fn editing_settles_after_a_moment_as_it_is() {
     use std::time::{Duration, Instant};
     let mut doc = example();
     let t = Instant::now() + Duration::from_secs(10);
-    assert!(doc.settled(t, false), "nothing changed since it opened");
-    doc.job.tolerance *= 2.0;
-    assert!(!doc.settled(t, false), "just changed");
-    assert!(!doc.settled(t + Duration::from_millis(100), false));
-    assert!(doc.settled(t + Duration::from_millis(400), false));
+    let ms = Duration::from_millis;
     assert!(
-        !doc.settled(t + Duration::from_millis(400), true),
+        doc.until_settled(t, false).is_zero(),
+        "nothing changed since it opened"
+    );
+    doc.job.tolerance *= 2.0;
+    assert_eq!(doc.until_settled(t, false), ms(300), "just changed");
+    assert_eq!(doc.until_settled(t + ms(100), false), ms(200));
+    assert!(doc.until_settled(t + ms(400), false).is_zero());
+    assert!(
+        !doc.until_settled(t + ms(400), true).is_zero(),
         "still typing"
     );
-    assert!(doc.settled(t + Duration::from_millis(1600), true));
+    assert!(doc.until_settled(t + ms(1600), true).is_zero());
 }
 
 /// What a run has made so far shows as it is made: the operations made are

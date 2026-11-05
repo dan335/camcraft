@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Depths, Leave, Operation, StrategySpec, ToolKind, ToolSpec, is_default, is_yes, yes};
+use super::{Depths, Leave, Operation, ToolSpec, is_default, is_yes, yes};
 
 /// How the passes are laid out.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -375,66 +375,4 @@ impl Operation {
             },
         }
     }
-
-    /// The stepover Fusion gives this operation with `tool`, at `tolerance`: for
-    /// parallel finishing and the patterns dropped onto the part (scallop,
-    /// spiral, radial and morphed spiral), a quarter of the tool's diameter with
-    /// a square end, and with a round one the spacing that leaves a cusp no
-    /// taller than the tolerance, `2·√(r² − (r − tol)²) / √2`; for 3D pocket
-    /// clearing, a 2D pocket and flat finishing, 0.6 of the diameter; for
-    /// adaptive clearing, its optimal load, `tool_diameter * 0.4`; for facing,
-    /// 95% of the flat of the tool's end. `None` for contour finishing, a profile
-    /// or drilling, which have none, and for facing with a tool that has no flat.
-    pub fn default_stepover(&self, tool: &ToolSpec, tolerance: f64) -> Option<f64> {
-        let d = tool.diameter;
-        match self.strategy {
-            // A scallop pass is parallel's cusp, kept on a slope too.
-            StrategySpec::Parallel { .. }
-            | StrategySpec::Scallop { .. }
-            | StrategySpec::Spiral { .. }
-            | StrategySpec::Radial { .. }
-            | StrategySpec::MorphedSpiral { .. } => {
-                let r = tool.corner_radius();
-                let over = if r > tolerance && r > 0.0 {
-                    2.0 * (r * r - (r - tolerance).powi(2)).sqrt() / 2f64.sqrt()
-                } else {
-                    d / 4.0
-                };
-                Some(to_the_micron(over))
-            }
-            StrategySpec::PocketClearing { .. }
-            | StrategySpec::Pocket { .. }
-            | StrategySpec::Flat { .. } => Some(0.6 * d),
-            // Fusion's optimal load, `tool_diameter * 0.4`, to the micron.
-            StrategySpec::Adaptive { .. } => Some(to_the_micron(0.4 * d)),
-            // Fusion's: 95% of the flat of the tool's end, less its corners.
-            StrategySpec::Face { .. } => match tool.kind {
-                ToolKind::Flat => Some(0.95 * d),
-                ToolKind::Bullnose => Some(0.95 * (d - 2.0 * tool.corner)),
-                ToolKind::Ball | ToolKind::Cone | ToolKind::Drill => None,
-            },
-            StrategySpec::Profile { .. }
-            | StrategySpec::Contour { .. }
-            | StrategySpec::Drill { .. } => None,
-        }
-    }
-
-    /// The stepdown Fusion gives this operation with `tool`: for adaptive and
-    /// 3D pocket clearing, its maximum roughing stepdown,
-    /// `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)`, the flutes
-    /// assumed where the tool does not give them
-    /// ([`ToolSpec::flute_length`]). `None` for the rest, whose own stands.
-    pub fn default_tool_stepdown(&self, tool: &ToolSpec) -> Option<f64> {
-        match self.strategy {
-            StrategySpec::Adaptive { .. } | StrategySpec::PocketClearing { .. } => Some(
-                to_the_micron((0.75 * tool.flute_length()).min(2.5 * tool.diameter)),
-            ),
-            _ => None,
-        }
-    }
-}
-
-/// `mm` to the micron, as Fusion rounds what its expressions give.
-fn to_the_micron(mm: f64) -> f64 {
-    (mm * 1000.0).round() / 1000.0
 }

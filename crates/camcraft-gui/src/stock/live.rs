@@ -14,7 +14,7 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use camcraft_core::replay::{Changed, Live, Position, Replay};
+use camcraft_core::replay::{Changed, Live, Position, Replay, ReplaySource};
 use camcraft_sim::stock::{CellRect, PartSurface};
 use eframe::egui;
 
@@ -118,7 +118,9 @@ impl LiveStock {
     pub fn start(ctx: &egui::Context, ran: &RanSetup) -> Option<Self> {
         let result = &ran.ran.result;
         let setup = ran.job.setups.iter().find(|s| s.name == result.setup)?;
-        let replay = Replay::new(&ran.job, setup, result).ok()?;
+        // Its paths are turned into moves on the thread: a long program's
+        // take a while.
+        let source = ReplaySource::new(&ran.job, setup, result).ok()?;
         let part = Arc::clone(&result.part);
         let budget = result.verify_budget;
         let (to_thread, rx) = channel();
@@ -128,7 +130,7 @@ impl LiveStock {
         let ctx = ctx.clone();
         std::thread::Builder::new()
             .name("camcraft playback".into())
-            .spawn(move || run(&replay, &part, budget, &shared, &rx, &tx, &ctx))
+            .spawn(move || run(&source.replay(), &part, budget, &shared, &rx, &tx, &ctx))
             .ok()?;
         Some(Self {
             scene_key: ran.scene_key,

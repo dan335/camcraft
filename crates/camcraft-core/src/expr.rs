@@ -523,7 +523,10 @@ fn call(
         if step <= 0.0 {
             return Err(fault(format!("{name}'s step must be more than zero"), at));
         }
-        Ok(f(x / step) * step)
+        // By its reciprocal, a whole number for a decimal step: so 1.5875 is
+        // 1587.5 thousandths, where dividing by 0.001 falls a hair short.
+        let per = 1.0 / step;
+        Ok(f(x * per) / per)
     };
     let n = match short {
         "min" | "minimum" | "max" | "maximum" => {

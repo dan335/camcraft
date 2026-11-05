@@ -166,8 +166,8 @@ plunges down off it at the plunge feed, `"triangular"` climbs and ramps off at
 **Adaptive clearing** (`strategy = "adaptive"`) is Fusion's 3D Adaptive
 Clearing ([decision 0007](decisions/0007-adaptive-clearing.md)): Z levels a
 stepdown apart, each cleared by passes steered step by step to hold the tool's
-engagement at the *optimal load*, which is its `passes.stepover` (0.4 of the
-tool to start, as Fusion's). Passes start beside the block where they can, and go down a helix
+engagement at the *optimal load*, which is its `passes.stepover`
+(`tool_diameter * 0.4` to start, as Fusion's). Passes start beside the block where they can, and go down a helix
 (`linking.helix_diameter`, Fusion's: 0.95 × the tool less its corners, no less
 than a quarter of the tool) where they cannot; `direction` is
 `"climb"` (the default), `"conventional"` or `"both-ways"`; `flat_areas` (on by

@@ -106,21 +106,79 @@ pub struct SetupView {
     pub mode: ViewMode,
     /// The cutter at the playhead.
     pub show_cutter: bool,
-    /// Toolpaths while setting up, over the per-role choices.
-    pub show_paths: bool,
-    /// Toolpaths while playing back, as far as the playhead: off until asked for,
-    /// the material being what playback is for.
-    pub paths_in_playback: bool,
-    /// The part while playing back: off until asked for, the material covering it.
-    pub part_in_playback: bool,
     /// Setting up, the material as the selection leaves it, in place of the
     /// part, the stock's outline and work zero: what an edit does to the cut,
     /// where its toolpaths are hard to read.
     pub material: bool,
-    /// Toolpaths over that material: off until asked for, as playing back.
-    pub paths_over_material: bool,
+    /// What each look shows of the part and the toolpaths.
+    pub looks: Looks,
     /// What to draw.
     pub view: View,
+}
+
+/// The ways a setup is looked at, each showing its own things.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Look {
+    /// Setting up, the part.
+    Part,
+    /// Setting up, the stock as the selection leaves it cut.
+    CutStock,
+    /// Playing the program back.
+    Playback,
+}
+
+/// Whether a look shows the part and the toolpaths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shown {
+    pub part: bool,
+    pub toolpaths: bool,
+}
+
+/// What each look shows. Setting up the part, the part and its toolpaths;
+/// the cut stock and playing back, the material alone until more is asked
+/// for, the material being what they are for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Looks {
+    part: Shown,
+    cut_stock: Shown,
+    playback: Shown,
+}
+
+impl Default for Looks {
+    fn default() -> Self {
+        let material_alone = Shown {
+            part: false,
+            toolpaths: false,
+        };
+        Self {
+            part: Shown {
+                part: true,
+                toolpaths: true,
+            },
+            cut_stock: material_alone,
+            playback: material_alone,
+        }
+    }
+}
+
+impl Looks {
+    /// What `look` shows.
+    pub fn of(&self, look: Look) -> Shown {
+        match look {
+            Look::Part => self.part,
+            Look::CutStock => self.cut_stock,
+            Look::Playback => self.playback,
+        }
+    }
+
+    /// What `look` shows, to change.
+    pub fn of_mut(&mut self, look: Look) -> &mut Shown {
+        match look {
+            Look::Part => &mut self.part,
+            Look::CutStock => &mut self.cut_stock,
+            Look::Playback => &mut self.playback,
+        }
+    }
 }
 
 /// Playback: whether it plays, which way, how fast, and where it stops by itself.
@@ -153,27 +211,6 @@ impl Default for Transport {
     }
 }
 
-impl SetupView {
-    /// Whether toolpaths are drawn, playing back (`back`) or setting up, over
-    /// the material (`material`) or the part: each has its own say.
-    pub fn paths(&self, back: bool, material: bool) -> bool {
-        match (back, material) {
-            (true, _) => self.paths_in_playback,
-            (false, true) => self.paths_over_material,
-            (false, false) => self.show_paths,
-        }
-    }
-
-    /// The say [`SetupView::paths`] reads, to change.
-    pub fn paths_mut(&mut self, back: bool, material: bool) -> &mut bool {
-        match (back, material) {
-            (true, _) => &mut self.paths_in_playback,
-            (false, true) => &mut self.paths_over_material,
-            (false, false) => &mut self.show_paths,
-        }
-    }
-}
-
 impl Default for SetupView {
     fn default() -> Self {
         Self {
@@ -183,11 +220,8 @@ impl Default for SetupView {
             transport: Transport::default(),
             mode: ViewMode::Setup,
             show_cutter: true,
-            show_paths: true,
-            paths_in_playback: false,
-            part_in_playback: false,
             material: false,
-            paths_over_material: false,
+            looks: Looks::default(),
             view: View {
                 stock: true,
                 ..View::default()

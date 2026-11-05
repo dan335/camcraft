@@ -205,7 +205,7 @@ fn run_in_process(path: &Path) -> Vec<(String, Toolpath)> {
         .result
         .operations
         .into_iter()
-        .map(|o| (o.name, o.path))
+        .map(|o| (o.name, (*o.path).clone()))
         .collect()
 }
 

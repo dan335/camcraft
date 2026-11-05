@@ -12,7 +12,7 @@ use camcraft_session::Ran;
 use camcraft_session::checks::Level;
 use eframe::egui;
 
-use crate::document::{SetupState, Transport, ViewMode};
+use crate::document::{Look, SetupState, Transport, ViewMode};
 use crate::help::Help;
 use crate::help::topics::app;
 use crate::playback::{self, finding_segment, playing_back, thousands};
@@ -403,7 +403,7 @@ pub fn bar(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) {
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = theme::SPACE_3;
-            let paths = &mut state.view.paths_in_playback;
+            let paths = &mut state.view.looks.of_mut(Look::Playback).toolpaths;
             let variant = if *paths {
                 Variant::Secondary
             } else {

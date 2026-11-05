@@ -22,8 +22,8 @@ use super::*;
 /// with.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Earlier {
-    /// Its moves, as cut.
-    pub path: Toolpath,
+    /// Its moves, as cut: shared with its operation's result.
+    pub path: std::sync::Arc<Toolpath>,
     /// The tool it was cut with, without the stock it left: what took the
     /// material.
     pub cutter: Cutter,

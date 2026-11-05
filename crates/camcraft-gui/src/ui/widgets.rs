@@ -410,7 +410,7 @@ pub fn expression(
             .color(theme::egui_color(theme::text_4()));
         let clicked = ui
             .add(egui::Button::new(fx).frame(false))
-            .on_hover_text("Work it out from an expression, as tool_diameter * 0.4")
+            .on_hover_text("Use an expression, such as tool_diameter * 0.4")
             .clicked();
         return clicked.then(|| ExpressionEdit::To(start.to_string()));
     };
@@ -432,7 +432,7 @@ pub fn expression(
                 ui.colored_label(Level::Err.color(), why);
                 ui.separator();
             }
-            ui.label("Worked out from the tool and the operation, as Fusion's expressions are:");
+            ui.label("Variables:");
             for (name, what) in camcraft_core::job::EXPRESSION_NAMES {
                 ui.label(egui::RichText::new(format!("{name}: {what}")).size(SMALL_TEXT));
             }
@@ -440,7 +440,7 @@ pub fn expression(
                 "Math.min(a; b), Math.max, Math.sqrt, a ? b : c, 2mm, 0.1in",
             ));
         });
-    if icon_button(ui, Icon::X, "drop the expression, keeping the number").clicked() {
+    if icon_button(ui, Icon::X, "remove the expression").clicked() {
         return Some(ExpressionEdit::Dropped);
     }
     field.changed().then_some(ExpressionEdit::To(buffer))

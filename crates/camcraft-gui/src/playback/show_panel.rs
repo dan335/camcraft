@@ -107,16 +107,14 @@ pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option
             .help(&app::SHOW_MATERIAL);
         });
         if view.material && !fits {
-            ui.label(hint_text("The cut stock shows once it is generated."));
+            ui.label(hint_text("Generate to see the cut stock."));
         }
     }
+    let look = super::look(state);
+    let view = &mut state.view;
     if back || !material {
-        let part = if back {
-            &mut view.part_in_playback
-        } else {
-            &mut view.view.part
-        };
-        ui.checkbox(part, "part").help(&app::SHOW_PART);
+        ui.checkbox(&mut view.looks.of_mut(look).part, "part")
+            .help(&app::SHOW_PART);
         ui.checkbox(&mut view.view.stock, "stock outline")
             .help(&app::SHOW_STOCK);
         ui.checkbox(&mut view.view.origin, "work zero")
@@ -129,15 +127,15 @@ pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option
         ui.checkbox(&mut view.show_cutter, "cutter")
             .help(&app::SHOW_CUTTER);
     }
-    let paths = view.paths_mut(back, material);
-    ui.checkbox(paths, "toolpaths").help(&app::SHOW_TOOLPATHS);
+    ui.checkbox(&mut view.looks.of_mut(look).toolpaths, "toolpaths")
+        .help(&app::SHOW_TOOLPATHS);
     // Stopping there, as every other jump does, rather than playing on.
     if let Some(end) = toolpaths(ui, view, &ran.scene, back) {
         go_to(state, end);
     }
     if material {
         ui.separator();
-        self::material(ui, state, back);
+        self::material(ui, state);
     }
     let ran = state.ran.as_ref()?;
     let go = steep(ui, ran, m);
@@ -194,22 +192,16 @@ fn toolpaths(ui: &mut egui::Ui, view: &mut SetupView, scene: &Scene, back: bool)
     jump
 }
 
-/// How the material is coloured, and a legend of its cells; setting up, also
-/// where in the program it stands.
-fn material(ui: &mut egui::Ui, state: &mut SetupState, back: bool) {
+/// How the material is coloured, and a legend of its cells.
+fn material(ui: &mut egui::Ui, state: &mut SetupState) {
     let view = &mut state.view;
     ui.label(section_label("Cut stock"));
-    if !back {
-        ui.label(hint_text(
-            "as the selected operation leaves it, or with none selected, the setup",
-        ));
-    }
     ui.horizontal(|ui| {
         ui.label("colours");
         ui.selectable_value(&mut view.transport.color, ColorMode::Material, "stock")
-            .on_hover_text("the shape being cut; red where it goes below the part");
+            .on_hover_text("red where it cuts into the part");
         ui.selectable_value(&mut view.transport.color, ColorMode::Compare, "compare")
-            .on_hover_text("every column against the part, by the verifier's rule");
+            .on_hover_text("coloured by how far it is from the part");
     });
     let mode = view.transport.color;
     // As the thread last counted them, without locking the image it writes.
@@ -231,9 +223,6 @@ fn material(ui: &mut egui::Ui, state: &mut SetupState, back: bool) {
             |_| {},
         );
     }
-    ui.label(hint_text(
-        "cells of the simulated stock, by the verifier's rule",
-    ));
 }
 
 /// The steep descents, by operation and then deepest first. The one clicked.

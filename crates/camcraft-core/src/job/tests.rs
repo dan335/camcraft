@@ -1215,12 +1215,12 @@ fn stepovers_default_as_fusions() {
     };
     op.strategy = StrategySpec::Parallel { angle: 0.0 };
     assert_eq!(
-        op.default_stepover(&tool(ToolKind::Flat, 6.35, 0.0), 0.05),
+        default_stepover(&op, &tool(ToolKind::Flat, 6.35, 0.0), 0.05),
         Some(1.588)
     );
     // r = 3.175: 2·√(3.175² − 3.125²) / √2.
     assert_eq!(
-        op.default_stepover(&tool(ToolKind::Ball, 6.35, 0.0), 0.05),
+        default_stepover(&op, &tool(ToolKind::Ball, 6.35, 0.0), 0.05),
         Some(0.794)
     );
     op.strategy = StrategySpec::PocketClearing {
@@ -1228,16 +1228,14 @@ fn stepovers_default_as_fusions() {
         conventional: false,
         flat_areas: true,
     };
-    let clearing = op
-        .default_stepover(&tool(ToolKind::Flat, 6.35, 0.0), 0.05)
-        .unwrap();
+    let clearing = default_stepover(&op, &tool(ToolKind::Flat, 6.35, 0.0), 0.05).unwrap();
     assert!((clearing - 3.81).abs() < 1e-12);
     op.strategy = StrategySpec::Drill {
         peck: None,
         dwell: None,
     };
     assert_eq!(
-        op.default_stepover(&tool(ToolKind::Drill, 6.0, 0.0), 0.05),
+        default_stepover(&op, &tool(ToolKind::Drill, 6.0, 0.0), 0.05),
         None
     );
 }
@@ -1569,7 +1567,7 @@ fn facing_reads_with_fusions_defaults() {
     let rough = j.tools["rough-6-flat"].clone();
     let op = &mut j.setups[0].operations[0];
     assert_eq!(
-        op.default_stepover(&rough, 0.01),
+        default_stepover(op, &rough, 0.01),
         Some(0.95 * rough.diameter)
     );
     let ball = j.tools["finish-4-ball"].clone();
@@ -1694,8 +1692,8 @@ fn scallop_reads_with_fusions_defaults() {
         ..op.clone()
     };
     assert_eq!(
-        op.default_stepover(&ball, 0.01),
-        parallel.default_stepover(&ball, 0.01)
+        default_stepover(op, &ball, 0.01),
+        default_stepover(&parallel, &ball, 0.01)
     );
 
     op.strategy = StrategySpec::Scallop {
@@ -1843,7 +1841,7 @@ fn more_finishing_strategies_use_what_fusions_do() {
     assert_eq!(contour.strategy.uses().depths, Depths::Required);
     assert!(!contour.strategy.uses().stepover);
     assert_eq!(contour.strategy.default_stepdown(), Some(1.0));
-    assert_eq!(contour.default_stepover(&ball, 0.01), None);
+    assert_eq!(default_stepover(&contour, &ball, 0.01), None);
     let flat = op(StrategySpec::Flat {
         direction: CutDirection::Conventional,
         order: PassOrder::InsideOut,
@@ -1851,7 +1849,7 @@ fn more_finishing_strategies_use_what_fusions_do() {
     assert!(flat.strategy.conventional());
     assert_eq!(flat.strategy.uses().depths, Depths::None);
     assert_eq!(
-        flat.default_stepover(&ball, 0.01),
+        default_stepover(&flat, &ball, 0.01),
         Some(0.6 * ball.diameter)
     );
     let parallel = op(StrategySpec::Parallel { angle: 0.0 });
@@ -1885,8 +1883,8 @@ fn more_finishing_strategies_use_what_fusions_do() {
     ] {
         let o = op(strategy);
         assert_eq!(
-            o.default_stepover(&ball, 0.01),
-            parallel.default_stepover(&ball, 0.01)
+            default_stepover(&o, &ball, 0.01),
+            default_stepover(&parallel, &ball, 0.01)
         );
         assert!(!o.strategy.uses().reorder);
         assert!(o.strategy.slopes().is_some());
@@ -2223,4 +2221,15 @@ fn a_fine_stepdown_is_checked_and_kept() {
     op.passes.fine_stepdown = Some(5.0);
     j.validate().unwrap();
     assert_eq!(j.setups[0].operations[0].fine_stepdown(), None);
+}
+
+/// The stepover `op`'s strategy starts with for `tool` at `tolerance`: its
+/// default expression ([`StrategySpec::default_expressions`]), worked out.
+fn default_stepover(op: &Operation, tool: &ToolSpec, tolerance: f64) -> Option<f64> {
+    let (_, text) = op
+        .strategy
+        .default_expressions()
+        .iter()
+        .find(|(setting, _)| *setting == "passes.stepover")?;
+    crate::expr::evaluate(text, &|n| op.expression_value(n, Some(tool), tolerance)).ok()
 }

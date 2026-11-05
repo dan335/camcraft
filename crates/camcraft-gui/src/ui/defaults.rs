@@ -252,12 +252,9 @@ impl<T: Serialize + DeserializeOwned> Defaults<T> {
             .and_then(|e| e.faults.get(path).cloned());
         let mut edit = None;
         let (out, reset) = widgets::setting_row(ui, text, topic, changed, |ui| {
-            // Worked out, the field shows what it comes to and is not typed in.
-            let out = if given.is_some() {
-                ui.add_enabled_ui(false, add).inner
-            } else {
-                add(ui)
-            };
+            // Worked out, the field shows what it comes to; a number typed
+            // over it takes the expression's place ([`Defaults::apply`]).
+            let out = add(ui);
             let id = ui.id().with(("expression", path));
             edit = widgets::expression(ui, id, given.as_deref(), fault.as_deref(), &start);
             out
@@ -404,25 +401,44 @@ impl<T: Serialize + DeserializeOwned> Defaults<T> {
 }
 
 impl<T: Serialize + DeserializeOwned> Defaults<T> {
-    /// Put the expressions edited into `value`; and take out those of the
-    /// settings put back to their defaults, which would otherwise be worked
-    /// out again over them.
+    /// Put the expressions edited into `value`. A setting put back to its
+    /// default goes back to the default's expression, or has none if the
+    /// default has none; one typed over loses its expression, as Fusion's
+    /// does, rather than have it worked out again over what was typed.
     fn apply_expressions(&self, value: &mut T) {
         let Some(e) = &self.expressions else {
             return;
         };
-        let reset = self
-            .resets
-            .iter()
-            .filter(|(path, _)| e.given.contains_key(path))
-            .map(|(path, _)| (path.clone(), ExpressionEdit::Dropped));
-        let edits: Vec<_> = e.edits.iter().cloned().chain(reset).collect();
-        if edits.is_empty() {
-            return;
-        }
         let Ok(mut now) = Table::try_from(&*value) else {
             return;
         };
+        let default_of = |path: &str| {
+            self.default
+                .get("expressions")
+                .and_then(|t| t.get(path))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
+        let reset = self.resets.iter().map(|(path, _)| {
+            let edit = default_of(path).map_or(ExpressionEdit::Dropped, ExpressionEdit::To);
+            (path.clone(), edit)
+        });
+        let typed_over = e
+            .given
+            .keys()
+            .filter(|path| !e.edits.iter().any(|(p, _)| p == *path))
+            .filter(|path| at(&now, path) != at(&self.now, path))
+            .map(|path| (path.clone(), ExpressionEdit::Dropped));
+        let edits: Vec<_> = e
+            .edits
+            .iter()
+            .cloned()
+            .chain(reset)
+            .chain(typed_over)
+            .collect();
+        if edits.is_empty() {
+            return;
+        }
         let mut given: Table = now
             .remove("expressions")
             .and_then(|v| v.as_table().cloned())
@@ -483,7 +499,8 @@ mod tests {
 
     /// A number setting offers an expression, starting at what it holds,
     /// even at its default and so not written; others do not. One given is
-    /// put in; put back to the default, the setting drops it.
+    /// put in; a number typed over it takes its place; put back to the
+    /// default, the setting has the default's expression again.
     #[test]
     fn an_expression_is_given_and_dropped_with_its_setting() {
         let def = adaptive();
@@ -509,23 +526,34 @@ mod tests {
             None
         );
 
+        let stepover = |op: &Operation| {
+            op.expressions
+                .get("passes.stepover")
+                .map(String::as_str)
+                .map(str::to_string)
+        };
         let mut d = Defaults::of(&op, &def).expressive(Vec::new());
         if let Some(e) = d.expressions.as_mut() {
             e.edits.push((
                 "passes.stepover".into(),
-                ExpressionEdit::To("tool_diameter * 0.4".into()),
+                ExpressionEdit::To("tool_diameter * 0.2".into()),
             ));
         }
         d.apply(&mut op);
-        assert_eq!(
-            op.expressions.get("passes.stepover").map(String::as_str),
-            Some("tool_diameter * 0.4")
-        );
+        assert_eq!(stepover(&op).as_deref(), Some("tool_diameter * 0.2"));
 
+        // A number typed over it takes its place.
+        let d = Defaults::of(&op, &def).expressive(Vec::new());
+        op.passes.stepover = 1.25;
+        d.apply(&mut op);
+        assert_eq!(stepover(&op), None);
+        assert_eq!(op.passes.stepover, 1.25);
+
+        // Put back, it is the default's again, expression and all.
         let mut d = Defaults::of(&op, &def).expressive(Vec::new());
         d.push("passes.stepover", Layer::Started);
         d.apply(&mut op);
-        assert!(op.expressions.is_empty());
+        assert_eq!(stepover(&op).as_deref(), Some("tool_diameter * 0.4"));
         assert_eq!(op.passes.stepover, def.passes.stepover);
     }
 

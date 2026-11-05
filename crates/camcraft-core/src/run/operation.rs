@@ -511,7 +511,7 @@ pub(super) fn cut_operation(
     }
 
     Ok(OperationResult {
-        path,
+        path: Arc::new(path),
         sim,
         passes,
         travel_saved,
@@ -558,7 +558,7 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
     OperationResult {
         name: op.name.clone(),
         strategy: op.strategy.name(),
-        path: Toolpath::new(),
+        path: Arc::new(Toolpath::new()),
         tool_number: spec.map_or(0, |t| t.number),
         rpm: op.passes.rpm.or(spec.map(|t| t.rpm)).unwrap_or(0),
         tool_comment: spec.map(|t| t.comment.clone()).unwrap_or_default(),

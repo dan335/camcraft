@@ -120,8 +120,9 @@ pub struct OperationResult {
     pub name: String,
     /// Which strategy produced it, for the program's section comment.
     pub strategy: &'static str,
-    /// The machinable path.
-    pub path: Toolpath,
+    /// The machinable path: shared, by what draws it, replays it and rests
+    /// against it, rather than copied.
+    pub path: Arc<Toolpath>,
     /// Tool number, for the post.
     pub tool_number: u32,
     /// Spindle speed.

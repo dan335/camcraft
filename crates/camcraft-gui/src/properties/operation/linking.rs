@@ -240,10 +240,7 @@ pub(super) fn linking(
             });
             widgets::dependent(ui, op.linking.reorder, |ui| {
                 d.row(ui, &link::REVERSE, "linking.allow_reverse", |ui| {
-                    ui.checkbox(
-                        &mut op.linking.allow_reverse,
-                        "where it travels less (changes climb)",
-                    );
+                    ui.checkbox(&mut op.linking.allow_reverse, "allow (changes climb)");
                 });
             });
         }

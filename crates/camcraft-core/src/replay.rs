@@ -36,6 +36,7 @@ use camcraft_sim::stock::{CellRect, PackedStock, SimMove, Stock, SweptTool};
 use crate::cutter::allowance::EffectiveTool;
 use crate::job::{Job, Setup};
 use crate::path::simadapt::sim_moves;
+use crate::path::toolpath::Toolpath;
 use crate::run::{RunError, SetupResult, cutting_tool};
 
 /// A place in the program: the moves of one operation applied so far.
@@ -66,28 +67,58 @@ pub struct Replay {
     keyframes: Vec<Arc<PackedStock>>,
 }
 
-impl Replay {
-    /// Everything needed to replay `result`, which must be `setup`'s, in `job`.
+/// What a [`Replay`] is made from, gathered at once: each operation's tool
+/// and its path, shared with the run's result, and the keyframes. Turning
+/// the paths into moves to sweep, the slow part on a long program, is left
+/// to [`ReplaySource::replay`], wherever that can take its time.
+#[derive(Debug, Clone)]
+pub struct ReplaySource {
+    ops: Vec<(Option<EffectiveTool>, Arc<Toolpath>)>,
+    keyframes: Vec<Arc<PackedStock>>,
+}
+
+impl ReplaySource {
+    /// What replaying `result`, which must be `setup`'s, in `job`, needs.
     pub fn new(job: &Job, setup: &Setup, result: &SetupResult) -> Result<Self, RunError> {
-        let sweeps = setup
+        let ops = setup
             .operations
             .iter()
             .zip(&result.operations)
             .map(|(op, ran)| {
-                Ok(OpSweep {
-                    tool: if ran.made.has_paths() {
-                        Some(cutting_tool(job, op)?)
-                    } else {
-                        None
-                    },
-                    moves: sim_moves(&ran.path),
-                })
+                let tool = if ran.made.has_paths() {
+                    Some(cutting_tool(job, op)?)
+                } else {
+                    None
+                };
+                Ok((tool, Arc::clone(&ran.path)))
             })
             .collect::<Result<Vec<_>, RunError>>()?;
         Ok(Self {
-            sweeps,
+            ops,
             keyframes: result.keyframes.clone(),
         })
+    }
+
+    /// The replay: each operation's path as the moves it sweeps.
+    pub fn replay(self) -> Replay {
+        Replay {
+            sweeps: self
+                .ops
+                .into_iter()
+                .map(|(tool, path)| OpSweep {
+                    tool,
+                    moves: sim_moves(&path),
+                })
+                .collect(),
+            keyframes: self.keyframes,
+        }
+    }
+}
+
+impl Replay {
+    /// Everything needed to replay `result`, which must be `setup`'s, in `job`.
+    pub fn new(job: &Job, setup: &Setup, result: &SetupResult) -> Result<Self, RunError> {
+        Ok(ReplaySource::new(job, setup, result)?.replay())
     }
 
     /// How many moves operation `op` has.

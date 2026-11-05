@@ -602,7 +602,7 @@ fn rest_material_is_what_the_operations_before_left() {
         .feed_to(dvec3(45.0, 10.0, -6.0), MoveRole::Cut, 1000.0)
         .unwrap();
     let flat = Earlier {
-        path: flat_path,
+        path: std::sync::Arc::new(flat_path),
         cutter: Cutter::Bullnose(Bullnose::new(R, 0.0).unwrap()),
     };
     let watch = crate::control::Watch::default();
@@ -644,8 +644,7 @@ fn rest_material_is_what_the_operations_before_left() {
     // A second pass 5.8 mm over leaves a strip 0.2 mm wide: ignored at 0.5.
     let mut twice = flat.clone();
     for x in [45.0, -5.0] {
-        twice
-            .path
+        std::sync::Arc::make_mut(&mut twice.path)
             .feed_to(dvec3(x, 7.0 - 0.2 - R, -6.0), MoveRole::Cut, 1000.0)
             .unwrap();
     }

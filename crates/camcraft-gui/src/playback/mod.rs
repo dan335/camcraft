@@ -19,7 +19,7 @@ use camcraft_session::checks::Finding;
 use eframe::egui;
 use glam::DVec3;
 
-use crate::document::{Selection, SetupState, ViewMode};
+use crate::document::{Look, Selection, SetupState, Shown, ViewMode};
 use crate::stock::live::{Goal, LiveStock};
 use crate::transport;
 use crate::view::scene::{Playhead, Scene, Steep};
@@ -68,6 +68,17 @@ pub fn cannot_play_back(state: &SetupState) -> Option<&'static str> {
 /// part is.
 pub fn showing_material(state: &SetupState) -> bool {
     playing_back(state) || (state.view.material && paths_fit(state))
+}
+
+/// How the setup is being looked at.
+pub fn look(state: &SetupState) -> Look {
+    if playing_back(state) {
+        Look::Playback
+    } else if showing_material(state) {
+        Look::CutStock
+    } else {
+        Look::Part
+    }
 }
 
 /// The operation of setup `name` that `selection` is, if it is one of its.
@@ -205,9 +216,12 @@ pub fn content<'a>(state: &'a SetupState, name: &str, selection: &Selection) -> 
         ),
         (None, None) => (None, None),
     };
-    let show_paths = view.paths(back, material);
-    let (show_part, shown, ops, only) = if back {
-        (view.part_in_playback, view.at.shown, view.view.ops, None)
+    let Shown {
+        part: show_part,
+        toolpaths: show_paths,
+    } = view.looks.of(look(state));
+    let (shown, ops, only) = if back {
+        (view.at.shown, view.view.ops, None)
     } else {
         // Setting up: the selection's toolpaths, all of them. An operation of
         // this setup is its alone; anything else, the setup's.
@@ -219,8 +233,7 @@ pub fn content<'a>(state: &'a SetupState, name: &str, selection: &Selection) -> 
                 .unwrap_or(0)
         });
         let all = scene.map_or(0, |r| r.scene.segments.len());
-        // The material in place of the part, as playing back has it.
-        (view.view.part && !material, all, ops, only)
+        (all, ops, only)
     };
     // Setting up, the material stands for the stock: its outline and work zero
     // go with the part. Playing back, they are as ticked.

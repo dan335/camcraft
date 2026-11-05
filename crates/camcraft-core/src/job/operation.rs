@@ -65,7 +65,9 @@ impl Operation {
     /// A new operation called `name` of `strategy`, with no tool yet, and
     /// everything else as Fusion starts it: the strategy's own multiple depths
     /// and stock to leave ([`StrategySpec::default_stepdown`],
-    /// [`StrategySpec::default_stock_to_leave`]), and the rest as a job file that
+    /// [`StrategySpec::default_stock_to_leave`]), its stepover and stepdown
+    /// worked out from its tool once it has one
+    /// ([`StrategySpec::default_expressions`]), and the rest as a job file that
     /// gives none has it.
     pub fn new(name: impl Into<String>, strategy: StrategySpec) -> Self {
         Self {
@@ -84,7 +86,11 @@ impl Operation {
             },
             linking: Linking::default(),
             enabled: true,
-            expressions: BTreeMap::new(),
+            expressions: strategy
+                .default_expressions()
+                .iter()
+                .map(|(setting, text)| ((*setting).to_string(), (*text).to_string()))
+                .collect(),
         }
     }
 
@@ -164,15 +170,13 @@ impl Operation {
 
     /// A new operation called `name` of `strategy`, cutting with the job's tool
     /// `tool`, described by `spec`, and its preset `preset`: as
-    /// [`Operation::new`] starts one, with the preset's values, the stepover
-    /// and stepdown Fusion gives the strategy with the tool, on the part's
-    /// silhouette as Fusion starts it ([`StrategySpec::starting_containment`]), and with room
-    /// round the part for the tool ([`Operation::fit_channel`]).
+    /// [`Operation::new`] starts one, with the preset's values, on the part's
+    /// silhouette as Fusion starts it ([`StrategySpec::starting_containment`]),
+    /// and with room round the part for the tool ([`Operation::fit_channel`]).
     pub fn fresh(
         name: impl Into<String>,
         strategy: StrategySpec,
         (tool, spec, preset): (Option<String>, Option<&ToolSpec>, Option<&Preset>),
-        tolerance: f64,
     ) -> Self {
         let mut op = Self {
             tool,
@@ -181,43 +185,12 @@ impl Operation {
         if let Some(p) = preset {
             op.apply_preset(p);
         }
-        op.fit_stepover(spec, preset, tolerance);
-        op.fit_stepdown(spec, preset);
         if let Some(containment) = strategy.starting_containment() {
             op.boundary.kind = Boundary::Silhouette;
             op.boundary.containment = containment;
         }
         op.fit_channel(spec);
         op
-    }
-
-    /// The stepover Fusion gives its strategy with `tool`, unless `preset` set
-    /// one: a fixed millimetre suits a 1/32" cutter and starves a 1/4" one.
-    pub fn fit_stepover(
-        &mut self,
-        tool: Option<&ToolSpec>,
-        preset: Option<&Preset>,
-        tolerance: f64,
-    ) {
-        // A preset's stepover is not an adaptive operation's load, which it keeps.
-        if preset.is_some_and(|p| p.stepover.is_some()) && !self.strategy.uses().load {
-            return;
-        }
-        if let Some(over) = tool.and_then(|t| self.default_stepover(t, tolerance)) {
-            self.passes.stepover = over;
-        }
-    }
-
-    /// The stepdown Fusion gives its strategy with `tool`
-    /// ([`Operation::default_tool_stepdown`]), unless `preset` set one or it
-    /// cuts in one pass.
-    pub fn fit_stepdown(&mut self, tool: Option<&ToolSpec>, preset: Option<&Preset>) {
-        if preset.is_some_and(|p| p.stepdown.is_some()) || self.passes.stepdown.is_none() {
-            return;
-        }
-        if let Some(down) = tool.and_then(|t| self.default_tool_stepdown(t)) {
-            self.passes.stepdown = Some(down);
-        }
     }
 
     /// Room for `tool` round the part, as the Geometry tab gives it: a 3D
@@ -236,6 +209,33 @@ impl Operation {
     /// Copy the values `preset` has into this operation, leaving the rest, and
     /// record where they came from.
     pub fn apply_preset(&mut self, preset: &Preset) {
+        // What the preset gives is the setting's, not worked out over it.
+        let mut given = |setting: &str| {
+            self.expressions.remove(setting);
+        };
+        for (setting, is) in [
+            ("passes.rpm", preset.rpm.is_some()),
+            ("passes.feed", preset.feed.is_some()),
+            ("linking.plunge_feed", preset.plunge_feed.is_some()),
+            ("linking.ramp_feed", preset.ramp_feed.is_some()),
+            ("passes.stepdown", preset.stepdown.is_some()),
+            (
+                "passes.stock_to_leave.radial",
+                preset.stock_to_leave.is_some(),
+            ),
+            (
+                "passes.stock_to_leave.axial",
+                preset.stock_to_leave.is_some(),
+            ),
+            (
+                "passes.stepover",
+                preset.stepover.is_some() && !self.strategy.uses().load,
+            ),
+        ] {
+            if is {
+                given(setting);
+            }
+        }
         if let Some(rpm) = preset.rpm {
             self.passes.rpm = Some(rpm);
         }

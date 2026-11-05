@@ -150,10 +150,7 @@ pub(super) fn footer(
 pub(super) fn banner(ui: &mut egui::Ui, status: Status, share: Option<f64>) {
     let text = match status {
         Status::Running => match share {
-            Some(share) => format!(
-                "Generating: {:.0}%. Each operation shows as soon as it is made.",
-                share * 100.0
-            ),
+            Some(share) => format!("Generating: {:.0}%.", share * 100.0),
             None => "Generating: laying out the part and stock.".into(),
         },
         Status::Stale => {

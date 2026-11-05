@@ -346,7 +346,14 @@ impl App {
             doc.stop_changed_runs();
             // What is being worked out, drawn as it is found.
             doc.take_previews(now);
-            if !self.settings.generate || !doc.settled(now, editing) {
+            if !self.settings.generate {
+                continue;
+            }
+            let wait = doc.until_settled(now, editing);
+            if !wait.is_zero() {
+                // A frame when it settles, to start it: nothing else may draw
+                // one, as after a value typed and entered, the mouse still.
+                ctx.request_repaint_after(wait);
                 continue;
             }
             for name in doc.wanting_runs() {

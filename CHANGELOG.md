@@ -4,6 +4,18 @@ What changed in each release, newest first. Each release's page
 ([Releases](https://github.com/dan335/camcraft/releases)) has the downloads and
 the same notes at more length.
 
+## Unreleased
+
+- **Stepovers and stepdowns start as expressions**, as Fusion's defaults do: a
+  new operation's follows its tool, and a number typed over one, or a preset's,
+  takes its place; ↺ brings the expression back.
+- **Generating starts when a value is entered**, without the mouse having to
+  move.
+- **No pause after each run on a long program**: the replay the cut stock and
+  playback are drawn from is built off the window's thread, from toolpaths now
+  shared rather than copied.
+- Plainer hints in the Show panel and on expressions.
+
 ## 0.5.0 — 2026-11-05
 
 - **The cut stock while setting up.** Part or cut stock at the top of the Show

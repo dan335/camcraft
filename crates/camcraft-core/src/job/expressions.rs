@@ -110,7 +110,9 @@ impl Operation {
     /// were, and say why.
     pub fn work_out_expressions(&mut self, tool: Option<&ToolSpec>, tolerance: f64) -> Worked {
         let mut worked = Worked::default();
-        if self.expressions.is_empty() {
+        // Without a tool, what they read of one is not there yet: the settings
+        // keep their numbers until one is chosen.
+        if self.expressions.is_empty() || tool.is_none() {
             return worked;
         }
         let Ok(mut table) = Table::try_from(&*self) else {
@@ -121,7 +123,9 @@ impl Operation {
         let read = |name: &str| self.expression_value(name, tool, tolerance);
         for (setting, text) in &self.expressions {
             let value = match expr::evaluate(text, &read) {
-                Ok(v) => v,
+                // Clear of what arithmetic leaves past the ninth place, as
+                // 6.35 * 0.4 does: kept as it is written.
+                Ok(v) => (v * 1e9).round() / 1e9,
                 Err(e) => {
                     faults.push((setting.clone(), e.to_string()));
                     continue;

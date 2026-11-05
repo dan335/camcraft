@@ -539,7 +539,7 @@ fn earlier(job: &Job, setup: &Setup, made: &[OperationResult]) -> Result<Vec<Ear
         .map(|(op, r)| {
             let (_, tool) = tool_of(job, op)?;
             Ok(Earlier {
-                path: r.path.clone(),
+                path: Arc::clone(&r.path),
                 cutter: *tool.base(),
             })
         })

@@ -430,6 +430,53 @@ impl StrategySpec {
         }
     }
 
+    /// The expressions a new operation of this strategy works its settings out
+    /// from, as Fusion's defaults are, so they follow its tool:
+    ///
+    /// - The stepover: for parallel finishing and the patterns dropped onto the
+    ///   part (scallop, spiral, radial and morphed spiral), a quarter of the
+    ///   tool's diameter with a square end, and with a round one the spacing
+    ///   that leaves a cusp no taller than the tolerance, `√(2(r² − (r − tol)²))`,
+    ///   to the micron; for 3D pocket clearing, a 2D pocket and flat finishing,
+    ///   0.6 of the diameter; for adaptive clearing, its optimal load,
+    ///   `tool_diameter * 0.4`; for facing, 95% of the flat of the tool's end.
+    /// - The stepdown, for adaptive and 3D pocket clearing: Fusion's maximum
+    ///   roughing stepdown, `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)`.
+    ///
+    /// Contour finishing, a profile and drilling have none.
+    pub fn default_expressions(&self) -> &'static [(&'static str, &'static str)] {
+        const CUSP: &str = "tool_cornerRadius > tolerance \
+            ? Math.roundto(Math.sqrt(2 * (tool_cornerRadius^2 - (tool_cornerRadius - tolerance)^2)); 0.001) \
+            : Math.roundto(tool_diameter / 4; 0.001)";
+        const ROUGHING_STEPDOWN: &str = "Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)";
+        match self {
+            // A scallop pass is parallel's cusp, kept on a slope too.
+            StrategySpec::Parallel { .. }
+            | StrategySpec::Scallop { .. }
+            | StrategySpec::Spiral { .. }
+            | StrategySpec::Radial { .. }
+            | StrategySpec::MorphedSpiral { .. } => &[("passes.stepover", CUSP)],
+            StrategySpec::PocketClearing { .. } => &[
+                ("passes.stepover", "tool_diameter * 0.6"),
+                ("passes.stepdown", ROUGHING_STEPDOWN),
+            ],
+            StrategySpec::Pocket { .. } | StrategySpec::Flat { .. } => {
+                &[("passes.stepover", "tool_diameter * 0.6")]
+            }
+            StrategySpec::Adaptive { .. } => &[
+                ("passes.stepover", "tool_diameter * 0.4"),
+                ("passes.stepdown", ROUGHING_STEPDOWN),
+            ],
+            StrategySpec::Face { .. } => &[(
+                "passes.stepover",
+                "(tool_diameter - 2 * tool_cornerRadius) * 0.95",
+            )],
+            StrategySpec::Profile { .. }
+            | StrategySpec::Contour { .. }
+            | StrategySpec::Drill { .. } => &[],
+        }
+    }
+
     /// The multiple depths this strategy starts with: roughing and 2D cutting
     /// 2 mm a level, facing its bottom in one pass.
     pub fn default_stepdown(&self) -> Option<f64> {

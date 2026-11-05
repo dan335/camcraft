@@ -64,7 +64,7 @@ pub(crate) fn recheck(
 ) -> Checks {
     let job = small_job();
     let mut ops = ran.result.operations.clone();
-    tamper(&mut ops[0].path);
+    tamper(std::sync::Arc::make_mut(&mut ops[0].path));
     checks::check(
         &job,
         0,
