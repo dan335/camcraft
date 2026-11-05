@@ -221,6 +221,26 @@ impl ToolManager {
         self.selected = tool;
     }
 
+    /// Undo the library's last edit; the tool selected stays so if it is
+    /// still there.
+    pub fn undo(&mut self) {
+        self.library.undo();
+        self.keep_selection();
+    }
+
+    /// Redo the library's last undone edit.
+    pub fn redo(&mut self) {
+        self.library.redo();
+        self.keep_selection();
+    }
+
+    /// Let go of the tool selected if an undo or redo took it away.
+    fn keep_selection(&mut self) {
+        if self.selected_tool().is_none() {
+            self.select(None);
+        }
+    }
+
     fn selected_tool(&self) -> Option<&ToolSpec> {
         let (folder, name) = self.selected.as_ref()?;
         self.library.edited.at(folder)?.tools.get(name)
@@ -293,9 +313,11 @@ impl ToolManager {
                     .inner_margin(egui::Margin::symmetric(12, 10)),
             )
             .show(ui, |ui| self.table(ui));
-        // An edit is finished once no field is being typed in or dragged.
+        // An edit is finished once no field is being typed in or dragged: it
+        // becomes one step to undo, and is saved.
         let ctx = ui.ctx();
         if ctx.memory(|m| m.focused().is_none()) && ctx.dragged_id().is_none() {
+            self.library.checkpoint();
             self.save_library();
         }
     }
@@ -365,6 +387,29 @@ impl ToolManager {
             }
             let locked = is_system(&self.folder);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let keys = |key| {
+                    ui.ctx().format_shortcut(&egui::KeyboardShortcut::new(
+                        egui::Modifiers::COMMAND,
+                        key,
+                    ))
+                };
+                let (undo_keys, redo_keys) = (keys(egui::Key::Z), keys(egui::Key::Y));
+                ui.add_enabled_ui(self.library.can_redo(), |ui| {
+                    if widgets::button(ui, Variant::Ghost, Size::Md, None, "Redo")
+                        .on_hover_text(format!("redo the library's last undone edit ({redo_keys})"))
+                        .clicked()
+                    {
+                        self.redo();
+                    }
+                });
+                ui.add_enabled_ui(self.library.can_undo(), |ui| {
+                    if widgets::button(ui, Variant::Ghost, Size::Md, None, "Undo")
+                        .on_hover_text(format!("undo the library's last edit ({undo_keys})"))
+                        .clicked()
+                    {
+                        self.undo();
+                    }
+                });
                 ui.add_enabled_ui(!locked, |ui| {
                     if widgets::button(ui, Variant::Primary, Size::Md, Some(Icon::Plus), "New tool")
                         .on_hover_text("a new tool in the folder showing")

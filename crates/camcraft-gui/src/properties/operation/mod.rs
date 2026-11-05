@@ -68,6 +68,34 @@ const TABS: [OperationTab; 5] = [
     OperationTab::Linking,
 ];
 
+/// The tab an operation's setting is on, by its place (`passes.stepover`):
+/// the feeds and speeds on Tool, what it is kept to on Geometry, and so on.
+pub fn tab_of(setting: &str) -> OperationTab {
+    let section = setting.split('.').next().unwrap_or(setting);
+    match (section, setting) {
+        (_, "tool" | "preset" | "passes.feed" | "passes.rpm" | "linking.plunge_feed") => {
+            OperationTab::Tool
+        }
+        ("selection" | "boundary" | "outline" | "rest_machining" | "ignore_stock_less_than", _) => {
+            OperationTab::Geometry
+        }
+        ("heights", _) => OperationTab::Heights,
+        ("linking" | "stay_down_level" | "stay_down_clearance" | "lift_height", _) => {
+            OperationTab::Linking
+        }
+        _ => OperationTab::Passes,
+    }
+}
+
+/// Show the tab of an operation's that has `setting` on it ([`tab_of`]),
+/// the next time an operation's panel is drawn.
+pub fn show_tab_of(ctx: &egui::Context, setting: &str) {
+    let tab = tab_of(setting);
+    if let Some(page) = TABS.iter().position(|t| *t == tab) {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(TAB), page));
+    }
+}
+
 /// Operation `index` of `setup`'s panel. Which of its tabs shows, if it has one to
 /// show.
 /// `def`, an operation's default, with each optional group `op` has given as

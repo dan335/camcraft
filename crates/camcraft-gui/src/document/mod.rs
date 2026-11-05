@@ -13,6 +13,7 @@
 //! the job is in [`edit`]; running it, and what came of a run, in [`run`].
 
 mod edit;
+mod history;
 mod passes;
 mod run;
 mod setup_state;
@@ -40,6 +41,7 @@ use camcraft_session::{Model, SessionError, write_job};
 use crate::worker::DocId;
 
 pub use edit::{Wanted, is_stl};
+use history::Step;
 pub use run::{OpStatus, Status};
 pub use setup_state::{
     Halt, Layout, Look, OpWork, RanSetup, Running, SetupState, SetupView, Shown, Transport,
@@ -198,8 +200,8 @@ pub struct Document {
     saved: Job,
     /// The job when last checkpointed, and what came before and after it.
     checkpoint: Job,
-    undo: Vec<Job>,
-    redo: Vec<Job>,
+    undo: Vec<Step>,
+    redo: Vec<Step>,
     /// Its models, by name, as far as loading has got.
     pub models: BTreeMap<String, ModelSlot>,
     /// Models being placed again, by name, with where to: each still shown where
@@ -357,7 +359,7 @@ impl Document {
         // from, so none reads as changed.
         if old_dir != new_dir {
             for j in self.undo.iter_mut().chain(self.redo.iter_mut()) {
-                rebase(j, &old_dir, &new_dir);
+                rebase(&mut j.job, &old_dir, &new_dir);
             }
             for state in self.setups.values_mut() {
                 if let Some(ran) = &mut state.ran {
@@ -399,11 +401,19 @@ impl Document {
         quiet.saturating_sub(now.saturating_duration_since(self.edited_at))
     }
 
-    /// Note an edit as finished: what the job was before it becomes one undo.
+    /// Note an edit as finished: what the job was before it becomes one undo,
+    /// named for what changed. What the edit's expressions make of it is
+    /// worked out first and is part of it, not a step of its own, which
+    /// undoing would only see worked out again.
     pub fn checkpoint(&mut self) {
+        self.work_out_expressions();
         if self.job != self.checkpoint {
+            let change = history::change(&self.checkpoint, &self.job);
             let before = std::mem::replace(&mut self.checkpoint, self.job.clone());
-            self.undo.push(before);
+            self.undo.push(Step {
+                job: before,
+                change,
+            });
             // Plenty to recover from a slip, and never unbounded.
             if self.undo.len() > 200 {
                 self.undo.remove(0);
@@ -412,37 +422,67 @@ impl Document {
         }
     }
 
-    /// Whether there is an edit to undo.
-    pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty() || self.job != self.checkpoint
+    /// What undoing would undo, as the menu names it, if anything: the edit
+    /// not finished yet, or the last that was.
+    pub fn undo_name(&self) -> Option<String> {
+        if self.job != self.checkpoint {
+            return Some(history::change(&self.checkpoint, &self.job).what);
+        }
+        self.undo.last().map(|s| s.change.what.clone())
     }
 
-    /// Whether there is an undone edit to redo.
-    pub fn can_redo(&self) -> bool {
-        !self.redo.is_empty()
+    /// What redoing would redo, if anything.
+    pub fn redo_name(&self) -> Option<String> {
+        self.redo.last().map(|s| s.change.what.clone())
     }
 
-    /// Undo the last edit.
-    pub fn undo(&mut self) {
+    /// Undo the last edit, and show where it was: it is selected, and the
+    /// setting it changed, if it was one, is given for its tab to be shown.
+    pub fn undo(&mut self) -> Option<String> {
         self.checkpoint();
-        if let Some(before) = self.undo.pop() {
-            let was = std::mem::replace(&mut self.job, before);
-            self.follow_renames(&was);
-            self.redo.push(was);
-            self.checkpoint = self.job.clone();
-            self.tidy_selection();
-        }
+        let step = self.undo.pop()?;
+        let was = std::mem::replace(&mut self.job, step.job);
+        self.moved(&was);
+        let setting = self.show_where(&was);
+        self.redo.push(Step {
+            job: was,
+            change: step.change,
+        });
+        setting
     }
 
-    /// Redo the last undone edit.
-    pub fn redo(&mut self) {
-        if let Some(after) = self.redo.pop() {
-            let was = std::mem::replace(&mut self.job, after);
-            self.follow_renames(&was);
-            self.undo.push(was);
-            self.checkpoint = self.job.clone();
-            self.tidy_selection();
-        }
+    /// Redo the last undone edit, and show where it was, as [`Document::undo`].
+    pub fn redo(&mut self) -> Option<String> {
+        let step = self.redo.pop()?;
+        let was = std::mem::replace(&mut self.job, step.job);
+        self.moved(&was);
+        let setting = self.show_where(&was);
+        self.undo.push(Step {
+            job: was,
+            change: step.change,
+        });
+        setting
+    }
+
+    /// The job has just gone from `was` to what it is by undoing or
+    /// redoing: what was run follows its setups through renames.
+    fn moved(&mut self, was: &Job) {
+        self.follow_renames(was);
+        self.checkpoint = self.job.clone();
+    }
+
+    /// Select where the job changed from `was` to what it is, in the job as
+    /// it is now, and say the setting, if it was one.
+    fn show_where(&mut self, was: &Job) -> Option<String> {
+        let setting = history::change(was, &self.job).at.and_then(|at| {
+            if let Selection::Setup(s) | Selection::Operation(s, _) = &at.selection {
+                self.active = Some(s.clone());
+            }
+            self.selection = at.selection;
+            at.setting
+        });
+        self.tidy_selection();
+        setting
     }
 
     /// Carry each setup's state, the view's and the selection's to its name now,

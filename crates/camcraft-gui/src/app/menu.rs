@@ -61,17 +61,24 @@ impl App {
             ui.menu_button("Edit", |ui| {
                 let (undo, redo) = self
                     .doc()
-                    .map_or((false, false), |d| (d.can_undo(), d.can_redo()));
-                if ui.add_enabled(undo, egui::Button::new("Undo")).clicked() {
-                    if let Some(d) = self.doc_mut() {
-                        d.undo();
-                    }
+                    .map_or((None, None), |d| (d.undo_name(), d.redo_name()));
+                let ctx = ui.ctx().clone();
+                let keys = |key| {
+                    ctx.format_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, key))
+                };
+                let item = |ui: &mut egui::Ui, verb: &str, what: &Option<String>, keys: String| {
+                    let text = what
+                        .as_ref()
+                        .map_or(verb.to_string(), |w| format!("{verb} {w}"));
+                    ui.add_enabled(what.is_some(), egui::Button::new(text).shortcut_text(keys))
+                        .clicked()
+                };
+                if item(ui, "Undo", &undo, keys(egui::Key::Z)) {
+                    self.undo(&ctx);
                     ui.close();
                 }
-                if ui.add_enabled(redo, egui::Button::new("Redo")).clicked() {
-                    if let Some(d) = self.doc_mut() {
-                        d.redo();
-                    }
+                if item(ui, "Redo", &redo, keys(egui::Key::Y)) {
+                    self.redo(&ctx);
                     ui.close();
                 }
             });

@@ -111,6 +111,15 @@ pub struct App {
     post_plan: Option<(DocId, Posting)>,
     /// Whether posting setups that did not pass their checks has been confirmed.
     post_anyway: bool,
+    /// The field that had the keyboard last frame, to tell when it moves on.
+    focus: Option<egui::Id>,
+}
+
+/// Whether an edit is finished, the keyboard with the field `now` having had
+/// it with `was`, and something `dragging` or not: nothing typed in or
+/// dragged, or the keyboard gone on to another field, as Tab takes it.
+fn edit_finished(was: Option<egui::Id>, now: Option<egui::Id>, dragging: bool) -> bool {
+    !dragging && (now.is_none() || (was.is_some() && was != now))
 }
 
 impl App {
@@ -151,6 +160,7 @@ impl App {
             log: Vec::new(),
             post_plan: None,
             post_anyway: false,
+            focus: None,
         }
     }
 
@@ -478,6 +488,20 @@ impl App {
         }
     }
 
+    /// Undo the showing job's last edit, and show where it was.
+    pub(super) fn undo(&mut self, ctx: &egui::Context) {
+        if let Some(setting) = self.doc_mut().and_then(Document::undo) {
+            properties::show_tab_of(ctx, &setting);
+        }
+    }
+
+    /// Redo the showing job's last undone edit, and show where it was.
+    pub(super) fn redo(&mut self, ctx: &egui::Context) {
+        if let Some(setting) = self.doc_mut().and_then(Document::redo) {
+            properties::show_tab_of(ctx, &setting);
+        }
+    }
+
     // ---- the frame ------------------------------------------------------------
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
@@ -512,15 +536,16 @@ impl App {
         if !typing && !modal && ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.picking.escape();
         }
+        // While the tool library's window is open, its edits are what undo.
         if !typing {
-            if pressed(shift, Key::Z) {
-                if let Some(d) = self.doc_mut() {
-                    d.redo();
-                }
-            } else if pressed(Modifiers::COMMAND, Key::Z)
-                && let Some(d) = self.doc_mut()
-            {
-                d.undo();
+            let redo = pressed(shift, Key::Z) || pressed(Modifiers::COMMAND, Key::Y);
+            let undo = !redo && pressed(Modifiers::COMMAND, Key::Z);
+            match (self.tools.open, undo, redo) {
+                (true, true, _) => self.tools.undo(),
+                (true, _, true) => self.tools.redo(),
+                (false, true, _) => self.undo(ctx),
+                (false, _, true) => self.redo(ctx),
+                _ => {}
             }
         }
         let n = self.docs.len();
@@ -986,13 +1011,16 @@ impl eframe::App for App {
                 });
         }
 
-        // An edit is finished once no field is being typed in or dragged: then it
-        // becomes one step to undo.
-        if ctx.memory(|m| m.focused().is_none()) && ctx.dragged_id().is_none() {
+        // An edit is finished once no field is being typed in or dragged, or
+        // the keyboard has moved on to another field: then it becomes one step
+        // to undo.
+        let focus = ctx.memory(|m| m.focused());
+        if edit_finished(self.focus, focus, ctx.dragged_id().is_some()) {
             for d in &mut self.docs {
                 d.checkpoint();
             }
         }
+        self.focus = focus;
 
         if ctx.input(|i| i.viewport().close_requested()) && self.docs.iter().any(Document::dirty) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1011,5 +1039,25 @@ impl eframe::App for App {
         eframe::set_value(storage, STORAGE_DIALOG, self.dialog.storage());
         eframe::set_value(storage, STORAGE_SETTINGS, &self.settings);
         eframe::set_value(storage, STORAGE_RECENT, &self.recent);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::edit_finished;
+    use eframe::egui::Id;
+
+    /// An edit is finished once nothing is typed in or dragged, or once the
+    /// keyboard goes on to another field: two fields typed into with Tab
+    /// between are two steps to undo.
+    #[test]
+    fn an_edit_is_finished_field_by_field() {
+        let (a, b) = (Some(Id::new("a")), Some(Id::new("b")));
+        assert!(edit_finished(None, None, false), "nothing being edited");
+        assert!(edit_finished(a, None, false), "the field let go");
+        assert!(edit_finished(a, b, false), "on to the next field");
+        assert!(!edit_finished(a, a, false), "still typing");
+        assert!(!edit_finished(None, a, false), "just started typing");
+        assert!(!edit_finished(None, None, true), "dragging");
     }
 }

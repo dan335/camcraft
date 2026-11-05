@@ -32,6 +32,35 @@ fn a_rename_onto_a_taken_name_or_nothing_is_refused() {
     assert!(set.edited.tools.contains_key("c"));
 }
 
+/// A tool deleted from the library comes back on undo, and goes again on
+/// redo; the tool selected is let go when it goes.
+#[test]
+fn a_deleted_tool_comes_back_on_undo() {
+    let mut m = manager("undo");
+    m.library
+        .edit()
+        .tools
+        .insert("flat-6".into(), ToolSpec::default());
+    m.library.checkpoint();
+    m.select(Some((Vec::new(), "flat-6".into())));
+    m.delete(&[], "flat-6");
+    m.library.checkpoint();
+    assert!(!m.library.edited.tools.contains_key("flat-6"));
+    assert!(m.library.can_undo() && !m.library.can_redo());
+
+    m.undo();
+    assert!(m.library.edited.tools.contains_key("flat-6"));
+    assert!(m.library.can_redo());
+    m.select(Some((Vec::new(), "flat-6".into())));
+    m.redo();
+    assert!(!m.library.edited.tools.contains_key("flat-6"));
+    assert_eq!(m.selected, None, "let go with the tool");
+    m.undo();
+    m.undo();
+    assert!(m.library.edited.tools.is_empty(), "before it was added");
+    assert!(!m.library.can_undo());
+}
+
 fn manager(name: &str) -> ToolManager {
     let dir = std::env::temp_dir().join(format!("camcraft-tm-{name}-{}", std::process::id()));
     ToolManager::with_library(dir.join("never-written.toml"))

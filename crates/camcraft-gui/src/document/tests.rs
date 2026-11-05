@@ -1126,7 +1126,59 @@ fn undo_and_redo_step_through_finished_edits() {
     doc.redo();
     doc.redo();
     assert_eq!(doc.job.setups.len(), 2);
-    assert!(!doc.can_redo());
+    assert!(doc.redo_name().is_none());
+}
+
+/// A tool's edit and what its operations' expressions make of it are one
+/// step, named for the tool: undone, both are back and stay back; redone,
+/// both come again.
+#[test]
+fn what_an_edit_works_out_is_undone_with_it() {
+    let (mut doc, setup) = with_plate();
+    doc.job.tools.insert(
+        "t".into(),
+        ToolSpec {
+            diameter: 6.0,
+            ..ToolSpec::default()
+        },
+    );
+    let i = doc
+        .add_operation(&setup, StrategySpec::named("adaptive").unwrap())
+        .unwrap();
+    doc.use_tool(&setup, i, "t".into(), None);
+    doc.checkpoint();
+    let stepover = |doc: &Document| doc.operation(&setup, i).unwrap().passes.stepover;
+    assert!((stepover(&doc) - 2.4).abs() < 1e-9);
+
+    doc.job.tools.get_mut("t").unwrap().diameter = 10.0;
+    doc.checkpoint();
+    assert!((stepover(&doc) - 4.0).abs() < 1e-9, "worked out with it");
+    assert_eq!(doc.undo_name().as_deref(), Some("diameter of tool t"));
+    doc.undo();
+    // The next frame works the expressions out again, and changes nothing.
+    doc.checkpoint();
+    assert_eq!(doc.job.tools["t"].diameter, 6.0);
+    assert!((stepover(&doc) - 2.4).abs() < 1e-9);
+    assert_eq!(doc.redo_name().as_deref(), Some("diameter of tool t"));
+    doc.redo();
+    assert!((stepover(&doc) - 4.0).abs() < 1e-9);
+}
+
+/// Undoing a setting shows where it was: its operation selected, and the
+/// setting given for its tab.
+#[test]
+fn undoing_shows_where_the_edit_was() {
+    let (mut doc, setup) = with_plate();
+    let i = doc
+        .add_operation(&setup, StrategySpec::named("adaptive").unwrap())
+        .unwrap();
+    doc.checkpoint();
+    doc.operation_mut(&setup, i).unwrap().linking.ramp_angle = 4.0;
+    doc.checkpoint();
+    doc.selection = Selection::Job;
+    assert_eq!(doc.undo().as_deref(), Some("linking.ramp_angle"));
+    assert_eq!(doc.selection, Selection::Operation(setup.clone(), i));
+    assert_eq!(doc.redo().as_deref(), Some("linking.ramp_angle"));
 }
 
 /// A run's reply lands only if it is the latest asked for, and its result goes

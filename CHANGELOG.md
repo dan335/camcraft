@@ -6,6 +6,12 @@ the same notes at more length.
 
 ## Unreleased
 
+- **Undo, made whole** ([decision 0019](docs/decisions/0019-undo.md)): what an
+  edit's expressions work out undoes with it, where undoing a tool's diameter
+  used to seem to do nothing; each field typed into is its own step; the Edit
+  menu says what it undoes (*Undo stepover of rough*), and undoing shows where,
+  the operation selected and the setting's tab open; Ctrl+Y redoes; and the
+  tool library has undo, so a tool or folder deleted there comes back.
 - **Stepovers and stepdowns start as expressions**, as Fusion's defaults do: a
   new operation's follows its tool, and a number typed over one, or a preset's,
   takes its place; ↺ brings the expression back.

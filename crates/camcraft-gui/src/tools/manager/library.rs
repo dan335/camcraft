@@ -20,7 +20,7 @@ fn count(n: usize, what: &str) -> String {
     }
 }
 
-/// The library: as saved, and as edited.
+/// The library: as saved, and as edited, with its edits to undo and redo.
 #[derive(Debug, Clone, Default)]
 pub(super) struct Set {
     pub(super) original: Folder,
@@ -28,14 +28,66 @@ pub(super) struct Set {
     /// An edit has landed since saving was last tried: only then is the library
     /// looked through for what changed, not every frame.
     touched: bool,
+    /// The library when last checkpointed, and what came before and after it,
+    /// as a job's edits are kept ([decision 0019]).
+    ///
+    /// [decision 0019]: ../../../../../docs/decisions/0019-undo.md
+    checkpoint: Folder,
+    undo: Vec<Folder>,
+    redo: Vec<Folder>,
 }
+
+/// Edits kept to undo, at most: plenty to recover from a slip, never unbounded.
+const UNDO_DEPTH: usize = 200;
 
 impl Set {
     pub(super) fn new(root: Folder) -> Self {
         Self {
             original: root.clone(),
+            checkpoint: root.clone(),
             edited: root,
-            touched: false,
+            ..Self::default()
+        }
+    }
+
+    /// Note an edit as finished: the library before it becomes one undo.
+    pub(super) fn checkpoint(&mut self) {
+        if self.edited != self.checkpoint {
+            let before = std::mem::replace(&mut self.checkpoint, self.edited.clone());
+            self.undo.push(before);
+            if self.undo.len() > UNDO_DEPTH {
+                self.undo.remove(0);
+            }
+            self.redo.clear();
+        }
+    }
+
+    /// Whether there is an edit to undo, finished or not.
+    pub(super) fn can_undo(&self) -> bool {
+        !self.undo.is_empty() || self.edited != self.checkpoint
+    }
+
+    /// Whether there is an undone edit to redo.
+    pub(super) fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    /// Undo the last edit: saved again as any edit is.
+    pub(super) fn undo(&mut self) {
+        self.checkpoint();
+        if let Some(before) = self.undo.pop() {
+            let was = std::mem::replace(self.edit(), before);
+            self.redo.push(was);
+            self.checkpoint = self.edited.clone();
+        }
+    }
+
+    /// Redo the last undone edit.
+    pub(super) fn redo(&mut self) {
+        if let Some(after) = self.redo.pop() {
+            let was = std::mem::replace(self.edit(), after);
+            self.undo.push(was);
+            self.checkpoint = self.edited.clone();
         }
     }
 

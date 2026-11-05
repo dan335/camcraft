@@ -12,8 +12,13 @@ disagree about what runs.
 
 Jobs are documents, as in Fusion: File › New, Open (several at once), Open Recent,
 Save, Save As and Close, each job in its own tab at the top (⌃Tab switches), with a
-prompt before unsaved work is lost, and undo and redo (⌘Z, ⌘⇧Z) of whole edits. A
-job's models load in the background; a model not where the job says is asked
+prompt before unsaved work is lost, and undo and redo (⌘Z; ⌘⇧Z or ⌘Y) of whole
+edits ([decision 0019](decisions/0019-undo.md)): a field typed into is one step,
+what its expressions work out from it is part of it, the Edit menu names the
+step (*Undo stepover of rough*), and undoing selects where it was, the tab of
+the setting showing. The tool library has its own undo, with Undo and Redo in
+its window and the same keys while it is open, so a tool or folder deleted
+there comes back. A job's models load in the background; a model not where the job says is asked
 about, and can be found elsewhere. Save As keeps relative model paths pointing at
 the same files.
 

@@ -22,7 +22,7 @@ mod setup;
 mod stock;
 mod work_zero;
 
-pub use operation::{HeightPlanes, OperationTab};
+pub use operation::{HeightPlanes, OperationTab, show_tab_of};
 
 use eframe::egui;
 
