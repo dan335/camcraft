@@ -172,7 +172,8 @@ As planned; what was built is marked.
    job keeps a copy. *Built.* The person's own machines in a library of their
    own, and trim routers' noses, are not yet.
 3. **Holders.** Built-in holders (the ER11 to ER32 nuts, BT30 ER25 and ER32,
-   ISO30 ER32, from makers' tables), put onto a tool from its Holder tab.
+   from makers' tables; ISO30 ER16 to ER32, 70 long, their 50 mm flange from
+   Kemmler's drawing of its SK30 ER16), put onto a tool from its Holder tab.
    *Built.* A library of the person's own holders, and Fusion's JSON
    libraries imported with their holders and shafts, are not yet.
 4. **The check.** Sweeping the assembly in simulation, collisions as a

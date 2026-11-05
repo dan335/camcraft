@@ -13,7 +13,7 @@ the same notes at more length.
   checks (CC108) with how far out of the holder the tool would have to be. A
   setup names its machine (an 80 mm ER20 spindle, or an ISO30, BT30 or ISO20
   ATC spindle); a holder's segments can taper, and **Standard…** puts an ER
-  nut or a BT30 or ISO30 holder on a tool. Playback and the tool's drawing
+  nut, a BT30 holder or an ISO30 ER16 to ER32 holder on a tool. Playback and the tool's drawing
   show the whole of it.
 - **Shaft and holder**, as Fusion's, on each 3D operation and drilling:
   off, as before; pull away or trim, finishes lifted or cut out where the

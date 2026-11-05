@@ -6,7 +6,7 @@
 //! Only what has been measured or read off a maker's drawing is here. A holder
 //! whose flange is wider than its nose and whose flange length is not known
 //! (BT30 ER16 and ER20, ISO20) is left out until it is, rather than drawn
-//! smaller than it is.
+//! smaller than it is; ISO30's flange is drawn, from a maker's drawing.
 //!
 //! [decision 0021]: ../../../docs/decisions/0021-shank-and-holder.md
 
@@ -76,7 +76,27 @@ pub fn builtin_holders() -> Vec<Holder> {
         one("BT30 ER25, 70 long", 46.0, 70.0),
         one("BT30 ER32, 70 long", 50.0, 70.0),
         one("ISO30 ER32, 50 long", 50.0, 50.0),
+        // ISO30 (ISO 7388-1, DIN 69871) holders 70 long, gauge line to nut
+        // face, after Kemmler's drawing of its SK30 ER16 (302.02.10): a flange
+        // 50 across below the gauge line, about 19.5 long scaled off it and
+        // taken as 20, the same on every SK30 shank; below it the nut, as wide
+        // as anything there.
+        iso30("ISO30 ER16, 70 long", 32.0),
+        iso30("ISO30 ER20, 70 long", 35.0),
+        iso30("ISO30 ER25, 70 long", 42.0),
+        iso30("ISO30 ER32, 70 long", 50.0),
     ]
+}
+
+/// An ISO30 ER holder 70 long whose nut is `nut` across.
+fn iso30(name: &str, nut: f64) -> Holder {
+    Holder {
+        name: name.into(),
+        segments: vec![
+            HolderSegment::cylinder(nut, 50.0),
+            HolderSegment::cylinder(50.0, 20.0),
+        ],
+    }
 }
 
 #[cfg(test)]

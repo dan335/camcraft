@@ -480,8 +480,9 @@ machine = "80 mm ER20 spindle"
 `holders = true` marks a machine whose tools sit in holders of their own (ISO30,
 BT30, ISO20): its nose is not drawn. The built-in machines are an 80 mm ER20
 spindle (its nose from the GDK80's drawing) and ISO30, BT30 and ISO20 ATC
-spindles; the built-in holders are the ER11 to ER32 nuts and the BT30 ER25,
-BT30 ER32 and ISO30 ER32 holders whose maker's sizes are known. What a tool
+spindles; the built-in holders are the ER11 to ER32 nuts, the BT30 ER25 and
+ER32 holders, and ISO30 ER16 to ER32 holders, their 50 mm flange drawn from a
+maker's drawing. What a tool
 leaves out (flute length, stickout, shank diameter) is assumed and said
 (CC216).
 
