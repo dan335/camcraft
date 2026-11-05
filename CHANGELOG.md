@@ -4,7 +4,7 @@ What changed in each release, newest first. Each release's page
 ([Releases](https://github.com/dan335/camcraft/releases)) has the downloads and
 the same notes at more length.
 
-## Unreleased
+## 0.5.0 — 2026-11-05
 
 - **The cut stock while setting up.** Part or cut stock at the top of the Show
   panel, or M, shows the stock as the selected operation leaves it, or the

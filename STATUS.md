@@ -1,6 +1,23 @@
 # Where this is
 
-Last updated 2026-11-04. Read this before picking the work back up.
+Last updated 2026-11-05. Read this before picking the work back up.
+
+**0.5 brings Fusion's adaptive settings, expressions and the cut stock while
+setting up.** Adaptive has Fusion's rest machining, minimum cutting radius,
+machine cavities, order by area, shallow areas, flat area detection and
+stay-down settings; every operation can be smoothed with arcs and longer lines
+([decision 0015](docs/decisions/0015-smoothing.md)) and slowed in its corners
+([decision 0016](docs/decisions/0016-feed-optimisation.md)). Any number of an
+operation's can be worked out from an expression, as Fusion's
+(`tool_diameter * 0.4`), and adaptive starts at Fusion's own: an optimal load
+of 0.4 of the tool, and a stepdown from its flutes. Generating keeps each
+operation's passes by what they are worked out from, and an unchanged
+operation after a changed one is only linked again
+([decision 0017](docs/decisions/0017-what-a-run-keeps.md)). Setting up shows
+the stock as the selected operation leaves it, the tree each operation's
+machining time, and a setting that only counts while another is on hangs
+under it. On Omarchy the window follows the desktop's theme
+([decision 0018](docs/decisions/0018-themes.md)).
 
 **0.4 shows toolpaths as they are found, and finishes walls everywhere.** Each
 operation's passes are drawn as its strategy finds them, before it is made.
