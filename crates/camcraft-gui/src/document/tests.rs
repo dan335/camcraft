@@ -810,8 +810,9 @@ fn ops_of(doc: &Document, setup: &str) -> usize {
 }
 
 /// After a run, generating one operation keeps the others that have not
-/// changed and leaves out the ones that have; an operation turned off is
-/// shown so and cannot be generated.
+/// changed and leaves out the ones that have; one after a changed one, itself
+/// unchanged, links its passes again; an operation turned off is shown so and
+/// cannot be generated.
 #[test]
 fn one_operation_is_generated_alone() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
@@ -828,6 +829,7 @@ fn one_operation_is_generated_alone() {
             .iter()
             .map(|p| match p {
                 Plan::Generate => "generate",
+                Plan::Relink(_) => "relink",
                 Plan::Keep(_) => "keep",
                 Plan::Skip => "skip",
             })
@@ -837,11 +839,18 @@ fn one_operation_is_generated_alone() {
         doc.op_status("top", 0),
         OpStatus::Done | OpStatus::Warnings
     ));
-    assert_eq!(kinds(&doc.plans(0, Some(1))), ["keep", "generate"]);
+    // Generated alone, unchanged, from the passes it found.
+    assert_eq!(kinds(&doc.plans(0, Some(1))), ["keep", "relink"]);
     assert_eq!(
         kinds(&doc.plans(0, None)),
         ["keep", "keep"],
         "the setup keeps what stands"
+    );
+    // With the material each left, to put back rather than cut again.
+    assert!(
+        doc.plans(0, None)
+            .iter()
+            .all(|p| matches!(p, Plan::Keep(k) if k.after.is_some()))
     );
 
     doc.job.setups[0].operations[0].passes.feed += 100.0;
@@ -850,13 +859,28 @@ fn one_operation_is_generated_alone() {
         doc.op_status("top", 1),
         OpStatus::Done | OpStatus::Warnings
     ));
-    assert_eq!(kinds(&doc.plans(0, Some(1))), ["skip", "generate"]);
+    assert_eq!(kinds(&doc.plans(0, Some(1))), ["skip", "relink"]);
     assert_eq!(
         kinds(&doc.plans(0, None)),
-        ["generate", "generate"],
-        "what comes after a changed operation cuts what it leaves"
+        ["generate", "relink"],
+        "what comes after a changed operation cuts what it leaves, from the          passes it found from the part"
     );
     assert_eq!(doc.status("top"), Status::Stale);
+
+    // The run cut back to what stands keeps the passes all the same: with the
+    // change undone, the roughing's are found again too.
+    doc.invalidate_changed_operations();
+    assert_eq!(kinds(&doc.plans(0, None)), ["generate", "relink"]);
+    doc.job.setups[0].operations[0].passes.feed -= 100.0;
+    assert_eq!(kinds(&doc.plans(0, None)), ["relink", "relink"]);
+    // The finish changed: its passes are not the ones kept.
+    doc.job.setups[0].operations[1].passes.stepover += 0.5;
+    assert_eq!(kinds(&doc.plans(0, None)), ["relink", "generate"]);
+    doc.job.setups[0].operations[1].passes.stepover -= 0.5;
+    // Nor are they where the part is placed otherwise.
+    doc.job.tolerance *= 0.5;
+    assert_eq!(kinds(&doc.plans(0, None)), ["generate", "generate"]);
+    doc.job.tolerance *= 2.0;
 
     doc.set_enabled("top", 0, false);
     assert_eq!(doc.op_status("top", 0), OpStatus::Disabled);

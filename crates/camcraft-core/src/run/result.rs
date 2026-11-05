@@ -7,6 +7,7 @@ use camcraft_geom::mesh::Aabb;
 use camcraft_sim::stock::{PackedStock, PartSurface, SimReport, VerifyReport};
 use glam::DVec2;
 
+use super::Planned;
 use crate::job::{Coolant, HeightContext, SpindleDirection};
 use crate::path::linker::LinkReport;
 use crate::path::toolpath::Toolpath;
@@ -62,6 +63,10 @@ pub enum StrategyDetail {
 pub enum Made {
     /// Worked out in this run.
     Generated,
+    /// Its passes kept from an earlier run, and linked again over this run's
+    /// material: the operation and the part as they were, and the material
+    /// before it not.
+    Relinked,
     /// Kept from an earlier run, as it was, and cut again into this run's
     /// material.
     Kept,
@@ -72,21 +77,40 @@ pub enum Made {
 }
 
 impl Made {
-    /// Whether it has paths: worked out now or kept from before.
+    /// Whether it has paths: worked out now, linked again, or kept from
+    /// before.
     pub fn has_paths(self) -> bool {
-        matches!(self, Made::Generated | Made::Kept)
+        matches!(self, Made::Generated | Made::Relinked | Made::Kept)
     }
 }
 
-/// What a run is to do with one operation.
+/// What a run is to do with one operation: the less there is to do, the more
+/// of what an earlier run made is used.
 #[derive(Debug, Clone)]
 pub enum Plan {
     /// Work it out.
     Generate,
+    /// Link again, over the material as this run leaves it, the passes an
+    /// earlier run worked out ([`OperationResult::planned`]): what the
+    /// operation, its tool and the part were then, they are now; and, for a
+    /// strategy that clears what the operations before it left
+    /// ([`Uses::rest`](crate::job::Uses::rest)), those operations too.
+    Relink(Arc<Planned>),
     /// Keep what an earlier run made of it, unchanged since.
-    Keep(Box<OperationResult>),
+    Keep(Box<Kept>),
     /// Leave it out.
     Skip,
+}
+
+/// An operation an earlier run made, for a run to keep.
+#[derive(Debug, Clone)]
+pub struct Kept {
+    /// What it made of it.
+    pub result: OperationResult,
+    /// The material as it left it, where it is known: put back as it was
+    /// rather than cut again, where everything before it is kept too and the
+    /// material is on the same grid.
+    pub after: Option<Arc<PackedStock>>,
 }
 
 /// What one operation produced.
@@ -138,6 +162,9 @@ pub struct OperationResult {
     pub warnings: Vec<String>,
     /// How its paths came to be in this run.
     pub made: Made,
+    /// Its passes as worked out, before they were linked: for a later run to
+    /// link again ([`Plan::Relink`]). `None` where it was not worked out.
+    pub planned: Option<Arc<Planned>>,
 }
 
 impl OperationResult {

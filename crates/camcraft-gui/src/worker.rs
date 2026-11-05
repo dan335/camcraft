@@ -26,8 +26,8 @@ use camcraft_core::setup::Prepared;
 use camcraft_geom::bvh::MeshBvh;
 use camcraft_geom::shadow::Shadow;
 use camcraft_session::{
-    Model, Models, Posting, Ran, SessionError, Underway, load_job_model, plan_posting, read_job,
-    run_setup_watched, write_posting,
+    LaidOut, Model, Models, Posting, Ran, SessionError, Underway, load_job_model, plan_posting,
+    read_job, run_setup_watched, write_posting,
 };
 use eframe::egui;
 
@@ -105,10 +105,9 @@ pub enum Request {
         models: BTreeMap<String, Arc<Model>>,
         /// What to do with each operation; none, to work them all out.
         plans: Vec<Plan>,
-        /// The part's shadow from above in the setup's turned frame, kept from
-        /// a layout of the same models turned the same way: taken rather than
-        /// cast again.
-        shadow: Option<Arc<Shadow>>,
+        /// What of the setup is laid out already, for the run to take rather
+        /// than work out again.
+        laid_out: LaidOut,
         /// What stops it, and is told how far each operation has got: the
         /// window holds the same.
         control: Control,
@@ -257,7 +256,7 @@ fn execute(request: Request, word: &mut dyn FnMut(Reply)) -> Reply {
             setup,
             models,
             plans,
-            shadow,
+            laid_out,
             control,
         } => {
             let refs: Models<'_> = models.iter().map(|(n, m)| (n.as_str(), &**m)).collect();
@@ -267,21 +266,22 @@ fn execute(request: Request, word: &mut dyn FnMut(Reply)) -> Reply {
                     .map(|s| Scene::build(&job, s, &ran.result))
                     .unwrap_or_default()
             };
-            let ran = run_setup_watched(
-                &job,
-                setup,
-                &refs,
-                &plans,
-                shadow.as_deref(),
-                &control,
-                &mut |u| match u {
-                    Underway::Stage(stage) => word(Reply::Progress(stage)),
-                    Underway::SoFar(ran) => {
-                        let scene = scene_of(&ran);
-                        word(Reply::SoFar(Box::new((*ran, scene))));
-                    }
-                },
-            );
+            let ran =
+                run_setup_watched(
+                    &job,
+                    setup,
+                    &refs,
+                    &plans,
+                    laid_out,
+                    &control,
+                    &mut |u| match u {
+                        Underway::Stage(stage) => word(Reply::Progress(stage)),
+                        Underway::SoFar(ran) => {
+                            let scene = scene_of(&ran);
+                            word(Reply::SoFar(Box::new((*ran, scene))));
+                        }
+                    },
+                );
             Reply::Ran(Box::new(ran.map(|ran| {
                 let scene = scene_of(&ran);
                 (ran, scene)

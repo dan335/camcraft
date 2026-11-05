@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use camcraft_core::job::StrategySpec;
+use camcraft_core::run::Kept;
 
 use super::*;
 use crate::test_support::{recheck, run_small, small_job};
@@ -32,16 +33,36 @@ fn operations_are_kept_skipped_and_turned_off() {
             .all(|o| o.made == Made::Generated)
     );
 
-    let first = Box::new(both.result.operations[0].clone());
-    let plans = [Plan::Keep(first), Plan::Generate];
-    let kept = run_setup_planned(&job, 0, &models, &plans, &mut |_| {}).unwrap();
-    assert_eq!(kept.result.operations[0].made, Made::Kept);
-    assert_eq!(kept.result.operations[1].made, Made::Generated);
+    // Kept, cut again; and kept with the material it left, put back: the
+    // same either way.
+    for after in [None, both.result.keyframes.get(1).cloned()] {
+        let first = Box::new(Kept {
+            result: both.result.operations[0].clone(),
+            after,
+        });
+        let plans = [Plan::Keep(first), Plan::Generate];
+        let kept = run_setup_planned(&job, 0, &models, &plans, &mut |_| {}).unwrap();
+        assert_eq!(kept.result.operations[0].made, Made::Kept);
+        assert_eq!(kept.result.operations[1].made, Made::Generated);
+        assert_eq!(
+            kept.result.operations[1].path.moves(),
+            both.result.operations[1].path.moves()
+        );
+        assert_eq!(kept.result.keyframes[1], both.result.keyframes[1]);
+        assert_eq!(final_heights(&kept), final_heights(&both));
+    }
+
+    // The second's passes, linked again over the material the first leaves:
+    // the same program, and the same material, as working them out again.
+    let planned = both.result.operations[1].planned.clone().unwrap();
+    let plans = [Plan::Generate, Plan::Relink(planned)];
+    let relinked = run_setup_planned(&job, 0, &models, &plans, &mut |_| {}).unwrap();
+    assert_eq!(relinked.result.operations[1].made, Made::Relinked);
     assert_eq!(
-        kept.result.operations[1].path.moves(),
+        relinked.result.operations[1].path.moves(),
         both.result.operations[1].path.moves()
     );
-    assert_eq!(final_heights(&kept), final_heights(&both));
+    assert_eq!(final_heights(&relinked), final_heights(&both));
 
     // Skipped: nothing of it, and it need not be finished to run the other.
     job.setups[0].operations[0].tool = None;
@@ -322,11 +343,19 @@ fn a_watched_run_tells_what_it_has_made_so_far() {
     let models: Models<'_> = [("hinge", &model)].into_iter().collect();
     let control = Control::new(2);
     let mut so_far = Vec::new();
-    let ran = run_setup_watched(&job, 0, &models, &[], None, &control, &mut |u| {
-        if let Underway::SoFar(ran) = u {
-            so_far.push(ran);
-        }
-    })
+    let ran = run_setup_watched(
+        &job,
+        0,
+        &models,
+        &[],
+        LaidOut::Nothing,
+        &control,
+        &mut |u| {
+            if let Underway::SoFar(ran) = u {
+                so_far.push(ran);
+            }
+        },
+    )
     .unwrap();
     assert_eq!(so_far.len(), 2);
     for (k, partial) in so_far.iter().enumerate() {
@@ -354,11 +383,19 @@ fn a_watched_run_stopped_ends_stopped_with_what_it_made_told() {
     let control = Control::new(2);
     control.stop_from(1);
     let mut told = 0;
-    let err = run_setup_watched(&job, 0, &models, &[], None, &control, &mut |u| {
-        if let Underway::SoFar(ran) = u {
-            told = ran.result.operations.len();
-        }
-    })
+    let err = run_setup_watched(
+        &job,
+        0,
+        &models,
+        &[],
+        LaidOut::Nothing,
+        &control,
+        &mut |u| {
+            if let Underway::SoFar(ran) = u {
+                told = ran.result.operations.len();
+            }
+        },
+    )
     .unwrap_err();
     assert!(err.is_stopped(), "{err}");
     assert_eq!(told, 1);

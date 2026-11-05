@@ -3,8 +3,9 @@
 use camcraft_core::control::Control;
 use camcraft_core::job::{Job, JobError};
 use camcraft_core::run::{Made, Plan, Progress, SetupResult, Stage, run_prepared_planned};
-use camcraft_core::setup::{Bodies, prepare};
-use camcraft_geom::mesh::TriMesh;
+use std::sync::Arc;
+
+use camcraft_core::setup::{Bodies, Prepared, prepare};
 use camcraft_geom::shadow::Shadow;
 
 use crate::checks::{self, Checks};
@@ -15,9 +16,10 @@ use crate::{Models, SessionError};
 pub struct Ran {
     /// What the engine produced.
     pub result: SetupResult,
-    /// The part as the setup machined it: its models, merged, turned and measured
-    /// from its work zero.
-    pub part: TriMesh,
+    /// The setup laid out as it ran: its part as the setup machined it, its
+    /// models merged, turned and measured from its work zero; shared with
+    /// the layout it was run from, and with what was worked out from it.
+    pub prepared: Arc<Prepared>,
     /// What happened, in order, for a log.
     pub notes: Vec<String>,
     /// Everything worth a person's attention: the setup's and its models'.
@@ -74,29 +76,49 @@ pub fn run_setup_planned(
 ) -> Result<Ran, SessionError> {
     let operations = job.setups.get(index).map_or(0, |s| s.operations.len());
     let control = Control::new(operations);
-    run_setup_watched(job, index, models, plans, None, &control, &mut |u| {
-        if let Underway::Stage(stage) = u {
-            progress(stage);
-        }
-    })
+    run_setup_watched(
+        job,
+        index,
+        models,
+        plans,
+        LaidOut::Nothing,
+        &control,
+        &mut |u| {
+            if let Underway::Stage(stage) = u {
+                progress(stage);
+            }
+        },
+    )
+}
+
+/// What a run can take of its setup laid out already, rather than lay it out
+/// again and work out afresh what is worked out from the part alone.
+#[derive(Debug, Clone, Default)]
+pub enum LaidOut {
+    /// Nothing: it is laid out afresh.
+    #[default]
+    Nothing,
+    /// The part's shadow from above, already cast in the setup's turned
+    /// frame, as
+    /// [`Prepared::turned_shadow`](camcraft_core::setup::Prepared::turned_shadow)
+    /// gives it for the same models turned the same way.
+    Shadow(Arc<Shadow>),
+    /// The setup laid out as the job has it now, with whatever has been
+    /// worked out from its part already ([`Prepared`]).
+    Prepared(Arc<Prepared>),
 }
 
 /// As [`run_setup_planned`], as `control` lets it and telling it how far each
 /// operation has got, and telling `underway` each stage it starts and what it
 /// has made so far, each time an operation is made. Stopped, it ends with
 /// an error that [`SessionError::is_stopped`]; what it made before was told.
-///
-/// The part's shadow from above, already cast in the setup's turned frame, is
-/// `turned`, as
-/// [`Prepared::turned_shadow`](camcraft_core::setup::Prepared::turned_shadow)
-/// gives it for the same models turned the same way: taken rather than cast
-/// again.
+/// What of the setup is laid out already is `laid_out`.
 pub fn run_setup_watched(
     job: &Job,
     index: usize,
     models: &Models<'_>,
     plans: &[Plan],
-    turned: Option<&Shadow>,
+    laid_out: LaidOut,
     control: &Control,
     underway: &mut dyn FnMut(Underway),
 ) -> Result<Ran, SessionError> {
@@ -112,10 +134,15 @@ pub fn run_setup_watched(
     )];
     let bodies: Bodies<'_> = models.iter().map(|(n, m)| (*n, &m.body)).collect();
     underway(Underway::Stage(Stage::Preparing));
-    let prepared = prepare(job, index, &bodies)?;
-    if let Some(turned) = turned {
-        prepared.adopt_shadow(turned);
-    }
+    let prepared = match laid_out {
+        LaidOut::Prepared(prepared) => prepared,
+        LaidOut::Shadow(turned) => {
+            let prepared = prepare(job, index, &bodies)?;
+            prepared.adopt_shadow(&turned);
+            Arc::new(prepared)
+        }
+        LaidOut::Nothing => Arc::new(prepare(job, index, &bodies)?),
+    };
     let mut model_warnings = Vec::new();
     for m in job.models_for(index) {
         if let Some(model) = models.get(m.name.as_str()) {
@@ -145,7 +172,7 @@ pub fn run_setup_watched(
                     warnings.extend(model_warnings.iter().cloned());
                     underway(Underway::SoFar(Box::new(Ran {
                         result: result.clone(),
-                        part: prepared.part.clone(),
+                        prepared: Arc::clone(&prepared),
                         notes: notes.clone(),
                         warnings,
                         checks: Checks::default(),
@@ -160,7 +187,7 @@ pub fn run_setup_watched(
     let checks = checks::check(
         job,
         index,
-        &prepared.part,
+        &prepared,
         &result.operations,
         &result.verify,
         result.verify_budget,
@@ -170,7 +197,7 @@ pub fn run_setup_watched(
     warnings.extend(model_warnings);
     Ok(Ran {
         result,
-        part: prepared.part,
+        prepared,
         notes,
         warnings,
         checks,
@@ -186,7 +213,7 @@ fn summary(result: &SetupResult) -> Vec<String> {
         .map(|op| match op.made {
             Made::Skipped => format!("{}: not generated", op.name),
             Made::Disabled => format!("{}: turned off", op.name),
-            Made::Generated | Made::Kept => format!(
+            Made::Generated | Made::Relinked | Made::Kept => format!(
                 "{}: {} passes, {} links stayed down, {} ramped, {} down a helix, \
                  removed {:.0} mm3, travel saved {:.0}%, rapid contacts {}{}{}{}",
                 op.name,
@@ -205,10 +232,10 @@ fn summary(result: &SetupResult) -> Vec<String> {
                     ", slowed at {} corners and {} arcs, {:.0} mm",
                     c.corners, c.arcs, c.slowed
                 )),
-                if op.made == Made::Kept {
-                    ", kept from before"
-                } else {
-                    ""
+                match op.made {
+                    Made::Kept => ", kept from before",
+                    Made::Relinked => ", its passes kept from before",
+                    _ => "",
                 }
             ),
         })

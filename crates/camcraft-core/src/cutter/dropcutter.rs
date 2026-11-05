@@ -23,6 +23,7 @@
 //! deterministic under `rayon`.
 
 use std::cell::RefCell;
+use std::sync::Arc;
 
 use camcraft_geom::bvh::MeshBvh;
 use camcraft_geom::mesh::TriMesh;
@@ -59,16 +60,19 @@ pub trait DropTest: ToolProfile {
 #[derive(Debug)]
 pub struct DropCutter<'a> {
     mesh: &'a TriMesh,
-    bvh: MeshBvh,
+    bvh: Arc<MeshBvh>,
 }
 
 impl<'a> DropCutter<'a> {
     /// Build a drop-cutter over `mesh`, constructing its spatial index.
     pub fn new(mesh: &'a TriMesh) -> Self {
-        Self {
-            bvh: MeshBvh::new(mesh),
-            mesh,
-        }
+        Self::sharing(mesh, Arc::new(MeshBvh::new(mesh)))
+    }
+
+    /// A drop-cutter over `mesh` with `bvh`, its spatial index built already:
+    /// one built once for a part serves every drop-cutter over it.
+    pub fn sharing(mesh: &'a TriMesh, bvh: Arc<MeshBvh>) -> Self {
+        Self { mesh, bvh }
     }
 
     /// Tool-tip Z at `(x, y)`, or `None` when no geometry lies under the tool.

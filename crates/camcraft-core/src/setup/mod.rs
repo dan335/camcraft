@@ -14,15 +14,20 @@ pub mod features;
 pub mod frame;
 
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
+use camcraft_geom::bvh::MeshBvh;
 use camcraft_geom::contour::RegionError;
 use camcraft_geom::mesh::{Aabb, MeshError, TriMesh};
 use camcraft_geom::shadow::{Shadow, shadow_above};
 use camcraft_geom::topology::Body;
+use camcraft_sim::stock::{PartSurface, StockError};
 use glam::DVec3;
 
+use crate::cutter::dropcutter::DropCutter;
 use crate::job::{BoxOf, HeightContext, Job, JobError, Origin, Setup, StockSpec};
+use crate::memo::Memo;
+use crate::strategy::adaptive::flat_heights;
 use features::FeatureError;
 use frame::{BadOrientation, Frame, Orientation};
 
@@ -61,8 +66,10 @@ pub struct Piece {
 
 /// A setup in its own frame.
 ///
-/// Its part is not to be changed once laid out: what is worked out from it is
-/// kept.
+/// Its part is not to be changed once laid out: what is worked out from it
+/// alone is kept with it, for every run that uses it to share: its shadow,
+/// the index drops onto it search, the surface the simulator judges against,
+/// and the heights of its flats.
 #[derive(Debug, Clone)]
 pub struct Prepared {
     /// Every model the setup machines, as one mesh.
@@ -77,6 +84,14 @@ pub struct Prepared {
     pub frame: Frame,
     /// The part's shadow, once cast ([`Prepared::shadow`]).
     shadow: OnceLock<Shadow>,
+    /// The part's spatial index, once built ([`Prepared::drop_cutter`]).
+    bvh: OnceLock<Arc<MeshBvh>>,
+    /// The part as the simulator sees it, for the grid pitch it was laid out
+    /// at ([`Prepared::part_surface`]).
+    surface: Memo<u64, PartSurface>,
+    /// The heights of the part's flats, for the tolerance they were found to
+    /// ([`Prepared::flat_heights`]).
+    flats: Memo<u64, Vec<f64>>,
 }
 
 impl Prepared {
@@ -116,6 +131,29 @@ impl Prepared {
         }
         let cast = shadow_above(&self.part, self.model_bounds.min.z - 1.0)?;
         Ok(self.shadow.get_or_init(|| cast))
+    }
+
+    /// Drops onto the part, its index built the first time one is asked for.
+    pub fn drop_cutter(&self) -> DropCutter<'_> {
+        let bvh = self.bvh.get_or_init(|| Arc::new(MeshBvh::new(&self.part)));
+        DropCutter::sharing(&self.part, Arc::clone(bvh))
+    }
+
+    /// The part as the simulator sees it, over the stock's footprint on a grid
+    /// of `pitch`: laid out the first time it is asked for at that pitch.
+    pub fn part_surface(&self, pitch: f64) -> Result<Arc<PartSurface>, StockError> {
+        self.surface.get_or_try(pitch.to_bits(), || {
+            let all = self.stock_bounds();
+            PartSurface::from_mesh(&self.part, all.min.truncate(), all.max.truncate(), pitch)
+        })
+    }
+
+    /// The heights of the part's flat faces that face up, found to
+    /// `tolerance` ([`flat_heights`]): found the first time they are asked
+    /// for to it.
+    pub fn flat_heights(&self, tolerance: f64) -> Arc<Vec<f64>> {
+        self.flats
+            .get_or(tolerance.to_bits(), || flat_heights(&self.part, tolerance))
     }
 
     /// The part's shadow, if [`Prepared::shadow`] has cast it already: never
@@ -302,6 +340,9 @@ pub fn prepare(job: &Job, index: usize, bodies: &Bodies<'_>) -> Result<Prepared,
             .collect(),
         frame,
         shadow: OnceLock::new(),
+        bvh: OnceLock::new(),
+        surface: Memo::new(),
+        flats: Memo::new(),
     })
 }
 

@@ -26,8 +26,8 @@ use camcraft_core::cutter::tool::ToolProfile;
 use camcraft_core::job::Job;
 use camcraft_core::path::toolpath::{MoveRole, PLUNGE_RATIO, Toolpath};
 use camcraft_core::run::{OperationResult, StrategyDetail};
+use camcraft_core::setup::Prepared;
 use camcraft_core::strategy::parallel::ParallelReport;
-use camcraft_geom::mesh::TriMesh;
 use camcraft_sim::stock::VerifyReport;
 use glam::DVec3;
 use rayon::prelude::*;
@@ -126,7 +126,7 @@ impl Finding {
 pub fn check(
     job: &Job,
     setup: usize,
-    part: &TriMesh,
+    prepared: &Prepared,
     operations: &[OperationResult],
     verify: &VerifyReport,
     verify_budget: f64,
@@ -142,7 +142,7 @@ pub fn check(
         findings: sorted(setup_findings(verify, verify_budget, model_warnings)),
     });
     let ops = job.setups.get(setup).map(|s| &s.operations);
-    let cutter = DropCutter::new(part);
+    let cutter = prepared.drop_cutter();
     // Only what has paths: an operation left out of the run has nothing to check.
     let per_op: Vec<Group> = operations
         .par_iter()
@@ -741,7 +741,7 @@ mod tests {
         use camcraft_core::path::toolpath::MoveRole;
         use glam::dvec3;
         let ran = run_small();
-        let b = ran.part.bounds().unwrap();
+        let b = ran.prepared.part.bounds().unwrap();
         let mid = b.center();
 
         // A rapid straight through the middle of the part.

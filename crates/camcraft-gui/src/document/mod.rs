@@ -13,6 +13,7 @@
 //! the job is in [`edit`]; running it, and what came of a run, in [`run`].
 
 mod edit;
+mod passes;
 mod run;
 mod setup_state;
 #[cfg(test)]

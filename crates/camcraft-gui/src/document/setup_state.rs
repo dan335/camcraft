@@ -12,6 +12,7 @@ use camcraft_geom::contour::Region;
 use camcraft_session::Ran;
 
 use super::next_key;
+use super::passes::PassCache;
 use super::run::{SetupInputs, ShadowKey};
 use crate::stock::live::LiveStock;
 use crate::stock::stock_view::ColorMode;
@@ -61,6 +62,10 @@ pub struct Layout {
     ///
     /// [`Document::shadows_wanted`]: super::Document::shadows_wanted
     pub prepared: Result<Arc<Prepared>, String>,
+    /// Whether it is laid out as the job has it: not where its work zero was
+    /// picked on something no longer there, and is drawn from the model's
+    /// own zero instead. Only then may a run take it.
+    pub(super) exact: bool,
     /// Why the part's shadow could not be cast, once the worker has tried.
     pub(super) shadow_failed: Option<String>,
     /// What its part's shadow is cast from, to keep it by and find it again.
@@ -254,6 +259,8 @@ pub struct SetupState {
     pub view: SetupView,
     /// Its material during playback, once it has been followed.
     pub live: Option<LiveStock>,
+    /// Its operations' passes, kept from its runs, to link again.
+    pub(super) passes: PassCache,
 }
 
 impl SetupState {
@@ -262,6 +269,7 @@ impl SetupState {
     /// operation visible; one shown again, as each change is generated, keeps
     /// its playhead where it was, as far as the new run goes.
     pub fn show_run(&mut self, ran: RanSetup) {
+        self.passes.keep(&ran.inputs, &ran.ran.result);
         let first = self.ran.is_none();
         let end = ran.scene.segments.len();
         self.ran = Some(ran);

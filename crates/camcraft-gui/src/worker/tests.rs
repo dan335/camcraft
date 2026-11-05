@@ -75,7 +75,7 @@ fn a_run_through_the_worker_matches_the_session_directly() {
             setup: 0,
             models: models.clone(),
             plans: Vec::new(),
-            shadow: None,
+            laid_out: LaidOut::Nothing,
             control: camcraft_core::control::Control::new(job.setups[0].operations.len()),
         },
     );

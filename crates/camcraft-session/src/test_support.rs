@@ -68,7 +68,7 @@ pub(crate) fn recheck(
     checks::check(
         &job,
         0,
-        &ran.part,
+        &ran.prepared,
         &ops,
         &ran.result.verify,
         ran.result.verify_budget,

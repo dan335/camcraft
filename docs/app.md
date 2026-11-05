@@ -186,8 +186,12 @@ job` runs it, from the job as it is on screen, saved or not: as soon as its
 models load, and again as soon as editing it settles, a moment after the last
 change, or longer while a field is still being typed in. What still stands is
 kept: every operation made before and unchanged since, up to the first changed
-one, which is worked out again with every one after it, since each cuts what the
-ones before left. Every open job's setups are generated at once.
+one, with the material it left. That one and every one after it are made
+again, since each cuts what the ones before left; but one unchanged itself
+only links again, over the new material, the passes it found from the part,
+kept by what they were found from, so an edit undone or an operation moved
+finds them too ([decision 0017](decisions/0017-what-a-run-keeps.md)). Every
+open job's setups are generated at once.
 
 Within a setup, every operation's passes that are worked out from the part alone
 are worked out at once, each on a thread of its own; pocket clearing, which

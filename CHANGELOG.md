@@ -37,6 +37,13 @@ the same notes at more length.
 - **Feed optimisation**, as Fusion's, on every operation but drilling and
   adaptive clearing: cuts slowed into and out of sharp corners and round tight
   arcs, only those turning into the material unless asked.
+- **Generating keeps more of what it worked out.** An operation unchanged
+  itself after one that changed links its passes again over the new material
+  rather than finding them again; passes are kept by what they were found
+  from, so an edit undone or an operation moved finds them too; a kept
+  operation's material is put back rather than cut again; and a run takes the
+  setup as the window laid it out, with the part's index and surface built
+  once. On a serving tray, a finish's edit undone takes 6 s where it took 21.
 - **Every program is read back before it is written**, as a controller would
   read it, and refused if it does not cut the path it was posted from. Until
   now only the tests did this.

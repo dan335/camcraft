@@ -1,7 +1,7 @@
 //! Running one operation: its strategy's paths, ordered, linked over the material
 //! as it stands, and cut into it.
 
-use std::sync::OnceLock;
+use std::sync::Arc;
 
 use camcraft_geom::contour::Region;
 use camcraft_geom::topology::EdgeKind;
@@ -32,9 +32,7 @@ use crate::path::trim::within_heights;
 use crate::setup::features::{Chain, FeatureError, Picking, picked_chains};
 use crate::setup::{Bodies, Prepared};
 use crate::strategy::adaptive::rest::Earlier;
-use crate::strategy::adaptive::{
-    AdaptiveParams, Shallow, adaptive_rough, flat_heights, peak_heights,
-};
+use crate::strategy::adaptive::{AdaptiveParams, Shallow, adaptive_rough, peak_heights};
 use crate::strategy::drilling::{DrillParams, DrillReport, Hole, drill, holes, nearest_first};
 use crate::strategy::face::{FaceParams, LevelsAsked, face};
 use crate::strategy::flat::{FlatParams, flat_finish};
@@ -89,7 +87,6 @@ pub(super) struct Work<'a> {
     pub(super) blocks: &'a [(DVec2, DVec2, f64)],
     /// The heights of the part's flat faces, found for the setup when an
     /// operation first needs them.
-    pub(super) flats: &'a OnceLock<Vec<f64>>,
     /// The operations before it in the setup, as cut, for a strategy that
     /// clears what they left ([`Uses::rest`](crate::job::Uses::rest)); none
     /// for any other.
@@ -118,8 +115,8 @@ impl Work<'_> {
             return Vec::new();
         }
         let axial = self.op.stock_to_leave().axial;
-        self.flats
-            .get_or_init(|| flat_heights(&self.prepared.part, self.job.tolerance))
+        self.prepared
+            .flat_heights(self.job.tolerance)
             .iter()
             .map(|z| z + axial)
             .collect()
@@ -167,8 +164,11 @@ pub(super) enum Target {
 }
 
 /// An operation's passes, worked out and put in order, its tabs on them: ready
-/// to be linked over the material and cut into it ([`cut_operation`]).
-pub(super) struct Planned {
+/// to be linked over the material and cut into it, and kept with its result,
+/// for a later run to link again over other material
+/// ([`Plan::Relink`](super::Plan::Relink)).
+#[derive(Debug)]
+pub struct Planned {
     /// The passes, with the links between them still to make.
     ordered: Toolpath,
     /// How many passes the strategy made.
@@ -421,7 +421,7 @@ pub(super) fn plan_operation(
 /// telling `watch` how far it has got.
 pub(super) fn cut_operation(
     work: &Work<'_>,
-    planned: Planned,
+    planned: &Arc<Planned>,
     stock: &mut Stock,
     watch: &Watch,
 ) -> Result<OperationResult, RunError> {
@@ -431,11 +431,14 @@ pub(super) fn cut_operation(
         ordered,
         passes,
         detail,
-        mut warnings,
+        warnings,
         travel_saved,
         smoothing,
         corners,
-    } = planned;
+    } = &**planned;
+    let (passes, travel_saved, smoothing, corners) = (*passes, *travel_saved, *smoothing, *corners);
+    let detail = detail.clone();
+    let mut warnings = warnings.clone();
 
     // Traverses clear the material as it stood before the operation: never lower
     // than it will stand, so they are safe whatever the operation cuts first.
@@ -462,7 +465,7 @@ pub(super) fn cut_operation(
         deepest: 0.0,
     };
     let (path, mut links) = link_watched(
-        &ordered,
+        ordered,
         &clearance,
         &mut cutting,
         &surface,
@@ -520,6 +523,7 @@ pub(super) fn cut_operation(
         smoothing,
         corners,
         warnings,
+        planned: Some(Arc::clone(planned)),
         // The rest is the operation's own: its name, strategy and tool.
         ..not_made(op, Some(work.spec), Made::Generated)
     })
@@ -573,5 +577,6 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
         max_cut_step: op.max_cut_step(),
         warnings: Vec::new(),
         made,
+        planned: None,
     }
 }

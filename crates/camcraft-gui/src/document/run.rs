@@ -9,11 +9,11 @@ use std::time::Instant;
 
 use camcraft_core::control::{Control, share};
 use camcraft_core::job::{Job, ModelDef, Operation, Origin, Setup, StockDef, ToolSpec};
-use camcraft_core::run::{Made, OperationResult, Plan, Stage};
+use camcraft_core::run::{Kept, Made, OperationResult, Plan, Stage};
 use camcraft_core::setup::frame::Orientation;
 use camcraft_core::setup::{PrepareError, Prepared, prepare};
 use camcraft_geom::shadow::Shadow;
-use camcraft_session::{Model, Ran, SessionError, check_runnable};
+use camcraft_session::{LaidOut, Model, Ran, SessionError, check_runnable};
 use glam::DVec3;
 
 use super::{
@@ -152,31 +152,80 @@ impl SetupInputs {
     }
 
     /// Whether what shapes the cuts, not what is only posted with them, is as
-    /// setup `index` of `job` has it now: the tolerance, how the part sits, and
-    /// the stocks and models. A setup renamed, or given another work offset or
-    /// post, still cuts the same paths.
+    /// setup `index` of `job` has it now ([`Cut`]). A setup renamed, or given
+    /// another work offset or post, still cuts the same paths.
     fn cut_is_now(&self, job: &Job, loaded: &BTreeMap<String, ModelSlot>, index: usize) -> bool {
-        let Some(setup) = job.setups.get(index) else {
-            return false;
-        };
-        let models = job.models_for(index);
-        let models_now = models
-            .iter()
-            .map(|m| (*m, loaded.get(&m.name).map(ModelSlot::key)));
-        self.tolerance == job.tolerance.to_bits()
-            && self.setup.models == setup.models
-            && self.setup.stocks == setup.stocks
-            && self.setup.orientation == setup.orientation
-            && self.setup.origin == setup.origin
-            && self
-                .stocks
-                .iter()
-                .eq(setup.stocks.iter().filter_map(|s| job.stock(s)))
-            && self
+        Cut::now(job, loaded, index).is_some_and(|now| now == self.cut())
+    }
+
+    /// Whether these and `other` shape the cuts alike ([`Cut`]).
+    pub(super) fn cuts_alike(&self, other: &Self) -> bool {
+        self.cut() == other.cut()
+    }
+
+    /// What of these shapes the cuts.
+    fn cut(&self) -> Cut<'_> {
+        Cut {
+            tolerance: self.tolerance,
+            setup: (
+                &self.setup.models,
+                &self.setup.stocks,
+                &self.setup.orientation,
+                &self.setup.origin,
+            ),
+            stocks: self.stocks.iter().collect(),
+            models: self
                 .models
                 .iter()
                 .map(|(m, key)| (m, key.as_ref()))
-                .eq(models_now)
+                .collect(),
+        }
+    }
+
+    /// How many operations the setup had.
+    pub(super) fn operations(&self) -> usize {
+        self.setup.operations.len()
+    }
+
+    /// Operation `i` as these took it, with its tool as it was then.
+    pub(super) fn operation(&self, i: usize) -> Option<(&Operation, Option<&ToolSpec>)> {
+        let op = self.setup.operations.get(i)?;
+        Some((op, op.tool.as_ref().and_then(|t| self.tools.get(t))))
+    }
+}
+
+/// What shapes a setup's cuts, as against what is only posted with them: the
+/// tolerance; which models and stocks it has, how the part sits and where its
+/// work zero is; and the stocks and models themselves, each model as loaded.
+/// Every operation's passes are worked out from these.
+#[derive(PartialEq)]
+struct Cut<'a> {
+    tolerance: u64,
+    setup: (&'a [String], &'a [String], &'a Orientation, &'a Origin),
+    stocks: Vec<&'a StockDef>,
+    models: Vec<(&'a ModelDef, Option<&'a ModelKey>)>,
+}
+
+impl<'a> Cut<'a> {
+    /// What shapes setup `index` of `job`'s cuts now, with the models
+    /// `loaded`: `None` for a setup there is not.
+    fn now(job: &'a Job, loaded: &'a BTreeMap<String, ModelSlot>, index: usize) -> Option<Self> {
+        let setup = job.setups.get(index)?;
+        Some(Self {
+            tolerance: job.tolerance.to_bits(),
+            setup: (
+                &setup.models,
+                &setup.stocks,
+                &setup.orientation,
+                &setup.origin,
+            ),
+            stocks: setup.stocks.iter().filter_map(|s| job.stock(s)).collect(),
+            models: job
+                .models_for(index)
+                .into_iter()
+                .map(|m| (m, loaded.get(&m.name).map(ModelSlot::key)))
+                .collect(),
+        })
     }
 }
 
@@ -353,10 +402,14 @@ impl Document {
     }
 
     /// What a run of setup `index` does with each operation: keeps every one
-    /// made before and unchanged since, up to the first that is not, and works
-    /// out that one and every one after it, since each cuts what the ones
-    /// before it left; or, for operation `only`, works it out alone, keeps the
-    /// others it can, and leaves out the rest.
+    /// made before and unchanged since, up to the first that is not, with the
+    /// material it left; and makes that one and every one after it again,
+    /// since each cuts what the ones before it left: linking again the passes
+    /// kept for one unchanged itself ([`PassCache`]), and working out the
+    /// rest. Or, for operation `only`, makes it alone, keeps the others it
+    /// can, and leaves out the rest.
+    ///
+    /// [`PassCache`]: super::passes::PassCache
     pub fn plans(&self, index: usize, only: Option<usize>) -> Vec<Plan> {
         let Some(setup) = self.job.setups.get(index) else {
             return Vec::new();
@@ -365,13 +418,28 @@ impl Document {
         let standing = (0..setup.operations.len())
             .take_while(|&i| kept.get(i).copied().flatten().is_some())
             .count();
+        let state = self.setups.get(&setup.name);
+        let keyframes = state
+            .and_then(|s| s.ran.as_ref())
+            .map(|r| r.ran.result.keyframes.as_slice())
+            .unwrap_or_default();
+        let keep = |i: usize, op: &OperationResult, after: bool| {
+            Plan::Keep(Box::new(Kept {
+                result: op.clone(),
+                after: keyframes.get(i + 1).filter(|_| after).cloned(),
+            }))
+        };
+        // Its passes, linked again where they are kept for it as it is now.
+        let now = SetupInputs::of(&self.job, &self.models, index);
+        let make = |i: usize| Some(Plan::Relink(state?.passes.find(now.as_ref()?, i)?));
         (0..setup.operations.len())
             .map(|i| match (only, kept.get(i).copied().flatten()) {
-                (Some(k), _) if i == k => Plan::Generate,
-                (Some(_), Some(op)) => Plan::Keep(Box::new(op.clone())),
+                (Some(k), _) if i == k => make(i).unwrap_or(Plan::Generate),
+                // Kept where what is before it is not: cut again, into it.
+                (Some(_), Some(op)) => keep(i, op, false),
                 (Some(_), None) => Plan::Skip,
-                (None, Some(op)) if i < standing => Plan::Keep(Box::new(op.clone())),
-                (None, _) => Plan::Generate,
+                (None, Some(op)) if i < standing => keep(i, op, true),
+                (None, _) => make(i).unwrap_or(Plan::Generate),
             })
             .collect()
     }
@@ -870,27 +938,12 @@ impl Document {
     /// setup is drawn measured from it, so a view kept on the part moves with it.
     pub fn refresh_layout(&mut self, name: &str) -> Option<DVec3> {
         let index = self.setup_index(name)?;
-        // A model that finishes loading changes the layout without changing the job.
-        let ready = || {
-            self.models
-                .iter()
-                .filter(|(_, s)| s.model().is_some())
-                .map(|(n, _)| n)
-        };
         // Asked every frame, so compared in place and copied only when changed.
-        if self
-            .setups
-            .get(name)
-            .and_then(|s| s.layout.as_ref())
-            .is_some_and(|l| {
-                l.inputs.0.layout_is_now(&self.job, &self.models, index)
-                    && l.inputs.1.iter().eq(ready())
-            })
-        {
+        if self.layout_now(index).is_some() {
             return None;
         }
         let inputs = SetupInputs::of(&self.job, &self.models, index)?.into_layout();
-        let inputs = (inputs, ready().cloned().collect());
+        let inputs = (inputs, self.ready_models().cloned().collect());
         let meshes = self.bodies();
         let prepared = match prepare(&self.job, index, &meshes) {
             // A work zero picked on something no longer there: draw the part from
@@ -918,6 +971,8 @@ impl Document {
                 lines
             })
             .unwrap_or_default();
+        // Laid out as the job has it, its work zero found: what a run may take.
+        let exact = matches!(prepared, Ok((_, true)));
         let prepared = prepared
             .map(|(p, _)| Arc::new(p))
             .map_err(|e| e.to_string());
@@ -936,6 +991,7 @@ impl Document {
         let after = prepared.as_ref().ok().map(|p| p.frame);
         state.layout = Some(Layout {
             inputs,
+            exact,
             prepared,
             shadow_failed: None,
             shadow_key,
@@ -1042,6 +1098,41 @@ impl Document {
             .iter()
             .find(|(k, _)| k == key)
             .map(|(_, s)| Arc::clone(s))
+    }
+
+    /// The names of the models loaded: one that finishes loading changes the
+    /// layout without changing the job.
+    fn ready_models(&self) -> impl Iterator<Item = &String> {
+        self.models
+            .iter()
+            .filter(|(_, s)| s.model().is_some())
+            .map(|(n, _)| n)
+    }
+
+    /// Setup `index`'s layout, if it is laid out as it would be now.
+    fn layout_now(&self, index: usize) -> Option<&Layout> {
+        let setup = self.job.setups.get(index)?;
+        self.setups.get(&setup.name)?.layout.as_ref().filter(|l| {
+            l.inputs.0.layout_is_now(&self.job, &self.models, index)
+                && l.inputs.1.iter().eq(self.ready_models())
+        })
+    }
+
+    /// What a run of setup `index` can take of it laid out already: the setup
+    /// as laid out, with whatever has been worked out from its part, where it
+    /// is laid out as the job has it now; or else its part's shadow, kept
+    /// from a layout of the same models turned the same way.
+    pub fn laid_out_for_run(&self, index: usize) -> LaidOut {
+        let laid_out = self
+            .layout_now(index)
+            .filter(|l| l.exact)
+            .and_then(|l| l.prepared.as_ref().ok());
+        match laid_out {
+            Some(prepared) => LaidOut::Prepared(Arc::clone(prepared)),
+            None => self
+                .turned_shadow(index)
+                .map_or(LaidOut::Nothing, LaidOut::Shadow),
+        }
     }
 
     /// The shadow kept for setup `index` as it would be laid out now, in its

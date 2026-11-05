@@ -25,7 +25,10 @@ It can be turned off in Settings, where a setup is generated only when asked.
 unchanged since, up to the first that is not, and works out that one and every
 one after it: each cuts what the ones before it left (the rest machining the
 run is built on), so nothing after a changed operation stands. A kept
-operation is cut into the material again, as `Plan::Keep` always was.
+operation is cut into the material again, as `Plan::Keep` always was. Since
+[decision 0017](0017-what-a-run-keeps.md), its material is put back instead,
+and an operation after a changed one that is unchanged itself links again the
+passes it found, rather than finding them again.
 
 **A run is stopped from what changed.** Each frame, a run in flight is compared
 with what it was sent from: from the first operation that would now cut

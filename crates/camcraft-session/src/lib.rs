@@ -39,5 +39,6 @@ pub use post::{
     program_spec, setup_profile, write_posting,
 };
 pub use run::{
-    Passed, Ran, Underway, check_runnable, gate, run_setup, run_setup_planned, run_setup_watched,
+    LaidOut, Passed, Ran, Underway, check_runnable, gate, run_setup, run_setup_planned,
+    run_setup_watched,
 };

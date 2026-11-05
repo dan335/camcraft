@@ -145,7 +145,10 @@ pub fn content<'a>(state: &'a SetupState, name: &str, selection: &Selection) -> 
     // Laid out, the part's bounds are known; otherwise, rarely, measured.
     let (part, part_bounds) = match (laid, &state.ran) {
         (Some((key, p, _)), _) => (Some((key, &p.part)), Some(p.model_bounds)),
-        (None, Some(r)) => (Some((r.scene_key, &r.ran.part)), r.ran.part.bounds()),
+        (None, Some(r)) => (
+            Some((r.scene_key, &r.ran.prepared.part)),
+            r.ran.prepared.part.bounds(),
+        ),
         (None, None) => (None, None),
     };
     let (show_part, show_paths, shown, ops, only) = if back {

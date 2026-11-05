@@ -291,7 +291,7 @@ impl App {
             setup: index,
             models,
             plans,
-            shadow: doc.turned_shadow(index),
+            laid_out: doc.laid_out_for_run(index),
             control,
         };
         let task = Task::Run {
