@@ -2,6 +2,7 @@
 //! speeds and feeds, and the drop-cutter that finds where it touches the part.
 
 pub mod allowance;
+pub mod assembly;
 pub mod cutting;
 pub mod dropcutter;
 pub mod tool;

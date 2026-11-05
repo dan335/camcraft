@@ -93,6 +93,36 @@ pub(super) struct Cutting<'a> {
     pub(super) tool: &'a EffectiveTool,
     pub(super) rapid_contacts: u64,
     pub(super) deepest: f64,
+    /// The rest of the tool, watched for meeting the material as it cuts.
+    pub(super) guard: Option<Guard<'a, Body>>,
+    /// Where the next stretch cut starts in the operation's path: each starts
+    /// where the last ended.
+    pub(super) next: usize,
+    /// Where the rest of the tool met the material: the move, how far in, and
+    /// how far from the axis.
+    pub(super) contacts: Vec<(usize, f64, f64)>,
+}
+
+impl<'a> Cutting<'a> {
+    /// Cutting into `stock` with `tool`, watching `body`, the rest of the
+    /// tool, where it has one, to the job's `tolerance`.
+    pub(super) fn new(
+        stock: &'a mut Stock,
+        tool: &'a EffectiveTool,
+        body: Option<&'a Body>,
+        tolerance: f64,
+    ) -> Self {
+        let guard = body.map(|b| Guard::new(stock, b, tolerance));
+        Self {
+            stock,
+            tool,
+            rapid_contacts: 0,
+            deepest: 0.0,
+            guard,
+            next: 0,
+            contacts: Vec::new(),
+        }
+    }
 }
 
 impl Material for Cutting<'_> {
@@ -103,7 +133,17 @@ impl Material for Cutting<'_> {
     }
 
     fn cut(&mut self, moves: &[Move]) {
-        let swept = self.stock.sweep(&sim_moves_of(moves), self.tool);
+        let sim = sim_moves_of(moves);
+        let swept = match &mut self.guard {
+            Some(guard) => {
+                let (swept, met) = self.stock.sweep_guarded(&sim, self.tool, guard);
+                self.contacts
+                    .extend(met.iter().map(|c| (self.next + c.at, c.depth, c.distance)));
+                swept
+            }
+            None => self.stock.sweep(&sim, self.tool),
+        };
+        self.next += moves.len().saturating_sub(1);
         self.rapid_contacts += swept.rapid_contacts;
         self.deepest = self.deepest.max(swept.deepest_rapid_contact_mm);
     }

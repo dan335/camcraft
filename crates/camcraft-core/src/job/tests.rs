@@ -1012,7 +1012,7 @@ stickout = 25.0
 material = "carbide"
 vendor = "Amana"
 product = "46170-K"
-holder = { name = "ER20", segments = [{ diameter = 32.0, length = 20.0 }, { diameter = 40.0, length = 30.0 }] }
+holder = { name = "ER20", segments = [{ diameter = 32.0, length = 20.0 }, { lower_diameter = 40.0, upper_diameter = 30.0, length = 30.0 }] }
 spindle = "counter-clockwise"
 coolant = "flood"
 
@@ -2229,4 +2229,49 @@ fn default_stepover(op: &Operation, tool: &ToolSpec, tolerance: f64) -> Option<f
         .into_iter()
         .find(|(setting, _)| *setting == "passes.stepover")?;
     crate::expr::evaluate(text, &|n| op.expression_value(n, Some(tool), tolerance)).ok()
+}
+
+/// A setup is cut on one of the job's machines, by name, as the docs write
+/// it; a name the job has not, or a nose segment of no size, is refused
+/// ([decision 0021]); and a shaft and holder setting reads as written.
+///
+/// [decision 0021]: ../../../../docs/decisions/0021-shank-and-holder.md
+#[test]
+fn a_setup_is_cut_on_a_machine_the_job_has() {
+    let text = format!(
+        "{SAMPLE}\n{}",
+        r#"
+[machines."80 mm ER20 spindle"]
+spindle = "ER20"
+nose = [
+  { length = 19.5, diameter = 35.0 },
+  { length = 6.5, diameter = 35.0 },
+  { length = 15.0, lower_diameter = 70.0, upper_diameter = 78.0 },
+]
+"#
+    );
+    let mut j: Job = toml::from_str(&text).unwrap();
+    j.setups[0].machine = Some("80 mm ER20 spindle".into());
+    j.setups[0].operations[0].passes.holder.mode = HolderMode::Trim;
+    j.validate().unwrap();
+    let m = j.machine_for(&j.setups[0]).unwrap();
+    assert_eq!(m.nose.len(), 3);
+    assert!(!m.nose[2].is_cylinder());
+    let back: Job = toml::from_str(&toml::to_string(&j).unwrap()).unwrap();
+    assert_eq!(back, j);
+
+    let mut unknown = j.clone();
+    unknown.setups[0].machine = Some("router".into());
+    assert!(matches!(
+        unknown.validate(),
+        Err(JobError::UnknownMachine { .. })
+    ));
+    let mut bad = j;
+    if let Some(m) = bad.machines.get_mut("80 mm ER20 spindle") {
+        m.nose[1].lower_diameter = 0.0;
+    }
+    assert!(matches!(
+        bad.validate(),
+        Err(JobError::BadNose { segment: 2, .. })
+    ));
 }

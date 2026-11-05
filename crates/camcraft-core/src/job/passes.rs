@@ -64,6 +64,68 @@ pub struct Passes {
     /// Feed Optimization, off until asked ([`crate::path::corners`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feed_optimization: Option<FeedOptimization>,
+    /// How its tool's shank and holder are kept off the material: Fusion's
+    /// Shaft and Holder ([decision 0021]). Every program is checked for them
+    /// whatever this says; it says how near counts, and what generating does
+    /// about them.
+    ///
+    /// [decision 0021]: ../../../../docs/decisions/0021-shank-and-holder.md
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub holder: HolderClearance,
+}
+
+/// How an operation keeps its tool's shank and holder off the material:
+/// Fusion's Shaft and Holder, its clearances Fusion's.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HolderClearance {
+    /// What generating does where they would meet the material.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub mode: HolderMode,
+    /// How near the neck and shank may come, in millimetres: Fusion's Shaft
+    /// Clearance.
+    #[serde(
+        default = "default_shank_clearance",
+        skip_serializing_if = "is_default_shank_clearance"
+    )]
+    pub shank_clearance: f64,
+    /// How near the holder, or the spindle's nose, may come, in millimetres:
+    /// Fusion's Holder Clearance.
+    #[serde(
+        default = "default_holder_clearance",
+        skip_serializing_if = "is_default_holder_clearance"
+    )]
+    pub holder_clearance: f64,
+}
+
+impl Default for HolderClearance {
+    fn default() -> Self {
+        Self {
+            mode: HolderMode::default(),
+            shank_clearance: default_shank_clearance(),
+            holder_clearance: default_holder_clearance(),
+        }
+    }
+}
+
+default_number!(default_shank_clearance, is_default_shank_clearance = 1.0);
+default_number!(default_holder_clearance, is_default_holder_clearance = 5.0);
+
+/// What generating does where the shank or holder would meet the material:
+/// Fusion's Shaft and Holder modes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HolderMode {
+    /// Nothing: the check says where they would, and the program is refused.
+    /// Fusion's default in 3-axis.
+    #[default]
+    Off,
+    /// Lift the tool clear, leaving material: Fusion's Pull Away.
+    PullAway,
+    /// Leave out what would collide: Fusion's Trimmed.
+    Trim,
+    /// Stop with where they would first meet: Fusion's Fail on Collision.
+    Fail,
 }
 
 impl Default for Passes {
@@ -81,6 +143,7 @@ impl Default for Passes {
             smoothing: false,
             smoothing_tolerance: None,
             feed_optimization: None,
+            holder: HolderClearance::default(),
         }
     }
 }

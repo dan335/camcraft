@@ -129,6 +129,28 @@ impl<'m> LevelReach<'m> {
         })
     }
 
+    /// Kept off the part by the rest of the tool too: `cylinders`, each a
+    /// radius and how far above the real tool's tip its bottom is, the shank
+    /// and holder as [`Body::cylinders`](crate::cutter::assembly::Body::cylinders)
+    /// gives them ([decision 0021]). At a level the tool may then not be
+    /// where any of them would meet the part above it.
+    ///
+    /// [decision 0021]: ../../../../docs/decisions/0021-shank-and-holder.md
+    pub fn with_body(mut self, cylinders: &[(f64, f64)]) -> Self {
+        let lift = self.lift;
+        self.bands.extend(
+            cylinders
+                .iter()
+                .filter(|(r, h)| is_positive(*r) && h.is_finite())
+                .map(|&(radius, height)| Band {
+                    height: height + lift,
+                    radius,
+                }),
+        );
+        self.bands.sort_by(|a, b| a.height.total_cmp(&b.height));
+        self
+    }
+
     /// Where the tool tip may not be at level `z`.
     ///
     /// Asking for levels from the top down is cheapest; see [`Shadows`].
@@ -185,10 +207,13 @@ impl<'m> LevelReach<'m> {
         // unions are the same on any number of cores.
         let mut batch: Vec<(usize, Arc<Shadow>, f64)> = Vec::new();
         let mut last: Option<(f64, Arc<Shadow>)> = None;
-        // Each level's shadow for the band above: a band whose shadow is the same
-        // is grown less, inside what that one was, and adds nothing. Where the
-        // part is walls and flats, most bands are.
-        let mut above: Vec<Option<Arc<Shadow>>> = vec![None; levels.len()];
+        // Each level's shadow for the band above, and what it was grown by: a
+        // band whose shadow is the same, grown no more, is inside what that
+        // one was, and adds nothing. Where the part is walls and flats, most
+        // bands are. A cutter widens up its corner, so a band below is
+        // never wider; a shank or holder above it may be narrower than what
+        // is below it, and is looked at whatever.
+        let mut above: Vec<Option<(Arc<Shadow>, f64)>> = vec![None; levels.len()];
         let flush = |batch: &mut Vec<(usize, Arc<Shadow>, f64)>,
                      grown: &mut Vec<Vec<Region>>,
                      arc: f64|
@@ -233,10 +258,10 @@ impl<'m> LevelReach<'m> {
             let covered = above
                 .get(i)
                 .and_then(Option::as_ref)
-                .is_some_and(|a| *a == shadow);
+                .is_some_and(|(a, r)| *a == shadow && radius <= *r);
             if !shadow.is_empty() && !covered {
                 if let Some(slot) = above.get_mut(i) {
-                    *slot = Some(Arc::clone(&shadow));
+                    *slot = Some((Arc::clone(&shadow), radius));
                 }
                 batch.push((i, shadow, radius));
             }

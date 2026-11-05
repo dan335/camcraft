@@ -5,21 +5,24 @@ use std::sync::Arc;
 
 use camcraft_geom::contour::Region;
 use camcraft_geom::topology::EdgeKind;
-use camcraft_sim::stock::{SimReport, Stock};
+use camcraft_sim::stock::{Guard, SimReport, Stock};
 use glam::{DVec2, DVec3, dvec2};
 
 use super::error::in_op;
-use super::{Made, OperationResult, PLUNGE_RATIO, RunError, StrategyDetail};
+use super::{Contact, Made, OperationResult, PLUNGE_RATIO, RunError, StrategyDetail};
 use crate::control::Watch;
 use crate::cutter::allowance::{Allowance, EffectiveTool};
+use crate::cutter::assembly::{Assembly, Body};
 use crate::cutter::dropcutter::DropCutter;
 use crate::cutter::tool::ToolProfile;
 use crate::job::{
-    ContourOrder, CutDirection, Depths, Entry, FaceDirection, HeightContext, Job, Links, Operation,
-    PassOrder, Picks, RadialDirection, Retraction, SpindleDirection, StrategySpec, ToolSpec,
+    ContourOrder, CutDirection, Depths, Entry, FaceDirection, HeightContext, HolderMode,
+    HolderSegment, Job, Links, Operation, PassOrder, Picks, RadialDirection, Retraction,
+    SpindleDirection, StrategySpec, ToolSpec,
 };
 use crate::path::corners::{CornerParams, CornerReport, slow_corners};
 use crate::path::fit::{FitReport, fit_arcs};
+use crate::path::held::{Clear, HeldClearance, HeldDrop, keep_clear, skip_unreached};
 use crate::path::linker::{
     ClearanceField, EntryKind, LinkParams, LinkReport, Material, Ramp, StayDown, Surface,
     highest_under, link_watched,
@@ -93,9 +96,38 @@ pub(super) struct Work<'a> {
     pub(super) before: &'a [Earlier],
     /// What its work tells how far it has got, and asks whether to stop.
     pub(super) watch: Watch,
+    /// The spindle's nose, which holds a tool that has no holder of its own:
+    /// the setup's machine's, if it has one.
+    pub(super) nose: Option<&'a [HolderSegment]>,
 }
 
 impl Work<'_> {
+    /// The rest of its tool, the shank and what holds it, grown by the
+    /// clearances its Shaft and Holder asks for, as what must keep off the
+    /// material; `None` where it asks nothing, or there is nothing to it.
+    fn held_body(&self) -> Option<Body> {
+        let asked = &self.op.passes.holder;
+        (asked.mode != HolderMode::Off)
+            .then(|| {
+                Assembly::of(self.spec, self.nose)
+                    .body(asked.shank_clearance, asked.holder_clearance)
+            })
+            .filter(|b| !b.is_empty())
+    }
+
+    /// `reach`, where a level may be, kept off the part by the rest of the
+    /// tool too where the operation asks: at a level, the region it may clear
+    /// shrinks, which is trimming, the only way to keep clear at a fixed
+    /// height ([decision 0021]).
+    ///
+    /// [decision 0021]: ../../../../docs/decisions/0021-shank-and-holder.md
+    fn held<'m>(&self, reach: LevelReach<'m>) -> LevelReach<'m> {
+        match self.held_body() {
+            Some(body) => reach.with_body(&body.cylinders(self.job.tolerance)),
+            None => reach,
+        }
+    }
+
     /// Whether its tool's spindle turns clockwise, seen from above: a pass
     /// climbs with what it cuts on its right.
     fn clockwise(&self) -> bool {
@@ -183,6 +215,79 @@ pub struct Planned {
     smoothing: Option<FitReport>,
     /// What feed optimisation did, where it was asked for.
     corners: Option<CornerReport>,
+}
+
+/// `ordered`, an operation's passes, kept clear of the part and of `stock`,
+/// the material as it stands before it, by the rest of the tool as the
+/// operation's Shaft and Holder says, and how many passes it is then: `None`
+/// where it says nothing, or there is nothing to keep clear.
+///
+/// The material is as it stands before the operation: what the operation
+/// itself cuts first is not counted on, so what is kept clear is clear
+/// whatever it cuts first.
+fn held_clear(
+    work: &Work<'_>,
+    ordered: &Toolpath,
+    stock: &Stock,
+    warnings: &mut Vec<String>,
+) -> Result<Option<(Toolpath, u64)>, RunError> {
+    let op = work.op;
+    let mode = op.passes.holder.mode;
+    let Some(body) = work.held_body() else {
+        return Ok(None);
+    };
+    // How each keeps clear: a finish over the part as asked; one at levels
+    // by trimming, a fixed height being all it has; a hole by not being
+    // drilled. Clearing has kept off the part already, by the region each
+    // level may clear ([`Work::held`]), and is trimmed here where the levels
+    // above it left material over it that it would meet. Failing, any of
+    // them that would meet it stops.
+    let how = match op.strategy {
+        _ if mode == HolderMode::Fail => Some(Clear::Trim),
+        _ if op.strategy.uses().links == Links::OverPart => Some(match mode {
+            HolderMode::PullAway => Clear::PullAway,
+            _ => Clear::Trim,
+        }),
+        StrategySpec::Contour { .. }
+        | StrategySpec::Flat { .. }
+        | StrategySpec::Adaptive { .. }
+        | StrategySpec::PocketClearing { .. } => Some(Clear::Trim),
+        StrategySpec::Drill { .. } => None,
+        _ => return Ok(None),
+    };
+    let tolerance = work.job.tolerance;
+    let guard = Guard::new(stock, &body, tolerance);
+    // The material before it holds the part, which no operation cuts into:
+    // asked of it alone, a holder however wide is quick to keep clear.
+    let held = HeldDrop::over_stock(&guard, stock, &body, tolerance);
+    let (kept, report) = match how {
+        Some(how) => keep_clear(ordered, &held, how, tolerance)?,
+        None => skip_unreached(ordered, &held, tolerance)?,
+    };
+    let Some(at) = report.first else {
+        return Ok(None);
+    };
+    if mode == HolderMode::Fail {
+        return Err(RunError::Held {
+            op: op.name.clone(),
+            at,
+        });
+    }
+    warnings.push(match how {
+        Some(Clear::PullAway) => format!(
+            "the shank or holder would meet the material: {} stretch(es) pulled away, leaving material there",
+            report.stretches
+        ),
+        Some(Clear::Trim) => format!(
+            "the shank or holder would meet the material: {} stretch(es) trimmed, leaving material there",
+            report.stretches
+        ),
+        None => format!(
+            "the shank or holder would meet the material: {} hole(s) not drilled",
+            report.stretches
+        ),
+    });
+    Ok(Some((kept, report.after)))
 }
 
 /// Work out one operation's passes, to `target`, and put them in order. Only a
@@ -440,6 +545,14 @@ pub(super) fn cut_operation(
     let detail = detail.clone();
     let mut warnings = warnings.clone();
 
+    // The rest of the tool kept clear of the part and the material as the
+    // operation asks, before the passes are linked.
+    let held = held_clear(work, ordered, stock, &mut warnings)?;
+    let (ordered, passes) = match &held {
+        Some((kept, after)) => (kept, *after),
+        None => (ordered, passes),
+    };
+
     // Traverses clear the material as it stood before the operation: never lower
     // than it will stand, so they are safe whatever the operation cuts first.
     // Between cuts, the safe distance over it, as Fusion's minimum retraction;
@@ -458,12 +571,34 @@ pub(super) fn cut_operation(
     // Linked over the material as each pass leaves it, and cut into it as linked.
     let before = stock.volume();
     let surface = OnPart::new(work.cutter, work.tool, work.job.tolerance);
-    let mut cutting = Cutting {
-        stock,
-        tool: work.tool,
-        rapid_contacts: 0,
-        deepest: 0.0,
+    // The whole tool, as it is held: the rest of it, above the flutes, is
+    // watched for meeting the material as it cuts.
+    let assembly = Assembly::of(work.spec, work.nose);
+    // Narrower by twice its tolerance, the job's and smoothing's together:
+    // the wall one pass left and the tool on another are each where they
+    // should be to within it, so two passes along one wall at different
+    // levels may be that far apart, and a shank as wide as its cutter rides
+    // against what the other left without, past what the job allows,
+    // meeting it.
+    let tolerance = work.job.tolerance;
+    let total = tolerance + op.smoothing(tolerance).unwrap_or(0.0);
+    let shrink = -2.0 * total;
+    let body = Some(assembly.body(shrink, shrink)).filter(|b| !b.is_empty());
+    let assembly = Some(assembly);
+    // Links lift over the material by the rest of the tool too, where the
+    // operation keeps it clear: the material as it stood before it, as the
+    // cutter's own clearance is.
+    let link_body = work.held_body();
+    let stood = link_body.as_ref().map(|_| stock.clone());
+    let link_guard = link_body
+        .as_ref()
+        .zip(stood.as_ref())
+        .map(|(body, stood)| Guard::new(stood, body, tolerance));
+    let clearance = HeldClearance {
+        inner: &clearance,
+        held: link_guard.as_ref().zip(stood.as_ref()),
     };
+    let mut cutting = Cutting::new(stock, work.tool, body.as_ref(), tolerance);
     let (path, mut links) = link_watched(
         ordered,
         &clearance,
@@ -485,6 +620,24 @@ pub(super) fn cut_operation(
         rapid_contacts: cutting.rapid_contacts,
         deepest_rapid_contact_mm: cutting.deepest,
     };
+    let contacts: Vec<Contact> = body.as_ref().map_or_else(Vec::new, |b| {
+        cutting
+            .contacts
+            .iter()
+            .filter_map(|&(at, depth, distance)| {
+                let (piece, _) = b.piece_at(distance)?;
+                Some(Contact { at, piece, depth })
+            })
+            .collect()
+    });
+    if let Some(c) = contacts.iter().max_by(|a, b| a.depth.total_cmp(&b.depth)) {
+        warnings.push(format!(
+            "the tool's {} meets the material on {} move(s), {:.2} mm deep",
+            c.piece.name(),
+            contacts.len(),
+            c.depth
+        ));
+    }
     if links.suspicious_plunges > 0 {
         warnings.push(format!(
             "{} plunge(s) do not start above the surface",
@@ -525,6 +678,8 @@ pub(super) fn cut_operation(
         warnings,
         planned: Some(Arc::clone(planned)),
         // The rest is the operation's own: its name, strategy and tool.
+        assembly,
+        contacts,
         ..not_made(op, Some(work.spec), Made::Generated)
     })
 }
@@ -578,5 +733,7 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
         warnings: Vec::new(),
         made,
         planned: None,
+        assembly: None,
+        contacts: Vec::new(),
     }
 }

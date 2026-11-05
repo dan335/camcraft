@@ -5,6 +5,7 @@
 //! puts it on one. Dimensions the tool does not give are assumed from its diameter
 //! and marked as assumed, so the picture never claims more than the tool says.
 
+use camcraft_core::cutter::assembly::Assembly;
 use camcraft_core::job::{DRILL_POINT, ToolKind, ToolSpec};
 use eframe::egui;
 
@@ -91,7 +92,8 @@ pub fn tip_profile(tool: &ToolSpec) -> Vec<(f64, f64)> {
     out
 }
 
-/// Draw `tool`.
+/// Draw `tool`, the whole of it as it is held: its cutting end, its neck and
+/// shank, and its holder, as the run checks them ([`Assembly`]).
 pub fn draw(tool: &ToolSpec) -> Drawing {
     let d = if tool.diameter.is_finite() && tool.diameter > 0.0 {
         tool.diameter
@@ -99,72 +101,59 @@ pub fn draw(tool: &ToolSpec) -> Drawing {
         1.0
     };
     let r = d / 2.0;
-    let mut assumed = Vec::new();
-    let mut or_assume = |value: Option<f64>, name, default: f64| match value {
-        Some(v) if v.is_finite() && v > 0.0 => v,
-        _ => {
-            assumed.push(name);
-            default
+    let assembly = Assembly::of(tool, None);
+    let mut assumed = assembly.assumed.clone();
+    let stickout = assembly.stickout;
+    let overall = match tool.overall_length.filter(|l| l.is_finite() && *l > 0.0) {
+        Some(l) => l,
+        None => {
+            assumed.push("overall length");
+            stickout + 2.0 * d
         }
     };
-    let flutes = or_assume(
-        tool.flute_length,
-        "flute length",
-        tool.assumed_flute_length(),
-    );
-    let stickout = or_assume(tool.stickout, "stickout", flutes.max(3.0 * d));
-    let shank_r = or_assume(tool.shank_diameter, "shank diameter", d) / 2.0;
-    let overall = or_assume(tool.overall_length, "overall length", stickout + 2.0 * d);
 
     // The cutting end, then the side up to the end of the flutes; a long V-bit's
     // flank can outrun them.
     let mut cutter = tip_profile(tool);
     let end = cutter.last().map_or(0.0, |p| p.1);
-    let flutes = flutes.max(end);
+    let flutes = assembly.flutes.max(end);
     cutter.push((r, flutes));
     cutter.push((0.0, flutes));
-
-    // Above the flutes, the body steps to the shank diameter and runs up into the
-    // holder, and on to its end, hidden inside the holder.
-    let shank = vec![
-        (0.0, flutes),
-        (shank_r, flutes),
-        (shank_r, overall),
-        (0.0, overall),
-    ];
-
-    let mut outlines = vec![
-        Outline {
-            part: Part::Flutes,
-            half: cutter,
-        },
-        Outline {
-            part: Part::Shank,
-            half: shank,
-        },
-    ];
+    let mut outlines = vec![Outline {
+        part: Part::Flutes,
+        half: cutter,
+    }];
+    let mut max_radius = r;
     let mut top = overall;
-    let mut max_radius = r.max(shank_r);
-    if let Some(holder) = &tool.holder {
-        let mut z = stickout;
-        for seg in &holder.segments {
-            if !(seg.diameter.is_finite() && seg.length.is_finite()) {
-                continue;
-            }
-            let hr = seg.diameter / 2.0;
-            outlines.push(Outline {
-                part: Part::Holder,
-                half: vec![
-                    (0.0, z),
-                    (hr, z),
-                    (hr, z + seg.length),
-                    (0.0, z + seg.length),
-                ],
-            });
-            z += seg.length;
-            max_radius = max_radius.max(hr);
-        }
-        top = top.max(z);
+    // Its shank runs on into the holder, hidden there, to its end.
+    let shank_r = tool.shank_diameter() / 2.0;
+    outlines.push(Outline {
+        part: Part::Shank,
+        half: vec![
+            (0.0, stickout),
+            (shank_r, stickout),
+            (shank_r, overall),
+            (0.0, overall),
+        ],
+    });
+    for piece in &assembly.pieces {
+        let part = if piece.kind.is_shank() {
+            Part::Shank
+        } else {
+            Part::Holder
+        };
+        let bottom = piece.bottom.max(flutes.min(piece.top));
+        outlines.push(Outline {
+            part,
+            half: vec![
+                (0.0, bottom),
+                (piece.lower_radius, bottom),
+                (piece.upper_radius, piece.top),
+                (0.0, piece.top),
+            ],
+        });
+        max_radius = max_radius.max(piece.lower_radius).max(piece.upper_radius);
+        top = top.max(piece.top);
     }
     Drawing {
         outlines,
@@ -290,10 +279,7 @@ mod tests {
             overall_length: Some(50.0),
             holder: Some(Holder {
                 name: "ER20".into(),
-                segments: vec![HolderSegment {
-                    diameter: 32.0,
-                    length: 20.0,
-                }],
+                segments: vec![HolderSegment::cylinder(32.0, 20.0)],
             }),
             ..ToolSpec::default()
         };

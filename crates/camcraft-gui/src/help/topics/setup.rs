@@ -17,4 +17,6 @@ topics! {
         "Which of the machine's work offsets the program uses. Touch off into the same one.";
     POST: "Post",
         "The machine the program is written for. File… loads a machine profile of your own.";
+    MACHINE: "Machine",
+        "The machine the setup is cut on. Its spindle nose is checked against the stock for tools without a holder of their own.";
 }

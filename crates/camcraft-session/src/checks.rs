@@ -21,6 +21,7 @@
 //! still reads right.
 
 use camcraft_core::cutter::allowance::{Allowance, EffectiveTool};
+use camcraft_core::cutter::assembly::Assembly;
 use camcraft_core::cutter::dropcutter::{DropCutter, DropTest};
 use camcraft_core::cutter::tool::ToolProfile;
 use camcraft_core::job::Job;
@@ -388,6 +389,71 @@ fn operation_findings(
         )
     });
 
+    // CC108: the rest of the tool, its shank and its holder or the spindle's
+    // nose, against the material as it stood ([decision 0021]).
+    let held = op.assembly.as_ref().is_some_and(Assembly::is_held);
+    let (what, were) = if held {
+        ("the shank and holder", "were")
+    } else {
+        ("the shank", "was")
+    };
+    let deepest = op
+        .contacts
+        .iter()
+        .max_by(|a, b| a.depth.total_cmp(&b.depth));
+    out.push(match (deepest, op.contacts.first()) {
+        (Some(c), Some(first)) => {
+            let needs = op
+                .stickout_needed()
+                .zip(op.assembly.as_ref())
+                .map(|(needed, a)| {
+                    format!(
+                        "; it needs {needed:.1} mm out of the holder, not {:.1}",
+                        a.stickout
+                    )
+                })
+                .unwrap_or_default();
+            finding(
+                Level::Fail,
+                "CC108",
+                format!(
+                    "simulator: the tool's {} meets the material on {} move(s)",
+                    c.piece.name(),
+                    op.contacts.len()
+                ),
+                format!("{:.2} mm deep{needs}", c.depth),
+            )
+            .at(first.at)
+        }
+        _ => finding(
+            Level::Pass,
+            "CC108",
+            format!("simulator: {what} met no material"),
+            String::new(),
+        ),
+    });
+    // CC216: what that was checked with that the tool does not say.
+    if let Some(a) = op.assembly.as_ref().filter(|a| !a.assumed.is_empty()) {
+        out.push(finding(
+            Level::Note,
+            "CC216",
+            format!(
+                "{what} {were} checked with an assumed {}",
+                a.assumed.join(", ")
+            ),
+            "give them in the tool, measured".into(),
+        ));
+    }
+    // CC217: nothing holding the tool to check.
+    if op.assembly.is_some() && !held {
+        out.push(finding(
+            Level::Note,
+            "CC217",
+            "no holder or spindle nose to check: only the shank was".into(),
+            "give the tool a holder, or the setup a machine".into(),
+        ));
+    }
+
     // Advisories.
     match &op.detail {
         StrategyDetail::Parallel(r) => sampling(r, &mut out),
@@ -728,7 +794,7 @@ mod tests {
             .map(|f| f.code)
             .collect();
         for code in [
-            "CC101", "CC102", "CC103", "CC104", "CC105", "CC106", "CC107",
+            "CC101", "CC102", "CC103", "CC104", "CC105", "CC106", "CC107", "CC108",
         ] {
             assert!(passed.contains(&code), "{code} not reported as passed");
         }

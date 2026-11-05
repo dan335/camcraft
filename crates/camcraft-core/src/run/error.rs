@@ -63,6 +63,20 @@ pub enum RunError {
         /// Why.
         source: HoleError,
     },
+    /// The rest of the tool would meet the part, and the operation was to
+    /// fail where it would: Fusion's Shaft and Holder's Fail.
+    #[error(
+        "operation '{op}': the shank or holder would meet the part at X{:.3} Y{:.3} Z{:.3}",
+        at.x,
+        at.y,
+        at.z
+    )]
+    Held {
+        /// Which operation.
+        op: String,
+        /// Where the tool tip was.
+        at: glam::DVec3,
+    },
     /// The stock could not be built.
     #[error("cannot build stock: {0}")]
     Stock(#[from] StockError),

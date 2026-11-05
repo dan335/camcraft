@@ -262,12 +262,13 @@ fn holder(
             errors,
             "shank_diameter",
         );
+        let assumed_stickout = tool.assumed_stickout();
         opt_length(
             ui,
             d,
             m,
             &lib::STICKOUT,
-            (&mut tool.stickout, 4.0 * tool.diameter),
+            (&mut tool.stickout, assumed_stickout),
             errors,
             "stickout",
         );
@@ -283,10 +284,7 @@ fn holder(
         row(ui, d, &lib::HOLDER, errors, "holder", |ui| {
             let default = Holder {
                 name: String::new(),
-                segments: vec![HolderSegment {
-                    diameter: 32.0,
-                    length: 20.0,
-                }],
+                segments: vec![HolderSegment::cylinder(32.0, 20.0)],
             };
             widgets::optional(ui, &mut tool.holder, default, NOT_GIVEN, |ui, h| {
                 ui.add(
@@ -294,6 +292,15 @@ fn holder(
                         .hint_text("name, e.g. ER20")
                         .desired_width(160.0),
                 );
+            });
+            // A standard one, copied onto the tool to be changed there.
+            ui.menu_button("Standard…", |ui| {
+                for h in camcraft_session::builtin_holders() {
+                    if ui.button(&h.name).clicked() {
+                        tool.holder = Some(h);
+                        ui.close();
+                    }
+                }
             });
         });
     });
@@ -315,16 +322,14 @@ fn holder(
             )
             .clicked()
             {
-                h.segments.push(HolderSegment {
-                    diameter: 32.0,
-                    length: 10.0,
-                });
+                let below = h.segments.last().map_or(32.0, |s| s.upper_diameter);
+                h.segments.push(HolderSegment::cylinder(below, 10.0));
             }
         });
     });
     let mut remove = None;
     egui::Grid::new("holder-segments")
-        .num_columns(4)
+        .num_columns(5)
         .spacing([theme::SPACE_3, 6.0])
         .show(ui, |ui| {
             for (i, seg) in h.segments.iter_mut().enumerate() {
@@ -332,7 +337,10 @@ fn holder(
                     widgets::mono(format!("{}", i + 1), theme::TEXT_SM)
                         .color(theme::egui_color(theme::text_4())),
                 );
-                m.length_field(ui, &mut seg.diameter, 0.1, 1000.0, "Ø ")
+                // A taper's two diameters; the same twice is a cylinder.
+                m.length_field(ui, &mut seg.lower_diameter, 0.1, 1000.0, "Ø ")
+                    .help(&lib::HOLDER_SEGMENT);
+                m.length_field(ui, &mut seg.upper_diameter, 0.1, 1000.0, "to Ø ")
                     .help(&lib::HOLDER_SEGMENT);
                 m.length_field(ui, &mut seg.length, 0.1, 1000.0, "L ")
                     .help(&lib::HOLDER_SEGMENT);

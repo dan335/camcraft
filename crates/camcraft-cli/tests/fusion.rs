@@ -137,6 +137,9 @@ tolerance = 0.05
 [tools.quarter]
 kind = "flat"
 diameter = 6.35
+# An inch of flutes: a stepdown of 15 mm is more than the two diameters
+# assumed without, and the shank would ride in the cut.
+flute_length = 25.4
 number = 2
 rpm = 16000
 

@@ -174,7 +174,8 @@ pub fn pocket_clearing(
     // away from the walls, so never toward the part, and a finer arc on a
     // clearing ring buys nothing but points. The ring on the walls is their
     // boundary itself, drawn as finely as the forbidden region was.
-    let arc = reach.tolerance() * 0.5;
+    let tolerance = reach.tolerance();
+    let arc = tolerance * 0.5;
 
     let levels = levels(params);
 
@@ -192,9 +193,10 @@ pub fn pocket_clearing(
         .into_par_iter()
         .map(|(z, forbidden)| {
             let reachable = area.difference(&forbidden)?;
-            // The part and the stock left on it: where the tool's centre may not
-            // go, less the real tool's reach, and a cell for the grid.
-            let kept = (leave > 0.0).then(|| forbidden.offset(-(radius - slop), arc));
+            // The part and the stock left on it, and the tolerance a wall is
+            // left to: where the tool's centre may not go, less the real
+            // tool's reach.
+            let kept = (leave > 0.0).then(|| forbidden.offset(-(radius - tolerance), arc));
             Ok((z, reachable, kept))
         })
         .collect::<Result<_, StrategyError>>()?;
@@ -233,15 +235,19 @@ pub fn pocket_clearing(
                     material = material.difference(&cleared.offset(wide, arc))?;
                 }
             }
+            // Less what is kept. The outline is the grid's, traced between its
+            // points, so beside what is kept it leaves slivers no point stands
+            // in: a piece is material only where one of the grid's points
+            // stands in it, as the simulator, which cuts by those points, has
+            // it. So more left on a wall than this operation leaves, by an
+            // operation that left more, is cut at every level it stands at;
+            // were it cut only at the level below, where there is more beside
+            // it, the shank would rub it there.
             let material = match kept {
-                // Less what is kept, the slivers the two outlines leave between
-                // them taken back off with a cell's width, and given back after.
-                Some(kept) => material
-                    .difference(kept)?
-                    .offset(-slop, arc)
-                    .grow_covering(touch + slop),
-                None => material.grow_covering(touch),
-            };
+                Some(kept) => standing(&material.difference(kept)?, stock, z + MATERIAL_THICKNESS),
+                None => material,
+            }
+            .grow_covering(touch);
             if reachable.is_empty() || material.is_empty() {
                 return Ok(None);
             }
@@ -269,6 +275,43 @@ pub fn pocket_clearing(
     }
     report.rings = cut.emit.passes;
     Ok((cut.emit.path, report))
+}
+
+/// The pieces of `region` that a point of `stock` stands in, at or above
+/// `level`.
+fn standing(region: &Region, stock: &HeightMap, level: f64) -> Region {
+    let (origin, pitch) = (stock.origin(), stock.pitch());
+    let index = |v: f64, n: u32| -> u32 {
+        // Clamped into the grid, so the conversion is exact.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let i = v.clamp(0.0, f64::from(n)) as u32;
+        i
+    };
+    let rings = region
+        .pieces()
+        .into_iter()
+        .filter(|piece| {
+            let Some((lo, hi)) = piece.bounds() else {
+                return false;
+            };
+            let (x0, y0) = (
+                index(((lo.x - origin.x) / pitch).floor(), stock.nx()),
+                index(((lo.y - origin.y) / pitch).floor(), stock.ny()),
+            );
+            let (x1, y1) = (
+                index(((hi.x - origin.x) / pitch).ceil() + 1.0, stock.nx()),
+                index(((hi.y - origin.y) / pitch).ceil() + 1.0, stock.ny()),
+            );
+            (y0..y1).any(|iy| {
+                (x0..x1).any(|ix| {
+                    stock.get(ix, iy).is_some_and(|h| h >= level)
+                        && stock.position(ix, iy).is_some_and(|p| piece.contains(p))
+                })
+            })
+        })
+        .flat_map(|piece| piece.rings().to_vec())
+        .collect();
+    Region::new(rings)
 }
 
 /// The levels, in the order they are cut, each with the level below it if it is

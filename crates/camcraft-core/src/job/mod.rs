@@ -82,6 +82,7 @@ mod expressions;
 mod geometry;
 mod heights;
 mod linking;
+mod machine;
 mod model;
 mod operation;
 mod passes;
@@ -111,11 +112,12 @@ pub use expressions::{ExpressionFault, NAMES as EXPRESSION_NAMES, Worked};
 pub use geometry::{Boundary, Containment, MachiningBoundary, Outline, Selection};
 pub use heights::{Height, HeightContext, HeightRef, Heights, Picks};
 pub use linking::{Entry, LeadSizes, Leads, Linking, Retraction};
+pub use machine::Machine;
 pub use model::{FixedBox, LengthUnit, ModelDef, Place, StockDef, StockSpec, Transform};
 pub use operation::Operation;
 pub use passes::{
-    FeedOptimization, FeedOptimizationSizes, Finishing, FinishingSizes, Passes, StockToLeave,
-    TabShape, Tabs,
+    FeedOptimization, FeedOptimizationSizes, Finishing, FinishingSizes, HolderClearance,
+    HolderMode, Passes, StockToLeave, TabShape, Tabs,
 };
 pub use pick::{FeatureRef, PointRef, Snap};
 pub use setup::{Along, BoxOf, Origin, Setup};
@@ -146,6 +148,9 @@ pub struct Job {
     /// still cuts what was verified after the library changes.
     #[serde(default)]
     pub tools: BTreeMap<String, ToolSpec>,
+    /// The machines its setups are cut on, by name: copies, as its tools are.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub machines: BTreeMap<String, Machine>,
     /// The design files machined.
     #[serde(default, rename = "model")]
     pub models: Vec<ModelDef>,
@@ -164,6 +169,7 @@ impl Default for Job {
             version: JOB_VERSION,
             tolerance: NEW_JOB_TOLERANCE,
             tools: BTreeMap::new(),
+            machines: BTreeMap::new(),
             models: Vec::new(),
             stocks: Vec::new(),
             setups: Vec::new(),
@@ -244,6 +250,11 @@ impl Job {
     /// The tool an operation names, if it names one the job has.
     pub fn tool_for(&self, op: &Operation) -> Option<&ToolSpec> {
         op.tool.as_deref().and_then(|t| self.tools.get(t))
+    }
+
+    /// The machine `setup` is cut on, where it names one the job has.
+    pub fn machine_for(&self, setup: &Setup) -> Option<&Machine> {
+        setup.machine.as_deref().and_then(|m| self.machines.get(m))
     }
 
     /// The model called `name`.

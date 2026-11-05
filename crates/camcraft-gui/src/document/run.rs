@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use camcraft_core::control::{Control, share};
-use camcraft_core::job::{Job, ModelDef, Operation, Origin, Setup, StockDef, ToolSpec};
+use camcraft_core::job::{Job, Machine, ModelDef, Operation, Origin, Setup, StockDef, ToolSpec};
 use camcraft_core::run::{Kept, Made, OperationResult, Plan, Stage};
 use camcraft_core::setup::frame::Orientation;
 use camcraft_core::setup::{PrepareError, Prepared, prepare};
@@ -31,6 +31,7 @@ pub struct SetupInputs {
     tolerance: u64,
     setup: Setup,
     tools: BTreeMap<String, ToolSpec>,
+    machine: Option<Machine>,
     stocks: Vec<StockDef>,
     models: Vec<(ModelDef, Option<ModelKey>)>,
 }
@@ -60,10 +61,12 @@ impl SetupInputs {
             .into_iter()
             .map(|m| (m.clone(), loaded.get(&m.name).map(|s| s.key().clone())))
             .collect();
+        let machine = job.machine_for(&setup).cloned();
         Some(Self {
             tolerance: job.tolerance.to_bits(),
             setup,
             tools,
+            machine,
             stocks,
             models,
         })
@@ -173,6 +176,7 @@ impl SetupInputs {
                 &self.setup.orientation,
                 &self.setup.origin,
             ),
+            machine: self.machine.as_ref(),
             stocks: self.stocks.iter().collect(),
             models: self
                 .models
@@ -202,6 +206,9 @@ impl SetupInputs {
 struct Cut<'a> {
     tolerance: u64,
     setup: (&'a [String], &'a [String], &'a Orientation, &'a Origin),
+    /// The machine, which holds a tool that has no holder of its own: what
+    /// the run checks the rest of the tool with.
+    machine: Option<&'a Machine>,
     stocks: Vec<&'a StockDef>,
     models: Vec<(&'a ModelDef, Option<&'a ModelKey>)>,
 }
@@ -219,6 +226,7 @@ impl<'a> Cut<'a> {
                 &setup.orientation,
                 &setup.origin,
             ),
+            machine: job.machine_for(setup),
             stocks: setup.stocks.iter().filter_map(|s| job.stock(s)).collect(),
             models: job
                 .models_for(index)
@@ -283,6 +291,7 @@ fn same_but_operations(a: &Setup, b: &Setup) -> bool {
         stocks,
         wcs,
         post,
+        machine,
         orientation,
         origin,
         operations: _,
@@ -292,6 +301,7 @@ fn same_but_operations(a: &Setup, b: &Setup) -> bool {
         && *stocks == b.stocks
         && *wcs == b.wcs
         && *post == b.post
+        && *machine == b.machine
         && *orientation == b.orientation
         && *origin == b.origin
 }

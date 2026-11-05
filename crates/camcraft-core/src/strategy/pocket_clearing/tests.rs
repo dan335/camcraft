@@ -542,3 +542,64 @@ fn a_flat_face_between_levels_gets_a_level_of_its_own() {
             .all(|(z, _)| (z - 5.5).abs() > 1e-9)
     );
 }
+
+/// Round the boss, the material an operation before left, `before` thick
+/// on its walls, the rest cleared to `floor`.
+fn left_round_the_boss(before: f64, floor: f64) -> HeightMap {
+    let mut stock = full_stock(10.0);
+    for iy in 0..stock.ny() {
+        for ix in 0..stock.nx() {
+            let q = stock.position(ix, iy).unwrap();
+            if off_the_boss(q, 0.0) > before {
+                stock.set(ix, iy, floor);
+            }
+        }
+    }
+    stock
+}
+
+/// Clearing round the boss again with a tool leaving `leave`.
+fn again(stock: &HeightMap, leave: f64) -> (Toolpath, ClearingReport) {
+    let radius = 2.0;
+    let tool = EffectiveTool::new(
+        &Flat::new(radius).unwrap(),
+        Allowance::new(leave, 0.0).unwrap(),
+    )
+    .unwrap();
+    let mesh = boss();
+    let mut reach = LevelReach::new(&mesh, &tool, TOLERANCE).unwrap();
+    let sweep = Region::rectangle(LO, HI);
+    pocket_clearing(
+        &mut reach,
+        &sweep,
+        None,
+        stock,
+        tool.base(),
+        &params(10.0, 6.0),
+    )
+    .unwrap()
+}
+
+/// What an operation before left as this one leaves it is not cut again:
+/// the grid's outline of it is inside what is kept.
+#[test]
+fn stock_left_as_this_leaves_it_is_not_cut() {
+    let (_, report) = again(&left_round_the_boss(0.5, 6.0), 0.5);
+    assert_eq!(report.rings, 0, "{report:?}");
+}
+
+/// More left on a wall than this operation leaves is cut at every level it
+/// stands at, not only at the level below it, where the shank would rub
+/// what stood above the flutes.
+#[test]
+fn more_left_on_a_wall_is_cut_at_every_level() {
+    let (path, report) = again(&left_round_the_boss(1.5, 6.0), 0.5);
+    assert!(report.rings > 0, "{report:?}");
+    for level in [8.0, 6.0] {
+        let beside = passes_of(&path)
+            .into_iter()
+            .filter(|(z, _)| (z - level).abs() < 1e-9)
+            .any(|(_, pts)| pts.iter().all(|&q| off_the_boss(q, 2.5).abs() < 0.05));
+        assert!(beside, "no ring beside the boss at {level}");
+    }
+}

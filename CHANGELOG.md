@@ -6,6 +6,25 @@ the same notes at more length.
 
 ## Unreleased
 
+- **The whole tool is checked**, not only what cuts
+  ([decision 0021](docs/decisions/0021-shank-and-holder.md)): its neck,
+  shank, and holder, or the spindle's nose where it has none, are swept
+  through the part and stock with every move, and meeting them fails the
+  checks (CC108) with how far out of the holder the tool would have to be. A
+  setup names its machine (an 80 mm ER20 spindle, or an ISO30, BT30 or ISO20
+  ATC spindle); a holder's segments can taper, and **Standard…** puts an ER
+  nut or a BT30 or ISO30 holder on a tool. Playback and the tool's drawing
+  show the whole of it.
+- **Shaft and holder**, as Fusion's, on each 3D operation and drilling:
+  off, as before; pull away or trim, finishes lifted or cut out where the
+  rest of the tool would meet the part or stock, levels kept to where it
+  clears, links lifted over the material by it, and holes it cannot reach
+  not drilled; or fail.
+- **Pocket clearing cuts rest material on walls at every level**: material
+  an earlier operation left thicker than this one's stock to leave was only
+  cut at the bottom level, where the shank then rubbed it. **Adaptive leaves
+  walls to the tolerance**, not twice it.
+
 - **New operations start with Fusion's defaults**
   ([decision 0020](docs/decisions/0020-defaults.md)), as expressions where
   they follow the tool: pockets step down

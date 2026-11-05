@@ -2,8 +2,9 @@
 //! apart they are, the levels it cuts in, the stock it leaves and its tabs.
 
 use camcraft_core::job::{
-    ContourOrder, CutDirection, Depths, FaceDirection, FeedOptimization, Finishing, Leave,
-    Operation, PassOrder, Passes, RadialDirection, StockToLeave, StrategySpec, TabShape, Tabs,
+    ContourOrder, CutDirection, Depths, FaceDirection, FeedOptimization, Finishing,
+    HolderClearance, HolderMode, Leave, Links, Operation, PassOrder, Passes, RadialDirection,
+    StockToLeave, StrategySpec, TabShape, Tabs,
 };
 use eframe::egui;
 
@@ -305,6 +306,10 @@ pub(super) fn passes(
         widgets::section(ui, "Finishing passes");
         finishing(ui, d, m, &mut op.passes, diameter);
     }
+    if let Some(modes) = holder_modes(&op.strategy) {
+        widgets::section(ui, "Shaft and holder");
+        holder(ui, d, m, &mut op.passes.holder, modes);
+    }
     if uses.smoothing {
         widgets::section(ui, "Smoothing");
         smoothing(ui, d, m, &mut op.passes);
@@ -409,6 +414,78 @@ fn feed_optimization(
                 ui.checkbox(&mut f.only_inner_corners, "those turning into the material");
             },
         );
+    });
+}
+
+/// How a strategy may keep its shank and holder clear, each way named as it
+/// is for it: `None` for one that does not (facing, 2D cutting).
+fn holder_modes(strategy: &StrategySpec) -> Option<&'static [(HolderMode, &'static str)]> {
+    const OVER_PART: &[(HolderMode, &str)] = &[
+        (HolderMode::Off, "off"),
+        (HolderMode::PullAway, "pull away"),
+        (HolderMode::Trim, "trim"),
+        (HolderMode::Fail, "fail"),
+    ];
+    // At a fixed height there is nothing to lift to: trimming is all.
+    const LEVELS: &[(HolderMode, &str)] = &[
+        (HolderMode::Off, "off"),
+        (HolderMode::Trim, "trim"),
+        (HolderMode::Fail, "fail"),
+    ];
+    const HOLES: &[(HolderMode, &str)] = &[
+        (HolderMode::Off, "off"),
+        (HolderMode::Trim, "skip holes"),
+        (HolderMode::Fail, "fail"),
+    ];
+    match strategy {
+        _ if strategy.uses().links == Links::OverPart => Some(OVER_PART),
+        StrategySpec::Contour { .. }
+        | StrategySpec::Flat { .. }
+        | StrategySpec::Adaptive { .. }
+        | StrategySpec::PocketClearing { .. } => Some(LEVELS),
+        StrategySpec::Drill { .. } => Some(HOLES),
+        _ => None,
+    }
+}
+
+/// Fusion's Shaft and Holder: what generating does where the rest of the
+/// tool would meet the material, and how near each part of it may come.
+fn holder(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    m: Measure,
+    h: &mut HolderClearance,
+    modes: &[(HolderMode, &str)],
+) {
+    form(ui, "holder", |ui| {
+        d.row(ui, &pass::HOLDER_MODE, "passes.holder.mode", |ui| {
+            // A mode this strategy has no use for, from another it was, is
+            // trimming, as the run takes it; shown so, and kept until changed.
+            let known = modes.iter().any(|(mode, _)| *mode == h.mode);
+            let mut shown = if known { h.mode } else { HolderMode::Trim };
+            widgets::segmented(ui, &mut shown, modes);
+            if shown != h.mode && (known || shown != HolderMode::Trim) {
+                h.mode = shown;
+            }
+        });
+        widgets::dependent(ui, h.mode != HolderMode::Off, |ui| {
+            d.row(
+                ui,
+                &pass::SHANK_CLEARANCE,
+                "passes.holder.shank_clearance",
+                |ui| {
+                    m.length_field(ui, &mut h.shank_clearance, 0.0, 100.0, "");
+                },
+            );
+            d.row(
+                ui,
+                &pass::HOLDER_CLEARANCE,
+                "passes.holder.holder_clearance",
+                |ui| {
+                    m.length_field(ui, &mut h.holder_clearance, 0.0, 100.0, "");
+                },
+            );
+        });
     });
 }
 

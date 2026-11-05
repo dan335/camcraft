@@ -198,26 +198,96 @@ pub enum ToolMaterial {
     Hss,
 }
 
-/// A tool holder, as a stack of cylinders from the holder face upward.
+/// A tool holder, or a spindle's nose, as a stack of segments from the face
+/// the tool comes out of upward, as Fusion's holders are.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Holder {
     /// Its name, e.g. "ER20 collet chuck".
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
-    /// Cylinders, from the face that meets the tool upward.
+    /// Segments, from the face that meets the tool upward.
     #[serde(default)]
     pub segments: Vec<HolderSegment>,
 }
 
-/// One cylinder of a holder.
+/// One segment of a holder: a cylinder, or where its diameters differ, a
+/// taper, as an ER nut's chamfer or an ISO flange's groove is. A job file
+/// writes a cylinder's as `diameter`, a taper's as `lower_diameter` and
+/// `upper_diameter`.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "SegmentFile", into = "SegmentFile")]
 pub struct HolderSegment {
-    /// Diameter, in millimetres.
-    pub diameter: f64,
     /// Length, in millimetres.
     pub length: f64,
+    /// Diameter at its lower end, nearer the tool, in millimetres.
+    pub lower_diameter: f64,
+    /// Diameter at its upper end, in millimetres.
+    pub upper_diameter: f64,
+}
+
+impl HolderSegment {
+    /// A cylinder `diameter` across and `length` long.
+    pub fn cylinder(diameter: f64, length: f64) -> Self {
+        Self {
+            length,
+            lower_diameter: diameter,
+            upper_diameter: diameter,
+        }
+    }
+
+    /// Whether it is a cylinder.
+    pub fn is_cylinder(&self) -> bool {
+        self.lower_diameter.to_bits() == self.upper_diameter.to_bits()
+    }
+}
+
+/// A holder segment as a job file writes it.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SegmentFile {
+    length: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    diameter: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lower_diameter: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    upper_diameter: Option<f64>,
+}
+
+impl TryFrom<SegmentFile> for HolderSegment {
+    type Error = String;
+
+    fn try_from(f: SegmentFile) -> Result<Self, String> {
+        match (f.diameter, f.lower_diameter, f.upper_diameter) {
+            (Some(d), None, None) => Ok(Self::cylinder(d, f.length)),
+            (None, Some(lower), Some(upper)) => Ok(Self {
+                length: f.length,
+                lower_diameter: lower,
+                upper_diameter: upper,
+            }),
+            _ => Err(
+                "a holder segment has a `diameter`, or a `lower_diameter` and an `upper_diameter`"
+                    .into(),
+            ),
+        }
+    }
+}
+
+impl From<HolderSegment> for SegmentFile {
+    fn from(s: HolderSegment) -> Self {
+        let (diameter, lower, upper) = if s.is_cylinder() {
+            (Some(s.lower_diameter), None, None)
+        } else {
+            (None, Some(s.lower_diameter), Some(s.upper_diameter))
+        };
+        Self {
+            length: s.length,
+            diameter,
+            lower_diameter: lower,
+            upper_diameter: upper,
+        }
+    }
 }
 
 /// A tool field that is not physically meaningful, and why.
@@ -315,6 +385,30 @@ impl ToolSpec {
             .unwrap_or_else(|| self.assumed_flute_length())
     }
 
+    /// How far it is taken to stick out of its holder where it does not say:
+    /// its flutes, and no less than three diameters, as a common end mill is
+    /// held.
+    pub fn assumed_stickout(&self) -> f64 {
+        self.flute_length().max(3.0 * self.diameter)
+    }
+
+    /// How far it sticks out of its holder, tip to the holder's face, as
+    /// Fusion's body length: its own, or where it gives none,
+    /// [`ToolSpec::assumed_stickout`].
+    pub fn stickout(&self) -> f64 {
+        self.stickout
+            .filter(|l| l.is_finite() && *l > 0.0)
+            .unwrap_or_else(|| self.assumed_stickout())
+    }
+
+    /// Its shank's diameter: its own, or where it gives none, its cutting
+    /// diameter, as a common end mill's.
+    pub fn shank_diameter(&self) -> f64 {
+        self.shank_diameter
+            .filter(|d| d.is_finite() && *d > 0.0)
+            .unwrap_or(self.diameter)
+    }
+
     /// The preset called `name`.
     pub fn preset(&self, name: &str) -> Option<&Preset> {
         self.presets.iter().find(|p| p.name == name)
@@ -397,10 +491,13 @@ impl ToolSpec {
         }
         if let Some(h) = &self.holder {
             for (i, seg) in h.segments.iter().enumerate() {
-                if !is_positive(seg.diameter) || !is_positive(seg.length) {
+                if !is_positive(seg.lower_diameter)
+                    || !is_positive(seg.upper_diameter)
+                    || !is_positive(seg.length)
+                {
                     bad(
                         "holder",
-                        format!("segment {} needs a positive diameter and length", i + 1),
+                        format!("segment {} needs positive diameters and a length", i + 1),
                     );
                 }
             }

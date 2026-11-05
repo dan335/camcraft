@@ -859,7 +859,11 @@ struct LevelParams {
     /// Longest and shortest step.
     longest: f64,
     shortest: f64,
-    /// Material narrower than twice this is not worth a pass.
+    /// Material narrower than twice this is not worth a pass: half the
+    /// tolerance, so a wall is never left more than the tolerance past its
+    /// stock to leave, at any level. Left thicker, a level below, where
+    /// there is material in front of it, runs the wall exactly and the shank
+    /// above the flutes rubs what the level above left.
     sliver: f64,
     /// Arc tolerance for the regions derived from the model.
     arc: f64,
@@ -906,7 +910,7 @@ impl LevelParams {
             air: (target * 0.02).max(1e-3),
             longest: (radius * 0.2).max(p.tolerance),
             shortest: (radius * 0.02).max(p.tolerance * 0.2).min(radius * 0.2),
-            sliver: p.tolerance,
+            sliver: p.tolerance * 0.5,
             arc: p.tolerance * 0.1,
             swept_arc: p.tolerance * 0.5,
             coarse: (p.tolerance * 0.5).max(radius * 0.005),

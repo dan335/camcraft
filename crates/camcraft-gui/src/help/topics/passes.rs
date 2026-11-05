@@ -67,6 +67,12 @@ topics! {
     MAX_SHALLOW_STEPOVER: "Maximum shallow stepover",
         "Where a terrace between two levels is wider than this, a level is added halfway, then again, until none is.",
         Figure::ShallowAreas;
+    HOLDER_MODE: "Shaft and holder",
+        "Where the shank, holder or spindle nose would hit the part or stock: off, the checks show where; pull away lifts the pass; trim cuts it out; fail stops.";
+    SHANK_CLEARANCE: "Shaft clearance",
+        "How close the neck and shank may come to the part and stock.";
+    HOLDER_CLEARANCE: "Holder clearance",
+        "How close the holder or spindle nose may come to the part and stock.";
     SMOOTHING: "Smoothing",
         "Fits runs of short moves with arcs and longer lines: a smaller program the controller keeps up with, for a smoother cut.",
         Figure::Smoothing;

@@ -32,6 +32,7 @@
 //! its own types. The restriction is useful rather than merely tolerated: it keeps
 //! the simulator a geometry service that cannot quietly grow CAM opinions.
 
+mod guard;
 mod packed;
 mod part;
 mod sweep;
@@ -45,6 +46,7 @@ use camcraft_geom::heightmap::{HeightMap, HeightMapError, cell_index};
 use glam::{DVec2, DVec3};
 use rayon::prelude::*;
 
+pub use guard::{Collision, Guard};
 pub use packed::PackedStock;
 pub use part::PartSurface;
 

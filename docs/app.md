@@ -75,7 +75,9 @@ it.
   - *Position*: orientation (the 24 square ways, with Turn over) and work zero,
     chosen from a small top view of the box with a height, or picked on the part,
     with its offset folded away.
-  - *Post*: work offset and machine profile.
+  - *Post*: work offset, machine profile, and the machine, whose spindle nose
+    holds a tool without a holder of its own: one of the built-in machines,
+    copied into the job when chosen.
 - **Operation**, on tabs: *Tool* (the tool and its feeds and speeds), *Geometry*
   (Fusion's machining boundary: the stock, the part's bounding box or silhouette,
   or picked faces and edges; where the tool goes against it; an additional
@@ -131,7 +133,10 @@ it.
   the job's unless given; and below it, all but adaptive, *Feed optimization*,
   ticked to slow down in corners, then the most a cut may turn, the reduced
   feed's radius, distance and feed, each saying its default, and whether only
-  inner corners are slowed. Profiles can leave tabs, from *Passes*: shape,
+  inner corners are slowed. Above *Smoothing*, every 3D strategy and drilling
+  has *Shaft and holder*: off, pull away (finishes over the part only), trim
+  (*skip holes* for drilling) or fail, then the shaft and holder clearances.
+  Profiles can leave tabs, from *Passes*: shape,
   width, height and spacing. A setting that only counts while another is on
   hangs under it, indented with a guide down its left. Any number of an
   operation's can be worked out from an expression instead, as Fusion's:
@@ -328,7 +333,10 @@ machine profile gives a rate. How the material keeps up is in
 folders that nest (a folder per machine, say); drag a tool onto a folder, or use
 Move to. Tools carry Fusion-style detail: flutes, lengths, shank, stickout,
 holder, material and vendor, with a scale drawing and per-field checks. A value
-left out reads "not given".
+left out reads "not given". A holder is segments from its face up, each a
+cylinder or a taper (*Ø* to *to Ø*); **Standard…** puts one of the built-in
+holders on the tool, to change there. The drawing is the whole tool as it is
+held, and so is playback's.
 
 The **System library** is always there, above the person's own folders: twenty
 common inch router bits (up-cut, down-cut and compression spirals, O-flutes, ball
@@ -368,7 +376,8 @@ product and diameter) gets the file's presets beside its own instead of a twin.
 Chamfer mills and spot drills come in as cones, drills as drills; types this build
 cannot cut with are skipped, and the manager says which and why.
 
-Not yet: Fusion's own `.json` libraries, which carry holders; tapered ball mills;
+Not yet: Fusion's own `.json` libraries, which carry holders; a library of
+the person's own holders and machines; tapered ball mills;
 the work offset manager.
 
 ## Themes

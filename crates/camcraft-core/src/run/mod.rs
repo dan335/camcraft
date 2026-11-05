@@ -36,7 +36,9 @@ use glam::DVec2;
 use crate::control::{Control, Watch};
 use crate::cutter::allowance::{Allowance, EffectiveTool};
 use crate::cutter::dropcutter::DropCutter;
-use crate::job::{HeightContext, Job, JobError, Operation, Setup, ToolSpec};
+use crate::job::{
+    HeightContext, HolderSegment, Job, JobError, Machine, Operation, Setup, ToolSpec,
+};
 use crate::path::simadapt::sim_moves;
 use crate::setup::features::Picking;
 use crate::setup::{Bodies, Prepared};
@@ -45,7 +47,9 @@ use crate::strategy::adaptive::rest::Earlier;
 pub use crate::path::toolpath::PLUNGE_RATIO;
 pub use error::RunError;
 pub use operation::Planned;
-pub use result::{Kept, Made, OperationResult, Plan, Progress, SetupResult, Stage, StrategyDetail};
+pub use result::{
+    Contact, Kept, Made, OperationResult, Plan, Progress, SetupResult, Stage, StrategyDetail,
+};
 
 use error::in_op;
 use operation::{
@@ -146,6 +150,7 @@ pub fn run_prepared_planned(
         bounds: (lo, hi),
         blocks: &blocks,
         heights: &ctx,
+        nose: job.machine_for(setup).and_then(Machine::nose),
     };
     let plan_of = |i: usize| plans.get(i).unwrap_or(&Plan::Generate);
     // Smoothing strays from the passes by up to its tolerance, on top of the
@@ -242,6 +247,9 @@ struct Shared<'a> {
     bounds: (DVec2, DVec2),
     blocks: &'a [(DVec2, DVec2, f64)],
     heights: &'a HeightContext,
+    /// What holds a tool that has no holder of its own: the setup's
+    /// machine's spindle nose, where it has one.
+    nose: Option<&'a [HolderSegment]>,
 }
 
 /// The material a run cuts into, the grid's pitch it is simulated at, and the
@@ -272,6 +280,7 @@ impl<'a> Shared<'a> {
             bounds: self.bounds,
             blocks: self.blocks,
             watch,
+            nose: self.nose,
         }
     }
 

@@ -31,6 +31,22 @@ pub enum JobError {
         /// Which model.
         model: String,
     },
+    /// A setup names a machine the job does not have.
+    #[error("setup '{setup}' is cut on machine '{machine}', which is not in the job")]
+    UnknownMachine {
+        /// Which setup.
+        setup: String,
+        /// Which machine.
+        machine: String,
+    },
+    /// A machine's spindle nose has a segment that is not physically meaningful.
+    #[error("machine '{machine}': nose segment {segment} needs positive diameters and a length")]
+    BadNose {
+        /// Which machine.
+        machine: String,
+        /// Which segment, from one.
+        segment: usize,
+    },
     /// A setup names a stock the job does not have.
     #[error("setup '{setup}' uses stock '{stock}', which is not in the job")]
     UnknownStock {

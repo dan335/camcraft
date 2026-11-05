@@ -328,7 +328,7 @@ fn cutters_have_their_tip_at_the_origin_and_their_real_width() {
         },
         tool(ToolKind::Drill, 6.0, 0.0),
     ] {
-        let mesh = cutter_mesh(&t);
+        let mesh = cutter_mesh(&t, None);
         let points = || mesh.iter().flatten();
         let lowest = points().map(|p| p.z).fold(f32::MAX, f32::min);
         assert!(lowest.abs() < 1e-6, "{:?}: tip at {lowest}", t.kind);

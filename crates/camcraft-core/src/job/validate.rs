@@ -147,6 +147,24 @@ impl Job {
                 wcs: setup.wcs,
             });
         }
+        if let Some(machine) = &setup.machine {
+            let Some(m) = self.machines.get(machine) else {
+                return Err(JobError::UnknownMachine {
+                    setup: name.clone(),
+                    machine: machine.clone(),
+                });
+            };
+            if let Some(i) = m.nose.iter().position(|s| {
+                !is_positive(s.lower_diameter)
+                    || !is_positive(s.upper_diameter)
+                    || !is_positive(s.length)
+            }) {
+                return Err(JobError::BadNose {
+                    machine: machine.clone(),
+                    segment: i + 1,
+                });
+            }
+        }
         if setup.models.is_empty() {
             return Err(JobError::NoModels(name.clone()));
         }

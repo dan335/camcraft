@@ -1531,3 +1531,152 @@ fn a_pockets_corners_are_slowed_and_it_still_verifies() {
     assert_eq!(result.verify.gouged, 0);
     assert!(plain.operations[0].corners.is_none());
 }
+
+/// The rest of the tool is watched as it cuts ([decision 0021]): flutes long
+/// enough for each level meet nothing; flutes shorter than a level bring the
+/// shank into what stands above them; and a tool held short in a spindle
+/// whose nose is wide brings the nose down onto the block, and says how far
+/// out the tool would have to be.
+///
+/// [decision 0021]: ../../../../docs/decisions/0021-shank-and-holder.md
+#[test]
+fn the_shank_and_the_spindle_nose_are_checked() {
+    use crate::cutter::assembly::PieceKind;
+    use crate::job::{HolderSegment, Machine};
+    let job: Job = toml::from_str(JOB).unwrap();
+    let rough = |job: &Job| run_job(job, &dome()).unwrap().operations.remove(0);
+
+    let fine = rough(&job);
+    assert!(fine.contacts.is_empty(), "{:?}", fine.contacts.first());
+    assert!(fine.assembly.is_some());
+
+    let mut short = job.clone();
+    short.tools.get_mut("rough").unwrap().flute_length = Some(1.0);
+    let short = rough(&short);
+    assert!(
+        !short.contacts.is_empty(),
+        "levels 2.5 mm apart, flutes 1 mm long"
+    );
+    assert!(short.contacts.iter().all(|c| c.piece == PieceKind::Shank));
+    assert!(!short.is_clean());
+    // Each contact is at a move of the path, and that move is below the top.
+    let top = short
+        .path
+        .moves()
+        .iter()
+        .map(|m| m.to.z)
+        .fold(f64::MIN, f64::max);
+    for c in &short.contacts {
+        assert!(short.path.moves()[c.at].to.z < top);
+    }
+
+    let mut held = job.clone();
+    let tool = held.tools.get_mut("rough").unwrap();
+    tool.flute_length = Some(3.0);
+    tool.stickout = Some(4.0);
+    held.machines.insert(
+        "router".into(),
+        Machine {
+            spindle: "ER20".into(),
+            nose: vec![HolderSegment::cylinder(35.0, 20.0)],
+            ..Machine::default()
+        },
+    );
+    held.setups[0].machine = Some("router".into());
+    let held = rough(&held);
+    assert!(
+        held.contacts.iter().any(|c| c.piece == PieceKind::Nose),
+        "{:?}",
+        held.contacts.first()
+    );
+    let needed = held.stickout_needed().unwrap();
+    assert!(needed > 4.0, "{needed}");
+}
+
+/// Finishing low round the dome with a wide holder close above the tip
+/// brings the holder down onto the dome's top: the check finds it, pulling
+/// away and trimming keep it clear, and failing refuses ([decision 0021]).
+///
+/// [decision 0021]: ../../../../docs/decisions/0021-shank-and-holder.md
+#[test]
+fn a_finish_keeps_the_holder_off_the_part_as_it_is_asked() {
+    use crate::job::{Holder, HolderMode, HolderSegment};
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    let tool = job.tools.get_mut("finish").unwrap();
+    tool.flute_length = Some(3.0);
+    tool.stickout = Some(4.0);
+    tool.holder = Some(Holder {
+        name: "wide".into(),
+        segments: vec![HolderSegment::cylinder(30.0, 30.0)],
+    });
+    let finish = |mode: HolderMode| {
+        let mut job = job.clone();
+        job.setups[0].operations[1].passes.holder.mode = mode;
+        run_job(&job, &dome()).map(|r| r.operations[1].clone())
+    };
+
+    let off = finish(HolderMode::Off).unwrap();
+    assert!(
+        !off.contacts.is_empty(),
+        "the holder reaches the dome's top"
+    );
+    for mode in [HolderMode::PullAway, HolderMode::Trim] {
+        let kept = finish(mode).unwrap();
+        assert!(
+            kept.contacts.is_empty(),
+            "{mode:?}: {:?}",
+            kept.contacts.first()
+        );
+        assert!(
+            kept.warnings.iter().any(|w| w.contains("shank or holder")),
+            "{mode:?}: {:?}",
+            kept.warnings
+        );
+        // Kept clear of the top by its clearance: nothing below 8 - 4 + 1.
+        let lowest = kept
+            .path
+            .moves()
+            .iter()
+            .filter(|m| m.role == crate::path::toolpath::MoveRole::Cut)
+            .map(|m| m.to.z)
+            .fold(f64::MAX, f64::min);
+        assert!(lowest > 4.9, "{mode:?}: cuts down to {lowest}");
+    }
+    assert!(matches!(
+        finish(HolderMode::Fail),
+        Err(RunError::Held { .. })
+    ));
+}
+
+/// Clearing levels down round the dome with a wide holder close above the
+/// tip: trimmed, each level clears only where the holder keeps off the part
+/// above it, and nothing meets the material ([decision 0021]).
+///
+/// [decision 0021]: ../../../../docs/decisions/0021-shank-and-holder.md
+#[test]
+fn clearing_keeps_the_holder_off_the_part_by_the_region_it_clears() {
+    use crate::job::{Holder, HolderMode, HolderSegment};
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    job.setups[0].operations.truncate(1);
+    let tool = job.tools.get_mut("rough").unwrap();
+    tool.flute_length = Some(3.0);
+    tool.stickout = Some(4.0);
+    tool.holder = Some(Holder {
+        name: "wide".into(),
+        segments: vec![HolderSegment::cylinder(30.0, 30.0)],
+    });
+    let rough = |mode: HolderMode| {
+        let mut job = job.clone();
+        job.setups[0].operations[0].passes.holder.mode = mode;
+        run_job(&job, &dome()).unwrap().operations.remove(0)
+    };
+    let off = rough(HolderMode::Off);
+    assert!(!off.contacts.is_empty(), "the holder reaches the dome");
+    let trimmed = rough(HolderMode::Trim);
+    assert!(
+        trimmed.contacts.is_empty(),
+        "{:?}",
+        trimmed.contacts.first()
+    );
+    assert!(trimmed.passes > 0 && trimmed.sim.removed_mm3 < off.sim.removed_mm3);
+}

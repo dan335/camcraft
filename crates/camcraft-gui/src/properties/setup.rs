@@ -58,6 +58,18 @@ pub(super) fn show(
         .shown
         .and_then(|s| s.origin.as_ref())
         .is_some_and(Result::is_err);
+    // The machines it can be cut on: the built-in ones, and the job's own.
+    let mut machines: Vec<Option<String>> = vec![None];
+    machines.extend(
+        camcraft_session::builtin_machines()
+            .into_iter()
+            .map(|(n, _)| Some(n.into())),
+    );
+    for n in doc.job.machines.keys() {
+        if !machines.iter().flatten().any(|m| m == n) {
+            machines.push(Some(n.clone()));
+        }
+    }
     // What each setting shows as changed from, and goes back to.
     let Some(def) = doc.setup_defaults(name) else {
         return;
@@ -157,10 +169,23 @@ pub(super) fn show(
                         actions.push(PropAction::ProfileFile(name.to_string()));
                     }
                 });
+                d.row(ui, &topics::MACHINE, "machine", |ui| {
+                    widgets::select(ui, "machine", &mut s.machine, &machines, |m| {
+                        m.clone().unwrap_or_else(|| "Not said".into())
+                    });
+                });
             });
         }
     }
     d.apply(s);
+    // A built-in machine chosen is copied into the job, as a tool is, so the
+    // job checks with what it was verified with.
+    let chosen = s.machine.clone();
+    if let Some(m) = chosen.filter(|m| !doc.job.machines.contains_key(m))
+        && let Some(machine) = camcraft_session::builtin_machine(&m)
+    {
+        doc.job.machines.insert(m, machine);
+    }
 }
 
 /// Which way the part sits: the model directions that become the machine's Z and X.

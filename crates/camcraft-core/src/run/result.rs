@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use camcraft_geom::mesh::Aabb;
 use camcraft_sim::stock::{PackedStock, PartSurface, SimReport, VerifyReport};
+
+use crate::cutter::assembly::{Assembly, PieceKind};
 use glam::DVec2;
 
 use super::Planned;
@@ -166,6 +168,41 @@ pub struct OperationResult {
     /// Its passes as worked out, before they were linked: for a later run to
     /// link again ([`Plan::Relink`]). `None` where it was not worked out.
     pub planned: Option<Arc<Planned>>,
+    /// The whole tool it cut with, shank and holder or spindle nose and all,
+    /// as it was checked: `None` where it was not cut.
+    pub assembly: Option<Assembly>,
+    /// Where the tool's shank, holder or the spindle's nose met the material
+    /// ([decision 0021]): the moves, in order.
+    ///
+    /// [decision 0021]: ../../../../docs/decisions/0021-shank-and-holder.md
+    pub contacts: Vec<Contact>,
+}
+
+/// A move where a part of the tool that does not cut met the material.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Contact {
+    /// The move, by its place in the operation's path.
+    pub at: usize,
+    /// What met it.
+    pub piece: PieceKind,
+    /// How far into the material it would have gone, in millimetres: how much
+    /// higher it would have had to be.
+    pub depth: f64,
+}
+
+impl OperationResult {
+    /// How far the tool would have to stick out of its holder, or the
+    /// spindle's nose, for neither to meet the material, where either did:
+    /// as it is, raised by the deepest they went in.
+    pub fn stickout_needed(&self) -> Option<f64> {
+        let a = self.assembly.as_ref()?;
+        self.contacts
+            .iter()
+            .filter(|c| !c.piece.is_shank())
+            .map(|c| c.depth)
+            .fold(None, |m: Option<f64>, d| Some(m.map_or(d, |m| m.max(d))))
+            .map(|d| a.stickout + d)
+    }
 }
 
 impl OperationResult {
@@ -177,6 +214,7 @@ impl OperationResult {
         self.sim.is_clean()
             && !self.path.has_unplanned_links()
             && self.deepest_cut_descent_mm <= self.max_cut_step
+            && self.contacts.is_empty()
     }
 }
 

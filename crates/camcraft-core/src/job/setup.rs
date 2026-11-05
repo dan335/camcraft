@@ -24,6 +24,10 @@ pub struct Setup {
     /// The post processor: a built-in name, or a profile file relative to the job.
     #[serde(default = "default_post")]
     pub post: String,
+    /// The machine it is cut on, one of the job's, by name: what holds a tool
+    /// that has no holder of its own. None where it is not said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     /// Which model directions become the machine's Z and X.
     #[serde(default, skip_serializing_if = "is_default")]
     pub orientation: Orientation,
@@ -44,6 +48,7 @@ impl Setup {
             stocks: Vec::new(),
             wcs: default_wcs(),
             post: default_post(),
+            machine: None,
             orientation: Orientation::default(),
             origin: Origin::default(),
             operations: Vec::new(),

@@ -8,9 +8,11 @@
 //! - **Segments never join operations.** Between two operations is a tool change,
 //!   not a move, and drawing a line there would show a traverse that never happens.
 //! - **The cutter is the job's own tool,** revolved from its real profile, with the
-//!   tip at the origin because the tip is the point the engine controls.
+//!   tip at the origin because the tip is the point the engine controls, and
+//!   with its shank and what holds it, as the run checks them.
 
-use camcraft_core::job::{Job, Setup, ToolSpec};
+use camcraft_core::cutter::assembly::Assembly;
+use camcraft_core::job::{HolderSegment, Job, Machine, Setup, ToolSpec};
 use camcraft_core::path::toolpath::{MoveKind, MoveRole};
 use camcraft_core::replay::Position;
 use camcraft_core::run::{PLUNGE_RATIO, SetupResult};
@@ -158,6 +160,7 @@ pub struct AtMove<'a> {
 impl Scene {
     /// The scene for a finished run of `setup`, in `job`.
     pub fn build(job: &Job, setup: &Setup, result: &SetupResult) -> Self {
+        let nose = job.machine_for(setup).and_then(Machine::nose);
         let mut scene = Self::default();
         let mut clock = 0.0;
         for (i, run) in result.operations.iter().enumerate() {
@@ -209,7 +212,7 @@ impl Scene {
                 .operations
                 .get(i)
                 .and_then(|spec| job.tool_for(spec))
-                .map(cutter_mesh)
+                .map(|t| cutter_mesh(t, nose))
                 .unwrap_or_default();
             scene.ops.push(OpSpan {
                 name: run.name.clone(),
@@ -390,17 +393,27 @@ pub fn box_edges(b: &Aabb) -> Vec<(DVec3, DVec3)> {
 
 /// Segments around the cutter's axis.
 const AROUND: u32 = 36;
-/// The cutter as triangles: its profile revolved about +Z, tip at the origin, with
-/// a shank three diameters long, or longer for a V-bit's long flank.
-pub fn cutter_mesh(tool: &ToolSpec) -> Vec<[Vec3; 3]> {
-    let mut profile: Vec<(f32, f32)> = tip_profile(tool)
+/// The tool as triangles, the whole of it as the run checks it: its profile
+/// revolved about +Z, tip at the origin, up the flutes, neck and shank to what
+/// holds it, its own holder or the spindle's `nose`, as [`Assembly`] has it.
+pub fn cutter_mesh(tool: &ToolSpec, nose: Option<&[HolderSegment]>) -> Vec<[Vec3; 3]> {
+    let assembly = Assembly::of(tool, nose);
+    let mut profile: Vec<(f64, f64)> = tip_profile(tool);
+    let (radius, end) = profile.last().copied().unwrap_or((0.5, 0.0));
+    // A long V-bit's flank can outrun its flutes.
+    let flutes = assembly.flutes.max(end);
+    profile.push((radius, flutes));
+    for piece in &assembly.pieces {
+        let bottom = piece.bottom.max(flutes.min(piece.top));
+        profile.push((piece.lower_radius, bottom));
+        profile.push((piece.upper_radius, piece.top));
+    }
+    let top = profile.last().map_or(flutes, |p| p.1);
+    profile.push((0.0, top));
+    let profile: Vec<(f32, f32)> = profile
         .into_iter()
         .map(|(r, z)| (narrow(r), narrow(z)))
         .collect();
-    let (radius, end) = profile.last().copied().unwrap_or((0.5, 0.0));
-    let height = (radius * 6.0).max(end + radius * 2.0);
-    profile.push((radius, height));
-    profile.push((0.0, height));
 
     let ring = |(r, z): (f32, f32), k: u32| {
         let a = std::f32::consts::TAU * f32_from(k) / f32_from(AROUND);

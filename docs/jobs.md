@@ -440,6 +440,78 @@ faces in another order still has a face through that point. A model edited so th
 point is on nothing any more says so, and nothing is cut until the pick is made
 again ([decision 0002](decisions/0002-feature-references.md)).
 
+## Shank, holder and machine
+
+The whole tool is checked, not only what cuts
+([decision 0021](decisions/0021-shank-and-holder.md)). From the tip up it is the
+cutter, a neck at the cutting diameter to `shoulder_length`, the shank
+(`shank_diameter`) to `stickout`, how far it comes out of what holds it, and
+then that: the tool's own `holder`, segments from its face up, each a cylinder
+or a taper:
+
+```toml
+[tools.rough.holder]
+name = "ER20 nut"
+segments = [
+  { length = 19.5, diameter = 35.0 },
+  { length = 10.0, lower_diameter = 35.0, upper_diameter = 42.0 },
+]
+```
+
+A tool without a holder is held by its setup's machine's spindle nose, where the
+setup names a machine. The job keeps its machines as it keeps its tools, a copy
+of what the setup was set up with:
+
+```toml
+[machines."80 mm ER20 spindle"]
+spindle = "ER20"
+nose = [
+  { length = 19.5, diameter = 35.0 },
+  { length = 6.5, diameter = 35.0 },
+  { length = 15.0, diameter = 78.0 },
+  { length = 160.0, diameter = 80.0 },
+]
+
+[[setup]]
+name = "top"
+machine = "80 mm ER20 spindle"
+```
+
+`holders = true` marks a machine whose tools sit in holders of their own (ISO30,
+BT30, ISO20): its nose is not drawn. The built-in machines are an 80 mm ER20
+spindle (its nose from the GDK80's drawing) and ISO30, BT30 and ISO20 ATC
+spindles; the built-in holders are the ER11 to ER32 nuts and the BT30 ER25,
+BT30 ER32 and ISO30 ER32 holders whose maker's sizes are known. What a tool
+leaves out (flute length, stickout, shank diameter) is assumed and said
+(CC216).
+
+**Checking** sweeps everything above the flutes through the material, part and
+stock as they stand, alongside every move, cutting nothing: where it would meet
+material is CC108, a failure, with the deepest it went and how far out of the
+holder the tool would have to be to clear. Contact is actual, not by a
+clearance, and the body is taken twice the operation's tolerance (the job's,
+and smoothing's where it smooths) narrower: the wall one pass left and the tool
+on another are each only known to that.
+
+**Avoiding** is each operation's, `passes.holder`, as Fusion's Shaft and
+Holder:
+
+```toml
+passes = { holder = { mode = "trim", shank_clearance = 1.0, holder_clearance = 5.0 } }
+```
+
+`mode` is `off` (the default, as Fusion's in 3-axis: the check says where),
+`pull-away`, `trim` or `fail`; the clearances are how near the shank and the
+holder may come, Fusion's 1 and 5 mm. A finish over the part (parallel,
+scallop, spiral, radial, morphed spiral) drops the rest of the tool onto the
+part and the material as one tool, and lifts the pass clear or cuts it out
+there. Contour and flat, at fixed heights, trim. Adaptive and pocket clearing
+shrink what each level may clear by where the rest of the tool would meet the
+part above it, and trim where the levels above left material it would meet.
+Drilling skips a hole it cannot reach. Links lift over the material by the rest
+of the tool too. `fail` stops the operation at the first place it would meet
+anything.
+
 ## Checks
 
 `camcraft_session::checks` is one list, printed by the command line and shown in
@@ -460,6 +532,7 @@ with.
 | CC105 | fail    | a cutting descent plunges past the allowance                     |
 | CC106 | fail    | simulator: a rapid touched material                              |
 | CC107 | fail    | simulator: the finished stock is below the part (a gouge)        |
+| CC108 | fail    | simulator: the shank, holder or spindle nose met the material    |
 | CC201 | warn    | spans hit the refinement limit                                   |
 | CC202 | warn    | plunges that do not start above the surface                      |
 | CC203 | note    | spans stopped at a surface discontinuity                         |
@@ -475,6 +548,8 @@ with.
 | CC213 | warn    | a morphed spiral's laps further apart than the stepover          |
 | CC214 | note    | pieces of a morphed spiral cut in rings, too concave for one spiral |
 | CC215 | note    | contour points not pulled onto the part, left clear of it         |
+| CC216 | note    | the shank and holder were checked with an assumed length or size |
+| CC217 | note    | no holder or spindle nose to check: only the shank was           |
 | CC299 | warn    | a warning from reading the model                                 |
 
 A **plunge** is a continuous descent steeper than `PLUNGE_RATIO` (10:1) that falls
