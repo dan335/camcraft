@@ -113,6 +113,12 @@ pub struct SetupView {
     pub paths_in_playback: bool,
     /// The part while playing back: off until asked for, the material covering it.
     pub part_in_playback: bool,
+    /// Setting up, the material as the selection leaves it, in place of the
+    /// part, the stock's outline and work zero: what an edit does to the cut,
+    /// where its toolpaths are hard to read.
+    pub material: bool,
+    /// Toolpaths over that material: off until asked for, as playing back.
+    pub paths_over_material: bool,
     /// What to draw.
     pub view: View,
 }
@@ -147,6 +153,27 @@ impl Default for Transport {
     }
 }
 
+impl SetupView {
+    /// Whether toolpaths are drawn, playing back (`back`) or setting up, over
+    /// the material (`material`) or the part: each has its own say.
+    pub fn paths(&self, back: bool, material: bool) -> bool {
+        match (back, material) {
+            (true, _) => self.paths_in_playback,
+            (false, true) => self.paths_over_material,
+            (false, false) => self.show_paths,
+        }
+    }
+
+    /// The say [`SetupView::paths`] reads, to change.
+    pub fn paths_mut(&mut self, back: bool, material: bool) -> &mut bool {
+        match (back, material) {
+            (true, _) => &mut self.paths_in_playback,
+            (false, true) => &mut self.paths_over_material,
+            (false, false) => &mut self.show_paths,
+        }
+    }
+}
+
 impl Default for SetupView {
     fn default() -> Self {
         Self {
@@ -159,6 +186,8 @@ impl Default for SetupView {
             show_paths: true,
             paths_in_playback: false,
             part_in_playback: false,
+            material: false,
+            paths_over_material: false,
             view: View {
                 stock: true,
                 ..View::default()
@@ -257,8 +286,12 @@ pub struct SetupState {
     pub(super) casting: Option<(u64, ShadowKey)>,
     /// How it is being looked at.
     pub view: SetupView,
-    /// Its material during playback, once it has been followed.
+    /// Its material, played back or shown while setting up, once it has been
+    /// followed: perhaps of a run since replaced, until the new one's is.
     pub live: Option<LiveStock>,
+    /// The material of the run before, drawn until `live` has its own, so the
+    /// view does not go blank between runs ([`SetupState::drawn_stock`]).
+    pub outgoing: Option<LiveStock>,
     /// Its operations' passes, kept from its runs, to link again.
     pub(super) passes: PassCache,
 }
@@ -272,8 +305,8 @@ impl SetupState {
         self.passes.keep(&ran.inputs, &ran.ran.result);
         let first = self.ran.is_none();
         let end = ran.scene.segments.len();
+        // The material stays, drawn until the new run's takes its place.
         self.ran = Some(ran);
-        self.live = None;
         let view = &mut self.view;
         if first {
             view.at = Playhead::default();
@@ -290,9 +323,27 @@ impl SetupState {
     pub fn forget_run(&mut self) {
         self.ran = None;
         self.live = None;
+        self.outgoing = None;
         let view = &mut self.view;
         view.at = Playhead::default();
         view.transport.playing = false;
+    }
+
+    /// The material to draw: its run's, once its thread has filled it, and
+    /// until then the run's before.
+    pub fn drawn_stock(&self) -> Option<&LiveStock> {
+        self.live
+            .as_ref()
+            .filter(|l| l.filled())
+            .or(self.outgoing.as_ref())
+    }
+
+    /// As [`SetupState::drawn_stock`], to note what of it was uploaded.
+    pub fn drawn_stock_mut(&mut self) -> Option<&mut LiveStock> {
+        match &mut self.live {
+            Some(l) if l.filled() => Some(l),
+            _ => self.outgoing.as_mut(),
+        }
     }
 
     /// Keep only the first `kept` operations of its last run: their toolpaths
@@ -312,7 +363,6 @@ impl SetupState {
         keep_first(&mut ran.scene, kept);
         ran.marks = marks(&ran.ran, &ran.scene);
         ran.scene_key = next_key();
-        self.live = None;
         let view = &mut self.view;
         let end = ran.scene.segments.len();
         if view.at.shown >= end {

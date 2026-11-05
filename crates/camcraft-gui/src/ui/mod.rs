@@ -2,6 +2,7 @@
 //! components, and lengths in millimetres or inches.
 
 pub mod defaults;
+pub mod desktop;
 pub mod measure;
 pub mod theme;
 pub mod widgets;

@@ -382,7 +382,7 @@ impl Operation {
     /// a square end, and with a round one the spacing that leaves a cusp no
     /// taller than the tolerance, `2·√(r² − (r − tol)²) / √2`; for 3D pocket
     /// clearing, a 2D pocket and flat finishing, 0.6 of the diameter; for
-    /// adaptive clearing, its optimal load, a tenth of the diameter; for facing,
+    /// adaptive clearing, its optimal load, `tool_diameter * 0.4`; for facing,
     /// 95% of the flat of the tool's end. `None` for contour finishing, a profile
     /// or drilling, which have none, and for facing with a tool that has no flat.
     pub fn default_stepover(&self, tool: &ToolSpec, tolerance: f64) -> Option<f64> {
@@ -400,14 +400,13 @@ impl Operation {
                 } else {
                     d / 4.0
                 };
-                // To the micron, as Fusion rounds it.
-                Some((over * 1000.0).round() / 1000.0)
+                Some(to_the_micron(over))
             }
             StrategySpec::PocketClearing { .. }
             | StrategySpec::Pocket { .. }
             | StrategySpec::Flat { .. } => Some(0.6 * d),
-            // Fusion's optimal load: a tenth of the tool, to the micron.
-            StrategySpec::Adaptive { .. } => Some((0.1 * d * 1000.0).round() / 1000.0),
+            // Fusion's optimal load, `tool_diameter * 0.4`, to the micron.
+            StrategySpec::Adaptive { .. } => Some(to_the_micron(0.4 * d)),
             // Fusion's: 95% of the flat of the tool's end, less its corners.
             StrategySpec::Face { .. } => match tool.kind {
                 ToolKind::Flat => Some(0.95 * d),
@@ -419,4 +418,23 @@ impl Operation {
             | StrategySpec::Drill { .. } => None,
         }
     }
+
+    /// The stepdown Fusion gives this operation with `tool`: for adaptive and
+    /// 3D pocket clearing, its maximum roughing stepdown,
+    /// `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)`, the flutes
+    /// assumed where the tool does not give them
+    /// ([`ToolSpec::flute_length`]). `None` for the rest, whose own stands.
+    pub fn default_tool_stepdown(&self, tool: &ToolSpec) -> Option<f64> {
+        match self.strategy {
+            StrategySpec::Adaptive { .. } | StrategySpec::PocketClearing { .. } => Some(
+                to_the_micron((0.75 * tool.flute_length()).min(2.5 * tool.diameter)),
+            ),
+            _ => None,
+        }
+    }
+}
+
+/// `mm` to the micron, as Fusion rounds what its expressions give.
+fn to_the_micron(mm: f64) -> f64 {
+    (mm * 1000.0).round() / 1000.0
 }

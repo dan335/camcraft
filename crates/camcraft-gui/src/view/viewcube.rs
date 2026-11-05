@@ -286,12 +286,12 @@ fn paint(ui: &egui::Ui, painter: &egui::Painter, cube: &Cube, under: Option<Regi
     };
     axis(false);
 
-    let border = egui::Stroke::new(1.0, theme::egui_color(theme::BORDER_STRONG));
+    let border = egui::Stroke::new(1.0, theme::egui_color(theme::border_strong()));
     for face in cube.faces() {
         // Lighter the more squarely it faces the eye, so the cube reads as solid.
-        let base = theme::HOVER_OVERLAY.over(theme::SURFACE_3);
+        let base = theme::hover_overlay().over(theme::surface_3());
         let lit = theme::Tint {
-            rgb: theme::SURFACE_RAISED,
+            rgb: theme::surface_raised(),
             alpha: face.facing,
         }
         .over(base);
@@ -305,8 +305,8 @@ fn paint(ui: &egui::Ui, painter: &egui::Painter, cube: &Cube, under: Option<Regi
         {
             painter.add(egui::Shape::convex_polygon(
                 quad.to_vec(),
-                theme::SELECTION.color(),
-                egui::Stroke::new(1.0, theme::egui_color(theme::ACCENT)),
+                theme::selection().color(),
+                egui::Stroke::new(1.0, theme::egui_color(theme::accent())),
             ));
         }
         label(ui, painter, cube, &face);
@@ -327,7 +327,7 @@ fn label(ui: &egui::Ui, painter: &egui::Painter, cube: &Cube, face: &Face) {
     let (right, _) = cube.at(n + face.up.as_vec3().cross(n));
     let across = right - centre;
     let angle = across.y.atan2(across.x);
-    let color = theme::egui_color(theme::TEXT_2);
+    let color = theme::egui_color(theme::text_2());
     let galley =
         ui.painter()
             .layout_no_wrap(face.name.to_string(), theme::caption(ui.style()), color);
@@ -340,12 +340,12 @@ fn label(ui: &egui::Ui, painter: &egui::Painter, cube: &Cube, face: &Face) {
 /// The home button: a small house, lit when the pointer is over it.
 fn paint_home(painter: &egui::Painter, rect: Rect, hovered: bool) {
     let color = theme::egui_color(if hovered {
-        theme::ACCENT
+        theme::accent()
     } else {
-        theme::TEXT_3
+        theme::text_3()
     });
     if hovered {
-        painter.rect_filled(rect, theme::RADIUS_SM, theme::HOVER_OVERLAY.color());
+        painter.rect_filled(rect, theme::RADIUS_SM, theme::hover_overlay().color());
     }
     let c = rect.center();
     let s = rect.width() * 0.26;

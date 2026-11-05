@@ -56,15 +56,12 @@ min_ring_length = 3.0
 tool = "rough-6-flat"
 "#;
 
-/// The UI knows whether there is material to draw, what changed of it and
-/// what the legend counts without locking the image the thread writes: all
-/// of it here with the image held locked, as the thread holds it working.
-#[test]
-fn the_ui_reads_the_material_without_locking_it() {
-    use crate::stock::stock_view::Class;
-    let (to_thread, _to) = channel();
+/// A stock as [`LiveStock::start`] makes one, with what its thread would send
+/// it sent by hand.
+fn without_a_thread() -> (Sender<Update>, LiveStock) {
+    let (to_thread, _) = channel();
     let (tx, from_thread) = channel();
-    let mut live = LiveStock {
+    let live = LiveStock {
         scene_key: 0,
         to_thread,
         from_thread,
@@ -77,6 +74,66 @@ fn the_ui_reads_the_material_without_locking_it() {
         reached: None,
         shaded: false,
     };
+    (tx, live)
+}
+
+/// The image filled whole, as the thread first sends it, with these counts.
+fn filled(counts: [usize; 4]) -> Update {
+    Update {
+        target: Goal {
+            at: Position { op: 0, moves: 0 },
+            fraction: 0.0,
+        },
+        reached: true,
+        change: Some(Change::Full(64, 40)),
+        shaded: true,
+        counts: Some(counts),
+    }
+}
+
+/// A setup draws the last run's material until the new run's is filled,
+/// counted and uploaded as it is, and then the new run's.
+#[test]
+fn the_last_material_is_drawn_until_the_next_is_filled() {
+    use crate::document::SetupState;
+    use crate::stock::stock_view::Class;
+    let (tx, mut old) = without_a_thread();
+    tx.send(filled([0, 7, 0, 0])).unwrap();
+    old.poll();
+    let old_key = old.shown().unwrap().0;
+    let (tx, new) = without_a_thread();
+    let mut state = SetupState::default();
+    state.live = Some(new);
+    state.outgoing = Some(old);
+    let drawn = |s: &SetupState| {
+        s.drawn_stock()
+            .and_then(LiveStock::shown)
+            .map(|d| (d.0, d.2))
+    };
+    assert_eq!(drawn(&state), Some((old_key, StockChange::All)));
+    assert_eq!(state.drawn_stock().unwrap().count(Class::Leftover), 7);
+    state.drawn_stock_mut().unwrap().uploaded();
+    assert_eq!(
+        drawn(&state),
+        Some((old_key, StockChange::Nothing)),
+        "uploaded"
+    );
+
+    tx.send(filled([0, 9, 0, 0])).unwrap();
+    state.live.as_mut().unwrap().poll();
+    let (key, change) = drawn(&state).unwrap();
+    assert_ne!(key, old_key, "its own");
+    assert_eq!(change, StockChange::All);
+    assert_eq!(state.drawn_stock().unwrap().count(Class::Leftover), 9);
+}
+
+/// The UI knows whether there is material to draw, what changed of it and
+/// what the legend counts without locking the image the thread writes: all
+/// of it here with the image held locked, as the thread holds it working.
+#[test]
+fn the_ui_reads_the_material_without_locking_it() {
+    use crate::stock::stock_view::Class;
+    let (tx, mut live) = without_a_thread();
     let held = Arc::clone(&live.image);
     let _working = lock(&held);
     assert!(live.shown().is_none() && !live.filled());

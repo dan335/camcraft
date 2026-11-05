@@ -300,7 +300,7 @@ fn margins(
                 ("", "underneath", below, &topics::MARGIN_UNDER, "below"),
             ] {
                 ui.label(widgets::mono(letter, theme::TEXT_SM));
-                let label = egui::RichText::new(side).color(theme::egui_color(theme::TEXT_3));
+                let label = egui::RichText::new(side).color(theme::egui_color(theme::text_3()));
                 ui.label(d.tint(label, path)).help(topic);
                 ui.horizontal(|ui| {
                     m.length_field(ui, v, 0.1, 1000.0, "").help(topic);
@@ -420,16 +420,16 @@ fn paint_stock(ui: &mut egui::Ui, p: &Placement, m: Measure) {
         egui::Sense::hover(),
     );
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, theme::RADIUS_SM, theme::egui_color(theme::BG));
+    painter.rect_filled(rect, theme::RADIUS_SM, theme::egui_color(theme::bg()));
     widgets::grid_background(&painter, rect);
     painter.rect_stroke(
         rect,
         theme::RADIUS_SM,
-        egui::Stroke::new(1.0, theme::egui_color(theme::BORDER)),
+        egui::Stroke::new(1.0, theme::egui_color(theme::border())),
         egui::StrokeKind::Inside,
     );
     let caption = theme::caption(ui.style());
-    let quiet = theme::egui_color(theme::TEXT_3);
+    let quiet = theme::egui_color(theme::text_3());
     let s = p.stock;
     let all = p.part.map_or(s, |part| s.union(&part));
     let e = all.extent();
@@ -454,10 +454,10 @@ fn paint_stock(ui: &mut egui::Ui, p: &Placement, m: Measure) {
     };
     let (top_view, front_view) = (view_at(pad), view_at(2.0 * pad + half));
 
-    let block = egui::Stroke::new(1.5, theme::egui_color(theme::AMBER_5));
-    let block_fill = theme::egui_color(theme::AMBER_5).gamma_multiply(0.22);
-    let model = egui::Stroke::new(1.0, theme::egui_color(theme::GRAY_7));
-    let model_fill = theme::egui_color(theme::GRAY_6);
+    let block = egui::Stroke::new(1.5, theme::egui_color(theme::accent()));
+    let block_fill = theme::egui_color(theme::accent()).gamma_multiply(0.22);
+    let model = egui::Stroke::new(1.0, theme::egui_color(theme::text_3()));
+    let model_fill = theme::egui_color(theme::text_4());
     for (view, [u, v], label) in [
         (top_view, [0_usize, 1], "top"),
         (front_view, [0, 2], "front"),

@@ -277,7 +277,7 @@ fn rest_form(
     });
     if *rest_machining {
         ui.add_space(theme::SPACE_2);
-        form(ui, "rest", |ui| {
+        widgets::sub_form(ui, "rest", |ui| {
             d.row(ui, &geo::IGNORE_LESS_THAN, "ignore_stock_less_than", |ui| {
                 m.length_field(ui, ignore_stock_less_than, 0.01, 100.0, "");
             });
@@ -484,7 +484,7 @@ fn pick_list(
             Some(Err(why)) => row.label(widgets::error_text(why)),
             None => row.label(
                 egui::RichText::new(format!("{} on '{}'", r.index, r.model))
-                    .color(theme::egui_color(theme::TEXT_3)),
+                    .color(theme::egui_color(theme::text_3())),
             ),
         };
         row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

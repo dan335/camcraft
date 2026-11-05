@@ -86,7 +86,7 @@ fn plane_labels(ui: &egui::Ui, painter: &egui::Painter, projector: &Projector, p
         painter.rect_filled(
             bubble,
             theme::RADIUS_SM,
-            theme::egui_color(theme::SURFACE_2),
+            theme::egui_color(theme::surface_2()),
         );
         painter.galley(
             bubble.min + egui::vec2(6.0, 2.0),
@@ -357,7 +357,7 @@ fn paint_over(ui: &egui::Ui, rect: egui::Rect, projector: &Projector, content: &
     plane_labels(ui, &painter, projector, content.planes);
 
     // Picked points, then the one under the pointer, over the picture.
-    let edge = egui::Stroke::new(1.5, theme::egui_color(theme::BG));
+    let edge = egui::Stroke::new(1.5, theme::egui_color(theme::bg()));
     for at in content.selection.iter().flat_map(|(_, h)| &h.markers) {
         if let Some(p) = projector.screen(*at) {
             painter.circle(p, 5.0, theme::egui_color(theme::SELECTED), edge);
@@ -372,7 +372,7 @@ fn paint_over(ui: &egui::Ui, rect: egui::Rect, projector: &Projector, content: &
     }
     if let Some(hint) = content.hint {
         // In the accent, as a primary button is: dark text on amber.
-        let text = theme::egui_color(theme::BG);
+        let text = theme::egui_color(theme::bg());
         let galley = painter.layout_no_wrap(
             hint.to_string(),
             theme::font(ui.style(), egui::TextStyle::Body),
@@ -385,11 +385,11 @@ fn paint_over(ui: &egui::Ui, rect: egui::Rect, projector: &Projector, content: &
             at - egui::vec2(0.0, galley.size().y / 2.0),
             galley.size() + egui::vec2(20.0, 10.0),
         );
-        painter.rect_filled(bubble, theme::RADIUS_SM, theme::egui_color(theme::ACCENT));
+        painter.rect_filled(bubble, theme::RADIUS_SM, theme::egui_color(theme::accent()));
         painter.galley(bubble.center() - galley.size() / 2.0, galley, text);
     }
 
-    let faint = theme::egui_color(theme::TEXT_3);
+    let faint = theme::egui_color(theme::text_3());
     if content.part.is_none() {
         ui.painter().text(
             rect.center(),

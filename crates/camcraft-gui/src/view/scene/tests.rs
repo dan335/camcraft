@@ -168,6 +168,11 @@ fn machining_time_is_length_over_feed() {
         last = s.ends_at;
     }
     assert!(scene.total_time() > 0.0);
+    // The operations' times are the program's: no time between them.
+    let each: f64 = (0..scene.ops.len()).filter_map(|i| scene.op_time(i)).sum();
+    assert!((each - scene.total_time()).abs() < 1e-6 * scene.total_time());
+    assert!(scene.op_time(0).is_some_and(|t| t > 0.0));
+    assert_eq!(scene.op_time(scene.ops.len()), None, "past the last");
     assert_eq!(clock(59.6), "1:00");
     assert_eq!(clock(3725.0), "1:02:05");
 }

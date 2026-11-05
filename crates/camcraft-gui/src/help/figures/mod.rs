@@ -204,7 +204,7 @@ impl Figure {
             egui::Sense::hover(),
         );
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, theme::RADIUS_SM, theme::egui_color(theme::BG));
+        painter.rect_filled(rect, theme::RADIUS_SM, theme::egui_color(theme::bg()));
         self.paint(&painter, rect.shrink(8.0));
     }
 

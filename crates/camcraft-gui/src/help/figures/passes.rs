@@ -164,7 +164,7 @@ pub fn climb(painter: &egui::Painter, rect: egui::Rect) {
         // Clockwise, as the spindle turns seen from above.
         s.arrow(
             &arc([cx, 24.0], 5.0, 160.0, 20.0),
-            theme::egui_color(theme::BG),
+            theme::egui_color(theme::bg()),
             1.25,
         );
         s.text([cx, 1.0], Align2::CENTER_BOTTOM, name, true);
@@ -182,7 +182,7 @@ pub fn chip_load(painter: &egui::Painter, rect: egui::Rect) {
         &arc(c1, r, -90.0, 90.0),
         Tone::Hot.fill(),
     );
-    s.ring(c2, r, theme::egui_color(theme::GRAY_8), 1.25);
+    s.ring(c2, r, theme::egui_color(theme::text_2()), 1.25);
     s.dim(
         [c1[0] + r, 22.0],
         [c2[0] + r, 22.0],
@@ -492,7 +492,7 @@ pub fn both_ways(painter: &egui::Painter, rect: egui::Rect) {
         s.circle([cx, 24.0], r, Tone::Tool);
         s.arrow(
             &arc([cx, 24.0], 3.8, 160.0, 20.0),
-            theme::egui_color(theme::BG),
+            theme::egui_color(theme::bg()),
             1.25,
         );
         s.text([cx, 1.0], Align2::CENTER_BOTTOM, name, true);
@@ -508,7 +508,7 @@ pub fn both_ways(painter: &egui::Painter, rect: egui::Rect) {
     s.circle([cx, 20.0], r, Tone::Tool);
     s.arrow(
         &arc([cx, 20.0], 3.8, 160.0, 20.0),
-        theme::egui_color(theme::BG),
+        theme::egui_color(theme::bg()),
         1.25,
     );
     s.text([cx + 3.0, 1.0], Align2::CENTER_BOTTOM, "both ways", true);

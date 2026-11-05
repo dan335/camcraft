@@ -36,22 +36,23 @@ impl Tone {
     /// What it is filled with.
     pub fn fill(self) -> Color32 {
         match self {
-            Tone::Stock => theme::egui_color(theme::GRAY_4),
-            Tone::Part => theme::egui_color(theme::GRAY_6),
-            Tone::Tool => theme::egui_color(theme::GRAY_7),
+            Tone::Stock => theme::egui_color(theme::border()),
+            Tone::Part => theme::egui_color(theme::text_4()),
+            Tone::Tool => theme::egui_color(theme::text_3()),
             Tone::Ghost => Color32::TRANSPARENT,
-            Tone::Air => theme::egui_color(theme::BG),
-            Tone::Hot => theme::egui_color(theme::AMBER_7),
+            Tone::Air => theme::egui_color(theme::bg()),
+            // The accent sunk toward the ground, as `--amber-7` is amber's.
+            Tone::Hot => theme::egui_color(theme::mix(theme::accent(), theme::bg(), 0.45)),
         }
     }
 
     fn stroke(self) -> Stroke {
         let c = match self {
-            Tone::Stock => theme::GRAY_5,
-            Tone::Part => theme::GRAY_7,
-            Tone::Tool => theme::GRAY_8,
-            Tone::Ghost | Tone::Air => theme::TEXT_4,
-            Tone::Hot => theme::ACCENT,
+            Tone::Stock => theme::border_strong(),
+            Tone::Part => theme::text_3(),
+            Tone::Tool => theme::text_2(),
+            Tone::Ghost | Tone::Air => theme::text_4(),
+            Tone::Hot => theme::accent(),
         };
         Stroke::new(1.0, theme::egui_color(c))
     }
@@ -81,17 +82,17 @@ impl Move {
 
 /// The amber of what the field sets.
 pub fn hot() -> Color32 {
-    theme::egui_color(theme::ACCENT)
+    theme::egui_color(theme::accent())
 }
 
 /// The quiet grey of everything around it.
 pub fn quiet() -> Color32 {
-    theme::egui_color(theme::TEXT_3)
+    theme::egui_color(theme::text_3())
 }
 
 /// The quietest grey, for lines that only show where a dimension is taken.
 pub fn faint() -> Color32 {
-    theme::egui_color(theme::TEXT_4)
+    theme::egui_color(theme::text_4())
 }
 
 /// The size of a figure's words.

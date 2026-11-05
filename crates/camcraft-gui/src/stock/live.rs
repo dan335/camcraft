@@ -145,6 +145,12 @@ impl LiveStock {
         })
     }
 
+    /// Stop its thread, for material that is only drawn now, while the next
+    /// run's is filled in: it stops once nothing can send it a target.
+    pub fn halt(&mut self) {
+        self.to_thread = channel().0;
+    }
+
     /// Ask for the material at `target`, unless that is what was last asked for.
     pub fn seek(&mut self, target: Goal) {
         if self.sent != Some(target) && self.to_thread.send(target).is_ok() {
@@ -352,6 +358,11 @@ fn work(
     (Some(Change::Cells(rects)), reached)
 }
 
+/// Whether `t` is the end of an operation: one of the run's keyframes.
+fn at_an_end(replay: &Replay, t: Goal) -> bool {
+    t.fraction == 0.0 && t.at.moves >= replay.moves_in(t.at.op)
+}
+
 /// The thread: seek toward the newest target, and say what changed.
 fn run(
     replay: &Replay,
@@ -369,8 +380,12 @@ fn run(
     live.set_dropping(false);
     // A second stock, swept through the whole program while there is nothing else
     // to do, dropping checkpoints for the first: then going back anywhere costs at
-    // most one spacing of sweeping, even to where playback has never been.
-    let mut ahead = Live::new(replay, CHECKPOINT_BYTES);
+    // most one spacing of sweeping, even to where playback has never been. Only
+    // once the material is first asked for part-way through an operation, as
+    // playing back asks: an operation's end is a keyframe, put back at once, so
+    // the cut stock shown while setting up needs none.
+    let mut ahead: Option<Live> = None;
+    let mut swept_ahead = false;
     let mut target: Option<Goal> = None;
     let mut last: Option<Goal> = None;
     let mut shading = Shading::default();
@@ -432,6 +447,10 @@ fn run(
             }
         }
         let Some(t) = target else { continue };
+        if !swept_ahead && !at_an_end(replay, t) {
+            ahead = Live::new(replay, CHECKPOINT_BYTES);
+            swept_ahead = true;
+        }
 
         let until = Instant::now() + STEP;
         let (change, reached) = work(

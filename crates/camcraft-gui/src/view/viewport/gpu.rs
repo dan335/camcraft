@@ -511,7 +511,7 @@ impl Gpu {
         // The part alone first, kept, so its occlusion can be worked out from the
         // depth it leaves and darken it before anything else is drawn over it.
         {
-            let bg = theme::linear(theme::BG);
+            let bg = theme::linear(theme::bg());
             let mut pass = targets.pass(&mut encoder, "camcraft viewport part", Some(bg));
             pass.set_bind_group(0, &self.frame_group, &[]);
             if let Some((_, buffer, n)) = part {

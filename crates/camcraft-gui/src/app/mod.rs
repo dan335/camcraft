@@ -69,7 +69,7 @@ pub fn explain(e: &SessionError) -> String {
 /// colour for a warning or an error.
 fn log_color(level: Level) -> egui::Color32 {
     match level {
-        Level::Info => theme::egui_color(theme::TEXT_2),
+        Level::Info => theme::egui_color(theme::text_2()),
         Level::Warn => widgets::Level::Warn.color(),
         Level::Error => widgets::Level::Err.color(),
     }
@@ -117,6 +117,7 @@ impl App {
     /// The app, restoring what it remembers.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
+        crate::ui::desktop::follow(&cc.egui_ctx);
         let dialog = cc
             .storage
             .and_then(|s| eframe::get_value(s, STORAGE_DIALOG));
@@ -844,6 +845,7 @@ impl eframe::App for App {
             self.load_models(&ctx);
         }
         for doc in &mut self.docs {
+            doc.work_out_expressions();
             doc.invalidate_changed_operations();
         }
         self.generate_wanted(&ctx, editing);
@@ -879,11 +881,12 @@ impl eframe::App for App {
                         Request::Shadow { prepared },
                     );
                 }
+                let only = playback::selected_operation(&doc.selection, &name);
                 let state = doc.setups.entry(name).or_default();
                 playback::settle_mode(state);
                 transport::keys(&ctx, state);
                 transport::tick(&ctx, state);
-                playback::follow_stock(&ctx, state);
+                playback::follow_stock(&ctx, state, only);
             }
         }
         self.swap_camera();
@@ -930,7 +933,7 @@ impl eframe::App for App {
                         egui::Panel::bottom("transport")
                             .frame(
                                 egui::Frame::new()
-                                    .fill(theme::egui_color(theme::SURFACE_1))
+                                    .fill(theme::egui_color(theme::surface_1()))
                                     .inner_margin(egui::Margin::symmetric(8, 6)),
                             )
                             .show(ui, |ui| transport::bar(ui, state, m));
@@ -957,7 +960,8 @@ impl eframe::App for App {
                     // it changed; one that did not leaves it for one that does.
                     if drew_live
                         && frame.wgpu_render_state().is_some()
-                        && let Some(live) = self.active_state_mut().and_then(|s| s.live.as_mut())
+                        && let Some(live) =
+                            self.active_state_mut().and_then(|s| s.drawn_stock_mut())
                     {
                         live.uploaded();
                         // What one frame did not take, the next does.

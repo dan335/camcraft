@@ -190,7 +190,26 @@ impl Job {
             }
         }
 
-        running().try_for_each(|op| op.check(name, &self.tools))
+        running().try_for_each(|op| op.check(name, &self.tools))?;
+        // Each setting as its expression has it: one that cannot be worked
+        // out holds what it last came to, which may be stale.
+        for op in running().filter(|op| !op.expressions.is_empty()) {
+            let tool = op.tool.as_ref().and_then(|t| self.tools.get(t));
+            if let Some((setting, message)) = op
+                .clone()
+                .work_out_expressions(tool, self.tolerance)
+                .faults
+                .into_iter()
+                .next()
+            {
+                return Err(JobError::BadExpression {
+                    operation: format!("{name}/{}", op.name),
+                    setting,
+                    message,
+                });
+            }
+        }
+        Ok(())
     }
 }
 

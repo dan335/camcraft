@@ -2,6 +2,8 @@
 //! machines (Fusion's Geometry tab: a selection, a 3D boundary or a 2D outline),
 //! Heights, Passes and Linking.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -51,6 +53,12 @@ pub struct Operation {
     /// cut, checked or posted.
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub enabled: bool,
+    /// Settings worked out from expressions, as Fusion's parameter
+    /// expressions are, each by its place in the job file
+    /// (`passes.stepover = "tool_diameter * 0.4"`): worked out again whenever
+    /// what they read changes ([`Job::work_out_expressions`](super::Job::work_out_expressions)).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub expressions: BTreeMap<String, String>,
 }
 
 impl Operation {
@@ -76,6 +84,7 @@ impl Operation {
             },
             linking: Linking::default(),
             enabled: true,
+            expressions: BTreeMap::new(),
         }
     }
 
@@ -156,8 +165,8 @@ impl Operation {
     /// A new operation called `name` of `strategy`, cutting with the job's tool
     /// `tool`, described by `spec`, and its preset `preset`: as
     /// [`Operation::new`] starts one, with the preset's values, the stepover
-    /// Fusion gives the strategy with the tool, on the part's silhouette as
-    /// Fusion starts it ([`StrategySpec::starting_containment`]), and with room
+    /// and stepdown Fusion gives the strategy with the tool, on the part's
+    /// silhouette as Fusion starts it ([`StrategySpec::starting_containment`]), and with room
     /// round the part for the tool ([`Operation::fit_channel`]).
     pub fn fresh(
         name: impl Into<String>,
@@ -173,6 +182,7 @@ impl Operation {
             op.apply_preset(p);
         }
         op.fit_stepover(spec, preset, tolerance);
+        op.fit_stepdown(spec, preset);
         if let Some(containment) = strategy.starting_containment() {
             op.boundary.kind = Boundary::Silhouette;
             op.boundary.containment = containment;
@@ -195,6 +205,18 @@ impl Operation {
         }
         if let Some(over) = tool.and_then(|t| self.default_stepover(t, tolerance)) {
             self.passes.stepover = over;
+        }
+    }
+
+    /// The stepdown Fusion gives its strategy with `tool`
+    /// ([`Operation::default_tool_stepdown`]), unless `preset` set one or it
+    /// cuts in one pass.
+    pub fn fit_stepdown(&mut self, tool: Option<&ToolSpec>, preset: Option<&Preset>) {
+        if preset.is_some_and(|p| p.stepdown.is_some()) || self.passes.stepdown.is_none() {
+            return;
+        }
+        if let Some(down) = tool.and_then(|t| self.default_tool_stepdown(t)) {
+            self.passes.stepdown = Some(down);
         }
     }
 

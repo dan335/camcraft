@@ -145,7 +145,7 @@ fn folder_row(
         ui.painter().rect_stroke(
             rect,
             theme::RADIUS_SM,
-            egui::Stroke::new(1.5, theme::egui_color(theme::ACCENT)),
+            egui::Stroke::new(1.5, theme::egui_color(theme::accent())),
             egui::StrokeKind::Inside,
         );
     }
@@ -171,7 +171,7 @@ fn folder_row(
             Icon::ChevronRight
         };
         let r = row.add(
-            egui::Label::new(chevron.text(14.0).color(theme::egui_color(theme::TEXT_3)))
+            egui::Label::new(chevron.text(14.0).color(theme::egui_color(theme::text_3())))
                 .sense(egui::Sense::click()),
         );
         if r.clicked() {
@@ -222,7 +222,7 @@ fn folder_name(
         }
     } else {
         let name = path.last().map_or("Library", String::as_str);
-        let color = if is { theme::TEXT_1 } else { theme::TEXT_2 };
+        let color = if is { theme::text_1() } else { theme::text_2() };
         row.add(
             egui::Label::new(egui::RichText::new(name).color(theme::egui_color(color)))
                 .truncate()
@@ -232,7 +232,7 @@ fn folder_name(
             ui.add_space(theme::SPACE_3);
             ui.label(
                 widgets::mono(folder.count().to_string(), theme::TEXT_XS)
-                    .color(theme::egui_color(theme::TEXT_4)),
+                    .color(theme::egui_color(theme::text_4())),
             );
         });
     }
@@ -271,7 +271,7 @@ fn folder_actions(response: &egui::Response, path: &FolderPath, actions: &mut Ve
             }
             ui.separator();
             if ui
-                .button(egui::RichText::new("Delete").color(theme::egui_color(theme::ERR)))
+                .button(egui::RichText::new("Delete").color(theme::egui_color(theme::err())))
                 .clicked()
             {
                 actions.push(TreeAction::Delete(path.clone()));

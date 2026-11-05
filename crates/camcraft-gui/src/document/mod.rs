@@ -30,7 +30,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
-use camcraft_core::job::{Job, LengthUnit, ModelDef, Origin, Setup, StockDef, StockSpec};
+use camcraft_core::job::{
+    ExpressionFault, Job, LengthUnit, ModelDef, Origin, Setup, StockDef, StockSpec,
+};
 use camcraft_geom::bvh::MeshBvh;
 use camcraft_session::fs::{job_dir, real, relative_path, resolve, with_job_extension};
 use camcraft_session::{Model, SessionError, write_job};
@@ -223,6 +225,10 @@ pub struct Document {
     /// editing has settled ([`Document::settled`]).
     seen: Job,
     edited_at: std::time::Instant,
+    /// The job as its expressions were last worked out, and those that could
+    /// not be ([`Document::work_out_expressions`]).
+    worked_out: Job,
+    expression_faults: Vec<ExpressionFault>,
 }
 
 impl Document {
@@ -274,7 +280,37 @@ impl Document {
             asked_missing: false,
             seq: 0,
             turned_shadows: Vec::new(),
+            worked_out: Job::default(),
+            expression_faults: Vec::new(),
         }
+    }
+
+    /// Work out the job's expressions into their settings where it has
+    /// changed since they last were, as each frame does before anything reads
+    /// them: so a setting follows its tool, and what it reads, as soon as they
+    /// change. What could not be worked out is kept for its panel
+    /// ([`Document::expression_faults`]).
+    pub fn work_out_expressions(&mut self) {
+        if !self.job.has_expressions() {
+            // Worked out afresh if they come back, as by undoing.
+            self.expression_faults.clear();
+            self.worked_out = Job::default();
+            return;
+        }
+        if self.job != self.worked_out {
+            self.expression_faults = self.job.work_out_expressions();
+            self.worked_out = self.job.clone();
+        }
+    }
+
+    /// Why each expression of operation `index` of setup `setup` that cannot
+    /// be worked out cannot, by setting.
+    pub fn expression_faults(&self, setup: &str, index: usize) -> Vec<(String, String)> {
+        self.expression_faults
+            .iter()
+            .filter(|f| f.setup == setup && f.operation == index)
+            .map(|f| (f.setting.clone(), f.message.clone()))
+            .collect()
     }
 
     /// The name on its tab.

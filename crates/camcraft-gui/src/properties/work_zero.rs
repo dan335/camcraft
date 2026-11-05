@@ -128,8 +128,8 @@ fn on_row(ui: &mut egui::Ui, d: &mut Defaults<Setup>, origin: &mut Origin) {
     let on = On::of(origin);
     let offset = origin.offset();
     ui.horizontal(|ui| {
-        let label =
-            egui::RichText::new(topics::WORK_ZERO_ON.title).color(theme::egui_color(theme::TEXT_3));
+        let label = egui::RichText::new(topics::WORK_ZERO_ON.title)
+            .color(theme::egui_color(theme::text_3()));
         ui.label(d.tint(label, "origin.kind,origin.of"))
             .help(&topics::WORK_ZERO_ON);
         egui::ComboBox::from_id_salt("origin-on")
@@ -206,29 +206,29 @@ fn box_grid(ui: &mut egui::Ui, x: &mut Along, y: &mut Along) {
     painter.rect(
         inner,
         theme::RADIUS_SM,
-        theme::egui_color(theme::SURFACE_1),
-        egui::Stroke::new(1.0, theme::egui_color(theme::BORDER_STRONG)),
+        theme::egui_color(theme::surface_1()),
+        egui::Stroke::new(1.0, theme::egui_color(theme::border_strong())),
         egui::StrokeKind::Middle,
     );
     for ax in along {
         for ay in along {
             let p = at(ax, ay);
             if (ax, ay) == (*x, *y) {
-                painter.circle_filled(p, 5.0, theme::egui_color(theme::ACCENT));
+                painter.circle_filled(p, 5.0, theme::egui_color(theme::accent()));
             } else if nearest == Some((ax, ay)) {
                 painter.circle_filled(p, 4.0, theme::egui_color(theme::HOVER));
             } else {
                 painter.circle_stroke(
                     p,
                     3.5,
-                    egui::Stroke::new(1.0, theme::egui_color(theme::TEXT_3)),
+                    egui::Stroke::new(1.0, theme::egui_color(theme::text_3())),
                 );
             }
         }
     }
     // Which way is which: X to the right, Y away from the operator.
     let small = egui::FontId::monospace(theme::TEXT_XS);
-    let faint = theme::egui_color(theme::TEXT_4);
+    let faint = theme::egui_color(theme::text_4());
     painter.text(
         egui::pos2(inner.right() + 6.0, inner.bottom() + 4.0),
         egui::Align2::LEFT_TOP,
@@ -288,7 +288,7 @@ fn offset(ui: &mut egui::Ui, d: &mut Defaults<Setup>, m: Measure, origin: &mut O
     let moved = offset.iter().any(|v| *v != 0.0);
     egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, moved)
         .show_header(ui, |ui| {
-            ui.label(egui::RichText::new(summary).color(theme::egui_color(theme::TEXT_2)));
+            ui.label(egui::RichText::new(summary).color(theme::egui_color(theme::text_2())));
         })
         .body(|ui| {
             form(ui, "work-zero-offset-fields", |ui| {

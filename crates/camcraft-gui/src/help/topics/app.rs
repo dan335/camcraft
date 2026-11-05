@@ -15,6 +15,8 @@ topics! {
         "Pauses playback as each operation finishes.";
     SPEED: "Speed",
         "How much machining time plays each second. [ and ] change it.";
+    SHOW_MATERIAL: "Part or cut stock",
+        "The part, outline and work zero, or the stock as the selected operation leaves it cut (none selected: the whole setup). Follows each edit. M switches.";
     SHOW_PART: "Part",
         "Shows the part being machined.";
     SHOW_STOCK: "Stock outline",

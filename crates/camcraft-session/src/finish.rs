@@ -113,6 +113,7 @@ pub fn single_operation(spec: &FinishSpec, model: ModelDef) -> Job {
             ..Linking::default()
         },
         enabled: true,
+        expressions: BTreeMap::new(),
     }];
     Job {
         tolerance: spec.tolerance,

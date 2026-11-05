@@ -157,7 +157,7 @@ pub(super) fn linking(
             });
             // The default is written only when changed.
             op.linking.entry = (entry != Entry::default()).then_some(entry);
-            if entry == Entry::Helix {
+            widgets::dependent(ui, entry == Entry::Helix, |ui| {
                 let absent = match (uses.helix, diameter) {
                     (HelixSize::Tool, _) => of_tool(0.9, "0.9 × the tool"),
                     (HelixSize::Flat, Some(_)) => format!(
@@ -178,7 +178,7 @@ pub(super) fn linking(
                         },
                     );
                 });
-            }
+            });
         }
         // A pocket's leads take the tool onto its finishing passes and off.
         let pocket_leads = uses.finishing && op.passes.finishing.is_some();
@@ -198,37 +198,39 @@ pub(super) fn linking(
                 _ => {}
             }
             if let Some(l) = &mut op.linking.leads {
-                // What each value left out comes to, as the engine has it.
-                let start = Leads::default().sizes(across).straight;
-                let tenth = of_tool(0.1, "a tenth of the tool");
-                // A pocket's finishing passes are entered level, beside the
-                // wall: their leads have no vertical arc.
-                let vertical = (uses.leads).then_some((
-                    &link::LEAD_VERTICAL,
-                    "linking.leads.vertical",
-                    &mut l.vertical,
-                ));
-                for (topic, path, v) in vertical.into_iter().chain([
-                    (
-                        &link::LEAD_STRAIGHT,
-                        "linking.leads.straight",
-                        &mut l.straight,
-                    ),
-                    (&link::LEAD_ARC, "linking.leads.radius", &mut l.radius),
-                ]) {
-                    d.row(ui, topic, path, |ui| {
-                        widgets::optional(ui, v, start, &tenth, |ui, v| {
-                            m.length_field(ui, v, 0.05, 1000.0, "");
+                widgets::dependent(ui, true, |ui| {
+                    // What each value left out comes to, as the engine has it.
+                    let start = Leads::default().sizes(across).straight;
+                    let tenth = of_tool(0.1, "a tenth of the tool");
+                    // A pocket's finishing passes are entered level, beside the
+                    // wall: their leads have no vertical arc.
+                    let vertical = (uses.leads).then_some((
+                        &link::LEAD_VERTICAL,
+                        "linking.leads.vertical",
+                        &mut l.vertical,
+                    ));
+                    for (topic, path, v) in vertical.into_iter().chain([
+                        (
+                            &link::LEAD_STRAIGHT,
+                            "linking.leads.straight",
+                            &mut l.straight,
+                        ),
+                        (&link::LEAD_ARC, "linking.leads.radius", &mut l.radius),
+                    ]) {
+                        d.row(ui, topic, path, |ui| {
+                            widgets::optional(ui, v, start, &tenth, |ui, v| {
+                                m.length_field(ui, v, 0.05, 1000.0, "");
+                            });
                         });
+                    }
+                    d.row(ui, &link::LEAD_SWEEP, "linking.leads.sweep", |ui| {
+                        ui.add(
+                            widgets::number(&mut l.sweep)
+                                .speed(1.0)
+                                .range(1.0..=180.0)
+                                .suffix("°"),
+                        );
                     });
-                }
-                d.row(ui, &link::LEAD_SWEEP, "linking.leads.sweep", |ui| {
-                    ui.add(
-                        widgets::number(&mut l.sweep)
-                            .speed(1.0)
-                            .range(1.0..=180.0)
-                            .suffix("°"),
-                    );
                 });
             }
         }
@@ -236,11 +238,13 @@ pub(super) fn linking(
             d.row(ui, &link::REORDER, "linking.reorder", |ui| {
                 ui.checkbox(&mut op.linking.reorder, "to shorten travel");
             });
-            d.row(ui, &link::REVERSE, "linking.allow_reverse", |ui| {
-                ui.checkbox(
-                    &mut op.linking.allow_reverse,
-                    "while reordering (changes climb)",
-                );
+            widgets::dependent(ui, op.linking.reorder, |ui| {
+                d.row(ui, &link::REVERSE, "linking.allow_reverse", |ui| {
+                    ui.checkbox(
+                        &mut op.linking.allow_reverse,
+                        "where it travels less (changes climb)",
+                    );
+                });
             });
         }
     });

@@ -627,6 +627,7 @@ impl Document {
             None => o.preset = None,
         }
         o.fit_stepover(spec.as_ref(), preset.as_ref(), tolerance);
+        o.fit_stepdown(spec.as_ref(), preset.as_ref());
         // The channel is made once, for the first tool: an offset of zero after
         // that is one chosen, and a new tool keeps it.
         if first {

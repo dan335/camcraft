@@ -168,7 +168,7 @@ fn row(ui: &mut egui::Ui, name: &str, missing: bool) -> bool {
     let color = if missing {
         widgets::Level::Err.color()
     } else {
-        theme::egui_color(theme::TEXT_1)
+        theme::egui_color(theme::text_1())
     };
     child.label(egui::RichText::new(name).color(color));
     if missing {
@@ -239,7 +239,7 @@ pub(super) fn model(
                     ),
                     theme::TEXT_SM,
                 )
-                .color(theme::egui_color(theme::TEXT_2)),
+                .color(theme::egui_color(theme::text_2())),
             );
         }
         Some(ModelSlot::Loading(_)) => {

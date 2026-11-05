@@ -262,6 +262,16 @@ impl Scene {
         }
     }
 
+    /// Estimated machining time for operation `op`, in seconds, if it has
+    /// moves: from its first to its last, the tool change before it left out.
+    pub fn op_time(&self, op: usize) -> Option<f64> {
+        let span = self.ops.get(op).filter(|s| s.count > 0)?;
+        Some(
+            self.time_of(Playhead::at(span.first + span.count))
+                - self.time_of(Playhead::at(span.first)),
+        )
+    }
+
     /// Where the program stands after `seconds` of machining.
     pub fn locate(&self, seconds: f64) -> Playhead {
         let shown = self.segments.partition_point(|s| s.ends_at <= seconds);

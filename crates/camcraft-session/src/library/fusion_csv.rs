@@ -231,14 +231,10 @@ impl Row<'_> {
     /// The tool, without presets.
     fn tool(&self) -> Result<ToolSpec, String> {
         let kind_text = self.text("tool_type").unwrap_or_default();
-        let kind = match kind_text.to_ascii_lowercase().as_str() {
-            "flat end mill" => ToolKind::Flat,
-            "ball end mill" => ToolKind::Ball,
-            "bull nose end mill" => ToolKind::Bullnose,
-            "chamfer mill" | "spot drill" => ToolKind::Cone,
-            "drill" => ToolKind::Drill,
-            "" => return Err("no tool type".into()),
-            other => return Err(format!("'{other}' tools are not supported yet")),
+        let kind = match ToolKind::from_fusion_type(&kind_text) {
+            Some(kind) => kind,
+            None if kind_text.is_empty() => return Err("no tool type".into()),
+            None => return Err(format!("'{kind_text}' tools are not supported yet")),
         };
         let diameter = self.scaled("tool_diameter").ok_or("no diameter")?;
         let rpm = self.whole("tool_spindleSpeed").unwrap_or(18000);

@@ -316,7 +316,7 @@ fn job(ui: &mut egui::Ui, doc: &mut Document, m: Measure) {
                                 format!("{} Ø{}", kind_name(t.kind), m.length_trimmed(t.diameter)),
                                 theme::TEXT_SM,
                             )
-                            .color(theme::egui_color(theme::TEXT_3)),
+                            .color(theme::egui_color(theme::text_3())),
                         );
                         if used.contains(name) {
                             ui.label("");

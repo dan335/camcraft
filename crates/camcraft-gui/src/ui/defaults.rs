@@ -14,13 +14,14 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::{LazyLock, Mutex, PoisonError};
 
+use camcraft_core::job::settings::{at, number_kind, put};
 use eframe::egui;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use toml::{Table, Value};
 
 use crate::help::{Help, Topic};
-use crate::ui::widgets;
+use crate::ui::widgets::{self, ExpressionEdit};
 
 /// A form's thing and its default, as a job file has them, and the settings
 /// asked to go back to the default while the form was drawn.
@@ -32,6 +33,9 @@ pub struct Defaults<T> {
     /// against. The group's being given at all is against `default`.
     started: Option<Table>,
     resets: Vec<(String, Layer)>,
+    /// Its settings' expressions, for a thing that has them
+    /// ([`Defaults::expressive`]).
+    expressions: Option<Expressions>,
     of: PhantomData<T>,
     /// Every setting the form asked about, for the tests to check each names
     /// one ([`ASKED`]).
@@ -58,6 +62,7 @@ impl<T: Serialize + DeserializeOwned> Defaults<T> {
             default: table(default),
             started: None,
             resets: Vec::new(),
+            expressions: None,
             of: PhantomData,
             #[cfg(test)]
             asked: std::cell::RefCell::default(),
@@ -72,6 +77,52 @@ impl<T: Serialize + DeserializeOwned> Defaults<T> {
     pub fn started(mut self, started: &T) -> Self {
         self.started = Some(Table::try_from(started).unwrap_or_default());
         self
+    }
+
+    /// With an ƒx on each row of a number, to work it out from an expression
+    /// ([`camcraft_core::expr`]), for a thing whose settings may be, as an
+    /// operation's: `faults` say, by setting, why any cannot be worked out.
+    pub fn expressive(mut self, faults: Vec<(String, String)>) -> Self {
+        let given = self
+            .now
+            .get("expressions")
+            .and_then(Value::as_table)
+            .map(|t| {
+                t.iter()
+                    .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.expressions = Some(Expressions {
+            given,
+            faults: faults.into_iter().collect(),
+            edits: Vec::new(),
+        });
+        self
+    }
+
+    /// What a new expression for the setting at `path` starts as, the number
+    /// it holds, where the row offers one: a thing that has expressions, one
+    /// setting, and that a number. Empty where it holds none yet.
+    fn expression_start(&self, path: &str) -> Option<String> {
+        self.expressions.as_ref()?;
+        if path.contains(',') {
+            return None;
+        }
+        // An operation's strategy decides which settings it has.
+        let variant = self
+            .now
+            .get("strategy")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        number_kind::<T>(&self.now, path, variant)?;
+        Some(
+            match at(&self.now, path).or_else(|| at(&self.default, path)) {
+                Some(Value::Float(v)) => v.to_string(),
+                Some(Value::Integer(v)) => v.to_string(),
+                _ => String::new(),
+            },
+        )
     }
 
     /// What a setting is against: what its group started as, where it is in
@@ -183,9 +234,39 @@ impl<T: Serialize + DeserializeOwned> Defaults<T> {
         path: &str,
         add: impl FnOnce(&mut egui::Ui) -> R,
     ) -> R {
-        let (out, reset) = widgets::setting_row(ui, text, topic, self.changed(path), add);
+        let changed = self.changed(path);
+        let Some(start) = self.expression_start(path) else {
+            let (out, reset) = widgets::setting_row(ui, text, topic, changed, add);
+            if reset {
+                self.push(path, Layer::Started);
+            }
+            return out;
+        };
+        let given = self
+            .expressions
+            .as_ref()
+            .and_then(|e| e.given.get(path).cloned());
+        let fault = self
+            .expressions
+            .as_ref()
+            .and_then(|e| e.faults.get(path).cloned());
+        let mut edit = None;
+        let (out, reset) = widgets::setting_row(ui, text, topic, changed, |ui| {
+            // Worked out, the field shows what it comes to and is not typed in.
+            let out = if given.is_some() {
+                ui.add_enabled_ui(false, add).inner
+            } else {
+                add(ui)
+            };
+            let id = ui.id().with(("expression", path));
+            edit = widgets::expression(ui, id, given.as_deref(), fault.as_deref(), &start);
+            out
+        });
         if reset {
             self.push(path, Layer::Started);
+        }
+        if let (Some(edit), Some(e)) = (edit, self.expressions.as_mut()) {
+            e.edits.push((path.to_string(), edit));
         }
         out
     }
@@ -260,7 +341,7 @@ impl<T: Serialize + DeserializeOwned> Defaults<T> {
     /// its own way, which draws its labels itself.
     pub fn tint(&self, text: egui::RichText, path: &str) -> egui::RichText {
         if self.changed(path) {
-            text.color(crate::ui::theme::egui_color(crate::ui::theme::SELECTED))
+            text.color(crate::ui::theme::egui_color(crate::ui::theme::accent()))
         } else {
             text
         }
@@ -289,6 +370,7 @@ impl<T: Serialize + DeserializeOwned> Defaults<T> {
                 .collect();
             ASKED.with(|a| a.borrow_mut().extend(found));
         }
+        self.apply_expressions(value);
         if self.resets.is_empty() {
             return;
         }
@@ -321,6 +403,55 @@ impl<T: Serialize + DeserializeOwned> Defaults<T> {
     }
 }
 
+impl<T: Serialize + DeserializeOwned> Defaults<T> {
+    /// Put the expressions edited into `value`; and take out those of the
+    /// settings put back to their defaults, which would otherwise be worked
+    /// out again over them.
+    fn apply_expressions(&self, value: &mut T) {
+        let Some(e) = &self.expressions else {
+            return;
+        };
+        let reset = self
+            .resets
+            .iter()
+            .filter(|(path, _)| e.given.contains_key(path))
+            .map(|(path, _)| (path.clone(), ExpressionEdit::Dropped));
+        let edits: Vec<_> = e.edits.iter().cloned().chain(reset).collect();
+        if edits.is_empty() {
+            return;
+        }
+        let Ok(mut now) = Table::try_from(&*value) else {
+            return;
+        };
+        let mut given: Table = now
+            .remove("expressions")
+            .and_then(|v| v.as_table().cloned())
+            .unwrap_or_default();
+        for (path, edit) in edits {
+            match edit {
+                ExpressionEdit::To(text) => given.insert(path, Value::String(text)),
+                ExpressionEdit::Dropped => given.remove(&path),
+            };
+        }
+        if !given.is_empty() {
+            now.insert("expressions".into(), Value::Table(given));
+        }
+        if let Ok(back) = Value::Table(now).try_into::<T>() {
+            *value = back;
+        }
+    }
+}
+
+/// A form's thing's expressions ([`Defaults::expressive`]).
+struct Expressions {
+    /// Each setting's, as the form was drawn.
+    given: std::collections::BTreeMap<String, String>,
+    /// Why any cannot be worked out, by setting.
+    faults: HashMap<String, String>,
+    /// What the form did to them, to put in once it is drawn.
+    edits: Vec<(String, ExpressionEdit)>,
+}
+
 /// Which of a form's defaults a setting goes back to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Layer {
@@ -340,76 +471,6 @@ impl<T> Defaults<T> {
     }
 }
 
-/// The setting at `path`, dotted, in `table`, a number in it the place in a
-/// list (`size.0`): `None` where it is not written, as one at its default
-/// often is not.
-fn at<'t>(table: &'t Table, path: &str) -> Option<&'t Value> {
-    let mut keys = path.split('.');
-    let mut value = table.get(keys.next()?)?;
-    for key in keys {
-        value = match value {
-            Value::Table(t) => t.get(key)?,
-            Value::Array(a) => a.get(key.parse::<usize>().ok()?)?,
-            _ => return None,
-        };
-    }
-    Some(value)
-}
-
-/// Set the setting at `path` in `table` to `value`, or take it out for `None`,
-/// making the tables on the way to it.
-fn put(table: &mut Table, path: &str, value: Option<Value>) {
-    let mut keys: Vec<&str> = path.split('.').collect();
-    let Some(last) = keys.pop() else {
-        return;
-    };
-    let mut here = table;
-    for (k, key) in keys.iter().enumerate() {
-        // A place in a list is set where it is: the list is there, whole.
-        if let Some(Value::Array(list)) = here.get_mut(*key) {
-            let rest: Vec<&str> = keys.iter().skip(k + 1).copied().chain([last]).collect();
-            put_in_list(list, &rest, value);
-            return;
-        }
-        let next = here
-            .entry((*key).to_string())
-            .or_insert_with(|| Value::Table(Table::new()));
-        let Some(t) = next.as_table_mut() else {
-            return;
-        };
-        here = t;
-    }
-    match value {
-        Some(v) => {
-            here.insert(last.to_string(), v);
-        }
-        None => {
-            here.remove(last);
-        }
-    }
-}
-
-/// Set the place `path` leads to in `list`, its first key the place: a list's
-/// places are only ever set, never taken out.
-fn put_in_list(list: &mut [Value], path: &[&str], value: Option<Value>) {
-    let Some((first, rest)) = path.split_first() else {
-        return;
-    };
-    let Some(slot) = first.parse::<usize>().ok().and_then(|i| list.get_mut(i)) else {
-        return;
-    };
-    match (rest.is_empty(), slot) {
-        (true, slot) => {
-            if let Some(v) = value {
-                *slot = v;
-            }
-        }
-        (false, Value::Table(t)) => put(t, &rest.join("."), value),
-        (false, Value::Array(inner)) => put_in_list(inner, rest, value),
-        _ => {}
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
@@ -418,6 +479,54 @@ mod tests {
 
     fn adaptive() -> Operation {
         Operation::new("rough", StrategySpec::named("adaptive").unwrap())
+    }
+
+    /// A number setting offers an expression, starting at what it holds,
+    /// even at its default and so not written; others do not. One given is
+    /// put in; put back to the default, the setting drops it.
+    #[test]
+    fn an_expression_is_given_and_dropped_with_its_setting() {
+        let def = adaptive();
+        let mut op = adaptive();
+        op.passes.stepover = 2.5;
+        let d = Defaults::of(&op, &def).expressive(Vec::new());
+        assert_eq!(
+            d.expression_start("passes.stepover").as_deref(),
+            Some("2.5")
+        );
+        assert!(
+            d.expression_start("linking.safe_distance").is_some(),
+            "at its default"
+        );
+        assert_eq!(d.expression_start("name"), None, "text");
+        assert_eq!(
+            d.expression_start("slope_from,slope_to"),
+            None,
+            "two at once"
+        );
+        assert_eq!(
+            Defaults::of(&op, &def).expression_start("passes.stepover"),
+            None
+        );
+
+        let mut d = Defaults::of(&op, &def).expressive(Vec::new());
+        if let Some(e) = d.expressions.as_mut() {
+            e.edits.push((
+                "passes.stepover".into(),
+                ExpressionEdit::To("tool_diameter * 0.4".into()),
+            ));
+        }
+        d.apply(&mut op);
+        assert_eq!(
+            op.expressions.get("passes.stepover").map(String::as_str),
+            Some("tool_diameter * 0.4")
+        );
+
+        let mut d = Defaults::of(&op, &def).expressive(Vec::new());
+        d.push("passes.stepover", Layer::Started);
+        d.apply(&mut op);
+        assert!(op.expressions.is_empty());
+        assert_eq!(op.passes.stepover, def.passes.stepover);
     }
 
     /// A setting is changed where it differs from the default's, nested or a

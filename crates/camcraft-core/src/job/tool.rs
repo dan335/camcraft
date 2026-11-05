@@ -256,6 +256,37 @@ pub enum ToolKind {
     Drill,
 }
 
+impl ToolKind {
+    /// Every kind, as Fusion's tool libraries and expressions name it.
+    pub const FUSION_TYPES: [(Self, &'static str); 5] = [
+        (Self::Flat, "flat end mill"),
+        (Self::Ball, "ball end mill"),
+        (Self::Bullnose, "bull nose end mill"),
+        (Self::Cone, "chamfer mill"),
+        (Self::Drill, "drill"),
+    ];
+
+    /// What Fusion calls this kind of tool (`tool_type`).
+    pub fn fusion_type(self) -> &'static str {
+        Self::FUSION_TYPES
+            .iter()
+            .find(|(k, _)| *k == self)
+            .map_or("", |(_, name)| name)
+    }
+
+    /// The kind Fusion's `name` is, ignoring case: a spot drill is a cone.
+    pub fn from_fusion_type(name: &str) -> Option<Self> {
+        let name = name.to_ascii_lowercase();
+        if name == "spot drill" {
+            return Some(Self::Cone);
+        }
+        Self::FUSION_TYPES
+            .iter()
+            .find(|(_, n)| *n == name)
+            .map(|(k, _)| *k)
+    }
+}
+
 /// The point angle a drill has when none is given.
 pub const DRILL_POINT: f64 = 118.0;
 
@@ -268,6 +299,20 @@ impl ToolSpec {
             ToolKind::Bullnose => self.corner,
             ToolKind::Flat | ToolKind::Cone | ToolKind::Drill => 0.0,
         }
+    }
+
+    /// How long its flutes are taken to be where it does not say: two
+    /// diameters, as a common end mill's.
+    pub fn assumed_flute_length(&self) -> f64 {
+        2.0 * self.diameter
+    }
+
+    /// Its flute length, as Fusion's `tool_fluteLength`: its own, or where it
+    /// gives none, [`ToolSpec::assumed_flute_length`].
+    pub fn flute_length(&self) -> f64 {
+        self.flute_length
+            .filter(|l| l.is_finite() && *l > 0.0)
+            .unwrap_or_else(|| self.assumed_flute_length())
     }
 
     /// The preset called `name`.

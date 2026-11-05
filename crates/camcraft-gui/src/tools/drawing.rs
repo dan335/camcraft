@@ -107,7 +107,11 @@ pub fn draw(tool: &ToolSpec) -> Drawing {
             default
         }
     };
-    let flutes = or_assume(tool.flute_length, "flute length", 2.0 * d);
+    let flutes = or_assume(
+        tool.flute_length,
+        "flute length",
+        tool.assumed_flute_length(),
+    );
     let stickout = or_assume(tool.stickout, "stickout", flutes.max(3.0 * d));
     let shank_r = or_assume(tool.shank_diameter, "shank diameter", d) / 2.0;
     let overall = or_assume(tool.overall_length, "overall length", stickout + 2.0 * d);
@@ -193,12 +197,12 @@ pub fn paint_tool(ui: &mut egui::Ui, tool: &ToolSpec, m: Measure) {
         egui::Sense::hover(),
     );
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, theme::RADIUS_SM, theme::egui_color(theme::BG));
+    painter.rect_filled(rect, theme::RADIUS_SM, theme::egui_color(theme::bg()));
     widgets::grid_background(&painter, rect);
     painter.rect_stroke(
         rect,
         theme::RADIUS_SM,
-        egui::Stroke::new(1.0, theme::egui_color(theme::BORDER)),
+        egui::Stroke::new(1.0, theme::egui_color(theme::border())),
         egui::StrokeKind::Inside,
     );
     let margin = 16.0_f64;
@@ -211,9 +215,9 @@ pub fn paint_tool(ui: &mut egui::Ui, tool: &ToolSpec, m: Measure) {
     let at = |x: f64, z: f64| base + egui::vec2((x * scale) as f32, -(z * scale) as f32);
     for o in &d.outlines {
         let (fill, stroke) = match o.part {
-            Part::Flutes => (theme::AMBER_5, theme::AMBER_3),
-            Part::Shank => (theme::GRAY_7, theme::GRAY_8),
-            Part::Holder => (theme::GRAY_5, theme::GRAY_7),
+            Part::Flutes => (theme::accent(), theme::accent_hover()),
+            Part::Shank => (theme::text_3(), theme::text_2()),
+            Part::Holder => (theme::border_strong(), theme::text_3()),
         };
         // Right half up, left half down: one closed, convex outline per part.
         let mut points: Vec<egui::Pos2> = o.half.iter().map(|(x, z)| at(*x, *z)).collect();
@@ -231,7 +235,7 @@ pub fn paint_tool(ui: &mut egui::Ui, tool: &ToolSpec, m: Measure) {
             egui::pos2(rect.left() + 8.0, face),
             egui::pos2(rect.right() - 8.0, face),
         ],
-        egui::Stroke::new(1.0, theme::egui_color(theme::TEXT_3)),
+        egui::Stroke::new(1.0, theme::egui_color(theme::text_3())),
     );
     // Just below the face line, at the right edge: above it the holder is at its
     // widest, and below it only the narrower cutter, centred. Anywhere nearer the
@@ -241,7 +245,7 @@ pub fn paint_tool(ui: &mut egui::Ui, tool: &ToolSpec, m: Measure) {
         egui::Align2::RIGHT_TOP,
         format!("stickout {}", m.length(d.holder_face, 1)),
         theme::caption(ui.style()),
-        theme::egui_color(theme::TEXT_3),
+        theme::egui_color(theme::text_3()),
     );
     painter.text(
         egui::pos2(rect.right() - 10.0, rect.bottom() - 6.0),
@@ -254,7 +258,7 @@ pub fn paint_tool(ui: &mut egui::Ui, tool: &ToolSpec, m: Measure) {
         ui.label(
             egui::RichText::new(format!("assumed, not given: {}", d.assumed.join(", ")))
                 .size(theme::TEXT_SM)
-                .color(theme::egui_color(theme::TEXT_4)),
+                .color(theme::egui_color(theme::text_4())),
         );
     }
 }

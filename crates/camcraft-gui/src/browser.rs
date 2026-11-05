@@ -14,6 +14,7 @@ use eframe::egui;
 use crate::document::{Document, Level, ModelSlot, OpStatus, OpWork, Selection, Status};
 use crate::ui::theme;
 use crate::ui::widgets::{self, hint_text};
+use crate::view::scene::clock;
 
 /// Something the tree asks the app to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,7 +68,7 @@ pub fn status_text(status: Status) -> &'static str {
 /// The colour of nothing to show yet: a status with no result, drawn as a
 /// hairline would be.
 fn none_yet() -> egui::Color32 {
-    theme::egui_color(theme::BORDER_STRONG)
+    theme::egui_color(theme::border_strong())
 }
 
 /// Where a setup stands, as a status dot: filled for a result, hollow for none or
@@ -113,7 +114,7 @@ fn op_marker(ui: &mut egui::Ui, status: OpStatus) {
         }
         OpStatus::NotRun => (none_yet(), false, "not generated"),
         OpStatus::Waiting => (
-            theme::egui_color(theme::TEXT_3),
+            theme::egui_color(theme::text_3()),
             false,
             "waiting for the operations before it",
         ),
@@ -157,8 +158,8 @@ fn stage_text(d: &Document, name: &str) -> Option<String> {
 }
 
 /// Text quieter than a row's, and smaller, beside it.
-fn beside(ui: &mut egui::Ui, text: impl Into<String>) {
-    ui.label(hint_text(text).size(theme::TEXT_SM));
+fn beside(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
+    ui.label(hint_text(text).size(theme::TEXT_SM))
 }
 
 /// A row reading `text` that selects `selection`.
@@ -226,7 +227,7 @@ fn drop_target(ui: &egui::Ui, setup: &str, index: usize, line: egui::Rect) -> Op
     ui.painter().hline(
         line.x_range(),
         y,
-        egui::Stroke::new(2.0, theme::egui_color(theme::ACCENT)),
+        egui::Stroke::new(2.0, theme::egui_color(theme::accent())),
     );
     let dragged = dropped(ui)?;
     // The gap it goes into, counted, in its own setup, before it is taken out.
@@ -251,7 +252,7 @@ fn setup_drop(ui: &egui::Ui, setup: &str, count: usize, line: egui::Rect) -> Opt
     ui.painter().rect_stroke(
         line,
         theme::RADIUS_SM,
-        egui::Stroke::new(1.5, theme::egui_color(theme::ACCENT)),
+        egui::Stroke::new(1.5, theme::egui_color(theme::accent())),
         egui::StrokeKind::Inside,
     );
     let dragged = dropped(ui)?;
@@ -426,7 +427,8 @@ fn setup(
         ui,
         ("setup", d.id, &name),
         |ui| {
-            status_dot(ui, d.status(&name));
+            let status = d.status(&name);
+            status_dot(ui, status);
             let shown = d.active.as_deref() == Some(name.as_str());
             let mut text = egui::RichText::new(&name);
             if shown {
@@ -440,13 +442,16 @@ fn setup(
             }
             if let Some(text) = stage_text(d, &name) {
                 beside(ui, text);
+            } else if let Some(t) = setup_time(d, &name, status) {
+                beside(ui, clock(t)).on_hover_text("machining time, estimated");
             }
         },
         |ui| {
             let statuses = d.op_statuses(&name);
             for (i, op) in s.operations.iter().enumerate() {
                 let status = statuses.get(i).copied().unwrap_or(OpStatus::NotRun);
-                let line = operation_row(ui, d, (&name, i, status), op, edits);
+                let time = op_time(d, &name, i, status);
+                let line = operation_row(ui, d, (&name, i, status, time), op, edits);
                 if let Some(edit) = drop_target(ui, &name, i, line) {
                     edits.borrow_mut().push(edit);
                 }
@@ -460,13 +465,33 @@ fn setup(
     );
 }
 
+/// Setup `name`'s estimated machining time, once its last run is made whole
+/// and stands, `status`: as Fusion gives it in its tree.
+fn setup_time(d: &Document, name: &str, status: Status) -> Option<f64> {
+    let whole = matches!(
+        status,
+        Status::Verified | Status::Warnings | Status::Refused
+    );
+    let scene = &d.setups.get(name)?.ran.as_ref()?.scene;
+    whole.then(|| scene.total_time())
+}
+
+/// Operation `i` of setup `name`'s estimated machining time, where it is made
+/// and stands, `status`.
+fn op_time(d: &Document, name: &str, i: usize, status: OpStatus) -> Option<f64> {
+    if !matches!(status, OpStatus::Done | OpStatus::Warnings) {
+        return None;
+    }
+    d.setups.get(name)?.ran.as_ref()?.scene.op_time(i)
+}
+
 /// Operation `i` of setup `name`, `op`: where it stands, `status`, its name, a
-/// warning when it has no tool, and its menu. It drags to a new place. Returns
-/// where its row is.
+/// warning when it has no tool, its machining time, `time`, once it is made,
+/// and its menu. It drags to a new place. Returns where its row is.
 fn operation_row(
     ui: &mut egui::Ui,
     d: &Document,
-    (name, i, status): (&str, usize, OpStatus),
+    (name, i, status, time): (&str, usize, OpStatus, Option<f64>),
     op: &Operation,
     edits: &RefCell<Vec<Edit>>,
 ) -> egui::Rect {
@@ -499,6 +524,8 @@ fn operation_row(
         }
         if let OpStatus::Running { since, done, .. } = status {
             beside(ui, running_text(done, since));
+        } else if let Some(t) = time {
+            beside(ui, clock(t)).on_hover_text("machining time, estimated");
         }
         r.context_menu(|ui| operation_menu(ui, name, i, op, edits));
     })

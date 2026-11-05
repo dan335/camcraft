@@ -122,9 +122,9 @@ pub enum Level {
 impl Level {
     pub fn color(self) -> egui::Color32 {
         theme::egui_color(match self {
-            Level::Ok => theme::OK,
-            Level::Warn => theme::WARN,
-            Level::Err => theme::ERR,
+            Level::Ok => theme::ok(),
+            Level::Warn => theme::warn(),
+            Level::Err => theme::err(),
         })
     }
 
@@ -198,7 +198,7 @@ pub fn mono(text: impl Into<String>, size: f32) -> egui::RichText {
 pub fn section_label(text: &str) -> egui::RichText {
     medium(text.to_uppercase(), theme::TEXT_XS)
         .extra_letter_spacing(theme::TEXT_XS * theme::TRACKING_WIDE)
-        .color(theme::egui_color(theme::TEXT_3))
+        .color(theme::egui_color(theme::text_3()))
 }
 
 /// A section of a panel's form starting: a gap above, its label, and a
@@ -209,11 +209,91 @@ pub fn section(ui: &mut egui::Ui, title: &str) {
     ui.add_space(theme::SPACE_2);
 }
 
+/// How far a form's row is indented for each setting it hangs from.
+const DEPENDENT_INDENT: f32 = 14.0;
+
+/// How many settings the rows being drawn hang from ([`dependent`]).
+fn dependent_depth(ui: &egui::Ui) -> usize {
+    ui.data(|d| d.get_temp::<usize>(dependent_id()).unwrap_or(0))
+}
+
+fn dependent_id() -> egui::Id {
+    egui::Id::new("dependent rows")
+}
+
+/// The rows `rows` draws, for settings that only count while the one above
+/// them is `on`: drawn only then, and indented under it with a guide down
+/// their left, so what each setting hangs from is seen. They nest: a setting
+/// under one under another is indented twice. For any form's rows ([`row`],
+/// [`Defaults::row`](crate::ui::defaults::Defaults::row)), in its grid or a
+/// form of their own under the box that gives them.
+pub fn dependent<R>(
+    ui: &mut egui::Ui,
+    on: bool,
+    rows: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<R> {
+    if !on {
+        return None;
+    }
+    let depth = dependent_depth(ui);
+    ui.data_mut(|d| d.insert_temp(dependent_id(), depth + 1));
+    let out = rows(ui);
+    ui.data_mut(|d| d.insert_temp(dependent_id(), depth));
+    Some(out)
+}
+
+/// A row of a [`form`]: its label, `text` in `tint`, then what `add` puts
+/// beside it, with `topic`'s help on hovering either. A row that hangs from
+/// others ([`dependent`]) is indented under them, with a guide for each down
+/// the row and half the gaps either side, so a run of them reads as one line.
+fn form_row<R>(
+    ui: &mut egui::Ui,
+    text: &str,
+    tint: [u8; 3],
+    topic: &Topic,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let depth = dependent_depth(ui);
+    #[allow(clippy::cast_precision_loss)]
+    let indent = depth as f32 * DEPENDENT_INDENT;
+    let label = ui.horizontal(|ui| {
+        ui.add_space(indent);
+        ui.label(egui::RichText::new(text).color(theme::egui_color(tint)))
+    });
+    let field = ui.horizontal(add);
+    let (label, field_rect) = (label.inner.rect, field.response.rect);
+    if depth > 0 {
+        let gap = ui.spacing().item_spacing.y.max(6.0) / 2.0;
+        let (top, bottom) = (
+            label.top().min(field_rect.top()) - gap,
+            label.bottom().max(field_rect.bottom()) + gap,
+        );
+        let stroke = egui::Stroke::new(1.0, theme::egui_color(theme::border_strong()));
+        for level in 0..depth {
+            #[allow(clippy::cast_precision_loss)]
+            let x = label.left() - indent + (level as f32 + 0.5) * DEPENDENT_INDENT - 2.0;
+            ui.painter().vline(x.round() + 0.5, top..=bottom, stroke);
+        }
+    }
+    // Laid over both once they are drawn, so it is hovered over the field's
+    // own widgets too.
+    let id = ui.id().with(("help", text));
+    help::over(ui, label.union(field_rect), id, topic);
+    ui.end_row();
+    field.inner
+}
+
+/// The [`form`] of settings a box above it gives, drawn under it: its rows
+/// hang from the box ([`dependent`]), as rows in one form hang from a row.
+pub fn sub_form(ui: &mut egui::Ui, id: impl egui::AsIdSalt, body: impl FnOnce(&mut egui::Ui)) {
+    dependent(ui, true, |ui| form(ui, id, body));
+}
+
 /// A key in a form: `--text-3`, as `KeyValue.jsx` sets its keys. For what is
 /// only shown; a field that edits is labelled by [`row`], which gives it its
 /// help.
 pub fn key_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.label(egui::RichText::new(text).color(theme::egui_color(theme::TEXT_3)))
+    ui.label(egui::RichText::new(text).color(theme::egui_color(theme::text_3())))
 }
 
 /// A row of a [`form`]: `topic`'s label, then what `add` puts beside it, with
@@ -233,30 +313,27 @@ pub fn setting_row<R>(
     changed: bool,
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> (R, bool) {
-    let label = if changed {
-        ui.label(egui::RichText::new(text).color(theme::egui_color(theme::SELECTED)))
+    let tint = if changed {
+        theme::accent()
     } else {
-        key_label(ui, text)
+        theme::text_3()
     };
     let mut reset = false;
-    let field = ui.horizontal(|ui| {
+    let out = form_row(ui, text, tint, topic, |ui| {
         let out = add(ui);
         if changed {
             reset = reset_button(ui).clicked();
         }
         out
     });
-    let id = ui.id().with(("help", text));
-    help::over(ui, label.rect.union(field.response.rect), id, topic);
-    ui.end_row();
-    (field.inner, reset)
+    (out, reset)
 }
 
 /// The ↺ that puts a setting back to its default.
 pub fn reset_button(ui: &mut egui::Ui) -> egui::Response {
     let glyph = Icon::RotateCcw
         .text(SMALL_TEXT)
-        .color(theme::egui_color(theme::SELECTED));
+        .color(theme::egui_color(theme::accent()));
     ui.add(egui::Button::new(glyph).frame(false))
         .on_hover_text("Back to the default")
 }
@@ -268,20 +345,13 @@ pub fn row_as<R>(
     topic: &Topic,
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
-    let label = key_label(ui, text);
-    let field = ui.horizontal(add);
-    // Laid over both once they are drawn, so it is hovered over the field's
-    // own widgets too.
-    let id = ui.id().with(("help", text));
-    help::over(ui, label.rect.union(field.response.rect), id, topic);
-    ui.end_row();
-    field.inner
+    form_row(ui, text, theme::text_3(), topic, add)
 }
 
 /// Text that explains, quieter than what it explains: `--text-3`, as `readme.md`
 /// gives everything but the value the reader compares.
 pub fn hint_text(text: impl Into<String>) -> egui::RichText {
-    egui::RichText::new(text).color(theme::egui_color(theme::TEXT_3))
+    egui::RichText::new(text).color(theme::egui_color(theme::text_3()))
 }
 
 /// [`hint_text`] on its own line, wrapped to the width there is.
@@ -313,6 +383,69 @@ pub fn optional_positive(
     *value = given.unwrap_or(0.0);
 }
 
+/// What was done to a setting's expression ([`expression`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExpressionEdit {
+    /// Worked out from this, now.
+    To(String),
+    /// No longer worked out: the number it last came to stays.
+    Dropped,
+}
+
+/// A setting's expression, `text`, as Fusion's parameter expressions, after
+/// the setting's own field, which then only shows what it comes to: edited
+/// in place, in red with why where it cannot be worked out (`fault`), and a
+/// button to drop it. With none, an ƒx to start one, at `start`. What was
+/// done, if anything.
+pub fn expression(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    text: Option<&str>,
+    fault: Option<&str>,
+    start: &str,
+) -> Option<ExpressionEdit> {
+    let Some(text) = text else {
+        let fx = egui::RichText::new("ƒx")
+            .size(SMALL_TEXT)
+            .color(theme::egui_color(theme::text_4()));
+        let clicked = ui
+            .add(egui::Button::new(fx).frame(false))
+            .on_hover_text("Work it out from an expression, as tool_diameter * 0.4")
+            .clicked();
+        return clicked.then(|| ExpressionEdit::To(start.to_string()));
+    };
+    let mut buffer = text.to_string();
+    let color = match fault {
+        Some(_) => Level::Err.color(),
+        None => theme::egui_color(theme::accent()),
+    };
+    let field = ui
+        .add(
+            egui::TextEdit::singleline(&mut buffer)
+                .id(id)
+                .font(egui::TextStyle::Monospace)
+                .text_color(color)
+                .desired_width(170.0),
+        )
+        .on_hover_ui(|ui| {
+            if let Some(why) = fault {
+                ui.colored_label(Level::Err.color(), why);
+                ui.separator();
+            }
+            ui.label("Worked out from the tool and the operation, as Fusion's expressions are:");
+            for (name, what) in camcraft_core::job::EXPRESSION_NAMES {
+                ui.label(egui::RichText::new(format!("{name}: {what}")).size(SMALL_TEXT));
+            }
+            ui.label(hint_text(
+                "Math.min(a; b), Math.max, Math.sqrt, a ? b : c, 2mm, 0.1in",
+            ));
+        });
+    if icon_button(ui, Icon::X, "drop the expression, keeping the number").clicked() {
+        return Some(ExpressionEdit::Dropped);
+    }
+    field.changed().then_some(ExpressionEdit::To(buffer))
+}
+
 /// A value that may be left out: `absent`, quiet, saying what is used without it,
 /// to click to give it `default`; or its field, from `add`, and a button to take
 /// it out again. In place of a checkbox beside every field.
@@ -331,7 +464,7 @@ pub fn optional<T>(
         let given = ui
             .add(
                 egui::Button::new(
-                    egui::RichText::new(absent).color(theme::egui_color(theme::TEXT_4)),
+                    egui::RichText::new(absent).color(theme::egui_color(theme::text_4())),
                 )
                 .frame(false),
             )
@@ -409,7 +542,7 @@ pub fn dialog<R>(
     ui.label(
         medium(title, theme::TEXT_BASE)
             .family(egui::FontFamily::Name(theme::SEMIBOLD.into()))
-            .color(theme::egui_color(theme::TEXT_1)),
+            .color(theme::egui_color(theme::text_1())),
     );
     ui.add_space(theme::SPACE_3);
     ui.separator();
@@ -470,10 +603,10 @@ pub fn button(
         let hovered = response.hovered();
         let fill = match variant {
             // The accent lightens and darkens; everything else takes an overlay.
-            Variant::Primary if pressed => theme::egui_color(theme::AMBER_6),
-            Variant::Primary if hovered => theme::egui_color(theme::AMBER_3),
-            _ if pressed => overlay(fill, theme::PRESS_OVERLAY),
-            _ if hovered => overlay(fill, theme::HOVER_OVERLAY),
+            Variant::Primary if pressed => theme::egui_color(theme::accent_press()),
+            Variant::Primary if hovered => theme::egui_color(theme::accent_hover()),
+            _ if pressed => overlay(fill, theme::press_overlay()),
+            _ if hovered => overlay(fill, theme::hover_overlay()),
             _ => fill,
         };
         let radius = egui::CornerRadius::same(theme::RADIUS_SM);
@@ -503,26 +636,26 @@ fn button_colors(variant: Variant) -> (egui::Color32, egui::Color32, egui::Strok
     let hairline = |c| egui::Stroke::new(1.0, c);
     match variant {
         Variant::Primary => (
-            theme::egui_color(theme::ACCENT),
-            theme::egui_color(theme::BG),
+            theme::egui_color(theme::accent()),
+            theme::egui_color(theme::bg()),
             egui::Stroke::NONE,
         ),
         Variant::Secondary => (
-            theme::egui_color(theme::SURFACE_3),
-            theme::egui_color(theme::TEXT_1),
-            hairline(theme::egui_color(theme::BORDER_STRONG)),
+            theme::egui_color(theme::surface_3()),
+            theme::egui_color(theme::text_1()),
+            hairline(theme::egui_color(theme::border_strong())),
         ),
         Variant::Ghost => (
             egui::Color32::TRANSPARENT,
-            theme::egui_color(theme::TEXT_2),
+            theme::egui_color(theme::text_2()),
             egui::Stroke::NONE,
         ),
         Variant::Danger => (
-            theme::ERR_SUBTLE.color(),
-            theme::egui_color(theme::ERR),
+            theme::err_subtle().color(),
+            theme::egui_color(theme::err()),
             hairline(
                 Tint {
-                    rgb: theme::ERR,
+                    rgb: theme::err(),
                     alpha: 0.3,
                 }
                 .color(),
@@ -547,7 +680,7 @@ fn overlay(fill: egui::Color32, tint: Tint) -> egui::Color32 {
 pub fn tag(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let galley = galley(
         ui,
-        mono(text, SMALL_TEXT).color(theme::egui_color(theme::TEXT_2)),
+        mono(text, SMALL_TEXT).color(theme::egui_color(theme::text_2())),
     );
     let size = egui::vec2(galley.size().x + 12.0, 20.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
@@ -555,13 +688,13 @@ pub fn tag(ui: &mut egui::Ui, text: &str) -> egui::Response {
     painter.rect_stroke(
         rect,
         theme::RADIUS_SM,
-        egui::Stroke::new(1.0, theme::egui_color(theme::BORDER_STRONG)),
+        egui::Stroke::new(1.0, theme::egui_color(theme::border_strong())),
         egui::StrokeKind::Inside,
     );
     painter.galley(
         rect.center() - galley.size() / 2.0,
         galley,
-        theme::egui_color(theme::TEXT_2),
+        theme::egui_color(theme::text_2()),
     );
     response
 }
@@ -574,9 +707,9 @@ pub fn badge(ui: &mut egui::Ui, level: Level, text: &str) -> egui::Response {
     let size = egui::vec2(galley.size().x + 12.0, 18.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     let rgb = match level {
-        Level::Ok => theme::OK,
-        Level::Warn => theme::WARN,
-        Level::Err => theme::ERR,
+        Level::Ok => theme::ok(),
+        Level::Warn => theme::warn(),
+        Level::Err => theme::err(),
     };
     let painter = ui.painter();
     painter.rect_filled(rect, theme::RADIUS_SM, Tint { rgb, alpha: 0.12 }.color());
@@ -647,8 +780,8 @@ pub fn diagnostic(
     actions: impl FnOnce(&mut egui::Ui),
 ) -> egui::Response {
     let frame = egui::Frame::new()
-        .fill(theme::egui_color(theme::SURFACE_2))
-        .stroke(egui::Stroke::new(1.0, theme::egui_color(theme::BORDER)))
+        .fill(theme::egui_color(theme::surface_2()))
+        .stroke(egui::Stroke::new(1.0, theme::egui_color(theme::border())))
         .corner_radius(theme::RADIUS_SM)
         .inner_margin(egui::Margin::symmetric(12, 6));
     let response = frame
@@ -660,7 +793,7 @@ pub fn diagnostic(
                 );
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new(message).color(theme::egui_color(theme::TEXT_1)),
+                        egui::RichText::new(message).color(theme::egui_color(theme::text_1())),
                     )
                     .wrap(),
                 );
@@ -687,14 +820,14 @@ pub fn diagnostic(
 pub fn list_row_background(ui: &egui::Ui, rect: egui::Rect, selected: bool, hovered: bool) {
     let painter = ui.painter();
     if selected {
-        painter.rect_filled(rect, theme::RADIUS_SM, theme::ACCENT_SUBTLE.color());
+        painter.rect_filled(rect, theme::RADIUS_SM, theme::accent_subtle().color());
         painter.rect_filled(
             egui::Rect::from_min_max(rect.min, egui::pos2(rect.min.x + 2.0, rect.max.y)),
             0.0,
-            theme::egui_color(theme::ACCENT),
+            theme::egui_color(theme::accent()),
         );
     } else if hovered {
-        painter.rect_filled(rect, theme::RADIUS_SM, theme::HOVER_OVERLAY.color());
+        painter.rect_filled(rect, theme::RADIUS_SM, theme::hover_overlay().color());
     }
 }
 
@@ -709,7 +842,7 @@ pub fn drag_label(ctx: &egui::Context, text: &str, font: egui::FontId) {
         egui::Order::Tooltip,
         egui::Id::new("drag label"),
     ));
-    let galley = painter.layout_no_wrap(text.to_string(), font, theme::egui_color(theme::TEXT_1));
+    let galley = painter.layout_no_wrap(text.to_string(), font, theme::egui_color(theme::text_1()));
     let rect = egui::Rect::from_min_size(
         at + egui::vec2(12.0, 4.0),
         galley.size() + egui::vec2(12.0, 6.0),
@@ -717,14 +850,14 @@ pub fn drag_label(ctx: &egui::Context, text: &str, font: egui::FontId) {
     painter.rect(
         rect,
         theme::RADIUS_SM,
-        theme::egui_color(theme::SURFACE_RAISED),
-        egui::Stroke::new(1.0, theme::egui_color(theme::BORDER_STRONG)),
+        theme::egui_color(theme::surface_raised()),
+        egui::Stroke::new(1.0, theme::egui_color(theme::border_strong())),
         egui::StrokeKind::Inside,
     );
     painter.galley(
         rect.min + egui::vec2(6.0, 3.0),
         galley,
-        theme::egui_color(theme::TEXT_1),
+        theme::egui_color(theme::text_1()),
     );
 }
 
@@ -784,11 +917,11 @@ pub fn tabs(ui: &mut egui::Ui, selected: &mut usize, tabs: &[Tab<'_>]) -> bool {
                 changed = true;
             }
             let text = theme::egui_color(if on {
-                theme::TEXT_1
+                theme::text_1()
             } else if response.hovered() {
-                theme::TEXT_2
+                theme::text_2()
             } else {
-                theme::TEXT_3
+                theme::text_3()
             });
             let painter = ui.painter();
             let mut x = rect.left() + theme::SPACE_4;
@@ -802,7 +935,7 @@ pub fn tabs(ui: &mut egui::Ui, selected: &mut usize, tabs: &[Tab<'_>]) -> bool {
                 painter.galley(
                     egui::pos2(x, mid - g.size().y / 2.0),
                     g,
-                    theme::egui_color(theme::TEXT_4),
+                    theme::egui_color(theme::text_4()),
                 );
                 x += w;
             }
@@ -821,7 +954,7 @@ pub fn tabs(ui: &mut egui::Ui, selected: &mut usize, tabs: &[Tab<'_>]) -> bool {
                         rect.right_bottom(),
                     ),
                     0.0,
-                    theme::egui_color(theme::ACCENT),
+                    theme::egui_color(theme::accent()),
                 );
             }
         }
@@ -831,7 +964,7 @@ pub fn tabs(ui: &mut egui::Ui, selected: &mut usize, tabs: &[Tab<'_>]) -> bool {
     let y = top + TAB_HEIGHT - 0.5;
     ui.painter().with_clip_rect(ui.clip_rect()).line_segment(
         [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-        egui::Stroke::new(1.0, theme::egui_color(theme::BORDER)),
+        egui::Stroke::new(1.0, theme::egui_color(theme::border())),
     );
     changed
 }
@@ -893,8 +1026,8 @@ fn card_titled<R>(
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
     egui::Frame::new()
-        .fill(theme::egui_color(theme::SURFACE_2))
-        .stroke(egui::Stroke::new(1.0, theme::egui_color(theme::BORDER)))
+        .fill(theme::egui_color(theme::surface_2()))
+        .stroke(egui::Stroke::new(1.0, theme::egui_color(theme::border())))
         .corner_radius(theme::RADIUS_SM)
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -916,7 +1049,7 @@ fn card_titled<R>(
                 ui.painter().hline(
                     rect.x_range(),
                     rect.bottom() - 0.5,
-                    egui::Stroke::new(1.0, theme::egui_color(theme::BORDER)),
+                    egui::Stroke::new(1.0, theme::egui_color(theme::border())),
                 );
             }
             egui::Frame::new()
@@ -933,8 +1066,8 @@ fn card_titled<R>(
 /// The CAD grid, the only texture the system allows: 24 px lines at 4% white,
 /// every fourth at 8%, behind viewport-like areas.
 pub fn grid_background(painter: &egui::Painter, rect: egui::Rect) {
-    let minor = egui::Stroke::new(1.0, theme::GRID_LINE.color());
-    let major = egui::Stroke::new(1.0, theme::GRID_LINE_MAJOR.color());
+    let minor = egui::Stroke::new(1.0, theme::grid_line().color());
+    let major = egui::Stroke::new(1.0, theme::grid_line_major().color());
     let step = theme::GRID_SIZE;
     let mut i = 0_u32;
     let mut x = rect.left();
@@ -971,10 +1104,10 @@ pub fn empty_state(
 ) {
     ui.vertical_centered(|ui| {
         ui.add_space(theme::SPACE_6 * 2.0);
-        ui.label(icon.text(20.0).color(theme::egui_color(theme::TEXT_4)));
+        ui.label(icon.text(20.0).color(theme::egui_color(theme::text_4())));
         ui.add_space(theme::SPACE_3);
-        ui.label(medium(title, theme::TEXT_BASE).color(theme::egui_color(theme::TEXT_1)));
-        ui.label(egui::RichText::new(detail).color(theme::egui_color(theme::TEXT_3)));
+        ui.label(medium(title, theme::TEXT_BASE).color(theme::egui_color(theme::text_1())));
+        ui.label(egui::RichText::new(detail).color(theme::egui_color(theme::text_3())));
         ui.add_space(theme::SPACE_4);
         ui.horizontal(|ui| {
             // Centre the buttons: egui cannot centre a horizontal row itself.

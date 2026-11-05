@@ -73,10 +73,10 @@ pub fn show_in_place(ui: &mut egui::Ui, topic: &Topic) {
 /// small corners and the popover's shadow.
 fn frame(ctx: &egui::Context) -> egui::Frame {
     egui::Frame::new()
-        .fill(theme::egui_color(theme::SURFACE_RAISED))
+        .fill(theme::egui_color(theme::surface_raised()))
         .stroke(egui::Stroke::new(
             1.0,
-            theme::egui_color(theme::BORDER_STRONG),
+            theme::egui_color(theme::border_strong()),
         ))
         .corner_radius(theme::RADIUS_SM)
         .inner_margin(egui::Margin::symmetric(10, 8))
@@ -87,13 +87,13 @@ fn frame(ctx: &egui::Context) -> egui::Frame {
 fn popup(ui: &mut egui::Ui, topic: &Topic) {
     ui.spacing_mut().item_spacing.y = theme::SPACE_2;
     ui.label(
-        widgets::medium(topic.title, theme::TEXT_BASE).color(theme::egui_color(theme::TEXT_1)),
+        widgets::medium(topic.title, theme::TEXT_BASE).color(theme::egui_color(theme::text_1())),
     );
     ui.add(
         egui::Label::new(
             egui::RichText::new(topic.text)
                 .size(theme::TEXT_SM)
-                .color(theme::egui_color(theme::TEXT_2)),
+                .color(theme::egui_color(theme::text_2())),
         )
         .wrap(),
     );

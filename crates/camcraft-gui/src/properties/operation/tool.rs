@@ -75,8 +75,9 @@ pub(super) fn tool(
     let Some(def) = doc.operation_defaults(setup, index) else {
         return;
     };
+    let faults = doc.expression_faults(setup, index);
     if let Some(op) = doc.operation_mut(setup, index) {
-        let mut d = Defaults::of(&*op, &def);
+        let mut d = Defaults::of(&*op, &def).expressive(faults);
         form(ui, "feed-speed", |ui| feed_speed(ui, &mut d, m, op, cutter));
         d.apply(op);
     }

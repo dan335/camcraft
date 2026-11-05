@@ -736,7 +736,9 @@ fn a_changed_operation_takes_its_toolpath_with_it() {
 /// the view goes back to setting up.
 #[test]
 fn the_view_sets_up_or_plays_back() {
-    use crate::playback::{cannot_play_back, content, playing_back, set_mode, settle_mode};
+    use crate::playback::{
+        cannot_play_back, content, playing_back, set_mode, settle_mode, showing_material,
+    };
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let text = std::fs::read_to_string(dir.join("rail-jig.camcraft")).unwrap();
     let text = text.replace("sled_base.step", "hinge_jig.step");
@@ -772,6 +774,19 @@ fn the_view_sets_up_or_plays_back() {
     );
     let other = Selection::Operation("bottom".into(), 0);
     assert_eq!(content(state, "top", &other).view.ops, u32::MAX);
+
+    // The material asked for while setting up: in place of the part, its
+    // stock's outline and work zero.
+    state.view.material = true;
+    assert!(showing_material(state) && !playing_back(state));
+    let c = content(state, "top", &finish);
+    assert!(!c.view.part && !c.view.stock && !c.view.origin);
+    assert!(c.view.cutter.is_none());
+    assert_eq!(c.view.roles, 0, "no toolpaths over it until asked for");
+    state.view.paths_over_material = true;
+    let c = content(state, "top", &finish);
+    assert!(c.view.roles != 0 && c.view.ops == 0b10, "the selection's");
+    state.view.material = false;
 
     assert!(cannot_play_back(state).is_none());
     set_mode(state, ViewMode::Playback);

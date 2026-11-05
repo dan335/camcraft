@@ -6,6 +6,29 @@ the same notes at more length.
 
 ## Unreleased
 
+- **The cut stock while setting up.** Part or cut stock at the top of the Show
+  panel, or M, shows the stock as the selected operation leaves it, or the
+  whole setup with none selected, and follows each edit as it is generated.
+- **Omarchy's theme, followed**: on Omarchy the window is drawn in the
+  desktop's theme, light or dark, and changes with it as soon as it is
+  switched. Moves, picks, the material and ok, warning and error keep their
+  colours ([decision 0018](docs/decisions/0018-themes.md), which plans the
+  rest: a light theme, following the system's light or dark, palette files).
+- **Expressions**, as Fusion's: any number of an operation's can be worked
+  out from the tool and its other settings, `tool_diameter * 0.4` or
+  `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)`, with ƒx beside it,
+  and follows a new tool. Saved in the job file beside the number.
+- **Times in the tree**: each operation's estimated machining time beside it,
+  and the setup's total beside the setup, as Fusion has them. The table of
+  passes and volumes under the tree is a one-line verdict now.
+- **Adaptive's starting values are Fusion's, from the tool**: an optimal load
+  of `tool_diameter * 0.4`, and for adaptive and pocket clearing a stepdown of
+  `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)`, set as the tool is
+  chosen, as the stepover already was.
+- **A setting that only counts while another is on hangs under it**, indented
+  with a guide down its left: slot clearing under machine cavities, the
+  minimum stepdown under flat areas, the shallow area settings, a helix's
+  diameter, leads, reversing under reordering, and each ticked group's rows.
 - **Adaptive clearing gets Fusion's rest machining**, from the operations before
   it in the setup, each swept exactly with the tool it was cut with, and its
   *Ignore stock less than*.

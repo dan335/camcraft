@@ -218,16 +218,23 @@ fn apply(state: &mut SetupState, command: Command) {
 /// shuttle back, pause and forward, J or L again going faster; Left and Right
 /// step a move, a hundred with Shift; Up and Down go to the previous and next
 /// operation; Home and End; `[` and `]` change the speed. Only while playing
-/// back, but for Space, which starts it if it can.
+/// back, but for Space, which starts it if it can, and setting up, M, which
+/// switches between the part and the material.
 pub fn keys(ctx: &egui::Context, state: &mut SetupState) {
     if state.ran.is_none() || ctx.memory(|m| m.focused().is_some()) {
         return;
     }
     if !playing_back(state) {
-        let space = ctx.input(|i| i.key_pressed(egui::Key::Space) && !i.modifiers.command);
+        let (space, m) = ctx.input(|i| {
+            let plain = |k| i.key_pressed(k) && !i.modifiers.command;
+            (plain(egui::Key::Space), plain(egui::Key::M))
+        });
         if space && playback::cannot_play_back(state).is_none() {
             playback::set_mode(state, ViewMode::Playback);
             apply(state, Command::Play { reverse: false });
+        }
+        if m {
+            state.view.material = !state.view.material;
         }
         return;
     }
@@ -452,9 +459,9 @@ fn clock_readout(ui: &mut egui::Ui, state: &SetupState) {
         ui.label(
             egui::RichText::new("cutting…")
                 .size(theme::TEXT_XS)
-                .color(theme::egui_color(theme::TEXT_3)),
+                .color(theme::egui_color(theme::text_3())),
         )
-        .on_hover_text("the material is catching up with the playhead");
+        .on_hover_text("the cut stock is catching up with the playhead");
     }
 }
 
@@ -489,7 +496,7 @@ fn move_readout(ui: &mut egui::Ui, state: &SetupState, m: Measure) {
     );
     ui.add(
         egui::Label::new(
-            widgets::mono(text, theme::TEXT_XS).color(theme::egui_color(theme::TEXT_3)),
+            widgets::mono(text, theme::TEXT_XS).color(theme::egui_color(theme::text_3())),
         )
         .truncate(),
     );
@@ -516,16 +523,16 @@ fn timeline(ui: &mut egui::Ui, state: &mut SetupState) {
     let time_at = |x: f32| f64::from((x - rect.left()) / rect.width().max(1.0)) * total;
     let painter = ui.painter_at(rect);
     let radius = egui::CornerRadius::same(theme::RADIUS_SM);
-    painter.rect_filled(rect, radius, theme::egui_color(theme::SURFACE_2));
+    painter.rect_filled(rect, radius, theme::egui_color(theme::surface_2()));
 
     for (i, op) in scene.ops.iter().enumerate() {
         let a = x_of(scene.time_of(Playhead::at(op.first)));
         let b = x_of(scene.time_of(Playhead::at(op.first + op.count)));
         let span = egui::Rect::from_x_y_ranges(a..=b, rect.y_range()).shrink2(egui::vec2(0.5, 0.0));
         let fill = if i % 2 == 0 {
-            theme::GRAY_3
+            theme::surface_3()
         } else {
-            theme::GRAY_4
+            theme::border()
         };
         painter.rect_filled(span, radius, theme::egui_color(fill));
         if span.width() > 40.0 {
@@ -537,20 +544,20 @@ fn timeline(ui: &mut egui::Ui, state: &mut SetupState) {
                 egui::TextStyle::Body,
             );
             let at = egui::pos2(span.left() + 4.0, span.center().y - galley.size().y / 2.0);
-            painter.galley(at, galley, theme::egui_color(theme::TEXT_3));
+            painter.galley(at, galley, theme::egui_color(theme::text_3()));
         }
     }
 
     // Done so far, tinted.
     let now = x_of(scene.time_of(state.view.at));
     let done = egui::Rect::from_x_y_ranges(rect.left()..=now, rect.y_range());
-    painter.rect_filled(done, radius, theme::ACCENT_SUBTLE.color());
+    painter.rect_filled(done, radius, theme::accent_subtle().color());
 
     for (at, mark) in &ran.marks {
         let x = x_of(scene.time_of(Playhead::at(*at)));
         let color = match mark {
-            Mark::Fail => theme::ERR,
-            Mark::Warn => theme::WARN,
+            Mark::Fail => theme::err(),
+            Mark::Warn => theme::warn(),
         };
         painter.line_segment(
             [
@@ -561,7 +568,7 @@ fn timeline(ui: &mut egui::Ui, state: &mut SetupState) {
         );
     }
 
-    let accent = theme::egui_color(theme::ACCENT);
+    let accent = theme::egui_color(theme::accent());
     painter.line_segment(
         [egui::pos2(now, rect.top()), egui::pos2(now, rect.bottom())],
         egui::Stroke::new(2.0, accent),

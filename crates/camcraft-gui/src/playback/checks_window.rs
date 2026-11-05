@@ -20,9 +20,9 @@ pub fn checks(ui: &mut egui::Ui, state: &mut SetupState) -> Option<DVec3> {
     let failed = checks.failures().count();
     if failed > 0 {
         // On `--err-subtle`, edged in `--err`, as the system's danger is.
-        let err = theme::egui_color(theme::ERR);
+        let err = theme::egui_color(theme::err());
         egui::Frame::new()
-            .fill(theme::ERR_SUBTLE.color())
+            .fill(theme::err_subtle().color())
             .stroke(egui::Stroke::new(1.0, err))
             .inner_margin(egui::Margin::symmetric(12, 6))
             .corner_radius(theme::RADIUS_SM)
@@ -112,7 +112,7 @@ fn finding(ui: &mut egui::Ui, f: &Finding, goes: bool) -> bool {
         Level::Note => {
             ui.horizontal_wrapped(|ui| {
                 ui.label(
-                    widgets::mono("note", theme::TEXT_XS).color(theme::egui_color(theme::TEXT_3)),
+                    widgets::mono("note", theme::TEXT_XS).color(theme::egui_color(theme::text_3())),
                 );
                 ui.label(message);
                 go(ui);

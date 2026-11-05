@@ -154,14 +154,6 @@ impl Measure {
         }
     }
 
-    /// A volume of material, from cubic millimetres.
-    pub fn volume(self, mm3: f64) -> String {
-        match self {
-            Self::Metric => format!("{:.1} cm³", mm3 / 1000.0),
-            Self::Imperial => format!("{:.2} in³", mm3 / MM_PER_INCH.powi(3)),
-        }
-    }
-
     /// An editor for a length kept in millimetres, shown in this unit. `speed` and
     /// `max` are in millimetres.
     pub fn length_field(
@@ -338,11 +330,9 @@ mod tests {
     }
 
     #[test]
-    fn feeds_and_volumes_convert() {
+    fn feeds_convert() {
         assert_eq!(Measure::Metric.feed_number(1200.0), "1200");
         assert_eq!(Measure::Imperial.feed_number(254.0), "10.0");
-        assert_eq!(Measure::Metric.volume(12_300.0), "12.3 cm³");
-        assert_eq!(Measure::Imperial.volume(MM_PER_INCH.powi(3)), "1.00 in³");
     }
 
     #[test]

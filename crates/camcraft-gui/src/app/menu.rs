@@ -239,7 +239,7 @@ impl App {
                 egui::RichText::new("camcraft")
                     .family(egui::FontFamily::Name(theme::MONO_MEDIUM.into()))
                     .size(theme::TEXT_LG)
-                    .color(theme::egui_color(theme::TEXT_1)),
+                    .color(theme::egui_color(theme::text_1())),
             );
             ui.add_space(12.0);
             if widgets::button(ui, Variant::Primary, Size::Md, Some(Icon::Plus), "New job")

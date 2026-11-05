@@ -1,10 +1,10 @@
 //! The setup's panel on the left: what its last run did, what is shown of it, and
-//! the steep descents; playing back, also the material and how it is coloured.
+//! the steep descents; with the material shown, also how it is coloured.
 
 use eframe::egui;
 use glam::DVec3;
 
-use super::{go_to, jump_to, playing_back, thousands};
+use super::{go_to, jump_to, paths_fit, playing_back, showing_material, thousands};
 use crate::document::{RanSetup, SetupState, SetupView};
 use crate::help::Help;
 use crate::help::topics::app;
@@ -52,62 +52,76 @@ fn legend_row(
     });
 }
 
-/// What the last run did, and its verdict.
+/// What the last run found, in a line or two: verified, or what is wrong.
+/// Each operation's time is in the tree, and every check in its window.
 pub fn result(ui: &mut egui::Ui, state: &SetupState, m: Measure) {
     let Some(ran) = &state.ran else {
         return;
     };
     let result = &ran.ran.result;
-    egui::Grid::new("result")
-        .num_columns(4)
-        .striped(true)
-        .show(ui, |ui| {
-            for heading in ["operation", "passes", "removed", "rapid hits"] {
-                ui.label(section_label(heading));
-            }
-            ui.end_row();
-            for op in &result.operations {
-                ui.label(&op.name);
-                ui.label(op.passes.to_string());
-                ui.label(m.volume(op.sim.removed_mm3));
-                ui.label(op.sim.rapid_contacts.to_string());
-                ui.end_row();
-            }
-        });
     let v = &result.verify;
     if result.is_clean() {
-        ui.label(format!(
-            "Verified: {} columns compared, no gouges.",
-            v.compared
-        ));
+        ui.colored_label(widgets::Level::Ok.color(), "Verified: no gouges.");
     } else {
         ui.colored_label(
             widgets::Level::Err.color(),
             format!(
                 "NOT verified: {} gouged column(s), deepest {}.",
-                v.gouged,
+                camcraft_session::checks::thousands(v.gouged),
                 m.length(v.deepest_gouge_mm, 3)
+            ),
+        );
+    }
+    for op in result
+        .operations
+        .iter()
+        .filter(|o| o.sim.rapid_contacts > 0)
+    {
+        ui.colored_label(
+            widgets::Level::Err.color(),
+            format!(
+                "{}: {} rapid move(s) through the stock.",
+                op.name, op.sim.rapid_contacts
             ),
         );
     }
 }
 
-/// What to show, and playing back, the material. Returns a point to bring the
+/// What to show, and the material when it is. Returns a point to bring the
 /// camera in on, when a steep descent is clicked.
 pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option<DVec3> {
     let back = playing_back(state);
+    let material = showing_material(state);
+    let fits = paths_fit(state);
     let view = &mut state.view;
     ui.label(section_label("Show"));
-    let part = if back {
-        &mut view.part_in_playback
-    } else {
-        &mut view.view.part
-    };
-    ui.checkbox(part, "part").help(&app::SHOW_PART);
-    ui.checkbox(&mut view.view.stock, "stock outline")
-        .help(&app::SHOW_STOCK);
-    ui.checkbox(&mut view.view.origin, "work zero")
-        .help(&app::SHOW_WORK_ZERO);
+    if !back {
+        // Setting up, the part with what places it, or the material in its
+        // place; the material once there is a run to show it from.
+        ui.add_enabled_ui(fits, |ui| {
+            widgets::segmented(
+                ui,
+                &mut view.material,
+                &[(false, "part"), (true, "cut stock")],
+            )
+            .help(&app::SHOW_MATERIAL);
+        });
+        if view.material && !fits {
+            ui.label(hint_text("The cut stock shows once it is generated."));
+        }
+    }
+    if back || !material {
+        let part = if back {
+            &mut view.part_in_playback
+        } else {
+            &mut view.view.part
+        };
+        ui.checkbox(part, "part").help(&app::SHOW_PART);
+        ui.checkbox(&mut view.view.stock, "stock outline")
+            .help(&app::SHOW_STOCK);
+        ui.checkbox(&mut view.view.origin, "work zero")
+            .help(&app::SHOW_WORK_ZERO);
+    }
     let Some(ran) = &state.ran else {
         return None;
     };
@@ -115,19 +129,15 @@ pub fn controls(ui: &mut egui::Ui, state: &mut SetupState, m: Measure) -> Option
         ui.checkbox(&mut view.show_cutter, "cutter")
             .help(&app::SHOW_CUTTER);
     }
-    let paths = if back {
-        &mut view.paths_in_playback
-    } else {
-        &mut view.show_paths
-    };
+    let paths = view.paths_mut(back, material);
     ui.checkbox(paths, "toolpaths").help(&app::SHOW_TOOLPATHS);
     // Stopping there, as every other jump does, rather than playing on.
     if let Some(end) = toolpaths(ui, view, &ran.scene, back) {
         go_to(state, end);
     }
-    if back {
+    if material {
         ui.separator();
-        material(ui, state);
+        self::material(ui, state, back);
     }
     let ran = state.ran.as_ref()?;
     let go = steep(ui, ran, m);
@@ -184,20 +194,26 @@ fn toolpaths(ui: &mut egui::Ui, view: &mut SetupView, scene: &Scene, back: bool)
     jump
 }
 
-/// How the material is coloured, and a legend of its cells.
-fn material(ui: &mut egui::Ui, state: &mut SetupState) {
+/// How the material is coloured, and a legend of its cells; setting up, also
+/// where in the program it stands.
+fn material(ui: &mut egui::Ui, state: &mut SetupState, back: bool) {
     let view = &mut state.view;
-    ui.label(section_label("Material"));
+    ui.label(section_label("Cut stock"));
+    if !back {
+        ui.label(hint_text(
+            "as the selected operation leaves it, or with none selected, the setup",
+        ));
+    }
     ui.horizontal(|ui| {
         ui.label("colours");
-        ui.selectable_value(&mut view.transport.color, ColorMode::Material, "material")
+        ui.selectable_value(&mut view.transport.color, ColorMode::Material, "stock")
             .on_hover_text("the shape being cut; red where it goes below the part");
         ui.selectable_value(&mut view.transport.color, ColorMode::Compare, "compare")
             .on_hover_text("every column against the part, by the verifier's rule");
     });
     let mode = view.transport.color;
     // As the thread last counted them, without locking the image it writes.
-    let Some(live) = state.live.as_ref().filter(|l| l.filled()) else {
+    let Some(live) = state.drawn_stock() else {
         return;
     };
     let classes: &[Class] = match mode {
@@ -216,7 +232,7 @@ fn material(ui: &mut egui::Ui, state: &mut SetupState) {
         );
     }
     ui.label(hint_text(
-        "cells of the simulated material, by the verifier's rule",
+        "cells of the simulated stock, by the verifier's rule",
     ));
 }
 

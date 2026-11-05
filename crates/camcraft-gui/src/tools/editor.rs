@@ -224,12 +224,13 @@ fn cutter(
             ui.add(widgets::number(f).range(0..=16));
         });
     });
+    let flutes = tool.assumed_flute_length();
     opt_length(
         ui,
         d,
         m,
         &lib::FLUTE_LENGTH,
-        (&mut tool.flute_length, 2.0 * tool.diameter),
+        (&mut tool.flute_length, flutes),
         errors,
         "flute_length",
     );
@@ -329,7 +330,7 @@ fn holder(
             for (i, seg) in h.segments.iter_mut().enumerate() {
                 ui.label(
                     widgets::mono(format!("{}", i + 1), theme::TEXT_SM)
-                        .color(theme::egui_color(theme::TEXT_4)),
+                        .color(theme::egui_color(theme::text_4())),
                 );
                 m.length_field(ui, &mut seg.diameter, 0.1, 1000.0, "Ø ")
                     .help(&lib::HOLDER_SEGMENT);
@@ -475,9 +476,9 @@ fn presets(
         let color = if bad {
             widgets::Level::Err.color()
         } else if on {
-            theme::egui_color(theme::TEXT_1)
+            theme::egui_color(theme::text_1())
         } else {
-            theme::egui_color(theme::TEXT_2)
+            theme::egui_color(theme::text_2())
         };
         row.label(egui::RichText::new(name).color(color));
         if i == 0 {
@@ -505,7 +506,7 @@ fn presets(
             } else {
                 ui.label(
                     widgets::mono(preset_summary(p, m), theme::TEXT_SM)
-                        .color(theme::egui_color(theme::TEXT_3)),
+                        .color(theme::egui_color(theme::text_3())),
                 );
             }
         });

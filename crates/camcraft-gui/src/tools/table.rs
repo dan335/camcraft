@@ -14,7 +14,7 @@ pub fn tool_table<'a>(
     id: &str,
     sense: egui::Sense,
 ) -> egui_extras::TableBuilder<'a> {
-    ui.visuals_mut().selection.bg_fill = theme::ACCENT_SUBTLE.color();
+    ui.visuals_mut().selection.bg_fill = theme::accent_subtle().color();
     egui_extras::TableBuilder::new(ui)
         .id_salt(id)
         .striped(false)
@@ -30,7 +30,7 @@ pub fn number_cell(ui: &mut egui::Ui, tool_number: u32, selected: bool) {
         ui.painter().rect_filled(
             egui::Rect::from_min_max(r.left_top(), egui::pos2(r.left() + 2.0, r.bottom())),
             0.0,
-            theme::egui_color(theme::ACCENT),
+            theme::egui_color(theme::accent()),
         );
     }
     ui.add_space(theme::SPACE_3);
@@ -40,9 +40,9 @@ pub fn number_cell(ui: &mut egui::Ui, tool_number: u32, selected: bool) {
 /// A tool's name in a table: brightest when `selected`.
 pub fn name_cell(ui: &mut egui::Ui, name: &str, selected: bool) {
     let color = if selected {
-        theme::TEXT_1
+        theme::text_1()
     } else {
-        theme::TEXT_2
+        theme::text_2()
     };
     ui.add(
         egui::Label::new(egui::RichText::new(name).color(theme::egui_color(color)))
@@ -53,12 +53,12 @@ pub fn name_cell(ui: &mut egui::Ui, name: &str, selected: bool) {
 
 /// A figure in a table: mono, the value to compare.
 pub fn number(text: String) -> egui::Label {
-    egui::Label::new(widgets::mono(text, theme::TEXT_SM).color(theme::egui_color(theme::TEXT_1)))
+    egui::Label::new(widgets::mono(text, theme::TEXT_SM).color(theme::egui_color(theme::text_1())))
 }
 
 /// Secondary text in a table, cut short to its column.
 pub fn dim(text: String) -> egui::Label {
-    egui::Label::new(egui::RichText::new(text).color(theme::egui_color(theme::TEXT_3))).truncate()
+    egui::Label::new(egui::RichText::new(text).color(theme::egui_color(theme::text_3()))).truncate()
 }
 
 /// A column's header: the small uppercase label and its unit, lowercase as
@@ -75,17 +75,17 @@ pub fn column_header(
     let on = sorted == Some(true);
     let mut text = widgets::section_label(label);
     if on {
-        text = text.color(theme::egui_color(theme::TEXT_1));
+        text = text.color(theme::egui_color(theme::text_1()));
     }
     let mut parts = vec![text];
     if let Some(u) = unit {
-        parts.push(widgets::mono(u, theme::TEXT_XS).color(theme::egui_color(theme::TEXT_4)));
+        parts.push(widgets::mono(u, theme::TEXT_XS).color(theme::egui_color(theme::text_4())));
     }
     if on {
         parts.push(
             Icon::ArrowDown
                 .text(12.0)
-                .color(theme::egui_color(theme::ACCENT)),
+                .color(theme::egui_color(theme::accent())),
         );
     }
     let layout = if right {
@@ -117,7 +117,7 @@ pub fn column_header(
     ui.painter().hline(
         rect.x_range(),
         rect.bottom(),
-        egui::Stroke::new(1.0, theme::egui_color(theme::BORDER)),
+        egui::Stroke::new(1.0, theme::egui_color(theme::border())),
     );
     clicked
 }

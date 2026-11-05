@@ -10,6 +10,8 @@
 //! selection without asking. The components built on top are in `widgets.rs`.
 
 use camcraft_core::path::toolpath::MoveRole;
+use std::sync::{PoisonError, RwLock};
+
 use eframe::egui;
 
 /// `--gray-0`, the page background: near-black graphite, like a machine enclosure.
@@ -126,71 +128,12 @@ pub const AXIS_Y: [u8; 3] = PATH_CUT;
 /// The work zero's Z axis.
 pub const AXIS_Z: [u8; 3] = PATH_LEAD;
 
-/// `--surface-1`: panels, and the inside of fields.
-pub const SURFACE_1: [u8; 3] = GRAY_1;
-/// `--surface-2`: cards and windows, a step up from the panel they sit on.
-pub const SURFACE_2: [u8; 3] = GRAY_2;
-/// `--surface-3`: controls at rest.
-pub const SURFACE_3: [u8; 3] = GRAY_3;
-/// `--surface-raised`: open menus.
-pub const SURFACE_RAISED: [u8; 3] = GRAY_4;
-/// `--border`: the hairlines that do the structural work.
-pub const BORDER: [u8; 3] = GRAY_4;
-/// `--border-strong`: around controls.
-pub const BORDER_STRONG: [u8; 3] = GRAY_5;
-/// `--text-1`: the value the reader should compare.
-pub const TEXT_1: [u8; 3] = GRAY_9;
-/// `--text-2`: body text.
-pub const TEXT_2: [u8; 3] = GRAY_8;
-/// `--text-3`: labels, units, everything secondary.
-pub const TEXT_3: [u8; 3] = GRAY_7;
-/// `--text-4`: the quietest text: counts, paths, "not given".
-pub const TEXT_4: [u8; 3] = GRAY_6;
-/// `--accent`.
-pub const ACCENT: [u8; 3] = AMBER_5;
-
 /// A colour at some opacity, as the tokens give the subtle tints and overlays.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tint {
     pub rgb: [u8; 3],
     pub alpha: f32,
 }
-
-/// `--accent-subtle`: amber at 12%, behind the folder that is selected.
-pub const ACCENT_SUBTLE: Tint = Tint {
-    rgb: AMBER_5,
-    alpha: 0.12,
-};
-/// `--selection`: amber at 25%, behind what is selected.
-pub const SELECTION: Tint = Tint {
-    rgb: AMBER_5,
-    alpha: 0.25,
-};
-/// `--hover-overlay`: white at 5%, over a neutral control under the pointer.
-pub const HOVER_OVERLAY: Tint = Tint {
-    rgb: [255, 255, 255],
-    alpha: 0.05,
-};
-/// `--press-overlay`: white at 9%, over a control being pressed.
-pub const PRESS_OVERLAY: Tint = Tint {
-    rgb: [255, 255, 255],
-    alpha: 0.09,
-};
-/// `--err-subtle`: behind a destructive button.
-pub const ERR_SUBTLE: Tint = Tint {
-    rgb: ERR,
-    alpha: 0.12,
-};
-/// `--grid-line`: the 24 px CAD grid behind viewport-like areas.
-pub const GRID_LINE: Tint = Tint {
-    rgb: [255, 255, 255],
-    alpha: 0.04,
-};
-/// `--grid-line-major`: every fourth line of the grid.
-pub const GRID_LINE_MAJOR: Tint = Tint {
-    rgb: [255, 255, 255],
-    alpha: 0.08,
-};
 
 impl Tint {
     /// For egui, which blends it over whatever is under it.
@@ -204,17 +147,232 @@ impl Tint {
 
     /// Laid over `base`, as one solid colour: for egui's fills that are not blended.
     pub fn over(self, base: [u8; 3]) -> [u8; 3] {
-        let mut out = base;
-        for (o, (b, t)) in out.iter_mut().zip(base.iter().zip(self.rgb)) {
-            let mixed = f32::from(*b) + (f32::from(t) - f32::from(*b)) * self.alpha;
-            // Between two bytes, so it fits.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let byte = mixed.round() as u8;
-            *o = byte;
-        }
-        out
+        mix(base, self.rgb, self.alpha)
     }
 }
+
+/// `a` a fraction `t` of the way to `b`, as one solid colour.
+pub fn mix(a: [u8; 3], b: [u8; 3], t: f32) -> [u8; 3] {
+    let mut out = a;
+    for (o, (x, y)) in out.iter_mut().zip(a.into_iter().zip(b)) {
+        let mixed = f32::from(x) + (f32::from(y) - f32::from(x)) * t;
+        // Between two bytes, so it fits.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let byte = mixed.round() as u8;
+        *o = byte;
+    }
+    out
+}
+
+/// The colours the window itself is drawn in: its surfaces, hairlines, text,
+/// accent, and those that say how something stands. The design system's own
+/// ([`Palette::CAMCRAFT`]), or the desktop's theme ([`crate::ui::desktop`]).
+/// What the view draws with a meaning (moves, axes, picks, the material) keeps
+/// the system's colours whatever the theme: they say what something is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Palette {
+    /// Dark or light: what egui's own look starts from, and which way the
+    /// overlays shade.
+    pub dark: bool,
+    /// `--gray-0`: the page, and the view behind the part.
+    pub bg: [u8; 3],
+    /// `--surface-1`: panels, and the inside of fields.
+    pub surface_1: [u8; 3],
+    /// `--surface-2`: cards and windows, a step up from the panel they sit on.
+    pub surface_2: [u8; 3],
+    /// `--surface-3`: controls at rest.
+    pub surface_3: [u8; 3],
+    /// `--surface-raised`: open menus.
+    pub surface_raised: [u8; 3],
+    /// `--border`: the hairlines that do the structural work.
+    pub border: [u8; 3],
+    /// `--border-strong`: around controls.
+    pub border_strong: [u8; 3],
+    /// `--text-1`: what is read first.
+    pub text_1: [u8; 3],
+    /// `--text-2`.
+    pub text_2: [u8; 3],
+    /// `--text-3`: labels, and what explains.
+    pub text_3: [u8; 3],
+    /// `--text-4`: the quietest, as what is not given.
+    pub text_4: [u8; 3],
+    /// `--accent`: primary actions, focus, what is selected.
+    pub accent: [u8; 3],
+    /// `--accent-hover`.
+    pub accent_hover: [u8; 3],
+    /// `--accent-press`.
+    pub accent_press: [u8; 3],
+    /// `--ok`.
+    pub ok: [u8; 3],
+    /// `--warn`.
+    pub warn: [u8; 3],
+    /// `--err`.
+    pub err: [u8; 3],
+}
+
+impl Palette {
+    /// The design system's: graphite and amber.
+    pub const CAMCRAFT: Self = Self {
+        dark: true,
+        bg: BG,
+        surface_1: GRAY_1,
+        surface_2: GRAY_2,
+        surface_3: GRAY_3,
+        surface_raised: GRAY_4,
+        border: GRAY_4,
+        border_strong: GRAY_5,
+        text_1: GRAY_9,
+        text_2: GRAY_8,
+        text_3: GRAY_7,
+        text_4: GRAY_6,
+        accent: AMBER_5,
+        accent_hover: AMBER_3,
+        accent_press: AMBER_6,
+        ok: OK,
+        warn: WARN,
+        err: ERR,
+    };
+
+    /// What overlays shade with: white over a dark palette, black over a light.
+    fn overlay(&self) -> [u8; 3] {
+        if self.dark { [255; 3] } else { [0; 3] }
+    }
+
+    /// `--accent-subtle`: the accent at 12%, behind the folder that is selected.
+    pub fn accent_subtle(&self) -> Tint {
+        Tint {
+            rgb: self.accent,
+            alpha: 0.12,
+        }
+    }
+
+    /// `--selection`: the accent at 25%, behind what is selected.
+    pub fn selection(&self) -> Tint {
+        Tint {
+            rgb: self.accent,
+            alpha: 0.25,
+        }
+    }
+
+    /// `--hover-overlay`: 5%, over a neutral control under the pointer.
+    pub fn hover_overlay(&self) -> Tint {
+        Tint {
+            rgb: self.overlay(),
+            alpha: 0.05,
+        }
+    }
+
+    /// `--press-overlay`: 9%, over a control being pressed.
+    pub fn press_overlay(&self) -> Tint {
+        Tint {
+            rgb: self.overlay(),
+            alpha: 0.09,
+        }
+    }
+
+    /// `--err-subtle`: behind a destructive button.
+    pub fn err_subtle(&self) -> Tint {
+        Tint {
+            rgb: self.err,
+            alpha: 0.12,
+        }
+    }
+
+    /// `--grid-line`: the 24 px CAD grid behind viewport-like areas.
+    pub fn grid_line(&self) -> Tint {
+        Tint {
+            rgb: self.overlay(),
+            alpha: 0.04,
+        }
+    }
+
+    /// `--grid-line-major`: every fourth line of the grid.
+    pub fn grid_line_major(&self) -> Tint {
+        Tint {
+            rgb: self.overlay(),
+            alpha: 0.08,
+        }
+    }
+}
+
+/// The palette the window is drawn in now.
+static PALETTE: RwLock<Palette> = RwLock::new(Palette::CAMCRAFT);
+
+/// The palette the window is drawn in now.
+pub fn palette() -> Palette {
+    *PALETTE.read().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Draw the window in `palette` from now on, egui's own look with it.
+pub fn set_palette(ctx: &egui::Context, palette: Palette) {
+    *PALETTE.write().unwrap_or_else(PoisonError::into_inner) = palette;
+    paint(ctx, &palette);
+    ctx.request_repaint();
+}
+
+/// egui's own look in `palette`, dark or light, in every theme it has.
+fn paint(ctx: &egui::Context, palette: &Palette) {
+    ctx.set_theme(if palette.dark {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    });
+    ctx.all_styles_mut(|style| style.visuals = visuals(palette));
+}
+
+/// Each colour of the palette now, by its name there.
+macro_rules! palette_colours {
+    ($($name:ident),* $(,)?) => {
+        $(
+            #[doc = concat!("The palette's `", stringify!($name), "` now ([`Palette`]).")]
+            pub fn $name() -> [u8; 3] {
+                palette().$name
+            }
+        )*
+    };
+}
+
+palette_colours!(
+    bg,
+    surface_1,
+    surface_2,
+    surface_3,
+    surface_raised,
+    border,
+    border_strong,
+    text_1,
+    text_2,
+    text_3,
+    text_4,
+    accent,
+    accent_hover,
+    accent_press,
+    ok,
+    warn,
+    err,
+);
+
+/// Each tint of the palette now, by its name there.
+macro_rules! palette_tints {
+    ($($name:ident),* $(,)?) => {
+        $(
+            #[doc = concat!("The palette's `", stringify!($name), "` now ([`Palette`]).")]
+            pub fn $name() -> Tint {
+                palette().$name()
+            }
+        )*
+    };
+}
+
+palette_tints!(
+    accent_subtle,
+    selection,
+    hover_overlay,
+    press_overlay,
+    err_subtle,
+    grid_line,
+    grid_line_major,
+);
 
 /// `--text-xs`, from `tokens/typography.css`: captions, and the uppercase labels
 /// over cards and table columns.
@@ -346,29 +504,41 @@ fn widget(fill: [u8; 3], stroke: [u8; 3], text: [u8; 3]) -> egui::style::WidgetV
     }
 }
 
-/// The system's look, as egui's visuals. It has one theme, dark.
-fn visuals() -> egui::Visuals {
-    let mut v = egui::Visuals::dark();
-    v.widgets.noninteractive = widget(SURFACE_1, BORDER, TEXT_2);
-    v.widgets.inactive = widget(SURFACE_3, BORDER_STRONG, TEXT_1);
-    v.widgets.hovered = widget(HOVER_OVERLAY.over(SURFACE_3), BORDER_STRONG, TEXT_1);
-    v.widgets.active = widget(PRESS_OVERLAY.over(SURFACE_3), BORDER_STRONG, TEXT_1);
-    v.widgets.open = widget(SURFACE_RAISED, BORDER_STRONG, TEXT_1);
-    v.weak_text_color = Some(egui_color(TEXT_3));
+/// The system's look in `p`, as egui's visuals.
+fn visuals(p: &Palette) -> egui::Visuals {
+    let mut v = if p.dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    v.widgets.noninteractive = widget(p.surface_1, p.border, p.text_2);
+    v.widgets.inactive = widget(p.surface_3, p.border_strong, p.text_1);
+    v.widgets.hovered = widget(
+        p.hover_overlay().over(p.surface_3),
+        p.border_strong,
+        p.text_1,
+    );
+    v.widgets.active = widget(
+        p.press_overlay().over(p.surface_3),
+        p.border_strong,
+        p.text_1,
+    );
+    v.widgets.open = widget(p.surface_raised, p.border_strong, p.text_1);
+    v.weak_text_color = Some(egui_color(p.text_3));
     // Amber behind what is selected, and around the field being typed in: the
     // system's `--selection` and `--border-focus`.
-    v.selection.bg_fill = SELECTION.color();
-    v.selection.stroke = egui::Stroke::new(1.0, egui_color(ACCENT));
-    v.hyperlink_color = egui_color(ACCENT);
-    v.faint_bg_color = egui_color(SURFACE_2);
-    v.extreme_bg_color = egui_color(SURFACE_1);
-    v.text_edit_bg_color = Some(egui_color(SURFACE_1));
-    v.code_bg_color = egui_color(SURFACE_2);
-    v.warn_fg_color = egui_color(WARN);
-    v.error_fg_color = egui_color(ERR);
-    v.panel_fill = egui_color(SURFACE_1);
-    v.window_fill = egui_color(SURFACE_2);
-    v.window_stroke = egui::Stroke::new(1.0, egui_color(BORDER_STRONG));
+    v.selection.bg_fill = p.selection().color();
+    v.selection.stroke = egui::Stroke::new(1.0, egui_color(p.accent));
+    v.hyperlink_color = egui_color(p.accent);
+    v.faint_bg_color = egui_color(p.surface_2);
+    v.extreme_bg_color = egui_color(p.surface_1);
+    v.text_edit_bg_color = Some(egui_color(p.surface_1));
+    v.code_bg_color = egui_color(p.surface_2);
+    v.warn_fg_color = egui_color(p.warn);
+    v.error_fg_color = egui_color(p.err);
+    v.panel_fill = egui_color(p.surface_1);
+    v.window_fill = egui_color(p.surface_2);
+    v.window_stroke = egui::Stroke::new(1.0, egui_color(p.border_strong));
     v.window_corner_radius = egui::CornerRadius::same(RADIUS_LG);
     v.menu_corner_radius = egui::CornerRadius::same(RADIUS_SM);
     // `--shadow-dialog` and `--shadow-popover`; their 1 px ring is the stroke.
@@ -376,13 +546,13 @@ fn visuals() -> egui::Visuals {
         offset: [0, 24],
         blur: 64,
         spread: 0,
-        color: egui::Color32::from_black_alpha(179),
+        color: egui::Color32::from_black_alpha(if p.dark { 179 } else { 60 }),
     };
     v.popup_shadow = egui::Shadow {
         offset: [0, 8],
         blur: 24,
         spread: 0,
-        color: egui::Color32::from_black_alpha(153),
+        color: egui::Color32::from_black_alpha(if p.dark { 153 } else { 45 }),
     };
     v.window_highlight_topmost = false;
     v.collapsing_header_frame = false;
@@ -402,15 +572,14 @@ fn spacing(s: &mut egui::style::Spacing) {
     s.icon_width_inner = 8.0;
 }
 
-/// Set the design system on every theme egui has, fonts and all, so it holds
-/// whatever the OS prefers: the system has one theme. Called once, when the app
-/// starts.
+/// Set the design system on every theme egui has, fonts and all, in the
+/// palette now ([`palette`]), so it holds whatever the OS prefers. Called
+/// once, when the app starts; [`set_palette`] changes the colours after.
 pub fn apply(ctx: &egui::Context) {
     use egui::{FontFamily, FontId, TextStyle};
     ctx.set_fonts(fonts());
-    ctx.set_theme(egui::Theme::Dark);
+    paint(ctx, &palette());
     ctx.all_styles_mut(|style| {
-        style.visuals = visuals();
         spacing(&mut style.spacing);
         style.text_styles = [
             (
@@ -542,6 +711,9 @@ pub fn egui_color(c: [u8; 3]) -> eframe::egui::Color32 {
 mod tests {
     use super::*;
 
+    /// The design system's own palette.
+    const C: Palette = Palette::CAMCRAFT;
+
     const COLORS: &str = include_str!("../../design/system/tokens/colors.css");
     const TYPOGRAPHY: &str = include_str!("../../design/system/tokens/typography.css");
     const SPACING: &str = include_str!("../../design/system/tokens/spacing.css");
@@ -585,17 +757,19 @@ mod tests {
     #[test]
     fn semantic_colours_are_the_ones_the_system_names() {
         for (alias, gray, ours, theirs) in [
-            ("--surface-1", "--gray-1", SURFACE_1, GRAY_1),
-            ("--surface-2", "--gray-2", SURFACE_2, GRAY_2),
-            ("--surface-3", "--gray-3", SURFACE_3, GRAY_3),
-            ("--surface-raised", "--gray-4", SURFACE_RAISED, GRAY_4),
-            ("--border", "--gray-4", BORDER, GRAY_4),
-            ("--border-strong", "--gray-5", BORDER_STRONG, GRAY_5),
-            ("--text-1", "--gray-9", TEXT_1, GRAY_9),
-            ("--text-2", "--gray-8", TEXT_2, GRAY_8),
-            ("--text-3", "--gray-7", TEXT_3, GRAY_7),
-            ("--text-4", "--gray-6", TEXT_4, GRAY_6),
-            ("--accent", "--amber-5", ACCENT, AMBER_5),
+            ("--surface-1", "--gray-1", C.surface_1, GRAY_1),
+            ("--surface-2", "--gray-2", C.surface_2, GRAY_2),
+            ("--surface-3", "--gray-3", C.surface_3, GRAY_3),
+            ("--surface-raised", "--gray-4", C.surface_raised, GRAY_4),
+            ("--border", "--gray-4", C.border, GRAY_4),
+            ("--border-strong", "--gray-5", C.border_strong, GRAY_5),
+            ("--text-1", "--gray-9", C.text_1, GRAY_9),
+            ("--text-2", "--gray-8", C.text_2, GRAY_8),
+            ("--text-3", "--gray-7", C.text_3, GRAY_7),
+            ("--text-4", "--gray-6", C.text_4, GRAY_6),
+            ("--accent", "--amber-5", C.accent, AMBER_5),
+            ("--accent-hover", "--amber-3", C.accent_hover, AMBER_3),
+            ("--accent-press", "--amber-6", C.accent_press, AMBER_6),
         ] {
             let want = format!("{alias}:var({gray})");
             assert!(COLORS.contains(&want), "colors.css has no {want}");
@@ -607,13 +781,13 @@ mod tests {
     #[test]
     fn tints_match_the_design_system() {
         for (token, tint, css) in [
-            ("--accent-subtle:", ACCENT_SUBTLE, COLORS),
-            ("--selection:", SELECTION, COLORS),
-            ("--hover-overlay:", HOVER_OVERLAY, COLORS),
-            ("--press-overlay:", PRESS_OVERLAY, COLORS),
-            ("--err-subtle:", ERR_SUBTLE, COLORS),
-            ("--grid-line:", GRID_LINE, EFFECTS),
-            ("--grid-line-major:", GRID_LINE_MAJOR, EFFECTS),
+            ("--accent-subtle:", C.accent_subtle(), COLORS),
+            ("--selection:", C.selection(), COLORS),
+            ("--hover-overlay:", C.hover_overlay(), COLORS),
+            ("--press-overlay:", C.press_overlay(), COLORS),
+            ("--err-subtle:", C.err_subtle(), COLORS),
+            ("--grid-line:", C.grid_line(), EFFECTS),
+            ("--grid-line-major:", C.grid_line_major(), EFFECTS),
         ] {
             let [r, g, b] = tint.rgb;
             let alpha = format!("{:.2}", tint.alpha);
@@ -665,9 +839,9 @@ mod tests {
     /// A tint laid over a colour lands between the two, by its opacity.
     #[test]
     fn a_tint_over_a_colour_blends_by_its_opacity() {
-        assert_eq!(HOVER_OVERLAY.over([0, 0, 0]), [13, 13, 13]);
-        assert_eq!(SELECTION.over(AMBER_5), AMBER_5);
-        assert_eq!(SELECTION.color().a(), 64);
+        assert_eq!(C.hover_overlay().over([0, 0, 0]), [13, 13, 13]);
+        assert_eq!(C.selection().over(AMBER_5), AMBER_5);
+        assert_eq!(C.selection().color().a(), 64);
     }
 
     /// Applied, every text style takes its size from the scale, and the caption
@@ -696,9 +870,9 @@ mod tests {
         apply(&ctx);
         for theme in [Theme::Dark, Theme::Light] {
             let v = &ctx.style_of(theme).visuals;
-            assert_eq!(v.panel_fill, egui_color(SURFACE_1));
-            assert_eq!(v.window_fill, egui_color(SURFACE_2));
-            assert_eq!(v.selection.bg_fill, SELECTION.color());
+            assert_eq!(v.panel_fill, egui_color(C.surface_1));
+            assert_eq!(v.window_fill, egui_color(C.surface_2));
+            assert_eq!(v.selection.bg_fill, C.selection().color());
             assert_eq!(v.widgets.inactive.corner_radius.nw, RADIUS_SM);
             assert_eq!(v.window_corner_radius.nw, RADIUS_LG);
         }

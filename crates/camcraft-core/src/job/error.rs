@@ -97,6 +97,16 @@ pub enum JobError {
         /// Which tool it asked for.
         tool: String,
     },
+    /// A setting's expression could not be worked out.
+    #[error("operation '{operation}': {setting}'s expression cannot be worked out: {message}")]
+    BadExpression {
+        /// Which operation, as `setup/operation`.
+        operation: String,
+        /// The setting, by its place (`passes.stepover`).
+        setting: String,
+        /// Why.
+        message: String,
+    },
     /// A value was outside its usable range.
     #[error("{field} must be {range}, got {value}")]
     BadValue {

@@ -165,13 +165,16 @@ pub(super) fn show(
     // it starts it as.
     let def = doc.operation_defaults(setup, index)?;
     let started = doc.operation(setup, index).map(|op| started(op, &def))?;
+    // Each tab's form: its settings against those, and an ƒx on each number.
+    let faults = doc.expression_faults(setup, index);
+    let form = |op: &Operation| Defaults::of(op, &def).started(&started).expressive(faults);
     match page {
         OperationTab::Tool => {
             tool::tool(ui, doc, m, (setup, index), tool_name.as_deref(), actions);
         }
         OperationTab::Geometry => {
             let op = doc.operation_mut(setup, index)?;
-            let mut d = Defaults::of(&*op, &def).started(&started);
+            let mut d = form(op);
             geometry::geometry(
                 ui,
                 (&mut d, op),
@@ -185,19 +188,19 @@ pub(super) fn show(
         }
         OperationTab::Heights => {
             let op = doc.operation_mut(setup, index)?;
-            let mut d = Defaults::of(&*op, &def).started(&started);
+            let mut d = form(op);
             heights::heights(ui, &mut d, m, op);
             d.apply(op);
         }
         OperationTab::Passes => {
             let op = doc.operation_mut(setup, index)?;
-            let mut d = Defaults::of(&*op, &def).started(&started);
+            let mut d = form(op);
             passes::passes(ui, m, op, &mut d, least, diameter);
             d.apply(op);
         }
         OperationTab::Linking => {
             let op = doc.operation_mut(setup, index)?;
-            let mut d = Defaults::of(&*op, &def).started(&started);
+            let mut d = form(op);
             linking::linking(ui, m, op, &mut d, diameter, corner);
             d.apply(op);
         }

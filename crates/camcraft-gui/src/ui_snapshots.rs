@@ -125,6 +125,23 @@ fn main_window_after_a_run() {
     h.run_steps(2);
     shoot(&mut h, "after_run");
 
+    // Setting up, M shows the material in place of the part, as the setup
+    // leaves it, and with roughing selected, as roughing does; M again, the
+    // part.
+    h.key_press(egui::Key::M);
+    catch_up(&mut h, 60);
+    shoot(&mut h, "setup_material");
+    let doc = h.state_mut().doc_for_snapshot().unwrap();
+    let selected = std::mem::replace(
+        &mut doc.selection,
+        crate::document::Selection::Operation("top".into(), 0),
+    );
+    catch_up(&mut h, 60);
+    shoot(&mut h, "setup_material_after_rough");
+    h.state_mut().doc_for_snapshot().unwrap().selection = selected;
+    h.key_press(egui::Key::M);
+    h.run_steps(2);
+
     // Played back with the toolpaths: part-way through roughing, with the cutter
     // where the playhead stands.
     h.state_mut().playback_for_snapshot(true);
@@ -242,6 +259,64 @@ fn main_window_after_a_run() {
     h.state_mut().fail_a_check_and_post_for_snapshot(&out);
     h.run_steps(3);
     shoot(&mut h, "checks_failed_post_prompt");
+}
+
+/// The example, run and showing its cut stock with an operation open, in
+/// Omarchy's Tokyo Night and Catppuccin Latte, as the window follows the
+/// desktop's theme. The palette is the whole window's: run alone.
+#[test]
+#[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
+fn omarchy_themes() {
+    const THEMES: [(&str, &str); 2] = [
+        (
+            "omarchy_tokyo_night",
+            "mode = \"dark\"
+accent = \"#7aa2f7\"
+background = \"#1a1b26\"
+             dark_background = \"#13141c\"
+darker_background = \"#0e0e14\"
+             lighter_background = \"#24283b\"
+foreground = \"#a9b1d6\"
+             dark_foreground = \"#565f89\"
+bright_foreground = \"#c0caf5\"
+",
+        ),
+        (
+            "omarchy_catppuccin_latte",
+            "mode = \"light\"
+accent = \"#1e66f5\"
+background = \"#eff1f5\"
+             dark_background = \"#e3e4e8\"
+darker_background = \"#d7d8dc\"
+             lighter_background = \"#dce0e8\"
+foreground = \"#4c4f69\"
+             dark_foreground = \"#9ca0b0\"
+bright_foreground = \"#4c4f69\"
+",
+        ),
+    ];
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    h.state_mut()
+        .open_job(&ctx, repo("examples/rail-jig.camcraft"));
+    settle(&mut h);
+    h.state_mut().start_run(&ctx);
+    settle(&mut h);
+    h.key_press(egui::Key::M);
+    if let Some(doc) = h.state_mut().doc_for_snapshot() {
+        doc.selection = crate::document::Selection::Operation("top".into(), 0);
+    }
+    catch_up(&mut h, 60);
+    // The first frame drawn after the stock is filled can outlast the GPU's
+    // wait: drawn once first, unseen.
+    let _ = h.render();
+    for (name, colors) in THEMES {
+        let palette = crate::ui::desktop::palette_of(colors, false).unwrap();
+        crate::ui::theme::set_palette(&ctx, palette);
+        h.run_steps(3);
+        shoot(&mut h, name);
+    }
+    crate::ui::theme::set_palette(&ctx, crate::ui::theme::Palette::CAMCRAFT);
 }
 
 /// A job with a top and a bottom setup sharing one block, open beside the example,
@@ -481,6 +556,12 @@ fn setup_panel() {
             *lift_height = 1.0;
         }
         op.passes.smoothing = true;
+        // Its optimal load from the tool, and a stepdown that cannot be
+        // worked out: the one in the accent, the other in red.
+        op.expressions
+            .insert("passes.stepover".into(), "tool_diameter * 0.2".into());
+        op.expressions
+            .insert("passes.stepdown".into(), "tool_fluteLength * depth".into());
     }
     h.run_steps(3);
     shoot(&mut h, "operation_passes_adaptive");

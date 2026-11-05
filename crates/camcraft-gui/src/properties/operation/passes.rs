@@ -177,11 +177,11 @@ pub(super) fn passes(
                 d.row(ui, &pass::MACHINE_CAVITIES, "machine_cavities", |ui| {
                     ui.checkbox(machine_cavities, "go down into closed pockets");
                 });
-                if *machine_cavities {
+                widgets::dependent(ui, *machine_cavities, |ui| {
                     d.row(ui, &pass::SLOT_CLEARING, "slot_clearing", |ui| {
                         ui.checkbox(slot_clearing, "a slot along the middle first");
                     });
-                    if *slot_clearing {
+                    widgets::dependent(ui, *slot_clearing, |ui| {
                         d.row(ui, &pass::SLOT_WIDTH, "slot_width", |ui| {
                             let start = 1.5 * across(diameter);
                             widgets::optional_positive(
@@ -194,8 +194,8 @@ pub(super) fn passes(
                                 },
                             );
                         });
-                    }
-                }
+                    });
+                });
                 d.row(ui, &pass::DIRECTION_ADAPTIVE, "direction", |ui| {
                     widgets::segmented(
                         ui,
@@ -220,13 +220,13 @@ pub(super) fn passes(
                 d.row(ui, &pass::FLAT_AREAS, "flat_areas", |ui| {
                     ui.checkbox(flat_areas, "a level on each flat face and peak");
                 });
-                if *flat_areas {
+                widgets::dependent(ui, *flat_areas, |ui| {
                     d.row(ui, &pass::MIN_FLAT_STEPDOWN, "min_flat_stepdown", |ui| {
                         widgets::optional_positive(ui, min_flat_stepdown, 0.5, "none", |ui, v| {
                             m.length_field(ui, v, 0.01, 100.0, "");
                         });
                     });
-                }
+                });
             }
             StrategySpec::Profile { conventional, .. } | StrategySpec::Pocket { conventional } => {
                 climb_or_conventional(ui, d, (&pass::DIRECTION_2D, "conventional"), conventional);
@@ -340,7 +340,7 @@ fn feed_optimization(
     let given = FeedOptimization::default().sizes(across(diameter) / 2.0, feed);
     let tool_radius = left_out(m, diameter, given.radius, "the tool's radius");
     let start = given.radius;
-    form(ui, "feed_optimization", |ui| {
+    widgets::sub_form(ui, "feed_optimization", |ui| {
         d.row(
             ui,
             &pass::MAX_DIRECTIONAL_CHANGE,
@@ -419,7 +419,7 @@ fn smoothing(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, passes:
         d.row(ui, &pass::SMOOTHING, "passes.smoothing", |ui| {
             ui.checkbox(&mut passes.smoothing, "fit arcs and longer lines");
         });
-        if passes.smoothing {
+        widgets::dependent(ui, passes.smoothing, |ui| {
             d.row(
                 ui,
                 &pass::SMOOTHING_TOLERANCE,
@@ -436,7 +436,7 @@ fn smoothing(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, passes:
                     );
                 },
             );
-        }
+        });
     });
 }
 
@@ -464,7 +464,7 @@ fn finishing(
     // What each value left out comes to, as the engine has it.
     let given = Finishing::default().sizes(across(diameter), feed);
     let tenth = left_out(m, diameter, given.stepover, "a tenth of the tool");
-    form(ui, "finishing", |ui| {
+    widgets::sub_form(ui, "finishing", |ui| {
         d.row(
             ui,
             &pass::FINISHING_PASSES,
@@ -550,7 +550,7 @@ fn multiple_depths(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, o
         return;
     };
     ui.add_space(theme::SPACE_2);
-    form(ui, "multiple-depths", |ui| {
+    widgets::sub_form(ui, "multiple-depths", |ui| {
         d.row(ui, &pass::STEPDOWN, "passes.stepdown", |ui| {
             m.length_field(ui, stepdown, 0.05, 100.0, "");
         });
@@ -606,25 +606,24 @@ fn shallow(
     d.row(ui, &pass::SHALLOW_AREAS, "shallow_areas", |ui| {
         ui.checkbox(on, "levels between where the slope is shallow");
     });
-    if !*on {
-        return;
-    }
-    d.row(
-        ui,
-        &pass::MIN_SHALLOW_STEPDOWN,
-        "min_shallow_stepdown",
-        |ui| {
-            m.length_field(ui, min_stepdown, 0.01, stepdown.max(0.01), "");
-        },
-    );
-    d.row(
-        ui,
-        &pass::MAX_SHALLOW_STEPOVER,
-        "max_shallow_stepover",
-        |ui| {
-            m.length_field(ui, max_stepover, 0.01, 1000.0, "");
-        },
-    );
+    widgets::dependent(ui, *on, |ui| {
+        d.row(
+            ui,
+            &pass::MIN_SHALLOW_STEPDOWN,
+            "min_shallow_stepdown",
+            |ui| {
+                m.length_field(ui, min_stepdown, 0.01, stepdown.max(0.01), "");
+            },
+        );
+        d.row(
+            ui,
+            &pass::MAX_SHALLOW_STEPOVER,
+            "max_shallow_stepover",
+            |ui| {
+                m.length_field(ui, max_stepover, 0.01, 1000.0, "");
+            },
+        );
+    });
 }
 
 /// Whether `op` leaves any stock: of what its strategy cuts with, so a wall's
@@ -686,7 +685,7 @@ fn stock_to_leave(
     ui.add_space(theme::SPACE_2);
     let stock = &mut op.passes.stock_to_leave;
     let before = *stock;
-    form(ui, "stock-to-leave", |ui| {
+    widgets::sub_form(ui, "stock-to-leave", |ui| {
         if leave == Leave::Both {
             d.row(ui, &pass::WALLS, "passes.stock_to_leave.radial", |ui| {
                 m.wall_to_leave_field(ui, &mut stock.radial, least.radial, "");
@@ -711,7 +710,7 @@ fn tabs(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, tabs: &mut O
     let Some(t) = tabs else {
         return;
     };
-    form(ui, "tabs", |ui| {
+    widgets::sub_form(ui, "tabs", |ui| {
         d.row(ui, &pass::TAB_SHAPE, "passes.tabs.shape", |ui| {
             widgets::select(
                 ui,

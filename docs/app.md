@@ -87,8 +87,12 @@ it.
   tool whose preset gives no stepover sets Fusion's: a quarter of the diameter for
   parallel with a square end, the tolerance's cusp with a round one, and 0.6 of
   the diameter for pocket clearing and 2D pockets; adaptive clearing's stepover
-  is its *Optimal load*, a tenth of the diameter, which a preset's stepover does
-  not change. Scallop's stepover starts as parallel's, and its *Passes* has both
+  is its *Optimal load*, Fusion's `tool_diameter * 0.4`, which a preset's
+  stepover does not change. Adaptive clearing and pocket clearing also take
+  Fusion's maximum roughing stepdown from the tool,
+  `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)`, unless the preset
+  gives one; a tool with no flute length is taken to have two diameters of
+  flutes. Scallop's stepover starts as parallel's, and its *Passes* has both
   ways, climb or conventional, outside in or inside out, and the slopes it
   finishes between. Contour's has the same directions, by depth or by area, and
   the slopes, and it has *Multiple depths*, Top and Bottom but no stepover;
@@ -121,7 +125,13 @@ it.
   ticked to slow down in corners, then the most a cut may turn, the reduced
   feed's radius, distance and feed, each saying its default, and whether only
   inner corners are slowed. Profiles can leave tabs, from *Passes*: shape,
-  width, height and spacing. Which rows a
+  width, height and spacing. A setting that only counts while another is on
+  hangs under it, indented with a guide down its left. Any number of an
+  operation's can be worked out from an expression instead, as Fusion's:
+  *ƒx* beside it starts one at its value, typed in place as
+  `tool_diameter * 0.4` ([jobs](jobs.md#expressions)); the field then shows
+  what it comes to, an expression that cannot be worked out is red with why on
+  hover, and × drops it, keeping the number. Which rows a
   strategy shows is the core's to say (`StrategySpec::uses`), as is which
   settings it reads. The panel's foot says where generating the operation
   stands, with Stop while it is generated and Generate again where it was
@@ -247,8 +257,17 @@ and the front at the bottom. Picking works the same in both.
 **Setup** is for setting the job up: the part, the stock's outline, and the
 selection's toolpaths in full, coloured by move role (an operation's alone, or
 the whole setup's), as screen-space lines that stay readable on Retina. There is
-no cutter and no material. An operation's picked geometry shows only on its
-Geometry tab, and its height planes only on its Heights tab.
+no cutter. An operation's picked geometry shows only on its Geometry tab, and
+its height planes only on its Heights tab.
+
+**Part or cut stock**, at the top of the Show panel while setting up (or M),
+puts the stock as the selected operation leaves it cut in place of the part,
+its outline and work zero; with no operation selected, as the whole setup
+leaves it. It follows each edit as the setup is generated again, so a change to
+an operation is seen in what it cuts, not only in its toolpaths. Each end of an
+operation is kept from the run, so it is put back, not cut again. The
+toolpaths over it are off until asked for, as in Playback. Until the new run
+comes in, the last one's stock stays in view rather than the view going blank.
 
 **Playback** is for watching the program cut: the material as it stands at the
 playhead, and the job's own cutter there, hidden by the material and part in front
@@ -344,6 +363,16 @@ cannot cut with are skipped, and the manager says which and why.
 
 Not yet: Fusion's own `.json` libraries, which carry holders; tapered ball mills;
 the work offset manager.
+
+## Themes
+
+On Omarchy the window follows the desktop's theme: its `colors.toml` is read
+as the app starts and watched, and the window changes with it as soon as the
+theme is switched, a light theme light. The surfaces, hairlines, text and
+accent are the theme's; what says something keeps the design system's
+colours: the moves by role, the axes, picks and boundaries in the view, the
+material, and ok, warning and error. Elsewhere the window is the design
+system's, dark ([decision 0018](decisions/0018-themes.md) plans the rest).
 
 ## Design system
 

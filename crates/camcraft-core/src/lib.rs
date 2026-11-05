@@ -35,6 +35,7 @@
 
 pub mod control;
 pub mod cutter;
+pub mod expr;
 pub mod job;
 pub mod memo;
 pub mod path;

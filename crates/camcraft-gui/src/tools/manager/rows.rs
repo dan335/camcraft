@@ -84,13 +84,13 @@ impl ToolManager {
                     egui::RichText::new(
                         "Select a tool to edit it; drag it onto a folder to move it.",
                     )
-                    .color(theme::egui_color(theme::TEXT_4)),
+                    .color(theme::egui_color(theme::text_4())),
                 );
                 return;
             };
             ui.label(
                 widgets::mono(name.as_str(), theme::TEXT_SM)
-                    .color(theme::egui_color(theme::TEXT_1)),
+                    .color(theme::egui_color(theme::text_1())),
             );
             ui.add_space(theme::SPACE_3);
             if is_system(folder) {

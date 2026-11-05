@@ -166,8 +166,8 @@ plunges down off it at the plunge feed, `"triangular"` climbs and ramps off at
 **Adaptive clearing** (`strategy = "adaptive"`) is Fusion's 3D Adaptive
 Clearing ([decision 0007](decisions/0007-adaptive-clearing.md)): Z levels a
 stepdown apart, each cleared by passes steered step by step to hold the tool's
-engagement at the *optimal load*, which is its `passes.stepover` (a tenth of the
-tool to start). Passes start beside the block where they can, and go down a helix
+engagement at the *optimal load*, which is its `passes.stepover` (0.4 of the
+tool to start, as Fusion's). Passes start beside the block where they can, and go down a helix
 (`linking.helix_diameter`, Fusion's: 0.95 × the tool less its corners, no less
 than a quarter of the tool) where they cannot; `direction` is
 `"climb"` (the default), `"conventional"` or `"both-ways"`; `flat_areas` (on by
@@ -388,6 +388,37 @@ needs a volumetric stock.
 The tolerance is a job parameter, never a constant: it drives sampling, grid
 resolution, STEP tessellation and the gouge threshold alike. A job made in the app
 starts at 0.05 mm; a file that leaves it out gets 0.01 mm.
+
+### Expressions
+
+An operation's setting can be worked out from an expression, as Fusion's
+parameter expressions are, under `expressions` with the setting's place in the
+file as its key:
+
+```toml
+[setup.operation.expressions]
+"passes.stepover" = "tool_diameter * 0.4"
+"passes.stepdown" = "Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)"
+```
+
+The setting still holds the number, so the file reads the same without them;
+it is worked out again when the job is read and whenever what it reads
+changes, a new tool above all. The names are Fusion's: `tool_diameter`,
+`tool_cornerRadius`, `tool_fluteLength` (two diameters where the tool gives
+none), `tool_shoulderLength`, `tool_shaftDiameter`, `tool_overallLength`,
+`tool_taperAngle`, `tool_numberOfFlutes`, `tool_type` (`'flat end mill'`,
+`'ball end mill'`, `'bull nose end mill'`, `'chamfer mill'`, `'drill'`),
+`tool_spindleSpeed`, `tool_feedCutting`, `tool_feedPlunge`, `tolerance`,
+`stepover`, `optimalLoad`, `maximumStepdown`, `stockToLeave`,
+`axialStockToLeave` and `safeDistance`. Numbers take a length unit (`2mm`,
+`0.1in`, `1cm`); one without is millimetres, or the setting's own unit. There
+are `+ - * / ^`, comparisons, `&& || !`, `a ? b : c`, and Fusion's `Math.min`,
+`Math.max`, `Math.abs`, `Math.sqrt`, `Math.floor`, `Math.ceil`, `Math.round`,
+`Math.floorto`, `Math.ceilto`, `Math.roundto` and the trigonometric functions,
+their arguments split by `;` or `,`. Expressions read the settings as they
+stand, and are worked out in turns until none changes, so one may read what
+another sets. An expression that cannot be worked out stops its setup from
+running, and says why.
 
 ### Format
 

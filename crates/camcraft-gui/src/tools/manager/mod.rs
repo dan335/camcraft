@@ -258,7 +258,7 @@ impl ToolManager {
     /// The whole manager, in `ui`.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let bar = egui::Frame::new()
-            .fill(theme::egui_color(theme::SURFACE_1))
+            .fill(theme::egui_color(theme::surface_1()))
             .inner_margin(egui::Margin::symmetric(12, 8));
         egui::Panel::top("tools-top")
             .frame(bar)
@@ -280,7 +280,7 @@ impl ToolManager {
             .min_size(theme::PANEL + 40.0)
             .frame(
                 egui::Frame::new()
-                    .fill(theme::egui_color(theme::SURFACE_1))
+                    .fill(theme::egui_color(theme::surface_1()))
                     .inner_margin(egui::Margin::symmetric(16, 12)),
             )
             .show(ui, |ui| {
@@ -289,7 +289,7 @@ impl ToolManager {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
-                    .fill(theme::egui_color(theme::BG))
+                    .fill(theme::egui_color(theme::bg()))
                     .inner_margin(egui::Margin::symmetric(12, 10)),
             )
             .show(ui, |ui| self.table(ui));
@@ -343,7 +343,7 @@ impl ToolManager {
             ui.label(
                 widgets::medium("Tool library", theme::TEXT_MD)
                     .family(egui::FontFamily::Name(theme::SEMIBOLD.into()))
-                    .color(theme::egui_color(theme::TEXT_1)),
+                    .color(theme::egui_color(theme::text_1())),
             );
             widgets::tag(ui, &self.library.edited.count().to_string())
                 .on_hover_text("tools in the library");
@@ -351,7 +351,7 @@ impl ToolManager {
             ui.label(
                 Icon::Search
                     .text(16.0)
-                    .color(theme::egui_color(theme::TEXT_3)),
+                    .color(theme::egui_color(theme::text_3())),
             );
             ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
@@ -407,7 +407,7 @@ impl ToolManager {
             };
             widgets::status_dot(ui, level.color(), true);
             let color = if level == Level::Ok {
-                theme::egui_color(theme::TEXT_3)
+                theme::egui_color(theme::text_3())
             } else {
                 Level::Err.color()
             };
@@ -415,14 +415,14 @@ impl ToolManager {
             if let Some(p) = &self.library_path {
                 ui.label(
                     widgets::mono(short_path(p), theme::TEXT_XS)
-                        .color(theme::egui_color(theme::TEXT_4)),
+                        .color(theme::egui_color(theme::text_4())),
                 )
                 .on_hover_text(p.display().to_string());
             }
             if let Some(message) = &self.message {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let color = match message.level {
-                        Level::Ok => theme::egui_color(theme::TEXT_2),
+                        Level::Ok => theme::egui_color(theme::text_2()),
                         level => level.color(),
                     };
                     let label = ui.add(
@@ -530,13 +530,13 @@ fn breadcrumb(ui: &mut egui::Ui, path: &[String]) {
         for (i, part) in parts.enumerate() {
             if i > 0 {
                 ui.label(
-                    widgets::mono("/", theme::TEXT_SM).color(theme::egui_color(theme::TEXT_4)),
+                    widgets::mono("/", theme::TEXT_SM).color(theme::egui_color(theme::text_4())),
                 );
             }
             let color = if i == last {
-                theme::TEXT_2
+                theme::text_2()
             } else {
-                theme::TEXT_3
+                theme::text_3()
             };
             ui.label(widgets::mono(part, theme::TEXT_SM).color(theme::egui_color(color)));
         }

@@ -33,7 +33,7 @@ pub fn parse_job(text: &str, name: &str) -> Result<Job, SessionError> {
     {
         return Err(JobError::UnsupportedVersion(v).into());
     }
-    toml::from_str(text).map_err(|source| match misplaced(text, &source) {
+    let mut job: Job = toml::from_str(text).map_err(|source| match misplaced(text, &source) {
         Some((key, section)) => SessionError::JobMisplaced {
             path: name.to_string(),
             key,
@@ -41,7 +41,12 @@ pub fn parse_job(text: &str, name: &str) -> Result<Job, SessionError> {
             source: Box::new(source),
         },
         None => parse(source),
-    })
+    })?;
+    // Settings as their expressions have them now: the tool may have been
+    // edited in the file since. One that cannot be worked out keeps what it
+    // was saved with, and checking the setup says why.
+    job.work_out_expressions();
+    Ok(job)
 }
 
 /// The sections of an operation a setting may belong in.

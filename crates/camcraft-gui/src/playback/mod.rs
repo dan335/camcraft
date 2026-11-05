@@ -1,7 +1,8 @@
 //! Looking at a setup, in one of two modes. Setting up: the part, the stock's
-//! outline and the selection's toolpaths in full. Playing back: the playhead
-//! through its program in machine order, the material cut as far as it and the
-//! cutter there. And in both, what its last run did and its steep descents.
+//! outline and the selection's toolpaths in full, or in place of the part, the
+//! material as the selection leaves it. Playing back: the playhead through its
+//! program in machine order, the material cut as far as it and the cutter
+//! there. And in both, what its last run did and its steep descents.
 //!
 //! All of it is per setup, kept in its [`SetupState`], so each setup of each open
 //! job keeps its own mode and place.
@@ -12,6 +13,7 @@
 mod checks_window;
 mod show_panel;
 
+use camcraft_core::replay::Position;
 use camcraft_geom::mesh::Aabb;
 use camcraft_session::checks::Finding;
 use eframe::egui;
@@ -61,6 +63,39 @@ pub fn cannot_play_back(state: &SetupState) -> Option<&'static str> {
     }
 }
 
+/// Whether the material is shown: playing back, or setting up with it asked
+/// for and a run laid out as the setup is now to show it from. Otherwise the
+/// part is.
+pub fn showing_material(state: &SetupState) -> bool {
+    playing_back(state) || (state.view.material && paths_fit(state))
+}
+
+/// The operation of setup `name` that `selection` is, if it is one of its.
+pub fn selected_operation(selection: &Selection, name: &str) -> Option<usize> {
+    match selection {
+        Selection::Operation(s, i) if s == name => Some(*i),
+        _ => None,
+    }
+}
+
+/// Where the material should stand. Playing back, at the playhead; setting
+/// up, at the end of operation `only`, or of the setup. An end is a keyframe of
+/// the run, so it is put back rather than cut.
+fn goal(state: &SetupState, scene: &Scene, only: Option<usize>) -> Goal {
+    let (at, fraction) = if playing_back(state) {
+        scene.target(state.view.at)
+    } else {
+        // Past the run's last operation, as one edited and not yet generated
+        // again is, is the end of the last it has.
+        let end = Position {
+            op: only.unwrap_or(usize::MAX),
+            moves: usize::MAX,
+        };
+        (end, 0.0)
+    };
+    Goal { at, fraction }
+}
+
 /// Back to setting up, once there is nothing that fits to play back: a run
 /// forgotten, or the setup laid out otherwise since.
 pub fn settle_mode(state: &mut SetupState) {
@@ -77,25 +112,44 @@ pub fn set_mode(state: &mut SetupState, mode: ViewMode) {
     }
 }
 
-/// Keep the playback material following the playhead, while it is shown.
-pub fn follow_stock(ctx: &egui::Context, state: &mut SetupState) {
-    if !playing_back(state) {
+/// Keep the material where it should stand ([`goal`]), while it is shown,
+/// with `only` the operation selected. Not shown, it is kept for showing again
+/// while it is of the last run, and let go once it is not.
+pub fn follow_stock(ctx: &egui::Context, state: &mut SetupState, only: Option<usize>) {
+    let current = |s: &SetupState| {
+        s.live
+            .as_ref()
+            .zip(s.ran.as_ref())
+            .is_some_and(|(l, r)| l.scene_key == r.scene_key)
+    };
+    if !showing_material(state) {
+        if !current(state) {
+            state.live = None;
+            state.outgoing = None;
+        }
         return;
+    }
+    if !current(state) {
+        // The last run's material is drawn until the new one's is filled.
+        if let Some(mut last) = state.live.take().filter(LiveStock::filled) {
+            last.halt();
+            state.outgoing = Some(last);
+        }
+        state.live = state
+            .ran
+            .as_ref()
+            .and_then(|ran| LiveStock::start(ctx, ran));
     }
     let Some(ran) = &state.ran else {
         return;
     };
-    if state
-        .live
-        .as_ref()
-        .is_none_or(|l| l.scene_key != ran.scene_key)
-    {
-        state.live = LiveStock::start(ctx, ran);
-    }
-    let (at, fraction) = ran.scene.target(state.view.at);
+    let goal = goal(state, &ran.scene, only);
     if let Some(live) = &mut state.live {
-        live.seek(Goal { at, fraction });
+        live.seek(goal);
         live.poll();
+        if live.filled() {
+            state.outgoing = None;
+        }
     }
 }
 
@@ -124,13 +178,13 @@ pub fn jump_to(state: &mut SetupState, steep: Steep) -> DVec3 {
 pub fn content<'a>(state: &'a SetupState, name: &str, selection: &Selection) -> Content<'a> {
     let view = &state.view;
     let back = playing_back(state);
+    let material = showing_material(state);
     let scene = state.ran.as_ref().filter(|_| paths_fit(state));
     let cutter = scene
         .filter(|_| back && view.show_cutter)
         .and_then(|r| r.scene.cutter_at(view.at));
-    let stock = scene.filter(|_| back).and_then(|r| {
-        let live = state.live.as_ref().filter(|l| l.scene_key == r.scene_key)?;
-        let (key, image, changed) = live.shown()?;
+    let stock = scene.filter(|_| material).and_then(|_| {
+        let (key, image, changed) = state.drawn_stock()?.shown()?;
         Some(StockShow {
             key,
             image: StockRef(image),
@@ -151,21 +205,13 @@ pub fn content<'a>(state: &'a SetupState, name: &str, selection: &Selection) -> 
         ),
         (None, None) => (None, None),
     };
-    let (show_part, show_paths, shown, ops, only) = if back {
-        (
-            view.part_in_playback,
-            view.paths_in_playback,
-            view.at.shown,
-            view.view.ops,
-            None,
-        )
+    let show_paths = view.paths(back, material);
+    let (show_part, shown, ops, only) = if back {
+        (view.part_in_playback, view.at.shown, view.view.ops, None)
     } else {
         // Setting up: the selection's toolpaths, all of them. An operation of
         // this setup is its alone; anything else, the setup's.
-        let only = match selection {
-            Selection::Operation(s, i) if s == name => Some(*i),
-            _ => None,
-        };
+        let only = selected_operation(selection, name);
         let ops = only.map_or(u32::MAX, |i| {
             u32::try_from(i)
                 .ok()
@@ -173,8 +219,12 @@ pub fn content<'a>(state: &'a SetupState, name: &str, selection: &Selection) -> 
                 .unwrap_or(0)
         });
         let all = scene.map_or(0, |r| r.scene.segments.len());
-        (view.view.part, view.show_paths, all, ops, only)
+        // The material in place of the part, as playing back has it.
+        (view.view.part && !material, all, ops, only)
     };
+    // Setting up, the material stands for the stock: its outline and work zero
+    // go with the part. Playing back, they are as ticked.
+    let outlined = back || !material;
     Content {
         part,
         part_bounds,
@@ -187,12 +237,13 @@ pub fn content<'a>(state: &'a SetupState, name: &str, selection: &Selection) -> 
         stock,
         view: View {
             part: show_part,
+            stock: view.view.stock && outlined,
+            origin: view.view.origin && outlined,
             roles: if show_paths { view.view.roles } else { 0 },
             ops,
             only,
             shown,
             cutter,
-            ..view.view
         },
         selection: None,
         hover: None,
@@ -225,5 +276,23 @@ mod tests {
         assert_eq!(content(&state, "top", &other).view.only, None);
         let setup = Selection::Setup("top".into());
         assert_eq!(content(&state, "top", &setup).view.only, None);
+    }
+
+    /// Setting up, the material stands at the end of the operation selected,
+    /// or with none, of the setup: past the last there is, which the replay
+    /// takes as the end of the last.
+    #[test]
+    fn the_material_stands_where_the_selection_ends() {
+        let state = SetupState::default();
+        let scene = Scene::default();
+        let end = |op| Goal {
+            at: Position {
+                op,
+                moves: usize::MAX,
+            },
+            fraction: 0.0,
+        };
+        assert_eq!(goal(&state, &scene, Some(1)), end(1));
+        assert_eq!(goal(&state, &scene, None), end(usize::MAX));
     }
 }

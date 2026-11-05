@@ -78,6 +78,7 @@ default_number!(
 );
 
 mod error;
+mod expressions;
 mod geometry;
 mod heights;
 mod linking;
@@ -85,6 +86,7 @@ mod model;
 mod operation;
 mod passes;
 mod pick;
+pub mod settings;
 mod setup;
 mod strategy_spec;
 mod tool;
@@ -105,6 +107,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 pub use error::JobError;
+pub use expressions::{ExpressionFault, NAMES as EXPRESSION_NAMES, Worked};
 pub use geometry::{Boundary, Containment, MachiningBoundary, Outline, Selection};
 pub use heights::{Height, HeightContext, HeightRef, Heights, Picks};
 pub use linking::{Entry, LeadSizes, Leads, Linking, Retraction};
