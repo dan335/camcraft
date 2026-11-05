@@ -4,7 +4,7 @@ What changed in each release, newest first. Each release's page
 ([Releases](https://github.com/dan335/camcraft/releases)) has the downloads and
 the same notes at more length.
 
-## Unreleased
+## 0.6.0 — 2026-11-05
 
 - **The whole tool is checked**, not only what cuts
   ([decision 0021](docs/decisions/0021-shank-and-holder.md)): its neck,
@@ -13,18 +13,13 @@ the same notes at more length.
   checks (CC108) with how far out of the holder the tool would have to be. A
   setup names its machine (an 80 mm ER20 spindle, or an ISO30, BT30 or ISO20
   ATC spindle); a holder's segments can taper, and **Standard…** puts an ER
-  nut, a BT30 holder or an ISO30 ER16 to ER32 holder on a tool. Playback and the tool's drawing
-  show the whole of it.
+  nut, a BT30 holder or an ISO30 ER16 to ER32 holder on a tool. Playback and
+  the tool's drawing show the whole of it.
 - **Shaft and holder**, as Fusion's, on each 3D operation and drilling:
   off, as before; pull away or trim, finishes lifted or cut out where the
   rest of the tool would meet the part or stock, levels kept to where it
   clears, links lifted over the material by it, and holes it cannot reach
   not drilled; or fail.
-- **Pocket clearing cuts rest material on walls at every level**: material
-  an earlier operation left thicker than this one's stock to leave was only
-  cut at the bottom level, where the shank then rubbed it. **Adaptive leaves
-  walls to the tolerance**, not twice it.
-
 - **New operations start with Fusion's defaults**
   ([decision 0020](docs/decisions/0020-defaults.md)), as expressions where
   they follow the tool: pockets step down
@@ -37,7 +32,6 @@ the same notes at more length.
   25°, within a twentieth of the tool, from a fifth of it before, and a 2D
   pocket's helix is Fusion's size: both for saved jobs too, where they leave
   them out. Otherwise a saved job reads as it did.
-
 - **Undo, made whole** ([decision 0019](docs/decisions/0019-undo.md)): what an
   edit's expressions work out undoes with it, where undoing a tool's diameter
   used to seem to do nothing; each field typed into is its own step; the Edit
@@ -52,6 +46,10 @@ the same notes at more length.
 - **No pause after each run on a long program**: the replay the cut stock and
   playback are drawn from is built off the window's thread, from toolpaths now
   shared rather than copied.
+- **Pocket clearing cuts rest material on walls at every level**: material
+  an earlier operation left thicker than this one's stock to leave was only
+  cut at the bottom level, where the shank then rubbed it. **Adaptive leaves
+  walls to the tolerance**, not twice it.
 - Plainer hints in the Show panel and on expressions.
 
 ## 0.5.0 — 2026-11-05
