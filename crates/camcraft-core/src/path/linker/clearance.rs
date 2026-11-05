@@ -2,7 +2,7 @@
 
 use camcraft_geom::heightmap::{HeightMap, cell_index};
 use camcraft_geom::mesh::distance_to_segment;
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 
 use super::LinkError;
 use crate::is_positive;
@@ -16,6 +16,15 @@ pub trait Clearance {
     /// The radius is supplied so an implementation can account for the tool's
     /// footprint sweeping past an obstacle, not just its axis.
     fn safe_z(&self, from: DVec2, to: DVec2, tool_radius: f64) -> f64;
+
+    /// Whether the rest of the tool, its shank and holder, keeps clear of the
+    /// material going from `from` through `way` at feed, staying down between
+    /// cuts. Only the cutter is asked of where the operation does not keep the
+    /// rest clear, so by default it does.
+    fn keeps_clear(&self, from: DVec3, way: &[DVec3]) -> bool {
+        let _ = (from, way);
+        true
+    }
 }
 
 /// A single horizontal plane, high enough to clear everything.

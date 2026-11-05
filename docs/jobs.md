@@ -510,7 +510,7 @@ there. Contour and flat, at fixed heights, trim. Adaptive and pocket clearing
 shrink what each level may clear by where the rest of the tool would meet the
 part above it, and trim where the levels above left material it would meet.
 Drilling skips a hole it cannot reach. Links lift over the material by the rest
-of the tool too. `fail` stops the operation at the first place it would meet
+of the tool too, and stay down between passes only where it keeps clear. `fail` stops the operation at the first place it would meet
 anything.
 
 ## Checks

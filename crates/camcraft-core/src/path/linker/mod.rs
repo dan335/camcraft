@@ -578,7 +578,10 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                         .is_none_or(|top| top <= p.z + self.p.max_cut_step))
         });
         let fallen = trailing_fall(moves);
-        (clear && !falls_steeply(fallen, from, &way, pass, self.p.max_cut_step)).then_some(pieces)
+        (clear
+            && !falls_steeply(fallen, from, &way, pass, self.p.max_cut_step)
+            && self.clearance.keeps_clear(from, &way))
+        .then_some(pieces)
     }
 
     /// Make the link from `from` to `to`, where `pass` starts, without lifting
@@ -663,7 +666,9 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
             }
         };
         let fallen = trailing_fall(self.out.moves());
-        if falls_steeply(fallen, from, &way, pass, self.p.max_cut_step) {
+        if falls_steeply(fallen, from, &way, pass, self.p.max_cut_step)
+            || !self.clearance.keeps_clear(from, &way)
+        {
             return Ok(false);
         }
         for p in way {

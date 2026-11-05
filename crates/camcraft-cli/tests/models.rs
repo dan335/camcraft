@@ -122,3 +122,19 @@ fn two_tools_on_one_number_are_refused() {
         "nothing is computed for a refused job: {err}"
     );
 }
+
+/// The example job, shipped in every release and smoke-tested there, passes
+/// its checks as it is: it has warnings to review, its finish trimmed where the
+/// shank would ride in the roughing's stock on the deep walls, and no failure.
+#[test]
+fn the_example_job_passes_its_checks() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/rail-jig.camcraft");
+    let out = camcraft(&["job", example.to_str().unwrap()]);
+    let err = stderr(&out);
+    // Warnings to review are 2; a failed check, 1.
+    assert!(matches!(out.status.code(), Some(0 | 2)), "{err}");
+    assert!(
+        err.contains("checks passed") && !err.contains("FAILED"),
+        "{err}"
+    );
+}

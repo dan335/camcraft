@@ -56,5 +56,8 @@ name = "finish"
 strategy = "parallel"
 tool = "finish-6-ball"
 angle = 0.0
-passes = { stepover = 1.5, feed = 2400.0 }
+# The ball's 12 mm of flutes do not reach down the deep walls: climbing one, its
+# shank would ride in the stock the roughing left there. Trimmed, the pass stops
+# short of that, and leaves it.
+passes = { stepover = 1.5, feed = 2400.0, holder = { mode = "trim" } }
 heights = { clearance = { ref = "stock-top", offset = 8.0 } }

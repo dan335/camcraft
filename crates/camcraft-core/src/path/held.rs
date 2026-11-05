@@ -130,6 +130,20 @@ impl<C: Clearance> Clearance for HeldClearance<'_, C> {
             .held
             .map_or(0.0, |(guard, stock)| guard.rise_along(stock, from, to, z))
     }
+
+    fn keeps_clear(&self, from: DVec3, way: &[DVec3]) -> bool {
+        let Some((guard, stock)) = self.held else {
+            return true;
+        };
+        // Each stretch at the lower of its ends: the body is no lower
+        // anywhere along it.
+        let mut at = from;
+        way.iter().all(|&p| {
+            let clear = guard.rise_along(stock, at.truncate(), p.truncate(), at.z.min(p.z)) <= 0.0;
+            at = p;
+            clear
+        })
+    }
 }
 
 /// What to do where the rest of the tool would meet the part.
