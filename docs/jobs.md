@@ -274,11 +274,11 @@ falling as they turn.
 Feed Optimization: cuts are slowed into and out of their sharp corners and round
 their tight arcs, where the tool is wrapped in more material than along the
 walls ([decision 0016](decisions/0016-feed-optimisation.md)). A corner turns by
-more than `max_directional_change` (degrees, 45); an arc tighter than
+more than `max_directional_change` (degrees, 25); an arc tighter than
 `reduced_feed_radius` is slowed along; the cut slows `reduced_feed_distance`
 before each and speeds up as far after; and it slows to `reduced_feed` (mm/min).
-The radius and distance are the tool's radius when not given, the feed half the
-cutting feed. With `only_inner_corners` (on unless turned off), only the corners
+The radius and distance are a twentieth and a fifth of the tool when not given,
+as Fusion's, the feed half the cutting feed. With `only_inner_corners` (on unless turned off), only the corners
 turning into the material are slowed, judged from which side of the passes the
 material is on: where they cut both ways, every corner is. Every strategy but
 drilling and adaptive clearing has it; adaptive holds its load at every step.
@@ -328,7 +328,7 @@ helix beside where the ring starts, then once round level; `"ramp"`, along the
 ring in the direction it cuts; or `"plunge"`. Pocket clearing's helix is
 Fusion's size, 0.95 × the tool less its corners and no less than a quarter of
 the tool, made smaller where the part leaves no room, down to half the tool
-less its corners; a 2D pocket's is 0.9 × the tool, down to a quarter of that.
+less its corners; a 2D pocket's is the same, as Fusion's.
 Where no helix fits, the ring is ramped along instead, as Fusion's helix ramp
 type allows, and only where that does not fit either does the tool go
 straight down.
@@ -373,7 +373,9 @@ Parallel enters and leaves each pass along a vertical arc (the *lead radius*, a
 tenth of the tool); pocket clearing and 2D pockets go down a helix into material
 (their entry, above), and facing ramps along the pass it is about to cut, in
 the direction it cuts. Helixes and ramps go down at the *ramp angle*, 2°, at the
-*ramp feed*, 60% of the cutting feed, as Fusion's. After the last cut the tool goes up to
+*ramp feed*: a new operation's is its plunge feed, a third of the cutting feed,
+as a new tool of Fusion's has them; one a job file leaves out is 60% of the
+cutting feed. After the last cut the tool goes up to
 the clearance height before the spindle stops. The settings are written only when
 changed.
 

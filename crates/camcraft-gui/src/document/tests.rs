@@ -1001,7 +1001,8 @@ fn new_operations_start_on_the_silhouette() {
     assert_eq!(doc.job.setups[0].operations[profile].boundary.margin, 0.0);
 
     // Facing starts both ways at the bottom alone, and with a flat end mill
-    // steps over most of its width.
+    // steps over 0.7 of its width, its passes running half a tool and the
+    // tolerance past the stock, as Fusion's since 2022.
     let [(_, two_d), ..] = crate::browser::operation_groups();
     let (_, face) = two_d[0][0];
     let face = doc.add_operation("top", face).unwrap();
@@ -1011,10 +1012,14 @@ fn new_operations_start_on_the_silhouette() {
     assert_eq!(o.stepdown(), None);
     let d = doc.job.tools["rough-6-flat"].diameter;
     assert!(
-        (o.passes.stepover - 0.95 * d).abs() < 1e-9,
+        (o.passes.stepover - 0.7 * d).abs() < 1e-9,
         "{}",
         o.passes.stepover
     );
+    let StrategySpec::Face { pass_extension, .. } = o.strategy else {
+        unreachable!("a face is a face")
+    };
+    assert!((pass_extension - (d / 2.0 + doc.job.tolerance)).abs() < 1e-9);
 }
 
 /// A new roughing operation leaves half a millimetre for the finish, as Fusion's

@@ -156,6 +156,8 @@ impl StrategySpec {
                 outline: true,
                 finishing: true,
                 entries: &[Entry::Helix, Entry::Ramp, Entry::Plunge],
+                // Fusion's 2D pocket's helix is its 3D strategies'.
+                helix: HelixSize::Flat,
                 ..cuts_loops
             },
             StrategySpec::Profile { side, .. } => Uses {

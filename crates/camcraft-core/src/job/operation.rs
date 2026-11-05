@@ -70,6 +70,7 @@ impl Operation {
     /// ([`StrategySpec::default_expressions`]), and the rest as a job file that
     /// gives none has it.
     pub fn new(name: impl Into<String>, strategy: StrategySpec) -> Self {
+        let strategy = strategy.fresh();
         Self {
             name: name.into(),
             strategy,
@@ -78,7 +79,7 @@ impl Operation {
             selection: Selection::default(),
             boundary: MachiningBoundary::default(),
             outline: Outline::default(),
-            heights: Heights::default(),
+            heights: Heights::fresh(),
             passes: Passes {
                 stepdown: strategy.default_stepdown(),
                 stock_to_leave: strategy.default_stock_to_leave(),

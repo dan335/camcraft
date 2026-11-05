@@ -25,9 +25,9 @@ pub struct ExpressionFault {
     pub message: String,
 }
 
-/// How many times a job's expressions are worked out in turn, at most, so one
-/// that reads a setting another sets reads it set: as deep as anyone chains
-/// them, and never forever when two read each other.
+/// How many times an operation's expressions are worked out in turn, at
+/// most, so one that reads a setting another sets reads it set: as deep as
+/// anyone chains them, and never forever when two read each other.
 const ROUNDS: usize = 8;
 
 /// Every name an expression may read, and what it is, as the panels list them.
@@ -105,10 +105,26 @@ impl Operation {
 
     /// Work out each of its expressions, with `tool` its tool and `tolerance`
     /// the job's, and put what each comes to in its setting: a whole number
-    /// where the setting is one. Each reads the settings as they were before
-    /// any was worked out. Those that cannot be leave their settings as they
-    /// were, and say why.
+    /// where the setting is one. In turns until nothing changes, so one that
+    /// reads a setting another sets (a ramp feed the plunge feed) reads it
+    /// set. Those that cannot be leave their settings as they were, and say
+    /// why.
     pub fn work_out_expressions(&mut self, tool: Option<&ToolSpec>, tolerance: f64) -> Worked {
+        let mut worked = Worked::default();
+        for _ in 0..ROUNDS {
+            let turn = self.work_out_once(tool, tolerance);
+            worked.faults = turn.faults;
+            worked.changed |= turn.changed;
+            if !turn.changed {
+                break;
+            }
+        }
+        worked
+    }
+
+    /// One turn of [`Operation::work_out_expressions`]: each expression
+    /// reading the settings as they were before any was worked out.
+    fn work_out_once(&mut self, tool: Option<&ToolSpec>, tolerance: f64) -> Worked {
         let mut worked = Worked::default();
         // Without a tool, what they read of one is not there yet: the settings
         // keep their numbers until one is chosen.
@@ -177,31 +193,22 @@ pub struct Worked {
 
 impl Job {
     /// Work out every operation's expressions ([`Operation::work_out_expressions`])
-    /// into their settings, in turns until nothing changes, so one reading a
-    /// setting another sets reads it set. Returns those that could not be.
+    /// into their settings: each reads only its own operation, its tool and
+    /// the tolerance. Returns those that could not be.
     pub fn work_out_expressions(&mut self) -> Vec<ExpressionFault> {
         let tolerance = self.tolerance;
         let mut faults = Vec::new();
-        for _ in 0..ROUNDS {
-            let mut changed = false;
-            faults.clear();
-            for setup in &mut self.setups {
-                for (i, op) in setup.operations.iter_mut().enumerate() {
-                    let tool = op.tool.as_ref().and_then(|t| self.tools.get(t));
-                    let worked = op.work_out_expressions(tool, tolerance);
-                    changed |= worked.changed;
-                    for (setting, message) in worked.faults {
-                        faults.push(ExpressionFault {
-                            setup: setup.name.clone(),
-                            operation: i,
-                            setting,
-                            message,
-                        });
-                    }
+        for setup in &mut self.setups {
+            for (i, op) in setup.operations.iter_mut().enumerate() {
+                let tool = op.tool.as_ref().and_then(|t| self.tools.get(t));
+                for (setting, message) in op.work_out_expressions(tool, tolerance).faults {
+                    faults.push(ExpressionFault {
+                        setup: setup.name.clone(),
+                        operation: i,
+                        setting,
+                        message,
+                    });
                 }
-            }
-            if !changed {
-                break;
             }
         }
         faults

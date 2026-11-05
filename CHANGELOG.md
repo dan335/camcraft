@@ -6,6 +6,19 @@ the same notes at more length.
 
 ## Unreleased
 
+- **New operations start with Fusion's defaults**
+  ([decision 0020](docs/decisions/0020-defaults.md)), as expressions where
+  they follow the tool: pockets step down
+  `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)` and profiles three
+  quarters of the flutes, flat steps over 0.3 of the tool and facing 0.7 of
+  its flat with passes running half a tool past the stock, adaptive blends
+  corners tighter than a tenth of the tool and lifts 0.2 mm between passes,
+  plunges are a third of the cutting feed and ramps the plunge feed, and the
+  clearance height is 10 mm above the retract. Feed optimisation slows at
+  25°, within a twentieth of the tool, from a fifth of it before, and a 2D
+  pocket's helix is Fusion's size: both for saved jobs too, where they leave
+  them out. Otherwise a saved job reads as it did.
+
 - **Undo, made whole** ([decision 0019](docs/decisions/0019-undo.md)): what an
   edit's expressions work out undoes with it, where undoing a tool's diameter
   used to seem to do nothing; each field typed into is its own step; the Edit

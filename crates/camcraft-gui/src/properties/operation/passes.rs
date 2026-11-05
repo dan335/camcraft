@@ -338,8 +338,8 @@ fn feed_optimization(
     };
     // What each value left out comes to, as the engine has it.
     let given = FeedOptimization::default().sizes(across(diameter) / 2.0, feed);
-    let tool_radius = left_out(m, diameter, given.radius, "the tool's radius");
-    let start = given.radius;
+    let twentieth = left_out(m, diameter, given.radius, "a twentieth of the tool");
+    let fifth = left_out(m, diameter, given.distance, "a fifth of the tool");
     widgets::sub_form(ui, "feed_optimization", |ui| {
         d.row(
             ui,
@@ -362,8 +362,8 @@ fn feed_optimization(
                 widgets::optional(
                     ui,
                     &mut f.reduced_feed_radius,
-                    start,
-                    &tool_radius,
+                    given.radius,
+                    &twentieth,
                     |ui, v| {
                         m.length_field(ui, v, 0.01, 100.0, "");
                     },
@@ -378,8 +378,8 @@ fn feed_optimization(
                 widgets::optional(
                     ui,
                     &mut f.reduced_feed_distance,
-                    start,
-                    &tool_radius,
+                    given.distance,
+                    &fifth,
                     |ui, v| {
                         m.length_field(ui, v, 0.01, 100.0, "");
                     },
@@ -544,6 +544,21 @@ fn multiple_depths(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, o
         .inner;
     if r.changed() {
         op.passes.stepdown = on.then(|| starting_stepdown(op));
+        // Its stepdown's expression comes and goes with the levels: left on,
+        // it would put them back.
+        let worked_out = op
+            .strategy
+            .default_expressions()
+            .into_iter()
+            .find(|(setting, _)| *setting == "passes.stepdown");
+        match worked_out.filter(|_| on) {
+            Some((setting, text)) => {
+                op.expressions.insert(setting.into(), text.into());
+            }
+            None => {
+                op.expressions.remove("passes.stepdown");
+            }
+        }
     }
     let fine = op.strategy.uses().fine_stepdown;
     let Some(stepdown) = &mut op.passes.stepdown else {

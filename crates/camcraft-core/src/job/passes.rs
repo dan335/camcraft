@@ -140,19 +140,21 @@ pub struct FinishingSizes {
 #[serde(deny_unknown_fields)]
 pub struct FeedOptimization {
     /// The most a cut may turn into the next without slowing, in degrees:
-    /// Fusion's Maximum Directional Change. 45 degrees when not given.
+    /// Fusion's Maximum Directional Change. 25 degrees when not given, as
+    /// Fusion's.
     #[serde(
         default = "default_max_directional_change",
         skip_serializing_if = "is_default_max_directional_change"
     )]
     pub max_directional_change: f64,
     /// An arc tighter than this is slowed along, in millimetres: Fusion's
-    /// Reduced Feed Radius. The tool's radius when not given.
+    /// Reduced Feed Radius. A twentieth of the tool when not given, as
+    /// Fusion's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reduced_feed_radius: Option<f64>,
     /// How far before a corner the cut slows, and after it speeds up again,
-    /// in millimetres: Fusion's Reduced Feed Distance. The tool's radius when
-    /// not given.
+    /// in millimetres: Fusion's Reduced Feed Distance. A fifth of the tool
+    /// when not given, as Fusion's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reduced_feed_distance: Option<f64>,
     /// The feed slowed to, in mm/min: Fusion's Reduced Feedrate. Half the
@@ -183,8 +185,8 @@ impl FeedOptimization {
     pub fn sizes(&self, radius: f64, feed: f64) -> FeedOptimizationSizes {
         FeedOptimizationSizes {
             max_directional_change: self.max_directional_change,
-            radius: self.reduced_feed_radius.unwrap_or(radius),
-            distance: self.reduced_feed_distance.unwrap_or(radius),
+            radius: self.reduced_feed_radius.unwrap_or(0.1 * radius),
+            distance: self.reduced_feed_distance.unwrap_or(0.4 * radius),
             feed: self.reduced_feed.unwrap_or(0.5 * feed),
             only_inner_corners: self.only_inner_corners,
         }
@@ -209,7 +211,7 @@ pub struct FeedOptimizationSizes {
 
 default_number!(
     default_max_directional_change,
-    is_default_max_directional_change = 45.0
+    is_default_max_directional_change = 25.0
 );
 
 /// Tabs: bridges of material left standing across the deepest cut, so a part cut

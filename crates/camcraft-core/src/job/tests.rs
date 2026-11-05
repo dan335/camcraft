@@ -1566,10 +1566,9 @@ fn facing_reads_with_fusions_defaults() {
 
     let rough = j.tools["rough-6-flat"].clone();
     let op = &mut j.setups[0].operations[0];
-    assert_eq!(
-        default_stepover(op, &rough, 0.01),
-        Some(0.95 * rough.diameter)
-    );
+    // Fusion's since 2022: 0.7 of the flat of the end.
+    let over = default_stepover(op, &rough, 0.01).unwrap();
+    assert!((over - 0.7 * rough.diameter).abs() < 1e-9, "{over}");
     let ball = j.tools["finish-4-ball"].clone();
     assert!(op.cannot_use(&ball).is_some());
     op.strategy = StrategySpec::Face {
@@ -1848,10 +1847,8 @@ fn more_finishing_strategies_use_what_fusions_do() {
     });
     assert!(flat.strategy.conventional());
     assert_eq!(flat.strategy.uses().depths, Depths::None);
-    assert_eq!(
-        default_stepover(&flat, &ball, 0.01),
-        Some(0.6 * ball.diameter)
-    );
+    let over = default_stepover(&flat, &ball, 0.01).unwrap();
+    assert!((over - 0.3 * ball.diameter).abs() < 1e-9, "{over}");
     let parallel = op(StrategySpec::Parallel { angle: 0.0 });
     for strategy in [
         StrategySpec::Spiral {
@@ -2229,7 +2226,7 @@ fn default_stepover(op: &Operation, tool: &ToolSpec, tolerance: f64) -> Option<f
     let (_, text) = op
         .strategy
         .default_expressions()
-        .iter()
+        .into_iter()
         .find(|(setting, _)| *setting == "passes.stepover")?;
     crate::expr::evaluate(text, &|n| op.expression_value(n, Some(tool), tolerance)).ok()
 }

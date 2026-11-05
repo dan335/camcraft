@@ -40,6 +40,19 @@ impl Default for Heights {
 }
 
 impl Heights {
+    /// A new operation's, as Fusion's: the clearance height 10 mm above the
+    /// retract height, which is 5 mm above the stock, where a job file that
+    /// leaves it out has it 10 mm above the stock.
+    pub fn fresh() -> Self {
+        Self {
+            clearance: Height {
+                reference: HeightRef::StockTop,
+                offset: default_retract().offset + 10.0,
+            },
+            ..Self::default()
+        }
+    }
+
     /// Whether its top or bottom is measured from the selection.
     pub fn measured_from_selection(&self) -> bool {
         [self.top, self.bottom]

@@ -431,50 +431,87 @@ impl StrategySpec {
     }
 
     /// The expressions a new operation of this strategy works its settings out
-    /// from, as Fusion's defaults are, so they follow its tool:
+    /// from, so they follow its tool as Fusion's defaults do: Fusion's own,
+    /// from a fresh operation of each strategy and Autodesk's note of the
+    /// defaults it changed in 2022 ([decision 0020]).
     ///
-    /// - The stepover: for parallel finishing and the patterns dropped onto the
-    ///   part (scallop, spiral, radial and morphed spiral), a quarter of the
-    ///   tool's diameter with a square end, and with a round one the spacing
-    ///   that leaves a cusp no taller than the tolerance, `√(2(r² − (r − tol)²))`,
-    ///   to the micron; for 3D pocket clearing, a 2D pocket and flat finishing,
-    ///   0.6 of the diameter; for adaptive clearing, its optimal load,
-    ///   `tool_diameter * 0.4`; for facing, 95% of the flat of the tool's end.
-    /// - The stepdown, for adaptive and 3D pocket clearing: Fusion's maximum
-    ///   roughing stepdown, `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)`.
+    /// - **Stepover:** for parallel finishing and the patterns dropped onto
+    ///   the part (scallop, spiral, radial, morphed spiral), the spacing that
+    ///   leaves a cusp no taller than the tolerance with a round end, a quarter
+    ///   of the diameter with a square one, to the micron; for 3D and 2D
+    ///   pockets, 0.6 of the diameter; adaptive's optimal load, 0.4 of it;
+    ///   flat finishing, 0.3 of it; facing, 0.7 of the flat of the tool's end.
+    /// - **Stepdown:** adaptive's maximum roughing stepdown,
+    ///   `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)`; a pocket's,
+    ///   3D or 2D, `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)`; a
+    ///   profile's, three quarters of the flutes. Contour finishing's is a
+    ///   millimetre, [`StrategySpec::default_stepdown`].
+    /// - **Feeds:** plunging at a third of the cutting feed, and ramping at
+    ///   the plunge feed, as a new tool of Fusion's does; drilling's own.
+    /// - **Adaptive's own:** a minimum cutting radius of a tenth of the tool,
+    ///   a stay-down clearance of a tenth of it between 2 and 15 mm, and a slot
+    ///   1.25 tools wide when slot clearing is on.
+    /// - **Facing's own:** passes running half the tool and the tolerance past
+    ///   the stock.
     ///
-    /// Contour finishing, a profile and drilling have none.
-    pub fn default_expressions(&self) -> &'static [(&'static str, &'static str)] {
+    /// [decision 0020]: ../../../../docs/decisions/0020-defaults.md
+    pub fn default_expressions(&self) -> Vec<(&'static str, &'static str)> {
         const CUSP: &str = "tool_cornerRadius > tolerance \
             ? Math.roundto(Math.sqrt(2 * (tool_cornerRadius^2 - (tool_cornerRadius - tolerance)^2)); 0.001) \
             : Math.roundto(tool_diameter / 4; 0.001)";
         const ROUGHING_STEPDOWN: &str = "Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)";
-        match self {
+        const POCKET_STEPDOWN: &str = "Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)";
+        let mut own: Vec<(&'static str, &'static str)> = match self {
             // A scallop pass is parallel's cusp, kept on a slope too.
             StrategySpec::Parallel { .. }
             | StrategySpec::Scallop { .. }
             | StrategySpec::Spiral { .. }
             | StrategySpec::Radial { .. }
-            | StrategySpec::MorphedSpiral { .. } => &[("passes.stepover", CUSP)],
-            StrategySpec::PocketClearing { .. } => &[
+            | StrategySpec::MorphedSpiral { .. } => vec![("passes.stepover", CUSP)],
+            StrategySpec::PocketClearing { .. } | StrategySpec::Pocket { .. } => vec![
                 ("passes.stepover", "tool_diameter * 0.6"),
-                ("passes.stepdown", ROUGHING_STEPDOWN),
+                ("passes.stepdown", POCKET_STEPDOWN),
             ],
-            StrategySpec::Pocket { .. } | StrategySpec::Flat { .. } => {
-                &[("passes.stepover", "tool_diameter * 0.6")]
-            }
-            StrategySpec::Adaptive { .. } => &[
+            StrategySpec::Flat { .. } => vec![("passes.stepover", "tool_diameter * 0.3")],
+            StrategySpec::Adaptive { .. } => vec![
                 ("passes.stepover", "tool_diameter * 0.4"),
                 ("passes.stepdown", ROUGHING_STEPDOWN),
+                ("min_cutting_radius", "tool_diameter * 0.1"),
+                (
+                    "stay_down_clearance",
+                    "Math.max(Math.min(tool_diameter * 0.1; 15mm); 2mm)",
+                ),
+                ("slot_width", "tool_diameter * 1.25"),
             ],
-            StrategySpec::Face { .. } => &[(
-                "passes.stepover",
-                "(tool_diameter - 2 * tool_cornerRadius) * 0.95",
-            )],
-            StrategySpec::Profile { .. }
-            | StrategySpec::Contour { .. }
-            | StrategySpec::Drill { .. } => &[],
+            StrategySpec::Face { .. } => vec![
+                (
+                    "passes.stepover",
+                    "Math.max((tool_diameter - 2 * tool_cornerRadius) * 0.7; tool_diameter * 0.05)",
+                ),
+                ("pass_extension", "tool_diameter / 2 + tolerance"),
+            ],
+            StrategySpec::Profile { .. } => vec![("passes.stepdown", "tool_fluteLength * 0.75")],
+            StrategySpec::Contour { .. } | StrategySpec::Drill { .. } => Vec::new(),
+        };
+        // A drill's feed down is its cutting feed: it has no plunge of its own.
+        if !matches!(self, StrategySpec::Drill { .. }) {
+            own.push(("linking.plunge_feed", "tool_feedCutting / 3"));
         }
+        if self.uses().ramp {
+            own.push(("linking.ramp_feed", "tool_feedPlunge"));
+        }
+        own
+    }
+
+    /// What a new operation of this strategy starts with that is not worked
+    /// out from its tool, where it is not what a job file that leaves the
+    /// setting out reads: adaptive lifts a fifth of a millimetre off the
+    /// floor between passes, as Fusion's has since 2022.
+    pub fn fresh(mut self) -> Self {
+        if let StrategySpec::Adaptive { lift_height, .. } = &mut self {
+            *lift_height = 0.2;
+        }
+        self
     }
 
     /// The multiple depths this strategy starts with: roughing and 2D cutting

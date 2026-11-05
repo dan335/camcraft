@@ -89,14 +89,16 @@ it.
   a profile's level lead arcs on and off each ring, their radius, sweep and
   straight run;
   one left out says what the strategy's default comes to for the tool). A new
-  operation's stepover is an expression, as Fusion's defaults are, so it follows
-  the tool: a quarter of the diameter for parallel with a square end, the
-  tolerance's cusp with a round one, 0.6 of the diameter for pocket clearing,
-  2D pockets and flat, and adaptive clearing's *Optimal load*,
-  `tool_diameter * 0.4`. Adaptive clearing and pocket clearing's stepdown is
-  Fusion's maximum roughing stepdown,
-  `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)`; a tool with no flute
-  length is taken to have two diameters of flutes. A number typed over one, or
+  operation starts with Fusion's defaults, as expressions where they follow
+  the tool ([decision 0020](decisions/0020-defaults.md)): its stepover (the
+  tolerance's cusp with a round end, a quarter of the diameter with a square
+  one; 0.6 of it for pockets, 0.3 for flat, adaptive's *Optimal load* 0.4,
+  facing's 0.7 of the flat of the end), its stepdown (adaptive's
+  `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)`, a pocket's
+  `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)`, a profile's three
+  quarters of the flutes), its plunge feed a third of the cutting feed and its
+  ramp feed the plunge feed; a tool with no flute length is taken to have two
+  diameters of flutes. A number typed over one, or
   a preset's, takes the expression's place; ↺ brings it back. Scallop's stepover starts as parallel's, and its *Passes* has both
   ways, climb or conventional, outside in or inside out, and the slopes it
   finishes between. Contour's has the same directions, by depth or by area, and
