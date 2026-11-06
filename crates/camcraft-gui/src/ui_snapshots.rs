@@ -797,14 +797,8 @@ fn tool_manager() {
         holder: Some(Holder {
             name: "ER20 collet chuck".into(),
             segments: vec![
-                HolderSegment {
-                    diameter: 34.0,
-                    length: 22.0,
-                },
-                HolderSegment {
-                    diameter: 44.0,
-                    length: 30.0,
-                },
+                HolderSegment::cylinder(34.0, 22.0),
+                HolderSegment::cylinder(44.0, 30.0),
             ],
         }),
         spindle: SpindleDirection::Clockwise,
