@@ -16,6 +16,8 @@
 mod error;
 mod operation;
 mod pitch;
+/// The material at any point in a finished job, for showing and for playback.
+pub mod replay;
 mod result;
 
 #[cfg(test)]

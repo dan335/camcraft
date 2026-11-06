@@ -31,11 +31,11 @@ use crate::document::{Document, Level, ModelSlot, Selection, Status, Wanted, nex
 use crate::file_dialog::{AppFileDialog, FileRequest};
 use crate::picking::Picking;
 use crate::playback;
+use crate::playback::transport;
 use crate::properties::{self, HeightPlanes, PropAction, ViewPicks};
 use crate::settings::Settings;
 use crate::tools::manager::ToolManager;
 use crate::tools::picker::{Outcome, Picked, ToolPicker};
-use crate::transport;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
 use crate::ui::widgets;

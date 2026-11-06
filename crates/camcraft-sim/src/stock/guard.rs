@@ -187,8 +187,32 @@ impl<'b, B: SweptTool> Guard<'b, B> {
                 continue;
             }
             if k == 0 {
-                // A cell: as it is, at its own distance.
-                best = Some((bound, nearest));
+                // A cell: as it is, at its own distance, where it is not a
+                // needle, standing into the body alone: a crumb narrower than
+                // the grid can tell from a pin a fraction of a cell across,
+                // which breaks off before it stops a shank. A wall or a post
+                // has a neighbour standing in too.
+                let stands = |nx: i64, ny: i64| -> bool {
+                    let (Ok(ix), Ok(iy)) = (u32::try_from(nx), u32::try_from(ny)) else {
+                        return false;
+                    };
+                    let Some(nh) = stock.field.get(ix, iy) else {
+                        return false;
+                    };
+                    let q = origin + dvec2(f64::from(ix) * pitch, f64::from(iy) * pitch);
+                    let d = box_to_segment(q, q, a, b);
+                    self.body
+                        .height_at(d)
+                        .is_some_and(|u| nh - (z + u) > TOUCHING)
+                };
+                let (cx, cy) = (i64::from(x), i64::from(y));
+                let with_neighbour = (-1..=1)
+                    .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+                    .filter(|&d| d != (0, 0))
+                    .any(|(dx, dy)| stands(cx + dx, cy + dy));
+                if with_neighbour {
+                    best = Some((bound, nearest));
+                }
                 continue;
             }
             for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
@@ -418,6 +442,32 @@ mod tests {
         let (_, collisions) = stock.sweep_guarded(&slot(19.0), &tool, &mut guard);
         let along = collisions.iter().find(|c| c.at == 2).unwrap();
         assert!(along.depth >= 9.0 - 1e-6, "{along:?}");
+    }
+
+    /// A needle, one cell standing alone into the body, is a crumb narrower
+    /// than the grid can tell, and meets nothing; with a neighbour standing in
+    /// too, it is a wall's or a post's, and does.
+    #[test]
+    fn a_lone_needle_meets_nothing() {
+        let body = Body {
+            radius: 3.0,
+            start: 10.0,
+            wide: 15.0,
+            holder: 30.0,
+        };
+        // A plate, its top 20 below the tip, and a needle to 0 beside the axis.
+        let with = |cells: &[(u32, u32)]| {
+            let mut stock =
+                Stock::block(dvec2(-10.0, -10.0), dvec2(10.0, 10.0), -20.0, -30.0, 0.25).unwrap();
+            for &(ix, iy) in cells {
+                stock.field.set(ix, iy, 0.0);
+            }
+            let guard = Guard::new(&stock, &body, 0.05);
+            guard.rise_at(&stock, dvec3(0.0, 0.0, -15.0))
+        };
+        assert!(with(&[(41, 40)]).abs() < 1e-12, "a lone needle");
+        let rise = with(&[(41, 40), (42, 40)]);
+        assert!((rise - 5.0).abs() < 1e-6, "{rise}");
     }
 
     /// The sweep cuts what the plain sweep cuts, cell for cell.

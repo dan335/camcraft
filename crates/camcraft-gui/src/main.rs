@@ -16,7 +16,6 @@ mod playback;
 mod properties;
 mod settings;
 mod tools;
-mod transport;
 
 // A job as the app holds it, and the work done off the UI thread.
 mod document;

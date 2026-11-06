@@ -80,7 +80,7 @@ impl<T: Serialize + DeserializeOwned> Defaults<T> {
     }
 
     /// With an ƒx on each row of a number, to work it out from an expression
-    /// ([`camcraft_core::expr`]), for a thing whose settings may be, as an
+    /// ([`camcraft_core::job::expr`]), for a thing whose settings may be, as an
     /// operation's: `faults` say, by setting, why any cannot be worked out.
     pub fn expressive(mut self, faults: Vec<(String, String)>) -> Self {
         let given = self

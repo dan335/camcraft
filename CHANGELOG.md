@@ -4,6 +4,20 @@ What changed in each release, newest first. Each release's page
 ([Releases](https://github.com/dan335/camcraft/releases)) has the downloads and
 the same notes at more length.
 
+## Unreleased
+
+- **Generating is about twice as fast** on a large adaptive job: the serving
+  tray from 198 s to 93 s, the regression job from 152 s to 96 s, and Shaft
+  and Holder's avoidance from 135 s more to under 10. Adaptive grew the
+  material round the tool by its radius before each pass, a jagged outline
+  folding over itself many times; it is simplified first now, to the
+  tolerance passes start to. Adaptive's steps read only the edges near them,
+  its levels' forbidden regions are worked out together, the holder's are
+  grown as loosely as its clearance allows, and the drop-cutter tries the
+  highest triangles first and stops once the rest are lower.
+- A lone cell of the simulated material standing into the shank, a crumb
+  narrower than the grid can resolve, no longer fails the shank check.
+
 ## 0.6.0 — 2026-11-05
 
 - **The whole tool is checked**, not only what cuts

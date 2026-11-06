@@ -12,8 +12,9 @@
 
 mod checks_window;
 mod show_panel;
+pub(crate) mod transport;
 
-use camcraft_core::replay::Position;
+use camcraft_core::run::replay::Position;
 use camcraft_geom::mesh::Aabb;
 use camcraft_session::checks::Finding;
 use eframe::egui;
@@ -21,7 +22,6 @@ use glam::DVec3;
 
 use crate::document::{Look, Selection, SetupState, Shown, ViewMode};
 use crate::stock::live::{Goal, LiveStock};
-use crate::transport;
 use crate::view::scene::{Playhead, Scene, Steep};
 use crate::view::viewport::{Content, StockRef, StockShow, View};
 

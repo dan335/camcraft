@@ -78,6 +78,7 @@ default_number!(
 );
 
 mod error;
+pub mod expr;
 mod expressions;
 mod geometry;
 mod heights;

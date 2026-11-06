@@ -104,26 +104,44 @@ impl<'a> DropCutter<'a> {
         self.bvh
             .candidates_in_column(x, y, tool.max_radius(), scratch);
 
-        let lift = tool.above_contact();
-        let mut best: Option<f64> = None;
-        for index in scratch.iter() {
-            let Some(tri) = self.mesh.triangle(*index as usize) else {
-                continue;
-            };
-            // The tip is the tool's lowest point, so it never rests above the
-            // highest point it touches: a triangle wholly below the best so far
-            // cannot raise it.
-            if best.is_some_and(|b| tri.iter().all(|v| v.z + lift <= b)) {
-                continue;
-            }
-            if let Some(z) = tool.drop_triangle(x, y, &tri) {
-                best = Some(match best {
-                    Some(b) if b >= z => b,
-                    _ => z,
-                });
-            }
+        thread_local! {
+            /// The triangles looked at, each with its highest point: one list
+            /// a thread, kept between drops.
+            static HIGHEST: RefCell<Vec<(f64, u32)>> = const { RefCell::new(Vec::new()) };
         }
-        best
+        let lift = tool.above_contact();
+        let drop = |order: &mut Vec<(f64, u32)>| {
+            order.clear();
+            order.extend(scratch.iter().filter_map(|&i| {
+                let tri = self.mesh.triangle(i as usize)?;
+                Some((tri.iter().map(|v| v.z).fold(f64::MIN, f64::max), i))
+            }));
+            // Highest first: the tip is the tool's lowest point, so it never
+            // rests above the highest point it touches, and once the best so far
+            // is at or above a triangle's highest, it is above every one after.
+            // The highest contact is the same in any order.
+            order.sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+            let mut best: Option<f64> = None;
+            for &(top, index) in order.iter() {
+                if best.is_some_and(|b| top + lift <= b) {
+                    break;
+                }
+                let Some(tri) = self.mesh.triangle(index as usize) else {
+                    continue;
+                };
+                if let Some(z) = tool.drop_triangle(x, y, &tri) {
+                    best = Some(match best {
+                        Some(b) if b >= z => b,
+                        _ => z,
+                    });
+                }
+            }
+            best
+        };
+        HIGHEST.with(|h| match h.try_borrow_mut() {
+            Ok(mut order) => drop(&mut order),
+            Err(_) => drop(&mut Vec::new()),
+        })
     }
 }
 

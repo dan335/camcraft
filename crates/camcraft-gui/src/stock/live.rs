@@ -14,7 +14,7 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use camcraft_core::replay::{Changed, Live, Position, Replay, ReplaySource};
+use camcraft_core::run::replay::{Changed, Live, Position, Replay, ReplaySource};
 use camcraft_sim::stock::{CellRect, PartSurface};
 use eframe::egui;
 

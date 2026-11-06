@@ -9,7 +9,12 @@ pub(super) struct Window {
     pub(super) lo: DVec2,
     pub(super) hi: DVec2,
     pub(super) uncut: Region,
-    pub(super) allowed: Region,
+    /// `uncut`'s edges indexed, so a step reads only those near it: made again
+    /// whenever `uncut` changes, every few dozen steps, and read by each try
+    /// of each.
+    pub(super) uncut_index: Indexed,
+    /// Where the tool may be, indexed: it does not change.
+    pub(super) allowed_index: Indexed,
 }
 
 /// How wide a tile is, in tool radii: wide enough that a pass's step reads

@@ -89,16 +89,23 @@ fn wrap(a: f64) -> f64 {
 /// The trail may end at `centre`, as a tool's does: the circle is then the
 /// leading edge of the trail's own sweep, and what lies ahead on it counts as in
 /// material if `uncut` has it.
-pub fn engaged(centre: DVec2, radius: f64, uncut: &Region, trail: &[DVec2], swept: f64) -> Engaged {
+pub fn engaged<O: Outline + ?Sized>(
+    centre: DVec2,
+    radius: f64,
+    uncut: &O,
+    trail: &[DVec2],
+    swept: f64,
+) -> Engaged {
     if !(radius.is_finite() && radius > 0.0) || !centre.is_finite() {
         return Engaged::default();
     }
     // Far enough from the centre that the circle cannot reach: tested first,
     // since most of the region's edges are.
     let mut cuts: Vec<f64> = Vec::new();
-    for (a, b) in uncut.rings().iter().flat_map(Contour::edges) {
+    let reach = DVec2::splat(radius);
+    uncut.edges_near(centre - reach, centre + reach, &mut |a, b| {
         circle_segment(centre, radius, a, b, &mut cuts);
-    }
+    });
     let at_centre = |p: DVec2| p.distance_squared(centre) <= (radius * 1e-9).powi(2);
     for (i, &p) in trail.iter().enumerate() {
         if p.distance(centre) > radius + swept {
@@ -135,7 +142,7 @@ pub fn engaged(centre: DVec2, radius: f64, uncut: &Region, trail: &[DVec2], swep
 
     let in_material = |angle: f64| {
         let p = centre + DVec2::from_angle(angle) * radius;
-        uncut.contains(p) && !near_trail(p, trail, swept)
+        uncut.inside(p) && !near_trail(p, trail, swept)
     };
     if cuts.is_empty() {
         return if in_material(0.0) {
@@ -182,6 +189,38 @@ pub fn engaged(centre: DVec2, radius: f64, uncut: &Region, trail: &[DVec2], swep
         }
     }
     Engaged { arcs }
+}
+
+/// What [`engaged`] reads of the material: its edges, at least those near a
+/// box, and which side of them a point is. A region gives all its edges; an
+/// indexed one only those near, the same answer from fewer.
+pub trait Outline {
+    /// Each edge with any part in the box `lo`-`hi`, and perhaps others.
+    fn edges_near(&self, lo: DVec2, hi: DVec2, each: &mut dyn FnMut(DVec2, DVec2));
+    /// Whether `p` is inside, by the even-odd rule.
+    fn inside(&self, p: DVec2) -> bool;
+}
+
+impl Outline for Region {
+    fn edges_near(&self, _lo: DVec2, _hi: DVec2, each: &mut dyn FnMut(DVec2, DVec2)) {
+        for (a, b) in self.rings().iter().flat_map(Contour::edges) {
+            each(a, b);
+        }
+    }
+
+    fn inside(&self, p: DVec2) -> bool {
+        self.contains(p)
+    }
+}
+
+impl Outline for crate::contour::Indexed {
+    fn edges_near(&self, lo: DVec2, hi: DVec2, each: &mut dyn FnMut(DVec2, DVec2)) {
+        self.edges_in(lo, hi, each);
+    }
+
+    fn inside(&self, p: DVec2) -> bool {
+        self.contains(p)
+    }
 }
 
 /// Whether `p` is strictly nearer than `swept` to the polyline `trail`: inside

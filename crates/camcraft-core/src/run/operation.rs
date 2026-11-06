@@ -122,8 +122,11 @@ impl Work<'_> {
     ///
     /// [decision 0021]: ../../../../docs/decisions/0021-shank-and-holder.md
     fn held<'m>(&self, reach: LevelReach<'m>) -> LevelReach<'m> {
+        let asked = &self.op.passes.holder;
+        // Kept clear by its clearance, and by a quarter of it more at most.
+        let slack = 0.25 * asked.shank_clearance.min(asked.holder_clearance);
         match self.held_body() {
-            Some(body) => reach.with_body(&body.cylinders(self.job.tolerance)),
+            Some(body) => reach.with_body(&body.cylinders(self.job.tolerance), slack),
             None => reach,
         }
     }

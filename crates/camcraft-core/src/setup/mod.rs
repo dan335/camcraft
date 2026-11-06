@@ -12,6 +12,7 @@
 
 pub mod features;
 pub mod frame;
+mod memo;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
@@ -26,10 +27,10 @@ use glam::DVec3;
 
 use crate::cutter::dropcutter::DropCutter;
 use crate::job::{BoxOf, HeightContext, Job, JobError, Origin, Setup, StockSpec};
-use crate::memo::Memo;
 use crate::strategy::adaptive::flat_heights;
 use features::FeatureError;
 use frame::{BadOrientation, Frame, Orientation};
+use memo::Memo;
 
 /// A setup's models, by name, in model coordinates, with their topology.
 pub type Bodies<'a> = BTreeMap<&'a str, &'a Body>;

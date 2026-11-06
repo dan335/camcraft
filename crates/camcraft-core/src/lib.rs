@@ -35,12 +35,8 @@
 
 pub mod control;
 pub mod cutter;
-pub mod expr;
 pub mod job;
-pub mod memo;
 pub mod path;
-/// The material at any point in a finished job, for showing and for playback.
-pub mod replay;
 pub mod run;
 pub mod setup;
 pub mod strategy;

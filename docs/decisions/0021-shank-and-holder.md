@@ -95,7 +95,11 @@ clearances (1 mm on the shank, 5 mm on the holder) are for keeping clear, and a
 check against them would fail programs that touch nothing. The body is taken
 twice the operation's tolerance narrower (the job's, and smoothing's where it
 smooths): a shank as wide as its cutter rides against the wall another pass
-cut, and the two passes are each only where they should be to within that.
+cut, and the two passes are each only where they should be to within that. A
+single cell of the simulated material standing into the body with no
+neighbour standing in too is a needle, a crumb narrower than the grid can
+tell from a pin a fraction of a cell across, which breaks off before it stops
+a shank: it is not counted. A wall or a post always has a neighbour in too.
 
 - The in-process material includes the part, so this covers part and stock
   at once, and fixtures if they are ever modelled as material.

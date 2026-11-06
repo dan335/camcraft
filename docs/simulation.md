@@ -55,7 +55,7 @@ next. The clock, the paths drawn, the cutter (part-way along its move) and the
 material all come from it, turned into a replay position.
 
 **The UI thread never sweeps.** Each setup being played has a thread that owns a
-`camcraft_core::replay::Live` stock. The UI sends the playhead when it moves; the
+`camcraft_core::run::replay::Live` stock. The UI sends the playhead when it moves; the
 thread works only on the newest, 12 ms at a time, and sends back the cells that
 changed, recoloured. The viewport uploads only that rectangle. "cutting…" beside
 the clock means the material is still catching up.

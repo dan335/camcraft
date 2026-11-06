@@ -2228,7 +2228,7 @@ fn default_stepover(op: &Operation, tool: &ToolSpec, tolerance: f64) -> Option<f
         .default_expressions()
         .into_iter()
         .find(|(setting, _)| *setting == "passes.stepover")?;
-    crate::expr::evaluate(text, &|n| op.expression_value(n, Some(tool), tolerance)).ok()
+    crate::job::expr::evaluate(text, &|n| op.expression_value(n, Some(tool), tolerance)).ok()
 }
 
 /// A setup is cut on one of the job's machines, by name, as the docs write

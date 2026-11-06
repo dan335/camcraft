@@ -14,7 +14,7 @@
 use camcraft_core::cutter::assembly::Assembly;
 use camcraft_core::job::{HolderSegment, Job, Machine, Setup, ToolSpec};
 use camcraft_core::path::toolpath::{MoveKind, MoveRole};
-use camcraft_core::replay::Position;
+use camcraft_core::run::replay::Position;
 use camcraft_core::run::{PLUNGE_RATIO, SetupResult};
 use camcraft_geom::heightmap::narrow;
 use camcraft_geom::mesh::Aabb;

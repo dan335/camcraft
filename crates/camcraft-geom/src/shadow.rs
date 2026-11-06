@@ -83,6 +83,31 @@ impl Shadow {
         self.area.is_empty() && self.sheets.is_empty()
     }
 
+    /// Everything within `radius`, and no more than twice `slack` further, to
+    /// `arc_tolerance`: its outline simplified to within `slack` first, as
+    /// [`Region::grown_loosely`], for growing by far more than its detail.
+    pub fn grown_loosely(
+        &self,
+        radius: f64,
+        slack: f64,
+        arc_tolerance: f64,
+    ) -> Result<Region, RegionError> {
+        let area = self.area.grown_loosely(radius, slack, arc_tolerance);
+        if self.sheets.is_empty() {
+            return Ok(area);
+        }
+        let sheets: Vec<Vec<DVec2>> = self
+            .sheets
+            .iter()
+            .map(|s| crate::contour::simplify(s, false, slack))
+            .collect();
+        area.union(&Region::around_polylines(
+            &sheets,
+            radius + slack,
+            arc_tolerance,
+        ))
+    }
+
     /// Everything within `radius`, erring outward by at most `arc_tolerance`.
     pub fn grown(&self, radius: f64, arc_tolerance: f64) -> Result<Region, RegionError> {
         let area = self.area.offset(radius, arc_tolerance);

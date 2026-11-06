@@ -1,7 +1,7 @@
 //! Settings worked out from expressions, as Fusion's parameter expressions
 //! are: an operation's `expressions` name a setting by its place in the job
 //! file ([`super::settings`]) and give the expression it is worked out from
-//! ([`crate::expr`]), reading the tool, the job's tolerance and the
+//! ([`crate::job::expr`]), reading the tool, the job's tolerance and the
 //! operation's own settings by Fusion's names ([`Operation::expression_value`]).
 //! The setting itself still holds the number, as a job file without
 //! expressions has it, so everything that reads a job reads it as before.
@@ -10,7 +10,7 @@ use toml::{Table, Value as Toml};
 
 use super::settings::{Number, at, number_kind, put};
 use super::{Job, Operation, ToolSpec};
-use crate::expr::{self, Value};
+use crate::job::expr::{self, Value};
 
 /// An expression that could not be worked out, or not put where it names.
 #[derive(Debug, Clone, PartialEq, Eq)]

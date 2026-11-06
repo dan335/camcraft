@@ -72,11 +72,25 @@ pub enum ReachError {
 }
 
 /// One height band of the cutter: from `height` above the tip up to the next band,
-/// grown by `radius`, the most the cutter reaches anywhere in it.
+/// grown by `radius`, the most the cutter reaches anywhere in it; or of the
+/// rest of the tool above it, its shank or holder, grown loosely by `slack`
+/// more at most ([`Shadow::grown_loosely`]): kept clear, not cut along.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Band {
     height: f64,
     radius: f64,
+    slack: f64,
+}
+
+impl Band {
+    /// `shadow` grown as this band is, to `arc` where it is exact.
+    fn grow(&self, shadow: &Shadow, arc: f64) -> Result<Region, RegionError> {
+        if self.slack > 0.0 {
+            shadow.grown_loosely(self.radius, self.slack, self.slack.max(arc))
+        } else {
+            shadow.grown(self.radius, arc)
+        }
+    }
 }
 
 /// The forbidden region of one cutter against one mesh, at any level.
@@ -135,9 +149,14 @@ impl<'m> LevelReach<'m> {
     /// gives them ([decision 0021]). At a level the tool may then not be
     /// where any of them would meet the part above it.
     ///
+    /// Each is kept clear by its radius, and by no more than twice `slack`
+    /// further: growing a part's shadow by a holder's radius, far more than
+    /// its detail, is quick only loosely.
+    ///
     /// [decision 0021]: ../../../../docs/decisions/0021-shank-and-holder.md
-    pub fn with_body(mut self, cylinders: &[(f64, f64)]) -> Self {
+    pub fn with_body(mut self, cylinders: &[(f64, f64)], slack: f64) -> Self {
         let lift = self.lift;
+        let slack = slack.max(self.tolerance);
         self.bands.extend(
             cylinders
                 .iter()
@@ -145,6 +164,7 @@ impl<'m> LevelReach<'m> {
                 .map(|&(radius, height)| Band {
                     height: height + lift,
                     radius,
+                    slack,
                 }),
         );
         self.bands.sort_by(|a, b| a.height.total_cmp(&b.height));
@@ -161,14 +181,14 @@ impl<'m> LevelReach<'m> {
         for band in self.bands.iter().rev() {
             let shadow = self.shadows.above(tip + band.height)?;
             if !shadow.is_empty() {
-                shadows.push((shadow, band.radius));
+                shadows.push((shadow, *band));
             }
         }
         // Growing each band is independent, so it is done in parallel; the order is
         // kept, so the union is the same on any number of cores.
         let grown = shadows
             .par_iter()
-            .map(|(shadow, radius)| shadow.grown(*radius, self.arc_tolerance))
+            .map(|(shadow, band)| band.grow(shadow, self.arc_tolerance))
             .collect::<Result<Vec<Region>, RegionError>>()?;
         Ok(Region::union_all(&grown)?)
     }
@@ -188,7 +208,7 @@ impl<'m> LevelReach<'m> {
         // Every band of every level: the height asked, whose it is, and its
         // radius; highest first, and, as `forbidden` has them, each level's
         // bands from the top of the tool down.
-        let mut asks: Vec<(f64, usize, f64)> = levels
+        let mut asks: Vec<(f64, usize, Band)> = levels
             .iter()
             .enumerate()
             .flat_map(|(i, &z)| {
@@ -196,7 +216,7 @@ impl<'m> LevelReach<'m> {
                 self.bands
                     .iter()
                     .rev()
-                    .map(move |band| (tip + band.height, i, band.radius))
+                    .map(move |band| (tip + band.height, i, *band))
             })
             .collect();
         asks.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
@@ -205,7 +225,7 @@ impl<'m> LevelReach<'m> {
         let mut out: Vec<Option<Region>> = vec![None; levels.len()];
         // Grown in parallel a batch at a time, each level's in its order, so the
         // unions are the same on any number of cores.
-        let mut batch: Vec<(usize, Arc<Shadow>, f64)> = Vec::new();
+        let mut batch: Vec<(usize, Arc<Shadow>, Band)> = Vec::new();
         let mut last: Option<(f64, Arc<Shadow>)> = None;
         // Each level's shadow for the band above, and what it was grown by: a
         // band whose shadow is the same, grown no more, is inside what that
@@ -214,13 +234,13 @@ impl<'m> LevelReach<'m> {
         // never wider; a shank or holder above it may be narrower than what
         // is below it, and is looked at whatever.
         let mut above: Vec<Option<(Arc<Shadow>, f64)>> = vec![None; levels.len()];
-        let flush = |batch: &mut Vec<(usize, Arc<Shadow>, f64)>,
+        let flush = |batch: &mut Vec<(usize, Arc<Shadow>, Band)>,
                      grown: &mut Vec<Vec<Region>>,
                      arc: f64|
          -> Result<(), ReachError> {
             let regions = batch
                 .par_iter()
-                .map(|(_, shadow, radius)| shadow.grown(*radius, arc))
+                .map(|(_, shadow, band)| band.grow(shadow, arc))
                 .collect::<Result<Vec<Region>, RegionError>>()?;
             for ((i, ..), region) in batch.drain(..).zip(regions) {
                 if let Some(list) = grown.get_mut(i) {
@@ -245,7 +265,8 @@ impl<'m> LevelReach<'m> {
             }
             Ok(())
         };
-        for (t, i, radius) in asks {
+        for (t, i, band) in asks {
+            let radius = band.radius;
             let shadow = match &last {
                 // The very same height, another level's: asked once.
                 Some((at, shadow)) if at.to_bits() == t.to_bits() => Arc::clone(shadow),
@@ -263,7 +284,7 @@ impl<'m> LevelReach<'m> {
                 if let Some(slot) = above.get_mut(i) {
                     *slot = Some((Arc::clone(&shadow), radius));
                 }
-                batch.push((i, shadow, radius));
+                batch.push((i, shadow, band));
             }
             let Some(count) = left.get_mut(i) else {
                 continue;
@@ -329,12 +350,14 @@ fn bands(profile: &(impl ToolProfile + ?Sized), step: f64) -> Result<Vec<Band>, 
             out.push(Band {
                 height,
                 radius: full,
+                slack: 0.0,
             });
             return Ok(out);
         }
         out.push(Band {
             height,
             radius: reach,
+            slack: 0.0,
         });
         if out.len() >= MAX_BANDS {
             return Err(ReachError::Profile { step });

@@ -288,8 +288,9 @@ impl<'a> Clearing<'a> {
         )
     }
 
-    /// How far a tile's growth reads the material round it: the tool and the
-    /// sliver it is shrunk by and grown back, each to its arcs, and a margin.
+    /// How far a tile's growth reads the material round it: the tool, the
+    /// sliver it is shrunk by and grown back, and the slack it is grown loosely
+    /// by, each to its arcs, and a margin.
     fn grown_reach(&self) -> f64 {
         self.p.radius + 4.0 * (self.p.sliver + self.p.coarse)
     }
@@ -313,7 +314,7 @@ impl<'a> Clearing<'a> {
                 let (own_lo, own_hi) = uncut.square_beyond(k, reach);
                 let piece = around
                     .offset(-p.sliver, p.coarse)
-                    .offset(p.radius + p.sliver, p.coarse)
+                    .grown_loosely(p.radius + p.sliver, p.coarse, p.coarse)
                     .intersection(&Region::rectangle(own_lo, own_hi))?;
                 Ok((k, piece))
             })
@@ -389,10 +390,14 @@ impl<'a> Clearing<'a> {
     ) -> Result<Situation, StrategyError> {
         // Shrunk, so slivers a rounding error wide are not passes.
         let remaining = uncut.offset(-self.p.sliver, self.p.coarse);
-        // A radius clear of the material, grown back by what it was shrunk.
+        // A radius clear of the material, grown back by what it was shrunk:
+        // to where passes start, which need only be near, so loosely, its
+        // outline simplified first.
         let grown = match grown {
             Some(grown) => grown,
-            None => remaining.offset(self.p.radius + self.p.sliver, self.p.coarse),
+            None => {
+                remaining.grown_loosely(self.p.radius + self.p.sliver, self.p.coarse, self.p.coarse)
+            }
         };
         let free = allowed.difference(&grown)?;
         Ok(Situation {
@@ -662,6 +667,7 @@ impl<'a> Clearing<'a> {
             if let Some(w) = &mut self.window {
                 let before = w.uncut.area();
                 w.uncut = w.uncut.difference(&swept)?;
+                w.uncut_index = Indexed::of(&w.uncut);
                 self.taken += (before - w.uncut.area()).max(0.0);
             }
             self.cut_material(&swept)?;
@@ -690,11 +696,13 @@ impl<'a> Clearing<'a> {
         self.flush()?;
         let half = DVec2::splat(margin + 4.0 * self.p.radius);
         let (lo, hi) = (at - half, at + half);
+        let uncut = self.uncut.window(lo, hi)?;
         self.window = Some(Window {
             lo,
             hi,
-            uncut: self.uncut.window(lo, hi)?,
-            allowed: self.room.window(lo, hi)?,
+            uncut_index: Indexed::of(&uncut),
+            allowed_index: Indexed::of(&self.room.window(lo, hi)?),
+            uncut,
         });
         Ok(())
     }

@@ -63,7 +63,7 @@
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
 use camcraft_geom::arc::Arc;
-use camcraft_geom::contour::{Contour, Region};
+use camcraft_geom::contour::{Contour, Indexed, Region};
 use camcraft_geom::engagement::engaged;
 use camcraft_geom::mesh::TriMesh;
 use glam::{DVec2, dvec3};
@@ -342,12 +342,11 @@ pub fn adaptive_rough(
         all
     };
 
-    // Where the tool may not be at every level, from the top: the shadows are
-    // cheapest asked for in descending order.
-    let mut forbidden = Vec::new();
-    for z in levels_of(&slabs) {
-        forbidden.push((z, reach.forbidden(z)?));
-    }
+    // Where the tool may not be at every level, all at once: each height
+    // asked once, from the top, and the levels put together in parallel.
+    let zs = levels_of(&slabs);
+    let mut forbidden: Vec<(f64, Region)> =
+        zs.iter().copied().zip(reach.forbidden_all(&zs)?).collect();
     // Levels added where the terraces are wide, each to cut only there.
     let arc = params.tolerance * 0.1;
     let mut zones: Vec<(f64, Region)> = Vec::new();

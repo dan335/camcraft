@@ -1,7 +1,7 @@
 //! The bridge to Clipper2: millimetres to ticks and back, and every operation that
 //! goes through the clipper.
 
-use super::{Contour, Region, RegionError, polyline_length};
+use super::{Contour, Region, RegionError, polyline_length, simplify};
 use clipper2_rust::{
     ClipType, Clipper64, ClipperOffset, EndType, FillRule, JoinType, Path64, Paths64, Point64,
     constants::{MAX_COORD, MIN_COORD},
@@ -84,6 +84,25 @@ impl Region {
             padded,
             tol,
         )
+    }
+
+    /// Grown by at least `delta` and at most `delta` and twice `slack` more,
+    /// to `arc_tolerance`: the outline simplified to within `slack` first, then
+    /// grown by `delta` and `slack`. For a region only asked where it is, not
+    /// followed: growing a jagged outline, as what a cutter has swept leaves,
+    /// by far more than its jags folds each over the next, and resolving those
+    /// is most of the work; simplified, there is little to fold.
+    pub fn grown_loosely(&self, delta: f64, slack: f64, arc_tolerance: f64) -> Self {
+        if !(slack.is_finite() && slack > 0.0) {
+            return self.offset(delta, arc_tolerance);
+        }
+        let rings: Vec<Contour> = self
+            .rings
+            .iter()
+            .filter_map(|c| Contour::new(simplify(&c.points, true, slack)))
+            .filter(|c| c.points.len() >= 3)
+            .collect();
+        Self::new(rings).offset(delta + slack, arc_tolerance)
     }
 
     /// Grown by at least `delta` everywhere, with mitred or squared corners.

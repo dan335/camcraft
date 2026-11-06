@@ -686,7 +686,10 @@ fn a_changed_operation_takes_its_toolpath_with_it() {
     assert_eq!(ops(&doc), 1);
     let state = &doc.setups["top"];
     let ran = state.ran.as_ref().unwrap();
-    assert_eq!(ran.marks, crate::transport::marks(&ran.ran, &ran.scene));
+    assert_eq!(
+        ran.marks,
+        crate::playback::transport::marks(&ran.ran, &ran.scene)
+    );
     let left = ran.scene.segments.len();
     assert!(0 < left && left < whole, "{left} of {whole}");
     assert_eq!(

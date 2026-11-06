@@ -152,6 +152,7 @@ impl Region {
 /// looking outwards from the point a ring of cells at a time; and in rows, each
 /// holding the edges whose heights span it, so inside or out is counted from
 /// those alone. The same answers as looking at every edge.
+#[derive(Debug, Clone, Default)]
 pub struct Indexed {
     edges: Vec<(DVec2, DVec2)>,
     lo: DVec2,
@@ -224,6 +225,78 @@ impl Indexed {
             cells,
             rows,
         }
+    }
+
+    /// Each edge with a part in the box `lo`-`hi`, once, by `each`: those in
+    /// the cells the box covers, which hold every edge crossing them.
+    pub fn edges_in(&self, lo: DVec2, hi: DVec2, each: &mut dyn FnMut(DVec2, DVec2)) {
+        let span = |v: f64, n: usize| {
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss
+            )]
+            let i = (v / self.cell).floor().clamp(0.0, (n - 1) as f64) as usize;
+            i
+        };
+        if hi.x < self.lo.x || hi.y < self.lo.y || self.nx == 0 || self.ny == 0 {
+            return;
+        }
+        let (x0, x1) = (
+            span(lo.x - self.lo.x, self.nx),
+            span(hi.x - self.lo.x, self.nx),
+        );
+        let (y0, y1) = (
+            span(lo.y - self.lo.y, self.ny),
+            span(hi.y - self.lo.y, self.ny),
+        );
+        thread_local! {
+            static SEEN: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        let mut gather = |seen: &mut Vec<u32>| {
+            seen.clear();
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    if let Some(c) = self.cells.get(y * self.nx + x) {
+                        seen.extend_from_slice(c);
+                    }
+                }
+            }
+            seen.sort_unstable();
+            seen.dedup();
+            for &k in seen.iter() {
+                if let Some(&(a, b)) = self.edges.get(k as usize) {
+                    each(a, b);
+                }
+            }
+        };
+        SEEN.with(|s| match s.try_borrow_mut() {
+            Ok(mut seen) => gather(&mut seen),
+            Err(_) => gather(&mut Vec::new()),
+        });
+    }
+
+    /// Whether the whole segment `a`-`b` lies inside, as
+    /// [`Region::contains_segment`] says: both ends inside, and no edge near it
+    /// crossing it.
+    pub fn contains_segment(&self, a: DVec2, b: DVec2) -> bool {
+        if !self.contains(a) || !self.contains(b) {
+            return false;
+        }
+        let (lo, hi) = (a.min(b), a.max(b));
+        let cross = |o: DVec2, p: DVec2, q: DVec2| (p - o).perp_dot(q - o);
+        let mut clear = true;
+        self.edges_in(lo, hi, &mut |c, d| {
+            if !clear || c.max(d).cmplt(lo).any() || c.min(d).cmpgt(hi).any() {
+                return;
+            }
+            let (d1, d2) = (cross(a, b, c), cross(a, b, d));
+            let (d3, d4) = (cross(c, d, a), cross(c, d, b));
+            if (d1 > 0.0) != (d2 > 0.0) && (d3 > 0.0) != (d4 > 0.0) {
+                clear = false;
+            }
+        });
+        clear
     }
 
     /// How far `p` is inside, as [`Region::depth_at`] says.

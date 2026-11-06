@@ -12,7 +12,8 @@ fn a_flat_mill_is_one_band() {
         b,
         vec![Band {
             height: 0.0,
-            radius: 3.0
+            radius: 3.0,
+            slack: 0.0,
         }]
     );
 }

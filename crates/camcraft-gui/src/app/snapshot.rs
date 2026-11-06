@@ -346,7 +346,7 @@ impl App {
                 f.detail = "deepest 2.40 mm under the cutter".into();
                 f.at_move = Some(len / 2);
             }
-            ran.marks = crate::transport::marks(&ran.ran, &ran.scene);
+            ran.marks = crate::playback::transport::marks(&ran.ran, &ran.scene);
         }
         if let Some(id) = id {
             // The worker only wakes the window with it; the harness steps it.

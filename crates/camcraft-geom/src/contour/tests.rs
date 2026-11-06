@@ -469,3 +469,52 @@ fn a_hole_touching_its_outer_stays_in_its_piece() {
     let area: f64 = cut.pieces().iter().map(Region::area).sum();
     assert!((area - 90.0).abs() < 1e-9, "{area} from {cut:?}");
 }
+
+/// A jagged outline grown loosely holds everything within the distance of it,
+/// reaches no further than the distance and twice the slack, and is far
+/// simpler than the outline grown exactly.
+#[test]
+fn growing_loosely_holds_the_exact_growth_and_little_more() {
+    // A circle of radius 10, its edge a zigzag 0.1 deep, 2000 points round.
+    let n = 2000;
+    let pts: Vec<DVec2> = (0..n)
+        .map(|k| {
+            let a = std::f64::consts::TAU * f64::from(k) / f64::from(n);
+            let r = 10.0 + if k % 2 == 0 { 0.05 } else { -0.05 };
+            DVec2::new(r * a.cos(), r * a.sin())
+        })
+        .collect();
+    let edge = pts.clone();
+    let jagged = Region::new(vec![Contour::new(pts).unwrap()]);
+    let (delta, slack, arc) = (3.0, 0.2, 0.01);
+    let loose = jagged.grown_loosely(delta, slack, arc);
+    let exact = jagged.offset(delta, arc);
+    let reach = |p: DVec2| {
+        if jagged.contains(p) {
+            return 0.0;
+        }
+        edge.iter()
+            .zip(edge.iter().cycle().skip(1))
+            .map(|(&a, &b)| crate::mesh::distance_to_segment(p, a, b))
+            .fold(f64::INFINITY, f64::min)
+    };
+    for i in 0..120 {
+        for j in 0..120 {
+            let p = DVec2::new(-15.0 + 0.25 * f64::from(i), -15.0 + 0.25 * f64::from(j));
+            let d = reach(p);
+            if d <= delta {
+                assert!(loose.contains(p), "{p:?} is {d} from it");
+            }
+            if loose.contains(p) {
+                assert!(d <= delta + 2.0 * slack + arc, "{p:?} is {d} from it");
+            }
+        }
+    }
+    let points = |r: &Region| r.rings().iter().map(|c| c.points().len()).sum::<usize>();
+    assert!(
+        points(&loose) * 4 < points(&exact),
+        "{} against {}",
+        points(&loose),
+        points(&exact)
+    );
+}

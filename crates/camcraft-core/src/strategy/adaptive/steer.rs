@@ -73,11 +73,11 @@ pub(super) fn choose(
     let mut eval = |t: f64| -> Option<Step> {
         let dir = DVec2::from_angle(side.toward() * t).rotate(heading);
         let next = at + dir * length;
-        if !w.allowed.contains_segment(at, next) {
+        if !w.allowed_index.contains_segment(at, next) {
             return None;
         }
         path.push(next);
-        let e = engaged(next, p.radius, &w.uncut, path.as_slice(), p.radius);
+        let e = engaged(next, p.radius, &w.uncut_index, path.as_slice(), p.radius);
         path.pop();
         let total = e.angle();
         let (right, left) = e.sides(dir);
