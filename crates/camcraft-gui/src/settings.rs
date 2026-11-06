@@ -65,25 +65,14 @@ impl Settings {
             });
     }
 
-    /// The Theme setting: the desktop's, the design system's, and each
-    /// palette in the themes folder, with a way to that folder.
+    /// The Theme setting: the desktop's, the design system's, Omarchy's, and
+    /// each palette in the themes folder, with a way to that folder.
     fn theme_choice(&mut self, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             egui::ComboBox::from_id_salt("theme")
                 .selected_text(self.theme.title())
-                .show_ui(ui, |ui| {
-                    for choice in [Choice::System, Choice::Camcraft] {
-                        let title = choice.title();
-                        ui.selectable_value(&mut self.theme, choice, title);
-                    }
-                    // Looked at only while the list is open: a few small files.
-                    let listed = themes::folder().map(|f| themes::listed(&f));
-                    for name in listed.unwrap_or_default() {
-                        let choice = Choice::File(name);
-                        let title = choice.title();
-                        ui.selectable_value(&mut self.theme, choice, title);
-                    }
-                });
+                .height(480.0)
+                .show_ui(ui, |ui| themes::pick(ui, &mut self.theme));
             if ui
                 .button("Themes folder")
                 .on_hover_text(themes::folder().map_or_else(String::new, |f| {

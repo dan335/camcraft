@@ -386,10 +386,12 @@ Settings' **Theme** chooses the window's colours. *System*, the default,
 follows the desktop's theme on Omarchy: its `colors.toml` is read as the app
 starts and watched, and the window changes with it as soon as the theme is
 switched, a light theme light. Elsewhere *System* is the design system's,
-dark, as *camcraft* is everywhere. The rest are palette files in Omarchy's
-`colors.toml` format, kept in camcraft's themes folder (**Themes folder**
-opens it): a `name.toml`, or an Omarchy theme's folder dropped in as it is.
-The one chosen is watched too. The surfaces, hairlines, text and accent are
+dark, as *camcraft* is everywhere. Then come the 23 themes Omarchy ships,
+bundled in the app (`assets/themes/`, as Omarchy has them). Last are your
+own: palette files in Omarchy's `colors.toml` format, kept in camcraft's
+themes folder (**Themes folder** opens it), a `name.toml`, or an Omarchy
+theme's folder dropped in as it is. The one chosen is watched too.
+**View → Theme** lists the same. The surfaces, hairlines, text and accent are
 the theme's; what says something keeps the design system's colours: the
 moves by role, the axes, picks and boundaries in the view, the material, and
 ok, warning and error. A light variant of the design system, for *System* to

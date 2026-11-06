@@ -262,38 +262,17 @@ fn main_window_after_a_run() {
 }
 
 /// The example, run and showing its cut stock with an operation open, in
-/// Omarchy's Tokyo Night and Catppuccin Latte, as the window follows the
-/// desktop's theme. The palette is the whole window's: run alone.
+/// some of the themes Omarchy ships, dark and light, as bundled. The palette
+/// is the whole window's: run alone.
 #[test]
 #[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
 fn omarchy_themes() {
-    const THEMES: [(&str, &str); 2] = [
-        (
-            "omarchy_tokyo_night",
-            "mode = \"dark\"
-accent = \"#7aa2f7\"
-background = \"#1a1b26\"
-             dark_background = \"#13141c\"
-darker_background = \"#0e0e14\"
-             lighter_background = \"#24283b\"
-foreground = \"#a9b1d6\"
-             dark_foreground = \"#565f89\"
-bright_foreground = \"#c0caf5\"
-",
-        ),
-        (
-            "omarchy_catppuccin_latte",
-            "mode = \"light\"
-accent = \"#1e66f5\"
-background = \"#eff1f5\"
-             dark_background = \"#e3e4e8\"
-darker_background = \"#d7d8dc\"
-             lighter_background = \"#dce0e8\"
-foreground = \"#4c4f69\"
-             dark_foreground = \"#9ca0b0\"
-bright_foreground = \"#4c4f69\"
-",
-        ),
+    const THEMES: [&str; 5] = [
+        "tokyo-night",
+        "catppuccin-latte",
+        "gruvbox",
+        "rose-pine",
+        "white",
     ];
     let mut h = harness();
     let ctx = h.ctx.clone();
@@ -310,13 +289,24 @@ bright_foreground = \"#4c4f69\"
     // The first frame drawn after the stock is filled can outlast the GPU's
     // wait: drawn once first, unseen.
     let _ = h.render();
-    for (name, colors) in THEMES {
+    for name in THEMES {
+        let (_, colors) = crate::ui::themes::BUNDLED
+            .iter()
+            .find(|(n, _)| *n == name)
+            .unwrap();
         let palette = crate::ui::desktop::palette_of(colors, false).unwrap();
         crate::ui::theme::set_palette(&ctx, palette);
         h.run_steps(3);
-        shoot(&mut h, name);
+        shoot(&mut h, &format!("omarchy_{}", name.replace('-', "_")));
     }
     crate::ui::theme::set_palette(&ctx, crate::ui::theme::Palette::CAMCRAFT);
+    // The Theme setting open, listing them all.
+    h.state_mut()
+        .settings_for_snapshot(crate::ui::measure::Measure::Metric);
+    h.run_steps(2);
+    h.get_by_value("System").click();
+    h.run_steps(3);
+    shoot(&mut h, "theme_list");
 }
 
 /// A job with a top and a bottom setup sharing one block, open beside the example,

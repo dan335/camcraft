@@ -65,6 +65,13 @@ do there, and on Windows, macOS and other Linux desktops?
   the desktop; and the rest are palette files. That is items 2 and 3 below,
   but for *Dark* and *Light*, which wait on item 1: until there is a light
   variant, *System* has nothing to switch to off Omarchy.
+- **The themes Omarchy ships are bundled**, all of them, as its
+  `colors.toml` files (`assets/themes/`, MIT): listed after *camcraft* and
+  before the person's own, as Omarchy lists its own before the person's.
+  They are compiled in, not copied into the themes folder, so a release's
+  changes to them reach everyone and the folder holds only what the person
+  put there; a theme no longer bundled falls back to the design system's.
+  **View → Theme** lists them too.
 - **Palette files are Omarchy's format**, in camcraft's config folder's
   `themes/` (`%APPDATA%\camcraft\config	hemes` on Windows,
   `~/.config/camcraft/themes` on Linux): a `name.toml`, or an Omarchy theme's

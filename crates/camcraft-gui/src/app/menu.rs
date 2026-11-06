@@ -162,6 +162,12 @@ impl App {
                 if ui.checkbox(&mut self.settings_open, "Settings").clicked() {
                     ui.close();
                 }
+                ui.separator();
+                ui.menu_button("Theme", |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        crate::ui::themes::pick(ui, &mut self.settings.theme);
+                    });
+                });
             });
         });
     }

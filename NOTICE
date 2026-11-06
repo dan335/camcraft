@@ -24,6 +24,10 @@ The app's fonts are IBM Plex Sans and Fira Code, under the SIL Open Font License
 subset of Lucide's icons, under the ISC licence. crates/camcraft-gui/assets/fonts/ holds each
 licence and where each file came from.
 
+The themes in crates/camcraft-gui/assets/themes/ are Omarchy's colors.toml files
+(https://github.com/basecamp/omarchy), copyright David Heinemeier Hansson, under the MIT
+licence in crates/camcraft-gui/assets/themes/LICENSE-Omarchy.txt.
+
 Other dependencies are listed in Cargo.lock and carry their own licences.
 
 camcraft is an independent project and is not affiliated with, sponsored by or endorsed by

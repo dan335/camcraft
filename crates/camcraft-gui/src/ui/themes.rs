@@ -3,12 +3,13 @@
 //!
 //! *System* follows the desktop's theme where there is one to follow
 //! (Omarchy's, [`crate::ui::desktop`]) and is the design system's elsewhere;
-//! *camcraft* is the design system's whatever the desktop; and any other is a
-//! palette file in camcraft's themes folder, in Omarchy's `colors.toml`
-//! format, so an Omarchy theme can be dropped in on any system: a `name.toml`,
-//! or a theme's folder as it is, `name/colors.toml`. A file chosen is watched
-//! as Omarchy's is, so a palette being written is seen as it is saved. See
-//! decision 0018.
+//! *camcraft* is the design system's whatever the desktop; then the themes
+//! Omarchy ships, bundled ([`BUNDLED`]), as Omarchy keeps its own beside the
+//! person's; and the person's: palette files in camcraft's themes folder, in
+//! Omarchy's `colors.toml` format, so an Omarchy theme can be dropped in on
+//! any system: a `name.toml`, or a theme's folder as it is,
+//! `name/colors.toml`. A file chosen is watched as Omarchy's is, so a palette
+//! being written is seen as it is saved. See decision 0018.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
@@ -19,10 +20,49 @@ use serde::{Deserialize, Serialize};
 
 use crate::ui::desktop;
 use crate::ui::theme::{self, Palette};
+use crate::ui::widgets;
 
 /// How often the theme's file is looked at for a change: soon enough to seem
 /// to follow it, and a few hundred bytes read.
 const LOOK_EVERY: Duration = Duration::from_millis(750);
+
+/// Omarchy's themes, by name, each its `colors.toml` as Omarchy ships it,
+/// in `assets/themes/` (MIT, `LICENSE-Omarchy.txt` there).
+macro_rules! bundled {
+    ($($name:literal),* $(,)?) => {
+        /// The themes Omarchy ships, by name, with what each `colors.toml`
+        /// holds.
+        pub const BUNDLED: &[(&str, &str)] = &[$(
+            ($name, include_str!(concat!("../../assets/themes/", $name, ".toml"))),
+        )*];
+    };
+}
+
+bundled! {
+    "catppuccin",
+    "catppuccin-latte",
+    "ethereal",
+    "everforest",
+    "flexoki-light",
+    "gruvbox",
+    "hackerman",
+    "jade-horse",
+    "kanagawa",
+    "last-horizon",
+    "lumon",
+    "lupine",
+    "matte-black",
+    "miasma",
+    "nord",
+    "retro-82",
+    "ristretto",
+    "rose-pine",
+    "solitude",
+    "starship",
+    "tokyo-night",
+    "vantablack",
+    "white",
+}
 
 /// Which theme the window is drawn in.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -34,8 +74,18 @@ pub enum Choice {
     System,
     /// The design system's own, graphite and amber, whatever the desktop's.
     Camcraft,
+    /// The theme Omarchy ships of this name ([`BUNDLED`]).
+    Bundled(String),
     /// The palette file of this name in the themes folder ([`folder`]).
     File(String),
+}
+
+/// Where a theme's palette comes from.
+enum Source {
+    /// A palette that does not change.
+    Fixed(Palette),
+    /// The first of these files there is, watched.
+    Files(Vec<PathBuf>),
 }
 
 impl Choice {
@@ -45,19 +95,55 @@ impl Choice {
             Self::System if desktop::omarchy_files().is_some() => "System (Omarchy)".into(),
             Self::System => "System".into(),
             Self::Camcraft => "camcraft".into(),
-            Self::File(name) => title(name),
+            Self::Bundled(name) | Self::File(name) => title(name),
         }
     }
 
-    /// The files it is read from, the first there is: none for the design
-    /// system's.
-    fn files(&self) -> Vec<PathBuf> {
-        match self {
-            Self::System => desktop::omarchy_files().unwrap_or_default(),
-            Self::Camcraft => Vec::new(),
-            Self::File(name) => folder().map(|f| files_in(&f, name)).unwrap_or_default(),
+    /// Where its palette comes from: the design system's where it has none,
+    /// as off Omarchy for *System*, or a bundled theme no longer bundled.
+    fn source(&self) -> Source {
+        let files = match self {
+            Self::System => desktop::omarchy_files(),
+            Self::Camcraft => None,
+            Self::Bundled(name) => {
+                let palette = BUNDLED
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .and_then(|(_, text)| desktop::palette_of(text, false));
+                return Source::Fixed(palette.unwrap_or(Palette::CAMCRAFT));
+            }
+            Self::File(name) => folder().map(|f| files_in(&f, name)),
+        };
+        files.map_or(Source::Fixed(Palette::CAMCRAFT), Source::Files)
+    }
+}
+
+/// The themes there are to choose, `choice` set to the one clicked: the
+/// desktop's, the design system's, Omarchy's, and the person's own, each
+/// under its heading. Whether it changed.
+pub fn pick(ui: &mut egui::Ui, choice: &mut Choice) -> bool {
+    let was = choice.clone();
+    let mut offer = |ui: &mut egui::Ui, c: Choice| {
+        let title = c.title();
+        ui.selectable_value(choice, c, title);
+    };
+    offer(ui, Choice::System);
+    offer(ui, Choice::Camcraft);
+    ui.separator();
+    ui.label(widgets::hint_text("Omarchy's"));
+    for (name, _) in BUNDLED {
+        offer(ui, Choice::Bundled((*name).to_owned()));
+    }
+    // Looked at only while the list is open: a few small files.
+    let own = folder().map(|f| listed(&f)).unwrap_or_default();
+    if !own.is_empty() {
+        ui.separator();
+        ui.label(widgets::hint_text("Yours"));
+        for name in own {
+            offer(ui, Choice::File(name));
         }
     }
+    *choice != was
 }
 
 /// A palette file's name as a title: `tokyo-night` as *Tokyo Night*.
@@ -170,13 +256,17 @@ impl Follower {
             return;
         }
         self.shown = Some(choice.clone());
-        let files = choice.files();
+        let (files, fixed) = match choice.source() {
+            Source::Fixed(palette) => (Vec::new(), Some(palette)),
+            Source::Files(files) => (files, None),
+        };
         let watch = !files.is_empty();
-        {
+        let palette = {
             let mut w = self.watch.lock().unwrap_or_else(PoisonError::into_inner);
             *w = Watch { files, read: None };
-            theme::set_palette(ctx, w.look().unwrap_or(Palette::CAMCRAFT));
-        }
+            fixed.or_else(|| w.look()).unwrap_or(Palette::CAMCRAFT)
+        };
+        theme::set_palette(ctx, palette);
         if watch && !self.watching {
             self.watching = true;
             spawn(Arc::downgrade(&self.watch), ctx.clone());
@@ -222,7 +312,7 @@ pub fn open_folder() -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -290,6 +380,48 @@ mod tests {
         assert!(w.look().is_some(), "back again");
     }
 
+    /// Every theme Omarchy ships is bundled, and reads as a palette, light
+    /// or dark as it says it is.
+    #[test]
+    fn omarchys_themes_are_bundled_and_read() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/themes");
+        let mut files: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| {
+                let name = e.unwrap().file_name().into_string().unwrap();
+                name.strip_suffix(".toml").map(str::to_owned)
+            })
+            .collect();
+        files.sort();
+        let bundled: Vec<&str> = BUNDLED.iter().map(|(n, _)| *n).collect();
+        assert_eq!(bundled, files, "assets/themes/ and BUNDLED differ");
+        for (name, text) in BUNDLED {
+            let palette = desktop::palette_of(text, false)
+                .unwrap_or_else(|| panic!("{name} does not read as a palette"));
+            let light = text.contains("mode = \"light\"");
+            assert_eq!(palette.dark, !light, "{name}");
+            assert_ne!(
+                palette.text_1, palette.surface_2,
+                "{name}: text on its card"
+            );
+        }
+    }
+
+    /// A bundled theme is a fixed palette; one no longer bundled is the
+    /// design system's, as is camcraft.
+    #[test]
+    fn a_bundled_theme_is_drawn_as_it_is() {
+        let Source::Fixed(p) = Choice::Bundled("tokyo-night".into()).source() else {
+            panic!("a bundled theme has no file");
+        };
+        assert_eq!(p.accent, [0x7a, 0xa2, 0xf7]);
+        let Source::Fixed(p) = Choice::Bundled("gone".into()).source() else {
+            panic!("a theme no longer bundled has no file");
+        };
+        assert_eq!(p, Palette::CAMCRAFT);
+        assert!(matches!(Choice::Camcraft.source(), Source::Fixed(p) if p == Palette::CAMCRAFT));
+    }
+
     #[test]
     fn a_palettes_name_reads_as_a_title() {
         assert_eq!(title("tokyo-night"), "Tokyo Night");
@@ -308,6 +440,7 @@ mod tests {
         for theme in [
             Choice::System,
             Choice::Camcraft,
+            Choice::Bundled("tokyo-night".into()),
             Choice::File("tokyo-night".into()),
         ] {
             let s = S { theme };
