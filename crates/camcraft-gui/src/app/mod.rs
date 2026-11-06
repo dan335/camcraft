@@ -38,6 +38,7 @@ use crate::tools::manager::ToolManager;
 use crate::tools::picker::{Outcome, Picked, ToolPicker};
 use crate::ui::measure::Measure;
 use crate::ui::theme;
+use crate::ui::themes::Follower;
 use crate::ui::widgets;
 use crate::view::viewport::{Content, Viewport};
 use crate::worker::{DocId, Reply, Request, Task, Worker};
@@ -96,6 +97,8 @@ pub struct App {
     tools: ToolManager,
     picker: Option<ToolPicker>,
     settings: Settings,
+    /// Keeps the window drawn in the theme the settings choose.
+    themes: Follower,
     settings_open: bool,
     /// Whether the log window is open.
     log_open: bool,
@@ -126,14 +129,15 @@ impl App {
     /// The app, restoring what it remembers.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
-        crate::ui::desktop::follow(&cc.egui_ctx);
         let dialog = cc
             .storage
             .and_then(|s| eframe::get_value(s, STORAGE_DIALOG));
-        let settings = cc
+        let settings: Settings = cc
             .storage
             .and_then(|s| eframe::get_value(s, STORAGE_SETTINGS))
             .unwrap_or_default();
+        let mut themes = Follower::default();
+        themes.show(&cc.egui_ctx, &settings.theme);
         let recent = cc
             .storage
             .and_then(|s| eframe::get_value(s, STORAGE_RECENT))
@@ -151,6 +155,7 @@ impl App {
             tools: ToolManager::new(),
             picker: None,
             settings,
+            themes,
             settings_open: false,
             log_open: false,
             checks_open: false,
@@ -933,6 +938,7 @@ impl eframe::App for App {
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::top("tabs").show(ui, |ui| self.tabs(ui));
         self.settings.show(&ctx, &mut self.settings_open);
+        self.themes.show(&ctx, &self.settings.theme);
         self.log_window(&ctx);
         self.checks_window(&ctx);
         self.file_dialog_results(&ctx);

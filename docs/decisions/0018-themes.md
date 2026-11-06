@@ -1,6 +1,8 @@
 # 0018 — Themes: Omarchy's followed, and a plan for everywhere else
 
-**Status:** Omarchy decided and built, 2026-11-04; the rest planned ·
+**Status:** Omarchy decided and built, 2026-11-04; the Theme setting and
+palette files built, 2026-11-05; the light variant and following the OS's
+light or dark planned ·
 **Milestone:** 0.5
 
 ## Question
@@ -41,7 +43,7 @@ do there, and on Windows, macOS and other Linux desktops?
 - **On Omarchy the window follows its theme.** Where its `colors.toml` is,
   it is read when the app starts and again every three quarters of a second,
   and the window is redrawn in it as soon as it changes, light themes light
-  (`ui::desktop`). Keys a theme leaves out are worked out as
+  (`ui::desktop`, watched by `ui::themes`). Keys a theme leaves out are worked out as
   `omarchy-theme-color` works them out, older themes' terminal colours
   included. Nothing is written into Omarchy's folders and no hook is
   installed: reading is enough, and an app that is not running needs nothing.
@@ -56,6 +58,20 @@ do there, and on Windows, macOS and other Linux desktops?
 - **The colours are a value, not constants** (`theme::Palette`, read with
   `theme::palette()` and its named colours, changed with
   `theme::set_palette`), so any source of a theme drives the same window.
+
+- **A Theme setting chooses the palette** (`ui::themes`): *System*, the
+  default, follows the desktop's theme where there is one, Omarchy's, and is
+  the design system's elsewhere; *camcraft* is the design system's whatever
+  the desktop; and the rest are palette files. That is items 2 and 3 below,
+  but for *Dark* and *Light*, which wait on item 1: until there is a light
+  variant, *System* has nothing to switch to off Omarchy.
+- **Palette files are Omarchy's format**, in camcraft's config folder's
+  `themes/` (`%APPDATA%\camcraft\config	hemes` on Windows,
+  `~/.config/camcraft/themes` on Linux): a `name.toml`, or an Omarchy theme's
+  folder dropped in as it is, `name/colors.toml`, light by its `light.mode`
+  as Omarchy's are. Only those that read as a palette are listed, and the one
+  chosen is watched as Omarchy's file is, so a palette being written is seen
+  as it is saved.
 
 ## Planned for everywhere else
 

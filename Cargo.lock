@@ -704,6 +704,7 @@ dependencies = [
  "camcraft-geom",
  "camcraft-session",
  "camcraft-sim",
+ "directories",
  "eframe",
  "egui-file-dialog",
  "egui_extras",

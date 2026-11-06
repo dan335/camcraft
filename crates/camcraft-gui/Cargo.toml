@@ -18,6 +18,8 @@ camcraft-geom.workspace    = true
 camcraft-sim.workspace     = true
 camcraft-session.workspace = true
 bytemuck.workspace         = true
+# camcraft's config folder, where palette files are kept (`ui::themes`).
+directories.workspace      = true
 eframe = { workspace = true, features = ["persistence"] }
 egui_extras.workspace      = true
 egui-file-dialog.workspace = true

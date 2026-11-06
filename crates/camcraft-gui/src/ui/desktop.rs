@@ -4,22 +4,15 @@
 //! `~/.local/state/omarchy/current/theme/` (Omarchy 4), or
 //! `~/.config/omarchy/current/theme/` (Omarchy 3), and replaces it whenever
 //! the theme is switched. Its guide for apps it does not ship is to read that
-//! file and keep watching it, which is what this does: so the window is drawn
-//! in the theme as soon as it is switched, light or dark. The keys and how
-//! one left out is worked out from the rest are Omarchy's own
-//! (`omarchy-theme-color`). Anywhere else, the design system's palette stands
-//! ([`Palette::CAMCRAFT`]); see decision 0018 for what is planned there.
+//! file and keep watching it, which [`crate::ui::themes`] does while the Theme
+//! setting is *System*: so the window is drawn in the theme as soon as it is
+//! switched, light or dark. The keys and how one left out is worked out from
+//! the rest are Omarchy's own (`omarchy-theme-color`), and a palette file in
+//! camcraft's themes folder is read the same way.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-
-use eframe::egui;
 
 use crate::ui::theme::{self, Palette, mix};
-
-/// How often the theme file is looked at for a switch: soon enough to seem
-/// to follow it, and a few hundred bytes read.
-const LOOK_EVERY: Duration = Duration::from_millis(750);
 
 /// Where Omarchy keeps the theme it is in, newest version first, under the
 /// home folder `home`.
@@ -32,50 +25,21 @@ fn theme_files(home: &Path) -> [PathBuf; 2] {
     })
 }
 
-/// Draw the window in Omarchy's theme, where there is one, from now on: as
-/// it is now, and, from a thread of its own that looks at its file every
-/// little while, again whenever it is switched. Nothing is woken for it until
-/// the theme changes. Elsewhere the design system's palette stands.
-pub fn follow(ctx: &egui::Context) {
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-        return;
-    };
+/// Where Omarchy keeps the theme it is in, newest version first, if this is
+/// Omarchy: if either is there.
+pub fn omarchy_files() -> Option<Vec<PathBuf>> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
     let files = theme_files(&home);
-    if !files.iter().any(|f| f.is_file()) {
-        return;
-    }
-    let mut read = look(&files, None, ctx);
-    let ctx = ctx.clone();
-    // A thread that lives as long as the app: it only ever sleeps and reads.
-    // Without one, the theme the app started in stands.
-    let _ = std::thread::Builder::new()
-        .name("camcraft theme".into())
-        .spawn(move || {
-            loop {
-                std::thread::sleep(LOOK_EVERY);
-                read = look(&files, read.take(), &ctx);
-            }
-        });
+    files.iter().any(|f| f.is_file()).then(|| files.to_vec())
 }
 
-/// Look at the theme in the first of `files` there is, and draw the window
-/// in it if it is not what was `read` before. What it holds now: what was
-/// read before while it cannot be read, as mid-switch, when it is briefly
-/// not there.
-fn look(files: &[PathBuf], read: Option<String>, ctx: &egui::Context) -> Option<String> {
-    let Some((file, text)) = files
-        .iter()
-        .find_map(|f| Some((f, std::fs::read_to_string(f).ok()?)))
-    else {
-        return read;
-    };
-    if read.as_deref() != Some(text.as_str()) {
-        let light_marker = file.with_file_name("light.mode").is_file();
-        if let Some(palette) = palette_of(&text, light_marker) {
-            theme::set_palette(ctx, palette);
-        }
-    }
-    Some(text)
+/// The window's palette from the palette file `file`, as read, `text`: a
+/// theme folder's `colors.toml` is light by its old `light.mode` beside it,
+/// as Omarchy's are.
+pub fn palette_in(file: &Path, text: &str) -> Option<Palette> {
+    let light_marker = file.file_name().is_some_and(|n| n == "colors.toml")
+        && file.with_file_name("light.mode").is_file();
+    palette_of(text, light_marker)
 }
 
 /// `#rrggbb`, as an Omarchy palette writes a colour.

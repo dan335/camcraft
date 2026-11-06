@@ -6,6 +6,11 @@ the same notes at more length.
 
 ## Unreleased
 
+- **A Theme setting**: *System* (the desktop's theme on Omarchy, as
+  before), *camcraft*, or any palette in Omarchy's `colors.toml` format
+  dropped into camcraft's themes folder, an Omarchy theme's folder as it is
+  ([decision 0018](docs/decisions/0018-themes.md)). The chosen palette is
+  watched, so editing it shows at once.
 - **Generating is about twice as fast** on a large adaptive job: the serving
   tray from 198 s to 93 s, the regression job from 152 s to 96 s, and Shaft
   and Holder's avoidance from 135 s more to under 10. Adaptive grew the

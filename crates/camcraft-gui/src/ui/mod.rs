@@ -5,4 +5,5 @@ pub mod defaults;
 pub mod desktop;
 pub mod measure;
 pub mod theme;
+pub mod themes;
 pub mod widgets;

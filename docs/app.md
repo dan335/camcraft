@@ -382,13 +382,19 @@ the work offset manager.
 
 ## Themes
 
-On Omarchy the window follows the desktop's theme: its `colors.toml` is read
-as the app starts and watched, and the window changes with it as soon as the
-theme is switched, a light theme light. The surfaces, hairlines, text and
-accent are the theme's; what says something keeps the design system's
-colours: the moves by role, the axes, picks and boundaries in the view, the
-material, and ok, warning and error. Elsewhere the window is the design
-system's, dark ([decision 0018](decisions/0018-themes.md) plans the rest).
+Settings' **Theme** chooses the window's colours. *System*, the default,
+follows the desktop's theme on Omarchy: its `colors.toml` is read as the app
+starts and watched, and the window changes with it as soon as the theme is
+switched, a light theme light. Elsewhere *System* is the design system's,
+dark, as *camcraft* is everywhere. The rest are palette files in Omarchy's
+`colors.toml` format, kept in camcraft's themes folder (**Themes folder**
+opens it): a `name.toml`, or an Omarchy theme's folder dropped in as it is.
+The one chosen is watched too. The surfaces, hairlines, text and accent are
+the theme's; what says something keeps the design system's colours: the
+moves by role, the axes, picks and boundaries in the view, the material, and
+ok, warning and error. A light variant of the design system, for *System* to
+follow the OS's light or dark, is planned
+([decision 0018](decisions/0018-themes.md)).
 
 ## Design system
 
