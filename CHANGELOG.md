@@ -4,7 +4,7 @@ What changed in each release, newest first. Each release's page
 ([Releases](https://github.com/dan335/camcraft/releases)) has the downloads and
 the same notes at more length.
 
-## Unreleased
+## 0.7.0 — 2026-11-11
 
 - **A Theme setting**, in Settings and **View → Theme**: *System* (the
   desktop's theme on Omarchy, as before), *camcraft*, the 23 themes Omarchy
