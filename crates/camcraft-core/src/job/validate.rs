@@ -518,7 +518,9 @@ impl Operation {
         } = self.strategy
         {
             finite(&field("angle"), angle)?;
-            at_least_zero(&field("pass_extension"), pass_extension)?;
+            if let Some(e) = pass_extension {
+                at_least_zero(&field("pass_extension"), e)?;
+            }
             finite(&field("stock_offset"), stock_offset)?;
         }
         if let Some((slope_from, slope_to)) = self.strategy.slopes() {

@@ -232,7 +232,30 @@ impl Motion {
 /// read, or something no controller could do, such as a move before its units
 /// are set.
 pub fn read(text: &str) -> Result<Vec<Step>, Problem> {
-    let mut r = Reader::default();
+    read_as(text, Convention::Standard)
+}
+
+/// How a controller takes a program where controllers differ.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Convention {
+    /// RS274/NGC's, as LinuxCNC reads it: `G80` leaves no motion in force, so
+    /// an axis word after it, before a `G0` or `G1`, is refused. What camcraft's
+    /// own programs are held to, so they run on either.
+    #[default]
+    Standard,
+    /// Fanuc's, as Masso, Haas and Centroid read it, and as Fusion's posts for
+    /// them write: the drilling cycles are a group of their own, so `G80` ends
+    /// one and the motion in force before it (`G0`, say) is in force again.
+    Fanuc,
+}
+
+/// [`read`], as a controller following `convention` reads the program: for a
+/// program another system posted, for the controller it was posted for.
+pub fn read_as(text: &str, convention: Convention) -> Result<Vec<Step>, Problem> {
+    let mut r = Reader {
+        convention,
+        ..Reader::default()
+    };
     for (i, line) in text.lines().enumerate() {
         r.line = i + 1;
         let words = words(line).map_err(|what| Problem::at(r.line, what))?;
@@ -370,8 +393,14 @@ struct Reader {
     absolute: Option<bool>,
     /// 17, 18 or 19.
     plane: u32,
-    /// 0, 1, 2, 3, 81, 82 or 83, once set; none after `G80`.
+    /// 0, 1, 2, 3, 81, 82 or 83, once set; after `G80`, none, or by the Fanuc
+    /// convention the motion in force before the cycle.
     motion: Option<u32>,
+    /// The last of 0, 1, 2 or 3 in force: what `G80` goes back to by the Fanuc
+    /// convention.
+    before_cycle: Option<u32>,
+    /// How `G80` is taken.
+    convention: Convention,
     /// mm/min.
     feed: Option<f64>,
     speed: Option<f64>,
@@ -392,6 +421,8 @@ impl Default for Reader {
             absolute: None,
             plane: 17,
             motion: None,
+            before_cycle: None,
+            convention: Convention::Standard,
             feed: None,
             speed: None,
             at: [None; 3],
@@ -431,9 +462,16 @@ impl Reader {
         }
         for &g in &b.g {
             match g {
-                0 | 1 | 2 | 3 | 81 | 82 | 83 => self.motion = Some(g),
+                0..=3 => {
+                    self.motion = Some(g);
+                    self.before_cycle = Some(g);
+                }
+                81..=83 => self.motion = Some(g),
                 80 => {
-                    self.motion = None;
+                    self.motion = match self.convention {
+                        Convention::Standard => None,
+                        Convention::Fanuc => self.before_cycle,
+                    };
                     self.cycle = Cycle::default();
                 }
                 17..=19 => self.plane = g,

@@ -5,7 +5,8 @@ fn params() -> FaceParams {
         area: (dvec2(0.0, 0.0), dvec2(100.0, 50.0)),
         angle: 0.0,
         stepover: 9.5,
-        extension: 2.0,
+        // To the tool's centre, as Fusion's: its radius and 2 mm more.
+        extension: 7.0,
         radius: 5.0,
         levels: LevelsAsked {
             top: 3.0,
@@ -27,7 +28,7 @@ fn cuts(path: &Toolpath) -> Vec<DVec3> {
 }
 
 /// Passes cover the area edge to edge, evenly no more than the stepover
-/// apart, and each runs off it by the tool's radius and the extension, at
+/// apart, and each runs off it by the extension, to the tool's centre, at
 /// the bottom alone.
 #[test]
 fn passes_cover_the_area_and_run_off_it() {
@@ -108,8 +109,8 @@ fn one_way_passes_all_go_the_same_way() {
     }
 }
 
-/// At an angle, every pass still runs off the area grown by the tool's
-/// radius at both ends, and the passes reach its far corners.
+/// At an angle, every pass still runs the extension off the area at both
+/// ends, so the tool is clear of it, and the passes reach its far corners.
 #[test]
 fn angled_passes_run_off_the_area() {
     let p = FaceParams {

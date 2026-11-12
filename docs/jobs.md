@@ -82,8 +82,9 @@ and a 2D operation's `outline`, what it cuts round or clears. `heights` holds
 the clearance (where the tool arrives and leaves, 10 mm over the stock), the
 retract height (Fusion's, 5 mm over it) and the top and bottom it cuts between. `passes.stepdown` is
 Fusion's multiple depths, shared the same way: adaptive and pocket clearing must have one,
-profiles, pockets and facing cut the bottom in one pass without, and parallel
-and drilling never read it. An operation may be
+profiles, pockets and facing cut the bottom in one pass without (and a new one
+starts so, as Fusion's 2D Contour, 2D Pocket and Face start with Multiple Depths
+off), and parallel and drilling never read it. An operation may be
 turned off, which leaves it in the job but out of every run, check and post.
 
 ```toml
@@ -241,8 +242,9 @@ to finish; negative cuts past the part, for a looser fit. Beside, it must stay
 under the tool's radius; down, in 3D with a ball or bullnose, within its corner
 radius (a flat end, or a 2D floor, may go any depth). Every operation has it,
 and cuts with as much as its strategy uses: a drill none, a profile on the
-boundary only its floor's. New adaptive and pocket clearing start at 0.5 mm each way, as
-Fusion's roughing does; everything else at none, which is not written. The 3D
+boundary only its floor's. New adaptive, pocket clearing and 2D pockets start at 0.5 mm
+each way, as Fusion's roughing, its 2D Pocket among it, does; everything else at
+none, which is not written. The 3D
 strategies grow the tool by it (`camcraft_core::cutter::allowance`); a 2D one moves its
 cut out by it and raises its floors by it. The material is cut by the real
 tool, so what is left shows in the simulation, and what was cut past the part
@@ -306,7 +308,7 @@ linking = { leads = { radius = 3.0, sweep = 90.0, straight = 1.0, vertical = 0.6
 A profile's **entry** (`linking.entry`) is how it goes down into material to
 start each ring, beside the lead:
 
-- `"helix"`, the default: down a helix in the waste beside where the lead
+- `"helix"`, what a job file that leaves it out has: down a helix in the waste beside where the lead
   starts (or the ring, without one), at the ramp angle, onto the vertical arc's
   top, then once round level, as Fusion's helix ends, so its circle is cut to
   the depth all round and the next depth's way in cuts nothing on the way. Its circle, as the
@@ -314,7 +316,8 @@ start each ring, beside the lead:
   part leaves no room for it, or for one three quarters, half or a quarter the
   size, the tool goes straight down instead.
 - `"plunge"`: straight down at the plunge feed onto the vertical arc's top, as
-  Fusion's 2D contour does without a ramp.
+  Fusion's 2D contour does without a ramp. A new profile starts with it, as
+  Fusion's 2D Contour starts with Ramp off.
 - `"ramp"`: the ring cut as one spiral, as Fusion cuts one: on along the
   lead-in once, the safe distance above the top; down along the ring, in the
   direction it cuts, to the first depth; once round there from where the ramp
@@ -595,6 +598,25 @@ the app, so there is exactly one engine path. `crates/camcraft-cli/tests/one_pat
 parses every written program back into positions and compares them with the paths
 `run_setup` produces in-process, move for move.
 
+`compare` holds camcraft's programs to another CAM system's, operation by
+operation, and writes nothing:
+
+```sh
+camcraft compare job.camcraft --setup top face=fusion/face.nc drill=fusion/drill.nc
+```
+
+It runs the setup, then cuts each other program from the material camcraft had
+before that operation, with the operation's tool, and prints what each program
+does as read back (moves, arcs, distance fed and at rapid, minutes feeding,
+plunges, the lowest it goes), how much each removed and left on the part, the
+gouges the run's own check finds in each, and how the material differs, column
+by column, with a map of where. The other program is read as the Fanuc-style
+controllers Fusion's posts write for (Masso, Haas, Centroid) read it.
+`crates/camcraft-session/src/compare/tests.rs` holds Face, 2D Contour, 2D Pocket
+and Drill to Fusion's own programs for a part made in Fusion
+(`fixtures/nc/ops_block_*.nc`): set as Fusion's are, each leaves the same
+material to 0.01 mm.
+
 Exit codes: `0` clean, `2` ran with warnings worth reading (or, with `--force`, wrote
 programs that failed a check), `1` a check failed (and, with `--out`, nothing was
 written).
@@ -649,7 +671,10 @@ of it, as Fusion's posts write one (`minimumChordLength`, `tolerance`).
 A program is checked by what it does, not by what it says.
 `camcraft_post::readback` reads one back as a controller would (units, distance
 mode, arcs by centre or radius in any plane, helices, drilling cycles, `G28`,
-`G53`, length offsets, tool changes), refusing anything it does not understand,
+`G53`, length offsets, tool changes), by RS274/NGC, where `G80` leaves no motion
+in force, so camcraft's programs run on controllers of either convention (another
+system's is read by the Fanuc one, where the motion before a cycle returns after
+it, as Fusion's posts for Masso write), refusing anything it does not understand,
 and replays it against the path it was posted from: every move reached in
 order, no cut made a rapid, feeds as asked, arcs on the same curve turning the
 same way. It holds the program to its safety too: never across from a height

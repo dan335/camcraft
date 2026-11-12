@@ -23,9 +23,11 @@ fn fit(c: &Chain) -> Option<(DVec3, f64)> {
     Some((centre, c.points[0].distance(centre)))
 }
 
+/// A rim alone goes down to the bottom given for it: its own hole's, or the
+/// operation's.
 #[test]
-fn a_rim_alone_is_drilled_to_the_bottom_asked_for() {
-    let got = holes(&[rim(1, dvec3(5.0, 5.0, 10.0), 3.0)], fit, -1.0, 0.01).unwrap();
+fn a_rim_alone_is_drilled_to_the_bottom_given_for_it() {
+    let got = holes(&[rim(1, dvec3(5.0, 5.0, 10.0), 3.0)], fit, |_| -1.0, 0.01).unwrap();
     assert_eq!(got.len(), 1);
     assert!(got[0].at.distance(dvec2(5.0, 5.0)) < 1e-9);
     assert_eq!((got[0].top, got[0].bottom), (10.0, -1.0));
@@ -42,7 +44,7 @@ fn both_rims_of_a_hole_set_its_depth() {
             rim(3, dvec3(0.0, 0.0, 10.0), 2.0),
         ],
         fit,
-        -5.0,
+        |_| -5.0,
         0.01,
     )
     .unwrap();
@@ -52,7 +54,8 @@ fn both_rims_of_a_hole_set_its_depth() {
 }
 
 /// Two rims of one axis at one height, a counterbore's floor's two edges,
-/// are one rim: drilled from there to the bottom asked for.
+/// are one rim: drilled from there to the lower of the bottoms given for them,
+/// the small hole's below the floor rather than the counterbore's wall's.
 #[test]
 fn rims_at_one_height_are_drilled_to_the_bottom_asked_for() {
     let got = holes(
@@ -61,7 +64,7 @@ fn rims_at_one_height_are_drilled_to_the_bottom_asked_for() {
             rim(2, dvec3(0.0, 0.0, 7.0), 2.0),
         ],
         fit,
-        -1.0,
+        |c| if c.edge == 2 { -1.0 } else { 3.0 },
         0.01,
     )
     .unwrap();
@@ -72,20 +75,23 @@ fn rims_at_one_height_are_drilled_to_the_bottom_asked_for() {
 
 #[test]
 fn what_is_not_a_hole_is_said() {
-    assert_eq!(holes(&[], fit, 0.0, 0.01), Err(HoleError::NothingPicked));
+    assert_eq!(
+        holes(&[], fit, |_| 0.0, 0.01),
+        Err(HoleError::NothingPicked)
+    );
     let square = rim(4, dvec3(0.0, 0.0, 5.0), 2.0);
     assert!(matches!(
-        holes(std::slice::from_ref(&square), |_| None, 0.0, 0.01),
+        holes(std::slice::from_ref(&square), |_| None, |_| 0.0, 0.01),
         Err(HoleError::NotRound { edge: 4, .. })
     ));
     let mut tilted = square;
     tilted.points[3].z += 1.0;
     assert!(matches!(
-        holes(&[tilted], fit, 0.0, 0.01),
+        holes(&[tilted], fit, |_| 0.0, 0.01),
         Err(HoleError::NotVertical { .. })
     ));
     assert!(matches!(
-        holes(&[rim(5, dvec3(0.0, 0.0, 5.0), 2.0)], fit, 6.0, 0.01),
+        holes(&[rim(5, dvec3(0.0, 0.0, 5.0), 2.0)], fit, |_| 6.0, 0.01),
         Err(HoleError::NoDepth { .. })
     ));
 }

@@ -51,6 +51,35 @@ enum Command {
     /// printed. With `--out`, writes one program per operation, named after its
     /// setup, and refuses to write any unless every setup passed its checks.
     Job(JobArgs),
+    /// Compare another CAM system's programs with camcraft's, operation by
+    /// operation.
+    ///
+    /// Runs one setup of a job, then cuts each other program from the material
+    /// camcraft had before that operation, with the operation's tool, and
+    /// compares the two: what each program does, read back as a controller reads
+    /// it, and the material each leaves, column by column and against the part.
+    /// Writes nothing.
+    Compare(CompareArgs),
+}
+
+#[derive(Parser, Debug)]
+struct CompareArgs {
+    /// The job file (`.camcraft`).
+    job: PathBuf,
+
+    /// The setup, by name: the job's first when not given.
+    #[arg(long)]
+    setup: Option<String>,
+
+    /// An operation and the other program for it, as `OPERATION=PROGRAM`. Give
+    /// it once for each operation to compare.
+    #[arg(required = true, value_name = "OPERATION=PROGRAM")]
+    programs: Vec<String>,
+
+    /// How far apart the material may be and still be alike, in millimetres:
+    /// the job's tolerance when not given.
+    #[arg(long)]
+    tolerance: Option<f64>,
 }
 
 #[derive(Parser, Debug)]
@@ -241,6 +270,7 @@ fn main() -> ExitCode {
     let outcome = match cli.command {
         Command::Job(args) => job(args),
         Command::Post(args) => post(args),
+        Command::Compare(args) => compare(args),
     };
     match outcome {
         Ok(0) => ExitCode::SUCCESS,
@@ -438,6 +468,137 @@ fn job(args: JobArgs) -> Fallible<usize> {
     }
     // Written anyway with --force, a failed check is still worth reading.
     Ok(runs.iter().map(|(_, r)| r.warnings.len()).sum::<usize>() + failed)
+}
+
+fn compare(args: CompareArgs) -> Fallible<usize> {
+    let job = read_job(&args.job)?;
+    let job_dir = job_dir(&args.job);
+    let setup = match &args.setup {
+        Some(name) => job
+            .setups
+            .iter()
+            .position(|s| s.name == *name)
+            .ok_or_else(|| format!("the job has no setup called '{name}'"))?,
+        None if job.setups.is_empty() => return Err("the job has no setups".into()),
+        None => 0,
+    };
+    let pairs: Vec<(String, String)> = args
+        .programs
+        .iter()
+        .map(|p| {
+            let (op, path) = p
+                .split_once('=')
+                .ok_or_else(|| format!("'{p}' is not OPERATION=PROGRAM"))?;
+            let text =
+                std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+            Ok::<_, Box<dyn std::error::Error>>((op.to_string(), text))
+        })
+        .collect::<Result<_, _>>()?;
+
+    let loaded = load_models(&job, &job_dir, &[setup]).map_err(explain)?;
+    let models = models_of(&loaded);
+    let ran = execute(&job, setup, &models)?;
+    let name = job.setups.get(setup).map_or("setup", |s| s.name.as_str());
+    report_checks(&format!("setup {name}"), &ran.checks);
+
+    let tolerance = args.tolerance.unwrap_or(job.tolerance);
+    let mut out = String::new();
+    for (op, text) in &pairs {
+        let c =
+            camcraft_session::compare::compare(&job, setup, &job_dir, &ran, op, text, tolerance)?;
+        out.push_str(&compared_report(&c, tolerance));
+    }
+    print!("{out}");
+    Ok(0)
+}
+
+/// One operation's comparison, as a table and a map.
+fn compared_report(c: &camcraft_session::compare::Compared, tolerance: f64) -> String {
+    use std::fmt::Write as _;
+    let (a, b, d) = (&c.ours, &c.theirs, &c.difference);
+    let mut s = String::new();
+    let _ = writeln!(s, "\n== {}", c.op);
+    let _ = writeln!(s, "{:<26}{:>14}{:>14}", "", "camcraft", "other");
+    let mut row = |label: &str, x: String, y: String| {
+        let _ = writeln!(s, "{label:<26}{x:>14}{y:>14}");
+    };
+    row("moves", a.moves.to_string(), b.moves.to_string());
+    row("  of them arcs", a.arcs.to_string(), b.arcs.to_string());
+    row("fed, mm", format!("{:.1}", a.fed), format!("{:.1}", b.fed));
+    row(
+        "rapid, mm",
+        format!("{:.1}", a.rapid),
+        format!("{:.1}", b.rapid),
+    );
+    row(
+        "feeding, min",
+        format!("{:.2}", a.feed_minutes),
+        format!("{:.2}", b.feed_minutes),
+    );
+    row("plunges", a.plunges.to_string(), b.plunges.to_string());
+    row("lifts at rapid", a.lifts.to_string(), b.lifts.to_string());
+    row(
+        "lowest Z",
+        format!("{:.3}", a.lowest),
+        format!("{:.3}", b.lowest),
+    );
+    row(
+        "removed, mm3",
+        format!("{:.0}", d.removed.0),
+        format!("{:.0}", d.removed.1),
+    );
+    row(
+        "left on the part, mm3",
+        format!("{:.0}", d.left.0),
+        format!("{:.0}", d.left.1),
+    );
+    row(
+        "gouged columns",
+        c.ours_verify.gouged.to_string(),
+        c.theirs_verify.gouged.to_string(),
+    );
+    row(
+        "  deepest, mm",
+        format!("{:.3}", c.ours_verify.deepest_gouge_mm),
+        format!("{:.3}", c.theirs_verify.deepest_gouge_mm),
+    );
+    row(
+        "rapids into material",
+        c.ours_cut.rapid_contacts.to_string(),
+        c.theirs_cut.rapid_contacts.to_string(),
+    );
+    // A share of the columns cut, in percent; counts past four billion read
+    // as that many, which a grid never holds.
+    let share = |n: usize| {
+        let count = |n: usize| f64::from(u32::try_from(n).unwrap_or(u32::MAX));
+        if d.cut == 0 {
+            0.0
+        } else {
+            100.0 * count(n) / count(d.cut)
+        }
+    };
+    let _ = writeln!(
+        s,
+        "columns cut {} at {:.3} mm: alike within {tolerance} mm {:.1}%, camcraft lower {:.1}% \
+         (most {:.3}), other lower {:.1}% (most {:.3})",
+        d.cut,
+        d.pitch,
+        share(d.agree),
+        share(d.ours_lower.0),
+        d.ours_lower.1,
+        share(d.theirs_lower.0),
+        d.theirs_lower.1
+    );
+    let _ = writeln!(
+        s,
+        "difference, mm: p50 {:.3}  p95 {:.3}  p99 {:.3}  most {:.3}",
+        d.quantiles[0], d.quantiles[1], d.quantiles[2], d.quantiles[3]
+    );
+    let _ = writeln!(s, "map (. alike, + camcraft lower, x other lower, # both):");
+    for line in &d.map {
+        let _ = writeln!(s, "  |{line}|");
+    }
+    s
 }
 
 /// The job `post` describes with flags, and its model, loaded.

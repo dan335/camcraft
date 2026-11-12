@@ -133,6 +133,14 @@ fn a_round_edge() {
     check("round_edge.step", "millimetre", 3, [200.0, 200.0, 19.0], 0);
 }
 
+/// Made in Fusion to hold camcraft's basic operations to Fusion's, and written
+/// in centimetres, as Fusion writes a design: a third unit after inches and
+/// millimetres, so a conversion that knows only those two fails.
+#[test]
+fn ops_block_centimetre() {
+    check("ops_block.step", "centimetre", 21, [100.0, 70.0, 20.0], 0);
+}
+
 /// The round edge with its top edge raised 0.006 mm off the torus it bounds, in a
 /// file that states its geometry to 0.01 mm: a modeller fits each face and edge
 /// separately, and a private part's band and the round below it disagreed by

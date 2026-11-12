@@ -210,7 +210,8 @@ impl StrategySpec {
                 leads: false,
                 // Holes are drilled in the order found, nearest first.
                 reorder: false,
-                // Each from its rim, to its bottom edge or the Bottom.
+                // Each from its rim to its own bottom, its bottom edge, or the
+                // Bottom where one is set; the part's bottom where no wall is found.
                 top: None,
                 bottom: Some(HeightRef::ModelBottom),
                 rest: false,

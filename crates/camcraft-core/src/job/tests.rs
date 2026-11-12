@@ -1448,7 +1448,7 @@ fn a_2d_operation_has_an_outline_and_a_3d_one_a_boundary() {
         StrategySpec::Face {
             angle: 0.0,
             direction: FaceDirection::BothWays,
-            pass_extension: 0.0,
+            pass_extension: None,
             stock_offset: 0.0,
         },
         StrategySpec::Drill {
@@ -1469,8 +1469,9 @@ fn a_2d_operation_has_an_outline_and_a_3d_one_a_boundary() {
 
 /// Multiple depths are one setting every operation has, used as its strategy
 /// says: roughing always cuts in levels, and without a stepdown is refused; 2D
-/// cutting and facing go straight to the bottom unless asked; finishing and
-/// drilling have none, whatever is written.
+/// cutting and facing go straight to the bottom unless asked, and a new one
+/// starts so, as Fusion's do; finishing and drilling have none, whatever is
+/// written.
 #[test]
 fn multiple_depths_are_shared_and_used_as_the_strategy_says() {
     let mut j = sample();
@@ -1496,17 +1497,25 @@ fn multiple_depths_are_shared_and_used_as_the_strategy_says() {
             },
             Some(2.0),
         ),
+        // Fusion's 2D Contour and 2D Pocket start with Multiple Depths off.
+        (
+            StrategySpec::Profile {
+                side: ProfileSide::Outside,
+                conventional: false,
+            },
+            None,
+        ),
         (
             StrategySpec::Pocket {
                 conventional: false,
             },
-            Some(2.0),
+            None,
         ),
         (
             StrategySpec::Face {
                 angle: 0.0,
                 direction: FaceDirection::BothWays,
-                pass_extension: 0.0,
+                pass_extension: None,
                 stock_offset: 0.0,
             },
             None,
@@ -1521,6 +1530,50 @@ fn multiple_depths_are_shared_and_used_as_the_strategy_says() {
     ] {
         assert_eq!(s.default_stepdown(), starts, "{}", s.name());
     }
+}
+
+/// A new 2D contour and 2D pocket start as Fusion's do: to the bottom in one
+/// pass, with no stepdown expression to put levels back; the pocket leaving
+/// half a millimetre each way, as roughing; the contour straight down onto its
+/// lead, as Fusion's with Ramp off. A job file that leaves the entry out still
+/// reads as it did.
+#[test]
+fn new_2d_contours_and_pockets_start_as_fusions() {
+    use crate::job::{Entry, StockToLeave};
+    let contour = Operation::new(
+        "contour",
+        StrategySpec::Profile {
+            side: ProfileSide::Outside,
+            conventional: false,
+        },
+    );
+    assert_eq!(contour.passes.stepdown, None);
+    assert!(!contour.expressions.contains_key("passes.stepdown"));
+    assert_eq!(contour.linking.entry, Some(Entry::Plunge));
+    assert_eq!(contour.passes.stock_to_leave, StockToLeave::default());
+
+    let pocket = Operation::new(
+        "pocket",
+        StrategySpec::Pocket {
+            conventional: false,
+        },
+    );
+    assert_eq!(pocket.passes.stepdown, None);
+    assert!(!pocket.expressions.contains_key("passes.stepdown"));
+    assert_eq!(pocket.linking.entry, None);
+    assert_eq!(
+        pocket.passes.stock_to_leave,
+        StockToLeave {
+            radial: 0.5,
+            axial: 0.5
+        }
+    );
+
+    // Roughing still starts in levels, with its expression.
+    let adaptive = Operation::new("rough", StrategySpec::named("adaptive").unwrap());
+    assert!(adaptive.passes.stepdown.is_some());
+    assert!(adaptive.expressions.contains_key("passes.stepdown"));
+    assert_eq!(Linking::default().entry, None);
 }
 
 /// Facing reads with Fusion's defaults, both ways at the bottom alone, writes
@@ -1539,7 +1592,7 @@ fn facing_reads_with_fusions_defaults() {
     let face = StrategySpec::Face {
         angle: 0.0,
         direction: FaceDirection::BothWays,
-        pass_extension: 0.0,
+        pass_extension: None,
         stock_offset: 0.0,
     };
     assert_eq!(j.setups[0].operations[0].strategy, face);
@@ -1554,7 +1607,7 @@ fn facing_reads_with_fusions_defaults() {
     op.strategy = StrategySpec::Face {
         angle: 0.0,
         direction: FaceDirection::Climb,
-        pass_extension: 0.0,
+        pass_extension: None,
         stock_offset: 0.0,
     };
     op.passes.stepdown = Some(1.0);
@@ -1574,7 +1627,7 @@ fn facing_reads_with_fusions_defaults() {
     op.strategy = StrategySpec::Face {
         angle: 0.0,
         direction: FaceDirection::BothWays,
-        pass_extension: -1.0,
+        pass_extension: Some(-1.0),
         stock_offset: 0.0,
     };
     assert!(j.validate().is_err());
@@ -2143,13 +2196,21 @@ fn linking_values_default_as_the_strategy_says() {
     assert!((clearing.helix_diameter(10.0, 5.0) - 2.5).abs() < 1e-12);
     assert!((clearing.least_helix_diameter(10.0, 0.0) - 5.0).abs() < 1e-12);
     assert!((clearing.least_helix_diameter(10.0, 5.0) - 2.5).abs() < 1e-12);
-    assert_eq!(op("profile").entry(), Some(Entry::Helix));
+    // A new profile goes straight down, as Fusion's 2D Contour starts; one
+    // whose entry is left out, as a job file may, down a helix.
+    assert_eq!(op("profile").entry(), Some(Entry::Plunge));
+    let mut left_out = op("profile");
+    left_out.linking.entry = None;
+    assert_eq!(left_out.entry(), Some(Entry::Helix));
     assert_eq!(op("pocket").entry(), Some(Entry::Helix));
     assert_eq!(op("parallel").entry(), None);
     assert!(op("profile").leads(6.0).is_some());
     assert_eq!(op("pocket").leads(6.0), None);
-    // The stepdown, or the tool without one.
-    assert_eq!(op("pocket").ramp_stepdown(6.0), 2.0);
+    // The stepdown, or the tool without one, as a new pocket starts.
+    let mut levels = op("pocket");
+    levels.passes.stepdown = Some(2.0);
+    assert_eq!(levels.ramp_stepdown(6.0), 2.0);
+    assert_eq!(op("pocket").ramp_stepdown(6.0), 6.0);
     assert_eq!(op("parallel").ramp_stepdown(6.0), 6.0);
     let mut given = op("adaptive");
     given.linking.stay_down = Some(12.0);

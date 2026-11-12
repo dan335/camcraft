@@ -1,0 +1,13 @@
+{
+  "autodeskProduct": "Fusion",
+  "type": "addin",
+  "id": "ff4e0ca6-72e6-49a5-9ad8-faaeaf65fdb2",
+  "author": "camcraft",
+  "description": {
+    "": "Runs scripts dropped into camcraft-fusion-bridge/inbox (in %LOCALAPPDATA% on Windows, ~ on macOS), for comparing Fusion's CAM with camcraft's."
+  },
+  "version": "0.1.0",
+  "runOnStartup": false,
+  "supportedOS": "windows|mac",
+  "editEnabled": true
+}

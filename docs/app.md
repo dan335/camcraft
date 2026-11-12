@@ -194,7 +194,10 @@ silhouette with the tool reaching in from outside, when the offset is 0, sets
 the offset to the tool's diameter. That clears a channel two tools wide round
 the part, where an offset of 0 would only touch its walls.
 - A drilling operation takes holes by their round top rims, and optionally their
-  bottom rims.
+  bottom rims. Each hole is drilled down to its own bottom, where its round wall
+  ends, as Fusion's drilling goes to the hole's bottom: a blind hole to its
+  floor, a through hole to the part's far side. A picked bottom rim takes its
+  hole there instead, and a Bottom height set takes every hole there.
 - A 2D profile or pocket takes faces and edges as what it cuts round or clears.
   The view draws that boundary (wide), each piece of it at the height of what is
   picked in it so it lies on the picks, or at the stock's top with nothing

@@ -501,7 +501,7 @@ fn bounded_runs_are_deterministic() {
 
 /// The plate with an 8 mm hole, standing in a sheet 10 mm bigger all round and no
 /// thicker, and one operation with the 6 mm flat and no stock to leave, made
-/// `strategy`.
+/// `strategy`, cutting in levels 2 mm apart where it can.
 fn in_a_sheet(strategy: StrategySpec, body: &Body) -> (Job, SetupResult) {
     use crate::job::StockSpec;
     let mut job: Job = toml::from_str(JOB).unwrap();
@@ -513,7 +513,7 @@ fn in_a_sheet(strategy: StrategySpec, body: &Body) -> (Job, SetupResult) {
     };
     let op = &mut job.setups[0].operations[0];
     op.strategy = strategy;
-    op.passes.stepdown = strategy.default_stepdown();
+    op.passes.stepdown = (strategy.uses().depths != crate::job::Depths::None).then_some(2.0);
     op.passes.stock_to_leave = Default::default();
     let bodies: Bodies<'_> = [("dome", body)].into_iter().collect();
     let result = run_setup(&job, 0, &bodies).unwrap();
@@ -1024,15 +1024,16 @@ fn facing_takes_the_stock_down_to_the_part() {
         below: 0.0,
     };
     let op = &mut job.setups[0].operations[0];
+    let diameter = job.tools[op.tool.as_ref().unwrap()].diameter;
+    // Fusion's meaning: to the tool's centre, here a millimetre past clear.
     op.strategy = StrategySpec::Face {
         angle: 0.0,
         direction: FaceDirection::BothWays,
-        pass_extension: 1.0,
+        pass_extension: Some(diameter / 2.0 + 1.0),
         stock_offset: 0.0,
     };
     op.passes.stepdown = Some(2.0);
     op.passes.stock_to_leave = Default::default();
-    let diameter = job.tools[op.tool.as_ref().unwrap()].diameter;
     op.passes.stepover = 0.9 * diameter;
     job.validate().unwrap();
     let bodies: Bodies<'_> = [("dome", &plate)].into_iter().collect();
@@ -1053,8 +1054,8 @@ fn facing_takes_the_stock_down_to_the_part() {
         .collect();
     let deepest = cuts.iter().map(|p| p.z).fold(f64::MAX, f64::min);
     assert!((deepest - top).abs() < 1e-9, "down to {deepest}, not {top}");
-    // Every pass starts and ends off the stock, a tool's radius and the
-    // extension past it.
+    // Every pass starts and ends off the stock, its centre the extension past
+    // it: the tool's radius and a millimetre.
     let reach = diameter / 2.0 + 1.0;
     for p in &cuts {
         assert!(p.y.abs() <= 30.0 + 1e-9, "{p}");

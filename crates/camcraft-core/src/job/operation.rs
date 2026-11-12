@@ -71,6 +71,7 @@ impl Operation {
     /// gives none has it.
     pub fn new(name: impl Into<String>, strategy: StrategySpec) -> Self {
         let strategy = strategy.fresh();
+        let stepdown = strategy.default_stepdown();
         Self {
             name: name.into(),
             strategy,
@@ -81,15 +82,21 @@ impl Operation {
             outline: Outline::default(),
             heights: Heights::fresh(),
             passes: Passes {
-                stepdown: strategy.default_stepdown(),
+                stepdown,
                 stock_to_leave: strategy.default_stock_to_leave(),
                 ..Passes::default()
             },
-            linking: Linking::default(),
+            linking: Linking {
+                entry: strategy.fresh_entry(),
+                ..Linking::default()
+            },
             enabled: true,
+            // The stepdown's expression comes with the levels: with none, it
+            // would put them back.
             expressions: strategy
                 .default_expressions()
                 .iter()
+                .filter(|(setting, _)| *setting != "passes.stepdown" || stepdown.is_some())
                 .map(|(setting, text)| ((*setting).to_string(), (*text).to_string()))
                 .collect(),
         }

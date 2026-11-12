@@ -19,6 +19,7 @@
 //! in its own way.
 
 pub mod checks;
+pub mod compare;
 mod error;
 mod finish;
 pub mod fs;

@@ -23,6 +23,37 @@ the same notes at more length.
   highest triangles first and stops once the rest are lower.
 - A lone cell of the simulated material standing into the shank, a crumb
   narrower than the grid can resolve, no longer fails the shank check.
+- **A blind hole is drilled to its floor.** A hole picked by its top rim alone
+  went down to the operation's Bottom height, which starts at the part's
+  bottom, so a blind hole was drilled through the part (and refused by the
+  material check, CC107). Each hole now goes to its own bottom, where its round
+  wall ends, as Fusion's drilling goes "from hole bottom"; a Bottom height set
+  still takes every hole there.
+- **New 2D pockets and contours start as Fusion's do**, found by holding them
+  to Fusion's own programs ([decision 0020](docs/decisions/0020-defaults.md),
+  amended): one pass to the bottom, Multiple Depths off (a new 2D pocket
+  stepped down 0.6 mm a level, taking four times as long as Fusion's); a 2D
+  pocket leaving 0.5 mm each way, as Fusion's roughing; and a 2D contour
+  straight down onto its lead, Ramp off, where it helixed down at 2°. These
+  are how new operations start; saved jobs keep theirs. Face's pass extension
+  is now to the tool's centre, as Fusion's, so passes end where Fusion's do: a
+  saved job's runs a radius shorter at each end, and one that leaves it out
+  stops just clear, as before.
+- **`camcraft compare`** holds camcraft's programs to another CAM system's:
+  it runs a setup, cuts each other program from the material camcraft had
+  before that operation, with the same tool, and compares what the two
+  programs do and the material each leaves, column by column and against the
+  part. A test holds new Face, 2D Contour, 2D Pocket and Drill operations to
+  Fusion's own programs for the same part, made in Fusion
+  (`fixtures/step/ops_block.step`, `fixtures/nc/ops_block_*.nc`): each leaves
+  the same material to 0.01 mm. The other program is read as Masso, Haas and
+  Centroid read one, the motion before a drilling cycle in force again after
+  `G80`, as Fusion's posts write; camcraft's own are still held to
+  RS274/NGC's stricter reading, so they run on either.
+- **`scripts/fusion/`** drives Fusion through its API: an add-in runs the
+  scripts dropped into a folder, on this machine or over SSH on another, and
+  the scripts kept there build the test part, set up Fusion's operations and
+  post them, remaking those fixtures byte for byte.
 
 ## 0.6.0 — 2026-11-05
 

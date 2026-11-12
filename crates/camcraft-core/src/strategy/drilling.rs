@@ -2,7 +2,9 @@
 //!
 //! A hole is picked by its rim, the round edge where it meets the top of the part.
 //! Pick its bottom rim as well and it is drilled to there; otherwise it is drilled
-//! to the operation's bottom height. Each hole is a pass of its own: a link to just
+//! to the bottom its caller gives for the rim: the hole's own, where its wall ends,
+//! as Fusion's drilling goes to the hole's bottom, or the operation's bottom height
+//! where that is set. Each hole is a pass of its own: a link to just
 //! above it, plunges down (in pecks, when asked, backing out to clear chips between
 //! them), and a retract. So the linker, simulator and checks treat a drilled hole
 //! as they treat anything else, and a post that knows canned cycles can write each
@@ -90,23 +92,26 @@ pub enum HoleError {
 }
 
 /// The holes picked rims make, in the order first picked: one per axis, from its
-/// highest rim to its lowest, or to `bottom` when the rims picked of it are all
-/// at one height, as both edges of a counterbore's floor are.
+/// highest rim to its lowest, or, when the rims picked of it are all at one
+/// height, as both edges of a counterbore's floor are, to the lowest `bottom`
+/// gives for them.
 ///
 /// `circle` gives each chain's circle, centre and radius, in the setup's frame;
-/// `tol` is how close two rims' axes must be to be one hole's, and two rims'
-/// heights to be one.
+/// `bottom`, how far down a hole picked by that rim alone goes; `tol` is how
+/// close two rims' axes must be to be one hole's, and two rims' heights to be
+/// one.
 pub fn holes(
     chains: &[Chain],
     circle: impl Fn(&Chain) -> Option<(DVec3, f64)>,
-    bottom: f64,
+    bottom: impl Fn(&Chain) -> f64,
     tol: f64,
 ) -> Result<Vec<Hole>, HoleError> {
     if chains.is_empty() {
         return Err(HoleError::NothingPicked);
     }
-    // Each axis, with the heights of its rims and the widest radius.
-    let mut axes: Vec<(DVec2, Vec<f64>, f64)> = Vec::new();
+    // Each axis, with the heights of its rims, the widest radius, and the lowest
+    // a rim of it alone goes down to.
+    let mut axes: Vec<(DVec2, Vec<f64>, f64, f64)> = Vec::new();
     for chain in chains {
         let Some((centre, radius)) = circle(chain) else {
             return Err(HoleError::NotRound {
@@ -125,16 +130,18 @@ pub fn holes(
             });
         }
         let at = centre.truncate();
-        match axes.iter_mut().find(|(a, _, _)| a.distance(at) <= tol) {
-            Some((_, zs, r)) => {
+        let down = bottom(chain);
+        match axes.iter_mut().find(|(a, _, _, _)| a.distance(at) <= tol) {
+            Some((_, zs, r, low)) => {
                 zs.push(centre.z);
                 *r = r.max(radius);
+                *low = low.min(down);
             }
-            None => axes.push((at, vec![centre.z], radius)),
+            None => axes.push((at, vec![centre.z], radius, down)),
         }
     }
     axes.into_iter()
-        .map(|(at, zs, radius)| {
+        .map(|(at, zs, radius, bottom)| {
             let top = zs.iter().copied().fold(f64::MIN, f64::max);
             let low = zs.iter().copied().fold(f64::MAX, f64::min);
             let bottom = if top - low > tol.max(1e-6) {

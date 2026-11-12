@@ -251,7 +251,10 @@ pub(super) fn passes(
                     );
                 });
                 d.row(ui, &pass::PASS_EXTENSION, "pass_extension", |ui| {
-                    m.length_field(ui, pass_extension, 0.1, 1000.0, "");
+                    let radius = across(diameter) / 2.0;
+                    widgets::optional(ui, pass_extension, radius, "just clear", |ui, e| {
+                        m.length_field(ui, e, 0.1, 1000.0, "");
+                    });
                 });
             }
             StrategySpec::Drill { peck, dwell } => {

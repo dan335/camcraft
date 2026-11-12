@@ -41,10 +41,13 @@ operations start differently.
 | Optimal load | adaptive | `tool_diameter * 0.4` | same | Dan's Fusion |
 | Stepover | flat | `tool_diameter * 0.3` | 0.6 × | dump |
 | Stepover | face | `Math.max((tool_diameter - 2 * tool_cornerRadius) * 0.7; tool_diameter * 0.05)` | 0.95 × the flat | 2022 note |
-| Pass extension | face | `tool_diameter / 2 + tolerance` | 0 | 2022 note |
+| Pass extension | face | `tool_diameter / 2 + tolerance`, to the tool's centre (amended below) | 0 | 2022 note |
 | Stepdown | adaptive | `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)` | same | 2022 note |
-| Stepdown | 3D pocket, 2D pocket | `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)` | adaptive's; 2 mm | 2022 note |
-| Stepdown | profile | `tool_fluteLength * 0.75` | 2 mm | 2022 note |
+| Stepdown | 3D pocket | `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)` | adaptive's; 2 mm | 2022 note |
+| Stepdown | 2D pocket | none: Multiple Depths off; ticked, `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)` (amended below) | 2 mm | Fusion's API |
+| Stepdown | profile | none: Multiple Depths off; ticked, `tool_fluteLength * 0.75` (amended below) | 2 mm | Fusion's API |
+| Stock to leave | 2D pocket | 0.5 mm each way (amended below) | none | Fusion's API |
+| Entry | profile | plunge: Ramp off (amended below) | helix | Fusion's API |
 | Stepdown | contour | 1 mm | same | dump |
 | Minimum cutting radius | adaptive | `tool_diameter * 0.1` | none | dump |
 | Stay-down clearance | adaptive | `Math.max(Math.min(tool_diameter * 0.1; 15mm); 2mm)` | 0 | dump |
@@ -81,3 +84,36 @@ is a new default, and feed optimisation arrived in 0.5.
   spiral has no meaning for in camcraft.
 - **The cutting feed** a new operation gets with no preset, 1200 mm/min
   (Fusion's new tool's is 1000).
+
+## Amended 2026-11-11: held to Fusion's own programs
+
+A part made in Fusion (`fixtures/step/ops_block.step`) was given a new Face,
+2D Contour, 2D Pocket and Drill in Fusion, through its API, and each was
+posted with the Masso post (`fixtures/nc/ops_block_*.nc`); camcraft's new
+operations were run on the same part and compared with `camcraft compare`,
+which cuts both programs from the same material with the same tool. Every
+parameter of Fusion's fresh operations was read back from the API. Four
+defaults above were Fusion's numbers without Fusion's switches:
+
+- **2D Pocket and 2D Contour start with Multiple Depths off**: one pass to
+  the bottom, the pocket's helix straight down to its floor. Their stepdown
+  expressions are Fusion's *Maximum Roughing Stepdown*, which is read only
+  once the box is ticked; camcraft's had them on, the pocket at 0.6 mm a
+  level (25 helixes on the test part, 6.6 minutes feeding to Fusion's 1.6).
+  A new one now starts with none, and ticking it brings the expression.
+- **2D Pocket starts with Stock to Leave ticked, 0.5 mm each way**, as
+  Fusion's roughing does; camcraft's started unticked.
+- **2D Contour starts with Ramp off**: straight down onto the lead-in at the
+  plunge feed. camcraft's helixed down at 2°, about 630 mm of helix on a
+  22 mm cut. A new profile starts with `entry = "plunge"`; a job file that
+  leaves the entry out still reads as a helix.
+- **Face's pass extension is to the tool's centre**: Fusion's default, half
+  the tool and the tolerance, ends each pass with the tool just clear.
+  camcraft added it after the tool was clear, so each pass ran a radius
+  further than Fusion's at each end. Passes now cross the faced area grown by
+  the extension, which is Fusion's at 0° and keeps an extension of at least
+  the radius clear at any angle; a job file that leaves it out runs the
+  tool's radius, just clear, as it did.
+
+Set so, each of the four leaves the same material as Fusion's program, to
+0.01 mm, and `crates/camcraft-session/src/compare/tests.rs` holds them to it.

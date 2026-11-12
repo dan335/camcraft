@@ -4,7 +4,7 @@
 use serde::de::value::MapDeserializer;
 use serde::{Deserialize, Serialize};
 
-use super::{Containment, Depths, StockToLeave, is_default, is_ninety, is_yes, ninety, yes};
+use super::{Containment, Depths, Entry, StockToLeave, is_default, is_ninety, is_yes, ninety, yes};
 
 /// Strategy and the parameters only it has.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
@@ -268,10 +268,12 @@ pub enum StrategySpec {
         /// Which way the passes cut.
         #[serde(default, skip_serializing_if = "is_default")]
         direction: FaceDirection,
-        /// How far each pass runs on once the tool is clear of the stock, in
-        /// millimetres.
-        #[serde(default, skip_serializing_if = "is_default")]
-        pass_extension: f64,
+        /// How far past the faced area each pass's tool centre runs, in
+        /// millimetres: Fusion's Pass Extension, whose default, half the tool
+        /// and the tolerance, takes the tool just clear. Left out, the tool's
+        /// radius: just clear.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pass_extension: Option<f64>,
         /// How far past the stock's footprint is faced, in millimetres: Fusion's
         /// stock offset.
         #[serde(default, skip_serializing_if = "is_default")]
@@ -418,11 +420,14 @@ impl StrategySpec {
         }
     }
 
-    /// The stock to leave Fusion starts this strategy with: roughing leaves half
-    /// a millimetre each way for the finish, and the rest cut to size.
+    /// The stock to leave Fusion starts this strategy with: roughing, its 2D
+    /// Pocket among it, leaves half a millimetre each way for the finish, and
+    /// the rest cut to size.
     pub fn default_stock_to_leave(&self) -> StockToLeave {
         match self {
-            StrategySpec::PocketClearing { .. } | StrategySpec::Adaptive { .. } => StockToLeave {
+            StrategySpec::PocketClearing { .. }
+            | StrategySpec::Adaptive { .. }
+            | StrategySpec::Pocket { .. } => StockToLeave {
                 radial: 0.5,
                 axial: 0.5,
             },
@@ -514,12 +519,31 @@ impl StrategySpec {
         self
     }
 
-    /// The multiple depths this strategy starts with: roughing and 2D cutting
-    /// 2 mm a level, facing its bottom in one pass.
+    /// How a new operation of this strategy goes down into the material, where
+    /// that is not what a job file that leaves it out reads: a 2D profile
+    /// straight down onto its lead, as Fusion's 2D Contour starts with Ramp
+    /// off.
+    pub fn fresh_entry(&self) -> Option<Entry> {
+        matches!(self, StrategySpec::Profile { .. }).then_some(Entry::Plunge)
+    }
+
+    /// The multiple depths this strategy starts with: roughing 2 mm a level;
+    /// facing, a 2D profile and a 2D pocket their bottom in one pass, as
+    /// Fusion's Face, 2D Contour and 2D Pocket start with Multiple Depths off.
+    /// Ticked, a profile's and a pocket's levels start at Fusion's Maximum
+    /// Roughing Stepdown ([`StrategySpec::default_expressions`]).
     pub fn default_stepdown(&self) -> Option<f64> {
         match self.uses().depths {
             Depths::None => None,
-            _ if matches!(self, StrategySpec::Face { .. }) => None,
+            _ if matches!(
+                self,
+                StrategySpec::Face { .. }
+                    | StrategySpec::Profile { .. }
+                    | StrategySpec::Pocket { .. }
+            ) =>
+            {
+                None
+            }
             // A finishing waterline's, as Fusion's Contour.
             _ if matches!(self, StrategySpec::Contour { .. }) => Some(1.0),
             _ => Some(2.0),

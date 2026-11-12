@@ -104,7 +104,7 @@ topics! {
         "How wide that slot is cut. Empty, or less than the tool, the tool's own width.",
         Figure::SlotClearing;
     PASS_EXTENSION: "Pass extension",
-        "How far each pass runs on past the faced area before it turns.",
+        "How far the tool's centre runs on past the faced area at each end of a pass, as Fusion's does. Half the tool and the tolerance, Fusion's default, takes the tool just clear; left empty, its radius.",
         Figure::Facing(Facing::PassExtension);
     PECK: "Peck",
         "How deep to drill before backing out to clear chips. Left empty, each hole is drilled in one go.",

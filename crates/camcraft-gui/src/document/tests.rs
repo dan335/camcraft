@@ -1022,11 +1022,12 @@ fn new_operations_start_on_the_silhouette() {
     let StrategySpec::Face { pass_extension, .. } = o.strategy else {
         unreachable!("a face is a face")
     };
+    let pass_extension = pass_extension.unwrap();
     assert!((pass_extension - (d / 2.0 + doc.job.tolerance)).abs() < 1e-9);
 }
 
-/// A new roughing operation leaves half a millimetre for the finish, as Fusion's
-/// does; a new finish or profile cuts to size.
+/// A new roughing operation, a 2D pocket among them, leaves half a millimetre
+/// for the finish, as Fusion's does; a new finish or profile cuts to size.
 #[test]
 fn new_roughing_leaves_stock_for_the_finish() {
     use camcraft_core::job::StockToLeave;
@@ -1043,6 +1044,21 @@ fn new_roughing_leaves_stock_for_the_finish() {
         .unwrap();
     assert_eq!(
         doc.job.setups[0].operations[rough].passes.stock_to_leave,
+        StockToLeave {
+            radial: 0.5,
+            axial: 0.5
+        }
+    );
+    let pocket = doc
+        .add_operation(
+            "top",
+            StrategySpec::Pocket {
+                conventional: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        doc.job.setups[0].operations[pocket].passes.stock_to_leave,
         StockToLeave {
             radial: 0.5,
             axial: 0.5

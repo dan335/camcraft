@@ -51,12 +51,28 @@ pub(super) fn heights(
         }
         if let Some(unset) = uses.top {
             d.row(ui, &ht::TOP, "heights.top", |ui| {
-                optional_height(ui, m, "geo-top", &mut op.heights.top, unset, picks);
+                let absent = absent(unset);
+                optional_height(ui, m, "geo-top", &mut op.heights.top, unset, absent, picks);
             });
         }
         if let Some(unset) = bottom {
+            // Left unset, each hole goes down to its own bottom, as Fusion's
+            // drilling goes "from hole bottom".
+            let absent = if uses.holes {
+                "each hole's own bottom"
+            } else {
+                absent(unset)
+            };
             d.row(ui, &ht::BOTTOM, "heights.bottom", |ui| {
-                optional_height(ui, m, "geo-bottom", &mut op.heights.bottom, unset, picks);
+                optional_height(
+                    ui,
+                    m,
+                    "geo-bottom",
+                    &mut op.heights.bottom,
+                    unset,
+                    absent,
+                    picks,
+                );
             });
         }
     });
@@ -79,8 +95,10 @@ pub(super) fn heights(
              every flat of the part.",
         ),
         StrategySpec::Drill { .. } => Some(
-            "Each hole starts at its picked rim. Bottom is how deep a hole goes when \
-             its bottom edge is not picked.",
+            "Each hole starts at its picked rim and goes down to its own bottom, where \
+             its wall ends, as Fusion's drilling goes to the hole's bottom. A Bottom set \
+             takes every hole there instead, and a hole whose bottom edge is picked \
+             goes to that.",
         ),
         StrategySpec::Profile { .. } | StrategySpec::Pocket { .. } => Some(
             "Without a Bottom, each area is cut down to the lowest point picked in \
@@ -307,22 +325,27 @@ fn height_field(ui: &mut egui::Ui, m: Measure, id: &str, h: &mut Height, picks: 
     });
 }
 
-/// A top or bottom that need not be given: `default` when it is not, which it
-/// starts from when given. `picks` as [`height_field`]'s.
+/// What a top or bottom left unset at `default` is, said.
+fn absent(default: HeightRef) -> &'static str {
+    match default {
+        HeightRef::StockTop => "the stock's top",
+        HeightRef::ModelTop => "the part's top",
+        HeightRef::Selection => "the picks",
+        _ => "the part's bottom",
+    }
+}
+
+/// A top or bottom that need not be given: `default` when it is not, said as
+/// `absent`, which it starts from when given. `picks` as [`height_field`]'s.
 fn optional_height(
     ui: &mut egui::Ui,
     m: Measure,
     id: &str,
     h: &mut Option<Height>,
     default: HeightRef,
+    absent: &str,
     picks: bool,
 ) {
-    let absent = match default {
-        HeightRef::StockTop => "the stock's top",
-        HeightRef::ModelTop => "the part's top",
-        HeightRef::Selection => "the picks",
-        _ => "the part's bottom",
-    };
     let start = Height {
         reference: default,
         offset: 0.0,

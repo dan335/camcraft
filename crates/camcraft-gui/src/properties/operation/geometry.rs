@@ -41,8 +41,9 @@ pub(super) fn geometry(
     if drilling {
         hint(
             ui,
-            "Pick the round edge at the top of each hole. Pick its bottom edge too to \
-             drill to there; otherwise each hole is drilled to the Bottom height.",
+            "Pick the round edge at the top of each hole: it is drilled down to its \
+             own bottom, where its wall ends. Pick its bottom edge too to drill to \
+             there instead.",
         );
         ui.add_space(theme::SPACE_3);
     } else if uses.boundary {

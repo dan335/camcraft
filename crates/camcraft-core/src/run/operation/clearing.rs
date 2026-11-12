@@ -267,11 +267,12 @@ pub(super) fn planar_paths(
 /// The stock's top faced: its footprint and the stock offset, from the top down
 /// to the bottom, the model's top unless another is asked for, raised by the
 /// stock to leave down; the passes at `angle`, cut the way `direction` says, and
-/// run on `pass_extension` past the stock.
+/// their tool centre run on `pass_extension` past the faced area, or the tool's
+/// radius, just clear, without one.
 pub(super) fn face_paths(
     work: &Work<'_>,
     (angle, direction): (f64, FaceDirection),
-    (pass_extension, stock_offset): (f64, f64),
+    (pass_extension, stock_offset): (Option<f64>, f64),
     warnings: &mut Vec<String>,
 ) -> Result<Paths, RunError> {
     let op = work.op;
@@ -282,7 +283,7 @@ pub(super) fn face_paths(
         area: (lo - grow, hi + grow),
         angle: angle.to_radians(),
         stepover: op.passes.stepover,
-        extension: pass_extension,
+        extension: pass_extension.unwrap_or_else(|| work.tool.cutter_radius()),
         radius: work.tool.cutter_radius(),
         levels: LevelsAsked {
             top,
@@ -447,7 +448,83 @@ pub(in crate::run) fn drill_holes(
             _ => None,
         }
     };
-    let (_, bottom) = op.levels_3d(ctx);
+    // A Bottom height set goes for every hole. Left as it starts, each hole goes
+    // to its own bottom, as Fusion's drilling goes "from hole bottom": a blind
+    // hole to its floor, not through the part to the operation's default.
+    let (_, op_bottom) = op.levels_3d(ctx);
+    let set = op.heights.bottom.is_some();
+    let bottom = |c: &Chain| {
+        if set {
+            return op_bottom;
+        }
+        bodies
+            .get(c.model.as_str())
+            .and_then(|body| {
+                hole_bottom(
+                    c.edge,
+                    body,
+                    |p| prepared.frame.to_setup(p).z,
+                    crate::setup::features::tolerance(job.tolerance, body),
+                )
+            })
+            .unwrap_or(op_bottom)
+    };
     let found = holes(&chains, circle, bottom, job.tolerance.max(0.01)).map_err(in_op(op))?;
     Ok(nearest_first(&found))
+}
+
+/// Where the round wall below the rim `edge` of `body` ends, as `height` measures
+/// it in the setup: the hole's own bottom, as Fusion's drilling's "from hole
+/// bottom" is. From the rim, down each face that runs from one rim of the wall to
+/// the next one below it (the same circle, further down its axis), until what
+/// follows is something else: the hole's floor, its drill point, or the far side
+/// of the part. So a drill's tip goes no deeper than the wall it was picked by.
+///
+/// `None` where the rim is not round, or no wall runs down from it: the top
+/// rim of a boss, say.
+pub(in crate::run) fn hole_bottom(
+    edge: u32,
+    body: &camcraft_geom::topology::Body,
+    height: impl Fn(DVec3) -> f64,
+    tol: f64,
+) -> Option<f64> {
+    use camcraft_geom::topology::{Circle, FaceKind};
+    let t = body.topology();
+    let EdgeKind::Circle(rim) = t.edge(edge)?.kind else {
+        return None;
+    };
+    // The rim's circle, further along its axis.
+    let of_the_wall = |c: &Circle| {
+        (c.radius - rim.radius).abs() <= tol
+            && c.normal.cross(rim.normal).length() <= 1e-6
+            && (c.center - rim.center).cross(rim.normal).length() <= tol
+    };
+    let (mut at, mut z) = (edge, height(rim.center));
+    let mut walls: Vec<u32> = Vec::new();
+    let mut bottom = None;
+    // A wall is never more faces than the model has.
+    for _ in 0..t.faces().len() {
+        let below = t.edge(at)?.faces.iter().find_map(|&f| {
+            if walls.contains(&f) {
+                return None;
+            }
+            let face = t.face(f)?;
+            if !matches!(face.kind, FaceKind::Curved) {
+                return None;
+            }
+            face.edges.iter().find_map(|&e| match t.edge(e)?.kind {
+                EdgeKind::Circle(c) if e != at && of_the_wall(&c) && height(c.center) < z - tol => {
+                    Some((f, e, height(c.center)))
+                }
+                _ => None,
+            })
+        });
+        let Some((wall, next, lower)) = below else {
+            break;
+        };
+        walls.push(wall);
+        (at, z) = (next, lower);
+        bottom = Some(lower);
+    }
+    bottom
 }

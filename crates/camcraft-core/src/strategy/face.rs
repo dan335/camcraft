@@ -11,10 +11,10 @@
 //! # Coverage
 //!
 //! The outermost passes put the tool's centre on the faced area's edges, so the
-//! tool reaches a radius past them, and every pass runs on until the tool is clear
-//! of the area, then on by the pass extension: nothing of the area is left under
-//! the tool's reach, and the tool enters and leaves off the stock. The passes are
-//! spaced evenly, no more than the stepover apart.
+//! tool reaches a radius past them, and every pass's tool centre runs on until it
+//! is the pass extension off the area, as Fusion's does: at its default, half the
+//! tool and the tolerance, the tool enters and leaves just clear of the stock, at
+//! any angle. The passes are spaced evenly, no more than the stepover apart.
 //!
 //! # Direction
 //!
@@ -39,7 +39,9 @@ pub struct FaceParams {
     pub angle: f64,
     /// Distance between passes, in millimetres.
     pub stepover: f64,
-    /// How far each pass runs on once the tool is clear of the area.
+    /// How far off the area each pass's tool centre runs on to: Fusion's pass
+    /// extension. More than the radius, the tool is clear of the area where it
+    /// enters and leaves.
     pub extension: f64,
     /// The tool's radius.
     pub radius: f64,
@@ -153,7 +155,8 @@ fn frame(angle: f64) -> (DVec2, DVec2) {
 
 /// Each pass's two ends, in the setup's frame, ordered across from -v to +v and
 /// each running +u: spaced evenly from one edge of the area to the other, and
-/// running across the area grown by the tool's radius, then the extension.
+/// running across the area grown by the extension, so each end is that far off
+/// it whichever side the pass leaves by.
 fn passes(params: &FaceParams) -> Vec<(DVec2, DVec2)> {
     let (lo, hi) = params.area;
     if !(hi.x > lo.x && hi.y > lo.y) {
@@ -179,8 +182,8 @@ fn passes(params: &FaceParams) -> Vec<(DVec2, DVec2)> {
     let steps = (span / params.stepover - 1e-9).ceil().clamp(0.0, 100_000.0);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let steps = steps as u32;
-    let r = params.radius;
-    let grown = corners(lo - DVec2::splat(r), hi + DVec2::splat(r));
+    let e = params.extension;
+    let grown = corners(lo - DVec2::splat(e), hi + DVec2::splat(e));
     (0..=steps)
         .filter_map(|i| {
             let c = if steps == 0 {
@@ -189,8 +192,7 @@ fn passes(params: &FaceParams) -> Vec<(DVec2, DVec2)> {
                 v0 + span * f64::from(i) / f64::from(steps)
             };
             let (a, b) = crossing(&grown, u, v, c)?;
-            let e = params.extension;
-            Some((u * (a - e) + v * c, u * (b + e) + v * c))
+            Some((u * a + v * c, u * b + v * c))
         })
         .collect()
 }
