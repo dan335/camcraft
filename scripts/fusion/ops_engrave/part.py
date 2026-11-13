@@ -3,7 +3,9 @@
 # ../README.md).
 #
 # A plate 80 x 50 x 10 mm, centred on the origin with its bottom at Z0, with
-# three shapes sunk 1.5 mm into its top for Fusion's Engrave to cut with a V:
+# three shapes sunk 3 mm into its top for Fusion's Engrave to cut with a V
+# (deeper than the V goes, 2.85 mm, so engraving them cuts nothing the model
+# keeps):
 #
 #   a triangle, (-30, -15), (-10, -15), (-20, 10): sharp corners to run into
 #   an L, 4 wide: a stroke narrower than the V at its full depth, with an
@@ -43,7 +45,7 @@ pin = root.constructionPlanes.createInput()
 pin.setByOffset(root.xYConstructionPlane, V(TOP))
 top = root.constructionPlanes.add(pin)
 
-def sunk(name, points, depth=1.5):
+def sunk(name, points, depth=3.0):
     s = root.sketches.add(top)
     s.name = name
     pts = [s.modelToSketchSpace(P(x, y, TOP)) for x, y in points]
