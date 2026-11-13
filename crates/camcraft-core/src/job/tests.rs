@@ -1816,7 +1816,9 @@ fn bore_and_circular_read_and_write_back() {
     assert_eq!(Operation::new("c", circular).passes.stepdown, Some(1.0));
     assert!(bore.uses().finishing && !circular.uses().finishing);
     assert!(bore.uses().leads && circular.uses().leads);
-    assert!(!bore.uses().ramp && circular.uses().ramp);
+    // Neither ramps nor stays down, as Fusion's programs show.
+    assert!(!bore.uses().ramp && !circular.uses().ramp);
+    assert!(!bore.uses().stay_down && !circular.uses().stay_down);
     // Their stepover, half the tool, and straight leads a twentieth of it,
     // follow the tool.
     for s in [bore, circular] {

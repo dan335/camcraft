@@ -17,10 +17,10 @@
 //! a hole's wall, or outside a boss's. With more than one stepover, the passes
 //! before it are a stepover apart further from the wall: from the middle out in a
 //! hole, from outside in round a boss, so the last pass is the one at the wall. A
-//! hole's pass that would be past its middle is put at half the tool's radius from
-//! it instead, once, so the passes stop at the middle, cutting it. A hole the
-//! passes do not reach the middle of is left with a core standing in it, as
-//! Fusion's are, and the report says so.
+//! hole's pass that would be past its middle is left out, as Fusion's Bore leaves
+//! it out, and the report counts it. A hole the passes do not reach the middle
+//! of is left with a core standing in it, as Fusion's are, and the report says
+//! so.
 //!
 //! A bore's finishing passes go on out from where those stop, a finishing
 //! stepover apart, the last at the wall.
@@ -29,7 +29,8 @@
 //!
 //! Each pass starts at the top, comes onto its circle along a level lead from the
 //! waste, goes down a helix round it to the bottom, at the pitch (or as steeply
-//! as the angle asked for takes it round that circle), once round level there,
+//! as the angle asked for takes it round the circle the tool's outer edge
+//! sweeps, as Fusion's does), once round level there,
 //! and off along a lead. Every move is a true arc, of at most half a turn: one
 //! that ends where it starts, seen from above, reads to the linker's ramp as
 //! straight down.
@@ -38,9 +39,9 @@
 //!
 //! The same circles, cut level by level: at each level, each pass from the
 //! middle out comes onto its circle along a lead, goes once round it, and leads
-//! off. The linker takes the tool down to each: along the circle into the
-//! material, as Fusion's Circular ramps on, or straight across at the level from
-//! the pass before.
+//! off, as Fusion's Circular does. The linker takes the tool down onto each
+//! lead along its vertical arc, into the material where the level is still
+//! there, and lifts it out after.
 //!
 //! # Direction
 //!
@@ -60,6 +61,10 @@ use crate::strategy::{StrategyError, check, slabs};
 /// A circle no smaller than this, as the tool's centre goes, in millimetres: a
 /// hole that leaves its centre less room is no wider than the tool.
 const LEAST_RADIUS: f64 = 1.0e-3;
+
+/// A pass round a hole on a circle no bigger than this, as the tool's centre
+/// goes, is past its middle, and left out, in millimetres.
+const SLIVER: f64 = 0.1;
 
 /// The most turns a helix makes down one pass.
 const MOST_TURNS: f64 = 10_000.0;
@@ -304,8 +309,9 @@ pub struct RoundParams {
 pub enum Down {
     /// So many millimetres a turn, round every circle.
     Pitch(f64),
-    /// At this angle from level, in radians: each circle's turn down as far
-    /// as the angle takes it round.
+    /// At this angle from level, in radians, as Fusion's Bore sets it: each
+    /// turn down as far as the angle takes it round the circle the tool's
+    /// outer edge sweeps, the pass's circle widened by the tool.
     Angle(f64),
 }
 
@@ -333,6 +339,8 @@ pub struct RoundReport {
     pub levels: u64,
     /// Holes the passes do not reach the middle of, so leave a core standing.
     pub cores: u64,
+    /// Passes asked for past a hole's middle, and left out.
+    pub dropped: u64,
     /// The widest core left, in millimetres across.
     pub widest_core: f64,
     /// Passes asked for leads that had no room for them inside the hole, and
@@ -368,9 +376,10 @@ fn check_params(p: &RoundParams) -> Result<(), StrategyError> {
     Ok(())
 }
 
-/// The passes round `round`, in the order cut, and how wide a core they leave
-/// standing in the middle of a hole, if any.
-fn passes(round: &Round, p: &RoundParams) -> Result<(Vec<Pass>, Option<f64>), RoundError> {
+/// The passes round `round`, in the order cut; how wide a core they leave
+/// standing in the middle of a hole, if any; and how many past its middle
+/// were left out.
+fn passes(round: &Round, p: &RoundParams) -> Result<(Vec<Pass>, Option<f64>, u64), RoundError> {
     let out = if round.boss { 1.0 } else { -1.0 };
     let wall = round.radius + out * (p.radius + p.leave);
     if !round.boss && (wall.is_nan() || wall <= LEAST_RADIUS) {
@@ -393,21 +402,24 @@ fn passes(round: &Round, p: &RoundParams) -> Result<(Vec<Pass>, Option<f64>), Ro
         let feed = if j == 0 { last_feed } else { p.feed };
         all.push((wall + out * f64::from(j) * step, feed));
     }
+    let asked = all.len();
     if round.boss {
         // Further out is further from the wall: nothing to keep from.
         all.retain(|(r, _)| r.is_finite());
     } else {
-        // Past the middle, half the tool's radius from it, once.
-        let least = (0.5 * p.radius).min(wall);
-        let mut kept: Vec<Pass> = Vec::with_capacity(all.len());
-        for (r, feed) in all {
-            let r = r.max(least);
-            if kept.last().is_none_or(|(last, _)| r > last + 1.0e-9) {
-                kept.push((r, feed));
-            }
-        }
-        all = kept;
+        // A pass past the middle is left out, as Fusion's Bore leaves it out
+        // ("Some passes were discarded"), never the one at the wall. Where
+        // Fusion's cut-off lies between nothing and a millimetre is not
+        // known: here it is a sliver more than nothing.
+        let last = all.len().saturating_sub(1);
+        all = all
+            .into_iter()
+            .enumerate()
+            .filter(|&(i, (r, _))| i == last || r > SLIVER)
+            .map(|(_, pass)| pass)
+            .collect();
     }
+    let dropped = (asked - all.len()) as u64;
     if p.repeat
         && let Some(last) = all.last().copied()
     {
@@ -421,7 +433,7 @@ fn passes(round: &Round, p: &RoundParams) -> Result<(Vec<Pass>, Option<f64>), Ro
             .filter(|&gap| gap > 1.0e-6)
             .map(|gap| 2.0 * gap)
     };
-    Ok((all, core))
+    Ok((all, core, dropped))
 }
 
 /// Which way round the passes round `round` go: anticlockwise, seen from above,
@@ -462,12 +474,20 @@ fn leads(
         return (None, None);
     };
     let to_centre = p.to_centre && !round.boss;
+    // In a hole, the arc no wider than half the circle, as Fusion's is made
+    // smaller where there is no room; then, where the straight still leaves
+    // it, half and a quarter of both.
+    let radius = if round.boss {
+        asked.radius
+    } else {
+        asked.radius.min(0.5 * rho)
+    };
     let shapes: Vec<(f64, f64, f64)> = if to_centre {
         vec![(0.5 * rho, PI, 0.0)]
     } else {
         [1.0, 0.5, 0.25]
             .into_iter()
-            .map(|k| (asked.radius * k, asked.sweep, asked.straight * k))
+            .map(|k| (radius * k, asked.sweep, asked.straight * k))
             .collect()
     };
     // Which way the leads turn: round a hole as the pass does, about a centre
@@ -591,15 +611,18 @@ pub fn bore(
                 y: round.at.y,
             });
         }
-        let (all, core) = passes(round, p)?;
+        let (all, core, dropped) = passes(round, p)?;
         count(round, core, &mut report);
+        report.dropped += dropped;
         report.levels = report.levels.max(1);
         let ccw = anticlockwise(round, p);
         let way = if ccw { 1.0 } else { -1.0 };
         for (rho, feed) in all {
+            // By its angle, as Fusion's Bore: the circle the tool's outer
+            // edge sweeps, its diameter times the angle's tangent, a turn.
             let pitch = match down {
                 Down::Pitch(pitch) => pitch,
-                Down::Angle(a) => TAU * rho * a.tan(),
+                Down::Angle(a) => 2.0 * (rho + p.radius) * a.tan(),
             };
             if pitch > PLUNGE_RATIO * TAU * rho {
                 return Err(RoundError::TooSteep {
@@ -704,8 +727,9 @@ pub fn circular(
                 y: round.at.y,
             });
         }
-        let (all, core) = passes(round, &once)?;
+        let (all, core, dropped) = passes(round, &once)?;
         count(round, core, &mut report);
+        report.dropped += dropped;
         report.levels = report.levels.max(zs.len() as u64);
         let ccw = anticlockwise(round, p);
         let way = if ccw { 1.0 } else { -1.0 };

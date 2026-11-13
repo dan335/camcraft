@@ -57,6 +57,12 @@ fn tell(report: &RoundReport, warnings: &mut Vec<String>) {
             report.cores, report.widest_core
         ));
     }
+    if report.dropped > 0 {
+        warnings.push(format!(
+            "{} pass(es) past the middle of a hole left out: fewer stepovers, or narrower ones, would keep them",
+            report.dropped
+        ));
+    }
     if report.no_room_to_lead > 0 {
         warnings.push(format!(
             "{} pass(es) have no room for a lead inside the hole, and are entered and \

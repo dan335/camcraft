@@ -582,6 +582,18 @@ fn operation_findings(
         // A hole the tool does not fit is among the run's own warnings.
         StrategyDetail::Drill(_) => {}
         StrategyDetail::Bore(r) | StrategyDetail::Circular(r) => {
+            if r.dropped > 0 {
+                out.push(finding(
+                    Level::Note,
+                    "CC222",
+                    format!(
+                        "{} pass(es) past the middle of a hole left out",
+                        r.dropped
+                    ),
+                    "as Fusion's Bore discards them: fewer stepovers, or narrower ones, would keep them"
+                        .into(),
+                ));
+            }
             if r.cores > 0 {
                 out.push(finding(
                     Level::Warn,

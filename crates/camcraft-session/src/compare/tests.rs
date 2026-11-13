@@ -182,3 +182,5 @@ fn a_blind_hole_is_drilled_to_its_floor() {
         .fold(f64::INFINITY, f64::min);
     assert!((lowest - 8.0).abs() < 1e-6, "drilled to {lowest}");
 }
+
+mod ops_2d;

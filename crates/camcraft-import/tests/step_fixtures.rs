@@ -36,6 +36,18 @@ fn check(name: &str, unit: &str, faces: u64, size: [f64; 3], open: usize) {
 }
 
 fn check_at(tolerance: f64, name: &str, unit: &str, faces: u64, size: [f64; 3], open: usize) {
+    check_dropping(tolerance, (name, unit), faces, size, (open, 0));
+}
+
+/// As [`check_at`], with `degenerate` triangles the kernel gives whose
+/// corners coincide, dropped in the weld.
+fn check_dropping(
+    tolerance: f64,
+    (name, unit): (&str, &str),
+    faces: u64,
+    size: [f64; 3],
+    (open, degenerate): (usize, u64),
+) {
     let (body, report) =
         load_step(fixture(name), tolerance).unwrap_or_else(|e| panic!("{name}: {e}"));
     let mesh = body.mesh();
@@ -46,7 +58,10 @@ fn check_at(tolerance: f64, name: &str, unit: &str, faces: u64, size: [f64; 3], 
         FileCheck::Passed,
         "{name}: checks against the file"
     );
-    assert_eq!(report.degenerate, 0, "{name}: degenerate triangles");
+    assert_eq!(
+        report.degenerate, degenerate,
+        "{name}: degenerate triangles"
+    );
     let got = mesh.bounds().unwrap().extent();
     for (axis, (g, want)) in ["X", "Y", "Z"].iter().zip(got.to_array().iter().zip(size)) {
         assert!(
@@ -139,6 +154,24 @@ fn a_round_edge() {
 #[test]
 fn ops_block_centimetre() {
     check("ops_block.step", "centimetre", 21, [100.0, 70.0, 20.0], 0);
+}
+
+/// Made in Fusion to hold camcraft's 2D operations to Fusion's: holes, a round
+/// pocket, slots, V grooves, a pocket with an island and chamfered rims.
+/// Written in centimetres, as Fusion writes a design.
+///
+/// ogeom gives it four triangles whose corners coincide, which the weld drops;
+/// the part still passes every check against its file. When ogeom stops, this
+/// fails: hold it to none.
+#[test]
+fn ops_2d_centimetre() {
+    check_dropping(
+        TOLERANCE,
+        ("ops_2d.step", "centimetre"),
+        51,
+        [140.0, 100.0, 20.0],
+        (0, 4),
+    );
 }
 
 /// The round edge with its top edge raised 0.006 mm off the torus it bounds, in a

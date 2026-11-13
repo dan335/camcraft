@@ -96,17 +96,52 @@ fn a_bore_goes_down_a_helix_at_the_pitch() {
     assert!((lowest - 12.0).abs() < 1e-12);
 }
 
-/// By angle, each circle's helix falls as far a turn as the angle takes it
-/// round that circle.
+/// By angle, each turn of the helix falls as far as the angle takes it round
+/// the circle the tool's outer edge sweeps, as Fusion's Bore does: with a 6 mm
+/// tool at 2°, 0.5587 mm a turn in a hole 16 across and 0.4889 in one 14
+/// across, and 0.3491 and 0.2794 on passes a radius of 2 and 1 from their
+/// middles, as Fusion's programs for them go.
 #[test]
-fn a_bore_by_angle_falls_with_its_circle() {
-    let h = hole(6.0, 20.0, 12.0);
-    let angle = 3f64.to_radians();
-    let (path, _) = bore(&[h], Down::Angle(angle), &params(2.0)).unwrap();
-    let arcs = cut_arcs(&path);
-    let (from, a, to) = arcs[0];
-    let flat = a.radius(from) * a.sweep.abs();
-    assert!(((from.z - to.z) / flat - angle.tan()).abs() < 1e-9);
+fn a_bore_by_angle_falls_with_the_tool_s_edge() {
+    let fall = |radius: f64, stepovers: u32| {
+        let p = RoundParams {
+            stepovers,
+            stepover: 3.0,
+            ..params(3.0)
+        };
+        let h = hole(radius, 20.0, 10.0);
+        let (path, _) = bore(&[h], Down::Angle(2f64.to_radians()), &p).unwrap();
+        // Each pass's fall a turn, from the middle out.
+        let mut out: Vec<(f64, f64)> = Vec::new();
+        for (from, a, to) in cut_arcs(&path).into_iter().filter(|(f, _, t)| t.z < f.z) {
+            let r = a.radius(from);
+            let per_turn = (from.z - to.z) / (a.sweep.abs() / TAU);
+            if out.last().is_none_or(|(l, _)| (l - r).abs() > 1e-9) {
+                out.push((r, per_turn));
+            }
+        }
+        out
+    };
+    // To Fusion's figures, read from programs written to a thousandth.
+    let near = |got: f64, want: f64| (got - want).abs() < 2e-4;
+    let one = fall(8.0, 1);
+    assert!(
+        one.len() == 1 && one[0].0 == 5.0 && near(one[0].1, 0.5587),
+        "{one:?}"
+    );
+    let one = fall(7.0, 1);
+    assert!(near(one[0].1, 0.4889), "{one:?}");
+    let passes = fall(8.0, 3);
+    assert_eq!(passes.len(), 2, "{passes:?}");
+    assert!(
+        near(passes[0].1, 0.3491) && near(passes[1].1, 0.5587),
+        "{passes:?}"
+    );
+    let passes = fall(7.0, 3);
+    assert!(
+        near(passes[0].1, 0.2794) && near(passes[1].1, 0.4889),
+        "{passes:?}"
+    );
 }
 
 /// Climbing with a clockwise spindle goes anticlockwise round a hole and
@@ -162,10 +197,23 @@ fn a_hole_too_small_for_the_tool_is_refused() {
 }
 
 /// Passes out to the wall a stepover apart, from the middle out, the last at
-/// the wall; one past the middle is put half the tool's radius from it, so the
-/// middle is cut. Too few leave a core, and say how wide.
+/// the wall; one past the middle is left out, and counted, as Fusion's Bore
+/// discards it: three stepovers of 3 mm with a 6 mm tool leave a hole 16
+/// across two passes, at 2 and 5, and one 14 across two, at 1 and 4. Too few
+/// leave a core, and say how wide.
 #[test]
 fn stepovers_go_out_to_the_wall() {
+    for (radius, kept) in [(8.0, [2.0, 5.0]), (7.0, [1.0, 4.0])] {
+        let h = hole(radius, 20.0, 10.0);
+        let p = RoundParams {
+            stepovers: 3,
+            stepover: 3.0,
+            ..params(3.0)
+        };
+        let (path, report) = bore(&[h], Down::Pitch(1.0), &p).unwrap();
+        assert_eq!(radii(&path, h.at), kept);
+        assert_eq!((report.passes, report.dropped, report.cores), (2, 1, 0));
+    }
     let h = hole(12.0, 20.0, 12.0);
     let p = RoundParams {
         stepovers: 3,
@@ -174,10 +222,11 @@ fn stepovers_go_out_to_the_wall() {
     };
     let (path, report) = bore(&[h], Down::Pitch(1.0), &p).unwrap();
     let r = radii(&path, h.at);
-    assert_eq!(r.len(), 3, "{r:?}");
-    assert!((r[0] - 1.5).abs() < 1e-9 && (r[1] - 3.3).abs() < 1e-9 && r[2] == 9.0);
-    assert_eq!(report.cores, 0);
-    assert_eq!(report.passes, 3);
+    assert_eq!(r.len(), 2, "{r:?}");
+    assert!((r[0] - 3.3).abs() < 1e-9 && r[1] == 9.0, "{r:?}");
+    // The pass left out leaves a pin 0.6 across.
+    assert_eq!((report.dropped, report.cores), (1, 1));
+    assert!((report.widest_core - 0.6).abs() < 1e-9);
 
     let (_, report) = bore(&[h], Down::Pitch(1.0), &params(3.0)).unwrap();
     assert_eq!(report.cores, 1);
@@ -335,6 +384,29 @@ fn leads_stay_in_the_hole() {
             }
         }
     }
+    // The level arc no wider than half the circle, its straight as asked, as
+    // Fusion's on a pass a radius of 1 from its middle: radius 0.5, straight
+    // 0.3.
+    let small = hole(4.0, 20.0, 12.0);
+    let p = RoundParams {
+        leads: Some(LeadArc {
+            radius: 0.6,
+            sweep: 0.5 * PI,
+            straight: 0.3,
+        }),
+        ..params(3.0)
+    };
+    let (path, report) = bore(&[small], Down::Pitch(1.0), &p).unwrap();
+    assert_eq!(report.no_room_to_lead, 0);
+    let lead: Vec<(DVec3, Move)> = steps(&path)
+        .into_iter()
+        .filter(|(_, m)| m.role == MoveRole::Lead)
+        .collect();
+    let MoveKind::Arc(arc) = lead[1].1.kind else {
+        panic!("{lead:?}")
+    };
+    assert!((arc.radius(lead[1].0) - 0.5).abs() < 1e-9);
+    assert!((lead[0].0.distance(lead[0].1.to) - 0.3).abs() < 1e-9);
     // No room even for a quarter of it: without, and said.
     let tight = hole(3.05, 20.0, 12.0);
     let p = RoundParams {

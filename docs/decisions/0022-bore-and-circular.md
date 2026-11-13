@@ -76,3 +76,46 @@ it, where its passes past a hole's middle go, where on the circle a pass
 starts, whether its lead-in arc turns a quarter turn, and how its Circular goes
 down to a level, are not in its references; PROGRESS.md and the report that
 came with this list them to check.
+
+## What Fusion's programs showed, 2026-11-13
+
+Fusion's own programs for both on a part made for them (`fixtures/step/ops_2d.step`,
+`fixtures/nc/ops_2d_{bore,bore_passes,circular,circular_passes}.nc`, made by
+`scripts/fusion/ops_2d/`) settled most of what was open, and changed three
+things; `crates/camcraft-session/src/compare/tests/ops_2d.rs` holds camcraft's
+to them.
+
+- **A bore's helix by its angle** falls, a turn, the angle's tangent times the
+  diameter the tool's outer edge sweeps: the pass's circle widened by the tool,
+  not the tool's centre's circle. 0.5587 mm a turn in a hole 16 across with a
+  6 mm tool at 2°.
+- **A pass past a hole's middle is left out**, as Fusion discards it ("Some
+  passes were discarded"), not moved to half the tool's radius: three
+  stepovers of 3 mm leave a hole 16 across passes at 2 and 5. The run says so
+  (CC222). Where Fusion's cut-off lies between nothing and a millimetre is not
+  known; camcraft's is a tenth of a millimetre.
+- **A circular neither ramps nor stays down.** Every pass at every level comes
+  down its vertical lead, into the material where the level is still there,
+  and lifts out after, even to a circle 3 mm away at the same level. Its ramp
+  along the circle and its stay-down are gone, so a saved circular's
+  `linking.ramp_angle`, `ramp_feed`, `ramp_stepdown`, `stay_down` and
+  `retraction` are no longer read.
+- **The lead's level arc** is made no wider than half its circle where the
+  circle is small, keeping its straight, as Fusion's is (0.5 on a circle of 1),
+  before it is halved.
+
+Confirmed as they were: N stepovers are N passes, the wall's among them, from
+the middle out; every pass starts on +X and climbs anticlockwise in a hole; a
+bore lifts out between passes and starts each at the top, and goes once round
+level at the bottom; the leads are a vertical arc a tenth of the tool, a
+straight a twentieth and a quarter-turn level arc a tenth, off the mirror; a
+circular's levels are a millimetre apart, each level's passes from the middle
+out before the next level.
+
+Still different: Fusion feeds from the safe distance down to the vertical
+lead's top at its lead-in feed, where camcraft's linker plunges at the plunge
+feed; it rises from the safe distance above the level, where camcraft feeds
+from the safe distance above the material. Neither changes what is cut. A
+single bore's lead off the bottom bites the core it leaves, and camcraft's
+vertical arc up is five straight moves within the tolerance where Fusion's is
+ten, so the loose core differs by up to 0.06 mm.

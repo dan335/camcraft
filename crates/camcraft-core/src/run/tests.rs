@@ -395,24 +395,15 @@ fn a_hole_is_bored_and_milled_round() {
             .map(|m| m.to.z)
             .fold(f64::MAX, f64::min);
         assert!(lowest.abs() < 1e-9, "{strategy}: down to {lowest}");
-        // A circular ramps down into each level round its circle, as
-        // Fusion's ramps on; a bore's helix is its own.
-        let ramps = op
-            .path
-            .moves()
-            .iter()
-            .filter(|m| m.role == crate::path::toolpath::MoveRole::Ramp)
-            .collect::<Vec<_>>();
-        if strategy == "circular" {
-            assert!(op.links.ramps > 0);
-            assert!(
-                ramps
-                    .iter()
-                    .all(|m| matches!(m.kind, crate::path::toolpath::MoveKind::Arc(_)))
-            );
-        } else {
-            assert!(ramps.is_empty());
-        }
+        // Neither ramps nor stays down, as Fusion's do not: each pass comes
+        // down its lead and lifts out after.
+        assert!(
+            op.path
+                .moves()
+                .iter()
+                .all(|m| m.role != crate::path::toolpath::MoveRole::Ramp)
+        );
+        assert_eq!((op.links.ramps, op.links.stayed_down), (0, 0));
         // Every cut an arc round the hole, the tool's radius in from its wall.
         let mut at = DVec3::ZERO;
         for m in op.path.moves() {

@@ -171,10 +171,10 @@ nearest.
 `multiple_passes` (off) is Fusion's Multiple Passes: `stepovers` (2) passes out
 to the wall, `passes.stepover` apart (half the tool to start), the last at the
 wall; from the middle out in a hole, from outside in round a boss. Off, the
-wall alone. A hole's pass that would be past its middle is put half the tool's
-radius from it, once, so the passes stop there. A hole the passes do not reach
-the middle of is left with a core standing in it, as Fusion's is, and the run
-says so (CC218): through the part, it comes loose. Both climb unless
+wall alone. A hole's pass that would be past its middle is left out, as
+Fusion's Bore discards it, and the run says so (CC222). A hole the passes do
+not reach the middle of is left with a core standing in it, as Fusion's is, and
+the run says so (CC218): through the part, it comes loose. Both climb unless
 `conventional = true`; climbing with a clockwise spindle goes anticlockwise
 round a hole and clockwise round a boss. `repeat = true` (Fusion's Repeat
 Passes) cuts the last pass twice. Each pass comes onto its circle along the
@@ -184,12 +184,15 @@ off along them, in the hole, made smaller where the hole has no room for them
 and left out where it has none even for a quarter of them; round a boss,
 outside it. `lead_to_center = true` leads on from the hole's centre and back to
 it instead, a half turn each way. Down onto the leads and up off them is the
-linker's vertical arc, the leads' `vertical`.
+linker's vertical arc, the leads' `vertical`. Every pass of either is entered
+so, from the safe distance above the material, and lifted out of after: none
+ramps or stays down, as none of Fusion's does.
 
 A bore goes down a helix round each circle from the top to the bottom, at
-`ramp_angle` (2°) from level, each circle's turn as far down as the angle takes
-it round, or with `use_ramp_angle = false` at `pitch` millimetres a turn (1), as
-a new Bore of Fusion's starts; then once round level at the bottom, and off
+`ramp_angle` (2°) from level, as Fusion's goes: each turn as far down as the
+angle takes it round the circle the tool's outer edge sweeps, the pass's
+circle widened by the tool, or with `use_ramp_angle = false` at `pitch`
+millimetres a turn (1), as a new Bore of Fusion's starts; then once round level at the bottom, and off
 along the leads. A helix that would fall more steeply than a plunge round a
 small circle is refused. It has no multiple depths: each pass is the helix all
 the way down, and between passes it lifts out and comes down to the top again.
@@ -201,11 +204,10 @@ not read.
 A circular cuts each circle level by level, a stepdown apart (Fusion's Multiple
 Depths, on to start, a millimetre): each level a whole stepdown and the last
 what is left, as Fusion's, or evenly with `even_stepdowns = true`. At each
-level each pass comes on along its lead, goes once round and leads off; the
-first goes down into the material along its circle, at the ramp angle and no
-more than the most per lap, as Fusion's Circular ramps on, and the passes after
-it at the level stay down between. A repeat cuts the wall's pass twice at the
-last level.
+level each pass comes on along its lead, goes once round and leads off, from
+the middle out, as Fusion's does; the first at each level goes down its
+vertical lead into the material still there. A repeat cuts the wall's pass
+twice at the last level.
 
 Every cut of either is a true arc or helix about the hole's axis, posted as
 `G2` or `G3`. Neither has smoothing, feed optimisation or a shaft and holder
@@ -608,7 +610,7 @@ distance is made without lifting, at the cutting feed; the distance is Fusion's
 Maximum Stay-Down Distance for the strategy: 50 mm for parallel and contour;
 twice the tool's diameter for scallop and flat; five times for spiral, radial,
 morphed spiral, pocket clearing, adaptive clearing and the 2D strategies but
-bore, which lifts between its passes, slot, twice, trace, which lifts
+bore and circular, which lift between their passes, slot, twice, trace, which lifts
 unless it keeps the tool down, then 50 mm, and a 2D chamfer, which lifts.
 Parallel and the other finishing strategies ride over the part: between passes
 side by side that run opposite ways, as zigzag passes do, by Fusion's default
@@ -808,6 +810,7 @@ with.
 | CC219 | warn    | a slot more than three tools wide left a band uncut              |
 | CC220 | note    | stretches of a trace steeper than its maximum angle left out     |
 | CC221 | warn    | stretches of a 2D chamfer lifted to keep its clearance           |
+| CC222 | note    | a bore's or circular's passes past a hole's middle left out      |
 | CC299 | warn    | a warning from reading the model                                 |
 
 A **plunge** is a continuous descent steeper than `PLUNGE_RATIO` (10:1) that falls

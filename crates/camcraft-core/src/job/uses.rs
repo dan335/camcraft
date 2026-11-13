@@ -245,13 +245,17 @@ impl StrategySpec {
                 feed_optimization: false,
                 ..cuts_loops
             },
-            // As a bore, but level by level: each level's first pass ramps
-            // down along its circle into the material, as Fusion's Circular
-            // ramps on, and the passes after it at the level stay down.
+            // As a bore, but level by level, as Fusion's Circular: every pass
+            // at every level comes down its vertical lead, into the material
+            // where the level is still there, and lifts out after, never
+            // ramping and never staying down, as Fusion's programs do.
             StrategySpec::Circular { .. } => Uses {
                 boundary: false,
                 holes: Some(Holes::Walls),
+                stay_down: false,
                 cut_step: false,
+                reach: Reach::Tools(0),
+                ramp: false,
                 leads: true,
                 top: Some(HeightRef::ModelTop),
                 bottom: Some(HeightRef::ModelBottom),

@@ -137,7 +137,8 @@ it.
   *Repeat passes*. A circular starts with *Multiple depths* ticked at a
   millimetre, with *Even stepdowns* under it; a bore's *Finishing passes* has
   only its stepover. Their *Linking* has the leads, with *Lead to center* under
-  them. A slot's *Passes* has *Backoff distance*, *Repeat finishing pass* and
+  them, and neither a ramp nor a stay-down distance: each pass comes down its
+  lead and lifts out after, as Fusion's do. A slot's *Passes* has *Backoff distance*, *Repeat finishing pass* and
   *Preserve order*; it has *Multiple depths* (a millimetre when ticked, as
   Fusion's Maximum Stepdown) and only a floor's stock to leave; its *Linking* has
   the ramp angle and feed and *Most per leg*, how far its ramp back and forth
