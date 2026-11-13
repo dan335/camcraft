@@ -536,10 +536,12 @@ mod tests {
             ToolKind::Ball,
             ToolKind::Bullnose,
             ToolKind::Cone,
+            ToolKind::ThreadMill,
         ] {
             let tool = ToolSpec {
                 kind,
                 diameter: 6.0,
+                pitch: (kind == ToolKind::ThreadMill).then_some(1.0),
                 presets: vec![Preset {
                     name: "wood".into(),
                     ..Preset::default()

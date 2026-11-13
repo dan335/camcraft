@@ -622,6 +622,24 @@ fn operation_findings(
                 ));
             }
         }
+        StrategyDetail::Thread(r) => {
+            // As Fusion's Thread: the lead in continues the helix below the
+            // hole's bottom, into a blind hole's floor where the thread runs
+            // to it.
+            if let Some(([x, y], deep)) = r.below_floor {
+                out.push(finding(
+                    Level::Warn,
+                    "CC224",
+                    format!(
+                        "a thread's lead goes {deep:.3} mm below the floor of the hole at \
+                         X{x:.3} Y{y:.3}"
+                    ),
+                    "its helical lead continues the thread below the hole's bottom, as \
+                     Fusion's does: set the Bottom that much higher, or level the leads"
+                        .into(),
+                ));
+            }
+        }
         StrategyDetail::Slot(r) => {
             // As Fusion's Slot: the middle only, the walls left for a finish.
             if r.narrower > 0 {

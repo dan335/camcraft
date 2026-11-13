@@ -12,12 +12,13 @@
 
 use camcraft_sim::stock::SweptTool;
 
-use crate::job::{HolderSegment, ToolSpec};
+use crate::job::{HolderSegment, ToolKind, ToolSpec};
 
 /// What a piece of the assembly is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PieceKind {
-    /// Between the end of the flutes and the shoulder, at the cutting diameter.
+    /// Between the end of the flutes and the shoulder, at the cutting
+    /// diameter; a thread mill's at its tooth's root.
     Neck,
     /// The shank, up to the holder.
     Shank,
@@ -94,11 +95,18 @@ impl Assembly {
         }
         let flutes = tool.flute_length();
         let stickout = tool.stickout().max(flutes);
-        let cutting = tool.diameter / 2.0;
+        // A thread mill's neck is no wider than its tooth's root, or the
+        // tooth would not be a whole V: it is that wide, its widest, so it
+        // passes inside the thread its tooth cuts, as a thread mill's must.
+        let cutting = if tool.kind == ToolKind::ThreadMill {
+            tool.thread_root_radius()
+        } else {
+            tool.diameter / 2.0
+        };
         let shank = tool.shank_diameter() / 2.0;
         let mut pieces = Vec::new();
-        // Up to the shoulder the tool keeps its cutting diameter; above it,
-        // its shank's.
+        // Up to the shoulder the tool keeps its cutting diameter, a thread
+        // mill its root's; above it, its shank's.
         let shoulder = given(tool.shoulder_length)
             .unwrap_or(flutes)
             .clamp(flutes, stickout);

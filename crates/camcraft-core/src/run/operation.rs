@@ -82,7 +82,7 @@ use finishing::{
 };
 use link::{Cutting, OnPart, link_params};
 pub(super) use round::round_walls;
-use round::{RoundAsked, bore_paths, circular_paths};
+use round::{RoundAsked, ThreadAsked, bore_paths, circular_paths, thread_paths};
 
 /// One operation, and everything its strategy works from.
 pub(super) struct Work<'a> {
@@ -213,7 +213,7 @@ pub(super) enum Target {
     Holes(Vec<Hole>),
     /// A 2D operation's areas, each with its floor.
     Areas(Vec<Area>),
-    /// A bore's or a circular's round walls, in order.
+    /// A bore's, a circular's or a thread's round walls, in order.
     Rounds(Vec<Round>),
     /// A slot operation's slots, in order.
     Slots(Vec<Slot>),
@@ -275,11 +275,12 @@ fn held_clear(
     let how = match op.strategy {
         // Fusion's 2D operations have no Shaft and Holder: the checks still
         // sweep the whole tool.
-        // Nor has its 2D Adaptive, nor its Engrave.
+        // Nor has its 2D Adaptive, nor its Engrave, nor its Thread.
         StrategySpec::Slot { .. }
         | StrategySpec::Trace { .. }
         | StrategySpec::Adaptive2d { .. }
-        | StrategySpec::Engrave { .. } => {
+        | StrategySpec::Engrave { .. }
+        | StrategySpec::Thread { .. } => {
             return Ok(None);
         }
         _ if mode == HolderMode::Fail => Some(Clear::Trim),
@@ -509,6 +510,28 @@ pub(super) fn plan_operation(
                 lead_to_center,
             },
             even_stepdowns,
+            rounds,
+            &mut warnings,
+        )?,
+        StrategySpec::Thread {
+            pitch,
+            pitch_diameter_offset,
+            hand,
+            multiple_passes,
+            stepovers,
+            helical_leads,
+            lead_to_center,
+            ..
+        } => thread_paths(
+            work,
+            ThreadAsked {
+                pitch,
+                offset: pitch_diameter_offset,
+                hand,
+                stepovers: if multiple_passes { stepovers } else { 1 },
+                helical: helical_leads,
+                lead_to_center,
+            },
             rounds,
             &mut warnings,
         )?,
@@ -917,6 +940,7 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
         }),
         StrategySpec::Bore { .. } => StrategyDetail::Bore(RoundReport::default()),
         StrategySpec::Circular { .. } => StrategyDetail::Circular(RoundReport::default()),
+        StrategySpec::Thread { .. } => StrategyDetail::Thread(Default::default()),
         StrategySpec::Slot { .. } => StrategyDetail::Slot(SlotReport::default()),
         StrategySpec::Trace { .. } => StrategyDetail::Trace(TraceReport::default()),
         StrategySpec::Chamfer2d { .. } => StrategyDetail::Chamfer2d(Default::default()),

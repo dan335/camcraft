@@ -9,7 +9,7 @@
 use camcraft_core::cutter::cutting;
 use camcraft_core::job::{
     Coolant, DRILL_POINT, Holder, HolderSegment, Leave, Preset, SpindleDirection, StockToLeave,
-    ToolFieldError, ToolKind, ToolMaterial, ToolSpec, free_preset_name,
+    THREAD_PROFILE, ToolFieldError, ToolKind, ToolMaterial, ToolSpec, free_preset_name,
 };
 use eframe::egui;
 use serde::Serialize;
@@ -107,10 +107,14 @@ pub fn tool_fields(ui: &mut egui::Ui, tool: &mut ToolSpec, m: Measure, editable:
 }
 
 /// What a tool of its kind must have that a tool may be without, as choosing
-/// the kind gives it: a cone's angle, 90° until set.
+/// the kind gives it: a cone's angle, 90° until set; a thread mill's pitch, a
+/// millimetre until set.
 fn fit_kind(tool: &mut ToolSpec) {
     if tool.kind == ToolKind::Cone && tool.angle.is_none() {
         tool.angle = Some(90.0);
+    }
+    if tool.kind == ToolKind::ThreadMill && tool.pitch.is_none() {
+        tool.pitch = Some(1.0);
     }
 }
 
@@ -165,6 +169,7 @@ fn cutter(
                 ToolKind::Bullnose,
                 ToolKind::Cone,
                 ToolKind::Drill,
+                ToolKind::ThreadMill,
             ],
             |k| kind_name(*k),
         );
@@ -218,6 +223,27 @@ fn cutter(
             errors,
             "tip_diameter",
         );
+    }
+    if tool.kind == ToolKind::ThreadMill {
+        row(ui, d, &lib::THREAD_PITCH, errors, "pitch", |ui| {
+            if let Some(p) = tool.pitch.as_mut() {
+                m.length_field(ui, p, 0.01, 100.0, "");
+            }
+        });
+        row(ui, d, &lib::PROFILE_ANGLE, errors, "angle", |ui| {
+            let mut a = tool.thread_profile();
+            if ui
+                .add(
+                    widgets::number(&mut a)
+                        .speed(0.5)
+                        .range(1.0..=179.0)
+                        .suffix("° included"),
+                )
+                .changed()
+            {
+                tool.angle = ((a - THREAD_PROFILE).abs() > 1e-9).then_some(a);
+            }
+        });
     }
     row(ui, d, &lib::FLUTES, errors, "flutes", |ui| {
         widgets::optional(ui, &mut tool.flutes, 2, NOT_GIVEN, |ui, f| {

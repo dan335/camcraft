@@ -9,7 +9,7 @@
 use toml::{Table, Value as Toml};
 
 use super::settings::{Number, at, number_kind, put};
-use super::{Job, Operation, ToolSpec};
+use super::{Job, Operation, ToolKind, ToolSpec};
 use crate::job::expr::{self, Value};
 
 /// An expression that could not be worked out, or not put where it names.
@@ -31,7 +31,7 @@ pub struct ExpressionFault {
 const ROUNDS: usize = 8;
 
 /// Every name an expression may read, and what it is, as the panels list them.
-pub const NAMES: [(&str, &str); 19] = [
+pub const NAMES: [(&str, &str); 21] = [
     ("tool_diameter", "the tool's diameter"),
     ("tool_cornerRadius", "the tool's corner radius"),
     (
@@ -46,9 +46,15 @@ pub const NAMES: [(&str, &str); 19] = [
         "a cone's taper from its axis: half its included angle",
     ),
     ("tool_numberOfFlutes", "how many flutes the tool has"),
+    ("tool_threadPitch", "a thread mill's pitch"),
+    (
+        "tool_threadProfileAngle",
+        "a thread mill's tooth's profile angle, 60 if it gives none",
+    ),
     (
         "tool_type",
-        "'flat end mill', 'ball end mill', 'bull nose end mill', 'chamfer mill' or 'drill'",
+        "'flat end mill', 'ball end mill', 'bull nose end mill', 'chamfer mill', 'drill' or \
+         'thread mill'",
     ),
     ("tool_spindleSpeed", "the spindle speed, in rev/min"),
     ("tool_feedCutting", "the cutting feed"),
@@ -96,6 +102,11 @@ impl Operation {
                     // Fusion measures a taper from the axis.
                     "tool_taperAngle" => n(t.angle? / 2.0),
                     "tool_numberOfFlutes" => n(f64::from(t.flutes?)),
+                    // A thread mill's alone, as Fusion's are.
+                    "tool_threadPitch" if t.kind == ToolKind::ThreadMill => n(t.pitch?),
+                    "tool_threadProfileAngle" if t.kind == ToolKind::ThreadMill => {
+                        n(t.thread_profile())
+                    }
                     "tool_type" => Value::Text(t.kind.fusion_type().into()),
                     _ => return None,
                 }

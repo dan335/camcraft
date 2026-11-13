@@ -114,6 +114,17 @@ impl Operation {
     /// round, no more than its corner radius down.
     pub fn cannot_use(&self, tool: &ToolSpec) -> Option<&'static str> {
         let uses = self.strategy.uses();
+        // A thread mill's one tooth cuts a thread's profile and nothing else,
+        // and nothing else cuts one.
+        let threading = matches!(self.strategy, StrategySpec::Thread { .. });
+        if tool.kind == ToolKind::ThreadMill && !threading {
+            return Some("a thread mill only mills threads; use a thread operation");
+        }
+        if threading && tool.kind != ToolKind::ThreadMill {
+            return Some(
+                "a thread is milled with a thread mill, whose tooth cuts the thread's profile",
+            );
+        }
         let drilling = matches!(self.strategy, StrategySpec::Drill { .. });
         if tool.kind == ToolKind::Drill && !drilling {
             return Some("a drill only drills; use a drilling operation");

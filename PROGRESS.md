@@ -24,7 +24,7 @@ has only with its Manufacturing Extension.
 
 | Area                                          | Done | Partial | Not started |
 |-----------------------------------------------|-----:|--------:|------------:|
-| [2D operations](#2d-operations)               |    1 |       9 |           1 |
+| [2D operations](#2d-operations)               |    1 |      10 |           0 |
 | [3D roughing](#3d-roughing)                   |    0 |       2 |           0 |
 | [3D finishing](#3d-finishing)                 |    0 |       7 |           9 |
 | [Drilling](#drilling)                         |    4 |       1 |           3 |
@@ -32,12 +32,12 @@ has only with its Manufacturing Extension.
 | [Linking and entries](#linking-and-entries)   |    4 |       1 |           1 |
 | [Models](#models)                             |    3 |       2 |           1 |
 | [Setups and stock](#setups-and-stock)         |    4 |       1 |           5 |
-| [Tools](#tools)                               |    8 |       0 |           5 |
+| [Tools](#tools)                               |    8 |       1 |           5 |
 | [Simulation and checks](#simulation-and-checks) |  7 |     0 |           1 |
 | [Posts and programs](#posts-and-programs)     |    6 |       0 |           2 |
 | [App](#app)                                   |    7 |       1 |           0 |
 | [Project](#project)                           |    1 |       0 |           4 |
-| **All**                                       |   55 |      26 |          37 |
+| **All**                                       |   55 |      28 |          36 |
 
 `grep "| not started" PROGRESS.md` lists everything not yet begun.
 
@@ -66,7 +66,7 @@ Roughly in the order they matter:
 | 2D Adaptive Clearing | partial     | Matches Fusion: held to its programs for `ops_2d`'s pocket with an island and its notch open to two sides (the stock flush with the part there, as Fusion's open edge is open to air). A 2D pocket's areas, picked or the silhouette, each cleared by 3D adaptive's engine at the pocket's levels: to each floor in one, or multiple depths, whole or even; islands cut round; open pockets found where the outline runs along the part's edge, and entered from outside the stock; optimal load, minimum cutting radius, slot clearing, direction, order by depth or area, helix or plunge in, stay-down level, clearance and lift ([0024](docs/decisions/0024-chamfer-and-2d-adaptive.md)). Missing: open pockets' extension methods (tangent, closest boundary, parallel) and stock contours, rest machining from a previous tool's size, predrill and entry positions, ramp clearance height and taper, both ways' other-way load and feed, no-engagement feed, separate lead radii, sketches. |
 | Slot                 | partial     | Matches Fusion: held to its programs for `ops_2d`'s two slots with a tool narrower than them and one as wide. Closed slots picked by the edges round their floors, or their floors: straight, curved or several of either; the middle only, a narrower tool leaving the walls; ramped from the ramp clearance height back and forth along the whole middle, each leg no more than half the maximum ramp stepdown, then once along the floor; multiple depths; repeat finishing pass, backoff, preserve order ([0023](docs/decisions/0023-slot-and-trace.md)). Missing: open and semi-open slots and tangential extension, ramp types (predrill, plunge), picked entry positions, sketches. Multiple depths, backoff and repeat are not yet compared with Fusion's programs. |
 | Trace                | partial     | Matches Fusion: held to its program for `ops_2d`'s two V grooves, on the curve. Picked edges followed, open or closed, joined end to end, a click taking the smooth chain; on the curve or beside it left or right; axial offset, pass extension, maximum angle, multiple depths with number of stepdowns, by depth or by curve, both ways, repeat, preserve order, keep tool down, vertical lead-in and lead-out ([0023](docs/decisions/0023-slot-and-trace.md)). Missing: chamfer (the checks can now hold a chamfer cut on purpose, as a 2D chamfer's), chamfer tip offset, up/down milling, multiple passes, spiral stepdowns, separate lead-out radius, flipping a chain's direction (Fusion runs a round groove the other way), tool orientation, sketches. Compensation, multiple depths and the rest not yet compared. |
-| Thread               | not started | |
+| Thread               | partial     | Matches Fusion: held to its programs for `ops_2d`'s through and blind holes, as a new one and with a pitch diameter offset of a millimetre, the holes bored first. Holes picked by their walls, threaded with a single-profile thread mill from each wall's bottom to its top: down the centre, a straight and a helical arc onto the thread, the helix at the pitch in half turns, the same off and back to the centre; pitch (the tool's), pitch diameter offset, right or left hand, climb or conventional, multiple passes, helical or level leads, lead to center. The thread cut into the wall is held by the checks as cut on purpose, and anything deeper is a gouge; a helical lead into a blind hole's floor, where Fusion's goes too, is said (CC224) and fails the part check ([0026](docs/decisions/0026-thread.md)). Missing: outside threads (bosses), multi-tooth thread mills, start angle, multiple threads, repeat passes, stock to leave, compensation in control, threads from a standard or the model, diameter range and same-diameter selection, hole order choices. Left hand, conventional, multiple passes, level leads and leads from beside the arc are not yet compared with Fusion's programs. |
 | Bore                 | partial     | Holes and bosses picked by their walls, from each wall's top to its bottom; pitch or ramp angle, stepovers, finishing passes, repeat, leads and lead to center, climb or conventional ([0022](docs/decisions/0022-bore-and-circular.md)). Matches Fusion. Missing: tapered walls, diameter range and same-diameter selection, hole order choices, compensation in control, bottom-to-top. |
 | Circular             | partial     | Holes and bosses picked by their walls, cut level by level, whole or even stepdowns, each pass down its lead and lifted out after; stepovers, repeat, leads and lead to center, climb or conventional ([0022](docs/decisions/0022-bore-and-circular.md)). Matches Fusion. Missing: diameter range and same-diameter selection, hole order choices, compensation in control. |
 | Engrave              | partial     | Matches Fusion, on all four of its programs for a plate with a triangle, a stroke and a rectangle sunk into it. Shapes picked by their rims or floors, islands too; the V's flank on the outline, round a wide shape at the depth, along a narrow one's middle, up into corners sharper than the sharp corner angle; depth (0.95 of the flank, as Fusion's Bottom), flat tips, multiple depths; a shape sunk less deep than the V goes is said (CC223) and fails the part check ([0025](docs/decisions/0025-engrave.md)). Missing: Top and Bottom from other references, Keep Tool Down, an island far from its outline joined to it in one pass, entry positions, sketches and text, polar and wrap. |
@@ -187,7 +187,8 @@ What Fusion's Geometry, Heights, Passes and Linking tabs hold, across operations
 | Tool library, in folders, with undo     | done        | |
 | Fusion CSV import                       | done        | |
 | Tapered end mills                       | not started | |
-| Taps and thread mills                   | not started | |
+| Thread mills                            | partial     | Single-profile, as Fusion's sample library's: a tooth of its profile angle one pitch tall on a neck as narrow as its root; imported from Fusion's CSV with its pitch and profile. Missing: multi-tooth and tapered thread mills, tips other than a point. |
+| Taps                                    | not started | |
 | Slot, dovetail and lollipop cutters     | not started | |
 | Fusion `.json` tool libraries           | not started | They carry holders. |
 | Holders and machines of one's own       | not started | |

@@ -624,6 +624,7 @@ pub fn strategy_label(s: &StrategySpec) -> &'static str {
         StrategySpec::Drill { .. } => "Drill",
         StrategySpec::Bore { .. } => "Bore",
         StrategySpec::Circular { .. } => "Circular",
+        StrategySpec::Thread { .. } => "Thread",
         StrategySpec::Slot { .. } => "Slot",
         StrategySpec::Trace { .. } => "Trace",
         StrategySpec::Chamfer2d { .. } => "2D chamfer",
@@ -658,6 +659,7 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
                 "profile",
                 "slot",
                 "trace",
+                "thread",
                 "bore",
                 "circular",
                 "engrave",
@@ -689,7 +691,6 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
 /// section's own, greyed, saying so. One that is built comes out of here and
 /// into [`operation_groups`], in the same place.
 pub const PLANNED: &[(&str, usize, &str)] = &[
-    ("2D", 0, "Thread"),
     ("3D", 1, "Steep and shallow"),
     ("3D", 1, "Ramp"),
     ("3D", 1, "Pencil"),
@@ -921,6 +922,7 @@ mod tests {
             ("2D adaptive clearing", "adaptive-2d"),
             ("2D chamfer", "chamfer-2d"),
             ("Engrave", "engrave"),
+            ("Thread", "thread"),
         ] {
             h.get_by_label("2D").click();
             h.run();
@@ -1029,7 +1031,7 @@ mod menu_tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), offered, "one is offered twice: {names:?}");
-        assert_eq!(offered, 20, "{names:?}");
+        assert_eq!(offered, 21, "{names:?}");
     }
 
     /// The planned operations are listed after their section's own, in the
@@ -1085,8 +1087,8 @@ mod menu_tests {
             }
         }
         // 2D: Fusion's order, 2D adaptive clearing before the pocket, Slot,
-        // Trace, Bore, Circular and Engrave after the profile, and 2D chamfer
-        // last.
+        // Trace, Thread, Bore, Circular and Engrave after the profile, and 2D
+        // chamfer last. Nothing of 2D is planned now.
         let two_d: Vec<String> = operation_menu_items()[0].1[0]
             .iter()
             .map(|m| match m {
@@ -1103,11 +1105,11 @@ mod menu_tests {
                 "2D profile",
                 "Slot",
                 "Trace",
+                "Thread",
                 "Bore",
                 "Circular",
                 "Engrave",
-                "2D chamfer",
-                "(Thread)"
+                "2D chamfer"
             ]
         );
     }

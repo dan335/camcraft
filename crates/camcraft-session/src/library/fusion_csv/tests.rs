@@ -116,6 +116,27 @@ fn chamfer_mills_and_spot_drills_are_cones() {
     assert_eq!(spot.tip_diameter, 0.0);
 }
 
+/// A thread mill comes in with its pitch, in millimetres, and its tooth's
+/// profile angle; one that gives no pitch cannot be cut with, and is skipped.
+#[test]
+fn thread_mills_come_in_with_their_pitch() {
+    let text = "\"Type (tool_type)\",\"Unit (tool_unit)\",\"Diameter (tool_diameter)\",\
+                    \"Thread Pitch (tool_threadPitch)\",\
+                    \"Thread Profile Angle (tool_threadProfileAngle)\",\
+                    \"Product ID (tool_productId)\"\n\
+                    \"thread mill\",\"millimeters\",9.14,1.75,60,\"M12\"\n\
+                    \"thread mill\",\"inches\",0.25,0.05,60,\"20 TPI\"\n\
+                    \"thread mill\",\"millimeters\",6,,60,\"none\"\n";
+    let got = import(text).unwrap();
+    assert_eq!(got.tools.len(), 2, "{:?}", got.skipped);
+    let m12 = &got.tools[0].1;
+    assert_eq!(m12.kind, ToolKind::ThreadMill);
+    assert_eq!(m12.pitch, Some(1.75));
+    assert_eq!(m12.angle, Some(60.0));
+    assert!(close(got.tools[1].1.pitch.unwrap(), 1.27));
+    assert_eq!(got.skipped.len(), 1, "{:?}", got.skipped);
+}
+
 #[test]
 fn drills_come_in_with_their_point() {
     let text = "\"Type (tool_type)\",\"Unit (tool_unit)\",\"Diameter (tool_diameter)\",\

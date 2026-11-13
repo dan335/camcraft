@@ -327,6 +327,11 @@ fn cutters_have_their_tip_at_the_origin_and_their_real_width() {
             ..tool(ToolKind::Cone, 6.0, 0.0)
         },
         tool(ToolKind::Drill, 6.0, 0.0),
+        ToolSpec {
+            pitch: Some(1.0),
+            flute_length: Some(1.0),
+            ..tool(ToolKind::ThreadMill, 6.0, 0.0)
+        },
     ] {
         let mesh = cutter_mesh(&t, None);
         let points = || mesh.iter().flatten();
@@ -346,6 +351,11 @@ fn cutters_have_their_tip_at_the_origin_and_their_real_width() {
             ToolKind::Bullnose => assert!((floor - 2.0).abs() < 1e-4),
             ToolKind::Cone => assert!((floor - 0.5).abs() < 1e-4, "{floor}"),
             ToolKind::Drill => assert!(floor < 1e-4, "{floor}"),
+            // Its tooth's root, a pitch's V of 60° in from its point.
+            ToolKind::ThreadMill => {
+                let root = 3.0 - 0.5 / 30f32.to_radians().tan();
+                assert!((floor - root).abs() < 1e-4, "{floor}");
+            }
         }
     }
 }

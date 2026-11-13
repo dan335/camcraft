@@ -246,15 +246,20 @@ impl Row<'_> {
                 _ => 0.0,
             },
             // A chamfer mill's taper is measured from the axis; a spot drill's tip
-            // angle is the whole point.
+            // angle is the whole point; a thread mill's is its tooth's profile.
             angle: match kind_text.to_ascii_lowercase().as_str() {
                 "chamfer mill" => self.number("tool_taperAngle").map(|a| 2.0 * a),
                 "spot drill" | "drill" => self.number("tool_tipAngle"),
+                "thread mill" => self.number("tool_threadProfileAngle"),
                 _ => None,
             },
             tip_diameter: match kind {
                 ToolKind::Cone => self.scaled("tool_tipDiameter").unwrap_or(0.0),
                 _ => 0.0,
+            },
+            pitch: match kind {
+                ToolKind::ThreadMill => self.scaled("tool_threadPitch"),
+                _ => None,
             },
             number: self.whole("tool_number").unwrap_or(1),
             rpm,

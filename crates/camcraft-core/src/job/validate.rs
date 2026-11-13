@@ -231,8 +231,8 @@ impl Job {
     }
 }
 
-/// The most passes out to a round wall a bore or circular may make, and the
-/// most a trace may make above each curve.
+/// The most passes out to a round wall a bore, circular or thread may make,
+/// and the most a trace may make above each curve.
 const MOST_STEPOVERS: u32 = 1000;
 
 fn unique<'a>(what: &'static str, names: impl Iterator<Item = &'a str>) -> Result<(), JobError> {
@@ -703,12 +703,26 @@ impl Operation {
                 positive(&field("pitch"), pitch)?;
             }
         }
+        if let StrategySpec::Thread {
+            pitch,
+            pitch_diameter_offset,
+            ..
+        } = self.strategy
+        {
+            positive(&field("pitch"), pitch)?;
+            finite(&field("pitch_diameter_offset"), pitch_diameter_offset)?;
+        }
         if let StrategySpec::Bore {
             multiple_passes: true,
             stepovers,
             ..
         }
         | StrategySpec::Circular {
+            multiple_passes: true,
+            stepovers,
+            ..
+        }
+        | StrategySpec::Thread {
             multiple_passes: true,
             stepovers,
             ..

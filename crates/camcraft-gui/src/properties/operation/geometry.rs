@@ -38,7 +38,15 @@ pub(super) fn geometry(
         outline_form(ui, d, op);
         ui.add_space(theme::SPACE_3);
     }
-    if uses.holes == Some(Holes::Walls) {
+    if matches!(op.strategy, StrategySpec::Thread { .. }) {
+        hint(
+            ui,
+            "Pick the round wall of each hole to thread, bored to size first: it is \
+             threaded from its own bottom to its own top. Only holes with straight walls \
+             are threaded; a boss is not yet.",
+        );
+        ui.add_space(theme::SPACE_3);
+    } else if uses.holes == Some(Holes::Walls) {
         hint(
             ui,
             "Pick the round wall of each hole or boss: it is cut from its own top down \

@@ -434,6 +434,105 @@ fn a_hole_is_bored_and_milled_round() {
     }
 }
 
+/// The plate's 8 mm hole bored with the 6 mm flat, then threaded with a 5 mm
+/// thread mill for a 1 mm pitch, a new Thread with a pitch diameter offset of
+/// 0.4 mm: the tooth cuts 0.2 mm into the wall, from the plate's bottom to its
+/// top, which the part, a plain hole, does not have. It is meant: the part is
+/// checked as threaded, the wall moved 0.2 mm out down to the bottom, there
+/// and nowhere else, and the run is clean. Through the plate there is no floor
+/// for its lead to go into. The neck, at the tooth's root, keeps off the
+/// thread it cuts.
+#[test]
+fn a_hole_is_threaded_into_its_wall() {
+    use crate::job::{FeatureRef, Operation, ToolKind, ToolSpec};
+    use crate::setup::features::find_face;
+    use crate::strategy::thread::ThreadReport;
+    let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    job.setups[0].operations.clear();
+    job.tools.insert(
+        "mill".into(),
+        ToolSpec {
+            kind: ToolKind::ThreadMill,
+            diameter: 5.0,
+            pitch: Some(1.0),
+            number: 3,
+            flute_length: Some(1.0),
+            shoulder_length: Some(8.0),
+            shank_diameter: Some(6.0),
+            ..ToolSpec::default()
+        },
+    );
+    let pick = FeatureRef {
+        model: "dome".into(),
+        index: 0,
+        at: [4.0, 0.0, 2.5],
+    };
+    let face = find_face(&body, &pick, 0.01).unwrap().index;
+    let wall = FeatureRef {
+        index: face,
+        ..pick
+    };
+    let mut bore = Operation::new("bore", StrategySpec::named("bore").unwrap());
+    bore.tool = Some("rough".into());
+    bore.selection.faces.push(wall.clone());
+    let mut thread = Operation::new("thread", StrategySpec::named("thread").unwrap());
+    thread.tool = Some("mill".into());
+    thread.selection.faces.push(wall);
+    if let StrategySpec::Thread {
+        pitch,
+        pitch_diameter_offset,
+        ..
+    } = &mut thread.strategy
+    {
+        (*pitch, *pitch_diameter_offset) = (1.0, 0.4);
+    }
+    job.setups[0].operations = vec![bore, thread];
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let op = &result.operations[1];
+    let StrategyDetail::Thread(report) = &op.detail else {
+        panic!("reported {:?}", op.detail);
+    };
+    let ThreadReport {
+        holes,
+        passes,
+        rising,
+        below_floor,
+        ..
+    } = report.clone();
+    assert_eq!((holes, passes, rising, below_floor), (1, 1, true, None));
+    assert!((report.turns - 5.0).abs() < 1e-9);
+    assert!(result.is_clean(), "{:?}", result.warnings());
+    assert_eq!(result.verify.gouged, 0);
+    assert!(op.contacts.is_empty(), "{:?}", op.contacts);
+    // The part as threaded: the wall 0.2 mm out, down to the bottom.
+    let at = |x: f64| result.part.height_at(x, 0.0).unwrap_or(f64::NAN);
+    assert!(at(4.1).abs() < 1e-3, "{}", at(4.1));
+    assert!((at(4.8) - 5.0).abs() < 1e-3, "{}", at(4.8));
+    // The material is cut there, all the way down.
+    let stock = result.keyframes.last().unwrap().unpack().unwrap();
+    let field = stock.field();
+    let cut_at = |x: f64| {
+        (0..field.nx())
+            .filter_map(|ix| {
+                let iy = field.ny() / 2;
+                let p = field.position(ix, iy)?;
+                ((p.x - x).abs() < 0.5 * field.pitch()).then(|| field.get(ix, iy))?
+            })
+            .next()
+            .unwrap_or(f64::NAN)
+    };
+    assert!(cut_at(4.1) < 1.0, "{}", cut_at(4.1));
+    assert!(cut_at(4.6) > 4.9, "{}", cut_at(4.6));
+
+    // A flat end mill threads nothing.
+    let mut flat = job.clone();
+    flat.setups[0].operations[1].tool = Some("rough".into());
+    let refused = run_setup(&flat, 0, &bodies).unwrap_err().to_string();
+    assert!(refused.contains("thread mill"), "{refused}");
+}
+
 /// A block 40 by 20 by 10 mm about the origin with a blind slot along X in its
 /// top, its ends' centres at (-8, 0) and (8, 0), 6 mm wide, its floor at 6 mm:
 /// faces named as a file would name them (top, bottom, outside, floor, the

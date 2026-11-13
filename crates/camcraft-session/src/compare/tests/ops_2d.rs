@@ -8,13 +8,15 @@
 //! Fusion's operations on it was set as a new one starts, but for what its
 //! program's name says, with the stock 5 mm round the part and level with its
 //! top, work zero at the model's origin, and the sample library's 6 mm and 8 mm
-//! flats (18,000 rev/min, 1500 mm/min, plunging and ramping at 500) and 6 mm
-//! 90° engraving tool; each was posted with Fusion's Masso post to
-//! `fixtures/nc/ops_2d_*.nc`.
+//! flats (18,000 rev/min, 1500 mm/min, plunging and ramping at 500), 6 mm
+//! 90° engraving tool and largest thread mill (M12 x 1.75, 600 mm/min); each was
+//! posted with Fusion's Masso post to `fixtures/nc/ops_2d_*.nc`.
 //!
 //! [`ops_2d_job`] is the part, its stock, setup and tools, with the
 //! operations a test gives it, each made as the app makes a new one; and
-//! [`held_to_fusion`] holds each of them to Fusion's program for it.
+//! [`held_to_fusion`] holds each of them to Fusion's program for it, as
+//! `thread_held` holds a thread's, but for the blind hole's floor its lead goes
+//! into.
 
 use std::path::Path;
 
@@ -22,13 +24,14 @@ use camcraft_core::job::{FeatureRef, Job, Operation, Outline, StockToLeave, Stra
 use camcraft_core::path::toolpath::{MoveKind, MoveRole};
 use camcraft_core::run::{OperationResult, StrategyDetail};
 
-use crate::compare::compare;
+use crate::compare::{Compared, compare};
 use crate::test_support::fixture;
 use crate::{Ran, job_text, load_models, models_of, parse_job, run_setup};
 
 /// The part, its stock `margin` round it, its one setup, `top`, and Fusion's
-/// tools: `flat6` (T1), `flat8` (T3) and `vee`, the 6 mm 90° engraving tool
-/// (T4).
+/// tools: `flat6` (T1), `flat8` (T3), `vee`, the 6 mm 90° engraving tool
+/// (T4), and `mill`, the sample library's largest thread mill, M12 x 1.75, a
+/// single 60° tooth 9.14 mm across on a neck 22 mm long (T5).
 fn base(margin: [f64; 3]) -> String {
     format!(
         r#"
@@ -71,6 +74,21 @@ shank_diameter = 6.0
 overall_length = 50.0
 stickout = 20.0
 
+[tools.mill]
+kind = "thread-mill"
+diameter = 9.14
+pitch = 1.75
+angle = 60.0
+number = 5
+rpm = 18000
+comment = "M12-1.75 Thread Mill"
+flutes = 3
+flute_length = 1.75
+shoulder_length = 22.0
+shank_diameter = 9.525
+overall_length = 77.0
+stickout = 30.0
+
 [[model]]
 name = "part"
 path = "{}"
@@ -107,14 +125,18 @@ pub(super) fn pick(at: [f64; 3]) -> FeatureRef {
 
 /// A new operation called `name` of `strategy` with `tool`, as the app makes
 /// one, cutting at Fusion's feed for the tool: 1500 mm/min for the flats, 1000
-/// for the engraving tool, plunging at a third of it.
+/// for the engraving tool, 600 for the thread mill, plunging at a third of it.
 pub(super) fn new_operation(job: &Job, name: &str, strategy: &str, tool: &str) -> Operation {
     let mut op = Operation::fresh(
         name,
         StrategySpec::named(strategy).unwrap(),
         (Some(tool.to_string()), job.tools.get(tool), None),
     );
-    op.passes.feed = if tool == "vee" { 1000.0 } else { 1500.0 };
+    op.passes.feed = match tool {
+        "vee" => 1000.0,
+        "mill" => 600.0,
+        _ => 1500.0,
+    };
     op
 }
 
@@ -344,6 +366,285 @@ fn bore_and_circular_in_several_passes_leave_what_fusions_do() {
     );
     let circular = made(&ran, "circular_passes");
     lifts_between_passes(circular, 8 * 4);
+}
+
+/// The holes bored to size first, as a thread is milled into a hole already
+/// made: Fusion's Bore in three stepovers, held to its program above, which
+/// leaves each hole clear to its wall and its floor.
+fn bored(job: &Job) -> Operation {
+    let mut op = new_operation(job, "bored", "bore", "flat6");
+    op.selection.faces = HOLES.iter().map(|&at| pick(at)).collect();
+    if let StrategySpec::Bore {
+        multiple_passes,
+        stepovers,
+        ..
+    } = &mut op.strategy
+    {
+        *multiple_passes = true;
+        *stepovers = 3;
+    }
+    op
+}
+
+/// A new Thread of both holes with the thread mill, its pitch diameter offset
+/// `offset`, after [`bored`].
+fn threaded(job: &Job, name: &str, offset: f64) -> Vec<Operation> {
+    let mut op = new_operation(job, name, "thread", "mill");
+    op.selection.faces = HOLES.iter().map(|&at| pick(at)).collect();
+    if let StrategySpec::Thread {
+        pitch_diameter_offset,
+        ..
+    } = &mut op.strategy
+    {
+        *pitch_diameter_offset = offset;
+    }
+    vec![bored(job), op]
+}
+
+/// The lowest and highest the tool's tip goes at the cutting feed, `feed`,
+/// as `steps` read back have it: along its leads and its helices, and not
+/// what links them.
+fn fed_heights(steps: &[camcraft_post::readback::Step], feed: f64) -> (f64, f64) {
+    use camcraft_post::readback::Action;
+    steps
+        .iter()
+        .filter_map(|s| match &s.action {
+            Action::Move(m) if m.feed.is_some_and(|f| (f - feed).abs() < 1e-9) => m.to[2],
+            _ => None,
+        })
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), z| {
+            (lo.min(z), hi.max(z))
+        })
+}
+
+/// Where each helix starts, as `steps` read back have it: the end of each arc
+/// whose next move is an arc about the hole's own axis, a turn's worth of them
+/// a hole, here the end of each lead's arc, the point after a straight from
+/// the hole's centre and an arc.
+fn helix_starts(steps: &[camcraft_post::readback::Step]) -> Vec<[f64; 3]> {
+    use camcraft_post::readback::Action;
+    let moves: Vec<&camcraft_post::readback::Motion> = steps
+        .iter()
+        .filter_map(|s| match &s.action {
+            Action::Move(m) => Some(m),
+            _ => None,
+        })
+        .collect();
+    moves
+        .windows(3)
+        .filter(|w| w[0].feed.is_some() && w[0].arc.is_none() && w[1].arc.is_some())
+        .filter(|w| w[2].arc.is_some())
+        .filter_map(|w| match w[1].to {
+            [Some(x), Some(y), Some(z)] => Some([x, y, z]),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The columns of `material` the part check calls a gouge, judged against
+/// `ran`'s part as the check judges them, outside the circle of `radius`
+/// about `at`.
+fn gouged_outside(
+    ran: &Ran,
+    material: &camcraft_sim::stock::Stock,
+    (at, radius): ([f64; 2], f64),
+) -> usize {
+    let field = material.field();
+    let budget = ran.result.verify_budget;
+    let part = ran.result.part.lookup(field);
+    let mut out = 0;
+    for iy in 0..field.ny() {
+        for ix in 0..field.nx() {
+            let (Some(p), Some(h)) = (field.position(ix, iy), field.get(ix, iy)) else {
+                continue;
+            };
+            let Some((_, under)) = part(ix, iy, p, h, budget) else {
+                continue;
+            };
+            let inside = (p.x - at[0]).hypot(p.y - at[1]) <= radius;
+            if under > budget && !inside {
+                out += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The blind hole's floor, where each program's lead goes below it.
+const BLIND: ([f64; 2], f64) = ([-30.0, 35.0], 7.0);
+
+/// `job`'s thread `op` held to Fusion's program for it, as
+/// [`held_to_fusion`] holds the others, but for the blind hole's floor: both
+/// programs' leads go below it, as Fusion's Thread leads in a turn's pitch
+/// below a thread's bottom, so both gouge it, as deep as each other, and
+/// nowhere else; the run says why (CC224) and the part check says it is cut
+/// into (CC107), as nothing else fails. Every column either cuts agrees but
+/// for `odd` in a thousand, and they remove as much; they go as low and as
+/// high, feed as far, and start each helix at the same point.
+fn thread_held(job: &Job, op: &str, program: &str, odd: usize, dip: f64) -> (Ran, Compared) {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let loaded = load_models(job, dir, &[0]).unwrap();
+    let ran = run_setup(job, 0, &models_of(&loaded)).unwrap();
+    let failed: Vec<&str> = ran.checks.failures().map(|(_, f)| f.code).collect();
+    assert_eq!(failed, ["CC107"], "{:?}", ran.checks);
+    let said = ran
+        .checks
+        .groups
+        .iter()
+        .flat_map(|g| &g.findings)
+        .find(|f| f.code == "CC224");
+    assert!(
+        said.is_some_and(|f| f.message.contains(&format!("{dip:.3} mm"))),
+        "{:?}",
+        ran.checks
+    );
+    let theirs = fusion(program);
+    let c = compare(job, 0, dir, &ran, op, &theirs, job.tolerance).unwrap();
+    let d = &c.difference;
+    let say = format!(
+        "{op}: {d:?}\n{:?}\n{:?}\n{:?}\n{:?}",
+        c.ours, c.theirs, c.ours_verify, c.theirs_verify
+    );
+    assert!(d.cut > 0, "{say}");
+    // The floor gouged as deep by each, its lead's dip, and nothing else.
+    for v in [&c.ours_verify, &c.theirs_verify] {
+        assert!(v.gouged > 0, "{say}");
+        assert!((v.deepest_gouge_mm - dip).abs() < 0.002, "{say}");
+    }
+    assert_eq!(c.ours_cut.rapid_contacts, 0, "{say}");
+    assert_eq!(c.theirs_cut.rapid_contacts, 0, "{say}");
+    assert!(1000 * (d.cut - d.agree) < odd * d.cut, "{say}");
+    assert!(d.quantiles[2] <= job.tolerance, "{say}");
+    // A thread removes little, so the odd column is a share of it: the
+    // volumes differ by no more than the columns that agree may, each by the
+    // tolerance, and what the odd ones hold.
+    let (ours, theirs_removed) = d.removed;
+    let area = d.pitch * d.pitch;
+    // Counts of columns, a few hundred thousand at most.
+    #[allow(clippy::cast_precision_loss)]
+    let most =
+        d.agree as f64 * area * job.tolerance + (d.cut - d.agree) as f64 * area * d.quantiles[3];
+    assert!((ours - theirs_removed).abs() <= most, "{say}");
+    assert!((c.ours.lowest - c.theirs.lowest).abs() < 1e-6, "{say}");
+    let fed = c.ours.fed / c.theirs.fed;
+    assert!(
+        (0.85..1.15).contains(&fed),
+        "fed {fed:.3} of Fusion's: {say}"
+    );
+    (ran, c)
+}
+
+/// `ran`'s thread `op` moves as Fusion's `program` does: as low and as high
+/// at the cutting feed, and each helix starting where Fusion's does, in the
+/// same order.
+fn moves_as_fusions(job: &Job, ran: &Ran, op: &str, program: &str) {
+    let theirs = camcraft_post::readback::read_as(
+        &fusion(program),
+        camcraft_post::readback::Convention::Fanuc,
+    )
+    .unwrap();
+    let ours = ours_steps(job, ran, op);
+    let ((lo, hi), (their_lo, their_hi)) = (fed_heights(&ours, 600.0), fed_heights(&theirs, 600.0));
+    let say = format!("{op}: fed from Z{lo} to Z{hi}, Fusion's from Z{their_lo} to Z{their_hi}");
+    assert!((lo - their_lo).abs() < 1e-6, "{say}");
+    assert!((hi - their_hi).abs() < 1e-6, "{say}");
+    let (starts, theirs) = (helix_starts(&ours), helix_starts(&theirs));
+    assert_eq!(starts.len(), 2, "{starts:?}");
+    assert_eq!(starts.len(), theirs.len(), "{starts:?} {theirs:?}");
+    for (a, b) in starts.iter().zip(&theirs) {
+        for (x, y) in a.iter().zip(b) {
+            assert!((x - y).abs() < 1e-6, "{starts:?} {theirs:?}");
+        }
+    }
+}
+
+/// Fusion's Thread, a new one with its thread mill in both holes, bored first:
+/// the tooth only touches the walls, so what either program cuts is where its
+/// leads go below each hole's bottom: below the part, through the hole 16
+/// across, and 0.165 mm into the floor of the blind one, 14 across, which the
+/// run says (CC224) and the part check fails (CC107), Fusion's program as
+/// much as camcraft's. Move for move, its helix and leads are Fusion's
+/// (`strategy::thread`'s tests): here they go as low and as high, feed about
+/// as far, and start each helix where Fusion's does.
+///
+/// Two of the 16,861 columns either cuts differ, by the hole's depth: the two
+/// whose centres lie on the through hole's wall itself, 8 mm out along X from
+/// its axis, where the tooth reaches exactly. Fusion's tooth, at the radius
+/// its program's thousandths put it, takes them; camcraft's, the tool's
+/// radius short of the wall by the last bit of a sum, does not; the bore
+/// before it took neither. Each is a column of the wall, cut whole or not as
+/// its centre falls a hair either side of where both programs' tooth is.
+#[test]
+fn new_thread_leaves_what_fusions_does() {
+    let job = ops_2d_job(|job| threaded(job, "thread", 0.0));
+    let (ran, _) = thread_held(&job, "thread", "thread", 1, 0.165);
+    let op = made(&ran, "thread");
+    let StrategyDetail::Thread(report) = &op.detail else {
+        unreachable!("a thread: {:?}", op.detail);
+    };
+    assert_eq!((report.holes, report.passes), (2, 2));
+    assert!(report.rising);
+    // Touching the walls, it means to cut nothing.
+    assert!(op.meant().is_none());
+    moves_as_fusions(&job, &ran, "thread", "thread");
+}
+
+/// The same with a pitch diameter offset of a millimetre, as Fusion's
+/// `thread_cut`: the tooth cuts half a millimetre into each hole's wall, all
+/// the way down, which the model's plain hole does not have. It is meant: the
+/// part is checked as threaded where the thread cut, and only the blind
+/// hole's floor fails, where both programs' leads go into it. Every column
+/// either cuts agrees. A thread cut deeper than asked is not meant: Fusion's
+/// program, held to a thread asked for half its offset, gouges the walls.
+#[test]
+fn a_thread_cut_into_the_wall_is_meant() {
+    let job = ops_2d_job(|job| threaded(job, "thread_cut", 1.0));
+    let (ran, c) = thread_held(&job, "thread_cut", "thread_cut", 1, 0.136);
+    assert_eq!(c.difference.agree, c.difference.cut, "{:?}", c.difference);
+    assert!(made(&ran, "thread_cut").meant().is_some());
+    let ours = ran.result.keyframes.last().unwrap().unpack().unwrap();
+    assert_eq!(gouged_outside(&ran, &ours, BLIND), 0);
+    // Fusion's leaves the floor gouged as camcraft's does, and nothing else.
+    assert!(
+        c.theirs_verify.gouged.abs_diff(c.ours_verify.gouged) <= 5,
+        "{c:?}"
+    );
+    moves_as_fusions(&job, &ran, "thread_cut", "thread_cut");
+
+    // Asked for half the offset, camcraft's cuts nothing past it, and the
+    // same program as before cuts a quarter of a millimetre past it into
+    // every wall, all the way down, which is a gouge.
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let half = ops_2d_job(|job| threaded(job, "thread_cut", 0.5));
+    let loaded = load_models(&half, dir, &[0]).unwrap();
+    let ran = run_setup(&half, 0, &models_of(&loaded)).unwrap();
+    let ours = ran.result.keyframes.last().unwrap().unpack().unwrap();
+    assert_eq!(gouged_outside(&ran, &ours, BLIND), 0);
+    let deeper = compare(
+        &half,
+        0,
+        dir,
+        &ran,
+        "thread_cut",
+        &fusion("thread_cut"),
+        half.tolerance,
+    )
+    .unwrap();
+    let say = format!("{:?}\n{:?}", deeper.ours_verify, deeper.theirs_verify);
+    assert!(
+        deeper.theirs_verify.gouged > deeper.ours_verify.gouged + 1000,
+        "{say}"
+    );
+    assert!(deeper.theirs_verify.deepest_gouge_mm > 9.0, "{say}");
+}
+
+/// camcraft's program for `op` as `ran` made it, read back.
+fn ours_steps(job: &Job, ran: &Ran, op: &str) -> Vec<camcraft_post::readback::Step> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let s = &job.setups[0];
+    let profile = crate::setup_profile(s, dir, None).unwrap();
+    let (text, _) = crate::program(made(ran, op), s.wcs, &profile, op).unwrap();
+    camcraft_post::readback::read(&text).unwrap()
 }
 
 /// The floors of the two slots: the straight one's, 6 deep, and the angled

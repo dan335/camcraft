@@ -772,6 +772,7 @@ fn tool_manager() {
         corner: 1.0,
         angle: None,
         tip_diameter: 0.0,
+        pitch: None,
         number: 4,
         rpm: 16000,
         comment: "8mm bullnose r1".into(),

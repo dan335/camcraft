@@ -1694,6 +1694,7 @@ fn every_strategy_is_named() {
         "chamfer-2d",
         "engrave",
         "adaptive-2d",
+        "thread",
     ] {
         let spec = StrategySpec::named(name).unwrap();
         assert_eq!(spec.name(), name);
@@ -1838,6 +1839,191 @@ fn bore_and_circular_read_and_write_back() {
         assert_eq!(op.passes.stepover, 3.0);
         assert_eq!(op.linking.leads.unwrap().straight, Some(0.3));
     }
+}
+
+/// Fusion's sample library's largest thread mill: M12 x 1.75, one 60° tooth
+/// 9.14 mm across.
+fn thread_mill() -> ToolSpec {
+    toml::from_str(
+        "kind = \"thread-mill\"\ndiameter = 9.14\npitch = 1.75\nnumber = 5\n\
+         flute_length = 1.75\nshoulder_length = 22.0\nshank_diameter = 9.525\n",
+    )
+    .unwrap()
+}
+
+/// A thread mill reads and writes back as Fusion's describes one, its
+/// profile 60° unless given; it needs its pitch, a profile it can have, and
+/// cuts, seen from above, as its tooth's lower flank: a flat at the root's
+/// radius, Fusion's shoulder diameter, rising to its point at half the
+/// pitch. It mills threads, and nothing else does.
+#[test]
+fn a_thread_mill_is_a_tooth_on_a_neck() {
+    let t = thread_mill();
+    assert_eq!(t.kind, ToolKind::ThreadMill);
+    assert_eq!(t.kind.fusion_type(), "thread mill");
+    assert_eq!(ToolKind::from_fusion_type("Thread Mill"), Some(t.kind));
+    assert!(t.check().is_empty(), "{:?}", t.check());
+    assert_eq!(t.thread_profile(), 60.0);
+    // Fusion's own shoulder diameter for it, 6.108911 mm.
+    assert!((2.0 * t.thread_root_radius() - 6.108_911).abs() < 1e-6);
+    let written = toml::to_string(&t).unwrap();
+    assert!(written.contains("kind = \"thread-mill\""), "{written}");
+    assert!(written.contains("pitch = 1.75"), "{written}");
+    assert!(!written.contains("angle"), "{written}");
+    assert_eq!(toml::from_str::<ToolSpec>(&written).unwrap(), t);
+    // Its lower flank, as the simulator and the drop-cutter take it.
+    let Cutter::Cone(cone) = t.build().unwrap() else {
+        panic!("a thread mill cuts as a cone")
+    };
+    assert!((cone.tip() - t.thread_root_radius()).abs() < 1e-12);
+    assert!((cone.max_radius() - 4.57).abs() < 1e-12);
+    assert!((cone.height_at(4.57).unwrap() - 0.875).abs() < 1e-9);
+    // Its pitch, and a profile it can have, are needed.
+    let bad = |edit: &dyn Fn(&mut ToolSpec)| {
+        let mut t = thread_mill();
+        edit(&mut t);
+        t.check().into_iter().map(|e| e.field).collect::<Vec<_>>()
+    };
+    assert_eq!(bad(&|t| t.pitch = None), ["pitch"]);
+    assert_eq!(bad(&|t| t.pitch = Some(0.0)), ["pitch"]);
+    assert_eq!(bad(&|t| t.angle = Some(180.0)), ["angle"]);
+    assert!(bad(&|t| t.angle = Some(55.0)).is_empty());
+    // Its pitch is an expression's, as Fusion's `tool_threadPitch`.
+    let op = Operation::new("t", StrategySpec::named("thread").unwrap());
+    let v = |name: &str, tool: &ToolSpec| op.expression_value(name, Some(tool), 0.01);
+    assert_eq!(
+        v("tool_threadPitch", &t),
+        Some(crate::job::expr::Value::Number(1.75))
+    );
+    assert_eq!(
+        v("tool_type", &t),
+        Some(crate::job::expr::Value::Text("thread mill".into()))
+    );
+    assert_eq!(v("tool_threadPitch", &vbit()), None);
+}
+
+/// A thread reads with Fusion's defaults, its holes picked by their walls,
+/// writes back only what differs, reads back its own settings, refuses what it
+/// cannot cut (anything but a thread mill, a pitch of nothing, no stepovers),
+/// and a new one starts as Fusion's does: the tool's pitch, no offset, right
+/// hand, climbing, one pass, helical leads from the centre, lifting to the
+/// retract height between holes. A thread mill cuts nothing else.
+#[test]
+fn thread_reads_and_writes_back() {
+    let finish = "strategy = \"parallel\"\ntool = \"finish-4-ball\"\nangle = 90.0\n";
+    let picked =
+        "selection = { faces = [{ model = \"part\", index = 3, at = [1.0, 2.0, 3.0] }] }\n";
+    let plain = SAMPLE.replace(
+        finish,
+        &format!("strategy = \"thread\"\ntool = \"mill\"\n{picked}"),
+    );
+    let with = |own: &str| -> Job {
+        let mut j: Job = toml::from_str(&plain.replace(picked, &format!("{picked}{own}"))).unwrap();
+        j.tools.insert("mill".into(), thread_mill());
+        j
+    };
+    let j = with("");
+    j.validate().unwrap();
+    let op = &j.setups[0].operations[1];
+    assert_eq!(
+        op.strategy,
+        StrategySpec::Thread {
+            pitch: 1.0,
+            pitch_diameter_offset: 0.0,
+            hand: ThreadHand::Right,
+            conventional: false,
+            multiple_passes: false,
+            stepovers: 2,
+            helical_leads: true,
+            lead_to_center: true,
+        }
+    );
+    assert!(op.cuts_selection());
+    assert_eq!(op.strategy.uses().holes, Some(Holes::Walls));
+    // The operation's own; its tool's pitch is the tool's.
+    let alone = toml::to_string(op).unwrap();
+    for key in [
+        "pitch",
+        "pitch_diameter_offset",
+        "hand",
+        "conventional",
+        "multiple_passes",
+        "stepovers",
+        "helical_leads",
+        "lead_to_center",
+    ] {
+        assert!(!alone.contains(&format!("{key} =")), "{key}: {alone}");
+    }
+    let written = toml::to_string(&j).unwrap();
+    assert_eq!(toml::from_str::<Job>(&written).unwrap(), j);
+
+    let own = "pitch = 1.5\npitch_diameter_offset = 0.4\nhand = \"left\"\nconventional = true\n\
+               multiple_passes = true\nstepovers = 3\nhelical_leads = false\n\
+               lead_to_center = false\n";
+    let set = with(own);
+    set.validate().unwrap();
+    assert_eq!(
+        set.setups[0].operations[1].strategy,
+        StrategySpec::Thread {
+            pitch: 1.5,
+            pitch_diameter_offset: 0.4,
+            hand: ThreadHand::Left,
+            conventional: true,
+            multiple_passes: true,
+            stepovers: 3,
+            helical_leads: false,
+            lead_to_center: false,
+        }
+    );
+    let written = toml::to_string(&set).unwrap();
+    assert_eq!(toml::from_str::<Job>(&written).unwrap(), set);
+
+    for refused in [
+        "pitch = 0.0\n",
+        "pitch = -1.0\n",
+        "multiple_passes = true\nstepovers = 0\n",
+    ] {
+        assert!(with(refused).validate().is_err(), "{refused}");
+    }
+    with("stepovers = 0\n").validate().unwrap();
+    assert!(
+        toml::from_str::<Job>(&plain.replace(picked, &format!("{picked}hand = \"up\"\n"))).is_err()
+    );
+    // Anything but a thread mill is refused, and a thread mill cuts nothing
+    // but a thread.
+    let mut flat = j.clone();
+    flat.setups[0].operations[1].tool = Some("rough-6-flat".into());
+    assert!(matches!(flat.validate(), Err(JobError::WrongTool { .. })));
+    let mut milled = sample();
+    milled.tools.insert("mill".into(), thread_mill());
+    milled.setups[0].operations[1].tool = Some("mill".into());
+    assert!(matches!(milled.validate(), Err(JobError::WrongTool { .. })));
+
+    // A new thread, as Fusion's starts.
+    let new = Operation::new("t", StrategySpec::named("thread").unwrap());
+    assert_eq!(new.passes.stepdown, None);
+    assert_eq!(new.passes.stepover, 1.0);
+    assert_eq!(new.linking.retraction, Retraction::Full);
+    assert_eq!(
+        new.expressions.get("pitch").map(String::as_str),
+        Some("tool_type == 'thread mill' ? tool_threadPitch : 1mm")
+    );
+    let uses = new.strategy.uses();
+    assert_eq!(uses.depths, Depths::None);
+    assert_eq!(uses.stock_to_leave, Leave::None);
+    assert!(uses.leads && !uses.ramp && !uses.stay_down && !uses.boundary);
+    let mut new = new;
+    new.tool = Some("mill".into());
+    assert!(
+        new.work_out_expressions(Some(&thread_mill()), 0.01)
+            .faults
+            .is_empty()
+    );
+    let StrategySpec::Thread { pitch, .. } = new.strategy else {
+        unreachable!("a thread is a thread")
+    };
+    assert_eq!(pitch, 1.75);
+    assert_eq!(new.linking.leads.unwrap().straight, Some(0.457));
 }
 
 /// A slot and a trace read with Fusion's defaults, cut what is picked, write

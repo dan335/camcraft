@@ -21,6 +21,7 @@ pub mod pocket_clearing;
 // Holes.
 pub mod drilling;
 pub mod round;
+pub mod thread;
 
 // Along what is picked.
 pub mod chamfer;

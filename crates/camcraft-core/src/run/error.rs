@@ -17,6 +17,7 @@ use crate::strategy::engrave::EngraveError;
 use crate::strategy::reach::ReachError;
 use crate::strategy::round::RoundError;
 use crate::strategy::slot::SlotError;
+use crate::strategy::thread::ThreadError;
 use crate::strategy::trace::TraceError;
 
 /// A setup that could not be run.
@@ -76,6 +77,14 @@ pub enum RunError {
         op: String,
         /// Why.
         source: RoundError,
+    },
+    /// A thread's hole cannot be threaded.
+    #[error("operation '{op}': {source}")]
+    Thread {
+        /// Which operation.
+        op: String,
+        /// Why.
+        source: ThreadError,
     },
     /// A slot's picks are not slots, or one cannot be cut.
     #[error("operation '{op}': {source}")]
@@ -209,6 +218,15 @@ impl OperationError for RoundError {
             // Stopped, or failed making the path, as any strategy does.
             RoundError::Strategy(e) => e.named(op),
             source => RunError::Rounds { op, source },
+        }
+    }
+}
+
+impl OperationError for ThreadError {
+    fn named(self, op: String) -> RunError {
+        match self {
+            ThreadError::Strategy(e) => e.named(op),
+            source => RunError::Thread { op, source },
         }
     }
 }

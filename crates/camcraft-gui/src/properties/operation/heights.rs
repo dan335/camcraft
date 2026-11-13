@@ -138,6 +138,11 @@ pub(super) fn heights(
              bottom of it. A Top or Bottom set takes every one from or to there \
              instead.",
         ),
+        StrategySpec::Thread { .. } => Some(
+            "Each hole is threaded from the bottom of its picked wall to its top, its \
+             helical leads a little past each. A Top or Bottom set takes every one from \
+             or to there instead. It lifts to the Retract height between holes.",
+        ),
         StrategySpec::Profile { .. }
         | StrategySpec::Pocket { .. }
         | StrategySpec::Adaptive2d { .. } => Some(

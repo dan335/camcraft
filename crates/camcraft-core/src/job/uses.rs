@@ -263,6 +263,29 @@ impl StrategySpec {
                 feed_optimization: false,
                 ..cuts_loops
             },
+            // Its picks are round walls, as a bore's, each hole threaded from
+            // its own bottom to its own top, or top to bottom: no levels, no
+            // stock to leave, as Fusion's Thread has none with its Stock to
+            // Leave off. Its stepover is between its passes out to the
+            // thread. Each pass starts at the hole's centre, down at the
+            // bottom: the linker comes down there and lifts out after, to the
+            // retract height between holes, as Fusion's programs do.
+            StrategySpec::Thread { .. } => Uses {
+                boundary: false,
+                holes: Some(Holes::Walls),
+                stock_to_leave: Leave::None,
+                depths: Depths::None,
+                stay_down: false,
+                cut_step: false,
+                reach: Reach::Tools(0),
+                ramp: false,
+                leads: true,
+                top: Some(HeightRef::ModelTop),
+                bottom: Some(HeightRef::ModelBottom),
+                smoothing: false,
+                feed_optimization: false,
+                ..cuts_loops
+            },
             // Its picks are the edges round each slot's floor, each slot cut
             // along its middle from the stock's top down to its own floor:
             // no area, no stepover, only its floor to leave anything on. Its
@@ -393,8 +416,8 @@ pub enum Curves {
 pub enum Holes {
     /// By their rims, the round edges at their tops, as drilling has them.
     Rims,
-    /// By their round walls, faces, as Fusion's Bore and Circular have them:
-    /// a hole's or a boss's.
+    /// By their round walls, faces, as Fusion's Bore, Circular and Thread
+    /// have them: a hole's or a boss's.
     Walls,
 }
 

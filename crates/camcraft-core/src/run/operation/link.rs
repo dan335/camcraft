@@ -9,11 +9,15 @@ pub(super) fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
     let (op, linking) = (work.op, &work.op.linking);
     let diameter = work.spec.diameter;
     // A profile's vertical lead is part of its leads; a finishing pass's is its
-    // own setting.
+    // own setting. A thread has none: it comes straight down its hole's
+    // centre onto its own leads, and goes straight up from it, as Fusion's
+    // Thread's programs do.
     let leads = op.leads(diameter);
     let uses = op.strategy.uses();
     let vertical = if uses.lead_radius {
         op.lead_radius(diameter)
+    } else if matches!(op.strategy, StrategySpec::Thread { .. }) {
+        0.0
     } else {
         leads.map_or(0.0, |l| l.vertical)
     };

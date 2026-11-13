@@ -124,11 +124,11 @@ pub use pick::{FeatureRef, PointRef, Snap};
 pub use setup::{Along, BoxOf, Origin, Setup};
 pub use strategy_spec::{
     Compensation, ContourOrder, CutDirection, FaceDirection, PassOrder, ProfileSide,
-    RadialDirection, StrategySpec,
+    RadialDirection, StrategySpec, ThreadHand,
 };
 pub use tool::{
-    Coolant, DRILL_POINT, Holder, HolderSegment, Preset, SpindleDirection, ToolFieldError,
-    ToolKind, ToolMaterial, ToolSpec, free_preset_name,
+    Coolant, DRILL_POINT, Holder, HolderSegment, Preset, SpindleDirection, THREAD_PROFILE,
+    ToolFieldError, ToolKind, ToolMaterial, ToolSpec, free_preset_name,
 };
 pub use uses::{Curves, Depths, HelixSize, Holes, Leave, Links, Reach, Uses};
 

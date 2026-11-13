@@ -53,8 +53,9 @@ const ARC_STEPS: u32 = 8;
 
 /// The cutting end of `tool`, as (radius, z) points from the tip on the axis out
 /// to where it reaches full width: a flat bottom and a quarter-round corner for
-/// the end mills, a flat tip and a straight flank for a cone. Both the side
-/// drawing and the 3D cutter are made from it.
+/// the end mills, a flat tip and a straight flank for a cone; a thread mill's
+/// whole tooth, back in to its root. Both the side drawing and the 3D cutter
+/// are made from it, on up from its last point.
 pub fn tip_profile(tool: &ToolSpec) -> Vec<(f64, f64)> {
     let r = if tool.diameter.is_finite() && tool.diameter > 0.0 {
         tool.diameter / 2.0
@@ -62,6 +63,20 @@ pub fn tip_profile(tool: &ToolSpec) -> Vec<(f64, f64)> {
         0.5
     };
     let mut out = vec![(0.0, 0.0)];
+    // A thread mill's tooth, whole: its lower flank from the root out to its
+    // point, its upper flank back in to the root a pitch up, where its neck
+    // goes on.
+    if tool.kind == ToolKind::ThreadMill {
+        let root = tool.thread_root_radius().clamp(0.0, r);
+        let half = (tool.thread_profile() / 2.0).clamp(1.0, 89.0).to_radians();
+        let rise = (r - root) * half.tan();
+        if root > 0.0 {
+            out.push((root, 0.0));
+        }
+        out.push((r, rise));
+        out.push((root, 2.0 * rise));
+        return out;
+    }
     if matches!(tool.kind, ToolKind::Cone | ToolKind::Drill) {
         let (tip, angle) = match tool.kind {
             ToolKind::Drill => (0.0, tool.angle.unwrap_or(DRILL_POINT)),
@@ -78,7 +93,7 @@ pub fn tip_profile(tool: &ToolSpec) -> Vec<(f64, f64)> {
     let corner = match tool.kind {
         ToolKind::Ball => r,
         ToolKind::Bullnose => tool.corner.clamp(0.0, r),
-        ToolKind::Flat | ToolKind::Cone | ToolKind::Drill => 0.0,
+        ToolKind::Flat | ToolKind::Cone | ToolKind::Drill | ToolKind::ThreadMill => 0.0,
     };
     if corner < r {
         out.push((r - corner, 0.0));
@@ -115,9 +130,9 @@ pub fn draw(tool: &ToolSpec) -> Drawing {
     // The cutting end, then the side up to the end of the flutes; a long V-bit's
     // flank can outrun them.
     let mut cutter = tip_profile(tool);
-    let end = cutter.last().map_or(0.0, |p| p.1);
+    let (edge, end) = cutter.last().copied().unwrap_or((r, 0.0));
     let flutes = assembly.flutes.max(end);
-    cutter.push((r, flutes));
+    cutter.push((edge, flutes));
     cutter.push((0.0, flutes));
     let mut outlines = vec![Outline {
         part: Part::Flutes,
@@ -172,6 +187,7 @@ pub fn kind_name(kind: ToolKind) -> &'static str {
         ToolKind::Bullnose => "bullnose",
         ToolKind::Cone => "V-bit / chamfer",
         ToolKind::Drill => "drill",
+        ToolKind::ThreadMill => "thread mill",
     }
 }
 
@@ -311,6 +327,34 @@ mod tests {
         assert!(d.assumed.contains(&"stickout"));
         assert!(d.assumed.contains(&"flute length"));
         assert!((widest(&d, Part::Flutes) - 3.0).abs() < 1e-9);
+    }
+
+    /// A thread mill is drawn as its tooth on its neck: widest at the tooth's
+    /// point, half a pitch up, and in to its root below and above it, where
+    /// its neck goes on up to the shoulder, as narrow, then its shank.
+    #[test]
+    fn a_thread_mill_is_a_tooth_on_a_neck() {
+        let tool = ToolSpec {
+            kind: ToolKind::ThreadMill,
+            diameter: 9.14,
+            pitch: Some(1.75),
+            flute_length: Some(1.75),
+            shoulder_length: Some(22.0),
+            shank_diameter: Some(9.525),
+            stickout: Some(30.0),
+            ..ToolSpec::default()
+        };
+        let root = tool.thread_root_radius();
+        let d = draw(&tool);
+        let tooth = &d.outlines[0].half;
+        assert!(tooth.contains(&(root, 0.0)), "{tooth:?}");
+        let point = tooth.iter().find(|p| p.0 == 4.57).unwrap();
+        assert!((point.1 - 0.875).abs() < 1e-9, "{tooth:?}");
+        assert!((tooth.last().unwrap().1 - 1.75).abs() < 1e-9);
+        let neck = &d.outlines[2].half;
+        assert!(neck.iter().all(|p| p.0 <= root + 1e-12), "{neck:?}");
+        assert!((widest(&d, Part::Shank) - 9.525 / 2.0).abs() < 1e-9);
+        assert_eq!(kind_name(tool.kind), "thread mill");
     }
 
     #[test]

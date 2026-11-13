@@ -360,6 +360,46 @@ pub enum StrategySpec {
         #[serde(default, skip_serializing_if = "is_default")]
         lead_to_center: bool,
     },
+    /// Round holes, picked by their walls, each threaded with a thread mill:
+    /// down the hole's centre, onto the wall along a lead, round a helix at
+    /// the pitch from the hole's bottom to its top, or from its top to its
+    /// bottom, as the hand and the direction have it, and off along a lead
+    /// back to the centre. Fusion's Thread.
+    Thread {
+        /// How far the thread rises a turn, in millimetres: Fusion's Thread
+        /// Pitch, the tool's own as a new one starts.
+        #[serde(default = "default_pitch", skip_serializing_if = "is_default_pitch")]
+        pitch: f64,
+        /// How much wider across than the hole the thread's pitch diameter is
+        /// cut, in millimetres: Fusion's Pitch Diameter Offset, none. The
+        /// tooth goes half of it into the wall; with none it only touches it.
+        #[serde(default, skip_serializing_if = "is_default")]
+        pitch_diameter_offset: f64,
+        /// Which way the thread winds: Fusion's Threading Hand, right unless
+        /// asked.
+        #[serde(default, skip_serializing_if = "is_default")]
+        hand: ThreadHand,
+        /// Cut conventional rather than climb: Fusion's Direction.
+        #[serde(default, skip_serializing_if = "is_default")]
+        conventional: bool,
+        /// More than one pass out to the thread, each a stepover further in
+        /// than the next: Fusion's Multiple Passes, off unless asked.
+        #[serde(default, skip_serializing_if = "is_default")]
+        multiple_passes: bool,
+        /// How many passes out to the thread with them, the last at it:
+        /// Fusion's Number of Stepovers, 2.
+        #[serde(default = "two", skip_serializing_if = "is_two")]
+        stepovers: u32,
+        /// Lead onto the thread and off it along arcs that rise or fall with
+        /// the helix, at its pitch: Fusion's Use Helical Leads, on. Off, they
+        /// are level.
+        #[serde(default = "yes", skip_serializing_if = "is_yes")]
+        helical_leads: bool,
+        /// Lead onto each pass from the hole's centre and off it back there:
+        /// Fusion's Lead To Center, on unless turned off.
+        #[serde(default = "yes", skip_serializing_if = "is_yes")]
+        lead_to_center: bool,
+    },
     /// Slots, picked by the edges round their floors, each milled along its
     /// middle from end to end: down to each level by ramping back and forth
     /// along the whole of it, then once along it at the level. A tool
@@ -568,6 +608,7 @@ impl StrategySpec {
             StrategySpec::Drill { .. } => "drill",
             StrategySpec::Bore { .. } => "bore",
             StrategySpec::Circular { .. } => "circular",
+            StrategySpec::Thread { .. } => "thread",
             StrategySpec::Slot { .. } => "slot",
             StrategySpec::Trace { .. } => "trace",
             StrategySpec::Chamfer2d { .. } => "chamfer-2d",
@@ -600,6 +641,7 @@ impl StrategySpec {
             | StrategySpec::Drill { .. }
             | StrategySpec::Bore { .. }
             | StrategySpec::Circular { .. }
+            | StrategySpec::Thread { .. }
             | StrategySpec::Slot { .. }
             | StrategySpec::Trace { .. }
             | StrategySpec::Chamfer2d { .. }
@@ -625,7 +667,8 @@ impl StrategySpec {
             | StrategySpec::Pocket { conventional }
             | StrategySpec::PocketClearing { conventional, .. }
             | StrategySpec::Bore { conventional, .. }
-            | StrategySpec::Circular { conventional, .. } => Some(one_way(conventional)),
+            | StrategySpec::Circular { conventional, .. }
+            | StrategySpec::Thread { conventional, .. } => Some(one_way(conventional)),
             StrategySpec::Adaptive { direction, .. }
             | StrategySpec::Adaptive2d { direction, .. }
             | StrategySpec::Scallop { direction, .. }
@@ -737,6 +780,8 @@ impl StrategySpec {
     ///   and a slot 1.25 tools wide when slot clearing is on. The 2D one's
     ///   stepdown is the 3D one's, read once Multiple Depths is ticked.
     /// - **A 2D chamfer's own:** a chamfer clearance of a tenth of the tool.
+    /// - **A thread's own:** the tool's pitch where it is a thread mill, as
+    ///   Fusion's `threadPitch`; its straight leads a twentieth of the tool.
     /// - **Facing's own:** passes running half the tool and the tolerance past
     ///   the stock.
     ///
@@ -786,6 +831,16 @@ impl StrategySpec {
                 ("passes.stepover", ROUND_STEPOVER),
                 ("linking.leads.straight", ROUND_LEAD),
             ],
+            // Fusion's Thread's own pitch, the tool's where it is a thread
+            // mill, and its Linear Lead Length; its stepover is a millimetre,
+            // as a new operation's is.
+            StrategySpec::Thread { .. } => vec![
+                (
+                    "pitch",
+                    "tool_type == 'thread mill' ? tool_threadPitch : 1mm",
+                ),
+                ("linking.leads.straight", ROUND_LEAD),
+            ],
             StrategySpec::Contour { .. }
             | StrategySpec::Drill { .. }
             | StrategySpec::Slot { .. }
@@ -816,15 +871,17 @@ impl StrategySpec {
     }
 
     /// How high a new operation of this strategy goes between cuts, where that
-    /// is not what a job file that leaves it out reads: a trace, a 2D chamfer
-    /// and an engraving to the retract height, as Fusion's Trace starts with
-    /// a full retraction, and its 2D Chamfer and Engrave have no other.
+    /// is not what a job file that leaves it out reads: a trace, a 2D chamfer,
+    /// an engraving and a thread to the retract height, as Fusion's Trace
+    /// starts with a full retraction, its 2D Chamfer and Engrave have no
+    /// other, and its Thread's programs go up to it between holes.
     pub fn fresh_retraction(&self) -> Retraction {
         if matches!(
             self,
             StrategySpec::Trace { .. }
                 | StrategySpec::Chamfer2d { .. }
                 | StrategySpec::Engrave { .. }
+                | StrategySpec::Thread { .. }
         ) {
             Retraction::Full
         } else {
@@ -876,6 +933,18 @@ impl StrategySpec {
             _ => Some(2.0),
         }
     }
+}
+
+/// Which way a thread winds: Fusion's Threading Hand.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThreadHand {
+    /// Right hand: it rises anticlockwise, seen from above, as nearly every
+    /// thread does.
+    #[default]
+    Right,
+    /// Left hand: it rises clockwise.
+    Left,
 }
 
 /// Which way facing passes cut.

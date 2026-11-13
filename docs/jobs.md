@@ -32,8 +32,8 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
 
 An operation has a strategy (parallel, scallop, contour, flat, spiral, radial or
 morphed spiral finishing, adaptive clearing, pocket clearing, a 2D profile, a 2D
-pocket, 2D adaptive clearing, facing, slot, trace, a 2D chamfer, bore, circular or
-drilling), a tool, heights, passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
+pocket, 2D adaptive clearing, facing, slot, trace, a 2D chamfer, bore, circular,
+thread or drilling), a tool, heights, passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
 along the surface, offset in from the boundary and from where the tool stops
 touching the part, so the cusp is the same on a slope as on the flat
 ([decision 0009](decisions/0009-scallop-distance-field.md)). It cuts `direction =
@@ -87,7 +87,7 @@ profiles, pockets, 2D adaptive and facing cut the bottom in one pass without
 (and a new one starts so, as Fusion's 2D Contour, 2D Pocket, 2D Adaptive and Face
 start with Multiple Depths off), a circular starts with them on at a millimetre,
 as Fusion's does, a slot and a trace start with them off, as Fusion's do, and
-parallel, a 2D chamfer, bore and drilling never read it. An operation may be
+parallel, a 2D chamfer, bore, thread and drilling never read it. An operation may be
 turned off, which leaves it in the job but out of every run, check and post.
 
 ```toml
@@ -114,7 +114,7 @@ contours") is each area's own: the highest or lowest point picked in it, plus th
 offset, so `bottom = { ref = "selection", offset = -0.5 }` cuts half a millimetre
 under every picked loop. A pocket clearing or facing operation measures one from all its
 picks; a clearance never is, nor a top or bottom of an operation whose picks
-are holes (drilling, bore, circular), and nothing picked is refused. A profile
+are holes (drilling, bore, circular, thread), and nothing picked is refused. A profile
 cuts each ring all the way down before the next, and never a ring before the
 rings inside it, so a part's holes are cut while it is held; a pocket clears
 from its middle out, the wall last. Both climb unless `conventional = true`, and
@@ -222,6 +222,85 @@ multiple_passes = true
 stepovers = 3
 selection = { faces = [{ model = "part", index = 12, at = [37.0, 10.0, 16.0] }] }
 passes = { stepover = 3.0 }
+```
+
+**Thread** (`strategy = "thread"`) is Fusion's Thread
+([decision 0026](decisions/0026-thread.md)): a thread milled into each round
+hole with a thread mill, and with nothing else. Holes are picked by their walls,
+as a bore's are, and cut in the same order; a boss's wall, an outside thread,
+is refused. Each pass, as Fusion's programs go: down the hole's centre to below
+the hole's bottom, along a straight to an arc a tenth of the tool across, round
+it a quarter turn onto the thread's circle on +X, round the helix at the pitch
+from the bottom of the wall to its top, off round an arc the same size and back
+along a straight to the centre, then up. The helix is cut in half turns from
+where it starts and what is left, each a `G2` or `G3`. The tooth's point goes
+round a circle the tool's radius in from the wall and half `pitch_diameter_offset`
+out (none): with none it only touches the wall, with a millimetre it cuts half a
+millimetre into it. The thread runs from the wall's bottom to its top unless a
+Top or Bottom is set, which then goes for every hole.
+
+`pitch` is Fusion's Thread Pitch: a new thread takes the thread mill's own, by
+the expression `tool_type == 'thread mill' ? tool_threadPitch : 1mm`, Fusion's;
+a file that leaves it out has 1 mm. A pitch the tooth is not ground for is said.
+`hand = "right"` (or `"left"`) and `conventional = true` decide which way it
+winds and goes: a right-hand thread climbing rises anticlockwise from the
+bottom, as Fusion's does; conventional falls clockwise from the top; a left-hand
+thread climbing falls anticlockwise from the top, and conventional rises
+clockwise from the bottom. `multiple_passes` (off) cuts `stepovers` (2) passes,
+each `passes.stepover` (1 mm) further in than the next, the last at the thread,
+each from the centre and back; one past the hole's middle is left out and said.
+
+The leads are `linking.leads`: the arc's `radius` (a tenth of the tool, made no
+wider than half the thread's circle) and `sweep` (90°), and with
+`lead_to_center = false` a `straight` (a twentieth of the tool) before the arc,
+along it, where the tool comes down beside it, instead of the hole's centre
+(`lead_to_center`, on, Fusion's Lead To Center). With `helical_leads` (on,
+Fusion's Use Helical Leads) the arcs rise as the helix does, at its pitch round
+its circle: the lead in starts below the thread's bottom by the arc's length at
+the helix's slope, 0.117 mm in a hole 16 across with a 9.14 mm thread mill at
+1.75 mm, and the lead off ends as far past its top. In a blind hole whose
+thread runs to its floor that goes into the floor, as Fusion's does: the run
+says where and how far (CC224), and the part check fails there (CC107). Set the
+Bottom that much higher, or `helical_leads = false`, whose leads are level at
+the thread's ends. A thread has no vertical leads: it comes straight down the
+centre and goes straight up from it. Between holes it lifts to the retract
+height (`retraction = "full"` to start), as Fusion's programs do. It has no
+stock to leave, multiple depths, smoothing, feed optimisation or shaft and
+holder mode.
+
+The model has a plain hole, so a thread cut into its wall would be a gouge. It
+is meant: where the thread cut, the part is checked as threaded, the hole's wall
+moved out by half the pitch diameter offset, down to the thread's bottom, and
+nowhere else (`OperationResult::meant`). A thread cut deeper than asked, or a
+cut anywhere else, is still a gouge.
+
+A **thread mill** (`kind = "thread-mill"`) is a single-profile thread mill, as
+Fusion's: a tooth `diameter` across at its point, a V of its profile `angle`
+(60° unless given) one `pitch` tall, its root at the tip, on a neck as narrow as
+the root up to `shoulder_length`. It needs its pitch. Seen from above, as the
+simulator cuts and the drop-cutter drops it, it is its tooth's lower flank: a
+flat at the root's radius, rising at half the profile angle from level to the
+point half a pitch up, and as wide as that above it, since the material is a
+height field and cannot hold a thread's undercut. Its neck, at the root, is
+what the shank check sweeps above the tooth, so it keeps off the thread the
+tooth cuts. Fusion's sample M12 x 1.75, 9.14 mm, has a root 6.109 mm across,
+its shoulder diameter.
+
+```toml
+[tools.m12]
+kind = "thread-mill"
+diameter = 9.14
+pitch = 1.75
+flute_length = 1.75
+shoulder_length = 22.0
+shank_diameter = 9.525
+
+[[setup.operation]]
+name = "thread"
+strategy = "thread"
+tool = "m12"
+pitch_diameter_offset = 0.4
+selection = { faces = [{ model = "part", index = 12, at = [-47.0, 35.0, 10.0] }] }
 ```
 
 **Slot** is Fusion's Slot ([decision 0023](decisions/0023-slot-and-trace.md)):
@@ -564,7 +643,7 @@ radius (a flat end, or a 2D floor, may go any depth). Every operation has it,
 and cuts with as much as its strategy uses: a drill none, a bore and a circular
 beside the wall and under the floor, a profile on the
 boundary, a slot and a trace on the curve only their floors', a 2D chamfer
-none. New adaptive, 2D adaptive, pocket clearing and 2D pockets start at 0.5 mm
+and a thread none. New adaptive, 2D adaptive, pocket clearing and 2D pockets start at 0.5 mm
 each way, as Fusion's roughing, its 2D Pocket and 2D Adaptive among it, does;
 everything else at none, which is not written. The 3D
 strategies grow the tool by it (`camcraft_core::cutter::allowance`); a 2D one moves its
@@ -581,7 +660,7 @@ passes' runs of short moves are fitted with arcs, where they lie on a circle in
 a plane a three-axis machine cuts arcs in, and with longer lines, none further
 than `passes.smoothing_tolerance` (the job's `tolerance` when not given) from
 the moves it stands for ([decision 0015](decisions/0015-smoothing.md)). Every
-strategy but drilling, bore and circular, whose moves are arcs already, has it. The passes are fitted before they are linked, so
+strategy but drilling, bore, circular and thread, whose moves are arcs already, has it. The passes are fitted before they are linked, so
 what is simulated and checked is what is written, and the setup is verified to
 the job's tolerance and the largest smoothing tolerance together. On a serving
 tray, adaptive's program went from 1,307,065 lines to 181,294 and scallop's from
@@ -605,7 +684,7 @@ The radius and distance are a twentieth and a fifth of the tool when not given,
 as Fusion's, the feed half the cutting feed. With `only_inner_corners` (on unless turned off), only the corners
 turning into the material are slowed, judged from which side of the passes the
 material is on: where they cut both ways, every corner is. Every strategy but
-drilling, bore, circular and adaptive clearing, 3D and 2D, has it; adaptive holds
+drilling, bore, circular, thread and adaptive clearing, 3D and 2D, has it; adaptive holds
 its load at every step.
 
 ```toml
@@ -683,7 +762,7 @@ distance is made without lifting, at the cutting feed; the distance is Fusion's
 Maximum Stay-Down Distance for the strategy: 50 mm for parallel and contour;
 twice the tool's diameter for scallop and flat; five times for spiral, radial,
 morphed spiral, pocket clearing, adaptive clearing and the 2D strategies but
-bore and circular, which lift between their passes, slot, twice, trace, which lifts
+bore, circular and thread, which lift between their passes, slot, twice, trace, which lifts
 unless it keeps the tool down, then 50 mm, and a 2D chamfer, which lifts.
 Parallel and the other finishing strategies ride over the part: between passes
 side by side that run opposite ways, as zigzag passes do, by Fusion's default
@@ -736,9 +815,10 @@ it is worked out again when the job is read and whenever what it reads
 changes, a new tool above all. The names are Fusion's: `tool_diameter`,
 `tool_cornerRadius`, `tool_fluteLength` (two diameters where the tool gives
 none), `tool_shoulderLength`, `tool_shaftDiameter`, `tool_overallLength`,
-`tool_taperAngle`, `tool_numberOfFlutes`, `tool_type` (`'flat end mill'`,
-`'ball end mill'`, `'bull nose end mill'`, `'chamfer mill'`, `'drill'`),
-`tool_spindleSpeed`, `tool_feedCutting`, `tool_feedPlunge`, `tolerance`,
+`tool_taperAngle`, `tool_numberOfFlutes`, a thread mill's `tool_threadPitch`
+and `tool_threadProfileAngle`, `tool_type` (`'flat end mill'`,
+`'ball end mill'`, `'bull nose end mill'`, `'chamfer mill'`, `'drill'`,
+`'thread mill'`), `tool_spindleSpeed`, `tool_feedCutting`, `tool_feedPlunge`, `tolerance`,
 `stepover`, `optimalLoad`, `maximumStepdown`, `stockToLeave`,
 `axialStockToLeave` and `safeDistance`. Numbers take a length unit (`2mm`,
 `0.1in`, `1cm`); one without is millimetres, or the setting's own unit. There
@@ -772,7 +852,8 @@ again ([decision 0002](decisions/0002-feature-references.md)).
 
 The whole tool is checked, not only what cuts
 ([decision 0021](decisions/0021-shank-and-holder.md)). From the tip up it is the
-cutter, a neck at the cutting diameter to `shoulder_length`, the shank
+cutter, a neck at the cutting diameter (a thread mill's at its tooth's root) to
+`shoulder_length`, the shank
 (`shank_diameter`) to `stickout`, how far it comes out of what holds it, and
 then that: the tool's own `holder`, segments from its face up, each a cylinder
 or a taper:
@@ -885,6 +966,7 @@ with.
 | CC221 | warn    | stretches of a 2D chamfer lifted to keep its clearance           |
 | CC222 | note    | a bore's or circular's passes past a hole's middle left out      |
 | CC223 | warn    | an engraving cuts into the part: its shape is sunk less deep     |
+| CC224 | warn    | a thread's helical lead goes below a hole's floor                |
 | CC299 | warn    | a warning from reading the model                                 |
 
 A **plunge** is a continuous descent steeper than `PLUNGE_RATIO` (10:1) that falls

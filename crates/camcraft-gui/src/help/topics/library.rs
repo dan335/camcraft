@@ -27,6 +27,10 @@ topics! {
     ANGLE: "Angle",
         "The V's included angle: a 90° bit cuts a 45° chamfer.",
         Figure::ToolDim(ToolDim::Angle);
+    THREAD_PITCH: "Thread pitch",
+        "The pitch the thread mill's tooth is ground for. A new thread takes it as its own.";
+    PROFILE_ANGLE: "Profile angle",
+        "The included angle of the thread mill's tooth: 60° for metric and unified threads.";
     TIP_DIAMETER: "Tip diameter",
         "The width of the flat at the V's tip. 0 for a sharp point.",
         Figure::ToolDim(ToolDim::Tip);

@@ -27,6 +27,7 @@ use crate::strategy::projected::ProjectReport;
 use crate::strategy::round::RoundReport;
 use crate::strategy::scallop::ScallopReport;
 use crate::strategy::slot::SlotReport;
+use crate::strategy::thread::{ThreadCut, ThreadReport};
 use crate::strategy::trace::TraceReport;
 use crate::strategy::waterline::WaterlineReport;
 
@@ -67,6 +68,8 @@ pub enum StrategyDetail {
     Bore(RoundReport),
     /// Circular.
     Circular(RoundReport),
+    /// Thread.
+    Thread(ThreadReport),
     /// Slot.
     Slot(SlotReport),
     /// Trace.
@@ -224,13 +227,43 @@ impl OperationResult {
     }
 }
 
+/// What an operation cuts into the part on purpose: the part as it means to
+/// leave it there, which the material is verified against where it cut.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Meant<'a> {
+    /// A 2D chamfer's chamfers.
+    Bevels(&'a [Bevel]),
+    /// A thread's threads, each a hole's wall moved out as far as the thread
+    /// goes into it.
+    Threads(&'a [ThreadCut]),
+}
+
+impl Meant<'_> {
+    /// How high the part is meant to be at `p` once cut, the lowest of what
+    /// is meant there; `None` where nothing is.
+    pub fn height_at(&self, p: DVec2) -> Option<f64> {
+        match self {
+            Meant::Bevels(bevels) => bevels
+                .iter()
+                .filter_map(|b| b.height_at(p))
+                .reduce(f64::min),
+            Meant::Threads(cuts) => cuts.iter().filter_map(|c| c.height_at(p)).reduce(f64::min),
+        }
+    }
+}
+
 impl OperationResult {
     /// What it cuts into the part on purpose, where it does: a 2D chamfer's
-    /// chamfers, which the part is verified against as lowered to, where it
-    /// cut, so a chamfer of the width asked is not a gouge.
-    pub fn meant(&self) -> Option<&[Bevel]> {
+    /// chamfers, or a thread's threads, cut into a hole's wall as deep as its
+    /// pitch diameter offset asks, which the part is verified against as
+    /// lowered to, where it cut, so a chamfer of the width asked, or a thread
+    /// as deep as asked, is not a gouge.
+    pub fn meant(&self) -> Option<Meant<'_>> {
         match &self.detail {
-            StrategyDetail::Chamfer2d(r) if !r.bevels.is_empty() => Some(&r.bevels),
+            StrategyDetail::Chamfer2d(r) if !r.bevels.is_empty() => Some(Meant::Bevels(&r.bevels)),
+            StrategyDetail::Thread(r) if r.cuts.iter().any(|c| c.reach > c.hole) => {
+                Some(Meant::Threads(&r.cuts))
+            }
             _ => None,
         }
     }

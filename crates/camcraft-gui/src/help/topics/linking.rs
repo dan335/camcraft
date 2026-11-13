@@ -57,6 +57,10 @@ topics! {
         Figure::Lead(Lead::Sweep);
     LEAD_TO_CENTER: "Lead to center",
         "Leads onto each pass from the hole's centre and back to it, a half turn each way: safer in a small hole.";
+    THREAD_TO_CENTER: "Lead to center",
+        "Comes down the hole's centre, along a straight to the lead's arc, and back after. Unticked, it comes down beside the arc, the straight's length before it.";
+    HELICAL_LEADS: "Helical leads",
+        "The leads rise with the thread, at its pitch, so start a little below its bottom: in a blind hole, into the floor. Unticked, they are level.";
     REORDER: "Reorder passes",
         "Cuts passes in the order that travels least between them.";
     REVERSE: "Reverse passes",

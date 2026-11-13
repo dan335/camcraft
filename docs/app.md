@@ -27,11 +27,11 @@ and the transport under the view. The Add menu adds models, stocks, setups and
 operations; View opens the log and the checks in their own windows; the Setup menu
 posts. Operations are grouped as Fusion's toolbar groups them, in the Add menu and
 a setup's right-click menu alike: 2D (face, 2D adaptive clearing, pocket,
-profile, slot, trace, bore, circular, engrave, 2D chamfer), 3D
+profile, slot, trace, thread, bore, circular, engrave, 2D chamfer), 3D
 (adaptive clearing, pocket clearing, then parallel, scallop, contour, flat,
 spiral, radial and morphed spiral) and drilling. Fusion's operations not built yet
 are listed after the rest of their group, greyed, and say *Not implemented yet*
-under the pointer: in 2D, thread; in 3D, after the finishing, steep
+under the pointer: in 3D, after the finishing, steep
 and shallow, ramp, pencil, project,
 morph, blend, flow, corner and geodesic. They are listed in `browser::PLANNED`,
 which an operation leaves once it is built.
@@ -138,7 +138,13 @@ it.
   millimetre, with *Even stepdowns* under it; a bore's *Finishing passes* has
   only its stepover. Their *Linking* has the leads, with *Lead to center* under
   them, and neither a ramp nor a stay-down distance: each pass comes down its
-  lead and lifts out after, as Fusion's do. A slot's *Passes* has *Backoff distance*, *Repeat finishing pass* and
+  lead and lifts out after, as Fusion's do. A thread's *Passes* has its
+  *Pitch*, the thread mill's to start, *Pitch diameter offset*, *Threading
+  hand*, climb or conventional, and *Multiple passes*, ticked, with the *Number
+  of stepovers* and their stepover; no stock to leave, multiple depths,
+  smoothing or shaft and holder. Its *Linking* has the leads without their
+  vertical arc, with *Helical leads* under them, and *Lead to center*; it lifts
+  to the Retract height between holes. A slot's *Passes* has *Backoff distance*, *Repeat finishing pass* and
   *Preserve order*; it has *Multiple depths* (a millimetre when ticked, as
   Fusion's Maximum Stepdown) and only a floor's stock to leave; its *Linking* has
   the ramp angle and feed, the *Maximum ramp stepdown*, how far its ramp back
@@ -170,8 +176,8 @@ it.
   leave*, as Fusion's, is ticked to leave any (starting at 0.5 mm), then its
   wall and floor amounts, negative to cut past the part; the floor follows the
   wall until it is given its own. A drill has none, and a profile on the
-  boundary only a floor. Every strategy but drilling, bore and circular, whose
-  moves are arcs already, has *Smoothing* at the
+  boundary only a floor. Every strategy but drilling, bore, circular and thread,
+  whose moves are arcs already, has *Smoothing* at the
   foot of *Passes*, ticked to fit arcs and longer lines, then its tolerance,
   the job's unless given; and below it, all but adaptive, *Feed optimization*,
   ticked to slow down in corners, then the most a cut may turn, the reduced
@@ -245,7 +251,8 @@ the part, where an offset of 0 would only touch its walls.
   boss, which it cuts from the wall's top down to its bottom, inside a hole and
   round the outside of a boss. The faces of one wall, as a file often splits a
   cylinder into halves, are taken together: one is enough where it runs the
-  wall's whole height. Its *Geometry* has no edges to pick.
+  wall's whole height. Its *Geometry* has no edges to pick. A thread takes the
+  same, a hole's wall alone, and threads it from the wall's bottom to its top.
 - A slot takes the edges round each slot's floor, a click taking the whole
   loop as for a boundary, or its floor as a face. Each slot is cut from the Top
   down to its own floor.
@@ -421,8 +428,11 @@ chart.
 
 Cutters: flat, ball and bullnose end mills; **V-bits and chamfer mills** (a cone:
 an included angle and an optional flat tip), which finish but are refused for
-pocket and adaptive clearing and for stock to leave; and **drills** (a cone point, 118° unless
-given), which only drill.
+pocket and adaptive clearing and for stock to leave; **drills** (a cone point, 118° unless
+given), which only drill; and **thread mills** (one tooth: a V of its profile
+angle, 60° unless given, one pitch tall, on a neck as narrow as its root), which
+only mill threads. A thread mill's *Cutter* page has its *Thread pitch* and
+*Profile angle*, and its drawing is its tooth on its neck.
 
 **Presets** are named sets of speeds and feeds on a tool ("Roughing", "MDF",
 whatever the person calls them), each with any of spindle speed, cutting, plunge
@@ -441,8 +451,9 @@ Bits & Bits publish theirs (`fixtures/tools/` holds two), into the folder showin
 Each tool's rows become one tool with a preset per row, in millimetres; columns
 are found by their key, not their place. A tool the folder already has (same
 product and diameter) gets the file's presets beside its own instead of a twin.
-Chamfer mills and spot drills come in as cones, drills as drills; types this build
-cannot cut with are skipped, and the manager says which and why.
+Chamfer mills and spot drills come in as cones, drills as drills, thread mills
+as thread mills with their pitch and profile angle; types this build cannot cut
+with are skipped, and the manager says which and why.
 
 Not yet: Fusion's own `.json` libraries, which carry holders; a library of
 the person's own holders and machines; tapered ball mills;

@@ -4,7 +4,7 @@
 use camcraft_core::job::{
     Compensation, ContourOrder, CutDirection, Depths, FaceDirection, FeedOptimization, Finishing,
     HolderClearance, HolderMode, Leave, Links, Operation, PassOrder, Passes, RadialDirection,
-    StockToLeave, StrategySpec, TabShape, Tabs,
+    StockToLeave, StrategySpec, TabShape, Tabs, ThreadHand,
 };
 use eframe::egui;
 
@@ -423,6 +423,51 @@ pub(super) fn passes(
                     &mut op.passes.stepover,
                 );
             }
+            StrategySpec::Thread {
+                pitch,
+                pitch_diameter_offset,
+                hand,
+                conventional,
+                multiple_passes,
+                stepovers,
+                ..
+            } => {
+                d.row(ui, &pass::THREAD_PITCH, "pitch", |ui| {
+                    m.length_field(ui, pitch, 0.01, 100.0, "");
+                });
+                d.row(
+                    ui,
+                    &pass::PITCH_DIAMETER_OFFSET,
+                    "pitch_diameter_offset",
+                    |ui| {
+                        m.signed_length_field(ui, pitch_diameter_offset, 0.01, 100.0, "");
+                    },
+                );
+                d.row(ui, &pass::THREAD_HAND, "hand", |ui| {
+                    widgets::segmented(
+                        ui,
+                        hand,
+                        &[(ThreadHand::Right, "right"), (ThreadHand::Left, "left")],
+                    );
+                });
+                climb_or_conventional(
+                    ui,
+                    d,
+                    (&pass::DIRECTION_THREAD, "conventional"),
+                    conventional,
+                );
+                d.row(ui, &pass::THREAD_PASSES, "multiple_passes", |ui| {
+                    ui.checkbox(multiple_passes, "more than one out to the thread");
+                });
+                widgets::dependent(ui, *multiple_passes, |ui| {
+                    d.row(ui, &pass::THREAD_STEPOVERS, "stepovers", |ui| {
+                        ui.add(widgets::number(stepovers).range(1..=1000));
+                    });
+                    d.row(ui, &pass::STEPOVER, "passes.stepover", |ui| {
+                        m.length_field(ui, &mut op.passes.stepover, 0.05, 100.0, "");
+                    });
+                });
+            }
             StrategySpec::Slot {
                 backoff_distance,
                 repeat,
@@ -670,10 +715,11 @@ fn holder_modes(strategy: &StrategySpec) -> Option<&'static [(HolderMode, &'stat
     match strategy {
         // Fusion's 2D Trace has no Shaft and Holder, though it follows its
         // curves as a finish follows the part.
-        // Nor has its 2D Adaptive, nor its Engrave.
+        // Nor has its 2D Adaptive, nor its Engrave, nor its Thread.
         StrategySpec::Trace { .. }
         | StrategySpec::Adaptive2d { .. }
-        | StrategySpec::Engrave { .. } => None,
+        | StrategySpec::Engrave { .. }
+        | StrategySpec::Thread { .. } => None,
         // Its 2D Chamfer has one: over the part, as a finish's.
         StrategySpec::Chamfer2d { .. } => Some(OVER_PART),
         _ if strategy.uses().links == Links::OverPart => Some(OVER_PART),

@@ -236,10 +236,15 @@ pub(super) fn linking(
         }
         // A pocket's leads take the tool onto its finishing passes and off.
         let pocket_leads = uses.finishing && op.passes.finishing.is_some();
+        // A thread comes straight down its hole's centre and up from it: its
+        // leads have no vertical arc.
+        let threading = matches!(op.strategy, StrategySpec::Thread { .. });
         if uses.leads || pocket_leads {
             let mut on = op.linking.leads.is_some();
             d.group_row(ui, &link::LEADS, "linking.leads", |ui| {
-                let what = if uses.leads {
+                let what = if threading {
+                    "on and off the thread"
+                } else if uses.leads {
                     "on and off each ring"
                 } else {
                     "onto the finishing passes and off"
@@ -257,8 +262,8 @@ pub(super) fn linking(
                     let start = Leads::default().sizes(across).straight;
                     let tenth = of_tool(0.1, "a tenth of the tool");
                     // A pocket's finishing passes are entered level, beside the
-                    // wall: their leads have no vertical arc.
-                    let vertical = (uses.leads).then_some((
+                    // wall: their leads have no vertical arc, nor a thread's.
+                    let vertical = (uses.leads && !threading).then_some((
                         &link::LEAD_VERTICAL,
                         "linking.leads.vertical",
                         &mut l.vertical,
@@ -296,6 +301,23 @@ pub(super) fn linking(
                     d.row(ui, &link::LEAD_TO_CENTER, "lead_to_center", |ui| {
                         ui.checkbox(lead_to_center, "from the hole's centre and back");
                     });
+                });
+            }
+            // A thread's leads rise with its helix, and it comes from the
+            // hole's centre with or without them.
+            if let StrategySpec::Thread {
+                helical_leads,
+                lead_to_center,
+                ..
+            } = &mut op.strategy
+            {
+                widgets::dependent(ui, leads_on, |ui| {
+                    d.row(ui, &link::HELICAL_LEADS, "helical_leads", |ui| {
+                        ui.checkbox(helical_leads, "rising with the thread, at its pitch");
+                    });
+                });
+                d.row(ui, &link::THREAD_TO_CENTER, "lead_to_center", |ui| {
+                    ui.checkbox(lead_to_center, "from the hole's centre and back");
                 });
             }
         }

@@ -1,13 +1,15 @@
-//! The paths of the strategies that cut round walls, Fusion's Bore and
-//! Circular, and the walls they cut, found from the picked faces.
+//! The paths of the strategies that cut round walls, Fusion's Bore, Circular
+//! and Thread, and the walls they cut, found from the picked faces.
 
 use camcraft_geom::topology::EdgeKind;
 
 use super::*;
+use crate::job::ThreadHand;
 use crate::setup::features::{self, find_face};
 use crate::strategy::round::{
     Down, Levels, RoundParams, Wall, bore, circular, nearest_first, rounds,
 };
+use crate::strategy::thread::{ThreadParams, thread};
 
 /// What a bore or a circular asks of each wall: how many passes out to it,
 /// whether the last is cut twice, and whether its leads go to the centre.
@@ -109,7 +111,86 @@ pub(super) fn circular_paths(
     Ok((path, report.passes, StrategyDetail::Circular(report)))
 }
 
-/// The round walls a bore's or a circular's picked faces make, in the setup's
+/// What a thread asks of each hole, beyond its operation's passes.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ThreadAsked {
+    pub(super) pitch: f64,
+    pub(super) offset: f64,
+    pub(super) hand: ThreadHand,
+    pub(super) stepovers: u32,
+    pub(super) helical: bool,
+    pub(super) lead_to_center: bool,
+}
+
+/// Each of `walls` threaded with `work`'s thread mill. Where a lead goes below
+/// a hole's floor, as Fusion's does in a blind hole whose thread runs to its
+/// bottom, the run says where and how far; the part check then fails there,
+/// unchanged.
+pub(super) fn thread_paths(
+    work: &Work<'_>,
+    asked: ThreadAsked,
+    walls: &[Round],
+    warnings: &mut Vec<String>,
+) -> Result<Paths, RunError> {
+    let op = work.op;
+    let diameter = work.spec.diameter;
+    let p = ThreadParams {
+        radius: work.tool.cutter_radius(),
+        pitch: asked.pitch,
+        offset: asked.offset,
+        right_hand: asked.hand == ThreadHand::Right,
+        kept_on_right: work.kept_on_right(),
+        stepovers: asked.stepovers,
+        stepover: op.passes.stepover,
+        leads: op.leads(diameter).map(|l| LeadArc {
+            radius: l.radius,
+            sweep: l.sweep.to_radians(),
+            straight: l.straight,
+        }),
+        helical: asked.helical,
+        to_centre: asked.lead_to_center,
+        feed: op.passes.feed,
+    };
+    let (path, mut report) = thread(walls, &p).map_err(in_op(op))?;
+    // The floor under each hole's middle, where it has one, against the
+    // lowest its leads go.
+    let tolerance = work.job.tolerance;
+    for cut in &report.cuts {
+        let Some(floor) = work.cutter.drop_at(work.tool, cut.at.x, cut.at.y) else {
+            continue;
+        };
+        let deep = floor - cut.lowest;
+        if deep > tolerance && report.below_floor.is_none_or(|(_, d)| deep > d) {
+            report.below_floor = Some(([cut.at.x, cut.at.y], deep));
+        }
+    }
+    if let Some(([x, y], deep)) = report.below_floor {
+        warnings.push(format!(
+            "the thread's lead goes {deep:.3} mm below the floor of the hole at X{x:.3} \
+             Y{y:.3}, as Fusion's does where a thread runs to a blind hole's bottom: set the \
+             Bottom that much higher, or level leads"
+        ));
+    }
+    if report.dropped > 0 {
+        warnings.push(format!(
+            "{} pass(es) past the middle of a hole left out: fewer stepovers, or narrower ones, \
+             would keep them",
+            report.dropped
+        ));
+    }
+    if let Some(ground) = work.spec.pitch
+        && (ground - asked.pitch).abs() > 1.0e-6
+    {
+        warnings.push(format!(
+            "the thread's pitch, {:.3} mm, is not the {ground:.3} mm the thread mill's tooth \
+             is ground for: its profile will not be the thread's",
+            asked.pitch
+        ));
+    }
+    Ok((path, report.passes, StrategyDetail::Thread(report)))
+}
+
+/// The round walls a bore's, a circular's or a thread's picked faces make, in the setup's
 /// frame, in the order they are cut: each from its own top to its own bottom,
 /// or the Top and Bottom where they are set, its bottom raised by the stock to
 /// leave down.

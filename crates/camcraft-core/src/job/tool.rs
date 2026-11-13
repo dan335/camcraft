@@ -26,12 +26,17 @@ pub struct ToolSpec {
     /// Corner radius, for a bullnose.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub corner: f64,
-    /// Included angle in degrees, for a cone: 90 for a 90° V-bit.
+    /// Included angle in degrees, for a cone: 90 for a 90° V-bit. A thread
+    /// mill's is its tooth's profile, 60° unless given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub angle: Option<f64>,
     /// Diameter of a cone's flat tip; zero comes to a point.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub tip_diameter: f64,
+    /// The pitch a thread mill's tooth is ground for, in millimetres: what a
+    /// thread cut with it rises a turn unless the operation says otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch: Option<f64>,
     /// Tool number in the program.
     #[serde(default = "one_u32")]
     pub number: u32,
@@ -140,6 +145,7 @@ impl Default for ToolSpec {
             corner: 0.0,
             angle: None,
             tip_diameter: 0.0,
+            pitch: None,
             number: one_u32(),
             rpm: default_rpm(),
             comment: String::new(),
@@ -324,16 +330,21 @@ pub enum ToolKind {
     Cone,
     /// A twist drill: its point is a cone, 118° unless its angle says otherwise.
     Drill,
+    /// A single-profile thread mill: one tooth, a V of its profile angle
+    /// ground for its pitch, on a narrower neck. It mills threads and nothing
+    /// else.
+    ThreadMill,
 }
 
 impl ToolKind {
     /// Every kind, as Fusion's tool libraries and expressions name it.
-    pub const FUSION_TYPES: [(Self, &'static str); 5] = [
+    pub const FUSION_TYPES: [(Self, &'static str); 6] = [
         (Self::Flat, "flat end mill"),
         (Self::Ball, "ball end mill"),
         (Self::Bullnose, "bull nose end mill"),
         (Self::Cone, "chamfer mill"),
         (Self::Drill, "drill"),
+        (Self::ThreadMill, "thread mill"),
     ];
 
     /// What Fusion calls this kind of tool (`tool_type`).
@@ -360,6 +371,10 @@ impl ToolKind {
 /// The point angle a drill has when none is given.
 pub const DRILL_POINT: f64 = 118.0;
 
+/// The profile a thread mill's tooth has when none is given: ISO metric's and
+/// unified's, 60°.
+pub const THREAD_PROFILE: f64 = 60.0;
+
 impl ToolSpec {
     /// The radius of its corner, as Fusion's `tool_cornerRadius`: a ball's is
     /// half its diameter, a bullnose's its corner, any other's none.
@@ -367,8 +382,25 @@ impl ToolSpec {
         match self.kind {
             ToolKind::Ball => self.diameter / 2.0,
             ToolKind::Bullnose => self.corner,
-            ToolKind::Flat | ToolKind::Cone | ToolKind::Drill => 0.0,
+            ToolKind::Flat | ToolKind::Cone | ToolKind::Drill | ToolKind::ThreadMill => 0.0,
         }
+    }
+
+    /// A thread mill's tooth's profile angle, in degrees: its own, or
+    /// [`THREAD_PROFILE`].
+    pub fn thread_profile(&self) -> f64 {
+        self.angle.unwrap_or(THREAD_PROFILE)
+    }
+
+    /// The radius of a thread mill's tooth at its root, where its flanks meet
+    /// the neck: a V of its profile angle one pitch tall, its point at the
+    /// cutting diameter, as Fusion's sample thread mills are ground (their
+    /// shoulder diameter is this to the micron). Never below zero: a tooth
+    /// whose V would close before the axis comes to a point there.
+    pub fn thread_root_radius(&self) -> f64 {
+        let half = self.thread_profile().to_radians() / 2.0;
+        let pitch = self.pitch.unwrap_or(0.0);
+        (self.diameter / 2.0 - 0.5 * pitch / half.tan()).max(0.0)
     }
 
     /// How long its flutes are taken to be where it does not say: two
@@ -425,8 +457,22 @@ impl ToolSpec {
                 why,
             });
         };
+        let threading = self.kind == ToolKind::ThreadMill;
+        let profile = self.thread_profile();
         if self.kind == ToolKind::Cone && self.angle.is_none() {
             bad("angle", "a V-bit or chamfer mill needs its angle".into());
+        } else if threading && !self.pitch.is_some_and(is_positive) {
+            bad(
+                "pitch",
+                "a thread mill needs the pitch its tooth is ground for, greater than zero".into(),
+            );
+        } else if threading && !(profile.is_finite() && profile > 0.0 && profile < 180.0) {
+            bad(
+                "angle",
+                format!(
+                    "a thread mill's profile angle is between 0 and 180 degrees, got {profile}"
+                ),
+            );
         } else if let Err(e) = self.build() {
             let field = match e {
                 ToolError::BadRadius(_) => "diameter",
@@ -568,6 +614,17 @@ impl ToolSpec {
             ToolKind::Drill => {
                 let angle = self.angle.unwrap_or(DRILL_POINT);
                 Cone::new(r, 0.0, (angle / 2.0).to_radians()).map(Cutter::from)
+            }
+            // What its tooth sweeps, seen from above: below the tooth's point
+            // its lower flank, rising from the root at the tip to the point at
+            // the cutting diameter; above the point, the tool as wide as its
+            // widest, since a height field cannot hold the thread's undercut
+            // and the neck above the tooth only ever passes where the tooth
+            // has cut. A chamfer mill's shape: a flat tip of the root's radius
+            // and a flank at half the profile angle from level.
+            ToolKind::ThreadMill => {
+                let flank = 90.0 - self.thread_profile() / 2.0;
+                Cone::new(r, self.thread_root_radius(), flank.to_radians()).map(Cutter::from)
             }
         }
     }

@@ -212,6 +212,19 @@ topics! {
         "How far the tool keeps off the part's other faces. Where it would come nearer, it is lifted and the chamfer is narrower.";
     FINISHING_OVERLAP: "Finishing overlap",
         "How far past where a closed edge's pass started the tool goes on before it leads off.";
+    THREAD_PITCH: "Pitch",
+        "How far the thread rises in each turn round the hole. A new one takes the thread mill's own: its tooth is ground for it.";
+    PITCH_DIAMETER_OFFSET: "Pitch diameter offset",
+        "How much wider across than the hole the thread is cut. The tooth goes half of it into the wall; with none it only touches it.";
+    THREAD_HAND: "Threading hand",
+        "Which way the thread winds. A right-hand thread rises anticlockwise seen from above, as nearly every one does.";
+    DIRECTION_THREAD: "Direction",
+        "Climb goes anticlockwise round a hole with a clockwise spindle: a right-hand thread bottom up, a left-hand one top down. Conventional, the other way.",
+        Figure::Climb;
+    THREAD_PASSES: "Multiple passes",
+        "Cuts the thread in several passes, each a stepover further in than the next, the last at the thread. Unticked, the thread alone.";
+    THREAD_STEPOVERS: "Number of stepovers",
+        "How many passes out to the thread, the last at it, each a whole pass from the centre and back.";
     ENGRAVE_DEPTH: "Depth",
         "The deepest the V goes below each shape's top, where the shape is wide. Unset, 0.95 of how deep its flank reaches.";
     SHARP_CORNER_ANGLE: "Sharp corner angle",

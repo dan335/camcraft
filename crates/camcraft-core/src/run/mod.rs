@@ -50,7 +50,7 @@ pub use crate::path::toolpath::PLUNGE_RATIO;
 pub use error::RunError;
 pub use operation::Planned;
 pub use result::{
-    Contact, Kept, Made, OperationResult, Plan, Progress, SetupResult, Stage, StrategyDetail,
+    Contact, Kept, Made, Meant, OperationResult, Plan, Progress, SetupResult, Stage, StrategyDetail,
 };
 
 use error::in_op;
@@ -527,8 +527,9 @@ impl<'a> Shared<'a> {
 }
 
 /// The part as the setup's operations mean to leave it: cut past where one
-/// with negative stock to leave cut, and chamfered where a 2D chamfer cut
-/// ([`OperationResult::meant`]), each then no gouge there and nowhere else.
+/// with negative stock to leave cut, chamfered where a 2D chamfer cut, and
+/// threaded where a thread cut into a hole's wall ([`OperationResult::meant`]),
+/// each then no gouge there and nowhere else.
 /// Where each cut is the material it took down, between the stock before it
 /// and after (`keyframes`).
 fn cut_past(
@@ -556,16 +557,8 @@ fn cut_past(
         if radial != 0.0 || axial != 0.0 {
             part = part.cut_past(radial, axial, cut);
         }
-        if let Some(bevels) = meant {
-            part = part.lowered(
-                |p| {
-                    bevels
-                        .iter()
-                        .filter_map(|b| b.height_at(p))
-                        .reduce(f64::min)
-                },
-                cut,
-            );
+        if let Some(meant) = meant {
+            part = part.lowered(|p| meant.height_at(p), cut);
         }
     }
     Ok(part)
