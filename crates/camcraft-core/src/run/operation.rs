@@ -16,9 +16,9 @@ use crate::cutter::assembly::{Assembly, Body};
 use crate::cutter::dropcutter::DropCutter;
 use crate::cutter::tool::ToolProfile;
 use crate::job::{
-    ContourOrder, CutDirection, Depths, Entry, FaceDirection, HeightContext, HolderMode,
-    HolderSegment, Job, Links, Operation, PassOrder, Picks, RadialDirection, Retraction,
-    SpindleDirection, StrategySpec, ToolSpec,
+    Compensation, ContourOrder, CutDirection, Depths, Entry, FaceDirection, HeightContext,
+    HolderMode, HolderSegment, Job, Links, Operation, PassOrder, Picks, RadialDirection,
+    Retraction, SpindleDirection, StrategySpec, ToolSpec,
 };
 use crate::path::corners::{CornerParams, CornerReport, slow_corners};
 use crate::path::fit::{FitReport, fit_arcs};
@@ -36,6 +36,7 @@ use crate::setup::features::{Chain, FeatureError, Picking, picked_chains};
 use crate::setup::{Bodies, Prepared};
 use crate::strategy::adaptive::rest::Earlier;
 use crate::strategy::adaptive::{AdaptiveParams, Shallow, adaptive_rough, peak_heights};
+use crate::strategy::curve::Curve as Picked;
 use crate::strategy::drilling::{DrillParams, DrillReport, Hole, drill, holes, nearest_first};
 use crate::strategy::face::{FaceParams, LevelsAsked, face};
 use crate::strategy::flat::{FlatParams, flat_finish};
@@ -52,9 +53,12 @@ use crate::strategy::reach::LevelReach;
 use crate::strategy::round::{Round, RoundReport};
 use crate::strategy::scallop::{ScallopParams, contact_region, scallop_finish_banded};
 use crate::strategy::slope::steep_ground;
+use crate::strategy::slot::{Slot, SlotReport};
+use crate::strategy::trace::{Beside, TraceReport};
 use crate::strategy::waterline::{WaterlineParams, waterline};
 
 mod clearing;
+mod curves;
 mod finishing;
 mod link;
 mod round;
@@ -63,6 +67,8 @@ use clearing::{
     AdaptiveAsked, adaptive_paths, drill_paths, face_paths, planar_paths, pocket_clearing_paths,
 };
 pub(super) use clearing::{drill_holes, heights_of, planar_areas};
+use curves::{TraceAsked, slot_paths, trace_paths};
+pub(super) use curves::{curves_picked, slots_picked};
 use finishing::{
     contour_paths, flat_paths, morphed_spiral_paths, parallel_paths, radial_paths, scallop_paths,
     spiral_paths,
@@ -202,6 +208,10 @@ pub(super) enum Target {
     Areas(Vec<Area>),
     /// A bore's or a circular's round walls, in order.
     Rounds(Vec<Round>),
+    /// A slot operation's slots, in order.
+    Slots(Vec<Slot>),
+    /// A trace's curves, in the order picked.
+    Curves(Vec<Picked>),
 }
 
 /// An operation's passes, worked out and put in order, its tabs on them: ready
@@ -252,6 +262,9 @@ fn held_clear(
     // above it left material over it that it would meet. Failing, any of
     // them that would meet it stops.
     let how = match op.strategy {
+        // Fusion's 2D operations have no Shaft and Holder: the checks still
+        // sweep the whole tool.
+        StrategySpec::Slot { .. } | StrategySpec::Trace { .. } => return Ok(None),
         _ if mode == HolderMode::Fail => Some(Clear::Trim),
         _ if op.strategy.uses().links == Links::OverPart => Some(match mode {
             HolderMode::PullAway => Clear::PullAway,
@@ -318,6 +331,12 @@ pub(super) fn plan_operation(
         Target::Holes(holes) => (None, holes.as_slice(), &[][..], &[][..]),
         Target::Areas(areas) => (None, &[][..], areas.as_slice(), &[][..]),
         Target::Rounds(rounds) => (None, &[][..], &[][..], rounds.as_slice()),
+        Target::Slots(_) | Target::Curves(_) => (None, &[][..], &[][..], &[][..]),
+    };
+    let (slots, curves) = match target {
+        Target::Slots(slots) => (slots.as_slice(), &[][..]),
+        Target::Curves(curves) => (&[][..], curves.as_slice()),
+        _ => (&[][..], &[][..]),
     };
     let (raw, passes, detail) = match op.strategy {
         StrategySpec::Parallel { angle } => parallel_paths(work, angle, limit, &mut warnings)?,
@@ -468,13 +487,52 @@ pub(super) fn plan_operation(
             rounds,
             &mut warnings,
         )?,
+        StrategySpec::Slot {
+            backoff_distance,
+            repeat,
+            ..
+        } => slot_paths(work, (backoff_distance, repeat), slots, &mut warnings)?,
+        StrategySpec::Trace {
+            compensation,
+            axial_offset,
+            pass_extension,
+            max_angle,
+            stepdowns,
+            order,
+            both_ways,
+            repeat,
+            preserve_order,
+            ..
+        } => trace_paths(
+            work,
+            TraceAsked {
+                beside: match compensation {
+                    Compensation::Center => Beside::On,
+                    Compensation::Left => Beside::Left,
+                    Compensation::Right => Beside::Right,
+                },
+                axial_offset,
+                pass_extension,
+                max_angle,
+                stepdowns,
+                by_depth: order == ContourOrder::ByDepth,
+                both_ways,
+                repeat,
+                preserve_order,
+            },
+            curves,
+            &mut warnings,
+        )?,
     };
 
     // A finishing path over the part keeps between the Top and Bottom it is
     // given, as Fusion's does: what goes past either is trimmed away, and what
     // is left is passes for the linker to join. Without them, all of it.
-    let (raw, passes) = if op.strategy.uses().links == Links::OverPart
-        && (op.heights.top.is_some() || op.heights.bottom.is_some())
+    // A trace has no Top or Bottom: it follows its curves where they are.
+    let uses = op.strategy.uses();
+    let (raw, passes) = if uses.links == Links::OverPart
+        && ((op.heights.top.is_some() && uses.top.is_some())
+            || (op.heights.bottom.is_some() && uses.bottom.is_some()))
     {
         let (top, bottom) = op.levels_3d(ctx);
         let (trimmed, report) = within_heights(
@@ -759,6 +817,8 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
         }),
         StrategySpec::Bore { .. } => StrategyDetail::Bore(RoundReport::default()),
         StrategySpec::Circular { .. } => StrategyDetail::Circular(RoundReport::default()),
+        StrategySpec::Slot { .. } => StrategyDetail::Slot(SlotReport::default()),
+        StrategySpec::Trace { .. } => StrategyDetail::Trace(TraceReport::default()),
     };
     OperationResult {
         name: op.name.clone(),

@@ -2,7 +2,8 @@
 //! while the tab shows.
 
 use camcraft_core::job::{
-    self, Height, HeightContext, HeightRef, Heights, Links, Operation, Outline, StrategySpec,
+    self, Curves, Height, HeightContext, HeightRef, Heights, Links, Operation, Outline,
+    StrategySpec,
 };
 use camcraft_core::setup::Prepared;
 use camcraft_core::setup::features;
@@ -22,7 +23,10 @@ use crate::worker::DocId;
 /// Whether a 2D operation goes down to its picks without a Bottom: it has some,
 /// and they are what it cuts round.
 fn down_to_picks(op: &Operation) -> bool {
-    op.strategy.uses().outline && !op.selection.is_empty() && op.outline == Outline::Selection
+    let uses = op.strategy.uses();
+    !op.selection.is_empty()
+        && ((uses.outline && op.outline == Outline::Selection)
+            || uses.curves == Some(Curves::Slots))
 }
 
 pub(super) fn heights(
@@ -64,6 +68,8 @@ pub(super) fn heights(
             // drilling goes "from hole bottom".
             let absent = if uses.holes.is_some() {
                 "each hole's own bottom"
+            } else if uses.curves.is_some() {
+                "each slot's own floor"
             } else {
                 absent(unset)
             };
@@ -85,6 +91,16 @@ pub(super) fn heights(
     }
     ui.add_space(theme::SPACE_3);
     let about = match op.strategy {
+        StrategySpec::Trace { .. } => Some(
+            "It follows each picked edge at its own height, moved by the axial offset: \
+             it has no Top or Bottom. With a full retraction it lifts to the Retract \
+             height between passes.",
+        ),
+        StrategySpec::Slot { .. } => Some(
+            "Each slot is cut from the Top, the stock's top unless set, down to its own \
+             floor, where its picked edges are. A Bottom set takes every slot there \
+             instead.",
+        ),
         _ if uses.links == Links::OverPart => Some(
             "It follows the part, trimmed to the Top and Bottom: what of each pass is \
              above the Top or below the Bottom is not cut. Without them, it follows \

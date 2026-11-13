@@ -61,4 +61,16 @@ topics! {
         "Cuts passes in the order that travels least between them.";
     REVERSE: "Reverse passes",
         "Lets reordering cut a pass backwards. That turns climb into conventional, so it is off unless asked for.";
+    KEEP_TOOL_DOWN: "Keep tool down",
+        "Goes from one pass to the next without lifting where it is no further than the stay-down distance.",
+        Figure::StayDown;
+    LEAD_IN: "Lead-in",
+        "Comes down onto each pass along a vertical arc of the lead radius, rather than straight down.",
+        Figure::LeadRadius;
+    LEAD_OUT: "Lead-out",
+        "Goes up off each pass along a vertical arc of the lead radius, rather than straight up.",
+        Figure::LeadRadius;
+    MOST_PER_LEG: "Most per leg",
+        "The most a ramp back and forth along a slot goes down each way along it. Left empty, the stepdown, or 1 mm.",
+        Figure::RampAngle;
 }

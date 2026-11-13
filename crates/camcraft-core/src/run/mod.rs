@@ -39,7 +39,7 @@ use crate::control::{Control, Watch};
 use crate::cutter::allowance::{Allowance, EffectiveTool};
 use crate::cutter::dropcutter::DropCutter;
 use crate::job::{
-    HeightContext, HolderSegment, Holes, Job, JobError, Machine, Operation, Setup, ToolSpec,
+    Curves, HeightContext, HolderSegment, Holes, Job, JobError, Machine, Operation, Setup, ToolSpec,
 };
 use crate::path::simadapt::sim_moves;
 use crate::setup::features::Picking;
@@ -55,8 +55,8 @@ pub use result::{
 
 use error::in_op;
 use operation::{
-    Target, Work, cut_operation, drill_holes, heights_of, not_made, plan_operation, planar_areas,
-    round_walls,
+    Target, Work, curves_picked, cut_operation, drill_holes, heights_of, not_made, plan_operation,
+    planar_areas, round_walls, slots_picked,
 };
 use pitch::sim_pitch;
 
@@ -338,6 +338,16 @@ impl<'a> Shared<'a> {
                 self.bodies,
                 &heights,
             )?)
+        } else if uses.curves == Some(Curves::Slots) {
+            Target::Slots(slots_picked(
+                self.job,
+                op,
+                self.prepared,
+                self.bodies,
+                &heights,
+            )?)
+        } else if uses.curves == Some(Curves::Traced) {
+            Target::Curves(curves_picked(self.job, op, self.prepared, self.bodies)?)
         } else {
             // Facing works from the stock alone.
             Target::Limit(None)

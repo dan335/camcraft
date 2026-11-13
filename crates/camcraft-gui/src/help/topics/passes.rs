@@ -180,4 +180,28 @@ topics! {
         "Cuts the last pass at the wall twice, for a tool that springs away from it.";
     EVEN_STEPDOWNS: "Even stepdowns",
         "Spaces the levels evenly. Unticked, each is a whole stepdown and the last takes what is left.";
+    BACKOFF: "Backoff distance",
+        "How far the tool backs off the wall at the end of each slot before it lifts, so it does not drag up the wall.";
+    SLOT_REPEAT: "Repeat finishing pass",
+        "Cuts the last pass at the floor twice, for a tool that springs away from the walls.";
+    PRESERVE_ORDER: "Preserve order",
+        "Cuts in the order picked. Unticked, the first picked, then always the nearest next.";
+    COMPENSATION: "Sideways compensation",
+        "Where the tool's centre goes: on the curve, or its radius to the left or right as the curve runs. Left climbs.",
+        Figure::Climb;
+    AXIAL_OFFSET: "Axial offset",
+        "Moves every pass up from the curve, or down below it when negative.";
+    TRACE_EXTENSION: "Pass extension",
+        "How far an open curve's passes run on past each of its ends, straight along it.";
+    MAX_ANGLE: "Maximum angle",
+        "The steepest a pass may go, from level. What of a curve is steeper is left out; 90° follows all of it.";
+    STEPDOWNS: "Number of stepdowns",
+        "How many passes above the curve, a stepdown apart, before the one on it.",
+        Figure::Stepdown;
+    TRACE_ORDER: "Order",
+        "By depth cuts every curve at a level before the next down. By area cuts each curve all the way down first.";
+    BOTH_WAYS: "Both ways",
+        "An open curve's levels go back and forth, each the other way from the one above.";
+    TRACE_REPEAT: "Repeat passes",
+        "Cuts the last pass of each curve twice, for a tool that springs away.";
 }

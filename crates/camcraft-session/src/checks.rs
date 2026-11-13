@@ -583,6 +583,36 @@ fn operation_findings(
                 ));
             }
         }
+        StrategyDetail::Slot(r) => {
+            if r.bands > 0 {
+                out.push(finding(
+                    Level::Warn,
+                    "CC219",
+                    format!(
+                        "{} slot(s) left with a band uncut either side of the middle",
+                        r.bands
+                    ),
+                    format!(
+                        "up to {:.2} mm wide: the slot is more than three times as wide as \
+                         the tool; use a wider one",
+                        r.widest_band
+                    ),
+                ));
+            }
+        }
+        StrategyDetail::Trace(r) => {
+            if r.steep > 0 {
+                out.push(finding(
+                    Level::Note,
+                    "CC220",
+                    format!(
+                        "{} stretch(es) of a trace steeper than its maximum angle left out",
+                        r.steep
+                    ),
+                    "raise the maximum angle to follow them".into(),
+                ));
+            }
+        }
     }
     if op.links.suspicious_plunges > 0 {
         out.push(finding(

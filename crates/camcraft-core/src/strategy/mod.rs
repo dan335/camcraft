@@ -22,6 +22,11 @@ pub mod pocket_clearing;
 pub mod drilling;
 pub mod round;
 
+// Along what is picked.
+pub mod curve;
+pub mod slot;
+pub mod trace;
+
 // What they share.
 mod field;
 pub(crate) mod nesting;

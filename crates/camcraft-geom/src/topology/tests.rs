@@ -398,6 +398,78 @@ fn a_level_edge_goes_round_at_its_height() {
     assert_eq!(t.level_loop(rim, points, 1e-6), Some(vec![rim]));
 }
 
+/// A block shaped as a slot seen from above, 4 high: straight sides along X
+/// from -5 to 5, 2 out, and round ends, its faces named: top, bottom, the two
+/// sides and the two ends, so its top's edges meet without a corner.
+fn rounded_bar() -> Body {
+    use std::f64::consts::PI;
+    let (half, r, h) = (5.0, 2.0, 4.0);
+    // The outline, anticlockwise from (-5, -2), and which wall each piece is.
+    let mut outline: Vec<(glam::DVec2, u32)> = Vec::new();
+    for k in 0..10 {
+        let x = -half + 2.0 * half * f64::from(k) / 10.0;
+        outline.push((glam::dvec2(x, -r), 2));
+    }
+    for k in 0..16 {
+        let a = -PI / 2.0 + PI * f64::from(k) / 16.0;
+        outline.push((glam::dvec2(half, 0.0) + glam::DVec2::from_angle(a) * r, 4));
+    }
+    for k in 0..10 {
+        let x = half - 2.0 * half * f64::from(k) / 10.0;
+        outline.push((glam::dvec2(x, r), 3));
+    }
+    for k in 0..16 {
+        let a = PI / 2.0 + PI * f64::from(k) / 16.0;
+        outline.push((glam::dvec2(-half, 0.0) + glam::DVec2::from_angle(a) * r, 5));
+    }
+    let n = u32::try_from(outline.len()).unwrap();
+    let mut v: Vec<DVec3> = outline.iter().map(|(p, _)| p.extend(h)).collect();
+    v.extend(outline.iter().map(|(p, _)| p.extend(0.0)));
+    v.push(dvec3(0.0, 0.0, h));
+    v.push(dvec3(0.0, 0.0, 0.0));
+    let (top, bottom) = (2 * n, 2 * n + 1);
+    let mut t = Vec::new();
+    let mut labels = Vec::new();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        t.push([top, i, j]);
+        labels.push(0);
+        t.push([bottom, n + j, n + i]);
+        labels.push(1);
+        let wall = outline.get(i as usize).map_or(2, |o| o.1);
+        t.push([n + i, n + j, j]);
+        t.push([n + i, j, i]);
+        labels.extend([wall, wall]);
+    }
+    Body::with_faces(TriMesh::new(v, t).unwrap(), labels, 6).unwrap()
+}
+
+/// An edge runs on into the edges that leave its corners without turning, so
+/// the slot-shaped top's four edges are one chain whichever is picked, and a
+/// box's edge, turning a right angle at each corner, is a chain by itself.
+#[test]
+fn an_edge_runs_on_where_its_neighbours_do_not_turn() {
+    let body = rounded_bar();
+    let t = body.topology();
+    let points = |e: u32| t.edge_points(body.mesh(), e).collect::<Vec<_>>();
+    let top: Vec<u32> = (0..u32::try_from(t.edges().len()).unwrap())
+        .filter(|&e| points(e).iter().all(|p| (p.z - 4.0).abs() < 1e-9))
+        .collect();
+    assert_eq!(top.len(), 4, "{top:?}");
+    for &e in &top {
+        let mut chain = t.smooth_chain(e, points, 0.2);
+        assert!(chain.contains(&e));
+        chain.sort_unstable();
+        assert_eq!(chain, top);
+    }
+    let cube = Body::derived(synthetic::cuboid(DVec3::ZERO, dvec3(4.0, 5.0, 6.0)));
+    let t = cube.topology();
+    let points = |e: u32| t.edge_points(cube.mesh(), e).collect::<Vec<_>>();
+    for e in 0..12 {
+        assert_eq!(t.smooth_chain(e, points, 0.2), vec![e]);
+    }
+}
+
 /// A placed body is moved, turned and scaled as a whole, keeping its faces'
 /// numbers; mirrored, its faces still face out; and placed again, it is placed
 /// from where its file put it, not from where it was.

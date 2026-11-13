@@ -443,6 +443,309 @@ fn a_hole_is_bored_and_milled_round() {
     }
 }
 
+/// A block 40 by 20 by 10 mm about the origin with a blind slot along X in its
+/// top, its ends' centres at (-8, 0) and (8, 0), 6 mm wide, its floor at 6 mm:
+/// faces named as a file would name them (top, bottom, outside, floor, the
+/// two straight walls and the two round ends), the round ends' edges circles.
+fn slotted_block() -> Body {
+    use camcraft_geom::mesh::TriMesh;
+    use std::f64::consts::TAU;
+    let (half, r, floor, top) = (8.0, 3.0, 6.0, 10.0);
+    let (wx, wy) = (20.0, 10.0);
+    // Where a ray from the middle at `a` leaves the slot, and the block.
+    let slot_at = |a: f64| {
+        let u = DVec2::from_angle(a);
+        if u.y.abs() > 1e-12 && (r / u.y.abs() * u.x).abs() <= half + 1e-12 {
+            return u * (r / u.y.abs());
+        }
+        let c = dvec2(half.copysign(u.x), 0.0);
+        let b = u.dot(c);
+        u * (b + (b * b - c.length_squared() + r * r).sqrt())
+    };
+    let block_at = |a: f64| {
+        let u = DVec2::from_angle(a);
+        u * (wx / u.x.abs()).min(wy / u.y.abs())
+    };
+    // Rays through every corner of either, and evenly between.
+    let mut angles: Vec<f64> = (0..96).map(|i| TAU * f64::from(i) / 96.0).collect();
+    for (x, y) in [(half, r), (wx, wy)] {
+        for (sx, sy) in [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)] {
+            angles.push((sy * y).atan2(sx * x).rem_euclid(TAU));
+        }
+    }
+    angles.sort_by(f64::total_cmp);
+    angles.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    let n = u32::try_from(angles.len()).unwrap();
+    let mut v = Vec::new();
+    // Rings: slot at the top, slot at the floor, block at the top and bottom.
+    for (z, slot) in [(top, true), (floor, true), (top, false), (0.0, false)] {
+        for &a in &angles {
+            let p = if slot { slot_at(a) } else { block_at(a) };
+            v.push(p.extend(z));
+        }
+    }
+    v.push(DVec3::new(0.0, 0.0, floor));
+    v.push(DVec3::new(0.0, 0.0, 0.0));
+    let (floor_mid, bottom_mid) = (4 * n, 4 * n + 1);
+    let at = |ring: u32, i: u32| ring * n + i % n;
+    let mut t = Vec::new();
+    let mut labels = Vec::new();
+    for i in 0..n {
+        let j = i + 1;
+        let (st0, st1, sf0, sf1) = (at(0, i), at(0, j), at(1, i), at(1, j));
+        let (ot0, ot1, ob0, ob1) = (at(2, i), at(2, j), at(3, i), at(3, j));
+        let a0 = angles[i as usize];
+        let a1 = if j == n {
+            angles[0] + TAU
+        } else {
+            angles[j as usize]
+        };
+        let m = slot_at((a0 + a1) / 2.0);
+        let wall = if m.x.abs() <= half + 1e-9 {
+            if m.y > 0.0 { 4 } else { 5 }
+        } else if m.x > 0.0 {
+            6
+        } else {
+            7
+        };
+        for (tri, face) in [
+            ([st0, ot0, ot1], 0),
+            ([st0, ot1, st1], 0),
+            ([ob0, bottom_mid, ob1], 1),
+            ([ob0, ob1, ot1], 2),
+            ([ob0, ot1, ot0], 2),
+            ([floor_mid, sf0, sf1], 3),
+            ([sf0, st1, sf1], wall),
+            ([sf0, st0, st1], wall),
+        ] {
+            t.push(tri);
+            labels.push(face);
+        }
+    }
+    Body::with_faces(TriMesh::new(v, t).unwrap(), labels, 8).unwrap()
+}
+
+/// `body`'s floor-of-the-slot edges or face, picked where they are.
+fn slot_pick(body: &Body, face: bool) -> crate::job::Selection {
+    use crate::job::{FeatureRef, Selection};
+    use crate::setup::features::{find_edge, find_face};
+    let pick = |at: [f64; 3]| FeatureRef {
+        model: "dome".into(),
+        index: 0,
+        at,
+    };
+    let mut s = Selection::default();
+    if face {
+        let f = find_face(body, &pick([0.0, 0.0, 6.0]), 0.01).unwrap().index;
+        s.faces.push(FeatureRef {
+            index: f,
+            ..pick([0.0, 0.0, 6.0])
+        });
+    } else {
+        for at in [
+            [0.0, 3.0, 6.0],
+            [11.0, 0.0, 6.0],
+            [0.0, -3.0, 6.0],
+            [-11.0, 0.0, 6.0],
+        ] {
+            let e = find_edge(body, &pick(at), 0.01).unwrap().index;
+            s.edges.push(FeatureRef {
+                index: e,
+                ..pick(at)
+            });
+        }
+    }
+    s
+}
+
+/// The block's slot cut by `op`, a new operation of `strategy` with tool
+/// `tool` of the job's, changed by `change`.
+fn on_slotted_block(
+    strategy: &str,
+    tool: (&str, crate::job::ToolSpec),
+    change: impl FnOnce(&mut crate::job::Operation),
+) -> (SetupResult, Job) {
+    use crate::job::Operation;
+    let body = slotted_block();
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    job.tools.insert(tool.0.into(), tool.1);
+    job.setups[0].operations.clear();
+    let mut op = Operation::new("along", StrategySpec::named(strategy).unwrap());
+    op.tool = Some(tool.0.into());
+    op.passes.feed = 1200.0;
+    change(&mut op);
+    job.setups[0].operations.push(op);
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    (run_setup(&job, 0, &bodies).unwrap(), job)
+}
+
+/// The heights the last of `result`'s material stands at over the points
+/// `inside` picks, each with how high the part is there: every one at most
+/// the tolerance above it, and how many there were.
+fn left_over(result: &SetupResult, job: &Job, inside: impl Fn(DVec2) -> bool, floor: f64) -> usize {
+    let stock = result.keyframes.last().unwrap().unpack().unwrap();
+    let field = stock.field();
+    let mut count = 0;
+    for iy in 0..field.ny() {
+        for ix in 0..field.nx() {
+            let p = field.position(ix, iy).unwrap();
+            if inside(p) {
+                count += 1;
+                let h = field.get(ix, iy).unwrap();
+                assert!(h <= floor + job.tolerance, "{h} left at {p}");
+            }
+        }
+    }
+    count
+}
+
+/// Fusion's Slot, a new operation picked by the edges round the slot's floor
+/// or by its floor, with a tool as wide as the slot, ramps back and forth down
+/// to the floor along the middle and cuts along it: clean, verified, every
+/// cut on the middle, and nothing left in the slot. In levels, with a
+/// narrower tool, it goes round the walls too, and still leaves nothing.
+#[test]
+fn a_slot_is_cut_along_its_middle() {
+    use crate::path::toolpath::MoveRole;
+    let flat = |d: f64| crate::job::ToolSpec {
+        diameter: d,
+        ..toml::from_str::<Job>(JOB).unwrap().tools["rough"].clone()
+    };
+    for (tool, levels, face) in [(6.0, None, false), (4.0, Some(2.0), true)] {
+        let (result, job) = on_slotted_block("slot", ("slotter", flat(tool)), |op| {
+            op.selection = slot_pick(&slotted_block(), face);
+            op.passes.stepdown = levels;
+        });
+        let op = &result.operations[0];
+        let StrategyDetail::Slot(report) = op.detail else {
+            panic!("reported {:?}", op.detail);
+        };
+        assert_eq!(report.slots, 1);
+        assert_eq!(report.walls, u64::from(tool < 6.0));
+        assert!(result.is_clean(), "{tool}: {:?}", result.warnings());
+        assert_eq!(result.verify.gouged, 0);
+        assert_eq!(op.sim.rapid_contacts, 0);
+        assert!(op.links.ramps > 0, "{tool}: ramped down");
+        let ramps = op.path.moves().iter().filter(|m| m.role == MoveRole::Ramp);
+        // Back and forth along the middle, no further than the slot's ends, or
+        // round the walls, as far from it as the tool goes round them.
+        let reach = 3.0 - tool / 2.0;
+        for m in ramps {
+            let off = dvec2(m.to.x.clamp(-8.0, 8.0), 0.0).distance(m.to.truncate());
+            assert!(off <= reach + 1e-9, "{tool}: {}", m.to);
+        }
+        let lowest = op
+            .path
+            .moves()
+            .iter()
+            .map(|m| m.to.z)
+            .fold(f64::MAX, f64::min);
+        assert!((lowest - 6.0).abs() < 1e-9, "down to {lowest}");
+        if tool >= 6.0 {
+            for m in op.path.moves().iter().filter(|m| m.role == MoveRole::Cut) {
+                assert!(m.to.y.abs() < 1e-9, "{}", m.to);
+            }
+        }
+        let pitch = 2.0 * result.keyframes[0].unpack().unwrap().field().pitch();
+        let inside = |p: DVec2| {
+            let along = dvec2(p.x.clamp(-8.0, 8.0), 0.0);
+            p.distance(along) < 3.0 - pitch
+        };
+        assert!(left_over(&result, &job, inside, 6.0) > 100);
+    }
+}
+
+/// A slot's refusals: a tool wider than the slot, a pick that is not one,
+/// and nothing picked.
+#[test]
+fn a_slot_refuses_what_it_cannot_cut() {
+    use crate::job::{FeatureRef, Operation};
+    let body = slotted_block();
+    let wide = crate::job::ToolSpec {
+        diameter: 8.0,
+        ..toml::from_str::<Job>(JOB).unwrap().tools["rough"].clone()
+    };
+    let run = |op: Operation| {
+        let mut job: Job = toml::from_str(JOB).unwrap();
+        job.tools.insert("wide".into(), wide.clone());
+        job.setups[0].operations = vec![op];
+        let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+        run_setup(&job, 0, &bodies).unwrap_err().to_string()
+    };
+    let mut op = Operation::new("slot", StrategySpec::named("slot").unwrap());
+    op.tool = Some("rough".into());
+    let nothing = run(op.clone());
+    assert!(
+        nothing.contains("pick the edges round the floor"),
+        "{nothing}"
+    );
+    op.selection = slot_pick(&body, true);
+    op.tool = Some("wide".into());
+    let wider = run(op.clone());
+    assert!(wider.contains("narrower than the 8.000 mm tool"), "{wider}");
+    // The block's top: a rectangle with a slot in it, not a slot.
+    op.tool = Some("rough".into());
+    let top = crate::setup::features::find_face(
+        &body,
+        &FeatureRef {
+            model: "dome".into(),
+            index: 0,
+            at: [15.0, 0.0, 10.0],
+        },
+        0.01,
+    )
+    .unwrap()
+    .index;
+    op.selection.faces = vec![FeatureRef {
+        model: "dome".into(),
+        index: top,
+        at: [15.0, 0.0, 10.0],
+    }];
+    let not = run(op);
+    assert!(not.contains("is not a slot"), "{not}");
+}
+
+/// Fusion's Trace, picked by the edges round the slot's floor, its tool kept
+/// to their left, inside the loop: each cut its radius from the loop at the
+/// floor, the round ends as arcs, and the band it cuts down to the floor,
+/// clean and verified.
+#[test]
+fn a_trace_follows_the_picked_edges() {
+    use crate::job::Compensation;
+    use crate::path::toolpath::MoveRole;
+    // Long enough to reach the floor, 6 mm down, with its flutes.
+    let small = crate::job::ToolSpec {
+        diameter: 2.0,
+        flute_length: Some(8.0),
+        ..toml::from_str::<Job>(JOB).unwrap().tools["rough"].clone()
+    };
+    let (result, job) = on_slotted_block("trace", ("small", small), |op| {
+        op.selection = slot_pick(&slotted_block(), false);
+        if let StrategySpec::Trace { compensation, .. } = &mut op.strategy {
+            *compensation = Compensation::Left;
+        }
+    });
+    let op = &result.operations[0];
+    let StrategyDetail::Trace(report) = op.detail else {
+        panic!("reported {:?}", op.detail);
+    };
+    assert_eq!((report.curves, report.closed, report.passes), (1, 1, 1));
+    assert!(result.is_clean(), "{:?}", result.warnings());
+    assert_eq!(result.verify.gouged, 0);
+    assert_eq!(op.sim.rapid_contacts, 0);
+    let middle = |p: DVec2| dvec2(p.x.clamp(-8.0, 8.0), 0.0).distance(p);
+    let mut arcs = 0;
+    for m in op.path.moves().iter().filter(|m| m.role == MoveRole::Cut) {
+        assert!((m.to.z - 6.0).abs() < 1e-9);
+        assert!((middle(m.to.truncate()) - 2.0).abs() < 1e-6, "{}", m.to);
+        arcs += usize::from(matches!(m.kind, crate::path::toolpath::MoveKind::Arc(_)));
+    }
+    assert!(arcs >= 2, "the round ends as arcs");
+    let pitch = 2.0 * result.keyframes[0].unpack().unwrap().field().pitch();
+    let band = |p: DVec2| (1.0 + pitch..3.0 - pitch).contains(&middle(p));
+    assert!(left_over(&result, &job, band, 6.0) > 100);
+}
+
 fn cuts(result: &SetupResult) -> Vec<DVec2> {
     result.operations[0]
         .path

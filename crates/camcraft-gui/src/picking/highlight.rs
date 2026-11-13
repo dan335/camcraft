@@ -74,7 +74,7 @@ pub fn ghosts(scene: &PickScene, slot: &Slot) -> Highlight {
                 h.lines.extend(box_lines(&s.bounds, OutlineKind::Ghost));
             }
         }
-        Slot::WorkZero { .. } | Slot::Faces { .. } | Slot::Edges { .. } => {}
+        Slot::WorkZero { .. } | Slot::Faces { .. } | Slot::Edges { .. } | Slot::Curves { .. } => {}
     }
     h
 }

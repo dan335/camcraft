@@ -99,12 +99,20 @@ pub fn link_watched<C: Clearance, M: Material, S: Surface>(
             value: params.safe_distance,
         });
     }
-    if !params.lead_radius.is_finite() || params.lead_radius < 0.0 {
-        return Err(LinkError::BadParameter {
-            name: "lead_radius",
-            must: AT_LEAST_ZERO,
-            value: params.lead_radius,
-        });
+    for (name, r) in [
+        ("lead_radius", params.lead_radius),
+        (
+            "lead_out_radius",
+            params.lead_out_radius.unwrap_or(params.lead_radius),
+        ),
+    ] {
+        if !r.is_finite() || r < 0.0 {
+            return Err(LinkError::BadParameter {
+                name,
+                must: AT_LEAST_ZERO,
+                value: r,
+            });
+        }
     }
     if let Some(r) = params.ramp {
         check("ramp feed", r.feed)?;
@@ -376,12 +384,13 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
     /// Off the cut at `from` along the vertical lead-out, where it fits. Returns
     /// where the tool is.
     fn lead_off(&mut self, from: DVec3, feed: f64) -> Result<DVec3, LinkError> {
-        if self.p.lead_radius > 0.0 {
+        let radius = self.p.lead_out_radius.unwrap_or(self.p.lead_radius);
+        if radius > 0.0 {
             let moves = self.out.moves();
             let last = moves.len().checked_sub(2).and_then(|k| moves.get(k..));
             if let Some([before, m]) = last
                 && let Some(t) = m.tangent_at(before.to, 1.0)
-                && let Some((end, arc)) = lead_out(from, t, self.p.lead_radius)
+                && let Some((end, arc)) = lead_out(from, t, radius)
                 && self.clear_of_part(from, &arc.chords(from, end, self.p.tolerance))
             {
                 self.out

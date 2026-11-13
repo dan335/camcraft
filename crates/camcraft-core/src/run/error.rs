@@ -14,6 +14,8 @@ use crate::strategy::StrategyError;
 use crate::strategy::drilling::HoleError;
 use crate::strategy::reach::ReachError;
 use crate::strategy::round::RoundError;
+use crate::strategy::slot::SlotError;
+use crate::strategy::trace::TraceError;
 
 /// A setup that could not be run.
 #[derive(Debug, thiserror::Error)]
@@ -72,6 +74,22 @@ pub enum RunError {
         op: String,
         /// Why.
         source: RoundError,
+    },
+    /// A slot's picks are not slots, or one cannot be cut.
+    #[error("operation '{op}': {source}")]
+    Slots {
+        /// Which operation.
+        op: String,
+        /// Why.
+        source: SlotError,
+    },
+    /// A trace's picks cannot be followed.
+    #[error("operation '{op}': {source}")]
+    Trace {
+        /// Which operation.
+        op: String,
+        /// Why.
+        source: TraceError,
     },
     /// The rest of the tool would meet the part, and the operation was to
     /// fail where it would: Fusion's Shaft and Holder's Fail.
@@ -173,6 +191,25 @@ impl OperationError for RoundError {
             // Stopped, or failed making the path, as any strategy does.
             RoundError::Strategy(e) => e.named(op),
             source => RunError::Rounds { op, source },
+        }
+    }
+}
+
+impl OperationError for SlotError {
+    fn named(self, op: String) -> RunError {
+        match self {
+            // Stopped, or failed making the path, as any strategy does.
+            SlotError::Strategy(e) => e.named(op),
+            source => RunError::Slots { op, source },
+        }
+    }
+}
+
+impl OperationError for TraceError {
+    fn named(self, op: String) -> RunError {
+        match self {
+            TraceError::Strategy(e) => e.named(op),
+            source => RunError::Trace { op, source },
         }
     }
 }

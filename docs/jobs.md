@@ -32,7 +32,7 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
 
 An operation has a strategy (parallel, scallop, contour, flat, spiral, radial or
 morphed spiral finishing, adaptive clearing, pocket clearing, a 2D profile, a 2D
-pocket, facing, bore, circular or drilling), a tool, heights, passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
+pocket, facing, slot, trace, bore, circular or drilling), a tool, heights, passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
 along the surface, offset in from the boundary and from where the tool stops
 touching the part, so the cusp is the same on a slope as on the flat
 ([decision 0009](decisions/0009-scallop-distance-field.md)). It cuts `direction =
@@ -84,8 +84,9 @@ retract height (Fusion's, 5 mm over it) and the top and bottom it cuts between. 
 Fusion's multiple depths, shared the same way: adaptive and pocket clearing must have one,
 profiles, pockets and facing cut the bottom in one pass without (and a new one
 starts so, as Fusion's 2D Contour, 2D Pocket and Face start with Multiple Depths
-off), a circular starts with them on at a millimetre, as Fusion's does, and
-parallel, bore and drilling never read it. An operation may be
+off), a circular starts with them on at a millimetre, as Fusion's does, a slot
+and a trace start with them off, as Fusion's do, and parallel, bore and
+drilling never read it. An operation may be
 turned off, which leaves it in the job but out of every run, check and post.
 
 ```toml
@@ -220,6 +221,89 @@ selection = { faces = [{ model = "part", index = 12, at = [37.0, 10.0, 16.0] }] 
 passes = { stepover = 3.0 }
 ```
 
+**Slot** is Fusion's Slot ([decision 0023](decisions/0023-slot-and-trace.md)):
+slots milled along their middles. A slot is picked as Fusion's is, by the edges
+round its floor (`selection.edges`; the app takes the whole loop at a click),
+or by its floor (`selection.faces`). The loop must lie level and close, and be a
+slot's: two sides a constant width apart, straight, arcs about one centre, or
+several of either, with a round end at each end half that width across. A loop
+that is not one is refused, saying so, as is a tool wider than the slot. Each
+slot is cut from the Top (the stock's unless set) down to its own floor, the
+height of its picked loop, raised by the axial stock to leave; a Bottom set
+takes every slot there. It has only axial stock to leave, as Fusion's.
+
+Without multiple depths it goes to the floor in one level, as Fusion's Slot
+ramps to the depth; with them (a millimetre a level when ticked, Fusion's
+Maximum Stepdown), each level a whole stepdown and the last what is left. At
+each level the tool runs along the middle from one end's centre to the other,
+each level the other way from the one above. The linker takes it down to each
+level by ramping back and forth along the middle at the ramp angle, from the
+safe distance over the material, each way no deeper than
+`linking.ramp_stepdown` (Fusion's Maximum Ramp Stepdown: the stepdown, or a
+millimetre without one). A tool narrower than the slot then goes once round
+its walls at the level, climbing, as a pass of its own the linker ramps into
+round it; one more than three times narrower leaves a band either side of the
+middle, and the run says so (CC219). `repeat = true` (Fusion's Repeat Finishing
+Pass) cuts the last pass at the floor twice; `backoff_distance` (none) backs
+the tool off the wall at the end of each slot before it lifts: back along the
+middle, or in from the walls. Slots are cut from the first picked, then always
+the nearest, or in the order picked with `preserve_order = true`. Between
+levels and slots it stays down within twice the tool, as Fusion's. Arcs, the
+ends round the walls and a curved slot's middle, are posted as `G2` or `G3`.
+
+```toml
+[[setup.operation]]
+name = "slot"
+strategy = "slot"
+tool = "flat-6"
+backoff_distance = 0.5
+selection = { edges = [{ model = "part", index = 31, at = [0.0, 3.0, 6.0] }] }
+passes = { stepdown = 1.0 }
+```
+
+**Trace** is Fusion's Trace ([decision 0023](decisions/0023-slot-and-trace.md)):
+picked edges followed (`selection.edges`), open or closed, each at its own
+height. Edges joined end to end, where exactly two meet at a corner, are
+followed as one; a round edge lying level is followed as an arc and posted as
+one. A closed curve runs anticlockwise seen from above; an open one from its end
+lowest in X, then Y, then Z. `compensation` (Fusion's Sideways Compensation) is
+`"center"` (the default), the tool's tip on the curve; `"left"` or `"right"`,
+its centre the tool's radius and the radial stock to leave to that side of the
+curve as it runs, its corners rounded outside and trimmed inside, and a curve
+too tight for that refused. Left of a closed curve is inside it, and climbs
+with a clockwise spindle. A V-bit traces only on the curve. Every pass is moved
+up by `axial_offset` (negative goes below the curve) and the axial stock to
+leave; on the curve, it has no radial stock to leave. An open curve's passes run
+on past each end along it by `pass_extension`. What of a pass is steeper than
+`max_angle` (90°: all of it) is left out, the pass broken there, and said
+(CC220).
+
+With multiple depths (off to start, a millimetre a level when ticked), each
+curve is cut `stepdowns` (1) stepdowns above itself, then on itself: Fusion's
+Number of Stepdowns. `order = "by-depth"` (the default, Fusion's Order by Depth)
+cuts every curve at a level before the next; `"by-area"` each curve all the way
+down first. `both_ways = true` cuts an open curve's levels back and forth.
+`repeat = true` cuts each curve's last pass twice. Curves are followed from the
+first picked, always to the nearest next, or with `preserve_order = true` in
+the order picked. Between passes it lifts, to the retract height as a new
+Trace of Fusion's does (`linking.retraction = "full"` in a new operation; a
+job file that leaves it out has the minimum, as every other), and plunges onto
+the next: it has no ramp. With `keep_tool_down = true` it stays down over the
+part between passes no further apart than the stay-down distance (50 mm).
+`lead_in` and `lead_out` (off) come down onto each pass and go up off it along
+a vertical arc of `linking.lead_radius` (a tenth of the tool). It has no Top or
+Bottom.
+
+```toml
+[[setup.operation]]
+name = "groove"
+strategy = "trace"
+tool = "ball-3"
+axial_offset = -0.5
+selection = { edges = [{ model = "part", index = 14, at = [10.0, 0.0, 12.0] }] }
+linking = { retraction = "full" }
+```
+
 **Tabs** (`passes.tabs`) hold what a cut frees: bridges of material left
 standing across it, as Fusion's holding tabs. They go on profiles, as Fusion's
 go only on a 2D contour: every ring a profile cuts is beside what it keeps,
@@ -314,7 +398,7 @@ under the tool's radius; down, in 3D with a ball or bullnose, within its corner
 radius (a flat end, or a 2D floor, may go any depth). Every operation has it,
 and cuts with as much as its strategy uses: a drill none, a bore and a circular
 beside the wall and under the floor, a profile on the
-boundary only its floor's. New adaptive, pocket clearing and 2D pockets start at 0.5 mm
+boundary, a slot and a trace on the curve only their floors'. New adaptive, pocket clearing and 2D pockets start at 0.5 mm
 each way, as Fusion's roughing, its 2D Pocket among it, does; everything else at
 none, which is not written. The 3D
 strategies grow the tool by it (`camcraft_core::cutter::allowance`); a 2D one moves its
@@ -433,7 +517,8 @@ distance is made without lifting, at the cutting feed; the distance is Fusion's
 Maximum Stay-Down Distance for the strategy: 50 mm for parallel and contour;
 twice the tool's diameter for scallop and flat; five times for spiral, radial,
 morphed spiral, pocket clearing, adaptive clearing and the 2D strategies but
-bore, which lifts between its passes.
+bore, which lifts between its passes, slot, twice, and trace, which lifts
+unless it keeps the tool down, then 50 mm.
 Parallel and the other finishing strategies ride over the part: between passes
 side by side that run opposite ways, as zigzag passes do, by Fusion's default
 *smooth* transition, a half turn out past their ends as wide as they are apart,
@@ -629,6 +714,8 @@ with.
 | CC216 | note    | the shank and holder were checked with an assumed length or size |
 | CC217 | note    | no holder or spindle nose to check: only the shank was           |
 | CC218 | warn    | a bore or circular left a core standing in a hole                |
+| CC219 | warn    | a slot more than three tools wide left a band uncut              |
+| CC220 | note    | stretches of a trace steeper than its maximum angle left out     |
 | CC299 | warn    | a warning from reading the model                                 |
 
 A **plunge** is a continuous descent steeper than `PLUNGE_RATIO` (10:1) that falls

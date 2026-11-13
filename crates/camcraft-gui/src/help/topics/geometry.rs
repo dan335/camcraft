@@ -30,4 +30,6 @@ topics! {
         "Faces picked in the view. Their outline seen from above is what the operation cuts or keeps to.";
     EDGES: "Edges",
         "Edge loops picked in the view. A click takes the whole loop the edge goes round.";
+    CURVES: "Edges",
+        "Edges picked in the view, open or closed. A click takes the edge and the edges running on smoothly from it.";
 }

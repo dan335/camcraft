@@ -77,9 +77,10 @@ pub struct Linking {
     /// ([`Operation::helix_diameter`]), smaller where there is no room for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helix_diameter: Option<f64>,
-    /// The most a helix or a ramp round a ring descends in one lap, in
-    /// millimetres: Fusion's maximum ramp stepdown. The operation's stepdown
-    /// when not given, or the tool's diameter without one.
+    /// The most a helix or a ramp round a ring descends in one lap, and a
+    /// slot's ramp each way along it, in millimetres: Fusion's maximum ramp
+    /// stepdown. The operation's stepdown when not given, or without one the
+    /// tool's diameter, or a slot's millimetre ([`Operation::ramp_stepdown`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ramp_stepdown: Option<f64>,
 }

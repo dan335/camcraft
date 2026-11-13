@@ -576,3 +576,142 @@ margin = [5.0, 5.0, 2.0]
         }
     }
 }
+
+/// Fusion's Trace and Slot, each a new operation as the app makes one, on the
+/// part made in Fusion for the basic operations (`ops_block.step`). The trace
+/// follows the edges round its pocket's floor, 8 mm down, a 6 mm flat end mill
+/// kept to their left, inside: every check passes, its program has the
+/// pocket's round corners as arcs, and it cuts the band beside the pocket's
+/// wall down to its floor. The block has no slot: a slot picked by the same
+/// edges is refused, as the loop of a pocket, not a slot.
+#[test]
+fn trace_follows_a_pocket_floor_and_slot_refuses_it() {
+    use camcraft_core::job::{Compensation, FeatureRef, Operation};
+
+    use crate::test_support::fixture;
+    use crate::{load_models, models_of, program, setup_profile};
+
+    let model = fixture("ops_block.step")
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    let text = format!(
+        r#"
+version = 1
+tolerance = 0.01
+
+[tools.flat6]
+kind = "flat"
+diameter = 6.0
+number = 1
+rpm = 18000
+flutes = 3
+flute_length = 20.0
+shoulder_length = 20.0
+shank_diameter = 6.0
+overall_length = 63.0
+stickout = 22.5
+
+[[model]]
+name = "part"
+path = "{model}"
+
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [5.0, 5.0, 2.0]
+
+[[setup]]
+name = "trace"
+models = ["part"]
+stocks = ["block"]
+post = "masso"
+"#
+    );
+    let mut job = parse_job(&text, "ops_block").unwrap();
+    // The pocket's floor, 14 mm up, from -40 to 0 in X and -18 to 18 in Y,
+    // its corners 6 mm round: a point on each of its eight edges.
+    let s = 6.0 * std::f64::consts::FRAC_1_SQRT_2;
+    let edges: Vec<FeatureRef> = [
+        [-20.0, 18.0],
+        [0.0, 0.0],
+        [-20.0, -18.0],
+        [-40.0, 0.0],
+        [-34.0 - s, 12.0 + s],
+        [-6.0 + s, 12.0 + s],
+        [-34.0 - s, -12.0 - s],
+        [-6.0 + s, -12.0 - s],
+    ]
+    .into_iter()
+    .map(|[x, y]| FeatureRef {
+        model: "part".into(),
+        index: 0,
+        at: [x, y, 14.0],
+    })
+    .collect();
+    let mut trace = Operation::fresh(
+        "trace",
+        StrategySpec::named("trace").unwrap(),
+        (Some("flat6".into()), job.tools.get("flat6"), None),
+    );
+    trace.passes.feed = 1500.0;
+    trace.selection.edges.clone_from(&edges);
+    if let StrategySpec::Trace { compensation, .. } = &mut trace.strategy {
+        *compensation = Compensation::Left;
+    }
+    job.setups[0].operations = vec![trace];
+    // Read back, so its expressions are worked out as a job read from disk has
+    // them.
+    let job = parse_job(&job_text(&job).unwrap(), "ops_block").unwrap();
+    job.validate().unwrap();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let loaded = load_models(&job, dir, &[0]).unwrap();
+    let ran = run_setup(&job, 0, &models_of(&loaded)).unwrap();
+    assert!(ran.checks.failures().count() == 0, "{:?}", ran.checks);
+    assert_eq!(ran.result.verify.gouged, 0);
+    let op = &ran.result.operations[0];
+    assert_eq!(op.strategy, "trace");
+    assert_eq!(op.sim.rapid_contacts, 0);
+    assert!(op.warnings.is_empty(), "{:?}", op.warnings);
+    let profile = setup_profile(&job.setups[0], dir, None).unwrap();
+    let (program, _) = program(op, 54, &profile, &op.name).unwrap();
+    let arcs = program
+        .lines()
+        .filter(|l| l.contains("G2") || l.contains("G3"))
+        .count();
+    assert!(arcs >= 4, "{arcs} arcs\n{program}");
+    // How far inside the pocket's wall a point is, seen from above.
+    let inside = |p: glam::DVec2| {
+        let q = (p - glam::dvec2(-20.0, 0.0)).abs() - glam::dvec2(20.0 - 6.0, 18.0 - 6.0);
+        let d = q.max(glam::DVec2::ZERO).length() + q.x.max(q.y).min(0.0) - 6.0;
+        -d
+    };
+    let stock = ran.result.keyframes[1].unpack().unwrap();
+    let field = stock.field();
+    let edge = 2.0 * field.pitch();
+    let mut band = 0;
+    for iy in 0..field.ny() {
+        for ix in 0..field.nx() {
+            let p = field.position(ix, iy).unwrap();
+            let d = inside(p);
+            if d > edge && d < 6.0 - edge {
+                band += 1;
+                let left = field.get(ix, iy).unwrap();
+                assert!(left <= 14.0 + job.tolerance, "{left:.4} left at {p}");
+            }
+        }
+    }
+    assert!(band > 100, "{band} cells in the band");
+
+    // The same edges picked for a slot: a pocket's floor, not a slot's.
+    let mut slotted = job.clone();
+    let mut slot = Operation::fresh(
+        "slot",
+        StrategySpec::named("slot").unwrap(),
+        (Some("flat6".into()), job.tools.get("flat6"), None),
+    );
+    slot.selection.edges = edges;
+    slotted.setups[0].operations = vec![slot];
+    let err = run_setup(&slotted, 0, &models_of(&loaded)).unwrap_err();
+    assert!(err.to_string().contains("is not a slot"), "{err}");
+}

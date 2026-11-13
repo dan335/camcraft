@@ -1689,6 +1689,8 @@ fn every_strategy_is_named() {
         "drill",
         "bore",
         "circular",
+        "slot",
+        "trace",
     ] {
         let spec = StrategySpec::named(name).unwrap();
         assert_eq!(spec.name(), name);
@@ -1831,6 +1833,130 @@ fn bore_and_circular_read_and_write_back() {
         assert_eq!(op.passes.stepover, 3.0);
         assert_eq!(op.linking.leads.unwrap().straight, Some(0.3));
     }
+}
+
+/// A slot and a trace read with Fusion's defaults, cut what is picked, write
+/// back only what differs, and refuse what cannot be cut: a V-bit in a slot or
+/// beside a curve, a negative backoff, a maximum angle that is no angle, no
+/// levels above a curve with multiple depths.
+#[test]
+fn slot_and_trace_read_and_write_back() {
+    let finish = "strategy = \"parallel\"\ntool = \"finish-4-ball\"\nangle = 90.0\n";
+    let picked =
+        "selection = { edges = [{ model = \"part\", index = 3, at = [1.0, 2.0, 3.0] }] }\n";
+    let slot_own = "backoff_distance = 0.5\nrepeat = true\npreserve_order = true\n";
+    let trace_own = "compensation = \"left\"\naxial_offset = -0.2\npass_extension = 1.0\n\
+                     max_angle = 45.0\nstepdowns = 3\norder = \"by-area\"\nboth_ways = true\n\
+                     repeat = true\npreserve_order = true\nkeep_tool_down = true\n\
+                     lead_in = true\nlead_out = true\n";
+    for (name, own) in [("slot", slot_own), ("trace", trace_own)] {
+        let plain = SAMPLE.replace(
+            finish,
+            &format!("strategy = \"{name}\"\ntool = \"rough-6-flat\"\n{picked}"),
+        );
+        let j: Job = toml::from_str(&plain).unwrap();
+        j.validate().unwrap();
+        let op = &j.setups[0].operations[1];
+        assert_eq!(op.strategy, StrategySpec::named(name).unwrap());
+        assert!(op.cuts_selection());
+        assert!(op.strategy.uses().curves.is_some());
+        let written = toml::to_string(&j).unwrap();
+        for key in [
+            "backoff_distance",
+            "repeat",
+            "preserve_order",
+            "compensation",
+            "axial_offset",
+            "pass_extension",
+            "max_angle",
+            "stepdowns",
+            "order",
+            "both_ways",
+            "keep_tool_down",
+            "lead_in",
+            "lead_out",
+        ] {
+            assert!(!written.contains(&format!("\n{key} =")), "{key}: {written}");
+        }
+        assert_eq!(toml::from_str::<Job>(&written).unwrap(), j);
+
+        // Every setting of its own, as written, reads back.
+        let set: Job = toml::from_str(&plain.replace(picked, &format!("{picked}{own}"))).unwrap();
+        set.validate().unwrap();
+        assert_ne!(
+            set.setups[0].operations[1].strategy,
+            j.setups[0].operations[1].strategy
+        );
+        let written = toml::to_string(&set).unwrap();
+        assert_eq!(toml::from_str::<Job>(&written).unwrap(), set);
+
+        let with = |to: &str| -> Job {
+            toml::from_str(&plain.replace(picked, &format!("{picked}{to}"))).unwrap()
+        };
+        let refused = |to: &str| assert!(with(to).validate().is_err(), "{name}: {to}");
+        let fine = |to: &str| assert!(with(to).validate().is_ok(), "{name}: {to}");
+        if name == "slot" {
+            refused("backoff_distance = -1.0\n");
+        } else {
+            refused("max_angle = 0.0\n");
+            refused("max_angle = 91.0\n");
+            fine("stepdowns = 0\n");
+            let mut levels = with("stepdowns = 0\n");
+            levels.setups[0].operations[1].passes.stepdown = Some(1.0);
+            assert!(levels.validate().is_err(), "no levels above the curve");
+            refused("axial_offset = nan\n");
+        }
+        // A V-bit cuts no slot's walls straight; it traces only on the curve.
+        let mut v = j.clone();
+        v.tools.insert("v".into(), vbit());
+        v.tools.get_mut("v").unwrap().number = 5;
+        v.setups[0].operations[1].tool = Some("v".into());
+        if name == "slot" {
+            assert!(matches!(v.validate(), Err(JobError::WrongTool { .. })));
+        } else {
+            v.validate().unwrap();
+            if let StrategySpec::Trace { compensation, .. } =
+                &mut v.setups[0].operations[1].strategy
+            {
+                *compensation = Compensation::Right;
+            }
+            assert!(matches!(v.validate(), Err(JobError::WrongTool { .. })));
+        }
+    }
+    // Both start with Multiple Depths off, as Fusion's; a slot ramps along
+    // itself, its legs a millimetre down each without levels; a trace has no
+    // ramp, no Top or Bottom, and starts with a full retraction and the tool
+    // lifted between passes.
+    let slot = Operation::new("s", StrategySpec::named("slot").unwrap());
+    assert_eq!(slot.passes.stepdown, None);
+    assert_eq!(slot.ramp_stepdown(6.0), 1.0);
+    assert!(slot.strategy.uses().ramp && slot.entry().is_none());
+    assert_eq!(slot.strategy.uses().stock_to_leave, Leave::Axial);
+    let trace = Operation::new("t", StrategySpec::named("trace").unwrap());
+    assert_eq!(trace.passes.stepdown, None);
+    assert_eq!(trace.linking.retraction, Retraction::Full);
+    assert_eq!(trace.stay_down(6.0), 0.0);
+    let uses = trace.strategy.uses();
+    assert!(!uses.ramp && uses.top.is_none() && uses.bottom.is_none());
+    assert_eq!(uses.stock_to_leave, Leave::Axial);
+    let mut kept = trace.clone();
+    if let StrategySpec::Trace {
+        keep_tool_down,
+        compensation,
+        ..
+    } = &mut kept.strategy
+    {
+        *keep_tool_down = true;
+        *compensation = Compensation::Left;
+    }
+    assert_eq!(kept.stay_down(6.0), 50.0);
+    assert_eq!(kept.strategy.uses().stock_to_leave, Leave::Both);
+    // A job file that leaves the retraction out reads it as every other
+    // strategy's.
+    assert_eq!(
+        StrategySpec::named("trace").unwrap().fresh_retraction(),
+        Retraction::Full
+    );
 }
 
 /// Scallop reads with Fusion's defaults, both ways from the boundary in on

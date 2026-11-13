@@ -429,7 +429,18 @@ impl Picking {
                 Kind::Face => sel.faces.get(i),
                 Kind::Edge => sel.edges.get(i),
             }?;
-            row_target(scene, doc, r, kind).map(|t| slots::whole_loop(scene, t))
+            // A trace's edges as the chain they run on along; others' loops.
+            let chains = from
+                .op
+                .and_then(|i| doc.operation(setup, i))
+                .is_some_and(|o| o.strategy.uses().curves == Some(job::Curves::Traced));
+            row_target(scene, doc, r, kind).map(|t| {
+                if chains {
+                    slots::whole_chain(scene, t)
+                } else {
+                    slots::whole_loop(scene, t)
+                }
+            })
         });
         let under = row.or_else(|| self.hover.clone());
         match under {

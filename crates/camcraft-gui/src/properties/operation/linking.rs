@@ -49,16 +49,30 @@ pub(super) fn linking(
         d.row(ui, &link::SAFE_DISTANCE, "linking.safe_distance", |ui| {
             m.length_field(ui, &mut op.linking.safe_distance, 0.1, 1_000.0, "");
         });
+        // A trace stays down only when it keeps the tool down, as Fusion's.
+        let mut kept_down = true;
+        if let StrategySpec::Trace { keep_tool_down, .. } = &mut op.strategy {
+            d.row(ui, &link::KEEP_TOOL_DOWN, "keep_tool_down", |ui| {
+                ui.checkbox(keep_tool_down, "between passes, where they are near");
+            });
+            kept_down = *keep_tool_down;
+        }
         if uses.stay_down {
             // Fusion's for the strategy: a length, or a multiple of the tool.
             let absent = match uses.reach {
                 Reach::Mm(mm) => format!("up to {}", m.length(f64::from(mm), 0)),
                 Reach::Tools(k) => of_tool(f64::from(k), &format!("up to {k} × the tool")),
             };
-            let start = op.stay_down(across);
-            d.row(ui, &link::STAY_DOWN, "linking.stay_down", |ui| {
-                widgets::optional(ui, &mut op.linking.stay_down, start, &absent, |ui, v| {
-                    m.length_field(ui, v, 0.5, 10_000.0, "up to ");
+            // What it comes to kept down, for a trace that is not yet.
+            let start = op
+                .linking
+                .stay_down
+                .unwrap_or_else(|| uses.reach.of(across));
+            widgets::dependent(ui, kept_down, |ui| {
+                d.row(ui, &link::STAY_DOWN, "linking.stay_down", |ui| {
+                    widgets::optional(ui, &mut op.linking.stay_down, start, &absent, |ui, v| {
+                        m.length_field(ui, v, 0.5, 10_000.0, "up to ");
+                    });
                 });
             });
         }
@@ -93,12 +107,28 @@ pub(super) fn linking(
                 m.length_field(ui, lift_height, 0.05, 100.0, "");
             });
         }
+        // A trace's vertical leads are each on or off, the radius the same.
+        let mut leads_on = true;
+        if let StrategySpec::Trace {
+            lead_in, lead_out, ..
+        } = &mut op.strategy
+        {
+            d.row(ui, &link::LEAD_IN, "lead_in", |ui| {
+                ui.checkbox(lead_in, "down onto each pass along an arc");
+            });
+            d.row(ui, &link::LEAD_OUT, "lead_out", |ui| {
+                ui.checkbox(lead_out, "up off each pass along an arc");
+            });
+            leads_on = *lead_in || *lead_out;
+        }
         if uses.lead_radius {
             let absent = of_tool(0.1, "a tenth of the tool");
             let start = op.lead_radius(across);
-            d.row(ui, &link::LEAD_RADIUS, "linking.lead_radius", |ui| {
-                widgets::optional(ui, &mut op.linking.lead_radius, start, &absent, |ui, v| {
-                    m.length_field(ui, v, 0.05, 100.0, "");
+            widgets::dependent(ui, leads_on, |ui| {
+                d.row(ui, &link::LEAD_RADIUS, "linking.lead_radius", |ui| {
+                    widgets::optional(ui, &mut op.linking.lead_radius, start, &absent, |ui, v| {
+                        m.length_field(ui, v, 0.05, 100.0, "");
+                    });
                 });
             });
         }
@@ -123,12 +153,20 @@ pub(super) fn linking(
                 });
             });
             let stepdown = op.stepdown();
-            let absent = match (stepdown, diameter) {
+            // A slot's ramp goes back and forth along it: its most is each way.
+            let slot = matches!(op.strategy, StrategySpec::Slot { .. });
+            let absent = match (stepdown, slot) {
                 (Some(d), _) => format!("the stepdown: {}", m.length(d, 2)),
-                (None, _) => of_tool(1.0, "the tool's diameter"),
+                (None, true) => format!("Fusion's: {}", m.length(op.ramp_stepdown(across), 2)),
+                (None, false) => of_tool(1.0, "the tool's diameter"),
             };
             let start = op.ramp_stepdown(across);
-            d.row(ui, &link::MOST_PER_LAP, "linking.ramp_stepdown", |ui| {
+            let topic = if slot {
+                &link::MOST_PER_LEG
+            } else {
+                &link::MOST_PER_LAP
+            };
+            d.row(ui, topic, "linking.ramp_stepdown", |ui| {
                 widgets::optional(
                     ui,
                     &mut op.linking.ramp_stepdown,

@@ -413,6 +413,95 @@ impl Topology {
         Some(out)
     }
 
+    /// The edges running on smoothly from edge `e` both ways, in order from one
+    /// end of them to the other, `e` among them: at each corner, the other edge
+    /// that leaves it turning least from the way the chain arrives, if that is
+    /// no more than `most` radians, in space. A closed edge is a chain by itself,
+    /// and a chain that comes back round to `e` stops there. So a hole's rim in
+    /// halves is taken whole, a rounded outline all the way round, and a square
+    /// one side at a time.
+    ///
+    /// `points` gives an edge's points, in order.
+    pub fn smooth_chain(&self, e: u32, points: impl Fn(u32) -> Vec<DVec3>, most: f64) -> Vec<u32> {
+        let Some(first) = self.edge(e) else {
+            return vec![e];
+        };
+        let Some([start, end]) = first.ends.filter(|_| !first.closed) else {
+            return vec![e];
+        };
+        // Edge `n`'s points in order away from vertex `from`, and the vertex at
+        // its far end.
+        let away = |n: u32, from: u32| {
+            let edge = self.edge(n)?;
+            let [a, b] = edge.ends?;
+            let far = if a == from {
+                b
+            } else if b == from {
+                a
+            } else {
+                return None;
+            };
+            let mut p = points(n);
+            if edge.points.first() != Some(&self.vertex(from)?.mesh_vertex) {
+                p.reverse();
+            }
+            Some((p, far))
+        };
+        let way = |p: &[DVec3], at_end: bool| -> Option<DVec3> {
+            if at_end {
+                let to = *p.last()?;
+                p.iter().rev().map(|q| to - *q).find(|d| d.length() > 1e-9)
+            } else {
+                let from = *p.first()?;
+                p.iter().map(|q| *q - from).find(|d| d.length() > 1e-9)
+            }
+            .map(DVec3::normalize)
+        };
+        let mut chain = vec![e];
+        // Out from each end, the way `e` arrives there; each edge once.
+        let mut ahead: Vec<u32> = Vec::new();
+        let mut behind: Vec<u32> = Vec::new();
+        for (from, list) in [(start, &mut ahead), (end, &mut behind)] {
+            // Along `e` from `from`, to its other end, and on from there.
+            let Some((p, mut at)) = away(e, from) else {
+                continue;
+            };
+            let Some(mut heading) = way(&p, true) else {
+                continue;
+            };
+            for _ in 0..self.edges.len() {
+                let Some(v) = self.vertex(at) else { break };
+                let next = v
+                    .edges
+                    .iter()
+                    .filter(|&&n| n != e && !chain.contains(&n))
+                    .filter_map(|&n| {
+                        let (p, far) = away(n, at)?;
+                        let leave = way(&p, false)?;
+                        let angle = heading.dot(leave).clamp(-1.0, 1.0).acos();
+                        Some((n, far, way(&p, true)?, angle))
+                    })
+                    .min_by(|a, b| a.3.total_cmp(&b.3).then(a.0.cmp(&b.0)))
+                    .filter(|c| c.3 <= most);
+                let Some((n, far, arrive, _)) = next else {
+                    break;
+                };
+                list.push(n);
+                chain.push(n);
+                heading = arrive;
+                at = far;
+                // Round to where it started: closed.
+                if at == start || at == end {
+                    break;
+                }
+            }
+        }
+        behind.reverse();
+        behind.push(e);
+        behind.extend(ahead);
+        behind
+    }
+
     /// Edge `e`'s points, in order, from `mesh`, the mesh this topology is of. A
     /// closed edge's first point is not repeated.
     pub fn edge_points<'a>(

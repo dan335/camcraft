@@ -86,6 +86,35 @@ fn edges_toggle_a_loop_at_a_time() {
     assert!(picked(&doc).is_empty());
 }
 
+/// A trace's edges are picked a chain at a time into its edges, as a loop is,
+/// and taken out the same way; a face means nothing to them.
+#[test]
+fn curves_toggle_a_chain_at_a_time() {
+    let mut doc = doc_with_op();
+    let setup = doc.job.setups[0].name.clone();
+    let slot = Slot::Curves { setup, op: 0 };
+    assert_eq!(slot.accept(), Accept::Edges);
+    assert!(!slot.single());
+    let same = |r: &FeatureRef, _| Some(r.index);
+    let chain = Target::Loop {
+        model: "p".into(),
+        edges: vec![(7, DVec3::X), (8, DVec3::Y)],
+    };
+    let picked = |doc: &Document| {
+        doc.job.setups[0].operations[0]
+            .selection
+            .edges
+            .iter()
+            .map(|r| r.index)
+            .collect::<Vec<_>>()
+    };
+    assert!(apply(&mut doc, &slot, &chain, same));
+    assert_eq!(picked(&doc), [7, 8]);
+    assert!(!apply(&mut doc, &slot, &face(2), same));
+    assert!(apply(&mut doc, &slot, &chain, same));
+    assert!(picked(&doc).is_empty());
+}
+
 /// A saved pick found now under another number is still the same face: the
 /// click takes it out rather than adding it twice.
 #[test]

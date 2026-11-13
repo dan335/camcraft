@@ -24,6 +24,8 @@ use crate::strategy::pocket_clearing::ClearingReport;
 use crate::strategy::projected::ProjectReport;
 use crate::strategy::round::RoundReport;
 use crate::strategy::scallop::ScallopReport;
+use crate::strategy::slot::SlotReport;
+use crate::strategy::trace::TraceReport;
 use crate::strategy::waterline::WaterlineReport;
 
 /// What a strategy reported, in its own terms.
@@ -63,6 +65,10 @@ pub enum StrategyDetail {
     Bore(RoundReport),
     /// Circular.
     Circular(RoundReport),
+    /// Slot.
+    Slot(SlotReport),
+    /// Trace.
+    Trace(TraceReport),
 }
 
 /// How an operation's paths came to be in a run.

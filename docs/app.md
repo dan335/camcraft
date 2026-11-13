@@ -26,12 +26,13 @@ The window is the job's tree on the left, the properties panel beside it, the vi
 and the transport under the view. The Add menu adds models, stocks, setups and
 operations; View opens the log and the checks in their own windows; the Setup menu
 posts. Operations are grouped as Fusion's toolbar groups them, in the Add menu and
-a setup's right-click menu alike: 2D (face, pocket, profile, bore, circular), 3D
+a setup's right-click menu alike: 2D (face, pocket, profile, slot, trace, bore,
+circular), 3D
 (adaptive clearing, pocket clearing, then parallel, scallop, contour, flat,
 spiral, radial and morphed spiral) and drilling. Fusion's operations not built yet
 are listed after the rest of their group, greyed, and say *Not implemented yet*
-under the pointer: in 2D, 2D adaptive clearing, slot, trace, thread, engrave and
-2D chamfer; in 3D, after the finishing, steep and shallow, ramp, pencil, project,
+under the pointer: in 2D, 2D adaptive clearing, thread, engrave and 2D
+chamfer; in 3D, after the finishing, steep and shallow, ramp, pencil, project,
 morph, blend, flow, corner and geodesic. They are listed in `browser::PLANNED`,
 which an operation leaves once it is built.
 
@@ -136,7 +137,17 @@ it.
   *Repeat passes*. A circular starts with *Multiple depths* ticked at a
   millimetre, with *Even stepdowns* under it; a bore's *Finishing passes* has
   only its stepover. Their *Linking* has the leads, with *Lead to center* under
-  them. *Stock to
+  them. A slot's *Passes* has *Backoff distance*, *Repeat finishing pass* and
+  *Preserve order*; it has *Multiple depths* (a millimetre when ticked, as
+  Fusion's Maximum Stepdown) and only a floor's stock to leave; its *Linking* has
+  the ramp angle and feed and *Most per leg*, how far its ramp back and forth
+  along the slot goes down each way. A trace's *Passes* has *Sideways
+  compensation* (on the curve, left or right), *Axial offset*, *Pass extension*,
+  *Maximum angle*, *Repeat passes* and *Preserve order*; under *Multiple depths*,
+  the *Number of stepdowns*, by depth or by curve, and *Both ways*. Its
+  *Linking* has *Keep tool down*, with the stay-down distance under it, and
+  *Lead-in* and *Lead-out*, with the lead radius under them; its *Heights*
+  only the clearance and retract heights. *Stock to
   leave*, as Fusion's, is ticked to leave any (starting at 0.5 mm), then its
   wall and floor amounts, negative to cut past the part; the floor follows the
   wall until it is given its own. A drill has none, and a profile on the
@@ -216,6 +227,14 @@ the part, where an offset of 0 would only touch its walls.
   round the outside of a boss. The faces of one wall, as a file often splits a
   cylinder into halves, are taken together: one is enough where it runs the
   wall's whole height. Its *Geometry* has no edges to pick.
+- A slot takes the edges round each slot's floor, a click taking the whole
+  loop as for a boundary, or its floor as a face. Each slot is cut from the Top
+  down to its own floor.
+- A trace takes edges, open or closed, as Fusion's chain selection does: a click
+  takes the edge and the edges running on from it without a corner, either way,
+  so a hole's rim in halves, or an outline rounded all the way round, comes
+  whole, and a square outline a side at a time. The panel lists each chain once.
+  Picked edges that meet end to end are followed as one curve.
 - A 2D profile or pocket takes faces and edges as what it cuts round or clears.
   The view draws that boundary (wide), each piece of it at the height of what is
   picked in it so it lies on the picks, or at the stock's top with nothing

@@ -180,8 +180,12 @@ pub(super) fn show(
     ];
     // Picking faces or edges starts on the tab that lists them.
     let geometry_tab = TABS.iter().position(|t| *t == OperationTab::Geometry);
-    let picking = geometry_tab
-        .filter(|_| matches!(picks.armed, Some(Slot::Faces { .. } | Slot::Edges { .. })));
+    let picking = geometry_tab.filter(|_| {
+        matches!(
+            picks.armed,
+            Some(Slot::Faces { .. } | Slot::Edges { .. } | Slot::Curves { .. })
+        )
+    });
     let page = widgets::remembered_tabs(ui, egui::Id::new(TAB), &tabs, 0, picking);
     // Another tab chosen while picking stops it: what is picked is out of sight.
     if picking.is_some_and(|p| p != page) {

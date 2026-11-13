@@ -2,7 +2,7 @@
 //! apart they are, the levels it cuts in, the stock it leaves and its tabs.
 
 use camcraft_core::job::{
-    ContourOrder, CutDirection, Depths, FaceDirection, FeedOptimization, Finishing,
+    Compensation, ContourOrder, CutDirection, Depths, FaceDirection, FeedOptimization, Finishing,
     HolderClearance, HolderMode, Leave, Links, Operation, PassOrder, Passes, RadialDirection,
     StockToLeave, StrategySpec, TabShape, Tabs,
 };
@@ -320,6 +320,62 @@ pub(super) fn passes(
                     &mut op.passes.stepover,
                 );
             }
+            StrategySpec::Slot {
+                backoff_distance,
+                repeat,
+                preserve_order,
+            } => {
+                d.row(ui, &pass::BACKOFF, "backoff_distance", |ui| {
+                    m.length_field(ui, backoff_distance, 0.05, 100.0, "");
+                });
+                d.row(ui, &pass::SLOT_REPEAT, "repeat", |ui| {
+                    ui.checkbox(repeat, "cut the last pass twice");
+                });
+                d.row(ui, &pass::PRESERVE_ORDER, "preserve_order", |ui| {
+                    ui.checkbox(preserve_order, "in the order picked");
+                });
+            }
+            StrategySpec::Trace {
+                compensation,
+                axial_offset,
+                pass_extension,
+                max_angle,
+                repeat,
+                preserve_order,
+                ..
+            } => {
+                d.row(ui, &pass::COMPENSATION, "compensation", |ui| {
+                    widgets::segmented(
+                        ui,
+                        compensation,
+                        &[
+                            (Compensation::Center, "on the curve"),
+                            (Compensation::Left, "left"),
+                            (Compensation::Right, "right"),
+                        ],
+                    );
+                });
+                d.row(ui, &pass::AXIAL_OFFSET, "axial_offset", |ui| {
+                    m.signed_length_field(ui, axial_offset, 0.05, 1000.0, "");
+                });
+                d.row(ui, &pass::TRACE_EXTENSION, "pass_extension", |ui| {
+                    m.length_field(ui, pass_extension, 0.1, 1000.0, "");
+                });
+                d.row(ui, &pass::MAX_ANGLE, "max_angle", |ui| {
+                    ui.add(
+                        widgets::number(max_angle)
+                            .speed(1.0)
+                            .range(1.0..=90.0)
+                            .suffix("°"),
+                    );
+                });
+                d.row(ui, &pass::TRACE_REPEAT, "repeat", |ui| {
+                    ui.checkbox(repeat, "cut the last pass twice");
+                });
+                d.row(ui, &pass::PRESERVE_ORDER, "preserve_order", |ui| {
+                    ui.checkbox(preserve_order, "in the order picked");
+                });
+            }
             StrategySpec::Drill { peck, dwell } => {
                 d.row(ui, &pass::PECK, "peck", |ui| {
                     widgets::optional(ui, peck, 2.0, "all the way at once", |ui, p| {
@@ -508,6 +564,9 @@ fn holder_modes(strategy: &StrategySpec) -> Option<&'static [(HolderMode, &'stat
         (HolderMode::Fail, "fail"),
     ];
     match strategy {
+        // Fusion's 2D Trace has no Shaft and Holder, though it follows its
+        // curves as a finish follows the part.
+        StrategySpec::Trace { .. } => None,
         _ if strategy.uses().links == Links::OverPart => Some(OVER_PART),
         StrategySpec::Contour { .. }
         | StrategySpec::Flat { .. }
@@ -692,9 +751,14 @@ fn angle_field(ui: &mut egui::Ui, angle: &mut f64) {
 }
 
 /// The stepdown a box ticked to step down in levels starts at: the
-/// strategy's own, or 2 mm.
+/// strategy's own, or a slot's and a trace's Maximum Stepdown as Fusion's
+/// starts it, a millimetre, or 2 mm.
 pub(super) fn starting_stepdown(op: &Operation) -> f64 {
-    op.strategy.default_stepdown().unwrap_or(2.0)
+    let fusions = match op.strategy {
+        StrategySpec::Slot { .. } | StrategySpec::Trace { .. } => 1.0,
+        _ => 2.0,
+    };
+    op.strategy.default_stepdown().unwrap_or(fusions)
 }
 
 /// Multiple depths, as Fusion's Passes tab has them: ticked to cut in levels,
@@ -752,6 +816,31 @@ fn multiple_depths(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, o
         if let StrategySpec::Circular { even_stepdowns, .. } = &mut op.strategy {
             d.row(ui, &pass::EVEN_STEPDOWNS, "even_stepdowns", |ui| {
                 ui.checkbox(even_stepdowns, "all the same depth");
+            });
+        }
+        // A trace's levels are above its curves, so many of them.
+        if let StrategySpec::Trace {
+            stepdowns,
+            order,
+            both_ways,
+            ..
+        } = &mut op.strategy
+        {
+            d.row(ui, &pass::STEPDOWNS, "stepdowns", |ui| {
+                ui.add(widgets::number(stepdowns).range(1..=1000));
+            });
+            d.row(ui, &pass::TRACE_ORDER, "order", |ui| {
+                widgets::segmented(
+                    ui,
+                    order,
+                    &[
+                        (ContourOrder::ByDepth, "by depth"),
+                        (ContourOrder::ByArea, "by curve"),
+                    ],
+                );
+            });
+            d.row(ui, &pass::BOTH_WAYS, "both_ways", |ui| {
+                ui.checkbox(both_ways, "back and forth along open curves");
             });
         }
         // Ticked, it starts at a quarter of the stepdown.

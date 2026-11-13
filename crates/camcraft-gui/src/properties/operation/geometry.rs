@@ -2,7 +2,7 @@
 //! picked for it.
 
 use camcraft_core::job::{
-    self, Boundary, Containment, FeatureRef, Holes, MachiningBoundary, Operation, Outline,
+    self, Boundary, Containment, Curves, FeatureRef, Holes, MachiningBoundary, Operation, Outline,
     ProfileSide, StrategySpec,
 };
 use eframe::egui;
@@ -46,6 +46,22 @@ pub(super) fn geometry(
              Only straight walls are cut.",
         );
         ui.add_space(theme::SPACE_3);
+    } else if uses.curves == Some(Curves::Slots) {
+        hint(
+            ui,
+            "Pick the edges round each slot's floor, or its floor: it is cut along its \
+             middle from the Top down to the floor. A slot has two sides a constant \
+             width apart and round ends; the tool may be no wider.",
+        );
+        ui.add_space(theme::SPACE_3);
+    } else if uses.curves == Some(Curves::Traced) {
+        hint(
+            ui,
+            "Pick the edges to follow, open or closed: the tool follows each at its own \
+             height, on it or its radius beside it. Edges joined end to end are \
+             followed as one.",
+        );
+        ui.add_space(theme::SPACE_3);
     } else if drilling {
         hint(
             ui,
@@ -62,15 +78,26 @@ pub(super) fn geometry(
         }
     }
     if op.cuts_selection() {
-        // Round walls are faces, as Fusion's Bore and Circular pick them.
+        // Round walls are faces, as Fusion's Bore and Circular pick them; a
+        // trace's curves are edges, as Fusion's Trace picks them.
         let kinds: &[Kind] = if uses.holes == Some(Holes::Walls) {
             &[Kind::Face]
+        } else if uses.curves == Some(Curves::Traced) {
+            &[Kind::Edge]
         } else {
             &[Kind::Face, Kind::Edge]
         };
-        pick_cards(ui, (setup, index), kinds, &mut op.selection, picks, actions);
+        let curves = uses.curves == Some(Curves::Traced);
+        pick_cards(
+            ui,
+            (setup, index),
+            (kinds, curves),
+            &mut op.selection,
+            picks,
+            actions,
+        );
     }
-    if drilling {
+    if drilling || uses.curves.is_some() {
         return;
     }
     if picks.shown.is_some_and(|s| s.waiting) {
@@ -384,7 +411,7 @@ fn boundary_hint(g: &MachiningBoundary) -> &'static str {
 fn pick_cards(
     ui: &mut egui::Ui,
     (setup, index): (&str, usize),
-    kinds: &[Kind],
+    (kinds, curves): (&[Kind], bool),
     selection: &mut job::Selection,
     picks: ViewPicks<'_>,
     actions: &mut Vec<PropAction>,
@@ -392,10 +419,16 @@ fn pick_cards(
     for &kind in kinds {
         let topic = match kind {
             Kind::Face => &geo::FACES,
+            Kind::Edge if curves => &geo::CURVES,
             Kind::Edge => &geo::EDGES,
         };
         let slot = match kind {
             Kind::Face => Slot::Faces {
+                setup: setup.to_string(),
+                op: index,
+            },
+            // A trace's edges run on along smooth joints, open or closed.
+            Kind::Edge if curves => Slot::Curves {
                 setup: setup.to_string(),
                 op: index,
             },

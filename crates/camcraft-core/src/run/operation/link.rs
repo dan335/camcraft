@@ -61,6 +61,17 @@ pub(super) fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         Some(Entry::Ramp) | None => EntryKind::Ramp,
     };
     let corner = work.spec.corner_radius();
+    // A trace's vertical leads are each on or off, as Fusion's Lead-In and
+    // Lead-Out, the radius the same.
+    let (lead_radius, lead_out_radius) = match op.strategy {
+        StrategySpec::Trace {
+            lead_in, lead_out, ..
+        } => (
+            if lead_in { lead_radius } else { 0.0 },
+            Some(if lead_out { lead_radius } else { 0.0 }),
+        ),
+        _ => (lead_radius, None),
+    };
     LinkParams {
         retract_feed: linking.retract_feed,
         plunge_feed: linking.plunge_feed,
@@ -68,6 +79,7 @@ pub(super) fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         safe_distance: linking.safe_distance,
         stay_down,
         lead_radius,
+        lead_out_radius,
         ramp,
         entry,
         helix_radius: op.helix_diameter(diameter, corner) / 2.0,
@@ -78,6 +90,9 @@ pub(super) fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         // A helix climbs as the cut does.
         helix_ccw: work.kept_on_right(),
         ramp_stepdown: Some(op.ramp_stepdown(diameter)),
+        // A slot's ramp back and forth along it goes down no more than that
+        // each way, as Fusion's Slot's Maximum Ramp Stepdown.
+        ramp_legs: matches!(op.strategy, StrategySpec::Slot { .. }),
         lead_in_material: leads.is_some(),
         max_cut_step: op.max_cut_step(),
         tolerance: work.job.tolerance,

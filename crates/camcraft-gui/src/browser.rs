@@ -624,6 +624,8 @@ pub fn strategy_label(s: &StrategySpec) -> &'static str {
         StrategySpec::Drill { .. } => "Drill",
         StrategySpec::Bore { .. } => "Bore",
         StrategySpec::Circular { .. } => "Circular",
+        StrategySpec::Slot { .. } => "Slot",
+        StrategySpec::Trace { .. } => "Trace",
     }
 }
 
@@ -646,7 +648,9 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
     [
         (
             "2D",
-            vec![section(&["face", "pocket", "profile", "bore", "circular"])],
+            vec![section(&[
+                "face", "pocket", "profile", "slot", "trace", "bore", "circular",
+            ])],
         ),
         (
             "3D",
@@ -674,8 +678,6 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
 /// into [`operation_groups`], in the same place.
 pub const PLANNED: &[(&str, usize, &str)] = &[
     ("2D", 0, "2D adaptive clearing"),
-    ("2D", 0, "Slot"),
-    ("2D", 0, "Trace"),
     ("2D", 0, "Thread"),
     ("2D", 0, "Engrave"),
     ("2D", 0, "2D chamfer"),
@@ -1004,7 +1006,7 @@ mod menu_tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), offered, "one is offered twice: {names:?}");
-        assert_eq!(offered, 15, "{names:?}");
+        assert_eq!(offered, 17, "{names:?}");
     }
 
     /// The planned operations are listed after their section's own, in the
@@ -1059,7 +1061,8 @@ mod menu_tests {
                 assert_eq!(planned, asked);
             }
         }
-        // 2D: Fusion's order, Bore and Circular built after the profile.
+        // 2D: Fusion's order, Slot, Trace, Bore and Circular built after the
+        // profile.
         let two_d: Vec<String> = operation_menu_items()[0].1[0]
             .iter()
             .map(|m| match m {
@@ -1073,11 +1076,11 @@ mod menu_tests {
                 "Face",
                 "2D pocket",
                 "2D profile",
+                "Slot",
+                "Trace",
                 "Bore",
                 "Circular",
                 "(2D adaptive clearing)",
-                "(Slot)",
-                "(Trace)",
                 "(Thread)",
                 "(Engrave)",
                 "(2D chamfer)"

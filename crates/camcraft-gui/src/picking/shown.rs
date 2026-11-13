@@ -8,7 +8,8 @@
 use camcraft_core::cutter::allowance::EffectiveTool;
 use camcraft_core::cutter::tool::ToolProfile;
 use camcraft_core::job::{
-    self, Boundary, FeatureRef, MachiningBoundary, Operation, Origin, Outline as Cut, StrategySpec,
+    self, Boundary, Curves, FeatureRef, MachiningBoundary, Operation, Origin, Outline as Cut,
+    StrategySpec,
 };
 use camcraft_core::run::cutting_tool;
 use camcraft_core::setup::features::{self, FeatureError};
@@ -21,7 +22,7 @@ use crate::document::Document;
 use crate::picking::describe::{describe_edge, describe_face, describe_point};
 use crate::picking::highlight::{face_triangles, model_edge_lines};
 use crate::picking::ray::{PickModel, PickScene};
-use crate::picking::slots::{Kind, edge_loop};
+use crate::picking::slots::{Kind, edge_loop, smooth_chain};
 use crate::ui::measure::Measure;
 use crate::view::viewport::{Highlight, Outline, OutlineKind};
 
@@ -111,7 +112,8 @@ pub fn shown(
         }));
     }
     // Each loop the picked edges go round, by model and its edges, with the picks
-    // on it.
+    // on it; a trace's, each chain they run on along.
+    let chains = operation.strategy.uses().curves == Some(Curves::Traced);
     type Round<'a> = (&'a str, Vec<u32>);
     let mut loops: Vec<(Round<'_>, Vec<usize>)> = Vec::new();
     for (i, r) in sel.edges.iter().enumerate() {
@@ -122,7 +124,11 @@ pub fn shown(
                     .lines
                     .extend(model_edge_lines(pm, *edge, OutlineKind::Selected));
             }
-            let mut round = edge_loop(scene, &r.model, *edge);
+            let mut round = if chains {
+                smooth_chain(scene, &r.model, *edge)
+            } else {
+                edge_loop(scene, &r.model, *edge)
+            };
             round.sort_unstable();
             let key = (r.model.as_str(), round);
             match loops.iter_mut().find(|(k, _)| *k == key) {
@@ -139,9 +145,11 @@ pub fn shown(
         let what = match (round.len(), picks.first()) {
             (0 | 1, Some(&i)) => out.edges.get(i).cloned().unwrap_or(Ok(String::new())),
             (n, _) if picks.len() < n => Ok(format!(
-                "{} of the {n} edges of a loop · on '{model}'",
-                picks.len()
+                "{} of the {n} edges of a {} · on '{model}'",
+                picks.len(),
+                if chains { "chain" } else { "loop" }
             )),
+            (n, _) if chains => Ok(format!("Chain of {n} edges · on '{model}'")),
             (n, _) => Ok(format!(
                 "Loop of {n} edges{} · on '{model}'",
                 scene

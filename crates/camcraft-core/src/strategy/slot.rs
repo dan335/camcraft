@@ -19,8 +19,9 @@
 //! runs along the middle from one end to the other, each level the other way
 //! from the one above, so it starts where the last ended; the linker takes it
 //! down to each by ramping back and forth along the middle. A tool narrower than
-//! the slot then goes once round its walls at the level, stepping straight across
-//! to them from the end of the middle, so the slot is cut to its width; one more
+//! the slot then goes once round its walls at the level, from beside the end of
+//! the middle, ramped down into as the linker ramps round a closed pass, so the
+//! slot is cut to its width; one more
 //! than three times narrower leaves a band either side of the middle, and the
 //! report says how wide. A tool wider than the slot is refused.
 //!
@@ -165,8 +166,9 @@ pub fn slot_of(boundary: &Curve, tol: f64) -> Result<(Curve, f64), SlotError> {
         .iter()
         .enumerate()
         .filter(|(_, r)| {
-            r.arc
-                .is_some_and(|(_, radius, sweep)| sweep > 0.0 && (sweep - PI).abs() * radius <= 4.0 * tol)
+            r.arc.is_some_and(|(_, radius, sweep)| {
+                sweep > 0.0 && (sweep - PI).abs() * radius <= 4.0 * tol
+            })
         })
         .map(|(i, _)| i)
         .collect();
@@ -330,7 +332,7 @@ pub fn slot(slots: &[Slot], p: &SlotParams) -> Result<(Toolpath, SlotReport), Sl
                 tool: 2.0 * p.radius,
             });
         }
-        if !(s.top - s.bottom > 1.0e-9) {
+        if s.top - s.bottom <= 1.0e-9 || s.top.is_nan() || s.bottom.is_nan() {
             return Err(SlotError::NoDepth { x: at.x, y: at.y });
         }
         let zs: Vec<f64> = match p.stepdown {
@@ -365,7 +367,13 @@ pub fn slot(slots: &[Slot], p: &SlotParams) -> Result<(Toolpath, SlotReport), Sl
                 None => None,
             };
             let times = if p.repeat && i == last { 2 } else { 1 };
-            pass(&mut path, (&along, ring.as_ref()), p.feed, times, &mut report)?;
+            pass(
+                &mut path,
+                (&along, ring.as_ref()),
+                p.feed,
+                times,
+                &mut report,
+            )?;
             if i == last && p.backoff > 0.0 {
                 back_off(&mut path, (&along, ring.as_ref()), walls, p)?;
             }
@@ -375,8 +383,8 @@ pub fn slot(slots: &[Slot], p: &SlotParams) -> Result<(Toolpath, SlotReport), Sl
 }
 
 /// One level of a slot: a link to the start of `along`, its middle, then where
-/// there are walls to go round, straight across to them and round, `ring`. Its
-/// last pass, the walls or the middle, cut `times` over.
+/// there are walls to go round, a link to them and round, `ring`. Its last
+/// pass, the walls or the middle, cut `times` over.
 fn pass(
     path: &mut Toolpath,
     (along, ring): (&Curve, Option<&Curve>),
@@ -388,13 +396,21 @@ fn pass(
     along.cut_into(path, MoveRole::Cut, feed)?;
     report.passes += 1;
     if let Some(ring) = ring {
-        path.feed_to(ring.start, MoveRole::Cut, feed)?;
+        // A pass of its own, so the ramp down along the middle keeps to it.
+        path.feed_to(ring.start, MoveRole::Link, feed)?;
         ring.cut_into(path, MoveRole::Cut, feed)?;
         report.passes += 1;
     }
     for _ in 1..times {
         let again = ring.unwrap_or(along);
-        path.feed_to(again.start, MoveRole::Link, feed)?;
+        // Round the walls again from where it ended; back along the middle
+        // to go along it again.
+        if path
+            .end()
+            .is_none_or(|end| end.distance(again.start) > 1.0e-9)
+        {
+            path.feed_to(again.start, MoveRole::Link, feed)?;
+        }
         again.cut_into(path, MoveRole::Cut, feed)?;
         report.passes += 1;
     }

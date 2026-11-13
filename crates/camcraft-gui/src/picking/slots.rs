@@ -53,6 +53,14 @@ pub enum Slot {
         /// The operation's place in it.
         op: usize,
     },
+    /// The edges operation `op` of setup `setup` follows, open or closed: a
+    /// trace's.
+    Curves {
+        /// The setup, by name.
+        setup: String,
+        /// The operation's place in it.
+        op: usize,
+    },
 }
 
 impl Slot {
@@ -63,7 +71,7 @@ impl Slot {
             Slot::Models { .. } => Accept::Models,
             Slot::Stocks { .. } => Accept::Stocks,
             Slot::Faces { .. } => Accept::Faces,
-            Slot::Edges { .. } => Accept::Edges,
+            Slot::Edges { .. } | Slot::Curves { .. } => Accept::Edges,
         }
     }
 
@@ -88,6 +96,9 @@ impl Slot {
             Slot::Edges { .. } => {
                 "Click an edge to add the loop it goes round, or take it out · Esc or Done to finish"
             }
+            Slot::Curves { .. } => {
+                "Click an edge to add it and the edges running on smoothly from it, or take them out · Esc or Done to finish"
+            }
         }
     }
 
@@ -99,7 +110,7 @@ impl Slot {
             Slot::WorkZero { setup } | Slot::Models { setup } | Slot::Stocks { setup } => {
                 doc.setup(setup).is_some() && doc.selection == Selection::Setup(setup.clone())
             }
-            Slot::Faces { setup, op } | Slot::Edges { setup, op } => {
+            Slot::Faces { setup, op } | Slot::Edges { setup, op } | Slot::Curves { setup, op } => {
                 doc.operation(setup, *op).is_some()
                     && doc.selection == Selection::Operation(setup.clone(), *op)
             }
@@ -149,7 +160,10 @@ pub fn apply(
                 })
             })
         }
-        (Slot::Edges { setup, op }, Target::Edge { model, edge, at }) => {
+        (
+            Slot::Edges { setup, op } | Slot::Curves { setup, op },
+            Target::Edge { model, edge, at },
+        ) => {
             let at = own(doc, model, *at);
             doc.operation_mut(setup, *op).is_some_and(|o| {
                 toggle(&mut o.selection.edges, model, *edge, at, |r| {
@@ -157,7 +171,7 @@ pub fn apply(
                 })
             })
         }
-        (Slot::Edges { setup, op }, Target::Loop { model, edges }) => {
+        (Slot::Edges { setup, op } | Slot::Curves { setup, op }, Target::Loop { model, edges }) => {
             let edges: Vec<(u32, DVec3)> = edges
                 .iter()
                 .map(|&(e, at)| (e, own(doc, model, at)))
@@ -182,12 +196,57 @@ fn own(doc: &Document, model: &str, at: DVec3) -> DVec3 {
 }
 
 /// What a click on `target` picks into `slot`: for edges, the whole loop the edge
-/// goes round ([`edge_loop`]), as they are only ever cut round in loops.
+/// goes round ([`edge_loop`]), as they are only ever cut round in loops; for
+/// edges a trace follows, the edges running on smoothly from it
+/// ([`smooth_chain`]), as Fusion's chain selection takes them.
 pub fn widen(scene: &PickScene, slot: &Slot, target: Target) -> Target {
     match (slot, target) {
         (Slot::Edges { .. }, t) => whole_loop(scene, t),
+        (Slot::Curves { .. }, t) => whole_chain(scene, t),
         (_, t) => t,
     }
+}
+
+/// An edge as the edges running on smoothly from it ([`smooth_chain`]);
+/// anything else as it is.
+pub fn whole_chain(scene: &PickScene, target: Target) -> Target {
+    let Target::Edge { model, edge, at } = target else {
+        return target;
+    };
+    let Some(body) = scene.model(&model).map(PickModel::body) else {
+        return Target::Edge { model, edge, at };
+    };
+    let t = body.topology();
+    let edges = smooth_chain(scene, &model, edge)
+        .into_iter()
+        .map(|e| {
+            let on = if e == edge {
+                at
+            } else {
+                t.edge_middle(body.mesh(), e).unwrap_or(at)
+            };
+            (e, on)
+        })
+        .collect();
+    Target::Loop { model, edges }
+}
+
+/// How far, in radians, a chain of edges may turn where two meet and still run
+/// on: a few degrees, more than a tessellated curve's chords turn at a smooth
+/// joint, far less than any corner drawn as one.
+const SMOOTH: f64 = 0.2;
+
+/// The edges running on smoothly from edge `edge` of `model`, in order along
+/// them ([`Topology::smooth_chain`](camcraft_geom::topology::Topology::smooth_chain)):
+/// a hole's rim in halves whole, a rounded outline all the way round, a square
+/// one a side at a time.
+pub fn smooth_chain(scene: &PickScene, model: &str, edge: u32) -> Vec<u32> {
+    let Some(pm) = scene.model(model) else {
+        return vec![edge];
+    };
+    let t = pm.body().topology();
+    let points = |e: u32| pm.edges.get(e as usize).cloned().unwrap_or_default();
+    t.smooth_chain(edge, points, SMOOTH)
 }
 
 /// An edge as the loop it goes round; anything else as it is.
