@@ -52,8 +52,9 @@ Autodesk.)
 Version 0.7, pre-alpha. The app runs, checks, plays back and posts jobs. File
 formats change without notice. [Releases](https://github.com/dan335/camcraft/releases)
 carry builds for Windows and Linux, with no installer; on macOS, build it from
-source. [STATUS.md](STATUS.md) says where the work stands and what the simulator
-cannot check for you.
+source. [PROGRESS.md](PROGRESS.md) lists, feature by feature against Fusion's
+3-axis milling, what is done and what is left, and what the simulator cannot
+check for you.
 
 ## Try it
 
@@ -93,7 +94,7 @@ cargo run --release -p camcraft-cli -- job examples/rail-jig.camcraft --out out 
 | Job files, the checks, the command line and the posts  | [docs/jobs.md](docs/jobs.md)                 |
 | How simulation and verification work                   | [docs/simulation.md](docs/simulation.md)     |
 | Why things are the way they are                        | [docs/decisions/](docs/decisions/)           |
-| Where the work stands                                  | [STATUS.md](STATUS.md)                       |
+| What is done, what is left, and open questions         | [PROGRESS.md](PROGRESS.md)                   |
 
 ## Development
 

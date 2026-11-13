@@ -5,8 +5,9 @@ Windows machine with WSL's Ubuntu (glibc 2.39). macOS builds from source.
 
 1. **Version.** Set `version` in the workspace `Cargo.toml`, and each internal
    crate's `version` under `[workspace.dependencies]`, and the README's
-   "Version" line, and add the release to `CHANGELOG.md`. Commit as
-   "Release X.Y.Z".
+   "Version" line, and add the release to `CHANGELOG.md`. Bring
+   `PROGRESS.md` up to date: its version and date, each row the release
+   changed, and the summary's counts. Commit as "Release X.Y.Z".
 2. **Gates.** `scripts/check.sh` (or `.\scripts\check.ps1`), all green.
 3. **Licences.** With [cargo-about](https://github.com/EmbarkStudios/cargo-about)
    (`cargo install --locked cargo-about --features cli`), from the repository's

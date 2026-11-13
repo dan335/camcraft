@@ -158,7 +158,7 @@ down at rapid to the safe distance (16.6 min of plunging became 4.2).
 ## Not taken yet
 
 - Rest machining from a file, bodies or the setup stock, and from earlier
-  setups (that needs [the volumetric stock](../../STATUS.md)).
+  setups (that needs [the volumetric stock](../../PROGRESS.md#what-is-next)).
 - Shaft and holder clearance.
 - A slot along a pocket's middle that bends with it, as a medial axis would: the
   slot is straight, along the pocket's longest way.
