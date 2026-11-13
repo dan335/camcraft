@@ -8,7 +8,8 @@
 # Fusion's API is in centimetres; everything here is written in millimetres.
 import os
 
-OUT = os.path.expanduser("~/camcraft-fusion-bridge/out/ops_block")
+BRIDGE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.join(BRIDGE, "out", "ops_block")
 os.makedirs(OUT, exist_ok=True)
 
 MM = 0.1

@@ -11,7 +11,7 @@
 # the bridge folder (masso.cps), as Fusion's own post library may not have it.
 import copy, json, os, time
 
-BRIDGE = os.path.expanduser("~/camcraft-fusion-bridge")
+BRIDGE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(BRIDGE, "out", "ops_block")
 os.makedirs(OUT, exist_ok=True)
 MM = 0.1
