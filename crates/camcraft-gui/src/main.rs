@@ -66,8 +66,39 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "camcraft",
         options,
-        Box::new(|cc| Ok(Box::new(app::App::with_jobs(cc, jobs)))),
+        Box::new(|cc| {
+            if let Some(render) = &cc.wgpu_render_state {
+                say_why_the_device_is_lost(render);
+            }
+            Ok(Box::new(app::App::with_jobs(cc, jobs)))
+        }),
     )
+}
+
+/// When the graphics device is lost, say why.
+///
+/// A device is lost when its driver gives up: reset, out of memory, or an
+/// error it does not name. wgpu tells no one unless asked, and the next frame
+/// then panics in egui's renderer, about a staging buffer for index data,
+/// which says nothing of the cause. So the driver's own words are written to
+/// the terminal first, with the adapter they came from.
+fn say_why_the_device_is_lost(render: &eframe::egui_wgpu::RenderState) {
+    let info = render.adapter.get_info();
+    let adapter = format!(
+        "{} through {:?}, driver {} {}",
+        info.name, info.backend, info.driver, info.driver_info
+    );
+    render
+        .device
+        .set_device_lost_callback(move |reason, message| {
+            // Closing the window destroys the device, which is no loss.
+            if matches!(reason, eframe::wgpu::DeviceLostReason::Destroyed) {
+                return;
+            }
+            eprintln!(
+                "camcraft: the graphics device was lost: {message} ({adapter}). The window \n                 cannot draw again and will close; jobs not saved are lost. If this was the \n                 computer running out of memory, close other programs and open the job again."
+            );
+        });
 }
 
 /// Generating works every core it is given, for as long as it takes; the

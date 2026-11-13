@@ -495,4 +495,11 @@ cargo test --release -p camcraft-gui --features ui-snapshots -- --ignored
 
 writes PNGs of the real UI to `target/ui-snapshots/`: the main window after a run,
 setups in tabs, the setup panel, the tool manager, and the lego brick and a full
-sheet playing.
+sheet playing. `docs/images/playback.png`, the README's picture, is its
+`lego_half_roughed.png`.
+
+The harness draws with a software renderer where there is one, as Windows has,
+so that pictures come out the same on any machine. That is slow: on a busy
+machine a frame of the lego brick's material does not finish in the ten
+seconds it is given, and the picture is skipped. `WGPU_BACKEND=vulkan` leaves
+it only the graphics card.

@@ -22,6 +22,12 @@ the same notes at more length.
   ogeom that use camcraft's engine, as
   [PrintCAD-cam-wb](https://github.com/gilbertorconde/PrintCAD-cam-wb) does,
   whose copy of the engine had this first.
+- **The app says why the graphics device was lost.** When a driver gives up
+  (reset, out of memory, or an error it does not name), the window cannot
+  draw again, and the app used to end with a panic about a staging buffer
+  that said nothing of the cause. The driver's own words, and the adapter
+  they came from, are now written to the terminal first.
+- The README's picture of the app is the app as it is now.
 
 ## 0.8.0 — 2026-11-13
 
