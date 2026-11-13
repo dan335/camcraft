@@ -163,4 +163,21 @@ topics! {
         "How fast the last finishing pass goes. Left empty, the cutting feed.";
     FINISHING_REPEAT: "Repeat",
         "Cuts the last finishing pass twice, for a tool that springs away from the wall.";
+    PITCH: "Pitch",
+        "How far the helix goes down in each turn round the hole. Smaller is a lighter cut and a smoother wall.";
+    USE_RAMP_ANGLE: "Use ramp angle",
+        "Sets the helix by its angle from level, so every circle goes down as steeply. Unticked, by its pitch.";
+    BORE_RAMP_ANGLE: "Angle",
+        "How steeply the helix goes down, from level. Each circle's turn falls as far as this takes it round.";
+    MULTIPLE_PASSES: "Multiple passes",
+        "Cuts out to the wall in several passes, a stepover apart, the last at the wall. Unticked, the wall alone.";
+    DIRECTION_ROUND: "Direction",
+        "Climb goes anticlockwise in a hole and clockwise round a boss with a clockwise spindle. Conventional, the other way.",
+        Figure::Climb;
+    STEPOVERS: "Number of stepovers",
+        "How many passes out to the wall, the last at it. Too few in a wide hole leave a core standing in its middle.";
+    REPEAT_PASS: "Repeat passes",
+        "Cuts the last pass at the wall twice, for a tool that springs away from it.";
+    EVEN_STEPDOWNS: "Even stepdowns",
+        "Spaces the levels evenly. Unticked, each is a whole stepdown and the last takes what is left.";
 }

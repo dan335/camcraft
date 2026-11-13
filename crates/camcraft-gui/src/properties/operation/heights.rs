@@ -51,14 +51,18 @@ pub(super) fn heights(
         }
         if let Some(unset) = uses.top {
             d.row(ui, &ht::TOP, "heights.top", |ui| {
-                let absent = absent(unset);
+                let absent = if uses.holes.is_some() {
+                    "each hole's own top"
+                } else {
+                    absent(unset)
+                };
                 optional_height(ui, m, "geo-top", &mut op.heights.top, unset, absent, picks);
             });
         }
         if let Some(unset) = bottom {
             // Left unset, each hole goes down to its own bottom, as Fusion's
             // drilling goes "from hole bottom".
-            let absent = if uses.holes {
+            let absent = if uses.holes.is_some() {
                 "each hole's own bottom"
             } else {
                 absent(unset)
@@ -99,6 +103,11 @@ pub(super) fn heights(
              its wall ends, as Fusion's drilling goes to the hole's bottom. A Bottom set \
              takes every hole there instead, and a hole whose bottom edge is picked \
              goes to that.",
+        ),
+        StrategySpec::Bore { .. } | StrategySpec::Circular { .. } => Some(
+            "Each hole or boss is cut from the top of its picked wall down to the \
+             bottom of it. A Top or Bottom set takes every one from or to there \
+             instead.",
         ),
         StrategySpec::Profile { .. } | StrategySpec::Pocket { .. } => Some(
             "Without a Bottom, each area is cut down to the lowest point picked in \

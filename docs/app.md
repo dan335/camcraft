@@ -26,9 +26,14 @@ The window is the job's tree on the left, the properties panel beside it, the vi
 and the transport under the view. The Add menu adds models, stocks, setups and
 operations; View opens the log and the checks in their own windows; the Setup menu
 posts. Operations are grouped as Fusion's toolbar groups them, in the Add menu and
-a setup's right-click menu alike: 2D (face, pocket, profile), 3D (adaptive
-clearing, pocket clearing, then parallel, scallop, contour, flat, spiral, radial
-and morphed spiral) and drilling.
+a setup's right-click menu alike: 2D (face, pocket, profile, bore, circular), 3D
+(adaptive clearing, pocket clearing, then parallel, scallop, contour, flat,
+spiral, radial and morphed spiral) and drilling. Fusion's operations not built yet
+are listed after the rest of their group, greyed, and say *Not implemented yet*
+under the pointer: in 2D, 2D adaptive clearing, slot, trace, thread, engrave and
+2D chamfer; in 3D, after the finishing, steep and shallow, ramp, pencil, project,
+morph, blend, flow, corner and geodesic. They are listed in `browser::PLANNED`,
+which an operation leaves once it is built.
 
 ## The tree
 
@@ -123,12 +128,20 @@ it.
   or conventional; a profile has no stepover. *Multiple depths*, as Fusion's,
   is ticked to step down in levels, then the stepdown: unticked cuts the bottom
   in one pass. Profiles and pockets start ticked at 2 mm, facing unticked, and
-  pocket and adaptive clearing always cut in levels, so cannot be unticked; parallel and
-  drilling have none (a drill has its pecks). *Stock to
+  pocket and adaptive clearing always cut in levels, so cannot be unticked; parallel,
+  bore and drilling have none (a drill has its pecks, a bore its helix). A bore's
+  *Passes* has *Use ramp angle*, ticked, and the helix's *Angle* or, unticked,
+  its *Pitch*; a bore's and a circular's have climb or conventional, *Multiple
+  passes*, ticked, with the *Number of stepovers* and their stepover, and
+  *Repeat passes*. A circular starts with *Multiple depths* ticked at a
+  millimetre, with *Even stepdowns* under it; a bore's *Finishing passes* has
+  only its stepover. Their *Linking* has the leads, with *Lead to center* under
+  them. *Stock to
   leave*, as Fusion's, is ticked to leave any (starting at 0.5 mm), then its
   wall and floor amounts, negative to cut past the part; the floor follows the
   wall until it is given its own. A drill has none, and a profile on the
-  boundary only a floor. Every strategy but drilling has *Smoothing* at the
+  boundary only a floor. Every strategy but drilling, bore and circular, whose
+  moves are arcs already, has *Smoothing* at the
   foot of *Passes*, ticked to fit arcs and longer lines, then its tolerance,
   the job's unless given; and below it, all but adaptive, *Feed optimization*,
   ticked to slow down in corners, then the most a cut may turn, the reduced
@@ -198,6 +211,11 @@ the part, where an offset of 0 would only touch its walls.
   ends, as Fusion's drilling goes to the hole's bottom: a blind hole to its
   floor, a through hole to the part's far side. A picked bottom rim takes its
   hole there instead, and a Bottom height set takes every hole there.
+- A bore or a circular takes faces, as Fusion's: the round wall of each hole or
+  boss, which it cuts from the wall's top down to its bottom, inside a hole and
+  round the outside of a boss. The faces of one wall, as a file often splits a
+  cylinder into halves, are taken together: one is enough where it runs the
+  wall's whole height. Its *Geometry* has no edges to pick.
 - A 2D profile or pocket takes faces and edges as what it cuts round or clears.
   The view draws that boundary (wide), each piece of it at the height of what is
   picked in it so it lies on the picks, or at the stock's top with nothing

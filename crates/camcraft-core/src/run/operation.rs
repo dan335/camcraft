@@ -49,6 +49,7 @@ use crate::strategy::planar::{
 use crate::strategy::pocket_clearing::{ClearingParams, pocket_clearing};
 use crate::strategy::projected::{Curve, ProjectParams, ProjectReport, project};
 use crate::strategy::reach::LevelReach;
+use crate::strategy::round::{Round, RoundReport};
 use crate::strategy::scallop::{ScallopParams, contact_region, scallop_finish_banded};
 use crate::strategy::slope::steep_ground;
 use crate::strategy::waterline::{WaterlineParams, waterline};
@@ -56,6 +57,7 @@ use crate::strategy::waterline::{WaterlineParams, waterline};
 mod clearing;
 mod finishing;
 mod link;
+mod round;
 
 use clearing::{
     AdaptiveAsked, adaptive_paths, drill_paths, face_paths, planar_paths, pocket_clearing_paths,
@@ -66,6 +68,8 @@ use finishing::{
     spiral_paths,
 };
 use link::{Cutting, OnPart, link_params};
+pub(super) use round::round_walls;
+use round::{RoundAsked, bore_paths, circular_paths};
 
 /// One operation, and everything its strategy works from.
 pub(super) struct Work<'a> {
@@ -196,6 +200,8 @@ pub(super) enum Target {
     Holes(Vec<Hole>),
     /// A 2D operation's areas, each with its floor.
     Areas(Vec<Area>),
+    /// A bore's or a circular's round walls, in order.
+    Rounds(Vec<Round>),
 }
 
 /// An operation's passes, worked out and put in order, its tabs on them: ready
@@ -307,10 +313,11 @@ pub(super) fn plan_operation(
     let ctx = work.heights;
     let mut warnings = Vec::new();
 
-    let (limit, holes, found) = match target {
-        Target::Limit(limit) => (limit.as_ref(), &[][..], &[][..]),
-        Target::Holes(holes) => (None, holes.as_slice(), &[][..]),
-        Target::Areas(areas) => (None, &[][..], areas.as_slice()),
+    let (limit, holes, found, rounds) = match target {
+        Target::Limit(limit) => (limit.as_ref(), &[][..], &[][..], &[][..]),
+        Target::Holes(holes) => (None, holes.as_slice(), &[][..], &[][..]),
+        Target::Areas(areas) => (None, &[][..], areas.as_slice(), &[][..]),
+        Target::Rounds(rounds) => (None, &[][..], &[][..], rounds.as_slice()),
     };
     let (raw, passes, detail) = match op.strategy {
         StrategySpec::Parallel { angle } => parallel_paths(work, angle, limit, &mut warnings)?,
@@ -423,6 +430,44 @@ pub(super) fn plan_operation(
         StrategySpec::Drill { peck, dwell } => {
             drill_paths(work, peck, dwell, holes, &mut warnings)?
         }
+        StrategySpec::Bore {
+            use_ramp_angle,
+            ramp_angle,
+            pitch,
+            multiple_passes,
+            stepovers,
+            repeat,
+            lead_to_center,
+            ..
+        } => bore_paths(
+            work,
+            (use_ramp_angle.then_some(ramp_angle), pitch),
+            RoundAsked {
+                stepovers: if multiple_passes { stepovers } else { 1 },
+                repeat,
+                lead_to_center,
+            },
+            rounds,
+            &mut warnings,
+        )?,
+        StrategySpec::Circular {
+            multiple_passes,
+            stepovers,
+            repeat,
+            even_stepdowns,
+            lead_to_center,
+            ..
+        } => circular_paths(
+            work,
+            RoundAsked {
+                stepovers: if multiple_passes { stepovers } else { 1 },
+                repeat,
+                lead_to_center,
+            },
+            even_stepdowns,
+            rounds,
+            &mut warnings,
+        )?,
     };
 
     // A finishing path over the part keeps between the Top and Bottom it is
@@ -712,6 +757,8 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
             dwell,
             feed: op.linking.plunge_feed,
         }),
+        StrategySpec::Bore { .. } => StrategyDetail::Bore(RoundReport::default()),
+        StrategySpec::Circular { .. } => StrategyDetail::Circular(RoundReport::default()),
     };
     OperationResult {
         name: op.name.clone(),

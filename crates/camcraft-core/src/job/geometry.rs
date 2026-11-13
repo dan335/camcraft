@@ -133,10 +133,11 @@ impl Default for MachiningBoundary {
 
 impl Operation {
     /// Whether what it cuts is its selection: a 2D outline or a 3D boundary of
-    /// it, or a drill's holes.
+    /// it, a drill's holes, or the slots or curves it runs along.
     pub fn cuts_selection(&self) -> bool {
         let uses = self.strategy.uses();
-        uses.holes
+        uses.holes.is_some()
+            || uses.curves.is_some()
             || (uses.outline && self.outline == Outline::Selection)
             || (uses.boundary && self.boundary.kind == Boundary::Selection)
     }

@@ -231,6 +231,10 @@ impl Job {
     }
 }
 
+/// The most passes out to a round wall a bore or circular may make, and the
+/// most a trace may make above each curve.
+const MOST_STEPOVERS: u32 = 1000;
+
 fn unique<'a>(what: &'static str, names: impl Iterator<Item = &'a str>) -> Result<(), JobError> {
     let mut seen = BTreeSet::new();
     for n in names {
@@ -622,6 +626,77 @@ impl Operation {
             }
             if let Some(d) = dwell {
                 at_least_zero(&field("dwell"), d)?;
+            }
+        }
+        if let StrategySpec::Bore {
+            use_ramp_angle,
+            ramp_angle,
+            pitch,
+            ..
+        } = self.strategy
+        {
+            // The angle is what it goes down by, or the pitch: the other is
+            // not read.
+            if use_ramp_angle {
+                if !(ramp_angle > 0.0 && ramp_angle < 90.0) {
+                    return Err(bad(
+                        field("ramp_angle"),
+                        ramp_angle,
+                        "greater than 0 and less than 90 degrees",
+                    ));
+                }
+            } else {
+                positive(&field("pitch"), pitch)?;
+            }
+        }
+        if let StrategySpec::Bore {
+            multiple_passes: true,
+            stepovers,
+            ..
+        }
+        | StrategySpec::Circular {
+            multiple_passes: true,
+            stepovers,
+            ..
+        } = self.strategy
+            && !(1..=MOST_STEPOVERS).contains(&stepovers)
+        {
+            return Err(bad(
+                field("stepovers"),
+                f64::from(stepovers),
+                "from 1 to 1000",
+            ));
+        }
+        if let StrategySpec::Slot {
+            backoff_distance, ..
+        } = self.strategy
+        {
+            at_least_zero(&field("backoff_distance"), backoff_distance)?;
+        }
+        if let StrategySpec::Trace {
+            axial_offset,
+            pass_extension,
+            max_angle,
+            stepdowns,
+            ..
+        } = self.strategy
+        {
+            finite(&field("axial_offset"), axial_offset)?;
+            at_least_zero(&field("pass_extension"), pass_extension)?;
+            if !(max_angle > 0.0 && max_angle <= 90.0) {
+                return Err(bad(
+                    field("max_angle"),
+                    max_angle,
+                    "greater than 0 and at most 90 degrees",
+                ));
+            }
+            // Read only with multiple depths.
+            if self.passes.stepdown.is_some() && !(1..=MOST_STEPOVERS).contains(&stepdowns) {
+                return Err(bad(
+                    field("stepdowns"),
+                    f64::from(stepdowns),
+                    "from 1 to 1000",
+                ));
             }
         }
         Ok(())

@@ -566,6 +566,23 @@ fn operation_findings(
         }
         // A hole the tool does not fit is among the run's own warnings.
         StrategyDetail::Drill(_) => {}
+        StrategyDetail::Bore(r) | StrategyDetail::Circular(r) => {
+            if r.cores > 0 {
+                out.push(finding(
+                    Level::Warn,
+                    "CC218",
+                    format!(
+                        "{} hole(s) left with a core standing in the middle",
+                        r.cores
+                    ),
+                    format!(
+                        "up to {:.2} mm across: more stepovers, or wider ones, would cut it; \
+                         through a hole, it comes loose",
+                        r.widest_core
+                    ),
+                ));
+            }
+        }
     }
     if op.links.suspicious_plunges > 0 {
         out.push(finding(

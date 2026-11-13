@@ -257,6 +257,69 @@ pub(super) fn passes(
                     });
                 });
             }
+            StrategySpec::Bore {
+                use_ramp_angle,
+                ramp_angle,
+                pitch,
+                multiple_passes,
+                stepovers,
+                conventional,
+                repeat,
+                ..
+            } => {
+                d.row(ui, &pass::USE_RAMP_ANGLE, "use_ramp_angle", |ui| {
+                    ui.checkbox(use_ramp_angle, "set the helix by its angle");
+                });
+                widgets::dependent(ui, *use_ramp_angle, |ui| {
+                    d.row(ui, &pass::BORE_RAMP_ANGLE, "ramp_angle", |ui| {
+                        ui.add(
+                            widgets::number(ramp_angle)
+                                .speed(0.1)
+                                .range(0.1..=89.0)
+                                .suffix("°"),
+                        );
+                    });
+                });
+                widgets::dependent(ui, !*use_ramp_angle, |ui| {
+                    d.row(ui, &pass::PITCH, "pitch", |ui| {
+                        m.length_field(ui, pitch, 0.01, 100.0, "");
+                    });
+                });
+                climb_or_conventional(
+                    ui,
+                    d,
+                    (&pass::DIRECTION_ROUND, "conventional"),
+                    conventional,
+                );
+                round_passes(
+                    ui,
+                    d,
+                    m,
+                    (multiple_passes, stepovers, repeat),
+                    &mut op.passes.stepover,
+                );
+            }
+            StrategySpec::Circular {
+                multiple_passes,
+                stepovers,
+                conventional,
+                repeat,
+                ..
+            } => {
+                climb_or_conventional(
+                    ui,
+                    d,
+                    (&pass::DIRECTION_ROUND, "conventional"),
+                    conventional,
+                );
+                round_passes(
+                    ui,
+                    d,
+                    m,
+                    (multiple_passes, stepovers, repeat),
+                    &mut op.passes.stepover,
+                );
+            }
             StrategySpec::Drill { peck, dwell } => {
                 d.row(ui, &pass::PECK, "peck", |ui| {
                     widgets::optional(ui, peck, 2.0, "all the way at once", |ui, p| {
@@ -275,7 +338,8 @@ pub(super) fn passes(
                 });
             }
         }
-        if uses.stepover {
+        // A hole's passes have their stepover with them, above.
+        if uses.stepover && uses.holes.is_none() {
             // Adaptive clearing's stepover is the width of cut it holds.
             if uses.load {
                 d.row(ui, &pass::OPTIMAL_LOAD, "passes.stepover", |ui| {
@@ -307,7 +371,10 @@ pub(super) fn passes(
     }
     if uses.finishing {
         widgets::section(ui, "Finishing passes");
-        finishing(ui, d, m, &mut op.passes, diameter);
+        // A bore's is one pass, at the cutting feed, its last pass repeated
+        // by its own Repeat Passes, above: it has only a stepover.
+        let bore = matches!(op.strategy, StrategySpec::Bore { .. });
+        finishing(ui, d, m, &mut op.passes, diameter, bore);
     }
     if let Some(modes) = holder_modes(&op.strategy) {
         widgets::section(ui, "Shaft and holder");
@@ -522,13 +589,15 @@ fn smoothing(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, passes:
 
 /// A pocket's finishing passes along its walls, off until asked for, as
 /// Fusion's: how many, how far apart, how fast the last goes, and whether it
-/// goes twice. A value left out is Fusion's, and says what it comes to.
+/// goes twice; a `bore`'s, how far in from the wall its one is. A value left
+/// out is Fusion's, and says what it comes to.
 fn finishing(
     ui: &mut egui::Ui,
     d: &mut Defaults<Operation>,
     m: Measure,
     passes: &mut Passes,
     diameter: Option<f64>,
+    bore: bool,
 ) {
     d.optional_group(
         ui,
@@ -545,16 +614,18 @@ fn finishing(
     let given = Finishing::default().sizes(across(diameter), feed);
     let tenth = left_out(m, diameter, given.stepover, "a tenth of the tool");
     widgets::sub_form(ui, "finishing", |ui| {
-        d.row(
-            ui,
-            &pass::FINISHING_PASSES,
-            "passes.finishing.passes",
-            |ui| {
-                let mut n = f.passes.unwrap_or(1);
-                ui.add(widgets::number(&mut n).range(1..=20));
-                f.passes = (n != 1).then_some(n);
-            },
-        );
+        if !bore {
+            d.row(
+                ui,
+                &pass::FINISHING_PASSES,
+                "passes.finishing.passes",
+                |ui| {
+                    let mut n = f.passes.unwrap_or(1);
+                    ui.add(widgets::number(&mut n).range(1..=20));
+                    f.passes = (n != 1).then_some(n);
+                },
+            );
+        }
         d.row(
             ui,
             &pass::FINISHING_STEPOVER,
@@ -565,6 +636,9 @@ fn finishing(
                 });
             },
         );
+        if bore {
+            return;
+        }
         d.row(ui, &pass::FINISHING_FEED, "passes.finishing.feed", |ui| {
             widgets::optional(ui, &mut f.feed, feed, "the cutting feed", |ui, v| {
                 m.feed_field(ui, v, 50_000.0);
@@ -578,6 +652,32 @@ fn finishing(
                 ui.checkbox(&mut f.repeat, "cut the last one twice");
             },
         );
+    });
+}
+
+/// A bore's or a circular's passes out to the wall, as Fusion's Multiple
+/// Passes: ticked, how many, the last at the wall, and how far apart; and
+/// whether the last is cut twice.
+fn round_passes(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    m: Measure,
+    (multiple, stepovers, repeat): (&mut bool, &mut u32, &mut bool),
+    stepover: &mut f64,
+) {
+    d.row(ui, &pass::MULTIPLE_PASSES, "multiple_passes", |ui| {
+        ui.checkbox(multiple, "more than one out to the wall");
+    });
+    widgets::dependent(ui, *multiple, |ui| {
+        d.row(ui, &pass::STEPOVERS, "stepovers", |ui| {
+            ui.add(widgets::number(stepovers).range(1..=1000));
+        });
+        d.row(ui, &pass::STEPOVER, "passes.stepover", |ui| {
+            m.length_field(ui, stepover, 0.05, 100.0, "");
+        });
+    });
+    d.row(ui, &pass::REPEAT_PASS, "repeat", |ui| {
+        ui.checkbox(repeat, "cut the last one twice");
     });
 }
 
@@ -649,6 +749,11 @@ fn multiple_depths(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, o
         d.row(ui, &pass::STEPDOWN, "passes.stepdown", |ui| {
             m.length_field(ui, stepdown, 0.05, 100.0, "");
         });
+        if let StrategySpec::Circular { even_stepdowns, .. } = &mut op.strategy {
+            d.row(ui, &pass::EVEN_STEPDOWNS, "even_stepdowns", |ui| {
+                ui.checkbox(even_stepdowns, "all the same depth");
+            });
+        }
         // Ticked, it starts at a quarter of the stepdown.
         if fine {
             let start = *stepdown / 4.0;

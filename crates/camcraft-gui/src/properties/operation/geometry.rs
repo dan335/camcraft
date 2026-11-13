@@ -2,8 +2,8 @@
 //! picked for it.
 
 use camcraft_core::job::{
-    self, Boundary, Containment, FeatureRef, MachiningBoundary, Operation, Outline, ProfileSide,
-    StrategySpec,
+    self, Boundary, Containment, FeatureRef, Holes, MachiningBoundary, Operation, Outline,
+    ProfileSide, StrategySpec,
 };
 use eframe::egui;
 
@@ -32,13 +32,21 @@ pub(super) fn geometry(
         return;
     }
     let uses = op.strategy.uses();
-    let drilling = uses.holes;
+    let drilling = uses.holes.is_some();
     let flat = uses.outline;
     if flat {
         outline_form(ui, d, op);
         ui.add_space(theme::SPACE_3);
     }
-    if drilling {
+    if uses.holes == Some(Holes::Walls) {
+        hint(
+            ui,
+            "Pick the round wall of each hole or boss: it is cut from its own top down \
+             to its own bottom, from inside a hole and round the outside of a boss. \
+             Only straight walls are cut.",
+        );
+        ui.add_space(theme::SPACE_3);
+    } else if drilling {
         hint(
             ui,
             "Pick the round edge at the top of each hole: it is drilled down to its \
@@ -54,7 +62,13 @@ pub(super) fn geometry(
         }
     }
     if op.cuts_selection() {
-        pick_cards(ui, setup, index, &mut op.selection, picks, actions);
+        // Round walls are faces, as Fusion's Bore and Circular pick them.
+        let kinds: &[Kind] = if uses.holes == Some(Holes::Walls) {
+            &[Kind::Face]
+        } else {
+            &[Kind::Face, Kind::Edge]
+        };
+        pick_cards(ui, (setup, index), kinds, &mut op.selection, picks, actions);
     }
     if drilling {
         return;
@@ -369,13 +383,17 @@ fn boundary_hint(g: &MachiningBoundary) -> &'static str {
 /// The cards of picked faces and edges, each with a way to pick more in the view.
 fn pick_cards(
     ui: &mut egui::Ui,
-    setup: &str,
-    index: usize,
+    (setup, index): (&str, usize),
+    kinds: &[Kind],
     selection: &mut job::Selection,
     picks: ViewPicks<'_>,
     actions: &mut Vec<PropAction>,
 ) {
-    for (kind, topic) in [(Kind::Face, &geo::FACES), (Kind::Edge, &geo::EDGES)] {
+    for &kind in kinds {
+        let topic = match kind {
+            Kind::Face => &geo::FACES,
+            Kind::Edge => &geo::EDGES,
+        };
         let slot = match kind {
             Kind::Face => Slot::Faces {
                 setup: setup.to_string(),

@@ -344,6 +344,105 @@ fn a_drill_the_wrong_size_is_said() {
     assert!(w.iter().any(|w| w.contains("8.000 mm across")), "{w:?}");
 }
 
+/// The plate's 8 mm hole, picked by its wall and cut with a 6 mm flat end mill
+/// by `strategy`, a new operation of it.
+fn round_wall_cut(strategy: &str) -> (SetupResult, Job) {
+    use crate::job::{FeatureRef, Operation};
+    use crate::setup::features::find_face;
+    let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    job.setups[0].operations.clear();
+    let mut op = Operation::new("hole", StrategySpec::named(strategy).unwrap());
+    op.tool = Some("rough".into());
+    op.passes.stepover = 5.7;
+    let pick = FeatureRef {
+        model: "dome".into(),
+        index: 0,
+        at: [4.0, 0.0, 2.5],
+    };
+    let face = find_face(&body, &pick, 0.01).unwrap().index;
+    op.selection.faces.push(FeatureRef {
+        index: face,
+        ..pick
+    });
+    job.setups[0].operations.push(op);
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    (run_setup(&job, 0, &bodies).unwrap(), job)
+}
+
+/// A bore and a circular each cut the plate's hole from its top to its own
+/// bottom, through the plate, and leave nothing in it: every cut an arc about
+/// its axis, the result verified clean.
+#[test]
+fn a_hole_is_bored_and_milled_round() {
+    for strategy in ["bore", "circular"] {
+        let (result, job) = round_wall_cut(strategy);
+        let op = &result.operations[0];
+        let report = match &op.detail {
+            StrategyDetail::Bore(r) | StrategyDetail::Circular(r) => *r,
+            other => panic!("reported {other:?}"),
+        };
+        assert_eq!((report.holes, report.bosses, report.cores), (1, 0, 0));
+        assert_eq!(op.strategy, strategy);
+        assert!(result.is_clean(), "{strategy}: {:?}", result.warnings());
+        assert_eq!(result.verify.gouged, 0, "{strategy}");
+        assert_eq!(op.sim.rapid_contacts, 0, "{strategy}");
+        // Down to the plate's bottom, its hole's own, and no further.
+        let lowest = op
+            .path
+            .moves()
+            .iter()
+            .map(|m| m.to.z)
+            .fold(f64::MAX, f64::min);
+        assert!(lowest.abs() < 1e-9, "{strategy}: down to {lowest}");
+        // A circular ramps down into each level round its circle, as
+        // Fusion's ramps on; a bore's helix is its own.
+        let ramps = op
+            .path
+            .moves()
+            .iter()
+            .filter(|m| m.role == crate::path::toolpath::MoveRole::Ramp)
+            .collect::<Vec<_>>();
+        if strategy == "circular" {
+            assert!(op.links.ramps > 0);
+            assert!(
+                ramps
+                    .iter()
+                    .all(|m| matches!(m.kind, crate::path::toolpath::MoveKind::Arc(_)))
+            );
+        } else {
+            assert!(ramps.is_empty());
+        }
+        // Every cut an arc round the hole, the tool's radius in from its wall.
+        let mut at = DVec3::ZERO;
+        for m in op.path.moves() {
+            if m.role == crate::path::toolpath::MoveRole::Cut {
+                let crate::path::toolpath::MoveKind::Arc(a) = m.kind else {
+                    panic!("{strategy}: a straight cut to {}", m.to);
+                };
+                assert!(a.centre.truncate().length() < 1e-6);
+                assert!((a.radius(at) - 1.0).abs() < 1e-6, "{}", a.radius(at));
+            }
+            at = m.to;
+        }
+        // Nothing is left in the hole.
+        let stock = result.keyframes.last().unwrap().unpack().unwrap();
+        let field = stock.field();
+        let mut inside = 0;
+        for iy in 0..field.ny() {
+            for ix in 0..field.nx() {
+                let p = field.position(ix, iy).unwrap();
+                if p.length() < 4.0 - 2.0 * field.pitch() {
+                    inside += 1;
+                    let h = field.get(ix, iy).unwrap();
+                    assert!(h <= job.tolerance, "{strategy}: {h} left at {p}");
+                }
+            }
+        }
+        assert!(inside > 100);
+    }
+}
+
 fn cuts(result: &SetupResult) -> Vec<DVec2> {
     result.operations[0]
         .path

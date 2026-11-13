@@ -22,6 +22,7 @@ use crate::strategy::parallel::ParallelReport;
 use crate::strategy::planar::PlanarReport;
 use crate::strategy::pocket_clearing::ClearingReport;
 use crate::strategy::projected::ProjectReport;
+use crate::strategy::round::RoundReport;
 use crate::strategy::scallop::ScallopReport;
 use crate::strategy::waterline::WaterlineReport;
 
@@ -58,6 +59,10 @@ pub enum StrategyDetail {
     Face(PlanarReport),
     /// Drilling.
     Drill(DrillReport),
+    /// Bore.
+    Bore(RoundReport),
+    /// Circular.
+    Circular(RoundReport),
 }
 
 /// How an operation's paths came to be in a run.

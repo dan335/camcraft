@@ -622,6 +622,8 @@ pub fn strategy_label(s: &StrategySpec) -> &'static str {
         StrategySpec::Pocket { .. } => "2D pocket",
         StrategySpec::Face { .. } => "Face",
         StrategySpec::Drill { .. } => "Drill",
+        StrategySpec::Bore { .. } => "Bore",
+        StrategySpec::Circular { .. } => "Circular",
     }
 }
 
@@ -642,7 +644,10 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
             .collect()
     };
     [
-        ("2D", vec![section(&["face", "pocket", "profile"])]),
+        (
+            "2D",
+            vec![section(&["face", "pocket", "profile", "bore", "circular"])],
+        ),
         (
             "3D",
             vec![
@@ -662,19 +667,90 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
     ]
 }
 
+/// Fusion's operations camcraft has not built yet, each by the group of the
+/// menus that add operations and the section of it it goes in, and its name
+/// there, in the order of Fusion's toolbar. The menus list them after that
+/// section's own, greyed, saying so. One that is built comes out of here and
+/// into [`operation_groups`], in the same place.
+pub const PLANNED: &[(&str, usize, &str)] = &[
+    ("2D", 0, "2D adaptive clearing"),
+    ("2D", 0, "Slot"),
+    ("2D", 0, "Trace"),
+    ("2D", 0, "Thread"),
+    ("2D", 0, "Engrave"),
+    ("2D", 0, "2D chamfer"),
+    ("3D", 1, "Steep and shallow"),
+    ("3D", 1, "Ramp"),
+    ("3D", 1, "Pencil"),
+    ("3D", 1, "Project"),
+    ("3D", 1, "Morph"),
+    ("3D", 1, "Blend"),
+    ("3D", 1, "Flow"),
+    ("3D", 1, "Corner"),
+    ("3D", 1, "Geodesic"),
+];
+
+/// What a planned operation's item says under the pointer.
+pub const NOT_YET: &str = "Not implemented yet";
+
+/// One item of a menu that adds an operation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MenuItem {
+    /// An operation there is: its name and what a new one starts from.
+    Operation(NewOperation),
+    /// One planned, by its name: shown, greyed, and not to be clicked.
+    Planned(&'static str),
+}
+
+/// The menus that add operations, group by group and section by section:
+/// [`operation_groups`]' operations, each section's planned ones
+/// ([`PLANNED`]) after them.
+pub fn operation_menu_items() -> Vec<(&'static str, Vec<Vec<MenuItem>>)> {
+    operation_groups()
+        .into_iter()
+        .map(|(group, sections)| {
+            let sections = sections
+                .into_iter()
+                .enumerate()
+                .map(|(i, section)| {
+                    let planned = PLANNED
+                        .iter()
+                        .filter(|(g, s, _)| *g == group && *s == i)
+                        .map(|(_, _, label)| MenuItem::Planned(label));
+                    section
+                        .into_iter()
+                        .map(MenuItem::Operation)
+                        .chain(planned)
+                        .collect()
+                })
+                .collect();
+            (group, sections)
+        })
+        .collect()
+}
+
 /// A submenu for each group of operations, `add` called with what the one
-/// picked starts from. The Add menu and a setup's menu both show them.
+/// picked starts from. The Add menu and a setup's menu both show them, the
+/// planned ones greyed.
 pub fn operation_menus(ui: &mut egui::Ui, mut add: impl FnMut(StrategySpec)) {
-    for (group, sections) in operation_groups() {
+    for (group, sections) in operation_menu_items() {
         ui.menu_button(group, |ui| {
             for (i, section) in sections.into_iter().enumerate() {
                 if i > 0 {
                     ui.separator();
                 }
-                for (label, strategy) in section {
-                    if ui.button(label).clicked() {
-                        add(strategy);
-                        ui.close();
+                for item in section {
+                    match item {
+                        MenuItem::Operation((label, strategy)) => {
+                            if ui.button(label).clicked() {
+                                add(strategy);
+                                ui.close();
+                            }
+                        }
+                        MenuItem::Planned(label) => {
+                            ui.add_enabled(false, egui::Button::new(label))
+                                .on_disabled_hover_text(NOT_YET);
+                        }
                     }
                 }
             }
@@ -788,7 +864,7 @@ fn apply(doc: &mut Document, edit: Edit) {
 mod tests {
     use super::*;
     use egui_kittest::Harness;
-    use egui_kittest::kittest::Queryable as _;
+    use egui_kittest::kittest::{NodeT as _, Queryable as _};
 
     fn names(doc: &Document) -> Vec<String> {
         doc.job.setups[0]
@@ -796,6 +872,39 @@ mod tests {
             .iter()
             .map(|o| o.name.clone())
             .collect()
+    }
+
+    /// Each planned operation is in its menu, greyed, saying so under the
+    /// pointer, and clicked adds nothing; one there is, clicked, adds it.
+    #[test]
+    fn planned_operations_are_greyed_in_the_menus() {
+        let mut h = Harness::new_ui_state(
+            |ui, added: &mut Vec<StrategySpec>| {
+                operation_menus(ui, |s| added.push(s));
+            },
+            Vec::new(),
+        );
+        h.run();
+        for (group, _, label) in PLANNED {
+            h.get_by_label(group).click();
+            h.run();
+            let item = h.get_by_label(label);
+            assert!(item.accesskit_node().is_disabled(), "{label} is not greyed");
+            item.hover();
+            h.run();
+            h.get_by_label(label).click();
+            h.run();
+            assert!(h.state().is_empty(), "{label} added {:?}", h.state());
+            // Shut, for the next.
+            h.key_press(egui::Key::Escape);
+            h.run();
+        }
+        h.get_by_label("2D").click();
+        h.run();
+        h.get_by_label("Bore").click();
+        h.run();
+        assert_eq!(h.state().len(), 1);
+        assert_eq!(h.state()[0].name(), "bore");
     }
 
     /// Dragging an operation's row onto the top half of another's puts it
@@ -875,6 +984,7 @@ fn item<T>(ui: &mut egui::Ui, label: &str, queue: &RefCell<Vec<T>>, then: impl F
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod menu_tests {
     use super::*;
 
@@ -894,6 +1004,84 @@ mod menu_tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), offered, "one is offered twice: {names:?}");
-        assert_eq!(offered, 13, "{names:?}");
+        assert_eq!(offered, 15, "{names:?}");
+    }
+
+    /// The planned operations are listed after their section's own, in the
+    /// order given, none of them an operation there is, so one that is built
+    /// cannot be listed twice; and every one is greyed.
+    #[test]
+    fn planned_operations_are_listed_greyed_after_the_rest() {
+        let labels: Vec<&str> = operation_groups()
+            .into_iter()
+            .flat_map(|(_, sections)| sections.into_iter().flatten())
+            .map(|(label, _)| label)
+            .collect();
+        for (group, section, label) in PLANNED {
+            assert!(
+                !labels.contains(label),
+                "{label} is built: take it out of PLANNED"
+            );
+            let sections = operation_groups()
+                .into_iter()
+                .find(|(g, _)| g == group)
+                .map(|(_, s)| s.len());
+            assert!(
+                sections.is_some_and(|n| *section < n),
+                "{label}: no section {section} of {group}"
+            );
+        }
+        for (group, sections) in operation_menu_items() {
+            for (i, section) in sections.iter().enumerate() {
+                // Every planned one after every one there is.
+                let first_planned = section
+                    .iter()
+                    .position(|m| matches!(m, MenuItem::Planned(_)))
+                    .unwrap_or(section.len());
+                assert!(
+                    section[first_planned..]
+                        .iter()
+                        .all(|m| matches!(m, MenuItem::Planned(_))),
+                    "{group} {i}: {section:?}"
+                );
+                let planned: Vec<&str> = section
+                    .iter()
+                    .filter_map(|m| match m {
+                        MenuItem::Planned(l) => Some(*l),
+                        MenuItem::Operation(_) => None,
+                    })
+                    .collect();
+                let asked: Vec<&str> = PLANNED
+                    .iter()
+                    .filter(|(g, s, _)| *g == group && *s == i)
+                    .map(|(.., l)| *l)
+                    .collect();
+                assert_eq!(planned, asked);
+            }
+        }
+        // 2D: Fusion's order, Bore and Circular built after the profile.
+        let two_d: Vec<String> = operation_menu_items()[0].1[0]
+            .iter()
+            .map(|m| match m {
+                MenuItem::Operation((l, _)) => (*l).to_string(),
+                MenuItem::Planned(l) => format!("({l})"),
+            })
+            .collect();
+        assert_eq!(
+            two_d,
+            [
+                "Face",
+                "2D pocket",
+                "2D profile",
+                "Bore",
+                "Circular",
+                "(2D adaptive clearing)",
+                "(Slot)",
+                "(Trace)",
+                "(Thread)",
+                "(Engrave)",
+                "(2D chamfer)"
+            ]
+        );
     }
 }

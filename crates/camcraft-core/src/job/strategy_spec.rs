@@ -4,7 +4,10 @@
 use serde::de::value::MapDeserializer;
 use serde::{Deserialize, Serialize};
 
-use super::{Containment, Depths, Entry, StockToLeave, is_default, is_ninety, is_yes, ninety, yes};
+use super::{
+    Containment, Depths, Entry, Retraction, StockToLeave, is_default, is_ninety, is_yes, ninety,
+    yes,
+};
 
 /// Strategy and the parameters only it has.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
@@ -288,6 +291,146 @@ pub enum StrategySpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dwell: Option<f64>,
     },
+    /// Round holes and bosses, picked by their walls, each milled down a helix
+    /// round its wall from its top to its bottom, then once round level at the
+    /// bottom. Fusion's Bore.
+    Bore {
+        /// Whether the helix is set by its angle, `ramp_angle`, rather than
+        /// its `pitch`: Fusion's Use Ramp Angle, on unless turned off, as a
+        /// new Bore of Fusion's starts.
+        #[serde(default = "yes", skip_serializing_if = "is_yes")]
+        use_ramp_angle: bool,
+        /// The helix's angle from level, in degrees: Fusion's Angle, 2°. Each
+        /// pass goes down as far a turn as it takes it round its own circle.
+        #[serde(
+            default = "default_bore_angle",
+            skip_serializing_if = "is_default_bore_angle"
+        )]
+        ramp_angle: f64,
+        /// How far the helix goes down in a turn without the angle, in
+        /// millimetres: Fusion's Pitch, 1 mm.
+        #[serde(default = "default_pitch", skip_serializing_if = "is_default_pitch")]
+        pitch: f64,
+        /// More than one pass out to the wall: Fusion's Multiple Passes, off
+        /// unless asked. Without, the wall alone.
+        #[serde(default, skip_serializing_if = "is_default")]
+        multiple_passes: bool,
+        /// How many passes out to the wall with them, a stepover apart, the
+        /// last at it: Fusion's Number of Stepovers, 2.
+        #[serde(default = "two", skip_serializing_if = "is_two")]
+        stepovers: u32,
+        /// Cut conventional rather than climb.
+        #[serde(default, skip_serializing_if = "is_default")]
+        conventional: bool,
+        /// Cut the last pass twice, for a tool that springs from the wall:
+        /// Fusion's Repeat Passes.
+        #[serde(default, skip_serializing_if = "is_default")]
+        repeat: bool,
+        /// Lead onto each pass from the hole's centre and off it back there:
+        /// Fusion's Lead To Center.
+        #[serde(default, skip_serializing_if = "is_default")]
+        lead_to_center: bool,
+    },
+    /// Round holes and bosses, picked by their walls, each cut level by level
+    /// down to its bottom: at each level the tool leads onto the wall from the
+    /// waste, goes once round it and leads off. Fusion's Circular.
+    Circular {
+        /// More than one pass out to the wall at each level: Fusion's
+        /// Multiple Passes, off unless asked. Without, the wall alone.
+        #[serde(default, skip_serializing_if = "is_default")]
+        multiple_passes: bool,
+        /// How many passes out to the wall with them, a stepover apart, the
+        /// last at it: Fusion's Number of Stepovers, 2.
+        #[serde(default = "two", skip_serializing_if = "is_two")]
+        stepovers: u32,
+        /// Cut conventional rather than climb.
+        #[serde(default, skip_serializing_if = "is_default")]
+        conventional: bool,
+        /// Cut the last pass twice, for a tool that springs from the wall:
+        /// Fusion's Repeat Passes.
+        #[serde(default, skip_serializing_if = "is_default")]
+        repeat: bool,
+        /// Its levels evenly spaced, none deeper than the stepdown, rather than
+        /// each a whole stepdown and the last what is left: Fusion's Use Even
+        /// Stepdowns.
+        #[serde(default, skip_serializing_if = "is_default")]
+        even_stepdowns: bool,
+        /// Lead onto each pass from the hole's centre and off it back there:
+        /// Fusion's Lead To Center.
+        #[serde(default, skip_serializing_if = "is_default")]
+        lead_to_center: bool,
+    },
+    /// Slots, picked by the edges round their floors, each milled along its
+    /// middle from end to end: down to each level by ramping back and forth
+    /// along it, then along it at the level, and once round its walls where
+    /// the tool is narrower than the slot. Fusion's Slot.
+    Slot {
+        /// How far the tool backs off the wall at the end of each cut before
+        /// it lifts, in millimetres: Fusion's Backoff Distance, none.
+        #[serde(default, skip_serializing_if = "is_default")]
+        backoff_distance: f64,
+        /// Cut the last pass at the bottom twice, for a tool that springs from
+        /// the wall: Fusion's Repeat Finishing Pass.
+        #[serde(default, skip_serializing_if = "is_default")]
+        repeat: bool,
+        /// Cut the slots in the order picked: Fusion's Preserve Order. Off,
+        /// the first picked, then always the nearest.
+        #[serde(default, skip_serializing_if = "is_default")]
+        preserve_order: bool,
+    },
+    /// Picked edges followed, open or closed: the tool's tip on each, or its
+    /// side beside it, at the edge's own height and an axial offset, in one
+    /// pass or several above it. Fusion's Trace.
+    Trace {
+        /// Where the tool's centre goes against each curve: on it, or its
+        /// radius to the left or right of it as it runs. Fusion's Sideways
+        /// Compensation, on it unless asked.
+        #[serde(default, skip_serializing_if = "is_default")]
+        compensation: Compensation,
+        /// How far up the passes are moved from the curves, in millimetres,
+        /// negative to go below them: Fusion's Axial Offset, none.
+        #[serde(default, skip_serializing_if = "is_default")]
+        axial_offset: f64,
+        /// How far an open curve's passes run on past each of its ends, along
+        /// it, in millimetres: Fusion's Pass Extension, none.
+        #[serde(default, skip_serializing_if = "is_default")]
+        pass_extension: f64,
+        /// The steepest a pass may go, in degrees from level: what of it is
+        /// steeper is left out. Fusion's Maximum Angle, 90°: all of it.
+        #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
+        max_angle: f64,
+        /// With multiple depths, how many passes above the last each curve
+        /// gets, a stepdown apart: Fusion's Number of Stepdowns, 1.
+        #[serde(default = "one", skip_serializing_if = "is_one")]
+        stepdowns: u32,
+        /// With multiple depths, every curve at a level before the next one
+        /// down, or each curve all the way down before the next: Fusion's
+        /// Order by Depth, on.
+        #[serde(default, skip_serializing_if = "is_default")]
+        order: ContourOrder,
+        /// With multiple depths, an open curve's levels cut back and forth,
+        /// each the other way from the one above: Fusion's Both Ways.
+        #[serde(default, skip_serializing_if = "is_default")]
+        both_ways: bool,
+        /// Cut the last pass of each curve twice: Fusion's Repeat Passes.
+        #[serde(default, skip_serializing_if = "is_default")]
+        repeat: bool,
+        /// Follow the curves in the order picked: Fusion's Preserve Order.
+        /// Off, the first picked, then always the nearest.
+        #[serde(default, skip_serializing_if = "is_default")]
+        preserve_order: bool,
+        /// Go from one pass to the next without lifting where it is near:
+        /// Fusion's Keep Tool Down, off.
+        #[serde(default, skip_serializing_if = "is_default")]
+        keep_tool_down: bool,
+        /// Come down onto each pass along a vertical arc: Fusion's Lead-In,
+        /// off.
+        #[serde(default, skip_serializing_if = "is_default")]
+        lead_in: bool,
+        /// Go up off each pass along a vertical arc: Fusion's Lead-Out, off.
+        #[serde(default, skip_serializing_if = "is_default")]
+        lead_out: bool,
+    },
 }
 
 impl StrategySpec {
@@ -315,6 +458,10 @@ impl StrategySpec {
             StrategySpec::Pocket { .. } => "pocket",
             StrategySpec::Face { .. } => "face",
             StrategySpec::Drill { .. } => "drill",
+            StrategySpec::Bore { .. } => "bore",
+            StrategySpec::Circular { .. } => "circular",
+            StrategySpec::Slot { .. } => "slot",
+            StrategySpec::Trace { .. } => "trace",
         }
     }
 
@@ -323,8 +470,8 @@ impl StrategySpec {
     /// tool's centre inside it; pocket and adaptive clearing, contour and flat
     /// finishing reach in from outside, since kept inside the part's outline
     /// the tool would never reach its walls. `None` for a 2D operation, whose
-    /// outline starts as the silhouette already, and for facing and drilling,
-    /// which have no boundary.
+    /// outline starts as the silhouette already, and for facing and the
+    /// strategies that cut holes, which have no boundary.
     pub fn starting_containment(&self) -> Option<Containment> {
         match *self {
             StrategySpec::Parallel { .. }
@@ -339,7 +486,11 @@ impl StrategySpec {
             StrategySpec::Profile { .. }
             | StrategySpec::Pocket { .. }
             | StrategySpec::Face { .. }
-            | StrategySpec::Drill { .. } => None,
+            | StrategySpec::Drill { .. }
+            | StrategySpec::Bore { .. }
+            | StrategySpec::Circular { .. }
+            | StrategySpec::Slot { .. }
+            | StrategySpec::Trace { .. } => None,
         }
     }
 
@@ -358,17 +509,23 @@ impl StrategySpec {
         match *self {
             StrategySpec::Profile { conventional, .. }
             | StrategySpec::Pocket { conventional }
-            | StrategySpec::PocketClearing { conventional, .. } => Some(one_way(conventional)),
+            | StrategySpec::PocketClearing { conventional, .. }
+            | StrategySpec::Bore { conventional, .. }
+            | StrategySpec::Circular { conventional, .. } => Some(one_way(conventional)),
             StrategySpec::Adaptive { direction, .. }
             | StrategySpec::Scallop { direction, .. }
             | StrategySpec::Contour { direction, .. }
             | StrategySpec::Flat { direction, .. }
             | StrategySpec::Spiral { direction, .. }
             | StrategySpec::MorphedSpiral { direction, .. } => Some(direction),
+            // A slot's tool is as wide as the slot, cutting both ways at once;
+            // a trace's side is its compensation.
             StrategySpec::Parallel { .. }
             | StrategySpec::Radial { .. }
             | StrategySpec::Face { .. }
-            | StrategySpec::Drill { .. } => None,
+            | StrategySpec::Drill { .. }
+            | StrategySpec::Slot { .. }
+            | StrategySpec::Trace { .. } => None,
         }
     }
 
@@ -445,12 +602,14 @@ impl StrategySpec {
     ///   leaves a cusp no taller than the tolerance with a round end, a quarter
     ///   of the diameter with a square one, to the micron; for 3D and 2D
     ///   pockets, 0.6 of the diameter; adaptive's optimal load, 0.4 of it;
-    ///   flat finishing, 0.3 of it; facing, 0.7 of the flat of the tool's end.
+    ///   flat finishing, 0.3 of it; facing, 0.7 of the flat of the tool's end;
+    ///   bore and circular, half the tool, their straight leads a twentieth
+    ///   of it.
     /// - **Stepdown:** adaptive's maximum roughing stepdown,
     ///   `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)`; a pocket's,
     ///   3D or 2D, `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)`; a
-    ///   profile's, three quarters of the flutes. Contour finishing's is a
-    ///   millimetre, [`StrategySpec::default_stepdown`].
+    ///   profile's, three quarters of the flutes. Contour finishing's and a
+    ///   circular's are a millimetre, [`StrategySpec::default_stepdown`].
     /// - **Feeds:** plunging at a third of the cutting feed, and ramping at
     ///   the plunge feed, as a new tool of Fusion's does; drilling's own.
     /// - **Adaptive's own:** a minimum cutting radius of a tenth of the tool,
@@ -466,6 +625,10 @@ impl StrategySpec {
             : Math.roundto(tool_diameter / 4; 0.001)";
         const ROUGHING_STEPDOWN: &str = "Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)";
         const POCKET_STEPDOWN: &str = "Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)";
+        // A new Bore's and Circular's, as Fusion's API gives them; its
+        // Circular reference says 95% of the cutter less its corner instead.
+        const ROUND_STEPOVER: &str = "tool_diameter * 0.5";
+        const ROUND_LEAD: &str = "tool_diameter * 0.05";
         let mut own: Vec<(&'static str, &'static str)> = match self {
             // A scallop pass is parallel's cusp, kept on a slope too.
             StrategySpec::Parallel { .. }
@@ -496,7 +659,14 @@ impl StrategySpec {
                 ("pass_extension", "tool_diameter / 2 + tolerance"),
             ],
             StrategySpec::Profile { .. } => vec![("passes.stepdown", "tool_fluteLength * 0.75")],
-            StrategySpec::Contour { .. } | StrategySpec::Drill { .. } => Vec::new(),
+            StrategySpec::Bore { .. } | StrategySpec::Circular { .. } => vec![
+                ("passes.stepover", ROUND_STEPOVER),
+                ("linking.leads.straight", ROUND_LEAD),
+            ],
+            StrategySpec::Contour { .. }
+            | StrategySpec::Drill { .. }
+            | StrategySpec::Slot { .. }
+            | StrategySpec::Trace { .. } => Vec::new(),
         };
         // A drill's feed down is its cutting feed: it has no plunge of its own.
         if !matches!(self, StrategySpec::Drill { .. }) {
@@ -519,6 +689,17 @@ impl StrategySpec {
         self
     }
 
+    /// How high a new operation of this strategy goes between cuts, where that
+    /// is not what a job file that leaves it out reads: a trace to the retract
+    /// height, as Fusion's Trace starts with a full retraction.
+    pub fn fresh_retraction(&self) -> Retraction {
+        if matches!(self, StrategySpec::Trace { .. }) {
+            Retraction::Full
+        } else {
+            Retraction::default()
+        }
+    }
+
     /// How a new operation of this strategy goes down into the material, where
     /// that is not what a job file that leaves it out reads: a 2D profile
     /// straight down onto its lead, as Fusion's 2D Contour starts with Ramp
@@ -528,10 +709,12 @@ impl StrategySpec {
     }
 
     /// The multiple depths this strategy starts with: roughing 2 mm a level;
-    /// facing, a 2D profile and a 2D pocket their bottom in one pass, as
-    /// Fusion's Face, 2D Contour and 2D Pocket start with Multiple Depths off.
+    /// facing, a 2D profile, a 2D pocket, a slot and a trace their bottom in
+    /// one pass, as Fusion's Face, 2D Contour, 2D Pocket, Slot and Trace start
+    /// with Multiple Depths off.
     /// Ticked, a profile's and a pocket's levels start at Fusion's Maximum
-    /// Roughing Stepdown ([`StrategySpec::default_expressions`]).
+    /// Roughing Stepdown ([`StrategySpec::default_expressions`]). A circular
+    /// starts with them on, a millimetre apart, as Fusion's Circular does.
     pub fn default_stepdown(&self) -> Option<f64> {
         match self.uses().depths {
             Depths::None => None,
@@ -540,12 +723,21 @@ impl StrategySpec {
                 StrategySpec::Face { .. }
                     | StrategySpec::Profile { .. }
                     | StrategySpec::Pocket { .. }
+                    | StrategySpec::Slot { .. }
+                    | StrategySpec::Trace { .. }
             ) =>
             {
                 None
             }
-            // A finishing waterline's, as Fusion's Contour.
-            _ if matches!(self, StrategySpec::Contour { .. }) => Some(1.0),
+            // A finishing waterline's, as Fusion's Contour; and Fusion's
+            // Circular's.
+            _ if matches!(
+                self,
+                StrategySpec::Contour { .. } | StrategySpec::Circular { .. }
+            ) =>
+            {
+                Some(1.0)
+            }
             _ => Some(2.0),
         }
     }
@@ -617,14 +809,16 @@ impl PassOrder {
     }
 }
 
-/// Which order a contour's levels are cut in, or adaptive clearing's.
+/// Which order a contour's levels are cut in, or adaptive clearing's, or a
+/// trace's.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ContourOrder {
     /// Each level all the way round before the next down. Fusion's default.
     #[default]
     ByDepth,
-    /// Each piece of the part all the way down before the next.
+    /// Each piece of the part all the way down before the next; each curve,
+    /// a trace's.
     ByArea,
 }
 
@@ -678,7 +872,56 @@ pub enum ProfileSide {
     On,
 }
 
+/// Where a trace's tool goes against the curve it follows: Fusion's Sideways
+/// Compensation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Compensation {
+    /// Its centre on the curve, its tip at the curve's height. Fusion's
+    /// default.
+    #[default]
+    Center,
+    /// Its centre the tool's radius to the left of the curve as it runs, seen
+    /// from above: climbing with a clockwise spindle, the material on its
+    /// right.
+    Left,
+    /// To the right: conventional with a clockwise spindle.
+    Right,
+}
+
 default_number!(full_turn, is_full_turn = 360.0);
+
+default_number!(
+    /// A bore's pitch, in millimetres a turn: a new Bore of Fusion's.
+    default_pitch,
+    is_default_pitch = 1.0
+);
+
+default_number!(
+    /// A bore's helix angle, in degrees: a new Bore of Fusion's.
+    default_bore_angle,
+    is_default_bore_angle = 2.0
+);
+
+fn two() -> u32 {
+    2
+}
+
+fn one() -> u32 {
+    1
+}
+
+// Serde's `skip_serializing_if` hands the field by reference.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_one(n: &u32) -> bool {
+    *n == 1
+}
+
+// Serde's `skip_serializing_if` hands the field by reference.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_two(n: &u32) -> bool {
+    *n == 2
+}
 
 fn climb() -> CutDirection {
     CutDirection::Climb

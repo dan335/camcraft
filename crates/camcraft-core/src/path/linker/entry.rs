@@ -435,7 +435,9 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
             } else {
                 dvec3(s.m.to.x, s.m.to.y, z)
             };
-            let straight_down = p.z < at.z && p.truncate().distance(at.truncate()) < 1e-9;
+            // Straight down only where it covers no ground: an arc all the way
+            // about ends over where it starts, and is a lap of the ramp.
+            let straight_down = p.z < at.z && s.flat_length() < 1e-9;
             let (role, feed) = if straight_down {
                 (MoveRole::Plunge, self.p.plunge_feed)
             } else {

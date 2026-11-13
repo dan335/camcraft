@@ -1,6 +1,6 @@
 //! Which of the settings every operation has its strategy uses.
 
-use super::{Entry, HeightRef, ProfileSide, StrategySpec};
+use super::{Compensation, Entry, HeightRef, ProfileSide, StrategySpec};
 
 impl StrategySpec {
     /// Which of the settings every operation has this strategy uses.
@@ -12,7 +12,8 @@ impl StrategySpec {
         let cuts_loops = Uses {
             boundary: true,
             outline: false,
-            holes: false,
+            holes: None,
+            curves: None,
             stepover: true,
             load: false,
             feed: true,
@@ -187,7 +188,8 @@ impl StrategySpec {
             StrategySpec::Drill { .. } => Uses {
                 boundary: false,
                 outline: false,
-                holes: true,
+                holes: Some(Holes::Rims),
+                curves: None,
                 stepover: false,
                 load: false,
                 // Each hole is fed down at the plunge feed.
@@ -219,8 +221,109 @@ impl StrategySpec {
                 smoothing: false,
                 feed_optimization: false,
             },
+            // Its picks are round walls, each hole or boss cut round its own
+            // circle from its own top to its own bottom: no area, no levels,
+            // its helix its own. In and out level along its leads, down and
+            // up the vertical arcs the linker makes; lifted between passes,
+            // each of which starts at the top.
+            StrategySpec::Bore { .. } => Uses {
+                boundary: false,
+                holes: Some(Holes::Walls),
+                depths: Depths::None,
+                finishing: true,
+                links: Links::Level,
+                stay_down: false,
+                cut_step: false,
+                reach: Reach::Tools(0),
+                ramp: false,
+                leads: true,
+                top: Some(HeightRef::ModelTop),
+                bottom: Some(HeightRef::ModelBottom),
+                // Its moves are arcs already, and every one goes round the
+                // same circle.
+                smoothing: false,
+                feed_optimization: false,
+                ..cuts_loops
+            },
+            // As a bore, but level by level: each level's first pass ramps
+            // down along its circle into the material, as Fusion's Circular
+            // ramps on, and the passes after it at the level stay down.
+            StrategySpec::Circular { .. } => Uses {
+                boundary: false,
+                holes: Some(Holes::Walls),
+                cut_step: false,
+                leads: true,
+                top: Some(HeightRef::ModelTop),
+                bottom: Some(HeightRef::ModelBottom),
+                smoothing: false,
+                feed_optimization: false,
+                ..cuts_loops
+            },
+            // Its picks are the edges round each slot's floor, each slot cut
+            // along its middle from the stock's top down to its own floor:
+            // no area, no stepover, only its floor to leave anything on. Down
+            // to each level by ramping back and forth along the slot, as
+            // Fusion's Slot's profile ramp, its legs no deeper than the most
+            // a ramp goes down; between levels and slots it stays down within
+            // twice the tool, as Fusion's.
+            StrategySpec::Slot { .. } => Uses {
+                boundary: false,
+                curves: Some(Curves::Slots),
+                stepover: false,
+                stock_to_leave: Leave::Axial,
+                cut_step: false,
+                reach: Reach::Tools(2),
+                top: Some(HeightRef::StockTop),
+                bottom: Some(HeightRef::Selection),
+                ..cuts_loops
+            },
+            // Its picks are edges, open or closed, each followed at its own
+            // height: no area, no stepover, its levels above the curve, its
+            // ramp none, as Fusion's Trace plunges. Entered and left along
+            // vertical arcs where asked; between passes it lifts, unless it
+            // keeps the tool down, over the part as a finishing pass does.
+            // Its stock to leave is beside it only with compensation.
+            StrategySpec::Trace { compensation, .. } => Uses {
+                boundary: false,
+                curves: Some(Curves::Traced),
+                stepover: false,
+                stock_to_leave: if compensation == Compensation::Center {
+                    Leave::Axial
+                } else {
+                    Leave::Both
+                },
+                links: Links::OverPart,
+                cut_step: false,
+                reach: Reach::Mm(50),
+                lead_radius: true,
+                ramp: false,
+                top: None,
+                bottom: None,
+                ..cuts_loops
+            },
         }
     }
+}
+
+/// What a strategy that runs along what is picked, rather than over an area,
+/// has picked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Curves {
+    /// Slots, by the edges round their floors, or their floors: a slot's
+    /// middle is what it runs along, as Fusion's Slot has them.
+    Slots,
+    /// Edges, open or closed, the tool follows, as Fusion's Trace has them.
+    Traced,
+}
+
+/// How a strategy that cuts holes has them picked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Holes {
+    /// By their rims, the round edges at their tops, as drilling has them.
+    Rims,
+    /// By their round walls, faces, as Fusion's Bore and Circular have them:
+    /// a hole's or a boss's.
+    Walls,
 }
 
 /// Which of the settings every operation has (its boundary or outline,
@@ -237,9 +340,13 @@ pub struct Uses {
     pub boundary: bool,
     /// An outline it cuts round or clears: a 2D strategy's.
     pub outline: bool,
-    /// Holes: its picks are what it drills, not an area, and no height is
-    /// measured from them, since each hole goes to its own bottom.
-    pub holes: bool,
+    /// Holes: its picks are the holes it cuts, not an area, and no height is
+    /// measured from them, since each hole goes to its own bottom. How they
+    /// are picked, where it has them.
+    pub holes: Option<Holes>,
+    /// Curves: its picks are what it runs along, slots or edges, not an area.
+    /// Which, where it has them.
+    pub curves: Option<Curves>,
     /// The distance between passes.
     pub stepover: bool,
     /// Its stepover is the tool's load, the width of cut it holds, rather than

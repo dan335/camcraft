@@ -20,6 +20,7 @@ pub mod pocket_clearing;
 
 // Holes.
 pub mod drilling;
+pub mod round;
 
 // What they share.
 mod field;

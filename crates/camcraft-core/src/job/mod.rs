@@ -123,14 +123,14 @@ pub use passes::{
 pub use pick::{FeatureRef, PointRef, Snap};
 pub use setup::{Along, BoxOf, Origin, Setup};
 pub use strategy_spec::{
-    ContourOrder, CutDirection, FaceDirection, PassOrder, ProfileSide, RadialDirection,
-    StrategySpec,
+    Compensation, ContourOrder, CutDirection, FaceDirection, PassOrder, ProfileSide,
+    RadialDirection, StrategySpec,
 };
 pub use tool::{
     Coolant, DRILL_POINT, Holder, HolderSegment, Preset, SpindleDirection, ToolFieldError,
     ToolKind, ToolMaterial, ToolSpec, free_preset_name,
 };
-pub use uses::{Depths, HelixSize, Leave, Links, Reach, Uses};
+pub use uses::{Curves, Depths, HelixSize, Holes, Leave, Links, Reach, Uses};
 
 /// The job file format this build reads and writes, and the only one it reads.
 pub const JOB_VERSION: u32 = 1;

@@ -400,3 +400,179 @@ fn a_watched_run_stopped_ends_stopped_with_what_it_made_told() {
     assert!(err.is_stopped(), "{err}");
     assert_eq!(told, 1);
 }
+
+/// Fusion's Bore and Circular, each a new operation as the app makes one, cut
+/// the part made in Fusion for the basic operations (`ops_block.step`): its
+/// round pocket, 24 mm across and 8 deep, with a 6 mm flat end mill in
+/// multiple passes, and its two blind holes, 6 mm across, with a 4 mm one, after the
+/// stock's top is faced. Every check passes, every program reads back with
+/// its circles as arcs, and the material each leaves is the hole it was
+/// picked by, to the job's tolerance.
+#[test]
+fn bore_and_circular_cut_the_holes_they_are_picked_by() {
+    use camcraft_core::job::{FeatureRef, Operation};
+
+    use crate::test_support::fixture;
+    use crate::{load_models, models_of, program, setup_profile};
+
+    let model = fixture("ops_block.step")
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    let setup = |name: &str| {
+        format!(
+            "\n[[setup]]\nname = \"{name}\"\nmodels = [\"part\"]\nstocks = [\"block\"]\npost = \"masso\"\n"
+        )
+    };
+    let text = format!(
+        r#"
+version = 1
+tolerance = 0.01
+
+[tools.flat6]
+kind = "flat"
+diameter = 6.0
+number = 1
+rpm = 18000
+flutes = 3
+flute_length = 20.0
+shoulder_length = 20.0
+shank_diameter = 6.0
+overall_length = 63.0
+stickout = 22.5
+
+[tools.flat4]
+kind = "flat"
+diameter = 4.0
+number = 2
+rpm = 18000
+flutes = 2
+flute_length = 14.0
+shoulder_length = 16.0
+shank_diameter = 4.0
+overall_length = 50.0
+stickout = 20.0
+
+[[model]]
+name = "part"
+path = "{model}"
+
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [5.0, 5.0, 2.0]
+{}{}"#,
+        setup("bore"),
+        setup("circular")
+    );
+    let mut job = parse_job(&text, "ops_block").unwrap();
+    let pick = |at: [f64; 3]| FeatureRef {
+        model: "part".into(),
+        index: 0,
+        at,
+    };
+    for (i, strategy) in ["bore", "circular"].into_iter().enumerate() {
+        let make = |name: &str, strategy: &str, tool: &str| {
+            let mut op = Operation::fresh(
+                name,
+                StrategySpec::named(strategy).unwrap(),
+                (Some(tool.to_string()), job.tools.get(tool), None),
+            );
+            op.passes.feed = 1500.0;
+            op
+        };
+        let face = make("face", "face", "flat6");
+        let mut pocket = make("pocket", strategy, "flat6");
+        pocket.selection.faces = vec![pick([37.0, 10.0, 16.0])];
+        // Multiple passes, three, half the tool apart: in to its middle.
+        if let StrategySpec::Bore {
+            multiple_passes,
+            stepovers,
+            ..
+        }
+        | StrategySpec::Circular {
+            multiple_passes,
+            stepovers,
+            ..
+        } = &mut pocket.strategy
+        {
+            *multiple_passes = true;
+            *stepovers = 3;
+        }
+        let mut holes = make("holes", strategy, "flat4");
+        holes.selection.faces = vec![pick([18.0, -22.0, 14.0]), pick([38.0, -22.0, 14.0])];
+        job.setups[i].operations = vec![face, pocket, holes];
+    }
+    // Read back, so its expressions are worked out as a job read from disk has
+    // them.
+    let job = parse_job(&job_text(&job).unwrap(), "ops_block").unwrap();
+    job.validate().unwrap();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let loaded = load_models(&job, dir, &[0, 1]).unwrap();
+    // The round pocket, and the holes, each a centre, radius and floor.
+    let walls = [
+        (1, vec![([25.0, 10.0], 12.0, 12.0)]),
+        (
+            2,
+            vec![([15.0, -22.0], 3.0, 8.0), ([35.0, -22.0], 3.0, 8.0)],
+        ),
+    ];
+    for (i, strategy) in ["bore", "circular"].into_iter().enumerate() {
+        let ran = run_setup(&job, i, &models_of(&loaded)).unwrap();
+        assert!(
+            ran.checks.failures().count() == 0,
+            "{strategy}: {:?}",
+            ran.checks
+        );
+        assert_eq!(ran.result.verify.gouged, 0, "{strategy}");
+        let profile = setup_profile(&job.setups[i], dir, None).unwrap();
+        for (index, holes) in &walls {
+            let op = &ran.result.operations[*index];
+            assert_eq!(op.strategy, strategy);
+            assert_eq!(op.sim.rapid_contacts, 0, "{strategy}/{}", op.name);
+            assert!(
+                op.warnings.is_empty(),
+                "{strategy}/{}: {:?}",
+                op.name,
+                op.warnings
+            );
+            let (program, _) = program(op, 54, &profile, &op.name).unwrap();
+            let arcs = program
+                .lines()
+                .filter(|l| l.contains("G2") || l.contains("G3"))
+                .count();
+            assert!(arcs > 10, "{strategy}/{}: {arcs} arcs\n{program}", op.name);
+            // Nothing is left in the hole, above its floor, but where the grid
+            // meets its wall.
+            let stock = ran.result.keyframes[index + 1].unpack().unwrap();
+            let field = stock.field();
+            let part = &ran.result.part;
+            for &(centre, radius, floor) in holes {
+                let centre = glam::DVec2::from_array(centre);
+                let mut inside = 0;
+                for iy in 0..field.ny() {
+                    for ix in 0..field.nx() {
+                        let p = field.position(ix, iy).unwrap();
+                        if p.distance(centre) > radius - 2.0 * field.pitch() {
+                            continue;
+                        }
+                        inside += 1;
+                        let left = field.get(ix, iy).unwrap();
+                        let under = part.height_at(p.x, p.y).unwrap();
+                        assert!(
+                            (under - floor).abs() < 1e-3,
+                            "{strategy}: the part at {p} is at {under}"
+                        );
+                        assert!(
+                            left - under <= job.tolerance,
+                            "{strategy}/{}: {:.4} left at {p}",
+                            op.name,
+                            left - under
+                        );
+                    }
+                }
+                assert!(inside > 100, "{strategy}: {inside} cells in the hole");
+            }
+        }
+    }
+}

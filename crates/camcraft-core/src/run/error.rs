@@ -13,6 +13,7 @@ use crate::setup::features::FeatureError;
 use crate::strategy::StrategyError;
 use crate::strategy::drilling::HoleError;
 use crate::strategy::reach::ReachError;
+use crate::strategy::round::RoundError;
 
 /// A setup that could not be run.
 #[derive(Debug, thiserror::Error)]
@@ -62,6 +63,15 @@ pub enum RunError {
         op: String,
         /// Why.
         source: HoleError,
+    },
+    /// A bore's or a circular's picks are not round walls, or one cannot be
+    /// cut.
+    #[error("operation '{op}': {source}")]
+    Rounds {
+        /// Which operation.
+        op: String,
+        /// Why.
+        source: RoundError,
     },
     /// The rest of the tool would meet the part, and the operation was to
     /// fail where it would: Fusion's Shaft and Holder's Fail.
@@ -154,6 +164,16 @@ impl OperationError for FeatureError {
 impl OperationError for HoleError {
     fn named(self, op: String) -> RunError {
         RunError::Holes { op, source: self }
+    }
+}
+
+impl OperationError for RoundError {
+    fn named(self, op: String) -> RunError {
+        match self {
+            // Stopped, or failed making the path, as any strategy does.
+            RoundError::Strategy(e) => e.named(op),
+            source => RunError::Rounds { op, source },
+        }
     }
 }
 

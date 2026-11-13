@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Boundary, Depths, Heights, Linking, MachiningBoundary, Outline, Passes, Preset, ProfileSide,
-    Selection, StrategySpec, ToolKind, ToolSpec, is_default, is_yes, yes,
+    Boundary, Compensation, Depths, Heights, Linking, MachiningBoundary, Outline, Passes, Preset,
+    ProfileSide, Selection, StrategySpec, ToolKind, ToolSpec, is_default, is_yes, yes,
 };
 
 /// One operation.
@@ -88,6 +88,7 @@ impl Operation {
             },
             linking: Linking {
                 entry: strategy.fresh_entry(),
+                retraction: strategy.fresh_retraction(),
                 ..Linking::default()
             },
             enabled: true,
@@ -113,7 +114,7 @@ impl Operation {
     /// round, no more than its corner radius down.
     pub fn cannot_use(&self, tool: &ToolSpec) -> Option<&'static str> {
         let uses = self.strategy.uses();
-        let drilling = uses.holes;
+        let drilling = matches!(self.strategy, StrategySpec::Drill { .. });
         if tool.kind == ToolKind::Drill && !drilling {
             return Some("a drill only drills; use a drilling operation");
         }
@@ -162,10 +163,28 @@ impl Operation {
             StrategySpec::Face { .. } => {
                 return Some("a V-bit or chamfer mill cannot face flat");
             }
+            StrategySpec::Bore { .. } | StrategySpec::Circular { .. } => {
+                return Some(
+                    "a V-bit or chamfer mill cannot cut a round wall straight: its width \
+                     changes with depth",
+                );
+            }
             StrategySpec::Profile { side, .. } if side != ProfileSide::On => {
                 return Some(
                     "a V-bit or chamfer mill profiles only on the line: its width changes \
                      with depth",
+                );
+            }
+            StrategySpec::Slot { .. } => {
+                return Some(
+                    "a V-bit or chamfer mill cannot cut a slot's walls straight: its width \
+                     changes with depth",
+                );
+            }
+            StrategySpec::Trace { compensation, .. } if compensation != Compensation::Center => {
+                return Some(
+                    "a V-bit or chamfer mill traces only on the curve: its width changes \
+                     with depth, so it has no one radius to keep beside it",
                 );
             }
             _ => {}

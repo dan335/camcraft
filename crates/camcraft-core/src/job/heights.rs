@@ -250,12 +250,13 @@ impl Operation {
     /// and they are not holes ([`Uses::holes`](super::Uses::holes)), each of
     /// which goes to its own bottom.
     pub fn can_measure_from_picks(&self) -> bool {
-        !self.strategy.uses().holes && !self.selection.is_empty()
+        self.strategy.uses().holes.is_none() && !self.selection.is_empty()
     }
 
     /// Why a height of this operation cannot be measured from its picks, if one
-    /// is and cannot: a clearance never is, a drill's holes each go to their own
-    /// bottom, and with nothing picked there is nothing to measure from.
+    /// is and cannot: a clearance never is, holes each go from their own top
+    /// to their own bottom, and with nothing picked there is nothing to
+    /// measure from.
     pub fn cannot_measure_from_picks(&self) -> Option<&'static str> {
         if self.heights.clearance.from_selection() {
             return Some("the clearance cannot be measured from the selection");
@@ -266,10 +267,10 @@ impl Operation {
         if !self.heights.measured_from_selection() {
             return None;
         }
-        if self.strategy.uses().holes {
+        if self.strategy.uses().holes.is_some() {
             return Some(
-                "a drill's bottom cannot be measured from the selection: each hole goes \
-                 to its own",
+                "a hole's top or bottom cannot be measured from the selection: each hole \
+                 goes from its own top to its own bottom",
             );
         }
         if self.selection.is_empty() {

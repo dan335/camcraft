@@ -272,6 +272,56 @@ fn a_ring_with_leads_is_ramped_along_the_way_it_cuts() {
     }
 }
 
+/// A ring that is one arc all the way about, as a round pocket's is, is ramped
+/// into round itself like any other: each lap of the way down an arc at the
+/// ramp feed, none of them a plunge for ending over where it starts.
+#[test]
+fn one_arc_all_the_way_about_is_ramped_along() {
+    use crate::path::toolpath::Arc;
+    let mut t = Toolpath::new();
+    t.feed_to(dvec3(5.0, 0.0, -2.0), MoveRole::Link, 1000.0)
+        .unwrap();
+    t.arc_to(
+        dvec3(5.0, 0.0, -2.0),
+        Arc {
+            centre: dvec3(0.0, 0.0, -2.0),
+            axis: DVec3::Z,
+            sweep: std::f64::consts::TAU,
+        },
+        MoveRole::Cut,
+        1000.0,
+    )
+    .unwrap();
+    let plane = ClearancePlane::new(10.0).unwrap();
+    let p = entering(EntryKind::Ramp);
+    let (out, report) = link(&t, &plane, &mut level_material(), &NoPart, &p).unwrap();
+    assert_eq!(report.ramps, 1);
+    assert!(
+        !roles(&out).contains(&MoveRole::Plunge),
+        "{:?}",
+        out.moves()
+    );
+    let ramp: Vec<&Move> = out
+        .moves()
+        .iter()
+        .filter(|m| m.role == MoveRole::Ramp)
+        .collect();
+    // Four millimetres down at two degrees, round a circle of radius five:
+    // more than three laps.
+    assert!(ramp.len() >= 4, "{ramp:?}");
+    let mut turned = 0.0;
+    for m in &ramp {
+        assert_eq!(m.feed, Some(250.0));
+        let MoveKind::Arc(a) = m.kind else {
+            panic!("a ramp round an arc is arcs: {m:?}");
+        };
+        turned += a.sweep.abs();
+    }
+    let run = 4.0 / 2f64.to_radians().tan();
+    assert!((turned * 5.0 - run).abs() < 1e-6, "turned {turned}");
+    assert_eq!(ramp.last().unwrap().to, dvec3(5.0, 0.0, -2.0));
+}
+
 /// Into material along the pass itself, at the ramp angle and feed, from the
 /// safe distance above the material: no plunge, and never off the pass's path.
 #[test]

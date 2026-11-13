@@ -1687,6 +1687,8 @@ fn every_strategy_is_named() {
         "pocket",
         "face",
         "drill",
+        "bore",
+        "circular",
     ] {
         let spec = StrategySpec::named(name).unwrap();
         assert_eq!(spec.name(), name);
@@ -1705,6 +1707,130 @@ fn every_strategy_is_named() {
         })
     );
     assert_eq!(StrategySpec::named("zlevel-rough"), None);
+}
+
+/// A bore and a circular read with Fusion's defaults, picked faces their holes,
+/// write back only what differs, and refuse what cannot be cut: a bore's pitch
+/// or angle, the number of passes, a drill or a V-bit, a height from the
+/// selection.
+#[test]
+fn bore_and_circular_read_and_write_back() {
+    let finish = "strategy = \"parallel\"\ntool = \"finish-4-ball\"\nangle = 90.0\n";
+    let picked =
+        "selection = { faces = [{ model = \"part\", index = 3, at = [1.0, 2.0, 3.0] }] }\n";
+    let bore_own = "use_ramp_angle = false\nramp_angle = 3.0\npitch = 0.5\n\
+                    multiple_passes = true\nstepovers = 3\nconventional = true\n\
+                    repeat = true\nlead_to_center = true\n";
+    let circular_own = "multiple_passes = true\nstepovers = 4\nconventional = true\n\
+                        repeat = true\neven_stepdowns = true\nlead_to_center = true\n";
+    for (name, own) in [("bore", bore_own), ("circular", circular_own)] {
+        let plain = SAMPLE.replace(
+            finish,
+            &format!("strategy = \"{name}\"\ntool = \"rough-6-flat\"\n{picked}"),
+        );
+        let j: Job = toml::from_str(&plain).unwrap();
+        j.validate().unwrap();
+        let op = &j.setups[0].operations[1];
+        assert_eq!(op.strategy, StrategySpec::named(name).unwrap());
+        assert!(op.cuts_selection());
+        assert_eq!(op.strategy.uses().holes, Some(Holes::Walls));
+        let written = toml::to_string(&j).unwrap();
+        for key in [
+            "use_ramp_angle",
+            "ramp_angle",
+            "pitch",
+            "multiple_passes",
+            "stepovers",
+            "conventional",
+            "repeat",
+            "even_stepdowns",
+            "lead_to_center",
+        ] {
+            assert!(!written.contains(&format!("\n{key} =")), "{key}: {written}");
+        }
+        assert_eq!(toml::from_str::<Job>(&written).unwrap(), j);
+
+        // Every setting of its own, as written, reads back.
+        let set: Job = toml::from_str(&plain.replace(picked, &format!("{picked}{own}"))).unwrap();
+        set.validate().unwrap();
+        assert_ne!(
+            set.setups[0].operations[1].strategy,
+            j.setups[0].operations[1].strategy
+        );
+        let written = toml::to_string(&set).unwrap();
+        assert_eq!(toml::from_str::<Job>(&written).unwrap(), set);
+
+        let refused = |to: &str| {
+            let j: Job = toml::from_str(&plain.replace(picked, &format!("{picked}{to}"))).unwrap();
+            assert!(j.validate().is_err(), "{name}: {to} should be refused");
+        };
+        let fine = |to: &str| {
+            let j: Job = toml::from_str(&plain.replace(picked, &format!("{picked}{to}"))).unwrap();
+            assert!(j.validate().is_ok(), "{name}: {to} is not read");
+        };
+        refused("multiple_passes = true\nstepovers = 0\n");
+        fine("stepovers = 0\n");
+        if name == "bore" {
+            refused("ramp_angle = 90.0\n");
+            refused("use_ramp_angle = false\npitch = 0.0\n");
+            fine("pitch = 0.0\n");
+        }
+        refused("heights = { bottom = { ref = \"selection\" } }\n");
+        // A drill only drills, and a V-bit's width changes with depth.
+        let mut drilled = j.clone();
+        drilled.tools.get_mut("rough-6-flat").unwrap().kind = ToolKind::Drill;
+        assert!(matches!(
+            drilled.validate(),
+            Err(JobError::WrongTool { .. })
+        ));
+        let mut v = j.clone();
+        v.tools.insert("v".into(), vbit());
+        v.tools.get_mut("v").unwrap().number = 5;
+        v.setups[0].operations[1].tool = Some("v".into());
+        assert!(matches!(v.validate(), Err(JobError::WrongTool { .. })));
+    }
+    // A new bore goes down its helix at 2°; a new circular steps down a
+    // millimetre a level, as Fusion's.
+    let bore = StrategySpec::named("bore").unwrap();
+    let StrategySpec::Bore {
+        use_ramp_angle,
+        ramp_angle,
+        pitch,
+        multiple_passes,
+        stepovers,
+        ..
+    } = bore
+    else {
+        unreachable!("a bore is a bore")
+    };
+    assert!(use_ramp_angle && !multiple_passes);
+    assert_eq!((ramp_angle, pitch, stepovers), (2.0, 1.0, 2));
+    assert_eq!(bore.uses().depths, Depths::None);
+    assert_eq!(bore.default_stepdown(), None);
+    let circular = StrategySpec::named("circular").unwrap();
+    assert_eq!(circular.uses().depths, Depths::Optional);
+    assert_eq!(Operation::new("c", circular).passes.stepdown, Some(1.0));
+    assert!(bore.uses().finishing && !circular.uses().finishing);
+    assert!(bore.uses().leads && circular.uses().leads);
+    assert!(!bore.uses().ramp && circular.uses().ramp);
+    // Their stepover, half the tool, and straight leads a twentieth of it,
+    // follow the tool.
+    for s in [bore, circular] {
+        let e = s.default_expressions();
+        assert!(
+            e.contains(&("passes.stepover", "tool_diameter * 0.5")),
+            "{e:?}"
+        );
+        assert!(
+            e.contains(&("linking.leads.straight", "tool_diameter * 0.05")),
+            "{e:?}"
+        );
+        let mut op = Operation::new("round", s);
+        let tool = sample().tools["rough-6-flat"].clone();
+        assert!(op.work_out_expressions(Some(&tool), 0.01).faults.is_empty());
+        assert_eq!(op.passes.stepover, 3.0);
+        assert_eq!(op.linking.leads.unwrap().straight, Some(0.3));
+    }
 }
 
 /// Scallop reads with Fusion's defaults, both ways from the boundary in on
@@ -2166,9 +2292,9 @@ fn each_strategy_says_how_it_links() {
         );
     }
     let drill = StrategySpec::named("drill").unwrap().uses();
-    assert!(drill.holes && !drill.feed && !drill.load);
+    assert!(drill.holes == Some(Holes::Rims) && !drill.feed && !drill.load);
     let adaptive = StrategySpec::named("adaptive").unwrap().uses();
-    assert!(adaptive.load && adaptive.feed && !adaptive.holes);
+    assert!(adaptive.load && adaptive.feed && adaptive.holes.is_none());
 }
 
 /// Each linking value left out is its strategy's own for the tool, as the run

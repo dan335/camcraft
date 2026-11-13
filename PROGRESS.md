@@ -24,7 +24,7 @@ has only with its Manufacturing Extension.
 
 | Area                                          | Done | Partial | Not started |
 |-----------------------------------------------|-----:|--------:|------------:|
-| [2D operations](#2d-operations)               |    1 |       2 |           8 |
+| [2D operations](#2d-operations)               |    1 |       4 |           6 |
 | [3D roughing](#3d-roughing)                   |    0 |       2 |           0 |
 | [3D finishing](#3d-finishing)                 |    0 |       7 |           9 |
 | [Drilling](#drilling)                         |    4 |       1 |           3 |
@@ -37,7 +37,7 @@ has only with its Manufacturing Extension.
 | [Posts and programs](#posts-and-programs)     |    6 |       0 |           2 |
 | [App](#app)                                   |    7 |       1 |           0 |
 | [Project](#project)                           |    1 |       0 |           4 |
-| **All**                                       |   55 |      19 |          44 |
+| **All**                                       |   55 |      21 |          42 |
 
 `grep "| not started" PROGRESS.md` lists everything not yet begun.
 
@@ -46,8 +46,8 @@ has only with its Manufacturing Extension.
 Roughly in the order they matter:
 
 1. **Cut on a machine.** See [Before the first cut](#before-the-first-cut).
-2. **More strategies:** steep and shallow, pencil, ramp; 2D adaptive, slot,
-   trace, bore and circular.
+2. **More strategies:** steep and shallow, pencil, ramp; 2D adaptive, slot
+   and trace.
 3. **A volumetric stock**, so what a top setup leaves carries to a flipped
    bottom one.
 4. **Exact slicing of the offset surface** for Z-level work
@@ -68,8 +68,8 @@ Roughly in the order they matter:
 | Slot                 | not started | |
 | Trace                | not started | |
 | Thread               | not started | |
-| Bore                 | not started | |
-| Circular             | not started | |
+| Bore                 | partial     | Holes and bosses picked by their walls, from each wall's top to its bottom; pitch or ramp angle, stepovers, finishing passes, repeat, leads and lead to center, climb or conventional ([0022](docs/decisions/0022-bore-and-circular.md)). Not yet held to Fusion's program. Missing: tapered walls, diameter range and same-diameter selection, hole order choices, compensation in control, bottom-to-top. |
+| Circular             | partial     | Holes and bosses picked by their walls, cut level by level, whole or even stepdowns, ramped on along the circle; stepovers, repeat, leads and lead to center, climb or conventional ([0022](docs/decisions/0022-bore-and-circular.md)). Not yet held to Fusion's program. Missing: diameter range and same-diameter selection, hole order choices, compensation in control. |
 | Engrave              | not started | |
 | 2D Chamfer           | not started | A V-bit can already profile on an outline. |
 

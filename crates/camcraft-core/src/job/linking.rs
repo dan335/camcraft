@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Operation, is_default, is_ninety, ninety, yes};
+use super::{Operation, StrategySpec, is_default, is_ninety, ninety, yes};
 
 /// How the tool moves between cuts.
 ///
@@ -261,6 +261,10 @@ impl Default for Linking {
 /// program for the lego ramps at 90 in/min to its 150.
 const RAMP_SHARE: f64 = 0.6;
 
+/// The most a slot's ramp goes down each way along it without a stepdown, in
+/// millimetres: a new Slot of Fusion's Maximum Stepdown.
+const SLOT_RAMP_STEPDOWN: f64 = 1.0;
+
 default_number!(default_safe_distance, is_default_safe_distance = 2.0);
 
 default_number!(default_ramp_angle, is_default_ramp_angle = 2.0);
@@ -287,10 +291,18 @@ impl Operation {
     /// The longest link it makes without lifting clear, in millimetres, with a
     /// tool `diameter` across: as given, or its strategy's own
     /// ([`Uses::reach`](super::Uses::reach)). Zero, always lifting, for one
-    /// that never stays down.
+    /// that never stays down, and a trace that does not keep the tool down.
     pub fn stay_down(&self, diameter: f64) -> f64 {
         let uses = self.strategy.uses();
-        if !uses.stay_down {
+        // A trace keeps the tool down only when asked, as Fusion's.
+        let kept_down = !matches!(
+            self.strategy,
+            StrategySpec::Trace {
+                keep_tool_down: false,
+                ..
+            }
+        );
+        if !uses.stay_down || !kept_down {
             return 0.0;
         }
         self.linking
@@ -346,11 +358,19 @@ impl Operation {
 
     /// The most a helix or a ramp round a ring descends in one lap, in
     /// millimetres, with a tool `diameter` across: as given, or its stepdown, or
-    /// the tool's diameter without one.
+    /// the tool's diameter without one. A slot's ramp, back and forth along
+    /// it, goes down no more than this each way, and without a stepdown a
+    /// millimetre: Fusion's Slot's Maximum Ramp Stepdown is its Maximum
+    /// Stepdown, a millimetre, with Multiple Depths off too.
     pub fn ramp_stepdown(&self, diameter: f64) -> f64 {
+        let without = if matches!(self.strategy, StrategySpec::Slot { .. }) {
+            SLOT_RAMP_STEPDOWN
+        } else {
+            diameter
+        };
         self.linking
             .ramp_stepdown
             .or(self.stepdown())
-            .unwrap_or(diameter)
+            .unwrap_or(without)
     }
 }

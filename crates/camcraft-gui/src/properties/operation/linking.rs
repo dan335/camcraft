@@ -233,6 +233,17 @@ pub(super) fn linking(
                     });
                 });
             }
+            // A hole's leads may go to its centre instead.
+            let leads_on = op.linking.leads.is_some();
+            if let StrategySpec::Bore { lead_to_center, .. }
+            | StrategySpec::Circular { lead_to_center, .. } = &mut op.strategy
+            {
+                widgets::dependent(ui, leads_on, |ui| {
+                    d.row(ui, &link::LEAD_TO_CENTER, "lead_to_center", |ui| {
+                        ui.checkbox(lead_to_center, "from the hole's centre and back");
+                    });
+                });
+            }
         }
         if uses.reorder {
             d.row(ui, &link::REORDER, "linking.reorder", |ui| {

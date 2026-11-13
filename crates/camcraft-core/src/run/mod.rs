@@ -39,7 +39,7 @@ use crate::control::{Control, Watch};
 use crate::cutter::allowance::{Allowance, EffectiveTool};
 use crate::cutter::dropcutter::DropCutter;
 use crate::job::{
-    HeightContext, HolderSegment, Job, JobError, Machine, Operation, Setup, ToolSpec,
+    HeightContext, HolderSegment, Holes, Job, JobError, Machine, Operation, Setup, ToolSpec,
 };
 use crate::path::simadapt::sim_moves;
 use crate::setup::features::Picking;
@@ -56,6 +56,7 @@ pub use result::{
 use error::in_op;
 use operation::{
     Target, Work, cut_operation, drill_holes, heights_of, not_made, plan_operation, planar_areas,
+    round_walls,
 };
 use pitch::sim_pitch;
 
@@ -321,8 +322,16 @@ impl<'a> Shared<'a> {
                 &heights,
                 &tool,
             )?)
-        } else if uses.holes {
+        } else if uses.holes == Some(Holes::Rims) {
             Target::Holes(drill_holes(
+                self.job,
+                op,
+                self.prepared,
+                self.bodies,
+                &heights,
+            )?)
+        } else if uses.holes == Some(Holes::Walls) {
+            Target::Rounds(round_walls(
                 self.job,
                 op,
                 self.prepared,

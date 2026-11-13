@@ -55,6 +55,8 @@ topics! {
     LEAD_SWEEP: "Arc sweep",
         "How far round the level arc turns.",
         Figure::Lead(Lead::Sweep);
+    LEAD_TO_CENTER: "Lead to center",
+        "Leads onto each pass from the hole's centre and back to it, a half turn each way: safer in a small hole.";
     REORDER: "Reorder passes",
         "Cuts passes in the order that travels least between them.";
     REVERSE: "Reverse passes",

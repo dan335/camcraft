@@ -32,7 +32,7 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
 
 An operation has a strategy (parallel, scallop, contour, flat, spiral, radial or
 morphed spiral finishing, adaptive clearing, pocket clearing, a 2D profile, a 2D
-pocket, facing or drilling), a tool, heights, passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
+pocket, facing, bore, circular or drilling), a tool, heights, passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
 along the surface, offset in from the boundary and from where the tool stops
 touching the part, so the cusp is the same on a slope as on the flat
 ([decision 0009](decisions/0009-scallop-distance-field.md)). It cuts `direction =
@@ -84,7 +84,8 @@ retract height (Fusion's, 5 mm over it) and the top and bottom it cuts between. 
 Fusion's multiple depths, shared the same way: adaptive and pocket clearing must have one,
 profiles, pockets and facing cut the bottom in one pass without (and a new one
 starts so, as Fusion's 2D Contour, 2D Pocket and Face start with Multiple Depths
-off), and parallel and drilling never read it. An operation may be
+off), a circular starts with them on at a millimetre, as Fusion's does, and
+parallel, bore and drilling never read it. An operation may be
 turned off, which leaves it in the job but out of every run, check and post.
 
 ```toml
@@ -110,7 +111,8 @@ bottom measured from the selection (`ref = "selection"`, Fusion's "selected
 contours") is each area's own: the highest or lowest point picked in it, plus the
 offset, so `bottom = { ref = "selection", offset = -0.5 }` cuts half a millimetre
 under every picked loop. A pocket clearing or facing operation measures one from all its
-picks; a clearance or a drill's bottom never is, and nothing picked is refused. A profile
+picks; a clearance never is, nor a top or bottom of an operation whose picks
+are holes (drilling, bore, circular), and nothing picked is refused. A profile
 cuts each ring all the way down before the next, and never a ring before the
 rings inside it, so a part's holes are cut while it is held; a pocket clears
 from its middle out, the wall last. Both climb unless `conventional = true`, and
@@ -147,6 +149,75 @@ strategy = "profile"          # side = "outside" | "inside" | "on"
 tool = "quarter-upcut"
 heights = { bottom = { ref = "stock-bottom", offset = -0.3 } }
 passes = { stepdown = 3.0, tabs = { width = 6.0, height = 3.0, spacing = 150.0 } }
+```
+
+**Bore and circular** are Fusion's Bore and Circular
+([decision 0022](decisions/0022-bore-and-circular.md)): round holes and bosses,
+picked by their walls (`selection.faces`), as Fusion's are. A face whose edges
+are circles about one upright axis, all one size, is a straight round wall; a
+tapered one is refused, as is one lying over. The faces of one wall, as a file
+splits a cylinder into halves, are one wall, from the highest of them to the
+lowest. Which side the material is on says whether it is a hole, cut from
+inside, or a boss, cut round from outside. Each is cut from its wall's top down
+to its bottom, as Fusion's go from the hole's top to its bottom, unless a Top
+or Bottom is set, which then goes for every one; the floor is raised by the
+axial stock to leave, and the tool's centre is its radius and the radial stock
+to leave off the wall. A hole no wider than that is refused, saying so: drill
+it, or use a smaller tool. Holes are cut from the first picked, then always the
+nearest.
+
+`multiple_passes` (off) is Fusion's Multiple Passes: `stepovers` (2) passes out
+to the wall, `passes.stepover` apart (half the tool to start), the last at the
+wall; from the middle out in a hole, from outside in round a boss. Off, the
+wall alone. A hole's pass that would be past its middle is put half the tool's
+radius from it, once, so the passes stop there. A hole the passes do not reach
+the middle of is left with a core standing in it, as Fusion's is, and the run
+says so (CC218): through the part, it comes loose. Both climb unless
+`conventional = true`; climbing with a clockwise spindle goes anticlockwise
+round a hole and clockwise round a boss. `repeat = true` (Fusion's Repeat
+Passes) cuts the last pass twice. Each pass comes onto its circle along the
+leads (`linking.leads`, on unless turned off: a straight, a twentieth of the
+tool to start, then a level arc a tenth of it, tangent to the circle) and goes
+off along them, in the hole, made smaller where the hole has no room for them
+and left out where it has none even for a quarter of them; round a boss,
+outside it. `lead_to_center = true` leads on from the hole's centre and back to
+it instead, a half turn each way. Down onto the leads and up off them is the
+linker's vertical arc, the leads' `vertical`.
+
+A bore goes down a helix round each circle from the top to the bottom, at
+`ramp_angle` (2°) from level, each circle's turn as far down as the angle takes
+it round, or with `use_ramp_angle = false` at `pitch` millimetres a turn (1), as
+a new Bore of Fusion's starts; then once round level at the bottom, and off
+along the leads. A helix that would fall more steeply than a plunge round a
+small circle is refused. It has no multiple depths: each pass is the helix all
+the way down, and between passes it lifts out and comes down to the top again.
+Its finishing pass (`passes.finishing`, Fusion's Finishing Passes) is one, at
+the cutting feed: the passes before it stop its `stepover` (a tenth of the
+tool) short of the wall. Its `passes`, `feed` and `repeat` are a pocket's, and
+not read.
+
+A circular cuts each circle level by level, a stepdown apart (Fusion's Multiple
+Depths, on to start, a millimetre): each level a whole stepdown and the last
+what is left, as Fusion's, or evenly with `even_stepdowns = true`. At each
+level each pass comes on along its lead, goes once round and leads off; the
+first goes down into the material along its circle, at the ramp angle and no
+more than the most per lap, as Fusion's Circular ramps on, and the passes after
+it at the level stay down between. A repeat cuts the wall's pass twice at the
+last level.
+
+Every cut of either is a true arc or helix about the hole's axis, posted as
+`G2` or `G3`. Neither has smoothing, feed optimisation or a shaft and holder
+mode of its own; the checks still sweep the whole tool.
+
+```toml
+[[setup.operation]]
+name = "bore"
+strategy = "bore"             # or "circular"
+tool = "flat-6"
+multiple_passes = true
+stepovers = 3
+selection = { faces = [{ model = "part", index = 12, at = [37.0, 10.0, 16.0] }] }
+passes = { stepover = 3.0 }
 ```
 
 **Tabs** (`passes.tabs`) hold what a cut frees: bridges of material left
@@ -241,7 +312,8 @@ and between the two on a slope. Positive leaves material for a later operation
 to finish; negative cuts past the part, for a looser fit. Beside, it must stay
 under the tool's radius; down, in 3D with a ball or bullnose, within its corner
 radius (a flat end, or a 2D floor, may go any depth). Every operation has it,
-and cuts with as much as its strategy uses: a drill none, a profile on the
+and cuts with as much as its strategy uses: a drill none, a bore and a circular
+beside the wall and under the floor, a profile on the
 boundary only its floor's. New adaptive, pocket clearing and 2D pockets start at 0.5 mm
 each way, as Fusion's roughing, its 2D Pocket among it, does; everything else at
 none, which is not written. The 3D
@@ -259,7 +331,7 @@ passes' runs of short moves are fitted with arcs, where they lie on a circle in
 a plane a three-axis machine cuts arcs in, and with longer lines, none further
 than `passes.smoothing_tolerance` (the job's `tolerance` when not given) from
 the moves it stands for ([decision 0015](decisions/0015-smoothing.md)). Every
-strategy but drilling has it. The passes are fitted before they are linked, so
+strategy but drilling, bore and circular, whose moves are arcs already, has it. The passes are fitted before they are linked, so
 what is simulated and checked is what is written, and the setup is verified to
 the job's tolerance and the largest smoothing tolerance together. On a serving
 tray, adaptive's program went from 1,307,065 lines to 181,294 and scallop's from
@@ -283,7 +355,8 @@ The radius and distance are a twentieth and a fifth of the tool when not given,
 as Fusion's, the feed half the cutting feed. With `only_inner_corners` (on unless turned off), only the corners
 turning into the material are slowed, judged from which side of the passes the
 material is on: where they cut both ways, every corner is. Every strategy but
-drilling and adaptive clearing has it; adaptive holds its load at every step.
+drilling, bore, circular and adaptive clearing has it; adaptive holds its load
+at every step.
 
 ```toml
 passes = { feed_optimization = { reduced_feed = 600, reduced_feed_distance = 2 } }
@@ -359,7 +432,8 @@ where the material is. A link no longer than the *stay-down*
 distance is made without lifting, at the cutting feed; the distance is Fusion's
 Maximum Stay-Down Distance for the strategy: 50 mm for parallel and contour;
 twice the tool's diameter for scallop and flat; five times for spiral, radial,
-morphed spiral, pocket clearing, adaptive clearing and the 2D strategies.
+morphed spiral, pocket clearing, adaptive clearing and the 2D strategies but
+bore, which lifts between its passes.
 Parallel and the other finishing strategies ride over the part: between passes
 side by side that run opposite ways, as zigzag passes do, by Fusion's default
 *smooth* transition, a half turn out past their ends as wide as they are apart,
@@ -554,6 +628,7 @@ with.
 | CC215 | note    | contour points not pulled onto the part, left clear of it         |
 | CC216 | note    | the shank and holder were checked with an assumed length or size |
 | CC217 | note    | no holder or spindle nose to check: only the shank was           |
+| CC218 | warn    | a bore or circular left a core standing in a hole                |
 | CC299 | warn    | a warning from reading the model                                 |
 
 A **plunge** is a continuous descent steeper than `PLUNGE_RATIO` (10:1) that falls
