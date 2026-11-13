@@ -627,6 +627,7 @@ pub fn strategy_label(s: &StrategySpec) -> &'static str {
         StrategySpec::Slot { .. } => "Slot",
         StrategySpec::Trace { .. } => "Trace",
         StrategySpec::Chamfer2d { .. } => "2D chamfer",
+        StrategySpec::Engrave { .. } => "Engrave",
         StrategySpec::Adaptive2d { .. } => "2D adaptive clearing",
     }
 }
@@ -659,6 +660,7 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
                 "trace",
                 "bore",
                 "circular",
+                "engrave",
                 "chamfer-2d",
             ])],
         ),
@@ -688,7 +690,6 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
 /// into [`operation_groups`], in the same place.
 pub const PLANNED: &[(&str, usize, &str)] = &[
     ("2D", 0, "Thread"),
-    ("2D", 0, "Engrave"),
     ("3D", 1, "Steep and shallow"),
     ("3D", 1, "Ramp"),
     ("3D", 1, "Pencil"),
@@ -919,6 +920,7 @@ mod tests {
         for (label, name) in [
             ("2D adaptive clearing", "adaptive-2d"),
             ("2D chamfer", "chamfer-2d"),
+            ("Engrave", "engrave"),
         ] {
             h.get_by_label("2D").click();
             h.run();
@@ -1027,7 +1029,7 @@ mod menu_tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), offered, "one is offered twice: {names:?}");
-        assert_eq!(offered, 19, "{names:?}");
+        assert_eq!(offered, 20, "{names:?}");
     }
 
     /// The planned operations are listed after their section's own, in the
@@ -1083,7 +1085,8 @@ mod menu_tests {
             }
         }
         // 2D: Fusion's order, 2D adaptive clearing before the pocket, Slot,
-        // Trace, Bore and Circular after the profile, and 2D chamfer last.
+        // Trace, Bore, Circular and Engrave after the profile, and 2D chamfer
+        // last.
         let two_d: Vec<String> = operation_menu_items()[0].1[0]
             .iter()
             .map(|m| match m {
@@ -1102,9 +1105,9 @@ mod menu_tests {
                 "Trace",
                 "Bore",
                 "Circular",
+                "Engrave",
                 "2D chamfer",
-                "(Thread)",
-                "(Engrave)"
+                "(Thread)"
             ]
         );
     }

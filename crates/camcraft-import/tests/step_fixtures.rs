@@ -174,6 +174,14 @@ fn ops_2d_centimetre() {
     );
 }
 
+/// Made in Fusion to hold camcraft's Engrave to Fusion's, in centimetres too: a
+/// plate with a triangle, an L and a rectangle sunk into its top, their floors
+/// and walls 16 faces of the 22.
+#[test]
+fn ops_engrave_centimetre() {
+    check("ops_engrave.step", "centimetre", 22, [80.0, 50.0, 10.0], 0);
+}
+
 /// The round edge with its top edge raised 0.006 mm off the torus it bounds, in a
 /// file that states its geometry to 0.01 mm: a modeller fits each face and edge
 /// separately, and a private part's band and the round below it disagreed by

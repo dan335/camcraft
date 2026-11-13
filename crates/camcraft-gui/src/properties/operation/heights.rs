@@ -103,6 +103,12 @@ pub(super) fn heights(
             and the tip offset below it: it has no Top or Bottom. It lifts to the \
             Retract height between edges.",
         ),
+        StrategySpec::Engrave { .. } => Some(
+            "It engraves each shape from its own top, the height of its picked rim or of \
+            the walls round its picked floor, down to its depth, on the Passes tab: it has \
+            no Top or Bottom. With a full retraction it lifts to the Retract height \
+            between shapes.",
+        ),
         StrategySpec::Slot { .. } => Some(
             "Each slot is cut from the Top, the stock's top unless set, down to its own \
              floor, where its picked edges are. A Bottom set takes every slot there \

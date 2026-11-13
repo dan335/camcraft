@@ -312,6 +312,26 @@ pub(super) fn passes(
                     ui.checkbox(preserve_order, "in the order picked");
                 });
             }
+            StrategySpec::Engrave {
+                depth,
+                sharp_corner_angle,
+            } => {
+                d.row(ui, &pass::ENGRAVE_DEPTH, "depth", |ui| {
+                    // As a 90° V's own: 0.95 of its radius.
+                    let start = 0.95 * across(diameter) / 2.0;
+                    widgets::optional(ui, depth, start, "0.95 of the flank's", |ui, v| {
+                        m.length_field(ui, v, 0.05, 100.0, "");
+                    });
+                });
+                d.row(ui, &pass::SHARP_CORNER_ANGLE, "sharp_corner_angle", |ui| {
+                    ui.add(
+                        widgets::number(sharp_corner_angle)
+                            .speed(1.0)
+                            .range(0.0..=180.0)
+                            .suffix("°"),
+                    );
+                });
+            }
             StrategySpec::Profile { conventional, .. } | StrategySpec::Pocket { conventional } => {
                 climb_or_conventional(ui, d, (&pass::DIRECTION_2D, "conventional"), conventional);
             }
@@ -650,8 +670,10 @@ fn holder_modes(strategy: &StrategySpec) -> Option<&'static [(HolderMode, &'stat
     match strategy {
         // Fusion's 2D Trace has no Shaft and Holder, though it follows its
         // curves as a finish follows the part.
-        // Nor has its 2D Adaptive.
-        StrategySpec::Trace { .. } | StrategySpec::Adaptive2d { .. } => None,
+        // Nor has its 2D Adaptive, nor its Engrave.
+        StrategySpec::Trace { .. }
+        | StrategySpec::Adaptive2d { .. }
+        | StrategySpec::Engrave { .. } => None,
         // Its 2D Chamfer has one: over the part, as a finish's.
         StrategySpec::Chamfer2d { .. } => Some(OVER_PART),
         _ if strategy.uses().links == Links::OverPart => Some(OVER_PART),
@@ -838,11 +860,13 @@ fn angle_field(ui: &mut egui::Ui, angle: &mut f64) {
 }
 
 /// The stepdown a box ticked to step down in levels starts at: the
-/// strategy's own, or a slot's and a trace's Maximum Stepdown as Fusion's
-/// starts it, a millimetre, or 2 mm.
+/// strategy's own, or a slot's, a trace's and an engraving's Maximum Stepdown
+/// as Fusion's starts it, a millimetre, or 2 mm.
 pub(super) fn starting_stepdown(op: &Operation) -> f64 {
     let fusions = match op.strategy {
-        StrategySpec::Slot { .. } | StrategySpec::Trace { .. } => 1.0,
+        StrategySpec::Slot { .. } | StrategySpec::Trace { .. } | StrategySpec::Engrave { .. } => {
+            1.0
+        }
         _ => 2.0,
     };
     op.strategy.default_stepdown().unwrap_or(fusions)

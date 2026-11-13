@@ -55,8 +55,8 @@ pub use result::{
 
 use error::in_op;
 use operation::{
-    Target, Work, chamfers_picked, curves_picked, cut_operation, drill_holes, heights_of, not_made,
-    plan_operation, planar_areas, round_walls, slots_picked,
+    Target, Work, chamfers_picked, curves_picked, cut_operation, drill_holes, engravings_picked,
+    heights_of, not_made, plan_operation, planar_areas, round_walls, slots_picked,
 };
 use pitch::sim_pitch;
 
@@ -350,6 +350,8 @@ impl<'a> Shared<'a> {
             Target::Curves(curves_picked(self.job, op, self.prepared, self.bodies)?)
         } else if uses.curves == Some(Curves::Chamfered) {
             Target::Chamfers(chamfers_picked(self.job, op, self.prepared, self.bodies)?)
+        } else if uses.curves == Some(Curves::Engraved) {
+            Target::Engravings(engravings_picked(self.job, op, self.prepared, self.bodies)?)
         } else {
             // Facing works from the stock alone.
             Target::Limit(None)

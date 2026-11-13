@@ -36,4 +36,8 @@ topics! {
         "Edges to chamfer. A click takes the loop the edge goes round, or where it closes none, the edges running on smoothly from it.";
     CHAMFER_FACES: "Faces",
         "Faces whose edges are all chamfered, Fusion's face contours: the outline and every hole's rim.";
+    ENGRAVE_EDGES: "Edges",
+        "The rim of each shape to engrave, and of any island in it. A click takes the whole loop, engraved from its own height.";
+    ENGRAVE_FACES: "Faces",
+        "The floor of each shape to engrave: its outline, islands too, engraved from the top of the walls round it.";
 }

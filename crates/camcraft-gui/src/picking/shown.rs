@@ -109,8 +109,9 @@ pub fn shown(
             out.highlight
                 .faces
                 .extend(face_triangles(body, face, &to_setup));
-            // A chamfer's face is its edges, each chamfered: drawn as picked.
-            if curves == Some(Curves::Chamfered)
+            // A chamfer's face is its edges, each chamfered, and an
+            // engraving's its outline, engraved: drawn as picked.
+            if matches!(curves, Some(Curves::Chamfered | Curves::Engraved))
                 && let Some(pm) = scene.model(&r.model)
             {
                 for &e in body.topology().face(face).map_or(&[][..], |f| &f.edges) {

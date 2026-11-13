@@ -1692,6 +1692,7 @@ fn every_strategy_is_named() {
         "slot",
         "trace",
         "chamfer-2d",
+        "engrave",
         "adaptive-2d",
     ] {
         let spec = StrategySpec::named(name).unwrap();
@@ -2187,6 +2188,84 @@ tool = \"{tool}\"
     assert_eq!(uses.depths, Depths::Optional);
     assert_eq!(uses.links, Links::Own);
     assert_eq!(uses.entries, &[Entry::Helix, Entry::Plunge]);
+}
+
+/// An engraving reads with Fusion's defaults and writes back only what
+/// differs, reads back its own settings, refuses what it cannot cut (anything
+/// but a cone, a depth past the flank, a sharp corner angle past 180°), and a
+/// new one starts as Fusion's does.
+#[test]
+fn engrave_reads_and_writes_back() {
+    let finish = "strategy = \"parallel\"\ntool = \"finish-4-ball\"\nangle = 90.0\n";
+    let picked =
+        "selection = { edges = [{ model = \"part\", index = 3, at = [1.0, 2.0, 3.0] }] }\n";
+    let plain = SAMPLE.replace(
+        finish,
+        &format!("strategy = \"engrave\"\ntool = \"v\"\n{picked}"),
+    );
+    let with = |own: &str| -> Job {
+        let mut j: Job = toml::from_str(&plain.replace(picked, &format!("{picked}{own}"))).unwrap();
+        j.tools.insert("v".into(), vbit());
+        j.tools.get_mut("v").unwrap().number = 5;
+        j
+    };
+    let j = with("");
+    j.validate().unwrap();
+    let op = &j.setups[0].operations[1];
+    assert_eq!(
+        op.strategy,
+        StrategySpec::Engrave {
+            depth: None,
+            sharp_corner_angle: 165.0
+        }
+    );
+    let written = toml::to_string(&j).unwrap();
+    assert!(!written.contains("\ndepth ="), "{written}");
+    assert!(!written.contains("sharp_corner_angle"), "{written}");
+    assert_eq!(toml::from_str::<Job>(&written).unwrap(), j);
+
+    let set = with("depth = 1.5\nsharp_corner_angle = 120.0\n");
+    set.validate().unwrap();
+    assert_eq!(
+        set.setups[0].operations[1].strategy,
+        StrategySpec::Engrave {
+            depth: Some(1.5),
+            sharp_corner_angle: 120.0
+        }
+    );
+    let written = toml::to_string(&set).unwrap();
+    assert_eq!(toml::from_str::<Job>(&written).unwrap(), set);
+
+    assert!(with("depth = 0.0\n").validate().is_err());
+    assert!(with("sharp_corner_angle = 181.0\n").validate().is_err());
+    // A 60° V-bit 6.35 mm across reaches 5.5 mm down its flank.
+    with("depth = 5.4\n").validate().unwrap();
+    assert!(matches!(
+        with("depth = 5.6\n").validate(),
+        Err(JobError::WrongTool { .. })
+    ));
+    let mut flat = j.clone();
+    flat.setups[0].operations[1].tool = Some("rough-6-flat".into());
+    assert!(matches!(flat.validate(), Err(JobError::WrongTool { .. })));
+    // Fusion's Bottom offset for the V: 0.95 of its flank.
+    let v = vbit();
+    let flank = (6.35 / 2.0) / 30f64.to_radians().tan();
+    assert!((engrave_flank(&v).unwrap() - flank).abs() < 1e-9);
+    assert!((engrave_depth(&v).unwrap() - 0.95 * flank).abs() < 1e-9);
+
+    // A new engraving: Multiple Depths off, a full retraction, lifting
+    // between passes, no ramp, Top or Bottom, nothing to leave, its picks the
+    // shapes it engraves.
+    let new = Operation::new("e", StrategySpec::named("engrave").unwrap());
+    assert_eq!(new.passes.stepdown, None);
+    assert_eq!(new.linking.retraction, Retraction::Full);
+    assert_eq!(new.stay_down(6.0), 0.0);
+    let uses = new.strategy.uses();
+    assert!(!uses.ramp && uses.top.is_none() && uses.bottom.is_none());
+    assert_eq!(uses.stock_to_leave, Leave::None);
+    assert_eq!(uses.depths, Depths::Optional);
+    assert_eq!(uses.curves, Some(Curves::Engraved));
+    assert!(new.cuts_selection());
 }
 
 /// Scallop reads with Fusion's defaults, both ways from the boundary in on

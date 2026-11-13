@@ -147,6 +147,13 @@ impl Operation {
                  makes the chamfer",
             );
         }
+        let engraving = matches!(self.strategy, StrategySpec::Engrave { .. });
+        if engraving && tool.kind != ToolKind::Cone {
+            return Some(
+                "an engraving cuts with a cone: use a V-bit or chamfer mill, whose flank \
+                 touches the outline",
+            );
+        }
         if tool.kind != ToolKind::Cone {
             return None;
         }
@@ -202,6 +209,14 @@ impl Operation {
                 return Some(
                     "the chamfer is wider than the tool's flank reaches: use a wider tool, \
                      or a smaller chamfer width or tip offset",
+                );
+            }
+            StrategySpec::Engrave {
+                depth: Some(depth), ..
+            } if engrave_flank(tool).is_some_and(|most| depth > most + 1e-9) => {
+                return Some(
+                    "the engraving is deeper than the tool's flank reaches: use a wider \
+                     tool, or a smaller depth",
                 );
             }
             _ => {}
@@ -316,6 +331,22 @@ impl Operation {
         }
         self.preset = Some(preset.name.clone());
     }
+}
+
+/// How deep `tool`'s flank reaches, from its tip to where it is its full
+/// width: what an engraving with it may go down to at most. `None` for a tool
+/// with no angle.
+pub fn engrave_flank(tool: &ToolSpec) -> Option<f64> {
+    let half = tool.angle?.to_radians() / 2.0;
+    (half > 0.0 && half < std::f64::consts::FRAC_PI_2)
+        .then(|| (tool.diameter - tool.tip_diameter) / 2.0 / half.tan())
+}
+
+/// How deep an engraving with `tool` goes when its depth is not given: 0.95
+/// of how deep its flank reaches, a new Engrave of Fusion's Bottom offset,
+/// `0.95*((tool_diameter-tool_tipDiameter)/2)*tan(90 - tool_taperAngle)`.
+pub fn engrave_depth(tool: &ToolSpec) -> Option<f64> {
+    engrave_flank(tool).map(|f| 0.95 * f)
 }
 
 /// How far out from a 2D chamfer's tool's axis the top of a chamfer `width`

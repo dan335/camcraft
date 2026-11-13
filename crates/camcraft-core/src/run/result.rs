@@ -17,6 +17,7 @@ use crate::setup::frame::Frame;
 use crate::strategy::adaptive::AdaptiveReport;
 use crate::strategy::chamfer::{Bevel, ChamferReport};
 use crate::strategy::drilling::DrillReport;
+use crate::strategy::engrave::EngraveReport;
 use crate::strategy::flat::FlatReport;
 use crate::strategy::morph::MorphedSpiralReport;
 use crate::strategy::parallel::ParallelReport;
@@ -72,6 +73,8 @@ pub enum StrategyDetail {
     Trace(TraceReport),
     /// 2D chamfer.
     Chamfer2d(ChamferReport),
+    /// Engraving.
+    Engrave(EngraveReport),
     /// 2D adaptive clearing.
     Adaptive2d(AdaptiveReport),
 }

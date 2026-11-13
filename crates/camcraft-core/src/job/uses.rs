@@ -325,6 +325,29 @@ impl StrategySpec {
                 bottom: None,
                 ..cuts_loops
             },
+            // Its picks are the shapes it engraves, by the edges round each or
+            // its floor: no area to keep to, no stepover, nothing to leave, as
+            // Fusion's Engrave has none; each shape from its own top down to
+            // its own depth, its levels a stepdown apart where asked. Each
+            // walk starts at a corner at the surface and goes round without
+            // lifting, down through its levels; between walks it lifts, as
+            // Fusion's does between shapes in every program of its compared:
+            // staying down from one shape to the next would drag the point
+            // across the surface between them.
+            StrategySpec::Engrave { .. } => Uses {
+                boundary: false,
+                curves: Some(Curves::Engraved),
+                stepover: false,
+                stock_to_leave: Leave::None,
+                stay_down: false,
+                cut_step: false,
+                ramp: false,
+                top: None,
+                bottom: None,
+                // Fusion's has no feed optimisation.
+                feed_optimization: false,
+                ..cuts_loops
+            },
             // A 2D pocket's areas and levels, each level cleared as adaptive
             // clearing clears one: its stepover is its optimal load, it goes
             // down a helix or straight into a closed pocket and from outside
@@ -360,6 +383,9 @@ pub enum Curves {
     /// Edges to chamfer, or faces whose edges to chamfer, as Fusion's 2D
     /// Chamfer has them: its chains or its face contours.
     Chamfered,
+    /// Shapes to engrave, by the edges round each, whole loops, or by each
+    /// one's floor, whose outline it is: Fusion's Engrave's contours.
+    Engraved,
 }
 
 /// How a strategy that cuts holes has them picked.

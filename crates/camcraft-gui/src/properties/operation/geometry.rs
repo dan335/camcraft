@@ -70,6 +70,14 @@ pub(super) fn geometry(
             an edge goes round, or the edges running on from it.",
         );
         ui.add_space(theme::SPACE_3);
+    } else if uses.curves == Some(Curves::Engraved) {
+        hint(
+            ui,
+            "Pick the rim of each shape to engrave, and of any island in it, or its floor: \
+             the V follows its middle, as deep as its flank touches the walls. A shape \
+             sunk less deep than the V goes is cut into.",
+        );
+        ui.add_space(theme::SPACE_3);
     } else if drilling {
         hint(
             ui,
@@ -432,9 +440,11 @@ fn pick_cards(
     for &kind in kinds {
         let topic = match (kind, curves) {
             (Kind::Face, Some(Curves::Chamfered)) => &geo::CHAMFER_FACES,
+            (Kind::Face, Some(Curves::Engraved)) => &geo::ENGRAVE_FACES,
             (Kind::Face, _) => &geo::FACES,
             (Kind::Edge, Some(Curves::Traced)) => &geo::CURVES,
             (Kind::Edge, Some(Curves::Chamfered)) => &geo::CHAMFER_EDGES,
+            (Kind::Edge, Some(Curves::Engraved)) => &geo::ENGRAVE_EDGES,
             (Kind::Edge, _) => &geo::EDGES,
         };
         let slot = match (kind, curves) {

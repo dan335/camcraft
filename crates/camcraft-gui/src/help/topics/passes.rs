@@ -212,4 +212,8 @@ topics! {
         "How far the tool keeps off the part's other faces. Where it would come nearer, it is lifted and the chamfer is narrower.";
     FINISHING_OVERLAP: "Finishing overlap",
         "How far past where a closed edge's pass started the tool goes on before it leads off.";
+    ENGRAVE_DEPTH: "Depth",
+        "The deepest the V goes below each shape's top, where the shape is wide. Unset, 0.95 of how deep its flank reaches.";
+    SHARP_CORNER_ANGLE: "Sharp corner angle",
+        "Corners whose edges meet at less than this are run into, up to the corner at the surface. Blunter ones are gone round.";
 }

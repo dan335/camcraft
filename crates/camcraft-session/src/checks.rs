@@ -553,6 +553,18 @@ fn operation_findings(
                 ));
             }
         }
+        StrategyDetail::Engrave(r) => {
+            if let Some(([x, y], deep)) = r.into_part {
+                out.push(finding(
+                    Level::Warn,
+                    "CC223",
+                    format!("an engraving cuts {deep:.3} mm into the part at X{x:.3} Y{y:.3}"),
+                    "the shape is sunk less deep in the model than the V goes, or nothing is \
+                     sunk there: sink it deeper, or engrave less deep"
+                        .into(),
+                ));
+            }
+        }
         StrategyDetail::Adaptive(r) | StrategyDetail::Adaptive2d(r) => {
             if r.passes == 0 {
                 out.push(nothing_to_clear());
