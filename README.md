@@ -176,22 +176,12 @@ Windows, `.\scripts\check.ps1` (and `-Full`) checks every crate.
 Plain `cargo build` and `cargo test` cover only the app, so that `cargo run`
 opens it. Add `--workspace` to build or test everything.
 
-`camcraft-import`'s `opencascade` feature keeps OpenCascade, the STEP kernel
-before ogeom, to cross-check ogeom against
-(`cargo test -p camcraft-import --features opencascade --test opencascade`). It
-needs cmake and a C++ compiler, and on Windows an MSVC developer prompt so cmake
-can find `cl.exe`; the first build takes several minutes. `vendor/` holds
-OpenCascade's Rust bindings for it, patched to build with MSVC and to report each
-B-rep face's triangle count. The reasoning is in
-[docs/decisions/0001-step-backend.md](docs/decisions/0001-step-backend.md).
-
 ## License
 
 Dual licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
-option. Third-party code and assets keep their own licences: `vendor/` is
-LGPL-2.1, and [NOTICE](NOTICE) lists the rest.
+option. Third-party code and assets keep their own licences, which
+[NOTICE](NOTICE) lists.
 
-A `camcraft` binary links no LGPL code: ogeom is MIT or Apache-2.0. Only a build
-with `camcraft-import`'s `opencascade` feature, for cross-checking, links
-OpenCascade statically, through LGPL-2.1 crates; such a build is not for
-distribution. See [docs/decisions/0001-step-backend.md](docs/decisions/0001-step-backend.md).
+Nothing in the repository or in a `camcraft` binary is LGPL: STEP import is
+ogeom, MIT or Apache-2.0. See
+[docs/decisions/0001-step-backend.md](docs/decisions/0001-step-backend.md).

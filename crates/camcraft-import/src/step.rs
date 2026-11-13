@@ -34,8 +34,7 @@
 //! than passed.
 //!
 //! Another kernel's mesh can be put through the same checks with
-//! [`load_step_with`]. With the `opencascade` feature, [`opencascade()`] is the
-//! kernel camcraft used before ogeom, kept to cross-check it against.
+//! [`load_step_with`].
 //!
 //! # Faces
 //!
@@ -45,8 +44,6 @@
 //! tessellation, so a face keeps its number when the tolerance changes.
 
 use std::path::Path;
-#[cfg(feature = "opencascade")]
-use std::sync::{Mutex, PoisonError};
 
 use camcraft_geom::mesh::MeshError;
 use camcraft_geom::topology::{Body, TopologyError};
@@ -530,35 +527,6 @@ fn is_ruled(model: &Model, face: &Shape) -> bool {
 
 fn faces_of(model: &Model, shape: &Shape) -> Result<Vec<Shape>, String> {
     explore(model, shape, Filter::OfType(ShapeType::Face)).map_err(|e| e.to_string())
-}
-
-/// Serialises every call into OpenCascade. See [`opencascade()`].
-#[cfg(feature = "opencascade")]
-static OPENCASCADE: Mutex<()> = Mutex::new(());
-
-/// Read the STEP file at `path` with OpenCascade and tessellate it to within
-/// `tolerance` millimetres, for [`load_step_with`]: the kernel camcraft used before
-/// ogeom, kept to cross-check ogeom against.
-#[cfg(feature = "opencascade")]
-pub fn opencascade(path: &Path, tolerance: f64) -> Result<KernelMesh, String> {
-    // One kernel call at a time, across every thread. OpenCascade's data
-    // exchange keeps its settings in process-wide statics, so this does not
-    // rely on every caller happening to read on one thread. A read once failed
-    // during a full gate run with "failed to read STEP file" on a fixture that
-    // reads fine alone; that was never reproduced (0 of 80 runs, with and
-    // without this lock), so this is a precaution, not a proven fix. The shape
-    // is declared after the guard, so it is dropped while the lock is held.
-    let _kernel = OPENCASCADE.lock().unwrap_or_else(PoisonError::into_inner);
-    let shape = ::opencascade::primitives::Shape::read_step(path).map_err(|e| e.to_string())?;
-    // Refuses outright if any face could not be triangulated.
-    let mesh = shape
-        .mesh_with_tolerance(tolerance)
-        .map_err(|e| e.to_string())?;
-    Ok(KernelMesh {
-        vertices: mesh.vertices.iter().map(|v| dvec3(v.x, v.y, v.z)).collect(),
-        indices: mesh.indices,
-        face_triangles: mesh.face_triangles,
-    })
 }
 
 /// [`load_step`] with the kernel's half supplied: `kernel` reads the file at

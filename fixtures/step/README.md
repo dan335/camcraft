@@ -65,7 +65,7 @@ a placement skipped the checks, the sculpted panel among them: solidcraft's mesh
 at 0.05 mm, with surface 108 mm off the part, passed them then and is refused now.
 Only placements that cannot be followed, such as mapped items, still skip them.
 `crates/camcraft-import/tests/assembly.rs` wraps the hinge jig in an assembly and
-holds the placement to OpenCascade's.
+holds the placement to the kernel's.
 
 Every face is also held to its surface: a face that lies on a plane, cylinder, cone,
 sphere or torus must lie within four times the tessellation tolerance of it, and every

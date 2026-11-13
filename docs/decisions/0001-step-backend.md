@@ -238,8 +238,16 @@ Accepted costs, all of which were actually hit and resolved during the spike:
 - **Revisit:** 0.11 also says ogeom meshes ruled faces without the rows
   (ogeom-rs#213) and holds every triangle of a curved face to its chord (#212).
   Measure both, then delete `ruled` and mesh at the tolerance rather than a third
-  of it. Delete the `opencascade` feature and `vendor/` once ogeom has run on real
-  jobs.
+  of it.
+- **2026-11-13: OpenCascade is gone.** ogeom has read every part of every
+  release since 0.3, and nothing had needed the cross-check since. The
+  `opencascade` feature, its test (`tests/opencascade.rs`), `vendor/` (the
+  patched bindings) and the `[patch.crates-io]` block that pointed at it are
+  deleted, and with them the last LGPL code in the repository, the need for
+  cmake and a C++ compiler, and what kept the crates off crates.io: a
+  dependency patched in by path. `load_step_with` stays, so another kernel's
+  mesh can still be put through the same checks, and step-conformance
+  (`scripts/kernel-trial.sh`) still scores readers against each other.
 
 ## Implemented (0.1-d, 2026-09-22)
 

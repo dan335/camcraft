@@ -292,10 +292,6 @@ actually break cutters on the day:
 - **The public fixture set cannot reproduce the bug that disqualified
   `truck-stepio`.** The part that exposed it is private. A synthetic
   sculpted-surface fixture should replace it.
-- **`vendor/` patches opencascade** (the MSVC fix, and each B-rep face's triangle
-  count) for `camcraft-import`'s `opencascade` feature, kept to cross-check ogeom.
-  Delete the feature, `vendor/` and its `[patch.crates-io]` block together once
-  ogeom has run on real jobs.
 - **There is no CI yet**, so `scripts/check.sh` is the only
   thing between a mistake and `main`. Run it unpiped: piping through `tail` buffers
   the whole run and hides progress.

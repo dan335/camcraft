@@ -4,6 +4,17 @@ What changed in each release, newest first. Each release's page
 ([Releases](https://github.com/dan335/camcraft/releases)) has the downloads and
 the same notes at more length.
 
+## Unreleased
+
+- **OpenCascade is gone from the repository.** It was the STEP reader before
+  ogeom, kept behind `camcraft-import`'s `opencascade` feature to cross-check
+  ogeom against. The feature, its test, `vendor/` (the patched bindings) and
+  the `--opencascade` gate are deleted
+  ([decision 0001](docs/decisions/0001-step-backend.md)). Nothing in the
+  repository is LGPL now, nothing needs cmake or a C++ compiler, and the
+  crates no longer carry a dependency patched in by path. No release build
+  ever included it.
+
 ## 0.8.0 — 2026-11-13
 
 - **Fusion's other 2D operations**, each a new strategy in the job file and
