@@ -53,8 +53,9 @@ fn a_solid_in_memory_loads_as_its_step_file_does() {
         assert_eq!(report.triangles, file.triangles, "{how}");
         assert_eq!(report.degenerate, file.degenerate, "{how}");
         assert_eq!(report.vertices, file.vertices, "{how}");
-        assert_eq!(body.faces().len(), from_file.faces().len(), "{how}");
-        assert_eq!(body.triangle_faces(), from_file.triangle_faces(), "{how}");
+        let (got, want) = (body.topology(), from_file.topology());
+        assert_eq!(got.faces().len(), want.faces().len(), "{how}");
+        assert_eq!(got.triangle_faces(), want.triangle_faces(), "{how}");
         let got = body.mesh().bounds().unwrap().extent();
         for (g, want) in got.to_array().iter().zip([100.0, 70.0, 20.0]) {
             assert!((g - want).abs() < 1e-6, "{how}: {g} mm, expected {want}");

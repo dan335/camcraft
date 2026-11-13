@@ -51,7 +51,9 @@ if [ "$platform" = linux-x86_64 ]; then
 else
     archive="$name.zip"
     rm -f "$archive"
-    powershell.exe -NoProfile -Command "Compress-Archive -Path '$name' -DestinationPath '$archive'"
+    # Windows PowerShell with its own modules: started from PowerShell 7 it is
+    # handed 7's, and its Archive module then fails to unpack.
+    PSModulePath= powershell.exe -NoProfile -Command "Compress-Archive -Path '$name' -DestinationPath '$archive'"
 fi
 echo "packed $out/$archive"
 
@@ -64,8 +66,16 @@ if [ "$platform" = linux-x86_64 ]; then
     tar xzf "$out/$archive"
 else
     # PowerShell reads Windows paths, not Git Bash's.
-    powershell.exe -NoProfile -Command "Expand-Archive -Path '$(cygpath -w "$out/$archive")' -DestinationPath '.'"
+    PSModulePath= powershell.exe -NoProfile -Command "Expand-Archive -Path '$(cygpath -w "$out/$archive")' -DestinationPath '.'"
 fi
 cd "$name"
 "./camcraft$exe" --version
-"./camcraft$exe" job examples/rail-jig.camcraft 2>&1 | tail -3
+# 0 is clean and 2 ran with warnings worth reading (docs/jobs.md); anything else
+# failed.
+status=0
+"./camcraft$exe" job examples/rail-jig.camcraft > ../job.log 2>&1 || status=$?
+tail -3 ../job.log
+if [ "$status" != 0 ] && [ "$status" != 2 ]; then
+    echo "the example job failed: exit $status" >&2
+    exit 1
+fi
