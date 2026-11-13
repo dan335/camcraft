@@ -126,6 +126,50 @@ impl PartSurface {
         self
     }
 
+    /// The part as an operation that cuts into it on purpose, to `meant`,
+    /// means to leave it, in the cells of the grid it is judged on that `cut`
+    /// says it cut: each no higher than `meant` says the part is to be at its
+    /// position, where it says. What `meant` says is cut is then no gouge,
+    /// and nothing else: not deeper than it says, not where it says nothing,
+    /// and not where the operation did not cut. A chamfer cut into a sharp
+    /// edge is one such cut.
+    ///
+    /// Parallel over rows, each writing only its own cells, so the result
+    /// does not depend on thread count.
+    #[must_use]
+    pub fn lowered(
+        mut self,
+        meant: impl Fn(DVec2) -> Option<f64> + Sync,
+        cut: impl Fn(u32, u32) -> bool + Sync,
+    ) -> Self {
+        let (nx, ny, at, origin, pitch) = (
+            self.field.nx(),
+            self.field.ny(),
+            self.at,
+            self.field.origin(),
+            self.field.pitch(),
+        );
+        self.field
+            .data_mut()
+            .par_chunks_mut(nx as usize)
+            .zip(0..ny)
+            .for_each(|(row, wy)| {
+                for (wx, slot) in (0..nx).zip(row) {
+                    if slot.is_nan() || !cut(wx + at.0, wy + at.1) {
+                        continue;
+                    }
+                    let p = origin + dvec2(f64::from(wx) * pitch, f64::from(wy) * pitch);
+                    if let Some(z) = meant(p) {
+                        let z = narrow(z);
+                        if z < *slot {
+                            *slot = z;
+                        }
+                    }
+                }
+            });
+        self
+    }
+
     /// The part's height at cell `(ix, iy)` of the grid it is judged on, if it
     /// has one there.
     pub(super) fn at_cell(&self, ix: i64, iy: i64) -> Option<f64> {

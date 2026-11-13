@@ -11,6 +11,7 @@ use crate::path::toolpath::ToolpathError;
 use crate::setup::PrepareError;
 use crate::setup::features::FeatureError;
 use crate::strategy::StrategyError;
+use crate::strategy::chamfer::ChamferError;
 use crate::strategy::drilling::HoleError;
 use crate::strategy::reach::ReachError;
 use crate::strategy::round::RoundError;
@@ -90,6 +91,14 @@ pub enum RunError {
         op: String,
         /// Why.
         source: TraceError,
+    },
+    /// A 2D chamfer's picks cannot be chamfered.
+    #[error("operation '{op}': {source}")]
+    Chamfer {
+        /// Which operation.
+        op: String,
+        /// Why.
+        source: ChamferError,
     },
     /// The rest of the tool would meet the part, and the operation was to
     /// fail where it would: Fusion's Shaft and Holder's Fail.
@@ -210,6 +219,15 @@ impl OperationError for TraceError {
         match self {
             TraceError::Strategy(e) => e.named(op),
             source => RunError::Trace { op, source },
+        }
+    }
+}
+
+impl OperationError for ChamferError {
+    fn named(self, op: String) -> RunError {
+        match self {
+            ChamferError::Strategy(e) => e.named(op),
+            source => RunError::Chamfer { op, source },
         }
     }
 }

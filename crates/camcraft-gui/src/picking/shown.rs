@@ -22,7 +22,7 @@ use crate::document::Document;
 use crate::picking::describe::{describe_edge, describe_face, describe_point};
 use crate::picking::highlight::{face_triangles, model_edge_lines};
 use crate::picking::ray::{PickModel, PickScene};
-use crate::picking::slots::{Kind, edge_loop, smooth_chain};
+use crate::picking::slots::{Kind, chamfer_run, edge_loop, smooth_chain};
 use crate::ui::measure::Measure;
 use crate::view::viewport::{Highlight, Outline, OutlineKind};
 
@@ -103,19 +103,30 @@ pub fn shown(
         let index = kind.find(body, r, tolerance).map_err(|e| e.to_string())?;
         Ok::<_, String>((*body, index))
     };
+    let curves = operation.strategy.uses().curves;
     for r in &sel.faces {
         out.faces.push(find(r, Kind::Face).map(|(body, face)| {
             out.highlight
                 .faces
                 .extend(face_triangles(body, face, &to_setup));
+            // A chamfer's face is its edges, each chamfered: drawn as picked.
+            if curves == Some(Curves::Chamfered)
+                && let Some(pm) = scene.model(&r.model)
+            {
+                for &e in body.topology().face(face).map_or(&[][..], |f| &f.edges) {
+                    out.highlight
+                        .lines
+                        .extend(model_edge_lines(pm, e, OutlineKind::Selected));
+                }
+            }
             describe_face(body, &r.model, face, m)
         }));
     }
     // Each loop the picked edges go round, by model and its edges, with the picks
-    // on it; a trace's, each chain they run on along.
-    let chains = operation.strategy.uses().curves == Some(Curves::Traced);
+    // on it; a trace's, each chain they run on along; a chamfer's, each loop,
+    // or each chain where they close no loop.
     type Round<'a> = (&'a str, Vec<u32>);
-    let mut loops: Vec<(Round<'_>, Vec<usize>)> = Vec::new();
+    let mut loops: Vec<(Round<'_>, bool, Vec<usize>)> = Vec::new();
     for (i, r) in sel.edges.iter().enumerate() {
         let found = find(r, Kind::Edge);
         if let Ok((_, edge)) = &found {
@@ -124,24 +135,25 @@ pub fn shown(
                     .lines
                     .extend(model_edge_lines(pm, *edge, OutlineKind::Selected));
             }
-            let mut round = if chains {
-                smooth_chain(scene, &r.model, *edge)
-            } else {
-                edge_loop(scene, &r.model, *edge)
+            let (mut round, closed) = match curves {
+                Some(Curves::Traced) => (smooth_chain(scene, &r.model, *edge), false),
+                Some(Curves::Chamfered) => chamfer_run(scene, &r.model, *edge),
+                _ => (edge_loop(scene, &r.model, *edge), true),
             };
             round.sort_unstable();
             let key = (r.model.as_str(), round);
-            match loops.iter_mut().find(|(k, _)| *k == key) {
-                Some((_, picks)) => picks.push(i),
-                None => loops.push((key, vec![i])),
+            match loops.iter_mut().find(|(k, ..)| *k == key) {
+                Some((.., picks)) => picks.push(i),
+                None => loops.push((key, closed, vec![i])),
             }
         } else {
-            loops.push((("", Vec::new()), vec![i]));
+            loops.push((("", Vec::new()), true, vec![i]));
         }
         out.edges
             .push(found.map(|(body, edge)| describe_edge(body, &r.model, edge, m)));
     }
-    for ((model, round), picks) in loops {
+    for ((model, round), closed, picks) in loops {
+        let chains = !closed;
         let what = match (round.len(), picks.first()) {
             (0 | 1, Some(&i)) => out.edges.get(i).cloned().unwrap_or(Ok(String::new())),
             (n, _) if picks.len() < n => Ok(format!(
@@ -275,7 +287,10 @@ fn outline_lines(
     let arc = tolerance / 2.0;
     let radius = tool.map_or(0.0, EffectiveTool::cutter_radius);
     let offset = centre_offset(op, radius);
-    let pocket = matches!(op.strategy, StrategySpec::Pocket { .. });
+    let pocket = matches!(
+        op.strategy,
+        StrategySpec::Pocket { .. } | StrategySpec::Adaptive2d { .. }
+    );
     let mut lines = Vec::new();
     let mut room = false;
     for (piece, picks) in picked_pieces(&shape, arc, &picked) {

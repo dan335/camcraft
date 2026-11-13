@@ -61,6 +61,13 @@ pub enum Slot {
         /// The operation's place in it.
         op: usize,
     },
+    /// The edges operation `op` of setup `setup` chamfers: a 2D chamfer's.
+    Chains {
+        /// The setup, by name.
+        setup: String,
+        /// The operation's place in it.
+        op: usize,
+    },
 }
 
 impl Slot {
@@ -71,7 +78,7 @@ impl Slot {
             Slot::Models { .. } => Accept::Models,
             Slot::Stocks { .. } => Accept::Stocks,
             Slot::Faces { .. } => Accept::Faces,
-            Slot::Edges { .. } | Slot::Curves { .. } => Accept::Edges,
+            Slot::Edges { .. } | Slot::Curves { .. } | Slot::Chains { .. } => Accept::Edges,
         }
     }
 
@@ -99,6 +106,9 @@ impl Slot {
             Slot::Curves { .. } => {
                 "Click an edge to add it and the edges running on smoothly from it, or take them out · Esc or Done to finish"
             }
+            Slot::Chains { .. } => {
+                "Click an edge to add the loop it goes round, or its chain where it closes none, or take them out · Esc or Done to finish"
+            }
         }
     }
 
@@ -110,7 +120,10 @@ impl Slot {
             Slot::WorkZero { setup } | Slot::Models { setup } | Slot::Stocks { setup } => {
                 doc.setup(setup).is_some() && doc.selection == Selection::Setup(setup.clone())
             }
-            Slot::Faces { setup, op } | Slot::Edges { setup, op } | Slot::Curves { setup, op } => {
+            Slot::Faces { setup, op }
+            | Slot::Edges { setup, op }
+            | Slot::Curves { setup, op }
+            | Slot::Chains { setup, op } => {
                 doc.operation(setup, *op).is_some()
                     && doc.selection == Selection::Operation(setup.clone(), *op)
             }
@@ -161,7 +174,7 @@ pub fn apply(
             })
         }
         (
-            Slot::Edges { setup, op } | Slot::Curves { setup, op },
+            Slot::Edges { setup, op } | Slot::Curves { setup, op } | Slot::Chains { setup, op },
             Target::Edge { model, edge, at },
         ) => {
             let at = own(doc, model, *at);
@@ -171,7 +184,10 @@ pub fn apply(
                 })
             })
         }
-        (Slot::Edges { setup, op } | Slot::Curves { setup, op }, Target::Loop { model, edges }) => {
+        (
+            Slot::Edges { setup, op } | Slot::Curves { setup, op } | Slot::Chains { setup, op },
+            Target::Loop { model, edges },
+        ) => {
             let edges: Vec<(u32, DVec3)> = edges
                 .iter()
                 .map(|&(e, at)| (e, own(doc, model, at)))
@@ -198,11 +214,14 @@ fn own(doc: &Document, model: &str, at: DVec3) -> DVec3 {
 /// What a click on `target` picks into `slot`: for edges, the whole loop the edge
 /// goes round ([`edge_loop`]), as they are only ever cut round in loops; for
 /// edges a trace follows, the edges running on smoothly from it
-/// ([`smooth_chain`]), as Fusion's chain selection takes them.
+/// ([`smooth_chain`]), as Fusion's chain selection takes them; for edges a 2D
+/// chamfer chamfers, the loop where there is one and the chain where there is
+/// not ([`edge_run`]), as Fusion's 2D Chamfer chains what it is given.
 pub fn widen(scene: &PickScene, slot: &Slot, target: Target) -> Target {
     match (slot, target) {
         (Slot::Edges { .. }, t) => whole_loop(scene, t),
         (Slot::Curves { .. }, t) => whole_chain(scene, t),
+        (Slot::Chains { .. }, t) => whole_run(scene, t),
         (_, t) => t,
     }
 }
@@ -210,6 +229,22 @@ pub fn widen(scene: &PickScene, slot: &Slot, target: Target) -> Target {
 /// An edge as the edges running on smoothly from it ([`smooth_chain`]);
 /// anything else as it is.
 pub fn whole_chain(scene: &PickScene, target: Target) -> Target {
+    widened(scene, target, smooth_chain)
+}
+
+/// An edge as the loop it goes round, or where it closes none the edges
+/// running on smoothly from it ([`edge_run`]); anything else as it is.
+pub fn whole_run(scene: &PickScene, target: Target) -> Target {
+    widened(scene, target, edge_run)
+}
+
+/// An edge as the edges `run` says it is part of, each with a point on it;
+/// anything else as it is.
+fn widened(
+    scene: &PickScene,
+    target: Target,
+    run: fn(&PickScene, &str, u32) -> Vec<u32>,
+) -> Target {
     let Target::Edge { model, edge, at } = target else {
         return target;
     };
@@ -217,7 +252,7 @@ pub fn whole_chain(scene: &PickScene, target: Target) -> Target {
         return Target::Edge { model, edge, at };
     };
     let t = body.topology();
-    let edges = smooth_chain(scene, &model, edge)
+    let edges = run(scene, &model, edge)
         .into_iter()
         .map(|e| {
             let on = if e == edge {
@@ -251,25 +286,27 @@ pub fn smooth_chain(scene: &PickScene, model: &str, edge: u32) -> Vec<u32> {
 
 /// An edge as the loop it goes round; anything else as it is.
 pub fn whole_loop(scene: &PickScene, target: Target) -> Target {
-    let Target::Edge { model, edge, at } = target else {
-        return target;
+    widened(scene, target, edge_loop)
+}
+
+/// The edges a 2D chamfer takes for a click on edge `edge` of `model`: the
+/// loop it goes round ([`edge_loop`]) where it closes one, else the edges
+/// running on smoothly from it ([`smooth_chain`]); and whether it was a loop.
+pub fn chamfer_run(scene: &PickScene, model: &str, edge: u32) -> (Vec<u32>, bool) {
+    let Some(pm) = scene.model(model) else {
+        return (vec![edge], false);
     };
-    let Some(body) = scene.model(&model).map(PickModel::body) else {
-        return Target::Edge { model, edge, at };
-    };
-    let t = body.topology();
-    let edges = edge_loop(scene, &model, edge)
-        .into_iter()
-        .map(|e| {
-            let on = if e == edge {
-                at
-            } else {
-                t.edge_middle(body.mesh(), e).unwrap_or(at)
-            };
-            (e, on)
-        })
-        .collect();
-    Target::Loop { model, edges }
+    let t = pm.body().topology();
+    let points = |e: u32| pm.edges.get(e as usize).cloned().unwrap_or_default();
+    match t.level_loop(edge, points, t.tolerance()) {
+        Some(round) => (round, true),
+        None => (t.smooth_chain(edge, points, SMOOTH), false),
+    }
+}
+
+/// [`chamfer_run`]'s edges.
+pub fn edge_run(scene: &PickScene, model: &str, edge: u32) -> Vec<u32> {
+    chamfer_run(scene, model, edge).0
 }
 
 /// The loop edge `edge` of `model` goes round, in order from it: the edges joined

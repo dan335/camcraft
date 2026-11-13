@@ -180,7 +180,8 @@ pub struct PlanarReport {
 
 /// How far `op`'s tool's centre stays outside its boundary, inward when
 /// negative: its radius, `cutter_radius`, and the stock to leave beside, on the
-/// side a profile cuts, and inside for a pocket. Zero for anything else. The
+/// side a profile cuts, and inside for a pocket, 2D adaptive's too. Zero for
+/// anything else. The
 /// geometry's additional offset is a 3D machining boundary's, and moves nothing
 /// here: as in Fusion, the stock to leave moves a 2D cut.
 ///
@@ -194,7 +195,7 @@ pub fn centre_offset(op: &Operation, cutter_radius: f64) -> f64 {
             ProfileSide::Inside => -radius,
             ProfileSide::On => 0.0,
         },
-        StrategySpec::Pocket { .. } => -radius,
+        StrategySpec::Pocket { .. } | StrategySpec::Adaptive2d { .. } => -radius,
         _ => 0.0,
     }
 }

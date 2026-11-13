@@ -23,6 +23,7 @@ pub mod drilling;
 pub mod round;
 
 // Along what is picked.
+pub mod chamfer;
 pub mod curve;
 pub mod slot;
 pub mod trace;

@@ -204,4 +204,12 @@ topics! {
         "An open curve's levels go back and forth, each the other way from the one above.";
     TRACE_REPEAT: "Repeat passes",
         "Cuts the last pass of each curve twice, for a tool that springs away.";
+    CHAMFER_WIDTH: "Chamfer width",
+        "How wide a chamfer to cut on a sharp edge. On a chamfer the model has, how far past it to cut. Zero follows a modelled chamfer.";
+    CHAMFER_TIP_OFFSET: "Chamfer tip offset",
+        "How far below the chamfer the tip goes, its flank still on the chamfer, so the cut is made with the side and not the point.";
+    CHAMFER_CLEARANCE: "Chamfer clearance",
+        "How far the tool keeps off the part's other faces. Where it would come nearer, it is lifted and the chamfer is narrower.";
+    FINISHING_OVERLAP: "Finishing overlap",
+        "How far past where a closed edge's pass started the tool goes on before it leads off.";
 }

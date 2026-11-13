@@ -183,7 +183,9 @@ pub(super) fn show(
     let picking = geometry_tab.filter(|_| {
         matches!(
             picks.armed,
-            Some(Slot::Faces { .. } | Slot::Edges { .. } | Slot::Curves { .. })
+            Some(
+                Slot::Faces { .. } | Slot::Edges { .. } | Slot::Curves { .. } | Slot::Chains { .. }
+            )
         )
     });
     let page = widgets::remembered_tabs(ui, egui::Id::new(TAB), &tabs, 0, picking);

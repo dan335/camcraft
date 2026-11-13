@@ -715,3 +715,157 @@ post = "masso"
     let err = run_setup(&slotted, 0, &models_of(&loaded)).unwrap_err();
     assert!(err.to_string().contains("is not a slot"), "{err}");
 }
+
+/// Fusion's 2D Adaptive and 2D Chamfer, each a new operation as the app makes
+/// one, on the part made in Fusion for the basic operations
+/// (`ops_block.step`), after a face takes the stock down to its top: 2D
+/// adaptive clears the rectangular pocket, picked by its floor, to size; a
+/// 90° V-bit chamfers its rim 1 mm wide. Every check passes, nothing is a
+/// gouge, the pocket is cleared to its floor, and the stock along the rim is
+/// the chamfer asked, to the job's tolerance.
+#[test]
+fn adaptive_2d_clears_a_pocket_and_chamfer_2d_breaks_its_rim() {
+    use camcraft_core::job::{FeatureRef, Operation, StockToLeave};
+
+    use crate::test_support::fixture;
+    use crate::{load_models, models_of};
+
+    let model = fixture("ops_block.step")
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    let text = format!(
+        r#"
+version = 1
+tolerance = 0.01
+
+[tools.flat6]
+kind = "flat"
+diameter = 6.0
+number = 1
+rpm = 18000
+flutes = 3
+flute_length = 20.0
+shoulder_length = 20.0
+shank_diameter = 6.0
+overall_length = 63.0
+stickout = 22.5
+
+[tools.v90]
+kind = "cone"
+angle = 90.0
+diameter = 6.35
+number = 2
+rpm = 18000
+flute_length = 4.0
+shank_diameter = 6.35
+overall_length = 50.0
+stickout = 20.0
+
+[[model]]
+name = "part"
+path = "{model}"
+
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [5.0, 5.0, 2.0]
+
+[[setup]]
+name = "pocket"
+models = ["part"]
+stocks = ["block"]
+post = "masso"
+"#
+    );
+    let mut job = parse_job(&text, "ops_block").unwrap();
+    let fresh = |name: &str, strategy: &str, tool: &str| {
+        let mut op = Operation::fresh(
+            name,
+            StrategySpec::named(strategy).unwrap(),
+            (Some(tool.into()), job.tools.get(tool), None),
+        );
+        op.passes.feed = 1500.0;
+        op
+    };
+    let face = fresh("face", "face", "flat6");
+    let mut adaptive = fresh("adaptive", "adaptive-2d", "flat6");
+    adaptive.outline = camcraft_core::job::Outline::Selection;
+    adaptive.passes.stock_to_leave = StockToLeave::default();
+    adaptive.selection.faces.push(FeatureRef {
+        model: "part".into(),
+        index: 0,
+        at: [-20.0, 0.0, 14.0],
+    });
+    let mut chamfer = fresh("chamfer", "chamfer-2d", "v90");
+    // The pocket's rim at the top, 20 mm up: a point on each of its edges.
+    let s = 6.0 * std::f64::consts::FRAC_1_SQRT_2;
+    chamfer.selection.edges = [
+        [-20.0, 18.0],
+        [0.0, 0.0],
+        [-20.0, -18.0],
+        [-40.0, 0.0],
+        [-34.0 - s, 12.0 + s],
+        [-6.0 + s, 12.0 + s],
+        [-34.0 - s, -12.0 - s],
+        [-6.0 + s, -12.0 - s],
+    ]
+    .into_iter()
+    .map(|[x, y]| FeatureRef {
+        model: "part".into(),
+        index: 0,
+        at: [x, y, 20.0],
+    })
+    .collect();
+    if let StrategySpec::Chamfer2d { width, .. } = &mut chamfer.strategy {
+        *width = 1.0;
+    }
+    job.setups[0].operations = vec![face, adaptive, chamfer];
+    // Read back, so its expressions are worked out as a job read from disk has
+    // them.
+    let job = parse_job(&job_text(&job).unwrap(), "ops_block").unwrap();
+    job.validate().unwrap();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let loaded = load_models(&job, dir, &[0]).unwrap();
+    let ran = run_setup(&job, 0, &models_of(&loaded)).unwrap();
+    assert!(ran.checks.failures().count() == 0, "{:?}", ran.checks);
+    assert_eq!(ran.result.verify.gouged, 0);
+    for op in &ran.result.operations {
+        assert_eq!(op.sim.rapid_contacts, 0, "{}", op.name);
+    }
+    let adaptive = &ran.result.operations[1];
+    assert_eq!(adaptive.strategy, "adaptive-2d");
+    let chamfer = &ran.result.operations[2];
+    assert_eq!(chamfer.strategy, "chamfer-2d");
+    assert!(chamfer.warnings.is_empty(), "{:?}", chamfer.warnings);
+    let stock = ran.result.keyframes.last().unwrap().unpack().unwrap();
+    let field = stock.field();
+    let pitch = field.pitch();
+    let allowed = job.tolerance + 2.0 * pitch;
+    let (mut floor, mut rim) = (0, 0);
+    for iy in 0..field.ny() {
+        for ix in 0..field.nx() {
+            let p = field.position(ix, iy).unwrap();
+            let h = field.get(ix, iy).unwrap();
+            // The pocket's floor, away from its walls.
+            if p.x > -34.0 && p.x < -6.0 && p.y.abs() < 12.0 {
+                floor += 1;
+                assert!(h <= 14.0 + job.tolerance, "{h:.4} left at {p}");
+            }
+            // Beside its long sides, outside it, within the chamfer.
+            let d = p.y.abs() - 18.0;
+            if p.x > -32.0 && p.x < -8.0 && d > pitch && d < 1.0 - pitch {
+                rim += 1;
+                let meant = 19.0 + d;
+                assert!(
+                    (h - meant).abs() <= allowed,
+                    "{h:.4} at {p}, meant {meant:.4}"
+                );
+            }
+        }
+    }
+    assert!(
+        floor > 100 && rim > 100,
+        "{floor} on the floor, {rim} on the rim"
+    );
+}

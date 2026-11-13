@@ -81,6 +81,12 @@ pub(super) fn linking(
             stay_down_clearance,
             lift_height,
             ..
+        }
+        | StrategySpec::Adaptive2d {
+            stay_down_level,
+            stay_down_clearance,
+            lift_height,
+            ..
         } = &mut op.strategy
         {
             d.row(ui, &link::STAY_DOWN_LEVEL, "stay_down_level", |ui| {

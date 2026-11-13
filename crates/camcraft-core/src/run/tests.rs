@@ -2083,3 +2083,662 @@ fn clearing_keeps_the_holder_off_the_part_by_the_region_it_clears() {
     );
     assert!(trimmed.passes > 0 && trimmed.sim.removed_mm3 < off.sim.removed_mm3);
 }
+
+/// What a test does to a new operation.
+type Change = Box<dyn FnOnce(&mut crate::job::Operation)>;
+
+/// A 90° V-bit 6 mm across: what a 2D chamfer cuts with.
+fn vbit() -> crate::job::ToolSpec {
+    crate::job::ToolSpec {
+        kind: crate::job::ToolKind::Cone,
+        angle: Some(90.0),
+        diameter: 6.0,
+        number: 3,
+        ..toml::from_str::<Job>(JOB).unwrap().tools["rough"].clone()
+    }
+}
+
+/// The edges of `body` nearest each of `at`, picked.
+fn edges_at(body: &Body, at: &[[f64; 3]]) -> crate::job::Selection {
+    use crate::job::{FeatureRef, Selection};
+    use crate::setup::features::find_edge;
+    let mut s = Selection::default();
+    for &at in at {
+        let pick = FeatureRef {
+            model: "dome".into(),
+            index: 0,
+            at,
+        };
+        let e = find_edge(body, &pick, 0.01).unwrap().index;
+        s.edges.push(FeatureRef { index: e, ..pick });
+    }
+    s
+}
+
+/// The slotted block's top outline, 40 by 20 at 10 mm, by a point on each
+/// side.
+const OUTLINE: [[f64; 3]; 4] = [
+    [0.0, 10.0, 10.0],
+    [20.0, 0.0, 10.0],
+    [0.0, -10.0, 10.0],
+    [-20.0, 0.0, 10.0],
+];
+
+/// The slotted block's slot's top rim, by a point on each of its four edges.
+const RIM: [[f64; 3]; 4] = [
+    [0.0, 3.0, 10.0],
+    [11.0, 0.0, 10.0],
+    [0.0, -3.0, 10.0],
+    [-11.0, 0.0, 10.0],
+];
+
+/// `operations`, each a new one of its strategy made by its function, run on
+/// `body` in a block exactly its size, every one with the job's V-bit.
+fn chamfered(body: &Body, operations: Vec<(&str, Change)>) -> (SetupResult, Job) {
+    use crate::job::{Operation, StockSpec};
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    job.tools.insert("vbit".into(), vbit());
+    job.stocks[0].spec = StockSpec::AroundModels {
+        models: vec![],
+        margin: [0.0, 0.0, 0.0],
+        below: 0.0,
+    };
+    job.setups[0].operations.clear();
+    for (i, (strategy, change)) in operations.into_iter().enumerate() {
+        let mut op = Operation::new(format!("op{i}"), StrategySpec::named(strategy).unwrap());
+        op.tool = Some("vbit".into());
+        op.passes.feed = 1000.0;
+        change(&mut op);
+        job.setups[0].operations.push(op);
+    }
+    job.validate().unwrap();
+    let bodies: Bodies<'_> = [("dome", body)].into_iter().collect();
+    (run_setup(&job, 0, &bodies).unwrap(), job)
+}
+
+/// A chamfer `width` across, its tip offset `tip`, round the slotted block's
+/// top outline.
+fn outline_chamfer(width: f64, tip: f64) -> Change {
+    Box::new(move |op: &mut crate::job::Operation| {
+        op.selection = edges_at(&slotted_block(), &OUTLINE);
+        if let StrategySpec::Chamfer2d {
+            width: w,
+            tip_offset,
+            clearance,
+            ..
+        } = &mut op.strategy
+        {
+            *w = width;
+            *tip_offset = tip;
+            *clearance = 0.6;
+        }
+    })
+}
+
+/// A V-bit traced along `edges`, its tip `down` below them.
+fn traced(edges: &'static [[f64; 3]], down: f64) -> Change {
+    Box::new(move |op: &mut crate::job::Operation| {
+        op.selection = edges_at(&slotted_block(), edges);
+        if let StrategySpec::Trace { axial_offset, .. } = &mut op.strategy {
+            *axial_offset = -down;
+        }
+    })
+}
+
+/// Fusion's 2D Chamfer, a 90° V-bit run round the slotted block's sharp top
+/// outline, 1 mm wide with its tip the default millimetre below: every check
+/// passes, and the stock along the edge is the chamfer asked, to the job's
+/// tolerance: 1 mm down at the edge, rising at 45° to the top 1 mm in, and
+/// the top untouched past it. Cut into the part on purpose, it is no gouge.
+#[test]
+fn a_chamfer_is_cut_to_the_width_asked_and_verifies() {
+    let body = slotted_block();
+    let (result, job) = chamfered(&body, vec![("chamfer-2d", outline_chamfer(1.0, 1.0))]);
+    let op = &result.operations[0];
+    let StrategyDetail::Chamfer2d(report) = &op.detail else {
+        panic!("reported {:?}", op.detail);
+    };
+    assert_eq!((report.edges, report.closed, report.passes), (1, 1, 1));
+    assert_eq!(report.lifted, 0, "nothing else within the clearance");
+    assert!((report.depth - 2.0).abs() < 1e-9);
+    assert!(result.is_clean(), "{:?}", result.warnings());
+    assert_eq!(result.verify.gouged, 0);
+    assert_eq!(op.sim.rapid_contacts, 0);
+    let stock = result.keyframes.last().unwrap().unpack().unwrap();
+    let field = stock.field();
+    let pitch = field.pitch();
+    let allowed = job.tolerance + 2.0 * pitch;
+    let (mut on, mut past) = (0, 0);
+    for iy in 0..field.ny() {
+        for ix in 0..field.nx() {
+            let p = field.position(ix, iy).unwrap();
+            // In from the long sides, away from the ends and the slot.
+            if p.x.abs() > 14.0 {
+                continue;
+            }
+            let d = 10.0 - p.y.abs();
+            let h = field.get(ix, iy).unwrap();
+            if d > pitch && d < 1.0 - pitch {
+                on += 1;
+                let meant = 9.0 + d;
+                assert!(
+                    (h - meant).abs() <= allowed,
+                    "{h:.4} at {p}, meant {meant:.4}"
+                );
+            } else if d > 1.0 + pitch && d < 2.0 {
+                past += 1;
+                assert!((h - 10.0).abs() <= allowed, "{h:.4} at {p}");
+            }
+        }
+    }
+    assert!(
+        on > 100 && past > 100,
+        "{on} on the chamfer, {past} past it"
+    );
+}
+
+/// A chamfer is no gouge only as it was asked: a trace after it along the same
+/// edges, its V-bit half a millimetre below the chamfer, gouges; and so does
+/// one along the slot's rim, which nothing chamfered.
+#[test]
+fn a_cut_past_the_chamfer_asked_is_still_a_gouge() {
+    let body = slotted_block();
+    let (deeper, _) = chamfered(
+        &body,
+        vec![
+            ("chamfer-2d", outline_chamfer(1.0, 1.0)),
+            ("trace", traced(&OUTLINE, 1.5)),
+        ],
+    );
+    assert!(deeper.verify.gouged > 0, "{:?}", deeper.verify);
+    assert!(
+        (deeper.verify.deepest_gouge_mm - 0.5).abs() < 0.1,
+        "{:?}",
+        deeper.verify
+    );
+    let (elsewhere, _) = chamfered(
+        &body,
+        vec![
+            ("chamfer-2d", outline_chamfer(1.0, 1.0)),
+            ("trace", traced(&RIM, 0.5)),
+        ],
+    );
+    assert!(elsewhere.verify.gouged > 0, "{:?}", elsewhere.verify);
+    // The trace along the outline no deeper than the chamfer: none.
+    let (within, _) = chamfered(
+        &body,
+        vec![
+            ("chamfer-2d", outline_chamfer(1.0, 1.0)),
+            ("trace", traced(&OUTLINE, 0.8)),
+        ],
+    );
+    assert_eq!(within.verify.gouged, 0, "{:?}", within.verify);
+}
+
+/// A block 40 by 20 by 10 mm about the origin in X and Y, its top outline
+/// chamfered 1 mm at 45°: the top face 38 by 18 at 10 mm, a chamfer face down
+/// each side to the walls at 9 mm.
+fn chamfered_block() -> Body {
+    use camcraft_geom::mesh::TriMesh;
+    let ring = |hx: f64, hy: f64, z: f64| {
+        [
+            DVec3::new(-hx, -hy, z),
+            DVec3::new(hx, -hy, z),
+            DVec3::new(hx, hy, z),
+            DVec3::new(-hx, hy, z),
+        ]
+    };
+    let mut v: Vec<DVec3> = Vec::new();
+    v.extend(ring(19.0, 9.0, 10.0));
+    v.extend(ring(20.0, 10.0, 9.0));
+    v.extend(ring(20.0, 10.0, 0.0));
+    let (top, mid, bottom) = (0u32, 4u32, 8u32);
+    let mut t: Vec<[u32; 3]> = vec![[top, top + 1, top + 2], [top, top + 2, top + 3]];
+    let mut labels = vec![0, 0];
+    for i in 0..4 {
+        let j = (i + 1) % 4;
+        // The chamfer face, then the wall below it.
+        t.push([mid + i, mid + j, top + j]);
+        t.push([mid + i, top + j, top + i]);
+        labels.extend([1 + i, 1 + i]);
+        t.push([bottom + i, bottom + j, mid + j]);
+        t.push([bottom + i, mid + j, mid + i]);
+        labels.extend([5 + i, 5 + i]);
+    }
+    t.push([bottom, bottom + 2, bottom + 1]);
+    t.push([bottom, bottom + 3, bottom + 2]);
+    labels.extend([9, 9]);
+    Body::with_faces(TriMesh::new(v, t).unwrap(), labels, 10).unwrap()
+}
+
+/// A chamfer the model has, picked by its lower edges, followed with no width:
+/// the V-bit's flank lies along it, the stock is left as the model's chamfer,
+/// and nothing is a gouge. With a clearance, the top face beyond the chamfer
+/// is one the edges do not join, and the tool is lifted off it, as Fusion
+/// says to set no clearance for a chamfer the model has.
+#[test]
+fn a_chamfer_the_model_has_is_followed() {
+    let body = chamfered_block();
+    let lower = [
+        [0.0, 10.0, 9.0],
+        [20.0, 0.0, 9.0],
+        [0.0, -10.0, 9.0],
+        [-20.0, 0.0, 9.0],
+    ];
+    let follow = |clearance: f64| -> Change {
+        Box::new(move |op: &mut crate::job::Operation| {
+            op.selection = edges_at(&chamfered_block(), &lower);
+            if let StrategySpec::Chamfer2d {
+                width,
+                clearance: c,
+                ..
+            } = &mut op.strategy
+            {
+                *width = 0.0;
+                *c = clearance;
+            }
+        })
+    };
+    let (result, job) = chamfered(&body, vec![("chamfer-2d", follow(0.0))]);
+    let op = &result.operations[0];
+    let StrategyDetail::Chamfer2d(report) = &op.detail else {
+        panic!("reported {:?}", op.detail);
+    };
+    assert_eq!((report.edges, report.lifted), (1, 0));
+    assert!(result.is_clean(), "{:?}", result.warnings());
+    assert_eq!(result.verify.gouged, 0);
+    let stock = result.keyframes.last().unwrap().unpack().unwrap();
+    let field = stock.field();
+    let pitch = field.pitch();
+    let mut on = 0;
+    for iy in 0..field.ny() {
+        for ix in 0..field.nx() {
+            let p = field.position(ix, iy).unwrap();
+            let d = 10.0 - p.y.abs();
+            if p.x.abs() < 14.0 && d > pitch && d < 1.0 - pitch {
+                on += 1;
+                let h = field.get(ix, iy).unwrap();
+                let meant = 9.0 + d;
+                assert!(
+                    (h - meant).abs() <= job.tolerance + 2.0 * pitch,
+                    "{h:.4} at {p}, meant {meant:.4}"
+                );
+            }
+        }
+    }
+    assert!(on > 100, "{on} on the chamfer");
+
+    let (cleared, _) = chamfered(&body, vec![("chamfer-2d", follow(0.6))]);
+    let op = &cleared.operations[0];
+    let StrategyDetail::Chamfer2d(report) = &op.detail else {
+        panic!("reported {:?}", op.detail);
+    };
+    assert!(report.lifted > 0);
+    assert!(op.warnings.iter().any(|w| w.contains("narrower")));
+    assert_eq!(cleared.verify.gouged, 0);
+}
+
+/// A 2D chamfer's refusals: a tool that is not a cone, a chamfer wider than
+/// its flank reaches, nothing picked, and an edge with no lower side.
+#[test]
+fn a_chamfer_refuses_what_it_cannot_cut() {
+    use crate::job::{JobError, Operation};
+    let body = slotted_block();
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    job.tools.insert("vbit".into(), vbit());
+    let mut op = Operation::new("chamfer", StrategySpec::named("chamfer-2d").unwrap());
+    op.tool = Some("rough".into());
+    op.selection = edges_at(&body, &OUTLINE);
+    job.setups[0].operations = vec![op.clone()];
+    let err = job.validate().unwrap_err();
+    assert!(
+        matches!(&err, JobError::WrongTool { why, .. } if why.contains("chamfer mill or V-bit")),
+        "{err}"
+    );
+    op.tool = Some("vbit".into());
+    if let StrategySpec::Chamfer2d { width, .. } = &mut op.strategy {
+        *width = 2.5;
+    }
+    job.setups[0].operations = vec![op.clone()];
+    let err = job.validate().unwrap_err();
+    assert!(
+        err.to_string().contains("wider than the tool's flank"),
+        "{err}"
+    );
+    if let StrategySpec::Chamfer2d { width, .. } = &mut op.strategy {
+        *width = 1.0;
+    }
+    op.selection = Default::default();
+    job.setups[0].operations = vec![op];
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let err = run_setup(&job, 0, &bodies).unwrap_err().to_string();
+    assert!(err.contains("pick the edges to chamfer"), "{err}");
+}
+
+/// A block of boxes on a grid: `xs` and `ys` the grid's lines, and each cell's
+/// height and the face its top is, from `cell`; walls between, down to the
+/// floor at nothing, each split at every height there is so that the mesh
+/// meets itself edge to edge. Faces named: each top as `cell` says, the
+/// bottom, and a wall for each plane and span.
+fn terraced(xs: &[f64], ys: &[f64], cell: impl Fn(f64, f64) -> (f64, u32)) -> Body {
+    use camcraft_geom::mesh::TriMesh;
+    use std::collections::BTreeMap;
+    let (nx, ny) = (xs.len() - 1, ys.len() - 1);
+    let at = |i: usize, j: usize| cell((xs[i] + xs[i + 1]) / 2.0, (ys[j] + ys[j + 1]) / 2.0);
+    let mut heights: Vec<f64> = vec![0.0];
+    for i in 0..nx {
+        for j in 0..ny {
+            heights.push(at(i, j).0);
+        }
+    }
+    heights.sort_by(f64::total_cmp);
+    heights.dedup();
+    let level = |h: f64| heights.iter().position(|&z| z == h).unwrap();
+    let tops = (0..nx)
+        .flat_map(|i| (0..ny).map(move |j| (i, j)))
+        .map(|(i, j)| at(i, j).1)
+        .max()
+        .unwrap();
+    let bottom = tops + 1;
+    let mut vertices: Vec<DVec3> = Vec::new();
+    let mut index: BTreeMap<(usize, usize, usize), u32> = BTreeMap::new();
+    let mut vertex = |i: usize, j: usize, k: usize| {
+        *index.entry((i, j, k)).or_insert_with(|| {
+            vertices.push(DVec3::new(xs[i], ys[j], heights[k]));
+            u32::try_from(vertices.len() - 1).unwrap()
+        })
+    };
+    let mut t: Vec<[u32; 3]> = Vec::new();
+    let mut labels: Vec<u32> = Vec::new();
+    let mut walls: BTreeMap<(bool, usize, usize, usize), u32> = BTreeMap::new();
+    let quad = |q: [u32; 4], face: u32, t: &mut Vec<[u32; 3]>, labels: &mut Vec<u32>| {
+        t.push([q[0], q[1], q[2]]);
+        t.push([q[0], q[2], q[3]]);
+        labels.extend([face, face]);
+    };
+    for i in 0..nx {
+        for j in 0..ny {
+            let (h, face) = at(i, j);
+            let k = level(h);
+            let top = [
+                vertex(i, j, k),
+                vertex(i + 1, j, k),
+                vertex(i + 1, j + 1, k),
+                vertex(i, j + 1, k),
+            ];
+            quad(top, face, &mut t, &mut labels);
+            let under = [
+                vertex(i, j, 0),
+                vertex(i, j + 1, 0),
+                vertex(i + 1, j + 1, 0),
+                vertex(i + 1, j, 0),
+            ];
+            quad(under, bottom, &mut t, &mut labels);
+        }
+    }
+    // Walls between each cell and the one past each of its sides, or nothing.
+    let height_of = |i: isize, j: isize| -> f64 {
+        if i < 0 || j < 0 || i as usize >= nx || j as usize >= ny {
+            0.0
+        } else {
+            at(i as usize, j as usize).0
+        }
+    };
+    let mut next = bottom + 1;
+    for line in 0..=nx {
+        for j in 0..ny {
+            let (a, b) = (
+                height_of(line as isize - 1, j as isize),
+                height_of(line as isize, j as isize),
+            );
+            if a == b {
+                continue;
+            }
+            let (lo, hi) = (level(a.min(b)), level(a.max(b)));
+            let face = *walls.entry((true, line, lo, hi)).or_insert_with(|| {
+                next += 1;
+                next - 1
+            });
+            for k in lo..hi {
+                let q = [
+                    vertex(line, j, k),
+                    vertex(line, j + 1, k),
+                    vertex(line, j + 1, k + 1),
+                    vertex(line, j, k + 1),
+                ];
+                quad(q, face, &mut t, &mut labels);
+            }
+        }
+    }
+    for line in 0..=ny {
+        for i in 0..nx {
+            let (a, b) = (
+                height_of(i as isize, line as isize - 1),
+                height_of(i as isize, line as isize),
+            );
+            if a == b {
+                continue;
+            }
+            let (lo, hi) = (level(a.min(b)), level(a.max(b)));
+            let face = *walls.entry((false, line, lo, hi)).or_insert_with(|| {
+                next += 1;
+                next - 1
+            });
+            for k in lo..hi {
+                let q = [
+                    vertex(i, line, k),
+                    vertex(i + 1, line, k),
+                    vertex(i + 1, line, k + 1),
+                    vertex(i, line, k + 1),
+                ];
+                quad(q, face, &mut t, &mut labels);
+            }
+        }
+    }
+    Body::with_faces(TriMesh::new(vertices, t).unwrap(), labels, next).unwrap()
+}
+
+/// A block 60 by 40 by 10 mm about the origin with two pockets in its top: a
+/// closed one, 24 by 32 mm, 5 mm deep about (-14, 0), with an island 6 by 10
+/// standing to the top in it; and one 22 by 16, 4 mm deep, open to the
+/// block's +X side.
+fn pocketed_block() -> Body {
+    let xs = [-30.0, -26.0, -17.0, -11.0, -2.0, 8.0, 30.0];
+    let ys = [-20.0, -16.0, -8.0, -5.0, 5.0, 8.0, 16.0, 20.0];
+    terraced(&xs, &ys, |x, y| {
+        if (-17.0..-11.0).contains(&x) && y.abs() < 5.0 {
+            (10.0, 2)
+        } else if (-26.0..-2.0).contains(&x) && y.abs() < 16.0 {
+            (5.0, 1)
+        } else if x > 8.0 && y.abs() < 8.0 {
+            (6.0, 3)
+        } else {
+            (10.0, 0)
+        }
+    })
+}
+
+/// Fusion's 2D Adaptive Clearing, a new operation picked by the floors of a
+/// pocket with an island and of one open to the block's side, cut to size: a
+/// helix down into the closed one only, the open one entered from outside the
+/// stock, and both cleared to their floors round the island, every check
+/// passing. Each pocket's own floor, as a 2D pocket's.
+#[test]
+fn adaptive_2d_clears_a_pocket_round_an_island_and_one_open_to_the_side() {
+    use crate::job::{FeatureRef, Operation, StockSpec};
+    use crate::setup::features::find_face;
+    let body = pocketed_block();
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    job.stocks[0].spec = StockSpec::AroundModels {
+        models: vec![],
+        margin: [0.0, 0.0, 0.0],
+        below: 0.0,
+    };
+    let mut op = Operation::new("adaptive", StrategySpec::named("adaptive-2d").unwrap());
+    op.tool = Some("rough".into());
+    op.passes.feed = 1500.0;
+    op.passes.stepover = 2.4;
+    op.passes.stock_to_leave = Default::default();
+    op.outline = Outline::Selection;
+    for at in [[-22.0, 0.0, 5.0], [20.0, 0.0, 6.0]] {
+        let pick = FeatureRef {
+            model: "dome".into(),
+            index: 0,
+            at,
+        };
+        let face = find_face(&body, &pick, 0.01).unwrap().index;
+        op.selection.faces.push(FeatureRef {
+            index: face,
+            ..pick
+        });
+    }
+    job.setups[0].operations = vec![op];
+    job.validate().unwrap();
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let op = &result.operations[0];
+    let StrategyDetail::Adaptive2d(report) = &op.detail else {
+        panic!("reported {:?}", op.detail);
+    };
+    assert!(result.is_clean(), "{:?}", result.warnings());
+    assert_eq!(result.verify.gouged, 0);
+    assert_eq!(op.sim.rapid_contacts, 0);
+    let ramps: Vec<_> = op
+        .path
+        .moves()
+        .iter()
+        .filter(|m| m.role == crate::path::toolpath::MoveRole::Ramp)
+        .map(|m| m.to)
+        .collect();
+    assert_eq!(
+        (report.levels, report.entries, report.helixes),
+        (2, 1, 1),
+        "{ramps:?}"
+    );
+    // Every pass at a pocket's floor.
+    for m in op.path.moves() {
+        if m.role == crate::path::toolpath::MoveRole::Cut {
+            assert!(
+                (m.to.z - 5.0).abs() < 1e-9 || (m.to.z - 6.0).abs() < 1e-9,
+                "{}",
+                m.to
+            );
+        }
+    }
+    let stock = result.keyframes.last().unwrap().unpack().unwrap();
+    let field = stock.field();
+    let e = 2.0 * field.pitch() + job.tolerance;
+    let (mut closed, mut open) = (0, 0);
+    for iy in 0..field.ny() {
+        for ix in 0..field.nx() {
+            let p = field.position(ix, iy).unwrap();
+            let h = field.get(ix, iy).unwrap();
+            // A round tool leaves the inside corners: away from them.
+            let cornered = |xs: [f64; 2], ys: [f64; 2]| {
+                xs.iter().any(|x| (p.x - x).abs() < 3.0) && ys.iter().any(|y| (p.y - y).abs() < 3.0)
+            };
+            let in_closed = p.x > -26.0 + e
+                && p.x < -2.0 - e
+                && p.y.abs() < 16.0 - e
+                && !cornered([-26.0, -2.0], [-16.0, 16.0]);
+            let on_island = p.x > -17.0 - e && p.x < -11.0 + e && p.y.abs() < 5.0 + e;
+            if in_closed && !on_island {
+                closed += 1;
+                assert!(h <= 5.0 + job.tolerance, "{h:.4} left at {p}");
+            }
+            if p.x > 8.0 + e && p.y.abs() < 8.0 - e && !cornered([8.0, 8.0], [-8.0, 8.0]) {
+                open += 1;
+                assert!(h <= 6.0 + job.tolerance, "{h:.4} left at {p}");
+            }
+            if p.x > -17.0 + e && p.x < -11.0 - e && p.y.abs() < 5.0 - e {
+                assert!(h >= 10.0 - job.tolerance, "the island cut at {p}");
+            }
+        }
+    }
+    assert!(closed > 100 && open > 100, "{closed}, {open}");
+}
+
+/// 2D adaptive with multiple depths: levels a whole stepdown apart from the
+/// top, the last what is left, or evenly where asked; each pocket to its own
+/// floor; ordered by area, each pocket all the way down before the next. The
+/// same result either way, and a cone refused.
+#[test]
+fn adaptive_2d_cuts_in_levels_as_asked() {
+    use crate::job::{ContourOrder, FeatureRef, Operation, StockSpec};
+    use crate::setup::features::find_face;
+    let body = pocketed_block();
+    let run = |even: bool, by_area: bool| {
+        let mut job: Job = toml::from_str(JOB).unwrap();
+        job.stocks[0].spec = StockSpec::AroundModels {
+            models: vec![],
+            margin: [0.0, 0.0, 0.0],
+            below: 0.0,
+        };
+        let mut op = Operation::new("adaptive", StrategySpec::named("adaptive-2d").unwrap());
+        op.tool = Some("rough".into());
+        op.passes.feed = 1500.0;
+        op.passes.stepover = 2.4;
+        op.passes.stepdown = Some(2.0);
+        op.outline = Outline::Selection;
+        if let StrategySpec::Adaptive2d {
+            even_stepdowns,
+            order,
+            ..
+        } = &mut op.strategy
+        {
+            *even_stepdowns = even;
+            *order = if by_area {
+                ContourOrder::ByArea
+            } else {
+                ContourOrder::ByDepth
+            };
+        }
+        let pick = FeatureRef {
+            model: "dome".into(),
+            index: 0,
+            at: [-22.0, 0.0, 5.0],
+        };
+        let face = find_face(&body, &pick, 0.01).unwrap().index;
+        op.selection.faces.push(FeatureRef {
+            index: face,
+            ..pick
+        });
+        job.setups[0].operations = vec![op];
+        let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+        run_setup(&job, 0, &bodies).unwrap()
+    };
+    let levels = |r: &SetupResult| {
+        let mut zs: Vec<f64> = r.operations[0]
+            .path
+            .moves()
+            .iter()
+            .filter(|m| m.role == crate::path::toolpath::MoveRole::Cut)
+            .map(|m| (m.to.z * 1000.0).round() / 1000.0)
+            .collect();
+        zs.dedup();
+        zs
+    };
+    // From the stock's top, 10 mm, to the floor at 5 mm with 0.5 mm left on
+    // it: whole stepdowns, the last what is left, or evenly.
+    let whole = run(false, false);
+    assert!(whole.is_clean(), "{:?}", whole.warnings());
+    assert_eq!(levels(&whole), [8.0, 6.0, 5.5]);
+    let even = run(true, false);
+    assert!(even.is_clean(), "{:?}", even.warnings());
+    let e = levels(&even);
+    assert_eq!(e.len(), 3);
+    assert!((e[0] - (10.0 - 4.5 / 3.0)).abs() < 1e-3, "{e:?}");
+    let by_area = run(false, true);
+    assert_eq!(levels(&by_area), [8.0, 6.0, 5.5]);
+    assert_eq!(by_area.operations[0].path, whole.operations[0].path);
+
+    // A cone cannot clear a floor.
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    job.tools.insert("vbit".into(), vbit());
+    let mut op = Operation::new("adaptive", StrategySpec::named("adaptive-2d").unwrap());
+    op.tool = Some("vbit".into());
+    op.passes.stepdown = Some(2.0);
+    job.setups[0].operations = vec![op];
+    let err = job.validate().unwrap_err().to_string();
+    assert!(err.contains("V-bit or chamfer mill"), "{err}");
+}

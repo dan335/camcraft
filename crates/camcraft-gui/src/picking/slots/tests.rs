@@ -115,6 +115,42 @@ fn curves_toggle_a_chain_at_a_time() {
     assert!(picked(&doc).is_empty());
 }
 
+/// A 2D chamfer's edges are picked a loop or a chain at a time into its
+/// edges, and taken out the same way; its faces are picked as any are.
+#[test]
+fn chamfer_edges_toggle_a_run_at_a_time() {
+    let mut doc = doc_with_op();
+    let setup = doc.job.setups[0].name.clone();
+    let slot = Slot::Chains {
+        setup: setup.clone(),
+        op: 0,
+    };
+    assert_eq!(slot.accept(), Accept::Edges);
+    assert!(!slot.single());
+    let same = |r: &FeatureRef, _| Some(r.index);
+    let run = Target::Loop {
+        model: "p".into(),
+        edges: vec![(3, DVec3::X), (4, DVec3::Y), (9, DVec3::Z)],
+    };
+    let picked = |doc: &Document| {
+        doc.job.setups[0].operations[0]
+            .selection
+            .edges
+            .iter()
+            .map(|r| r.index)
+            .collect::<Vec<_>>()
+    };
+    assert!(apply(&mut doc, &slot, &run, same));
+    assert_eq!(picked(&doc), [3, 4, 9]);
+    assert!(!apply(&mut doc, &slot, &face(2), same));
+    assert!(apply(&mut doc, &slot, &run, same));
+    assert!(picked(&doc).is_empty());
+    doc.selection = Selection::Operation(setup.clone(), 0);
+    assert!(slot.still_valid(&doc));
+    doc.selection = Selection::Setup(setup);
+    assert!(!slot.still_valid(&doc));
+}
+
 /// A saved pick found now under another number is still the same face: the
 /// click takes it out rather than adding it twice.
 #[test]

@@ -140,11 +140,20 @@ impl Operation {
                 "negative stock to leave down must be no more than the tool's corner radius",
             );
         }
+        let chamfering = matches!(self.strategy, StrategySpec::Chamfer2d { .. });
+        if chamfering && tool.kind != ToolKind::Cone {
+            return Some(
+                "a 2D chamfer cuts with a cone: use a chamfer mill or V-bit, whose flank \
+                 makes the chamfer",
+            );
+        }
         if tool.kind != ToolKind::Cone {
             return None;
         }
         match self.strategy {
-            StrategySpec::PocketClearing { .. } | StrategySpec::Adaptive { .. } => {
+            StrategySpec::PocketClearing { .. }
+            | StrategySpec::Adaptive { .. }
+            | StrategySpec::Adaptive2d { .. } => {
                 return Some(
                     "a V-bit or chamfer mill cannot rough in Z levels; use a parallel pass",
                 );
@@ -185,6 +194,14 @@ impl Operation {
                 return Some(
                     "a V-bit or chamfer mill traces only on the curve: its width changes \
                      with depth, so it has no one radius to keep beside it",
+                );
+            }
+            StrategySpec::Chamfer2d {
+                width, tip_offset, ..
+            } if chamfer_reach(tool, width, tip_offset) > tool.diameter / 2.0 + 1e-9 => {
+                return Some(
+                    "the chamfer is wider than the tool's flank reaches: use a wider tool, \
+                     or a smaller chamfer width or tip offset",
                 );
             }
             _ => {}
@@ -299,4 +316,17 @@ impl Operation {
         }
         self.preset = Some(preset.name.clone());
     }
+}
+
+/// How far out from a 2D chamfer's tool's axis the top of a chamfer `width`
+/// across reaches, its tip `tip_offset` below the chamfer, with `tool`'s cone:
+/// its tip's radius, what the tip offset moves it out, and the width. More
+/// than the tool's radius, its flank does not reach the chamfer's top. A tool
+/// with no angle reaches nowhere.
+pub fn chamfer_reach(tool: &ToolSpec, width: f64, tip_offset: f64) -> f64 {
+    let half = tool.angle.unwrap_or(0.0).to_radians() / 2.0;
+    if !(half > 0.0 && half < std::f64::consts::FRAC_PI_2) {
+        return f64::INFINITY;
+    }
+    tool.tip_diameter / 2.0 + tip_offset.max(0.0) * half.tan() + width.max(0.0)
 }

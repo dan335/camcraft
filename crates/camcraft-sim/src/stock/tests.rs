@@ -584,6 +584,42 @@ fn cutting_past_the_part_as_asked_is_no_gouge_only_where_asked() {
     assert_eq!(back.height_at(0.0, 0.0), Some(0.0));
 }
 
+/// A part lowered to what an operation meant to cut, as a chamfer is: no gouge
+/// where it cut and meant to, as deep as it meant; still one deeper than that,
+/// where it means nothing, and where it did not cut.
+#[test]
+fn lowered_to_what_was_meant_only_where_it_cut() {
+    let (lo, hi) = (dvec2(-5.0, -5.0), dvec2(5.0, 5.0));
+    let pitch = 0.25;
+    let mesh = synthetic::plane(0.0, 5.0);
+    let part = || PartSurface::from_mesh(&mesh, lo, hi, pitch).unwrap();
+    // Material everywhere half a millimetre under the part.
+    let stock = Stock::block(lo, hi, -0.5, -5.0, pitch).unwrap();
+    let half = stock.field().nx() / 2;
+    let all = stock.verify(&part(), 0.01, 1.0);
+    assert!(all.gouged > 0);
+    // Meant half a millimetre down on the left, where it cut.
+    let meant = |p: DVec2| (p.x < 0.0).then_some(-0.5);
+    let lowered = part().lowered(meant, |_, _| true);
+    let v = stock.verify(&lowered, 0.01, 1.0);
+    assert!(
+        v.gouged > 0 && v.gouged < all.gouged / 2 + 50,
+        "{v:?} against {all:?}"
+    );
+    assert_eq!(lowered.height_at(-2.0, 0.0), Some(-0.5));
+    assert_eq!(lowered.height_at(2.0, 0.0), Some(0.0));
+    // Meant only a quarter down: still a gouge everywhere.
+    let shallow = part().lowered(|_| Some(-0.25), |_, _| true);
+    assert_eq!(stock.verify(&shallow, 0.01, 1.0).gouged, all.gouged);
+    // Meant all over, but cut only on the right: the left still a gouge.
+    let right = part().lowered(|_| Some(-0.5), |ix, _| ix > half);
+    let v = stock.verify(&right, 0.01, 1.0);
+    assert!(v.gouged > 0 && v.gouged < all.gouged / 2 + 50, "{v:?}");
+    // Never raised.
+    let above = part().lowered(|_| Some(1.0), |_, _| true);
+    assert_eq!(above.height_at(0.0, 0.0), Some(0.0));
+}
+
 /// An arc is swept along itself, not along its chord: a level half turn clears a
 /// curved trench, and leaves standing the middle it turns round.
 #[test]

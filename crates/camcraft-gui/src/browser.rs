@@ -626,6 +626,8 @@ pub fn strategy_label(s: &StrategySpec) -> &'static str {
         StrategySpec::Circular { .. } => "Circular",
         StrategySpec::Slot { .. } => "Slot",
         StrategySpec::Trace { .. } => "Trace",
+        StrategySpec::Chamfer2d { .. } => "2D chamfer",
+        StrategySpec::Adaptive2d { .. } => "2D adaptive clearing",
     }
 }
 
@@ -649,7 +651,15 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
         (
             "2D",
             vec![section(&[
-                "face", "pocket", "profile", "slot", "trace", "bore", "circular",
+                "face",
+                "adaptive-2d",
+                "pocket",
+                "profile",
+                "slot",
+                "trace",
+                "bore",
+                "circular",
+                "chamfer-2d",
             ])],
         ),
         (
@@ -677,10 +687,8 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
 /// section's own, greyed, saying so. One that is built comes out of here and
 /// into [`operation_groups`], in the same place.
 pub const PLANNED: &[(&str, usize, &str)] = &[
-    ("2D", 0, "2D adaptive clearing"),
     ("2D", 0, "Thread"),
     ("2D", 0, "Engrave"),
-    ("2D", 0, "2D chamfer"),
     ("3D", 1, "Steep and shallow"),
     ("3D", 1, "Ramp"),
     ("3D", 1, "Pencil"),
@@ -907,6 +915,19 @@ mod tests {
         h.run();
         assert_eq!(h.state().len(), 1);
         assert_eq!(h.state()[0].name(), "bore");
+        // Built since they were planned: offered, and added.
+        for (label, name) in [
+            ("2D adaptive clearing", "adaptive-2d"),
+            ("2D chamfer", "chamfer-2d"),
+        ] {
+            h.get_by_label("2D").click();
+            h.run();
+            let item = h.get_by_label(label);
+            assert!(!item.accesskit_node().is_disabled(), "{label} is greyed");
+            item.click();
+            h.run();
+            assert_eq!(h.state().last().map(StrategySpec::name), Some(name));
+        }
     }
 
     /// Dragging an operation's row onto the top half of another's puts it
@@ -1006,7 +1027,7 @@ mod menu_tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), offered, "one is offered twice: {names:?}");
-        assert_eq!(offered, 17, "{names:?}");
+        assert_eq!(offered, 19, "{names:?}");
     }
 
     /// The planned operations are listed after their section's own, in the
@@ -1061,8 +1082,8 @@ mod menu_tests {
                 assert_eq!(planned, asked);
             }
         }
-        // 2D: Fusion's order, Slot, Trace, Bore and Circular built after the
-        // profile.
+        // 2D: Fusion's order, 2D adaptive clearing before the pocket, Slot,
+        // Trace, Bore and Circular after the profile, and 2D chamfer last.
         let two_d: Vec<String> = operation_menu_items()[0].1[0]
             .iter()
             .map(|m| match m {
@@ -1074,16 +1095,16 @@ mod menu_tests {
             two_d,
             [
                 "Face",
+                "2D adaptive clearing",
                 "2D pocket",
                 "2D profile",
                 "Slot",
                 "Trace",
                 "Bore",
                 "Circular",
-                "(2D adaptive clearing)",
+                "2D chamfer",
                 "(Thread)",
-                "(Engrave)",
-                "(2D chamfer)"
+                "(Engrave)"
             ]
         );
     }

@@ -24,7 +24,7 @@ has only with its Manufacturing Extension.
 
 | Area                                          | Done | Partial | Not started |
 |-----------------------------------------------|-----:|--------:|------------:|
-| [2D operations](#2d-operations)               |    1 |       6 |           4 |
+| [2D operations](#2d-operations)               |    1 |       8 |           2 |
 | [3D roughing](#3d-roughing)                   |    0 |       2 |           0 |
 | [3D finishing](#3d-finishing)                 |    0 |       7 |           9 |
 | [Drilling](#drilling)                         |    4 |       1 |           3 |
@@ -37,7 +37,7 @@ has only with its Manufacturing Extension.
 | [Posts and programs](#posts-and-programs)     |    6 |       0 |           2 |
 | [App](#app)                                   |    7 |       1 |           0 |
 | [Project](#project)                           |    1 |       0 |           4 |
-| **All**                                       |   55 |      23 |          40 |
+| **All**                                       |   55 |      25 |          38 |
 
 `grep "| not started" PROGRESS.md` lists everything not yet begun.
 
@@ -46,7 +46,7 @@ has only with its Manufacturing Extension.
 Roughly in the order they matter:
 
 1. **Cut on a machine.** See [Before the first cut](#before-the-first-cut).
-2. **More strategies:** steep and shallow, pencil, ramp; 2D adaptive.
+2. **More strategies:** steep and shallow, pencil, ramp.
 3. **A volumetric stock**, so what a top setup leaves carries to a flipped
    bottom one.
 4. **Exact slicing of the offset surface** for Z-level work
@@ -63,14 +63,14 @@ Roughly in the order they matter:
 | Face                 | done        | Matches Fusion. Direction, pass extension, stock offset, multiple depths. |
 | 2D Contour           | partial     | Matches Fusion. Outside, inside or on; tabs; leads; helix, plunge or ramp in; multiple depths; rings follow round edges as arcs ([0005](docs/decisions/0005-2d-profile-and-pocket.md), [0006](docs/decisions/0006-2d-linking-and-arcs.md)). Missing: sideways roughing passes, finishing passes, picked entry points. |
 | 2D Pocket            | partial     | Matches Fusion. Finishing passes with leads; helix, ramp or plunge in. Missing: leads on its roughing rings, picked entry (predrill) points. |
-| 2D Adaptive Clearing | not started | |
+| 2D Adaptive Clearing | partial     | A 2D pocket's areas, picked or the silhouette, each cleared by 3D adaptive's engine at the pocket's levels: to each floor in one, or multiple depths, whole or even; islands cut round; open pockets found where the outline runs along the part's edge, and entered from outside the stock; optimal load, minimum cutting radius, slot clearing, direction, order by depth or area, helix or plunge in, stay-down level, clearance and lift ([0024](docs/decisions/0024-chamfer-and-2d-adaptive.md)). Not yet held to Fusion's program. Missing: open pockets' extension methods (tangent, closest boundary, parallel) and stock contours, rest machining from a previous tool's size, predrill and entry positions, ramp clearance height and taper, both ways' other-way load and feed, no-engagement feed, separate lead radii, sketches. |
 | Slot                 | partial     | Closed slots picked by the edges round their floors, or their floors: straight, curved or several of either; cut along the middle, down by ramping back and forth along it, legs no deeper than the maximum ramp stepdown; multiple depths; round the walls with a narrower tool; repeat finishing pass, backoff, preserve order ([0023](docs/decisions/0023-slot-and-trace.md)). Not yet held to Fusion's program. Missing: open and semi-open slots and tangential extension, ramp types (predrill, plunge), ramp clearance height, picked entry positions, sketches. |
-| Trace                | partial     | Picked edges followed, open or closed, joined end to end, a click taking the smooth chain; on the curve or beside it left or right; axial offset, pass extension, maximum angle, multiple depths with number of stepdowns, by depth or by curve, both ways, repeat, preserve order, keep tool down, vertical lead-in and lead-out ([0023](docs/decisions/0023-slot-and-trace.md)). Not yet held to Fusion's program. Missing: chamfer (it cuts into the part, which the gouge check refuses), chamfer tip offset, up/down milling, multiple passes, spiral stepdowns, separate lead-out radius, flipping a chain's direction, tool orientation, sketches. |
+| Trace                | partial     | Picked edges followed, open or closed, joined end to end, a click taking the smooth chain; on the curve or beside it left or right; axial offset, pass extension, maximum angle, multiple depths with number of stepdowns, by depth or by curve, both ways, repeat, preserve order, keep tool down, vertical lead-in and lead-out ([0023](docs/decisions/0023-slot-and-trace.md)). Not yet held to Fusion's program. Missing: chamfer (the checks can now hold a chamfer cut on purpose, as a 2D chamfer's), chamfer tip offset, up/down milling, multiple passes, spiral stepdowns, separate lead-out radius, flipping a chain's direction, tool orientation, sketches. |
 | Thread               | not started | |
 | Bore                 | partial     | Holes and bosses picked by their walls, from each wall's top to its bottom; pitch or ramp angle, stepovers, finishing passes, repeat, leads and lead to center, climb or conventional ([0022](docs/decisions/0022-bore-and-circular.md)). Not yet held to Fusion's program. Missing: tapered walls, diameter range and same-diameter selection, hole order choices, compensation in control, bottom-to-top. |
 | Circular             | partial     | Holes and bosses picked by their walls, cut level by level, whole or even stepdowns, ramped on along the circle; stepovers, repeat, leads and lead to center, climb or conventional ([0022](docs/decisions/0022-bore-and-circular.md)). Not yet held to Fusion's program. Missing: diameter range and same-diameter selection, hole order choices, compensation in control. |
 | Engrave              | not started | |
-| 2D Chamfer           | not started | A V-bit can already profile on an outline. |
+| 2D Chamfer           | partial     | Picked edges, or every edge of picked faces, chamfered with a chamfer mill or V-bit: a sharp edge to the chamfer width asked, a chamfer the model has followed from its lower edge; tip offset, clearance (the tool lifted off the part's other faces), finishing overlap, preserve order; the side of the part found from the part; the chamfer asked is held by the checks as cut on purpose, and anything deeper is a gouge ([0024](docs/decisions/0024-chamfer-and-2d-adaptive.md)). Not yet held to Fusion's program. Missing: outer corner modes other than roll, lead-in and lead-out settings (always Fusion's default straight, a tenth of the tool), compensation in control, tangential extension of open chains, sketches. |
 
 ## 3D roughing
 

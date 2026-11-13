@@ -538,7 +538,22 @@ fn operation_findings(
                 out.push(nothing_to_clear());
             }
         }
-        StrategyDetail::Adaptive(r) => {
+        StrategyDetail::Chamfer2d(r) => {
+            if r.lifted > 0 {
+                out.push(finding(
+                    Level::Warn,
+                    "CC221",
+                    format!(
+                        "{} stretch(es) of a chamfer lifted to keep its clearance",
+                        r.lifted
+                    ),
+                    "the chamfer is narrower there: a smaller chamfer clearance, or a \
+                     smaller tool, would cut it"
+                        .into(),
+                ));
+            }
+        }
+        StrategyDetail::Adaptive(r) | StrategyDetail::Adaptive2d(r) => {
             if r.passes == 0 {
                 out.push(nothing_to_clear());
             }

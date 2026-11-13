@@ -2,7 +2,7 @@
 //! while the tab shows.
 
 use camcraft_core::job::{
-    self, Curves, Height, HeightContext, HeightRef, Heights, Links, Operation, Outline,
+    self, Curves, Height, HeightContext, HeightRef, Heights, Links, Operation, Outline, Retraction,
     StrategySpec,
 };
 use camcraft_core::setup::Prepared;
@@ -48,7 +48,9 @@ pub(super) fn heights(
         d.row(ui, &ht::CLEARANCE, "heights.clearance", |ui| {
             height_field(ui, m, "clearance", &mut op.heights.clearance, false);
         });
-        if uses.stay_down {
+        // Where a strategy that stays down goes no higher, and where a full
+        // retraction goes: a 2D chamfer's, which lifts there between edges.
+        if uses.stay_down || op.linking.retraction == Retraction::Full {
             d.row(ui, &ht::RETRACT, "heights.retract", |ui| {
                 height_field(ui, m, "retract", &mut op.heights.retract, false);
             });
@@ -96,6 +98,11 @@ pub(super) fn heights(
              it has no Top or Bottom. With a full retraction it lifts to the Retract \
              height between passes.",
         ),
+        StrategySpec::Chamfer2d { .. } => Some(
+            "It chamfers each picked edge at its own height, the tip the chamfer's depth \
+            and the tip offset below it: it has no Top or Bottom. It lifts to the \
+            Retract height between edges.",
+        ),
         StrategySpec::Slot { .. } => Some(
             "Each slot is cut from the Top, the stock's top unless set, down to its own \
              floor, where its picked edges are. A Bottom set takes every slot there \
@@ -125,7 +132,9 @@ pub(super) fn heights(
              bottom of it. A Top or Bottom set takes every one from or to there \
              instead.",
         ),
-        StrategySpec::Profile { .. } | StrategySpec::Pocket { .. } => Some(
+        StrategySpec::Profile { .. }
+        | StrategySpec::Pocket { .. }
+        | StrategySpec::Adaptive2d { .. } => Some(
             "Without a Bottom, each area is cut down to the lowest point picked in \
              it, or to the part's bottom when nothing is picked. From the selection, \
              each area's Top and Bottom are the highest and lowest points picked in \
@@ -303,7 +312,8 @@ fn planes(doc: &Document, m: Measure, s: &Shown<'_>) -> Vec<Plane> {
         (
             PlaneKind::Retract,
             "Retract",
-            uses.stay_down.then(|| op.heights.retract.resolve(&ctx)),
+            (uses.stay_down || op.linking.retraction == Retraction::Full)
+                .then(|| op.heights.retract.resolve(&ctx)),
         ),
         (PlaneKind::Top, "Top", uses.top.map(|_| top_z)),
         (PlaneKind::Bottom, "Bottom", uses.bottom.map(|_| bottom_z)),

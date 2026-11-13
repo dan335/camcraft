@@ -229,6 +229,89 @@ pub(super) fn passes(
                     });
                 });
             }
+            // Fusion's 2D Adaptive: no flats or cavities to choose, a pocket
+            // is always gone down into.
+            StrategySpec::Adaptive2d {
+                direction,
+                min_cutting_radius,
+                order,
+                slot_clearing,
+                slot_width,
+                ..
+            } => {
+                d.row(ui, &pass::MIN_CUTTING_RADIUS, "min_cutting_radius", |ui| {
+                    widgets::optional_positive(
+                        ui,
+                        min_cutting_radius,
+                        1.0,
+                        "none: into every corner",
+                        |ui, r| {
+                            m.length_field(ui, r, 0.05, 100.0, "");
+                        },
+                    );
+                });
+                d.row(ui, &pass::SLOT_CLEARING, "slot_clearing", |ui| {
+                    ui.checkbox(slot_clearing, "a slot along the middle first");
+                });
+                widgets::dependent(ui, *slot_clearing, |ui| {
+                    d.row(ui, &pass::SLOT_WIDTH, "slot_width", |ui| {
+                        let start = 1.5 * across(diameter);
+                        widgets::optional_positive(
+                            ui,
+                            slot_width,
+                            start,
+                            "the tool's width",
+                            |ui, w| {
+                                m.length_field(ui, w, 0.05, 1000.0, "");
+                            },
+                        );
+                    });
+                });
+                d.row(ui, &pass::DIRECTION_ADAPTIVE, "direction", |ui| {
+                    widgets::segmented(
+                        ui,
+                        direction,
+                        &[
+                            (CutDirection::Climb, "climb"),
+                            (CutDirection::Conventional, "conventional"),
+                            (CutDirection::BothWays, "both ways"),
+                        ],
+                    );
+                });
+                d.row(ui, &pass::ADAPTIVE_ORDER, "order", |ui| {
+                    widgets::segmented(
+                        ui,
+                        order,
+                        &[
+                            (ContourOrder::ByDepth, "by depth"),
+                            (ContourOrder::ByArea, "by area"),
+                        ],
+                    );
+                });
+            }
+            StrategySpec::Chamfer2d {
+                width,
+                tip_offset,
+                clearance,
+                finishing_overlap,
+                preserve_order,
+            } => {
+                d.row(ui, &pass::CHAMFER_WIDTH, "width", |ui| {
+                    m.length_field(ui, width, 0.05, 100.0, "");
+                });
+                d.row(ui, &pass::CHAMFER_TIP_OFFSET, "tip_offset", |ui| {
+                    m.length_field(ui, tip_offset, 0.05, 100.0, "");
+                });
+                d.row(ui, &pass::CHAMFER_CLEARANCE, "clearance", |ui| {
+                    m.length_field(ui, clearance, 0.05, 100.0, "");
+                });
+                d.row(ui, &pass::FINISHING_OVERLAP, "finishing_overlap", |ui| {
+                    m.length_field(ui, finishing_overlap, 0.1, 1000.0, "");
+                });
+                d.row(ui, &pass::PRESERVE_ORDER, "preserve_order", |ui| {
+                    ui.checkbox(preserve_order, "in the order picked");
+                });
+            }
             StrategySpec::Profile { conventional, .. } | StrategySpec::Pocket { conventional } => {
                 climb_or_conventional(ui, d, (&pass::DIRECTION_2D, "conventional"), conventional);
             }
@@ -566,7 +649,10 @@ fn holder_modes(strategy: &StrategySpec) -> Option<&'static [(HolderMode, &'stat
     match strategy {
         // Fusion's 2D Trace has no Shaft and Holder, though it follows its
         // curves as a finish follows the part.
-        StrategySpec::Trace { .. } => None,
+        // Nor has its 2D Adaptive.
+        StrategySpec::Trace { .. } | StrategySpec::Adaptive2d { .. } => None,
+        // Its 2D Chamfer has one: over the part, as a finish's.
+        StrategySpec::Chamfer2d { .. } => Some(OVER_PART),
         _ if strategy.uses().links == Links::OverPart => Some(OVER_PART),
         StrategySpec::Contour { .. }
         | StrategySpec::Flat { .. }
@@ -813,7 +899,9 @@ fn multiple_depths(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, o
         d.row(ui, &pass::STEPDOWN, "passes.stepdown", |ui| {
             m.length_field(ui, stepdown, 0.05, 100.0, "");
         });
-        if let StrategySpec::Circular { even_stepdowns, .. } = &mut op.strategy {
+        if let StrategySpec::Circular { even_stepdowns, .. }
+        | StrategySpec::Adaptive2d { even_stepdowns, .. } = &mut op.strategy
+        {
             d.row(ui, &pass::EVEN_STEPDOWNS, "even_stepdowns", |ui| {
                 ui.checkbox(even_stepdowns, "all the same depth");
             });

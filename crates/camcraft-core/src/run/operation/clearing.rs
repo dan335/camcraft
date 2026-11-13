@@ -191,6 +191,149 @@ pub(super) fn adaptive_paths(
     Ok((path, report.passes, StrategyDetail::Adaptive(report)))
 }
 
+/// What a 2D adaptive clearing operation asks of its strategy.
+pub(super) struct Adaptive2dAsked {
+    pub(super) direction: CutDirection,
+    pub(super) min_cutting_radius: f64,
+    pub(super) even_stepdowns: bool,
+    pub(super) order: ContourOrder,
+    pub(super) slot_clearing: bool,
+    pub(super) slot_width: f64,
+    pub(super) stay_down_level: f64,
+    pub(super) stay_down_clearance: f64,
+    pub(super) lift_height: f64,
+}
+
+/// `areas`, a 2D pocket's, each cleared by adaptive clearing at its levels:
+/// from its top down to its floor in one, or with multiple depths a stepdown
+/// at a time, evenly where asked. By depth, the areas with the same levels
+/// are cleared together, level by level; by area, each all the way down
+/// before the next.
+pub(super) fn adaptive_2d_paths(
+    work: &Work<'_>,
+    asked: Adaptive2dAsked,
+    areas: &[Area],
+    warnings: &mut Vec<String>,
+) -> Result<Paths, RunError> {
+    let (job, op) = (work.job, work.op);
+    let diameter = work.spec.diameter;
+    // Into a closed pocket it goes down a helix, or straight.
+    let helix_radius = match op.entry() {
+        Some(Entry::Plunge) => 0.0,
+        _ => op.helix_diameter(diameter, work.spec.corner_radius()) / 2.0,
+    };
+    let base = AdaptiveParams {
+        optimal_load: op.passes.stepover,
+        feed: op.passes.feed,
+        tolerance: job.tolerance,
+        climb_right: work.clockwise(),
+        direction: asked.direction.engine(),
+        helix_radius,
+        stay_down: op.stay_down(diameter),
+        stay_down_level: asked.stay_down_level / 100.0,
+        stay_down_clearance: asked.stay_down_clearance,
+        lift_height: asked.lift_height,
+        slot_width: asked
+            .slot_clearing
+            .then_some(asked.slot_width.max(diameter)),
+        ramp_angle: op.linking.ramp_angle.to_radians(),
+        ramp_feed: op.ramp_feed(),
+        ramp_stepdown: Some(op.ramp_stepdown(diameter)),
+        safe_distance: op.linking.safe_distance,
+        min_cutting_radius: asked.min_cutting_radius,
+        watch: work.watch.clone(),
+        ..AdaptiveParams::default()
+    };
+    // Each area's levels, from its top down, and the areas that share them.
+    let stepdown = op.stepdown();
+    let mut groups: Vec<(f64, Vec<f64>, Vec<Region>)> = Vec::new();
+    let mut too_shallow = 0;
+    for area in areas {
+        let zs: Vec<f64> = match stepdown {
+            Some(d) if !asked.even_stepdowns && area.top - area.bottom > 1.0e-9 => {
+                crate::strategy::slabs(area.top, area.bottom, d, &[])
+                    .into_iter()
+                    .map(|(z, _)| z)
+                    .collect()
+            }
+            d => crate::strategy::planar::levels(area.top, area.bottom, d),
+        };
+        if zs.is_empty() {
+            too_shallow += 1;
+            continue;
+        }
+        let same = |top: f64, levels: &[f64]| {
+            asked.order == ContourOrder::ByDepth
+                && (top - area.top).abs() < 1e-9
+                && levels.len() == zs.len()
+                && levels.iter().zip(&zs).all(|(a, b)| (a - b).abs() < 1e-9)
+        };
+        match groups
+            .iter_mut()
+            .find(|(top, levels, _)| same(*top, levels))
+        {
+            Some((_, _, regions)) => regions.push(area.region.clone()),
+            None => groups.push((area.top, zs, vec![area.region.clone()])),
+        }
+    }
+    if too_shallow > 0 {
+        warnings.push(format!(
+            "{too_shallow} area(s) have their floor at or above their top, and are not cut"
+        ));
+    }
+    let mut path = Toolpath::new();
+    let mut report = AdaptiveReport::default();
+    let cutter = *work.tool.base();
+    for (top, zs, regions) in &groups {
+        let room = Region::union_all(regions).map_err(in_op(op))?;
+        let levels: Vec<(f64, Region)> = zs.iter().map(|&z| (z, room.clone())).collect();
+        let params = AdaptiveParams {
+            top: *top,
+            bottom: zs.last().copied().unwrap_or(*top),
+            ..base.clone()
+        };
+        let (cut, r) = adaptive_clear(&levels, work.blocks, &cutter, &params).map_err(in_op(op))?;
+        path.append(cut.moves()).map_err(in_op(op))?;
+        add_report(&mut report, &r);
+    }
+    if report.passes == 0 {
+        warnings.push(
+            "found nothing to clear: the stock may already be below this operation's top".into(),
+        );
+    }
+    if report.no_room > 0 {
+        warnings.push(format!(
+            "{} area(s) have no room for the tool to go down into, and are left",
+            report.no_room
+        ));
+    }
+    if report.left_mm2 > 1.0 {
+        warnings.push(format!(
+            "{:.0} mm² the tool could reach was left uncleared",
+            report.left_mm2
+        ));
+    }
+    Ok((path, report.passes, StrategyDetail::Adaptive2d(report)))
+}
+
+/// `more`, one run's report, added to `to`.
+fn add_report(to: &mut AdaptiveReport, more: &AdaptiveReport) {
+    to.levels += more.levels;
+    to.flat_levels += more.flat_levels;
+    to.fine_levels += more.fine_levels;
+    to.shallow_levels += more.shallow_levels;
+    to.passes += more.passes;
+    to.stayed_down += more.stayed_down;
+    to.entries += more.entries;
+    to.helixes += more.helixes;
+    to.slots += more.slots;
+    to.no_room += more.no_room;
+    to.cavities += more.cavities;
+    to.cavity_mm2 += more.cavity_mm2;
+    to.left_mm2 += more.left_mm2;
+    to.overloads += more.overloads;
+}
+
 /// A 2D profile or pocket of `areas`.
 pub(super) fn planar_paths(
     work: &Work<'_>,
@@ -322,6 +465,15 @@ pub(in crate::run) fn planar_areas(
         let b = prepared.stock_bounds();
         Region::rectangle(b.min.truncate(), b.max.truncate())
     });
+    // 2D adaptive goes past a picked pocket's open sides, as Fusion's
+    // detects open pockets.
+    let shape = if matches!(op.strategy, StrategySpec::Adaptive2d { .. })
+        && op.outline == crate::job::Outline::Selection
+    {
+        opened(&shape, prepared, tool.cutter_radius(), job.tolerance).map_err(in_op(op))?
+    } else {
+        shape
+    };
     let leave = op.stock_to_leave();
     let offset = centre_offset(op, tool.cutter_radius());
     let levels = |picks: Option<Picks>| op.levels_2d(ctx, picks);
@@ -344,6 +496,56 @@ pub(in crate::run) fn planar_areas(
         a.bottom += leave.axial;
     }
     Ok(found)
+}
+
+/// `shape`, picked pockets, with their open sides opened: where a pocket's
+/// outline runs along the edge of the part seen from above, with nothing of
+/// the part beyond it, what lies beyond is taken in, out past the stock's
+/// edge far enough for the whole tool to stand clear of it, so the tool can
+/// come at the pocket from outside
+/// it, as Fusion's open pockets are extended to the stock. Only what joins a
+/// pocket is taken in: beyond a wall, however thin, is not.
+fn opened(
+    shape: &Region,
+    prepared: &Prepared,
+    radius: f64,
+    tolerance: f64,
+) -> Result<Region, camcraft_geom::contour::RegionError> {
+    let stock = prepared.stock_bounds();
+    let model = prepared.model_bounds;
+    // As far as the stock reaches past the part, and room past that for the
+    // whole tool to stand clear of the stock.
+    let margin = [
+        model.min.x - stock.min.x,
+        model.min.y - stock.min.y,
+        stock.max.x - model.max.x,
+        stock.max.y - model.max.y,
+    ]
+    .into_iter()
+    .fold(0.0, f64::max);
+    let past = 3.0 * radius + tolerance;
+    let room = Region::rectangle(
+        stock.min.truncate() - DVec2::splat(past),
+        stock.max.truncate() + DVec2::splat(past),
+    );
+    let beyond = shape
+        .offset(margin + past, tolerance * 0.5)
+        .intersection(&room)?
+        .difference(prepared.shadow()?.area())?;
+    if beyond.area() <= 1e-9 {
+        return Ok(shape.clone());
+    }
+    let joined = shape.union(&beyond)?;
+    let kept: Vec<Region> = joined
+        .pieces()
+        .into_iter()
+        .filter(|piece| {
+            piece
+                .intersection(shape)
+                .is_ok_and(|both| both.area() > 1e-9)
+        })
+        .collect();
+    Region::union_all(&kept)
 }
 
 /// What `op`'s heights resolve against: the setup's `ctx`, and how high its

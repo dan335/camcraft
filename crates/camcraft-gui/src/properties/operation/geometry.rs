@@ -62,6 +62,14 @@ pub(super) fn geometry(
              followed as one.",
         );
         ui.add_space(theme::SPACE_3);
+    } else if uses.curves == Some(Curves::Chamfered) {
+        hint(
+            ui,
+            "Pick the edges to chamfer, or faces to chamfer all their edges: a sharp \
+            edge, or the lower edge of a chamfer the model has. A click takes the loop \
+            an edge goes round, or the edges running on from it.",
+        );
+        ui.add_space(theme::SPACE_3);
     } else if drilling {
         hint(
             ui,
@@ -87,11 +95,10 @@ pub(super) fn geometry(
         } else {
             &[Kind::Face, Kind::Edge]
         };
-        let curves = uses.curves == Some(Curves::Traced);
         pick_cards(
             ui,
             (setup, index),
-            (kinds, curves),
+            (kinds, uses.curves),
             &mut op.selection,
             picks,
             actions,
@@ -112,7 +119,10 @@ pub(super) fn geometry(
             error(ui, why);
         }
         Some(Ok(())) if flat => {
-            let pocket = matches!(op.strategy, StrategySpec::Pocket { .. });
+            let pocket = matches!(
+                op.strategy,
+                StrategySpec::Pocket { .. } | StrategySpec::Adaptive2d { .. }
+            );
             let outline = if pocket { "The pocket" } else { "The contour" };
             let mut items = vec![(Swatch::Bold(theme::BOUNDARY), outline)];
             if diameter.is_some() {
@@ -209,7 +219,10 @@ fn legend(ui: &mut egui::Ui, items: &[(Swatch, &str)]) {
 /// select what is cut rather than fence the tool in. The tool's centre goes its radius and the
 /// stock to leave beside it, so there is no containment or additional offset.
 fn outline_form(ui: &mut egui::Ui, d: &mut Defaults<Operation>, op: &mut Operation) {
-    let pocket = matches!(op.strategy, StrategySpec::Pocket { .. });
+    let pocket = matches!(
+        op.strategy,
+        StrategySpec::Pocket { .. } | StrategySpec::Adaptive2d { .. }
+    );
     form(ui, "outline", |ui| {
         d.row(
             ui,
@@ -411,28 +424,36 @@ fn boundary_hint(g: &MachiningBoundary) -> &'static str {
 fn pick_cards(
     ui: &mut egui::Ui,
     (setup, index): (&str, usize),
-    (kinds, curves): (&[Kind], bool),
+    (kinds, curves): (&[Kind], Option<Curves>),
     selection: &mut job::Selection,
     picks: ViewPicks<'_>,
     actions: &mut Vec<PropAction>,
 ) {
     for &kind in kinds {
-        let topic = match kind {
-            Kind::Face => &geo::FACES,
-            Kind::Edge if curves => &geo::CURVES,
-            Kind::Edge => &geo::EDGES,
+        let topic = match (kind, curves) {
+            (Kind::Face, Some(Curves::Chamfered)) => &geo::CHAMFER_FACES,
+            (Kind::Face, _) => &geo::FACES,
+            (Kind::Edge, Some(Curves::Traced)) => &geo::CURVES,
+            (Kind::Edge, Some(Curves::Chamfered)) => &geo::CHAMFER_EDGES,
+            (Kind::Edge, _) => &geo::EDGES,
         };
-        let slot = match kind {
-            Kind::Face => Slot::Faces {
+        let slot = match (kind, curves) {
+            (Kind::Face, _) => Slot::Faces {
                 setup: setup.to_string(),
                 op: index,
             },
             // A trace's edges run on along smooth joints, open or closed.
-            Kind::Edge if curves => Slot::Curves {
+            (Kind::Edge, Some(Curves::Traced)) => Slot::Curves {
                 setup: setup.to_string(),
                 op: index,
             },
-            Kind::Edge => Slot::Edges {
+            // A chamfer's, round their loop, or along their chain where
+            // they close none.
+            (Kind::Edge, Some(Curves::Chamfered)) => Slot::Chains {
+                setup: setup.to_string(),
+                op: index,
+            },
+            (Kind::Edge, _) => Slot::Edges {
                 setup: setup.to_string(),
                 op: index,
             },

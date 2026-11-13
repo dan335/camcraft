@@ -1691,6 +1691,8 @@ fn every_strategy_is_named() {
         "circular",
         "slot",
         "trace",
+        "chamfer-2d",
+        "adaptive-2d",
     ] {
         let spec = StrategySpec::named(name).unwrap();
         assert_eq!(spec.name(), name);
@@ -1957,6 +1959,218 @@ fn slot_and_trace_read_and_write_back() {
         StrategySpec::named("trace").unwrap().fresh_retraction(),
         Retraction::Full
     );
+}
+
+/// A 2D chamfer and 2D adaptive read with Fusion's defaults, write back only
+/// what differs, read back every setting of their own, and refuse what they
+/// cannot cut: a chamfer anything but a cone, or one wider than its flank
+/// reaches; 2D adaptive a cone. New ones start as Fusion's do.
+#[test]
+fn chamfer_2d_and_adaptive_2d_read_and_write_back() {
+    let finish = "strategy = \"parallel\"
+tool = \"finish-4-ball\"
+angle = 90.0
+";
+    let picked = "selection = { edges = [{ model = \"part\", index = 3, at = [1.0, 2.0, 3.0] }] }
+";
+    let chamfer_own = "width = 0.5
+tip_offset = 0.2
+clearance = 0.6
+                       finishing_overlap = 1.0
+preserve_order = true
+";
+    let adaptive_own = "direction = \"conventional\"
+min_cutting_radius = 0.6
+                        even_stepdowns = true
+order = \"by-area\"
+slot_clearing = true
+                        slot_width = 7.5
+stay_down_level = 40.0
+stay_down_clearance = 2.0
+                        lift_height = 0.2
+";
+    for (name, tool, own) in [
+        ("chamfer-2d", "v", chamfer_own),
+        ("adaptive-2d", "rough-6-flat", adaptive_own),
+    ] {
+        let plain = SAMPLE.replace(
+            finish,
+            &format!(
+                "strategy = \"{name}\"
+tool = \"{tool}\"
+{picked}"
+            ),
+        );
+        let mut j: Job = toml::from_str(&plain).unwrap();
+        j.tools.insert("v".into(), vbit());
+        j.tools.get_mut("v").unwrap().number = 5;
+        j.validate().unwrap();
+        let op = &j.setups[0].operations[1];
+        assert_eq!(op.strategy, StrategySpec::named(name).unwrap());
+        assert_eq!(op.strategy.name(), name);
+        let written = toml::to_string(&j).unwrap();
+        for key in [
+            "width",
+            "tip_offset",
+            "clearance",
+            "finishing_overlap",
+            "preserve_order",
+            "direction",
+            "min_cutting_radius",
+            "even_stepdowns",
+            "order",
+            "slot_clearing",
+            "slot_width",
+            "stay_down_level",
+            "stay_down_clearance",
+            "lift_height",
+        ] {
+            assert!(
+                !written.contains(&format!(
+                    "
+{key} ="
+                )),
+                "{key}: {written}"
+            );
+        }
+        assert_eq!(toml::from_str::<Job>(&written).unwrap(), j);
+
+        // Every setting of its own, as written, reads back.
+        let mut set: Job =
+            toml::from_str(&plain.replace(picked, &format!("{picked}{own}"))).unwrap();
+        set.tools.clone_from(&j.tools);
+        set.validate().unwrap();
+        assert_ne!(
+            set.setups[0].operations[1].strategy,
+            j.setups[0].operations[1].strategy
+        );
+        let written = toml::to_string(&set).unwrap();
+        assert_eq!(toml::from_str::<Job>(&written).unwrap(), set);
+
+        let with = |to: &str| -> Job {
+            let mut w: Job =
+                toml::from_str(&plain.replace(picked, &format!("{picked}{to}"))).unwrap();
+            w.tools.clone_from(&j.tools);
+            w
+        };
+        let refused = |to: &str| assert!(with(to).validate().is_err(), "{name}: {to}");
+        let wrong = |to: &str| {
+            assert!(
+                matches!(with(to).validate(), Err(JobError::WrongTool { .. })),
+                "{name}: {to}"
+            );
+        };
+        if name == "chamfer-2d" {
+            refused(
+                "width = -1.0
+",
+            );
+            refused(
+                "tip_offset = -0.1
+",
+            );
+            refused(
+                "clearance = -0.1
+",
+            );
+            refused(
+                "finishing_overlap = -1.0
+",
+            );
+            // A 60° V-bit 6.35 mm across: a millimetre's tip offset puts its
+            // flank 0.577 mm out, so 2.6 mm is as wide as it reaches.
+            with(
+                "width = 2.5
+",
+            )
+            .validate()
+            .unwrap();
+            wrong(
+                "width = 2.7
+",
+            );
+        } else {
+            refused(
+                "stay_down_level = 101.0
+",
+            );
+            refused(
+                "min_cutting_radius = -1.0
+",
+            );
+            refused(
+                "lift_height = -1.0
+",
+            );
+        }
+        // A 2D chamfer cuts only with a cone; 2D adaptive never.
+        let mut other = j.clone();
+        other.setups[0].operations[1].tool = Some(
+            if name == "chamfer-2d" {
+                "rough-6-flat"
+            } else {
+                "v"
+            }
+            .into(),
+        );
+        assert!(matches!(other.validate(), Err(JobError::WrongTool { .. })));
+    }
+    // A new chamfer: a full retraction, no stay-down, no ramp, Top or
+    // Bottom, nothing to leave, a clearance a tenth of the tool; a millimetre's
+    // tip offset and no width.
+    let chamfer = Operation::new("c", StrategySpec::named("chamfer-2d").unwrap());
+    assert_eq!(chamfer.passes.stepdown, None);
+    assert_eq!(chamfer.linking.retraction, Retraction::Full);
+    assert_eq!(chamfer.stay_down(6.0), 0.0);
+    let uses = chamfer.strategy.uses();
+    assert!(!uses.ramp && uses.top.is_none() && uses.bottom.is_none());
+    assert_eq!(uses.stock_to_leave, Leave::None);
+    assert_eq!(uses.curves, Some(Curves::Chamfered));
+    assert_eq!(
+        chamfer.expressions.get("clearance").map(String::as_str),
+        Some("tool_diameter * 0.1")
+    );
+    assert!(matches!(
+        chamfer.strategy,
+        StrategySpec::Chamfer2d {
+            width: 0.0,
+            tip_offset: 1.0,
+            ..
+        }
+    ));
+    // A new 2D adaptive: Multiple Depths off, half a millimetre left each
+    // way, lifted a fifth of a millimetre, its load and minimum cutting
+    // radius from its tool, staying down only straight.
+    let adaptive = Operation::new("a", StrategySpec::named("adaptive-2d").unwrap());
+    assert_eq!(adaptive.passes.stepdown, None);
+    assert!(!adaptive.expressions.contains_key("passes.stepdown"));
+    assert_eq!(
+        adaptive.passes.stock_to_leave,
+        StockToLeave {
+            radial: 0.5,
+            axial: 0.5
+        }
+    );
+    assert_eq!(
+        adaptive
+            .expressions
+            .get("passes.stepover")
+            .map(String::as_str),
+        Some("tool_diameter * 0.4")
+    );
+    assert!(matches!(
+        adaptive.strategy,
+        StrategySpec::Adaptive2d {
+            lift_height: 0.2,
+            stay_down_level: 0.0,
+            ..
+        }
+    ));
+    let uses = adaptive.strategy.uses();
+    assert!(uses.outline && uses.load && !uses.boundary);
+    assert_eq!(uses.depths, Depths::Optional);
+    assert_eq!(uses.links, Links::Own);
+    assert_eq!(uses.entries, &[Entry::Helix, Entry::Plunge]);
 }
 
 /// Scallop reads with Fusion's defaults, both ways from the boundary in on

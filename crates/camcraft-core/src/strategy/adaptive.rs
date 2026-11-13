@@ -394,6 +394,104 @@ pub fn adaptive_rough(
             Ok((z, blended(&room, blend, arc)?))
         })
         .collect::<Result<_, StrategyError>>()?;
+    clear_levels(
+        Levels {
+            slabs: &slabs,
+            all: &all,
+            allowed: &allowed,
+            zones: &zones,
+        },
+        stocks,
+        cutter,
+        radius,
+        params,
+    )
+}
+
+/// Clear `levels`, each a height and where the tool's centre may be there,
+/// the highest first, holding the tool's engagement constant: adaptive
+/// clearing of levels found some other way than by slicing the part, as a 2D
+/// pocket's are. Each level is a slab of its own, cleared from the one above
+/// it, or `params.top` for the first, with no flat, fine or shallow levels
+/// between, and is cut whole: its inside corners rounded to the minimum
+/// cutting radius as [`adaptive_rough`]'s are. `stocks` and `cutter` are as
+/// [`adaptive_rough`] has them; the stepdown in `params` is not read.
+pub fn adaptive_clear(
+    levels: &[(f64, Region)],
+    stocks: &[(DVec2, DVec2, f64)],
+    cutter: &Cutter,
+    params: &AdaptiveParams,
+) -> Result<(Toolpath, AdaptiveReport), StrategyError> {
+    check("optimal load", params.optimal_load)?;
+    check("feed", params.feed)?;
+    check("tolerance", params.tolerance)?;
+    if !(params.helix_radius.is_finite() && params.helix_radius >= 0.0) {
+        return Err(StrategyError::BadParameter {
+            name: "helix radius",
+            value: params.helix_radius,
+        });
+    }
+    let radius = cutter.max_radius();
+    check("tool radius", radius)?;
+    let mut above = params.top;
+    for (z, _) in levels {
+        check_levels(above, *z)?;
+        above = *z;
+    }
+    let arc = params.tolerance * 0.1;
+    let slabs: Vec<(f64, Vec<f64>)> = levels.iter().map(|(z, _)| (*z, Vec::new())).collect();
+    let all: Vec<f64> = levels.iter().map(|(z, _)| *z).collect();
+    let allowed: Vec<(f64, Region)> = levels
+        .par_iter()
+        .map(|(z, room)| Ok((*z, blended(room, params.min_cutting_radius, arc)?)))
+        .collect::<Result<_, StrategyError>>()?;
+    clear_levels(
+        Levels {
+            slabs: &slabs,
+            all: &all,
+            allowed: &allowed,
+            zones: &[],
+        },
+        stocks,
+        cutter,
+        radius,
+        params,
+    )
+}
+
+/// The levels a run of adaptive clearing clears, found: each slab's level
+/// and the levels it has between, every level highest first, where the
+/// tool's centre may be at each, and the zones shallow levels keep to.
+struct Levels<'a> {
+    slabs: &'a [(f64, Vec<f64>)],
+    all: &'a [f64],
+    allowed: &'a [(f64, Region)],
+    zones: &'a [(f64, Region)],
+}
+
+/// Clear `levels` of `stocks`, the material, with `cutter`, `radius` across
+/// at its widest, as `params` asks: each slab in parallel, then every pass in
+/// the order it is cut, joined.
+fn clear_levels(
+    levels: Levels<'_>,
+    stocks: &[(DVec2, DVec2, f64)],
+    cutter: &Cutter,
+    radius: f64,
+    params: &AdaptiveParams,
+) -> Result<(Toolpath, AdaptiveReport), StrategyError> {
+    let Levels {
+        slabs,
+        all,
+        allowed,
+        zones,
+    } = levels;
+    let is_flat = |z: f64| params.flats.iter().any(|f| (f - z).abs() < SAME_LEVEL);
+    let zone_of = |z: f64| {
+        zones
+            .iter()
+            .find(|(at, _)| (at - z).abs() < SAME_LEVEL)
+            .map(|(_, r)| r)
+    };
     let allowed_at = |z: f64| {
         allowed
             .iter()
@@ -407,7 +505,7 @@ pub fn adaptive_rough(
     } else {
         rest::material_at(
             stocks,
-            &all,
+            all,
             &params.before,
             params.ignore_less_than,
             params.tolerance,

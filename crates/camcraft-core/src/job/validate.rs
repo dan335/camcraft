@@ -620,6 +620,44 @@ impl Operation {
             at_least_zero(&field("stay_down_clearance"), stay_down_clearance)?;
             at_least_zero(&field("lift_height"), lift_height)?;
         }
+        if let StrategySpec::Adaptive2d {
+            min_cutting_radius,
+            slot_clearing,
+            slot_width,
+            stay_down_level,
+            stay_down_clearance,
+            lift_height,
+            ..
+        } = self.strategy
+        {
+            at_least_zero(&field("min_cutting_radius"), min_cutting_radius)?;
+            // Read only with slot clearing.
+            if slot_clearing {
+                at_least_zero(&field("slot_width"), slot_width)?;
+            }
+            if !(0.0..=100.0).contains(&stay_down_level) {
+                return Err(bad(
+                    field("stay_down_level"),
+                    stay_down_level,
+                    "a percentage from 0 to 100",
+                ));
+            }
+            at_least_zero(&field("stay_down_clearance"), stay_down_clearance)?;
+            at_least_zero(&field("lift_height"), lift_height)?;
+        }
+        if let StrategySpec::Chamfer2d {
+            width,
+            tip_offset,
+            clearance,
+            finishing_overlap,
+            ..
+        } = self.strategy
+        {
+            at_least_zero(&field("width"), width)?;
+            at_least_zero(&field("tip_offset"), tip_offset)?;
+            at_least_zero(&field("clearance"), clearance)?;
+            at_least_zero(&field("finishing_overlap"), finishing_overlap)?;
+        }
         if let StrategySpec::Drill { peck, dwell } = self.strategy {
             if let Some(p) = peck {
                 positive(&field("peck"), p)?;

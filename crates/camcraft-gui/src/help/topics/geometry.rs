@@ -32,4 +32,8 @@ topics! {
         "Edge loops picked in the view. A click takes the whole loop the edge goes round.";
     CURVES: "Edges",
         "Edges picked in the view, open or closed. A click takes the edge and the edges running on smoothly from it.";
+    CHAMFER_EDGES: "Edges",
+        "Edges to chamfer. A click takes the loop the edge goes round, or where it closes none, the edges running on smoothly from it.";
+    CHAMFER_FACES: "Faces",
+        "Faces whose edges are all chamfered, Fusion's face contours: the outline and every hole's rim.";
 }

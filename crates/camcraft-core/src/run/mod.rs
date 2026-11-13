@@ -55,8 +55,8 @@ pub use result::{
 
 use error::in_op;
 use operation::{
-    Target, Work, curves_picked, cut_operation, drill_holes, heights_of, not_made, plan_operation,
-    planar_areas, round_walls, slots_picked,
+    Target, Work, chamfers_picked, curves_picked, cut_operation, drill_holes, heights_of, not_made,
+    plan_operation, planar_areas, round_walls, slots_picked,
 };
 use pitch::sim_pitch;
 
@@ -210,7 +210,7 @@ pub fn run_prepared_planned(
     // one cell plus the chordal tolerance the paths were built to; and that holds
     // across as well as down, or every vertical wall is a gouge beside it.
     progress(Progress::Stage(Stage::Verifying));
-    let part = cut_past(setup, base, &keyframes)?;
+    let part = cut_past(setup, &operations, base, &keyframes)?;
     let part = Arc::new(part.reaching(budget));
     let verify = stock.verify(&part, budget, LEFTOVER_LIMIT);
 
@@ -348,6 +348,8 @@ impl<'a> Shared<'a> {
             )?)
         } else if uses.curves == Some(Curves::Traced) {
             Target::Curves(curves_picked(self.job, op, self.prepared, self.bodies)?)
+        } else if uses.curves == Some(Curves::Chamfered) {
+            Target::Chamfers(chamfers_picked(self.job, op, self.prepared, self.bodies)?)
         } else {
             // Facing works from the stock alone.
             Target::Limit(None)
@@ -522,19 +524,25 @@ impl<'a> Shared<'a> {
     }
 }
 
-/// The part as the setup's operations mean to leave it: cut past where one with
-/// negative stock to leave cut, which is then no gouge there, and nowhere else.
-/// Where each cut is the material it took down, between the stock before it and
-/// after (`keyframes`).
+/// The part as the setup's operations mean to leave it: cut past where one
+/// with negative stock to leave cut, and chamfered where a 2D chamfer cut
+/// ([`OperationResult::meant`]), each then no gouge there and nowhere else.
+/// Where each cut is the material it took down, between the stock before it
+/// and after (`keyframes`).
 fn cut_past(
     setup: &Setup,
+    operations: &[OperationResult],
     mut part: PartSurface,
     keyframes: &[Arc<PackedStock>],
 ) -> Result<PartSurface, RunError> {
     for (i, op) in setup.operations.iter().enumerate() {
+        if !op.enabled {
+            continue;
+        }
         let leave = op.stock_to_leave();
         let (radial, axial) = (-leave.radial.min(0.0), -leave.axial.min(0.0));
-        if !op.enabled || (radial == 0.0 && axial == 0.0) {
+        let meant = operations.get(i).and_then(OperationResult::meant);
+        if radial == 0.0 && axial == 0.0 && meant.is_none() {
             continue;
         }
         let (Some(before), Some(after)) = (keyframes.get(i), keyframes.get(i + 1)) else {
@@ -542,9 +550,21 @@ fn cut_past(
         };
         let (before, after) = (before.unpack()?, after.unpack()?);
         let (before, after) = (before.field(), after.field());
-        part = part.cut_past(radial, axial, |ix, iy| {
-            matches!((before.get(ix, iy), after.get(ix, iy)), (Some(b), Some(a)) if a < b - 1e-6)
-        });
+        let cut = |ix: u32, iy: u32| matches!((before.get(ix, iy), after.get(ix, iy)), (Some(b), Some(a)) if a < b - 1e-6);
+        if radial != 0.0 || axial != 0.0 {
+            part = part.cut_past(radial, axial, cut);
+        }
+        if let Some(bevels) = meant {
+            part = part.lowered(
+                |p| {
+                    bevels
+                        .iter()
+                        .filter_map(|b| b.height_at(p))
+                        .reduce(f64::min)
+                },
+                cut,
+            );
+        }
     }
     Ok(part)
 }

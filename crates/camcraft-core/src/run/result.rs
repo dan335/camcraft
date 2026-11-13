@@ -15,6 +15,7 @@ use crate::path::linker::LinkReport;
 use crate::path::toolpath::Toolpath;
 use crate::setup::frame::Frame;
 use crate::strategy::adaptive::AdaptiveReport;
+use crate::strategy::chamfer::{Bevel, ChamferReport};
 use crate::strategy::drilling::DrillReport;
 use crate::strategy::flat::FlatReport;
 use crate::strategy::morph::MorphedSpiralReport;
@@ -69,6 +70,10 @@ pub enum StrategyDetail {
     Slot(SlotReport),
     /// Trace.
     Trace(TraceReport),
+    /// 2D chamfer.
+    Chamfer2d(ChamferReport),
+    /// 2D adaptive clearing.
+    Adaptive2d(AdaptiveReport),
 }
 
 /// How an operation's paths came to be in a run.
@@ -217,6 +222,16 @@ impl OperationResult {
 }
 
 impl OperationResult {
+    /// What it cuts into the part on purpose, where it does: a 2D chamfer's
+    /// chamfers, which the part is verified against as lowered to, where it
+    /// cut, so a chamfer of the width asked is not a gouge.
+    pub fn meant(&self) -> Option<&[Bevel]> {
+        match &self.detail {
+            StrategyDetail::Chamfer2d(r) if !r.bevels.is_empty() => Some(&r.bevels),
+            _ => None,
+        }
+    }
+
     /// Whether this operation is safe to run as it stands.
     ///
     /// A plunge at cutting feed is as unsafe as a rapid through material, so a

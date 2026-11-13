@@ -115,7 +115,7 @@ pub use heights::{Height, HeightContext, HeightRef, Heights, Picks};
 pub use linking::{Entry, LeadSizes, Leads, Linking, Retraction};
 pub use machine::Machine;
 pub use model::{FixedBox, LengthUnit, ModelDef, Place, StockDef, StockSpec, Transform};
-pub use operation::Operation;
+pub use operation::{Operation, chamfer_reach};
 pub use passes::{
     FeedOptimization, FeedOptimizationSizes, Finishing, FinishingSizes, HolderClearance,
     HolderMode, Passes, StockToLeave, TabShape, Tabs,

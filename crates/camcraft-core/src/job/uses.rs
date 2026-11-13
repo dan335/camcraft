@@ -301,6 +301,46 @@ impl StrategySpec {
                 bottom: None,
                 ..cuts_loops
             },
+            // Its picks are the edges it chamfers, or the faces whose edges
+            // it chamfers, each at its own height: no area, no stepover, no
+            // levels, nothing to leave, as Fusion's 2D Chamfer has none.
+            // Onto each pass along a straight from the waste and off it so,
+            // Fusion's lead; between them it lifts, as Fusion's keeps no tool
+            // down, over the part as a finishing pass does.
+            StrategySpec::Chamfer2d { .. } => Uses {
+                boundary: false,
+                curves: Some(Curves::Chamfered),
+                stepover: false,
+                stock_to_leave: Leave::None,
+                depths: Depths::None,
+                links: Links::OverPart,
+                stay_down: false,
+                cut_step: false,
+                reach: Reach::Mm(0),
+                ramp: false,
+                top: None,
+                bottom: None,
+                ..cuts_loops
+            },
+            // A 2D pocket's areas and levels, each level cleared as adaptive
+            // clearing clears one: its stepover is its optimal load, it goes
+            // down a helix or straight into a closed pocket and from outside
+            // into an open one, and its passes are in the order it steers
+            // them, linked at the level where it has cleared the way. Its
+            // levels are a 2D pocket's, down to each floor in one unless
+            // asked; it has no flats to find and no fine stepdown.
+            StrategySpec::Adaptive2d { .. } => Uses {
+                boundary: false,
+                outline: true,
+                load: true,
+                cut_step: false,
+                links: Links::Own,
+                helix: HelixSize::Flat,
+                entries: &[Entry::Helix, Entry::Plunge],
+                // It holds the load round its corners, as adaptive does.
+                feed_optimization: false,
+                ..cuts_loops
+            },
         }
     }
 }
@@ -314,6 +354,9 @@ pub enum Curves {
     Slots,
     /// Edges, open or closed, the tool follows, as Fusion's Trace has them.
     Traced,
+    /// Edges to chamfer, or faces whose edges to chamfer, as Fusion's 2D
+    /// Chamfer has them: its chains or its face contours.
+    Chamfered,
 }
 
 /// How a strategy that cuts holes has them picked.

@@ -412,3 +412,45 @@ fn only_what_is_accepted_is_picked() {
         Some(Target::Face { .. })
     ));
 }
+
+/// A 2D chamfer's click takes the loop an edge goes round, as a pocket's does,
+/// where it closes one, and the edges running on smoothly from it, as a
+/// trace's does, where it closes none.
+#[test]
+fn a_chamfer_takes_the_loop_or_else_the_chain() {
+    use crate::picking::slots::{Slot, chamfer_run, edge_loop, smooth_chain, widen};
+    let (scene, model) = scene();
+    let t = model.body.topology();
+    let (mut loops, mut chains) = (0, 0);
+    for e in 0..u32::try_from(t.edges().len()).unwrap() {
+        let (run, closed) = chamfer_run(&scene, "p", e);
+        if closed {
+            assert_eq!(run, edge_loop(&scene, "p", e), "edge {e}");
+            loops += 1;
+        } else {
+            assert_eq!(run, smooth_chain(&scene, "p", e), "edge {e}");
+            chains += 1;
+        }
+        let slot = Slot::Chains {
+            setup: "top".into(),
+            op: 0,
+        };
+        let at = t.edge_middle(model.mesh(), e).unwrap();
+        let widened = widen(
+            &scene,
+            &slot,
+            Target::Edge {
+                model: "p".into(),
+                edge: e,
+                at,
+            },
+        );
+        let Target::Loop { edges, .. } = widened else {
+            unreachable!("edge {e} not widened");
+        };
+        assert_eq!(edges.iter().map(|(e, _)| *e).collect::<Vec<_>>(), run);
+    }
+    // The hole's rim and the outlines go round; the plate's upright corners
+    // close no loop.
+    assert!(loops > 0 && chains > 0, "{loops} loops, {chains} chains");
+}

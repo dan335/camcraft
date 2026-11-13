@@ -35,7 +35,9 @@ use crate::path::trim::within_heights;
 use crate::setup::features::{Chain, FeatureError, Picking, picked_chains};
 use crate::setup::{Bodies, Prepared};
 use crate::strategy::adaptive::rest::Earlier;
-use crate::strategy::adaptive::{AdaptiveParams, Shallow, adaptive_rough, peak_heights};
+use crate::strategy::adaptive::{
+    AdaptiveParams, AdaptiveReport, Shallow, adaptive_clear, adaptive_rough, peak_heights,
+};
 use crate::strategy::curve::Curve as Picked;
 use crate::strategy::drilling::{DrillParams, DrillReport, Hole, drill, holes, nearest_first};
 use crate::strategy::face::{FaceParams, LevelsAsked, face};
@@ -64,11 +66,12 @@ mod link;
 mod round;
 
 use clearing::{
-    AdaptiveAsked, adaptive_paths, drill_paths, face_paths, planar_paths, pocket_clearing_paths,
+    Adaptive2dAsked, AdaptiveAsked, adaptive_2d_paths, adaptive_paths, drill_paths, face_paths,
+    planar_paths, pocket_clearing_paths,
 };
 pub(super) use clearing::{drill_holes, heights_of, planar_areas};
-use curves::{TraceAsked, slot_paths, trace_paths};
-pub(super) use curves::{curves_picked, slots_picked};
+use curves::{ChamferAsked, TraceAsked, chamfer_paths, slot_paths, trace_paths};
+pub(super) use curves::{Chamfers, chamfers_picked, curves_picked, slots_picked};
 use finishing::{
     contour_paths, flat_paths, morphed_spiral_paths, parallel_paths, radial_paths, scallop_paths,
     spiral_paths,
@@ -212,6 +215,8 @@ pub(super) enum Target {
     Slots(Vec<Slot>),
     /// A trace's curves, in the order picked.
     Curves(Vec<Picked>),
+    /// A 2D chamfer's edges, and the faces they do not join.
+    Chamfers(Chamfers),
 }
 
 /// An operation's passes, worked out and put in order, its tabs on them: ready
@@ -264,8 +269,19 @@ fn held_clear(
     let how = match op.strategy {
         // Fusion's 2D operations have no Shaft and Holder: the checks still
         // sweep the whole tool.
-        StrategySpec::Slot { .. } | StrategySpec::Trace { .. } => return Ok(None),
+        // Nor has its 2D Adaptive.
+        StrategySpec::Slot { .. }
+        | StrategySpec::Trace { .. }
+        | StrategySpec::Adaptive2d { .. } => {
+            return Ok(None);
+        }
         _ if mode == HolderMode::Fail => Some(Clear::Trim),
+        // Fusion's 2D Chamfer has one: its passes, over the part, lifted
+        // or trimmed as a finishing pass's are.
+        StrategySpec::Chamfer2d { .. } => Some(match mode {
+            HolderMode::PullAway => Clear::PullAway,
+            _ => Clear::Trim,
+        }),
         _ if op.strategy.uses().links == Links::OverPart => Some(match mode {
             HolderMode::PullAway => Clear::PullAway,
             _ => Clear::Trim,
@@ -331,7 +347,9 @@ pub(super) fn plan_operation(
         Target::Holes(holes) => (None, holes.as_slice(), &[][..], &[][..]),
         Target::Areas(areas) => (None, &[][..], areas.as_slice(), &[][..]),
         Target::Rounds(rounds) => (None, &[][..], &[][..], rounds.as_slice()),
-        Target::Slots(_) | Target::Curves(_) => (None, &[][..], &[][..], &[][..]),
+        Target::Slots(_) | Target::Curves(_) | Target::Chamfers(_) => {
+            (None, &[][..], &[][..], &[][..])
+        }
     };
     let (slots, curves) = match target {
         Target::Slots(slots) => (slots.as_slice(), &[][..]),
@@ -521,6 +539,57 @@ pub(super) fn plan_operation(
                 preserve_order,
             },
             curves,
+            &mut warnings,
+        )?,
+        StrategySpec::Chamfer2d {
+            width,
+            tip_offset,
+            clearance,
+            finishing_overlap,
+            preserve_order,
+        } => {
+            let Target::Chamfers(chamfers) = target else {
+                return Err(in_op(op)(
+                    crate::strategy::chamfer::ChamferError::NothingPicked,
+                ));
+            };
+            chamfer_paths(
+                work,
+                ChamferAsked {
+                    width,
+                    tip_offset,
+                    clearance,
+                    finishing_overlap,
+                    preserve_order,
+                },
+                chamfers,
+                &mut warnings,
+            )?
+        }
+        StrategySpec::Adaptive2d {
+            direction,
+            min_cutting_radius,
+            even_stepdowns,
+            order,
+            slot_clearing,
+            slot_width,
+            stay_down_level,
+            stay_down_clearance,
+            lift_height,
+        } => adaptive_2d_paths(
+            work,
+            Adaptive2dAsked {
+                direction,
+                min_cutting_radius,
+                even_stepdowns,
+                order,
+                slot_clearing,
+                slot_width,
+                stay_down_level,
+                stay_down_clearance,
+                lift_height,
+            },
+            found,
             &mut warnings,
         )?,
     };
@@ -716,7 +785,7 @@ pub(super) fn cut_operation(
     .map_err(in_op(op))?;
     // Adaptive clearing makes its own links at the level, and its own helixes:
     // they are the operation's as much as the linker's are.
-    if let StrategyDetail::Adaptive(r) = &detail {
+    if let StrategyDetail::Adaptive(r) | StrategyDetail::Adaptive2d(r) = &detail {
         links.links_resolved += r.stayed_down;
         links.stayed_down += r.stayed_down;
         links.helixes += r.helixes;
@@ -819,6 +888,8 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
         StrategySpec::Circular { .. } => StrategyDetail::Circular(RoundReport::default()),
         StrategySpec::Slot { .. } => StrategyDetail::Slot(SlotReport::default()),
         StrategySpec::Trace { .. } => StrategyDetail::Trace(TraceReport::default()),
+        StrategySpec::Chamfer2d { .. } => StrategyDetail::Chamfer2d(Default::default()),
+        StrategySpec::Adaptive2d { .. } => StrategyDetail::Adaptive2d(Default::default()),
     };
     OperationResult {
         name: op.name.clone(),

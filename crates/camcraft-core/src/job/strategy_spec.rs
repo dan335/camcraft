@@ -431,6 +431,85 @@ pub enum StrategySpec {
         #[serde(default, skip_serializing_if = "is_default")]
         lead_out: bool,
     },
+    /// Picked edges chamfered with a chamfer mill or V-bit run round them: a
+    /// sharp edge cut to a chamfer of the width asked, or a chamfer the model
+    /// has followed from its lower edge. Fusion's 2D Chamfer.
+    #[serde(rename = "chamfer-2d")]
+    Chamfer2d {
+        /// How wide a chamfer to cut on a sharp edge, across, in millimetres;
+        /// on a chamfer the model has, how far past it to cut. Fusion's
+        /// Chamfer Width, none.
+        #[serde(default, skip_serializing_if = "is_default")]
+        width: f64,
+        /// How far below the chamfer's lower edge the tool's tip goes, its
+        /// flank still on the chamfer, so the cut is made with the flank and
+        /// not the point, in millimetres: Fusion's Chamfer Tip Offset, 1 mm.
+        #[serde(
+            default = "default_tip_offset",
+            skip_serializing_if = "is_default_tip_offset"
+        )]
+        tip_offset: f64,
+        /// How far the tool keeps off the part's faces other than those the
+        /// chamfered edges join, in millimetres: Fusion's Chamfer Clearance.
+        /// Where it would come nearer, it is lifted, and the chamfer is
+        /// narrower there. None when zero.
+        #[serde(default, skip_serializing_if = "is_default")]
+        clearance: f64,
+        /// How far past where a closed edge's pass starts it goes on before
+        /// it leaves, in millimetres: Fusion's Finishing Overlap, none.
+        #[serde(default, skip_serializing_if = "is_default")]
+        finishing_overlap: f64,
+        /// Chamfer the edges in the order picked: Fusion's Preserve Order.
+        /// Off, the first picked, then always the nearest.
+        #[serde(default, skip_serializing_if = "is_default")]
+        preserve_order: bool,
+    },
+    /// The picked pockets, open or closed and with islands, cleared with the
+    /// tool's load held constant, as adaptive clearing does, at the 2D
+    /// pocket's levels: down to each pocket's floor in one level, or a
+    /// stepdown at a time ([`Depths::Optional`]). Fusion's 2D Adaptive
+    /// Clearing.
+    #[serde(rename = "adaptive-2d")]
+    Adaptive2d {
+        /// Which way the passes cut; climbing unless asked.
+        #[serde(default = "climb", skip_serializing_if = "is_climb")]
+        direction: CutDirection,
+        /// The tightest the tool's centre turns in an inside corner, in
+        /// millimetres: Fusion's Minimum Cutting Radius. None when zero.
+        #[serde(default, skip_serializing_if = "is_default")]
+        min_cutting_radius: f64,
+        /// With multiple depths, the levels evenly spaced, none deeper than
+        /// the stepdown, rather than each a whole stepdown and the last what
+        /// is left: Fusion's Use Even Stepdowns.
+        #[serde(default, skip_serializing_if = "is_default")]
+        even_stepdowns: bool,
+        /// Level by level across every pocket, or each pocket all the way
+        /// down before the next: Fusion's Order by Depth and Order by Area.
+        #[serde(default, skip_serializing_if = "is_default")]
+        order: ContourOrder,
+        /// A closed pocket gone down into is first cut a slot along its
+        /// middle, and cleared out from it: Fusion's Use Slot Clearing.
+        #[serde(default, skip_serializing_if = "is_default")]
+        slot_clearing: bool,
+        /// How wide that slot is, in millimetres: the tool's diameter when
+        /// zero, and never narrower. Fusion's Slot Clearing Width.
+        #[serde(default, skip_serializing_if = "is_default")]
+        slot_width: f64,
+        /// How hard a link tries to stay down round what stands between, in
+        /// percent: 0, Fusion's Least, goes only straight; 100 goes round as
+        /// far as the maximum stay-down distance allows. Fusion's Stay-Down
+        /// Level, least.
+        #[serde(default, skip_serializing_if = "is_default")]
+        stay_down_level: f64,
+        /// How far the tool keeps off the material along a link it stays
+        /// down for, in millimetres: Fusion's Minimum Stay-Down Clearance.
+        #[serde(default, skip_serializing_if = "is_default")]
+        stay_down_clearance: f64,
+        /// How far the tool rises for a link it stays down for, in
+        /// millimetres: Fusion's Lift Height.
+        #[serde(default, skip_serializing_if = "is_default")]
+        lift_height: f64,
+    },
 }
 
 impl StrategySpec {
@@ -462,6 +541,8 @@ impl StrategySpec {
             StrategySpec::Circular { .. } => "circular",
             StrategySpec::Slot { .. } => "slot",
             StrategySpec::Trace { .. } => "trace",
+            StrategySpec::Chamfer2d { .. } => "chamfer-2d",
+            StrategySpec::Adaptive2d { .. } => "adaptive-2d",
         }
     }
 
@@ -490,7 +571,9 @@ impl StrategySpec {
             | StrategySpec::Bore { .. }
             | StrategySpec::Circular { .. }
             | StrategySpec::Slot { .. }
-            | StrategySpec::Trace { .. } => None,
+            | StrategySpec::Trace { .. }
+            | StrategySpec::Chamfer2d { .. }
+            | StrategySpec::Adaptive2d { .. } => None,
         }
     }
 
@@ -513,19 +596,22 @@ impl StrategySpec {
             | StrategySpec::Bore { conventional, .. }
             | StrategySpec::Circular { conventional, .. } => Some(one_way(conventional)),
             StrategySpec::Adaptive { direction, .. }
+            | StrategySpec::Adaptive2d { direction, .. }
             | StrategySpec::Scallop { direction, .. }
             | StrategySpec::Contour { direction, .. }
             | StrategySpec::Flat { direction, .. }
             | StrategySpec::Spiral { direction, .. }
             | StrategySpec::MorphedSpiral { direction, .. } => Some(direction),
             // A slot's tool is as wide as the slot, cutting both ways at once;
-            // a trace's side is its compensation.
+            // a trace's side is its compensation; a chamfer climbs, as
+            // Fusion's chains are picked to.
             StrategySpec::Parallel { .. }
             | StrategySpec::Radial { .. }
             | StrategySpec::Face { .. }
             | StrategySpec::Drill { .. }
             | StrategySpec::Slot { .. }
-            | StrategySpec::Trace { .. } => None,
+            | StrategySpec::Trace { .. }
+            | StrategySpec::Chamfer2d { .. } => None,
         }
     }
 
@@ -584,6 +670,7 @@ impl StrategySpec {
         match self {
             StrategySpec::PocketClearing { .. }
             | StrategySpec::Adaptive { .. }
+            | StrategySpec::Adaptive2d { .. }
             | StrategySpec::Pocket { .. } => StockToLeave {
                 radial: 0.5,
                 axial: 0.5,
@@ -612,9 +699,11 @@ impl StrategySpec {
     ///   circular's are a millimetre, [`StrategySpec::default_stepdown`].
     /// - **Feeds:** plunging at a third of the cutting feed, and ramping at
     ///   the plunge feed, as a new tool of Fusion's does; drilling's own.
-    /// - **Adaptive's own:** a minimum cutting radius of a tenth of the tool,
-    ///   a stay-down clearance of a tenth of it between 2 and 15 mm, and a slot
-    ///   1.25 tools wide when slot clearing is on.
+    /// - **Adaptive's own,** 3D and 2D: a minimum cutting radius of a tenth of
+    ///   the tool, a stay-down clearance of a tenth of it between 2 and 15 mm,
+    ///   and a slot 1.25 tools wide when slot clearing is on. The 2D one's
+    ///   stepdown is the 3D one's, read once Multiple Depths is ticked.
+    /// - **A 2D chamfer's own:** a chamfer clearance of a tenth of the tool.
     /// - **Facing's own:** passes running half the tool and the tolerance past
     ///   the stock.
     ///
@@ -641,7 +730,7 @@ impl StrategySpec {
                 ("passes.stepdown", POCKET_STEPDOWN),
             ],
             StrategySpec::Flat { .. } => vec![("passes.stepover", "tool_diameter * 0.3")],
-            StrategySpec::Adaptive { .. } => vec![
+            StrategySpec::Adaptive { .. } | StrategySpec::Adaptive2d { .. } => vec![
                 ("passes.stepover", "tool_diameter * 0.4"),
                 ("passes.stepdown", ROUGHING_STEPDOWN),
                 ("min_cutting_radius", "tool_diameter * 0.1"),
@@ -651,6 +740,7 @@ impl StrategySpec {
                 ),
                 ("slot_width", "tool_diameter * 1.25"),
             ],
+            StrategySpec::Chamfer2d { .. } => vec![("clearance", "tool_diameter * 0.1")],
             StrategySpec::Face { .. } => vec![
                 (
                     "passes.stepover",
@@ -680,20 +770,26 @@ impl StrategySpec {
 
     /// What a new operation of this strategy starts with that is not worked
     /// out from its tool, where it is not what a job file that leaves the
-    /// setting out reads: adaptive lifts a fifth of a millimetre off the
-    /// floor between passes, as Fusion's has since 2022.
+    /// setting out reads: adaptive, 3D and 2D, lifts a fifth of a millimetre
+    /// off the floor between passes, as Fusion's has since 2022.
     pub fn fresh(mut self) -> Self {
-        if let StrategySpec::Adaptive { lift_height, .. } = &mut self {
+        if let StrategySpec::Adaptive { lift_height, .. }
+        | StrategySpec::Adaptive2d { lift_height, .. } = &mut self
+        {
             *lift_height = 0.2;
         }
         self
     }
 
     /// How high a new operation of this strategy goes between cuts, where that
-    /// is not what a job file that leaves it out reads: a trace to the retract
-    /// height, as Fusion's Trace starts with a full retraction.
+    /// is not what a job file that leaves it out reads: a trace and a 2D
+    /// chamfer to the retract height, as Fusion's Trace starts with a full
+    /// retraction and its 2D Chamfer has no other.
     pub fn fresh_retraction(&self) -> Retraction {
-        if matches!(self, StrategySpec::Trace { .. }) {
+        if matches!(
+            self,
+            StrategySpec::Trace { .. } | StrategySpec::Chamfer2d { .. }
+        ) {
             Retraction::Full
         } else {
             Retraction::default()
@@ -709,9 +805,9 @@ impl StrategySpec {
     }
 
     /// The multiple depths this strategy starts with: roughing 2 mm a level;
-    /// facing, a 2D profile, a 2D pocket, a slot and a trace their bottom in
-    /// one pass, as Fusion's Face, 2D Contour, 2D Pocket, Slot and Trace start
-    /// with Multiple Depths off.
+    /// facing, a 2D profile, a 2D pocket, 2D adaptive, a slot and a trace
+    /// their bottom in one pass, as Fusion's Face, 2D Contour, 2D Pocket, 2D
+    /// Adaptive, Slot and Trace start with Multiple Depths off.
     /// Ticked, a profile's and a pocket's levels start at Fusion's Maximum
     /// Roughing Stepdown ([`StrategySpec::default_expressions`]). A circular
     /// starts with them on, a millimetre apart, as Fusion's Circular does.
@@ -723,6 +819,7 @@ impl StrategySpec {
                 StrategySpec::Face { .. }
                     | StrategySpec::Profile { .. }
                     | StrategySpec::Pocket { .. }
+                    | StrategySpec::Adaptive2d { .. }
                     | StrategySpec::Slot { .. }
                     | StrategySpec::Trace { .. }
             ) =>
@@ -890,6 +987,13 @@ pub enum Compensation {
 }
 
 default_number!(full_turn, is_full_turn = 360.0);
+
+default_number!(
+    /// How far below a chamfer's lower edge the tool's tip goes, in
+    /// millimetres: a new 2D Chamfer of Fusion's.
+    default_tip_offset,
+    is_default_tip_offset = 1.0
+);
 
 default_number!(
     /// A bore's pitch, in millimetres a turn: a new Bore of Fusion's.

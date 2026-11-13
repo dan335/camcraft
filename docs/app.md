@@ -26,13 +26,13 @@ The window is the job's tree on the left, the properties panel beside it, the vi
 and the transport under the view. The Add menu adds models, stocks, setups and
 operations; View opens the log and the checks in their own windows; the Setup menu
 posts. Operations are grouped as Fusion's toolbar groups them, in the Add menu and
-a setup's right-click menu alike: 2D (face, pocket, profile, slot, trace, bore,
-circular), 3D
+a setup's right-click menu alike: 2D (face, 2D adaptive clearing, pocket,
+profile, slot, trace, bore, circular, 2D chamfer), 3D
 (adaptive clearing, pocket clearing, then parallel, scallop, contour, flat,
 spiral, radial and morphed spiral) and drilling. Fusion's operations not built yet
 are listed after the rest of their group, greyed, and say *Not implemented yet*
-under the pointer: in 2D, 2D adaptive clearing, thread, engrave and 2D
-chamfer; in 3D, after the finishing, steep and shallow, ramp, pencil, project,
+under the pointer: in 2D, thread and engrave; in 3D, after the finishing, steep
+and shallow, ramp, pencil, project,
 morph, blend, flow, corner and geodesic. They are listed in `browser::PLANNED`,
 which an operation leaves once it is built.
 
@@ -147,7 +147,16 @@ it.
   the *Number of stepdowns*, by depth or by curve, and *Both ways*. Its
   *Linking* has *Keep tool down*, with the stay-down distance under it, and
   *Lead-in* and *Lead-out*, with the lead radius under them; its *Heights*
-  only the clearance and retract heights. *Stock to
+  only the clearance and retract heights. A 2D chamfer's *Passes* has *Chamfer
+  width*, *Chamfer tip offset*, *Chamfer clearance*, *Finishing overlap* and
+  *Preserve order*, and no stock to leave or multiple depths; its *Heights* only
+  the clearance and retract heights, and its *Linking* nothing of its own. 2D
+  adaptive's *Passes* is 3D adaptive's less what a 2D pocket has no use for:
+  *Minimum cutting radius*, *Slot clearing* and its width, climb, conventional
+  or both ways, by depth or by area, the *Optimal load*, and *Multiple depths*,
+  unticked to start, with *Even stepdowns* under it; its *Linking* has the
+  *Stay-down level*, *Stay-down clearance* and *Lift height*, and its *Geometry*
+  a 2D pocket's outline. *Stock to
   leave*, as Fusion's, is ticked to leave any (starting at 0.5 mm), then its
   wall and floor amounts, negative to cut past the part; the floor follows the
   wall until it is given its own. A drill has none, and a profile on the
@@ -235,7 +244,12 @@ the part, where an offset of 0 would only touch its walls.
   so a hole's rim in halves, or an outline rounded all the way round, comes
   whole, and a square outline a side at a time. The panel lists each chain once.
   Picked edges that meet end to end are followed as one curve.
-- A 2D profile or pocket takes faces and edges as what it cuts round or clears.
+- A 2D chamfer takes edges or faces. A click on an edge takes the loop it lies
+  in, as for a boundary, or where it closes none the edges running on smoothly
+  from it, as for a trace; a face's every edge is chamfered, its outline and the
+  rim of every hole in it, and is drawn so.
+- A 2D profile, pocket or 2D adaptive takes faces and edges as what it cuts
+  round or clears.
   The view draws that boundary (wide), each piece of it at the height of what is
   picked in it so it lies on the picks, or at the stock's top with nothing
   picked, and, hatched, what the tool cuts away: a band beside it for a profile,

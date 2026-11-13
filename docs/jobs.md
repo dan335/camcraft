@@ -32,7 +32,8 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
 
 An operation has a strategy (parallel, scallop, contour, flat, spiral, radial or
 morphed spiral finishing, adaptive clearing, pocket clearing, a 2D profile, a 2D
-pocket, facing, slot, trace, bore, circular or drilling), a tool, heights, passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
+pocket, 2D adaptive clearing, facing, slot, trace, a 2D chamfer, bore, circular or
+drilling), a tool, heights, passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
 along the surface, offset in from the boundary and from where the tool stops
 touching the part, so the cusp is the same on a slope as on the flat
 ([decision 0009](decisions/0009-scallop-distance-field.md)). It cuts `direction =
@@ -82,11 +83,11 @@ and a 2D operation's `outline`, what it cuts round or clears. `heights` holds
 the clearance (where the tool arrives and leaves, 10 mm over the stock), the
 retract height (Fusion's, 5 mm over it) and the top and bottom it cuts between. `passes.stepdown` is
 Fusion's multiple depths, shared the same way: adaptive and pocket clearing must have one,
-profiles, pockets and facing cut the bottom in one pass without (and a new one
-starts so, as Fusion's 2D Contour, 2D Pocket and Face start with Multiple Depths
-off), a circular starts with them on at a millimetre, as Fusion's does, a slot
-and a trace start with them off, as Fusion's do, and parallel, bore and
-drilling never read it. An operation may be
+profiles, pockets, 2D adaptive and facing cut the bottom in one pass without
+(and a new one starts so, as Fusion's 2D Contour, 2D Pocket, 2D Adaptive and Face
+start with Multiple Depths off), a circular starts with them on at a millimetre,
+as Fusion's does, a slot and a trace start with them off, as Fusion's do, and
+parallel, a 2D chamfer, bore and drilling never read it. An operation may be
 turned off, which leaves it in the job but out of every run, check and post.
 
 ```toml
@@ -304,6 +305,61 @@ selection = { edges = [{ model = "part", index = 14, at = [10.0, 0.0, 12.0] }] }
 linking = { retraction = "full" }
 ```
 
+**2D chamfer** (`strategy = "chamfer-2d"`) is Fusion's 2D Chamfer
+([decision 0024](decisions/0024-chamfer-and-2d-adaptive.md)): picked edges
+chamfered with a cone, a chamfer mill or V-bit, and nothing else. Edges are
+picked (`selection.edges`; the app takes the loop an edge lies in at a click,
+or the edges running on smoothly from it), or faces (`selection.faces`), every
+edge round which is chamfered, as Fusion's face contours. Edges joined end to
+end are one; which side of each the part is, it finds from the part: level with
+the edge or above it on one side, lower on the other. An edge it cannot tell
+is refused, saying where.
+
+The chamfer is the line the tool's flank runs along, square to the edge: `width`
+(Fusion's Chamfer Width, none) in from the edge at its height, falling at the
+cone's angle. On a sharp edge that is a chamfer `width` across; on a chamfer
+the model has, picked by its lower edge, it is the model's own face, moved
+`width` further into the part. `tip_offset` (Fusion's Chamfer Tip Offset, 1 mm)
+takes the tip that much further down the line, below the chamfer's lower edge,
+so the chamfer is cut with the flank and not the point: the tool's axis is its
+tip's radius and the tip offset's share of the flank out from the edge, and its
+tip the width's depth and the tip offset below it. A chamfer whose top the
+flank does not reach is refused, as is any tool but a cone. `clearance`
+(Fusion's Chamfer Clearance, a tenth of the tool in a new operation, none in a
+file that leaves it out) keeps the tool, grown by it, off the part's faces other
+than those the chamfered edges join: where it would come nearer, the tool is
+lifted, the chamfer is narrower there, and the run says so (CC221). As Fusion
+says, set it to zero for a chamfer the model has, whose top edge joins a face
+the picked lower edge does not.
+
+Each edge is cut once, climbing: the part on the tool's right with a clockwise
+spindle, its outside corners rolled round, as Fusion's Outer Corner Mode starts.
+It comes onto each pass along a straight square to it from the waste, a tenth
+of the tool, and leaves the same way, as a new Fusion 2D Chamfer's linear lead-in
+and lead-out. `finishing_overlap` (none) takes a closed edge's pass on past
+where it started before it leaves. Edges are chamfered from the first picked,
+then always the nearest, or in the order picked with `preserve_order = true`.
+Between passes it lifts to the retract height (`linking.retraction = "full"` in
+a new operation; Fusion's 2D Chamfer has no other). It has no levels, no Top or
+Bottom, and no stock to leave.
+
+A chamfer on a sharp edge cuts into the part on purpose. The run keeps each
+edge's chamfer as it was asked, and the part the finished material is verified
+against is lowered to it where the chamfer cut, on the part's side of the edge
+and within the flank's reach: a chamfer of the width asked is no gouge, and a
+cut deeper than it, or anywhere else, still is.
+
+```toml
+[[setup.operation]]
+name = "break edges"
+strategy = "chamfer-2d"
+tool = "vbit-90"
+width = 0.5
+tip_offset = 0.5
+clearance = 0.6
+selection = { edges = [{ model = "part", index = 21, at = [-20.0, 18.0, 20.0] }] }
+```
+
 **Tabs** (`passes.tabs`) hold what a cut frees: bridges of material left
 standing across it, as Fusion's holding tabs. They go on profiles, as Fusion's
 go only on a 2D contour: every ring a profile cuts is beside what it keeps,
@@ -390,6 +446,40 @@ lift_height = 0.5
 passes = { stepover = 0.3, stepdown = 6.0, stock_to_leave = { radial = 0.5, axial = 0.5 } }
 ```
 
+**2D adaptive clearing** (`strategy = "adaptive-2d"`) is Fusion's 2D Adaptive
+Clearing ([decision 0024](decisions/0024-chamfer-and-2d-adaptive.md)): a 2D
+pocket's areas, cleared as adaptive clearing clears a level. Its `outline` is a
+2D pocket's: the silhouette, or the picked floors, edges and faces, each area to
+its own floor, raised by the axial stock to leave, and the tool's centre its
+radius and the radial stock to leave inside the outline, so an island is cut
+round. Where a picked pocket's outline runs along the edge of the part seen from
+above, with nothing of the part beyond it, the pocket is open there, as
+Fusion's open pockets are found: the tool may go past it, out beyond the stock,
+and comes at the pocket from outside. A closed pocket is gone down into by a
+helix, or straight with `linking.entry = "plunge"`.
+
+Without multiple depths (off to start, as Fusion's), each pocket is one level,
+at its floor; with them (Fusion's Maximum Roughing Stepdown when ticked, as 3D
+adaptive's), each level a whole stepdown from the top and the last what is left,
+or evenly with `even_stepdowns = true`. `order = "by-depth"` (the default)
+clears the pockets with the same levels together, level by level; `"by-area"`
+each pocket all the way down before the next. Its optimal load, `direction`,
+`min_cutting_radius`, `slot_clearing` and `slot_width`, `stay_down_clearance`
+and `lift_height` are 3D adaptive's, and start as Fusion's 2D Adaptive does;
+`stay_down_level` starts at 0, Fusion's Least, staying down only going straight.
+It has no flat areas, fine stepdown, shallow areas, cavities to leave or rest
+machining, and no shaft and holder mode; a cone is refused.
+
+```toml
+[[setup.operation]]
+name = "pockets"
+strategy = "adaptive-2d"
+tool = "rough-6-flat"
+outline = "selection"
+selection = { faces = [{ model = "part", index = 9, at = [-20.0, 0.0, 14.0] }] }
+passes = { stepover = 2.4, stepdown = 6.0 }
+```
+
 **Stock to leave** (`passes.stock_to_leave`) is Fusion's radial and axial
 stock to leave, in millimetres: `radial` on the walls, `axial` on the floors,
 and between the two on a slope. Positive leaves material for a later operation
@@ -398,9 +488,10 @@ under the tool's radius; down, in 3D with a ball or bullnose, within its corner
 radius (a flat end, or a 2D floor, may go any depth). Every operation has it,
 and cuts with as much as its strategy uses: a drill none, a bore and a circular
 beside the wall and under the floor, a profile on the
-boundary, a slot and a trace on the curve only their floors'. New adaptive, pocket clearing and 2D pockets start at 0.5 mm
-each way, as Fusion's roughing, its 2D Pocket among it, does; everything else at
-none, which is not written. The 3D
+boundary, a slot and a trace on the curve only their floors', a 2D chamfer
+none. New adaptive, 2D adaptive, pocket clearing and 2D pockets start at 0.5 mm
+each way, as Fusion's roughing, its 2D Pocket and 2D Adaptive among it, does;
+everything else at none, which is not written. The 3D
 strategies grow the tool by it (`camcraft_core::cutter::allowance`); a 2D one moves its
 cut out by it and raises its floors by it. The material is cut by the real
 tool, so what is left shows in the simulation, and what was cut past the part
@@ -439,8 +530,8 @@ The radius and distance are a twentieth and a fifth of the tool when not given,
 as Fusion's, the feed half the cutting feed. With `only_inner_corners` (on unless turned off), only the corners
 turning into the material are slowed, judged from which side of the passes the
 material is on: where they cut both ways, every corner is. Every strategy but
-drilling, bore, circular and adaptive clearing has it; adaptive holds its load
-at every step.
+drilling, bore, circular and adaptive clearing, 3D and 2D, has it; adaptive holds
+its load at every step.
 
 ```toml
 passes = { feed_optimization = { reduced_feed = 600, reduced_feed_distance = 2 } }
@@ -493,9 +584,9 @@ Where no helix fits, the ring is ramped along instead, as Fusion's helix ramp
 type allows, and only where that does not fit either does the tool go
 straight down.
 
-Adaptive clearing has an entry too, into what it cannot reach from the side:
-`"helix"` (the default) or `"plunge"`, as Fusion's 3D Adaptive's ramp types. It
-has no ring to ramp along, so `"ramp"` is refused.
+Adaptive clearing, 3D and 2D, has an entry too, into what it cannot reach from
+the side: `"helix"` (the default) or `"plunge"`, as Fusion's Adaptive's ramp
+types. It has no ring to ramp along, so `"ramp"` is refused.
 
 Neither a helix nor a ramp round a ring goes down more in one lap than the
 *most per lap* (`ramp_stepdown`, Fusion's maximum ramp stepdown): the
@@ -517,8 +608,8 @@ distance is made without lifting, at the cutting feed; the distance is Fusion's
 Maximum Stay-Down Distance for the strategy: 50 mm for parallel and contour;
 twice the tool's diameter for scallop and flat; five times for spiral, radial,
 morphed spiral, pocket clearing, adaptive clearing and the 2D strategies but
-bore, which lifts between its passes, slot, twice, and trace, which lifts
-unless it keeps the tool down, then 50 mm.
+bore, which lifts between its passes, slot, twice, trace, which lifts
+unless it keeps the tool down, then 50 mm, and a 2D chamfer, which lifts.
 Parallel and the other finishing strategies ride over the part: between passes
 side by side that run opposite ways, as zigzag passes do, by Fusion's default
 *smooth* transition, a half turn out past their ends as wide as they are apart,
@@ -716,6 +807,7 @@ with.
 | CC218 | warn    | a bore or circular left a core standing in a hole                |
 | CC219 | warn    | a slot more than three tools wide left a band uncut              |
 | CC220 | note    | stretches of a trace steeper than its maximum angle left out     |
+| CC221 | warn    | stretches of a 2D chamfer lifted to keep its clearance           |
 | CC299 | warn    | a warning from reading the model                                 |
 
 A **plunge** is a continuous descent steeper than `PLUNGE_RATIO` (10:1) that falls
