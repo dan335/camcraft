@@ -93,6 +93,6 @@ Three things it has to say, which the panel says with a click:
 ## ops_engrave
 
 `ops_engrave/part.py` builds `fixtures/step/ops_engrave.step`, a plate with a
-triangle, an L 4 mm wide and a rectangle sunk 1.5 mm into its top, and
+triangle, an L 4 mm wide and a rectangle sunk 3 mm into its top, and
 `ops_engrave/cam.py` posts Fusion's Engrave on them with a 90 degree V,
 together and each alone: `fixtures/nc/ops_engrave_*.nc`.

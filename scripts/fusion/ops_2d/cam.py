@@ -25,6 +25,11 @@
 #                    edge, the engraving tool
 #   chamfer_upper    the same, picked by its upper edge
 #   chamfer_width    the island's sharp rim, Chamfer Width 1 mm
+#   thread           both holes, the sample library's largest thread mill
+#                    (18,000 rev/min, 600 mm/min), as a new Thread starts: a
+#                    pitch diameter offset of none, so it only touches the wall
+#   thread_cut       the same, Pitch Diameter Offset 1 mm: the thread cut half
+#                    a millimetre into the wall
 import copy, json, os, time, traceback
 
 BRIDGE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -68,6 +73,10 @@ def sample(kind, diameter):
             return j
     raise LookupError("%s %s" % (kind, diameter))
 
+def sample_all(kind):
+    tl = lib.toolLibraryAtURL(adsk.core.URL.create("systemlibraryroot://Samples/Milling Tools (Metric)"))
+    return [j for j in (json.loads(tl.item(i).toJson()) for i in range(tl.count)) if j.get("type") == kind]
+
 def make_tool(j, number, desc, rpm, feeds):
     j = copy.deepcopy(j)
     j.pop("holder", None)
@@ -91,6 +100,10 @@ VEE = {"v_f": 1000, "v_f_plunge": 300, "v_f_ramp": 300, "v_f_leadIn": 1000, "v_f
 flat6 = make_tool(sample("flat end mill", 6), 1, "6mm flat", 18000, FLAT)
 flat8 = make_tool(sample("flat end mill", 8), 3, "8mm flat", 18000, FLAT)
 vee = make_tool(sample("chamfer mill", 6), 4, "6mm 90deg engraving", 18000, VEE)
+MILL = {"v_f": 600, "v_f_plunge": 300, "v_f_ramp": 300, "v_f_leadIn": 600, "v_f_leadOut": 600,
+        "v_f_retract": 600, "v_f_transition": 600}
+thread_mill = make_tool(max(sample_all("thread mill"), key=lambda j: j["geometry"]["DC"]),
+                        5, "thread mill", 18000, MILL)
 
 ST = adsk.core.SurfaceTypes
 def cylinders(radius):
@@ -189,6 +202,8 @@ for strategy, name, tool, select, settings in (
      {"chamferClearance": "0 mm"}),
     ("chamfer2d", "chamfer_upper", vee, lambda op: contours(edge_through(-37, -41, 20))(op), {}),
     ("chamfer2d", "chamfer_width", vee, lambda op: contours(island_rim(), True)(op), {"chamferWidth": "1 mm"}),
+    ("thread", "thread", thread_mill, faces(cylinders(8), cylinders(7)), {}),
+    ("thread", "thread_cut", thread_mill, faces(cylinders(8), cylinders(7)), {"pitchDiameterOffset": "1 mm"}),
 ):
     try:
         oi = setup.operations.createInput(strategy)
@@ -231,5 +246,8 @@ for op in made:
             notes.append("has toolpath: %s" % op.hasToolpath)
         except Exception:
             pass
+    if op.name.startswith("thread"):
+        pitch = op.parameters.itemByName("threadPitch")
+        notes.append("pitch: %s = %s" % (pitch.expression, pitch.value.value))
     print(op.name, "valid:", op.isToolpathValid, "posted:", posted, "; ".join(notes))
 print(sorted(os.listdir(OUT)))
