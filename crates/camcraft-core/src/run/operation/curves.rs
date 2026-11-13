@@ -145,7 +145,10 @@ fn picked_edge_ids(
 /// The slots a slot operation's picked edges and floors go round, in the
 /// setup's frame, in the order they are cut: each from the Top, the stock's
 /// unless set, down to its own floor, or the Bottom where one is set, raised
-/// by the stock to leave down.
+/// by the stock to leave down. Each starts at its end lowest in X, then in Y;
+/// unless the order picked is kept, the one starting nearest the work zero is
+/// cut first, then always the one starting nearest where the last ended. So
+/// Fusion's Slot cuts the two slots of `ops_2d`.
 pub(in crate::run) fn slots_picked(
     job: &Job,
     op: &Operation,
@@ -168,6 +171,9 @@ pub(in crate::run) fn slots_picked(
             }));
         }
         let (middle, radius) = slot_of(&boundary, tol).map_err(in_op(op))?;
+        let (a, b) = (middle.start, middle.end());
+        let lower = (b.x, b.y) < (a.x, a.y);
+        let middle = if lower { middle.reversed() } else { middle };
         let floor = if op.heights.bottom.is_some() {
             bottom
         } else {
@@ -190,13 +196,12 @@ pub(in crate::run) fn slots_picked(
     if preserve {
         return Ok(found);
     }
-    // The first picked, then always the nearest.
+    // From the work zero, always the nearest start. Where a slot ends
+    // depends on how many legs its ramp has; its far end is near enough.
     let mut out = Vec::with_capacity(found.len());
-    let mut at = found.first().map(|s| s.middle.start.truncate());
-    while let Some(s) = take_nearest(&mut found, |s| {
-        at.map_or(0.0, |a| a.distance(s.middle.start.truncate()))
-    }) {
-        at = Some(s.middle.end().truncate());
+    let mut at = DVec2::ZERO;
+    while let Some(s) = take_nearest(&mut found, |s| at.distance(s.middle.start.truncate())) {
+        at = s.middle.end().truncate();
         out.push(s);
     }
     Ok(out)
@@ -220,36 +225,29 @@ pub(in crate::run) fn curves_picked(
     Ok(join(&edges))
 }
 
-/// What a slot or a trace did, said where it is worth a person's attention.
-fn tell_slots(report: &crate::strategy::slot::SlotReport, warnings: &mut Vec<String>) {
-    if report.bands > 0 {
-        warnings.push(format!(
-            "{} slot(s) more than three tools wide: a band up to {:.3} mm wide is left \
-             either side of the middle; use a wider tool",
-            report.bands, report.widest_band
-        ));
-    }
-}
-
-/// Each of `slots` cut along its middle, level by level.
+/// Each of `slots` cut along its middle, ramped down to each level along it.
+/// A slot wider than the tool keeps its walls, as Fusion's does: the checks
+/// say how much is left on them (CC219).
 pub(super) fn slot_paths(
     work: &Work<'_>,
-    (backoff, repeat): (f64, bool),
+    (backoff, ramp_clearance, repeat): (f64, f64, bool),
     slots: &[Slot],
-    warnings: &mut Vec<String>,
 ) -> Result<Paths, RunError> {
     let op = work.op;
+    let spec = work.spec;
     let params = SlotParams {
         radius: work.tool.cutter_radius(),
         stepdown: op.stepdown(),
         feed: op.passes.feed,
+        ramp_feed: op.ramp_feed(),
+        ramp_angle: op.linking.ramp_angle.to_radians(),
+        ramp_stepdown: op.ramp_stepdown_for(spec.diameter, spec.flute_length()),
+        ramp_clearance,
         backoff,
         repeat,
-        kept_on_right: work.kept_on_right(),
         tolerance: work.job.tolerance.max(0.001),
     };
     let (path, report) = slot(slots, &params).map_err(in_op(op))?;
-    tell_slots(&report, warnings);
     Ok((path, report.passes, StrategyDetail::Slot(report)))
 }
 

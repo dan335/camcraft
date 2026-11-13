@@ -13,22 +13,22 @@
 //!
 //! # Passes
 //!
-//! Each slot is cut level by level from its top down to its floor, a whole
-//! stepdown each and the last what is left, or straight to the floor without
-//! Multiple Depths, as Fusion's Slot ramps to the depth. At each level the tool
-//! runs along the middle from one end to the other, each level the other way
-//! from the one above, so it starts where the last ended; the linker takes it
-//! down to each by ramping back and forth along the middle. A tool narrower than
-//! the slot then goes once round its walls at the level, from beside the end of
-//! the middle, ramped down into as the linker ramps round a closed pass, so the
-//! slot is cut to its width; one more
-//! than three times narrower leaves a band either side of the middle, and the
-//! report says how wide. A tool wider than the slot is refused.
+//! As Fusion's Slot cuts one, from its programs for `ops_2d`'s slots: the
+//! tool comes down to the ramp clearance height over the slot's top, above
+//! where its middle starts, and ramps back and forth along the whole middle,
+//! end to end, each leg falling as far, no more than half the maximum ramp
+//! stepdown (the most there and back) and no more steeply than the ramp angle,
+//! to the floor; then once along the floor at the cutting feed, from the end
+//! the ramp ended at to the other. With Multiple Depths each level, a whole
+//! stepdown and the last what is left, is ramped down to so from the one above
+//! and cut along. A slot is one pass, its ramp its own. A tool narrower than
+//! the slot cuts its middle only, as Fusion's does, and leaves its walls; the
+//! report says how much. A tool wider than the slot is refused.
 //!
-//! The last pass at the floor is cut twice where asked (Fusion's Repeat
-//! Finishing Pass), and at the end of each slot the tool backs off the wall
-//! before it lifts (Fusion's Backoff Distance): back along the middle, or in
-//! from the wall towards it.
+//! Where asked, the floor is cut a second time, back the way it came
+//! (Fusion's Repeat Finishing Pass), and at the end of each slot the tool backs
+//! off the end wall along the middle before it lifts (Fusion's Backoff
+//! Distance).
 
 use std::f64::consts::PI;
 
@@ -271,16 +271,23 @@ pub struct SlotParams {
     /// The deepest a level may be below the one above, in millimetres; the
     /// floor alone when `None`.
     pub stepdown: Option<f64>,
-    /// Cutting feed, in mm/min.
+    /// Cutting feed, along the floor, in mm/min.
     pub feed: f64,
+    /// Feed down the ramp, in mm/min.
+    pub ramp_feed: f64,
+    /// The steepest the ramp may fall, in radians from level.
+    pub ramp_angle: f64,
+    /// The most the ramp may fall there and back along the slot, in
+    /// millimetres: Fusion's Maximum Ramp Stepdown. Each way, half of it.
+    pub ramp_stepdown: f64,
+    /// How far above the slot's top the ramp starts, in millimetres: Fusion's
+    /// Ramp Clearance Height.
+    pub ramp_clearance: f64,
     /// How far the tool backs off the wall at the end of each slot, in
     /// millimetres.
     pub backoff: f64,
-    /// Whether the last pass at the floor is cut twice.
+    /// Whether the last pass along the floor is cut twice.
     pub repeat: bool,
-    /// Whether the material kept is on the tool's right going round the
-    /// walls: climbing with a clockwise spindle.
-    pub kept_on_right: bool,
     /// How close two ends must be to be one, in millimetres.
     pub tolerance: f64,
 }
@@ -290,33 +297,48 @@ pub struct SlotParams {
 pub struct SlotReport {
     /// Slots cut.
     pub slots: u64,
-    /// Passes along them and round them, every level's.
+    /// Passes along their floors, every level's.
     pub passes: u64,
     /// The most levels any was cut in.
     pub levels: u64,
-    /// Slots wider than the tool, cut round their walls as well.
-    pub walls: u64,
-    /// Slots more than three tools wide, which leave a band either side of the
-    /// middle uncut.
-    pub bands: u64,
-    /// The widest band left, in millimetres.
-    pub widest_band: f64,
+    /// Legs of ramp, one way along a slot each.
+    pub legs: u64,
+    /// Slots wider than the tool, whose walls are left uncut, as Fusion's are.
+    pub narrower: u64,
+    /// The most left on a wall of one of them, in millimetres.
+    pub most_left: f64,
 }
+
+/// The most legs a ramp down one level of a slot may have.
+const MOST_LEGS: f64 = 10_000.0;
 
 fn check_params(p: &SlotParams) -> Result<(), StrategyError> {
     check("tool radius", p.radius)?;
     check("feed", p.feed)?;
+    check("ramp feed", p.ramp_feed)?;
+    check("ramp stepdown", p.ramp_stepdown)?;
     check("tolerance", p.tolerance)?;
+    at_least_zero("ramp clearance height", p.ramp_clearance)?;
     at_least_zero("backoff distance", p.backoff)?;
+    if !(p.ramp_angle > 0.0 && p.ramp_angle < PI / 2.0) {
+        return Err(StrategyError::BadParameter {
+            name: "ramp angle",
+            value: p.ramp_angle,
+        });
+    }
     if let Some(d) = p.stepdown {
         check("stepdown", d)?;
     }
     Ok(())
 }
 
-/// Each of `slots` cut along its middle, level by level: Fusion's Slot. Each
-/// pass a link to where it starts, the middle, and the walls where the tool is
-/// narrower than the slot.
+/// Each of `slots` cut along its middle, as Fusion's Slot cuts one: down by
+/// ramping back and forth along the whole middle, end to end, each leg
+/// falling as far, then once along it at the level, from the end the ramp
+/// ended at to the other. A slot is one pass: a link to above where its
+/// middle starts, its levels one after another, and at the end, where asked,
+/// the floor again and the tool backed off the wall. A tool narrower than a
+/// slot leaves its walls, as Fusion's does.
 pub fn slot(slots: &[Slot], p: &SlotParams) -> Result<(Toolpath, SlotReport), SlotError> {
     check_params(p)?;
     let tol = p.tolerance;
@@ -335,6 +357,11 @@ pub fn slot(slots: &[Slot], p: &SlotParams) -> Result<(Toolpath, SlotReport), Sl
         if s.top - s.bottom <= 1.0e-9 || s.top.is_nan() || s.bottom.is_nan() {
             return Err(SlotError::NoDepth { x: at.x, y: at.y });
         }
+        let flat = s.middle.raised(-s.middle.start.z);
+        let length = flat.flat_length();
+        if length.is_nan() || length <= tol {
+            return Err(SlotError::NotASlot { x: at.x, y: at.y });
+        }
         let zs: Vec<f64> = match p.stepdown {
             Some(d) => slabs(s.top, s.bottom, d, &[])
                 .into_iter()
@@ -342,132 +369,57 @@ pub fn slot(slots: &[Slot], p: &SlotParams) -> Result<(Toolpath, SlotReport), Sl
                 .collect(),
             None => vec![s.bottom],
         };
-        // How far the tool's centre goes from the middle round the walls.
-        let walls = (s.radius - p.radius > tol).then_some(s.radius - p.radius);
         report.slots += 1;
         report.levels = report.levels.max(zs.len() as u64);
-        if let Some(h) = walls {
-            report.walls += 1;
-            let band = h - 2.0 * p.radius;
-            if band > tol {
-                report.bands += 1;
-                report.widest_band = report.widest_band.max(band);
-            }
+        if s.radius - p.radius > tol {
+            report.narrower += 1;
+            report.most_left = report.most_left.max(s.radius - p.radius);
         }
-        let flat = s.middle.raised(-s.middle.start.z);
-        let last = zs.len().saturating_sub(1);
-        for (i, &z) in zs.iter().enumerate() {
-            let along = if i % 2 == 0 {
-                flat.raised(z)
-            } else {
-                flat.reversed().raised(z)
-            };
-            let ring = match walls {
-                Some(h) => Some(round_walls(&along, h, p.kept_on_right, tol)?),
-                None => None,
-            };
-            let times = if p.repeat && i == last { 2 } else { 1 };
-            pass(
-                &mut path,
-                (&along, ring.as_ref()),
-                p.feed,
-                times,
-                &mut report,
-            )?;
-            if i == last && p.backoff > 0.0 {
-                back_off(&mut path, (&along, ring.as_ref()), walls, p)?;
+        // The most a leg falls: half the most there and back, and no steeper
+        // than the ramp's angle along the slot.
+        let per_leg = (p.ramp_stepdown / 2.0).min(length * p.ramp_angle.tan());
+        let back = flat.reversed();
+        // Which way along it the tool goes next: from its start, or back.
+        let mut forward = true;
+        let mut high = s.top + p.ramp_clearance;
+        path.feed_to(at.truncate().extend(high), MoveRole::Link, p.ramp_feed)?;
+        let mut last = flat.raised(s.bottom);
+        for &z in &zs {
+            let fall = high - z;
+            let legs = (fall / per_leg - 1.0e-9).ceil().max(1.0);
+            if legs.is_nan() || legs > MOST_LEGS {
+                return Err(StrategyError::BadParameter {
+                    name: "ramp stepdown",
+                    value: p.ramp_stepdown,
+                }
+                .into());
             }
+            let n = camcraft_geom::steps::bounded_count(legs);
+            for k in 0..n {
+                let from = high - fall * f64::from(k) / f64::from(n);
+                let to = high - fall * f64::from(k + 1) / f64::from(n);
+                let way = if forward { &flat } else { &back };
+                way.cut_falling(&mut path, (from, to), MoveRole::Ramp, p.ramp_feed)?;
+                forward = !forward;
+                report.legs += 1;
+            }
+            last = (if forward { &flat } else { &back }).raised(z);
+            last.cut_into(&mut path, MoveRole::Cut, p.feed)?;
+            forward = !forward;
+            report.passes += 1;
+            high = z;
+        }
+        if p.repeat {
+            last = last.reversed();
+            last.cut_into(&mut path, MoveRole::Cut, p.feed)?;
+            report.passes += 1;
+        }
+        if p.backoff > 0.0 {
+            last.back_from_end(p.backoff)
+                .cut_into(&mut path, MoveRole::Lead, p.feed)?;
         }
     }
     Ok((path, report))
-}
-
-/// One level of a slot: a link to the start of `along`, its middle, then where
-/// there are walls to go round, a link to them and round, `ring`. Its last
-/// pass, the walls or the middle, cut `times` over.
-fn pass(
-    path: &mut Toolpath,
-    (along, ring): (&Curve, Option<&Curve>),
-    feed: f64,
-    times: u32,
-    report: &mut SlotReport,
-) -> Result<(), ToolpathError> {
-    path.feed_to(along.start, MoveRole::Link, feed)?;
-    along.cut_into(path, MoveRole::Cut, feed)?;
-    report.passes += 1;
-    if let Some(ring) = ring {
-        // A pass of its own, so the ramp down along the middle keeps to it.
-        path.feed_to(ring.start, MoveRole::Link, feed)?;
-        ring.cut_into(path, MoveRole::Cut, feed)?;
-        report.passes += 1;
-    }
-    for _ in 1..times {
-        let again = ring.unwrap_or(along);
-        // Round the walls again from where it ended; back along the middle
-        // to go along it again.
-        if path
-            .end()
-            .is_none_or(|end| end.distance(again.start) > 1.0e-9)
-        {
-            path.feed_to(again.start, MoveRole::Link, feed)?;
-        }
-        again.cut_into(path, MoveRole::Cut, feed)?;
-        report.passes += 1;
-    }
-    Ok(())
-}
-
-/// Back off the wall from where the last pass ended: in from the walls
-/// towards the middle, or back along the middle.
-fn back_off(
-    path: &mut Toolpath,
-    (along, ring): (&Curve, Option<&Curve>),
-    walls: Option<f64>,
-    p: &SlotParams,
-) -> Result<(), ToolpathError> {
-    match (ring, walls) {
-        (Some(ring), Some(h)) => {
-            let end = ring.end();
-            let towards = (along.end() - end).truncate().normalize_or_zero();
-            let to = end + (towards * p.backoff.min(h)).extend(0.0);
-            path.feed_to(to, MoveRole::Lead, p.feed)?;
-        }
-        _ => {
-            along
-                .back_from_end(p.backoff)
-                .cut_into(path, MoveRole::Lead, p.feed)?;
-        }
-    }
-    Ok(())
-}
-
-/// The walls of the slot whose middle is `along`, gone round `h` from it:
-/// from beside the end `along` ends at, round that end, back along the
-/// other side, round the other end and along to where it started.
-/// Anticlockwise, so the walls are on the tool's right, when `kept_on_right`.
-fn round_walls(along: &Curve, h: f64, kept_on_right: bool, tol: f64) -> Result<Curve, SlotError> {
-    let at = along.start;
-    let not_a_slot = |_| SlotError::NotASlot { x: at.x, y: at.y };
-    let right = offset(along, -h, tol).map_err(not_a_slot)?;
-    let back = offset(&along.reversed(), -h, tol).map_err(not_a_slot)?;
-    let (a, b) = (along.start.truncate(), along.end().truncate());
-    let mut pieces = vec![Piece::Arc {
-        to: back.start,
-        centre: b,
-        sweep: PI,
-    }];
-    pieces.extend(back.pieces.iter().copied());
-    pieces.push(Piece::Arc {
-        to: right.start,
-        centre: a,
-        sweep: PI,
-    });
-    pieces.extend(right.pieces.iter().copied());
-    let ring = Curve {
-        start: right.end(),
-        pieces,
-    };
-    Ok(if kept_on_right { ring } else { ring.reversed() })
 }
 
 #[cfg(test)]

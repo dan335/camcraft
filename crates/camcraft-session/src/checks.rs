@@ -611,18 +611,19 @@ fn operation_findings(
             }
         }
         StrategyDetail::Slot(r) => {
-            if r.bands > 0 {
+            // As Fusion's Slot: the middle only, the walls left for a finish.
+            if r.narrower > 0 {
                 out.push(finding(
-                    Level::Warn,
+                    Level::Note,
                     "CC219",
                     format!(
-                        "{} slot(s) left with a band uncut either side of the middle",
-                        r.bands
+                        "{} slot(s) wider than the tool: their walls are left",
+                        r.narrower
                     ),
                     format!(
-                        "up to {:.2} mm wide: the slot is more than three times as wide as \
-                         the tool; use a wider one",
-                        r.widest_band
+                        "up to {:.2} mm on each wall, as Fusion's Slot leaves them: finish \
+                         them with a 2D contour, or use a tool as wide as the slot",
+                        r.most_left
                     ),
                 ));
             }

@@ -128,106 +128,189 @@ fn what_is_not_a_slot_is_refused() {
     ));
 }
 
+/// Fusion's own for a 6 mm flat in one of `ops_2d`'s slots: no levels, a
+/// ramp stepdown of a tenth of the tool, starting 2.5 mm over the top, at 2°.
 fn params(radius: f64) -> SlotParams {
     SlotParams {
         radius,
-        stepdown: Some(2.0),
-        feed: 1000.0,
+        stepdown: None,
+        feed: 1500.0,
+        ramp_feed: 500.0,
+        ramp_angle: 2f64.to_radians(),
+        ramp_stepdown: 0.6,
+        ramp_clearance: 2.5,
         backoff: 0.0,
         repeat: false,
-        kept_on_right: true,
         tolerance: 0.01,
     }
 }
 
+/// A slot 30 mm between its ends' centres and `r` either side, its top at 20
+/// and its floor at 16, as `ops_2d`'s angled one.
 fn one_slot(r: f64) -> Slot {
-    let (middle, radius) = slot_of(&stadium(10.0, r, 0.0, 1), 0.01).unwrap();
+    let (middle, radius) = slot_of(&stadium(15.0, r, 16.0, 1), 0.01).unwrap();
+    let middle = if middle.start.x > middle.end().x {
+        middle.reversed()
+    } else {
+        middle
+    };
     Slot {
         middle,
         radius,
-        top: 5.0,
-        bottom: 0.0,
+        top: 20.0,
+        bottom: 16.0,
     }
 }
 
-/// With a tool as wide as the slot, each level is one pass along its middle,
-/// a whole stepdown down and the last what is left, each the other way from the
-/// one above, so it starts where the last ended.
+/// Each move's role, where it ends and its feed.
+fn moves(path: &Toolpath) -> Vec<(MoveRole, DVec3, f64)> {
+    path.moves()
+        .iter()
+        .map(|m| (m.role, m.to, m.feed.unwrap_or(0.0)))
+        .collect()
+}
+
+/// As Fusion's program cuts it: from 2.5 mm over the top, back and forth
+/// along the whole middle, end to end, every leg falling as far and no more
+/// than half the ramp stepdown, 22 legs for 6.5 mm at 0.3 a leg, at the ramp
+/// feed; then once along the floor to the other end at the cutting feed. A
+/// slot is one pass. A tool narrower than the slot leaves its walls, and says
+/// how much is left on each.
 #[test]
-fn a_tool_as_wide_as_the_slot_runs_along_its_middle() {
-    let s = one_slot(3.0);
+fn a_slot_is_ramped_back_and_forth_then_cut_along_its_floor() {
+    let s = one_slot(4.0);
     let (path, report) = slot(std::slice::from_ref(&s), &params(3.0)).unwrap();
     assert_eq!(
-        (report.slots, report.passes, report.levels, report.walls),
-        (1, 3, 3, 0)
+        (report.slots, report.passes, report.levels, report.legs),
+        (1, 1, 1, 22)
     );
-    let links: Vec<DVec3> = path
-        .moves()
-        .iter()
-        .filter(|m| m.role == MoveRole::Link)
-        .map(|m| m.to)
-        .collect();
-    assert_eq!(links.len(), 3);
-    let zs: Vec<f64> = links.iter().map(|p| p.z).collect();
-    assert_eq!(zs, [3.0, 1.0, 0.0]);
-    assert_eq!(links[1].truncate(), s.middle.end().truncate());
-    assert_eq!(links[2].truncate(), s.middle.start.truncate());
-    for m in path.moves().iter().filter(|m| m.role == MoveRole::Cut) {
-        assert!(m.to.y.abs() < 1e-9, "{}", m.to);
+    assert_eq!(report.narrower, 1);
+    assert!((report.most_left - 1.0).abs() < 1e-9);
+    let m = moves(&path);
+    assert_eq!(m.len(), 1 + 22 + 1);
+    assert_eq!(m[0].0, MoveRole::Link);
+    assert!(
+        m[0].1.distance(dvec3(-15.0, 0.0, 22.5)) < 1e-9,
+        "{:?}",
+        m[0]
+    );
+    let fall = 6.5 / 22.0;
+    for (k, &(role, to, feed)) in m[1..23].iter().enumerate() {
+        assert_eq!((role, feed), (MoveRole::Ramp, 500.0));
+        let x = if k % 2 == 0 { 15.0 } else { -15.0 };
+        let z = 22.5 - fall * f64::from(u32::try_from(k).unwrap() + 1);
+        assert!(to.distance(dvec3(x, 0.0, z)) < 1e-9, "leg {k}: {to}");
     }
-}
-
-/// A narrower tool goes along the middle and then round the walls, climbing,
-/// its centre its radius in from them; one more than three times narrower
-/// than the slot says how wide a band it leaves; a wider one is refused.
-#[test]
-fn a_narrower_tool_goes_round_the_walls_too() {
-    let s = one_slot(3.0);
-    let (path, report) = slot(std::slice::from_ref(&s), &params(2.0)).unwrap();
-    assert_eq!((report.walls, report.bands, report.passes), (1, 0, 6));
-    let mut at = DVec3::ZERO;
-    let mut round = 0.0;
-    for m in path.moves() {
-        if m.role == MoveRole::Cut {
-            let d = s.middle.distance_to(m.to.truncate());
-            assert!(d < 1.0 + 1e-6, "{} is {d} out", m.to);
-            if let MoveKind::Arc(a) = m.kind {
-                round += a.sweep;
-            }
-        }
-        at = m.to;
-    }
-    let _ = at;
-    // Two half turns round the ends at every level, anticlockwise.
-    assert!((round - 3.0 * 2.0 * PI).abs() < 1e-6, "{round}");
-    let (_, narrow) = slot(std::slice::from_ref(&s), &params(0.5)).unwrap();
-    assert_eq!(narrow.bands, 1);
-    assert!((narrow.widest_band - 1.5).abs() < 1e-9);
+    // 22 legs, an even number, end where they started: the floor the other
+    // way.
+    assert_eq!(m[23].0, MoveRole::Cut);
+    assert_eq!(m[23].2, 1500.0);
+    assert!(m[23].1.distance(dvec3(15.0, 0.0, 16.0)) < 1e-9);
+    // With an 8 mm tool, the slot's own width, 0.4 a leg: 17 legs, ending at
+    // the far end, so the floor comes back.
+    let wide = SlotParams {
+        ramp_stepdown: 0.8,
+        ..params(4.0)
+    };
+    let (path, report) = slot(std::slice::from_ref(&s), &wide).unwrap();
+    assert_eq!((report.legs, report.narrower), (17, 0));
+    assert!(path.end().unwrap().distance(dvec3(-15.0, 0.0, 16.0)) < 1e-9);
     assert!(matches!(
-        slot(&[s], &params(3.5)),
+        slot(&[s], &params(4.5)),
         Err(SlotError::TooWide { .. })
     ));
 }
 
-/// Without multiple depths it ramps straight to the floor; the last pass is
-/// cut twice where asked, and the tool backs off along the middle at the end.
+/// On a short slot the ramp's angle governs, not its stepdown: no leg falls
+/// more steeply than it.
 #[test]
-fn one_level_repeated_and_backed_off() {
+fn the_ramp_is_no_steeper_than_its_angle() {
+    let (middle, radius) = slot_of(&stadium(1.0, 3.0, 16.0, 1), 0.01).unwrap();
+    let s = Slot {
+        middle,
+        radius,
+        top: 20.0,
+        bottom: 16.0,
+    };
+    let (path, report) = slot(&[s], &params(3.0)).unwrap();
+    let most = 2.0 * 2f64.to_radians().tan();
+    assert_eq!(
+        f64::from(u32::try_from(report.legs).unwrap()),
+        (6.5 / most).ceil()
+    );
+    let mut at = path.moves()[0].to;
+    for m in &path.moves()[1..] {
+        let run = at.truncate().distance(m.to.truncate());
+        assert!(at.z - m.to.z <= run * 2f64.to_radians().tan() + 1e-9);
+        at = m.to;
+    }
+}
+
+/// With multiple depths each level is ramped down to from the one above, the
+/// first from over the top, and cut along; all of it one pass.
+#[test]
+fn levels_are_ramped_down_to_one_after_another() {
     let s = one_slot(3.0);
     let p = SlotParams {
-        stepdown: None,
+        stepdown: Some(2.0),
+        ramp_stepdown: 2.0,
+        ..params(3.0)
+    };
+    let (path, report) = slot(std::slice::from_ref(&s), &p).unwrap();
+    // 22.5 to 18 at a millimetre a leg, 18 to 16 likewise.
+    assert_eq!((report.levels, report.passes, report.legs), (2, 2, 5 + 2));
+    let m = moves(&path);
+    assert_eq!(m.iter().filter(|m| m.0 == MoveRole::Link).count(), 1);
+    let floors: Vec<f64> = m
+        .iter()
+        .filter(|m| m.0 == MoveRole::Cut)
+        .map(|m| m.1.z)
+        .collect();
+    assert_eq!(floors, [18.0, 16.0]);
+}
+
+/// The floor is cut again where asked, back the way it came, and the tool
+/// backs off the end wall along the middle before it lifts; a slot whose
+/// floor is not below its top is refused.
+#[test]
+fn repeated_and_backed_off() {
+    let s = one_slot(3.0);
+    let p = SlotParams {
         repeat: true,
         backoff: 1.0,
         ..params(3.0)
     };
     let (path, report) = slot(std::slice::from_ref(&s), &p).unwrap();
-    assert_eq!((report.levels, report.passes), (1, 2));
-    let last = path.moves().last().unwrap();
-    assert_eq!(last.role, MoveRole::Lead);
-    let end = s.middle.end();
-    assert!((last.to.truncate().distance(end.truncate()) - 1.0).abs() < 1e-9);
+    assert_eq!(report.passes, 2);
+    let m = moves(&path);
+    let n = m.len();
+    assert_eq!(m[n - 2].0, MoveRole::Cut);
+    assert!(m[n - 2].1.distance(dvec3(-15.0, 0.0, 16.0)) < 1e-9);
+    assert_eq!(m[n - 1].0, MoveRole::Lead);
+    assert!(m[n - 1].1.distance(dvec3(-14.0, 0.0, 16.0)) < 1e-9);
     assert!(matches!(
-        slot(&[Slot { bottom: 5.0, ..s }], &p),
+        slot(&[Slot { bottom: 20.0, ..s }], &p),
         Err(SlotError::NoDepth { .. })
     ));
+}
+
+/// A curved slot is ramped along its arc: each leg a helix about its centre.
+#[test]
+fn a_curved_slot_ramps_down_helices() {
+    let (middle, radius) = slot_of(&curved(20.0, 3.0), 0.01).unwrap();
+    let s = Slot {
+        middle,
+        radius,
+        top: 4.0,
+        bottom: 0.0,
+    };
+    let (path, report) = slot(std::slice::from_ref(&s), &params(3.0)).unwrap();
+    assert!(report.legs > 1);
+    for m in path.moves().iter().filter(|m| m.role == MoveRole::Ramp) {
+        let MoveKind::Arc(a) = m.kind else {
+            panic!("a straight ramp leg to {}", m.to);
+        };
+        assert!(a.centre.truncate().length() < 1e-9);
+        assert!((m.to.truncate().length() - 20.0).abs() < 1e-9);
+    }
 }

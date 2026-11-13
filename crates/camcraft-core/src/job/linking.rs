@@ -78,9 +78,10 @@ pub struct Linking {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helix_diameter: Option<f64>,
     /// The most a helix or a ramp round a ring descends in one lap, and a
-    /// slot's ramp each way along it, in millimetres: Fusion's maximum ramp
-    /// stepdown. The operation's stepdown when not given, or without one the
-    /// tool's diameter, or a slot's millimetre ([`Operation::ramp_stepdown`]).
+    /// slot's ramp there and back along it, in millimetres: Fusion's maximum
+    /// ramp stepdown. The operation's stepdown when not given, or without one
+    /// the tool's diameter, or for a slot a tenth of it
+    /// ([`Operation::ramp_stepdown_for`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ramp_stepdown: Option<f64>,
 }
@@ -262,10 +263,6 @@ impl Default for Linking {
 /// program for the lego ramps at 90 in/min to its 150.
 const RAMP_SHARE: f64 = 0.6;
 
-/// The most a slot's ramp goes down each way along it without a stepdown, in
-/// millimetres: a new Slot of Fusion's Maximum Stepdown.
-const SLOT_RAMP_STEPDOWN: f64 = 1.0;
-
 default_number!(default_safe_distance, is_default_safe_distance = 2.0);
 
 default_number!(default_ramp_angle, is_default_ramp_angle = 2.0);
@@ -359,13 +356,21 @@ impl Operation {
 
     /// The most a helix or a ramp round a ring descends in one lap, in
     /// millimetres, with a tool `diameter` across: as given, or its stepdown, or
-    /// the tool's diameter without one. A slot's ramp, back and forth along
-    /// it, goes down no more than this each way, and without a stepdown a
-    /// millimetre: Fusion's Slot's Maximum Ramp Stepdown is its Maximum
-    /// Stepdown, a millimetre, with Multiple Depths off too.
+    /// the tool's diameter without one. A slot's is the most its ramp falls
+    /// there and back along it ([`Operation::ramp_stepdown_for`]); this is it
+    /// for a tool whose flutes are no shorter than two diameters.
     pub fn ramp_stepdown(&self, diameter: f64) -> f64 {
+        self.ramp_stepdown_for(diameter, 2.0 * diameter)
+    }
+
+    /// [`Operation::ramp_stepdown`] for a tool `diameter` across whose flutes
+    /// are `flute_length` long. A slot's, without a stepdown, is Fusion's
+    /// Slot's Maximum Ramp Stepdown with Multiple Depths off:
+    /// `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)`, as its
+    /// programs ramp.
+    pub fn ramp_stepdown_for(&self, diameter: f64, flute_length: f64) -> f64 {
         let without = if matches!(self.strategy, StrategySpec::Slot { .. }) {
-            SLOT_RAMP_STEPDOWN
+            (0.75 * flute_length).min(0.1 * diameter)
         } else {
             diameter
         };

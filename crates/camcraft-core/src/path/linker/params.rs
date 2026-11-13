@@ -86,10 +86,6 @@ pub struct LinkParams {
     /// The most a helix, or a ramp round a closed pass, descends in one lap, in
     /// millimetres; `None` for no limit but the ramp angle.
     pub ramp_stepdown: Option<f64>,
-    /// Whether [`LinkParams::ramp_stepdown`] is also the most a ramp back and
-    /// forth along an open pass descends each way along it, as Fusion's Slot's
-    /// Maximum Ramp Stepdown is; otherwise such a ramp keeps to its angle.
-    pub ramp_legs: bool,
     /// Whether the vertical lead may go down through material, from a plunge
     /// onto its top, as a 2D profile's does; otherwise it is left out wherever
     /// its top is in material, as a finishing pass's is.
@@ -125,7 +121,6 @@ impl LinkParams {
             ramp_where_no_helix: false,
             helix_ccw: true,
             ramp_stepdown: None,
-            ramp_legs: false,
             lead_in_material: false,
             max_cut_step: 0.5,
             tolerance: 0.01,

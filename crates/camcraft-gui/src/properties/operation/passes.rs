@@ -407,12 +407,13 @@ pub(super) fn passes(
                 backoff_distance,
                 repeat,
                 preserve_order,
+                ..
             } => {
                 d.row(ui, &pass::BACKOFF, "backoff_distance", |ui| {
                     m.length_field(ui, backoff_distance, 0.05, 100.0, "");
                 });
                 d.row(ui, &pass::SLOT_REPEAT, "repeat", |ui| {
-                    ui.checkbox(repeat, "cut the last pass twice");
+                    ui.checkbox(repeat, "along the floor a second time");
                 });
                 d.row(ui, &pass::PRESERVE_ORDER, "preserve_order", |ui| {
                     ui.checkbox(preserve_order, "in the order picked");

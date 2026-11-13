@@ -141,8 +141,11 @@ it.
   lead and lifts out after, as Fusion's do. A slot's *Passes* has *Backoff distance*, *Repeat finishing pass* and
   *Preserve order*; it has *Multiple depths* (a millimetre when ticked, as
   Fusion's Maximum Stepdown) and only a floor's stock to leave; its *Linking* has
-  the ramp angle and feed and *Most per leg*, how far its ramp back and forth
-  along the slot goes down each way. A trace's *Passes* has *Sideways
+  the ramp angle and feed, the *Maximum ramp stepdown*, how far its ramp back
+  and forth along the slot goes down there and back (half each leg; a tenth of
+  the tool without levels), and the *Ramp clearance height* it starts at over
+  the Top. A tool narrower than the slot leaves its walls, as Fusion's does.
+  A trace's *Passes* has *Sideways
   compensation* (on the curve, left or right), *Axial offset*, *Pass extension*,
   *Maximum angle*, *Repeat passes* and *Preserve order*; under *Multiple depths*,
   the *Number of stepdowns*, by depth or by curve, and *Both ways*. Its

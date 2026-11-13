@@ -159,11 +159,12 @@ pub(super) fn linking(
                 });
             });
             let stepdown = op.stepdown();
-            // A slot's ramp goes back and forth along it: its most is each way.
+            // A slot's ramp goes back and forth along it: its most is there
+            // and back, half of it each leg.
             let slot = matches!(op.strategy, StrategySpec::Slot { .. });
             let absent = match (stepdown, slot) {
                 (Some(d), _) => format!("the stepdown: {}", m.length(d, 2)),
-                (None, true) => format!("Fusion's: {}", m.length(op.ramp_stepdown(across), 2)),
+                (None, true) => of_tool(0.1, "a tenth of the tool"),
                 (None, false) => of_tool(1.0, "the tool's diameter"),
             };
             let start = op.ramp_stepdown(across);
@@ -183,6 +184,15 @@ pub(super) fn linking(
                     },
                 );
             });
+            if let StrategySpec::Slot {
+                ramp_clearance_height,
+                ..
+            } = &mut op.strategy
+            {
+                d.row(ui, &link::RAMP_CLEARANCE, "ramp_clearance_height", |ui| {
+                    m.length_field(ui, ramp_clearance_height, 0.1, 100.0, "");
+                });
+            }
         }
         if !uses.entries.is_empty() {
             let mut entry = op.entry().unwrap_or_default();

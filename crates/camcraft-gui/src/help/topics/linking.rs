@@ -70,7 +70,9 @@ topics! {
     LEAD_OUT: "Lead-out",
         "Goes up off each pass along a vertical arc of the lead radius, rather than straight up.",
         Figure::LeadRadius;
-    MOST_PER_LEG: "Most per leg",
-        "The most a ramp back and forth along a slot goes down each way along it. Left empty, the stepdown, or 1 mm.",
+    MOST_PER_LEG: "Maximum ramp stepdown",
+        "The most the ramp goes down there and back along a slot; each leg half. Left empty, the stepdown, or a tenth of the tool.",
         Figure::RampAngle;
+    RAMP_CLEARANCE: "Ramp clearance height",
+        "How far above the Top the ramp down along each slot starts.";
 }

@@ -362,19 +362,27 @@ pub enum StrategySpec {
     },
     /// Slots, picked by the edges round their floors, each milled along its
     /// middle from end to end: down to each level by ramping back and forth
-    /// along it, then along it at the level, and once round its walls where
-    /// the tool is narrower than the slot. Fusion's Slot.
+    /// along the whole of it, then once along it at the level. A tool
+    /// narrower than the slot leaves its walls. Fusion's Slot.
     Slot {
         /// How far the tool backs off the wall at the end of each cut before
         /// it lifts, in millimetres: Fusion's Backoff Distance, none.
         #[serde(default, skip_serializing_if = "is_default")]
         backoff_distance: f64,
-        /// Cut the last pass at the bottom twice, for a tool that springs from
-        /// the wall: Fusion's Repeat Finishing Pass.
+        /// How far above the Top the ramp down along each slot starts, in
+        /// millimetres: Fusion's Ramp Clearance Height, 2.5 mm.
+        #[serde(
+            default = "default_ramp_clearance",
+            skip_serializing_if = "is_default_ramp_clearance"
+        )]
+        ramp_clearance_height: f64,
+        /// Go along the floor a second time at the end of each slot, for a
+        /// tool that springs from the walls: Fusion's Repeat Finishing Pass.
         #[serde(default, skip_serializing_if = "is_default")]
         repeat: bool,
         /// Cut the slots in the order picked: Fusion's Preserve Order. Off,
-        /// the first picked, then always the nearest.
+        /// the one starting nearest the work zero first, then always the
+        /// nearest.
         #[serde(default, skip_serializing_if = "is_default")]
         preserve_order: bool,
     },
@@ -987,6 +995,13 @@ pub enum Compensation {
 }
 
 default_number!(full_turn, is_full_turn = 360.0);
+
+default_number!(
+    /// How far above the Top a slot's ramp starts, in millimetres: a new Slot
+    /// of Fusion's Ramp Clearance Height.
+    default_ramp_clearance,
+    is_default_ramp_clearance = 2.5
+);
 
 default_number!(
     /// How far below a chamfer's lower edge the tool's tip goes, in

@@ -301,15 +301,55 @@ impl Curve {
         role: MoveRole,
         feed: f64,
     ) -> Result<(), ToolpathError> {
+        self.cut_with(path, |_, z| z, role, feed)
+    }
+
+    /// Append it to `path` as [`Curve::cut_into`] does, but falling evenly
+    /// along it, seen from above, from `high` where it starts to `low` where
+    /// it ends, whatever its own heights: a ramp along it. Its arcs are
+    /// helices.
+    pub fn cut_falling(
+        &self,
+        path: &mut Toolpath,
+        (high, low): (f64, f64),
+        role: MoveRole,
+        feed: f64,
+    ) -> Result<(), ToolpathError> {
+        let total = self.flat_length();
+        let fall = |run: f64, _| {
+            if total > 1.0e-12 {
+                high + (low - high) * (run / total).min(1.0)
+            } else {
+                low
+            }
+        };
+        self.cut_with(path, fall, role, feed)
+    }
+
+    /// Append it to `path`, each piece ending at the height `z` gives for how
+    /// far along it is seen from above and the piece's own height there.
+    fn cut_with(
+        &self,
+        path: &mut Toolpath,
+        z: impl Fn(f64, f64) -> f64,
+        role: MoveRole,
+        feed: f64,
+    ) -> Result<(), ToolpathError> {
         let halves = self.in_half_turns();
-        for (from, p) in halves.steps() {
+        let mut run = 0.0;
+        for (own_from, p) in halves.steps() {
+            run += p.flat_length(own_from);
+            let end = p.to();
+            let to = end.truncate().extend(z(run, end.z));
+            // Where the path is: its own start, raised or lowered as asked.
+            let from = path.end().unwrap_or(own_from);
             match *p {
-                Piece::Line { to } => {
+                Piece::Line { .. } => {
                     if to.distance(from) > 1.0e-9 {
                         path.feed_to(to, role, feed)?;
                     }
                 }
-                Piece::Arc { to, centre, sweep } => {
+                Piece::Arc { centre, sweep, .. } => {
                     let c = equidistant(from.truncate(), to.truncate(), centre);
                     let r = from.truncate().distance(c);
                     let turned = sweep_from(from.truncate(), to.truncate(), c, sweep);

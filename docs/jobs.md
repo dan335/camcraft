@@ -235,24 +235,30 @@ slot is cut from the Top (the stock's unless set) down to its own floor, the
 height of its picked loop, raised by the axial stock to leave; a Bottom set
 takes every slot there. It has only axial stock to leave, as Fusion's.
 
-Without multiple depths it goes to the floor in one level, as Fusion's Slot
-ramps to the depth; with them (a millimetre a level when ticked, Fusion's
-Maximum Stepdown), each level a whole stepdown and the last what is left. At
-each level the tool runs along the middle from one end's centre to the other,
-each level the other way from the one above. The linker takes it down to each
-level by ramping back and forth along the middle at the ramp angle, from the
-safe distance over the material, each way no deeper than
-`linking.ramp_stepdown` (Fusion's Maximum Ramp Stepdown: the stepdown, or a
-millimetre without one). A tool narrower than the slot then goes once round
-its walls at the level, climbing, as a pass of its own the linker ramps into
-round it; one more than three times narrower leaves a band either side of the
-middle, and the run says so (CC219). `repeat = true` (Fusion's Repeat Finishing
-Pass) cuts the last pass at the floor twice; `backoff_distance` (none) backs
-the tool off the wall at the end of each slot before it lifts: back along the
-middle, or in from the walls. Slots are cut from the first picked, then always
-the nearest, or in the order picked with `preserve_order = true`. Between
-levels and slots it stays down within twice the tool, as Fusion's. Arcs, the
-ends round the walls and a curved slot's middle, are posted as `G2` or `G3`.
+It cuts the middle only, as Fusion's Slot does: a tool narrower than the slot
+leaves its walls, half the difference on each, and the run says how much
+(CC219, a note); finish them with a 2D contour. Each slot is one pass. The tool
+comes down to `ramp_clearance_height` (Fusion's Ramp Clearance Height, 2.5 mm)
+over the Top above the slot's start, then ramps back and forth along the whole
+middle, end to end, at the ramp feed, every leg falling as far, to the floor;
+then goes once along the floor at the cutting feed from the end the ramp ended
+at to the other. A leg falls no more than half of `linking.ramp_stepdown`
+(Fusion's Maximum Ramp Stepdown, the most there and back: the stepdown, or
+without multiple depths Fusion's `Math.min(tool_fluteLength * 0.75;
+tool_diameter * 0.1)`, a tenth of a common end mill), and no more steeply than
+the ramp angle. So a 6 mm end mill ramps 6.5 mm down a slot in 22 legs of
+0.295 mm, as Fusion's program does. With multiple depths (a millimetre a level
+when ticked, Fusion's Maximum Stepdown), each level a whole stepdown and the
+last what is left, each ramped down to from the level above along the middle
+and cut along; Fusion's programs for this have not been compared. `repeat =
+true` (Fusion's Repeat Finishing Pass) goes along the floor a second time, back
+the way it came; `backoff_distance` (none) backs the tool along the middle off
+the end wall before it lifts. Each slot starts at its end lowest in X, then in
+Y; the slot starting nearest the work zero is cut first, then always the one
+starting nearest where the last ended, or in the order picked with
+`preserve_order = true`. Between slots it lifts, or stays down within twice the
+tool. A curved slot's middle is posted as `G2` or `G3` arcs, its ramp legs as
+helices.
 
 ```toml
 [[setup.operation]]
@@ -807,7 +813,7 @@ with.
 | CC216 | note    | the shank and holder were checked with an assumed length or size |
 | CC217 | note    | no holder or spindle nose to check: only the shank was           |
 | CC218 | warn    | a bore or circular left a core standing in a hole                |
-| CC219 | warn    | a slot more than three tools wide left a band uncut              |
+| CC219 | note    | a slot wider than the tool: its walls left, as Fusion's are      |
 | CC220 | note    | stretches of a trace steeper than its maximum angle left out     |
 | CC221 | warn    | stretches of a 2D chamfer lifted to keep its clearance           |
 | CC222 | note    | a bore's or circular's passes past a hole's middle left out      |

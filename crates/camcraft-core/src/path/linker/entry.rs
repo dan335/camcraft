@@ -399,10 +399,8 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
             }
         }
         let high = top + self.p.safe_distance;
-        // Round a closed pass, no more than the most in a lap; along an open
-        // one, each way along it, where that is asked.
         let angle = match self.p.ramp_stepdown {
-            Some(d) if closed || self.p.ramp_legs => ramp.angle.min((d / length).atan()),
+            Some(d) if closed => ramp.angle.min((d / length).atan()),
             _ => ramp.angle,
         };
         let run = (high - to.z) / angle.tan();

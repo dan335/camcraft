@@ -265,11 +265,10 @@ impl StrategySpec {
             },
             // Its picks are the edges round each slot's floor, each slot cut
             // along its middle from the stock's top down to its own floor:
-            // no area, no stepover, only its floor to leave anything on. Down
-            // to each level by ramping back and forth along the slot, as
-            // Fusion's Slot's profile ramp, its legs no deeper than the most
-            // a ramp goes down; between levels and slots it stays down within
-            // twice the tool, as Fusion's.
+            // no area, no stepover, only its floor to leave anything on. Its
+            // ramp is its own, back and forth along the slot, as Fusion's
+            // Slot's profile ramp: each slot is one pass. Between slots it
+            // stays down within twice the tool, as Fusion's.
             StrategySpec::Slot { .. } => Uses {
                 boundary: false,
                 curves: Some(Curves::Slots),

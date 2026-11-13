@@ -93,3 +93,52 @@ Order by Depth orders, are not in its references; PROGRESS.md and the report
 that came with this list them to check. Trace's Chamfer, which cuts into the
 part's edge on purpose, waits for a way to tell the checks a cut past the part
 is meant.
+
+## What Fusion's programs showed (2026-11-13)
+
+Fusion's own programs for `ops_2d`'s two slots, 8 wide, one 6 deep and
+straight, one 4 deep at 30°, cut with the 6 mm flat and with the 8 mm
+(`fixtures/nc/ops_2d_slot.nc`, `ops_2d_slot8.nc`), settled what was
+assumed above:
+
+- **The middle only.** With the 6 mm flat in the 8 mm slots Fusion cuts along
+  the middle and nothing else, leaving a millimetre on each wall. camcraft's
+  loop round the walls is gone: a tool narrower than the slot leaves its
+  walls, and the checks say how much (CC219, a note now).
+- **Its own ramp.** Fusion feeds down at the ramp feed to the Ramp Clearance
+  Height, 2.5 mm over the stock's top, and ramps back and forth along the
+  whole middle, end to end, every leg falling as far, until it is on the
+  floor; then once along the floor at the cutting feed to the other end. Its
+  legs are the fewest that fall no more than half the Maximum Ramp Stepdown
+  each, from where the ramp starts to the floor: 22 legs of 0.295 mm for 6.5
+  mm with the 6 mm flat, 17 of 0.382 mm with the 8 mm. So the Maximum Ramp
+  Stepdown is what it falls there and back, and with Multiple Depths off it is
+  `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)`: Fusion's
+  expression, `maximumStepdown` counting as none. The ramp is now the slot's
+  own (`strategy::slot`), not the linker's, and starts at
+  `ramp_clearance_height`; the linker no longer limits a ramp's legs along an
+  open pass (`LinkParams::ramp_legs` is gone). The ramp angle stays the other
+  limit, which on these slots allows 1.05 mm a leg.
+- **Order and ends.** Fusion cut the angled slot first, from its lower-left
+  end, then the straight one from its left. camcraft starts each slot at its
+  end lowest in X, then Y, and cuts first the slot starting nearest the work
+  zero, then always the one starting nearest where the last ended. That rule
+  gives both programs; two slots do not show it is Fusion's.
+
+Held to those programs (`compare::tests::ops_2d`), the 6 mm's slots agree in
+all 65,080 columns cut and remove 2,082.6 mm³ to Fusion's 2,082.6, fed 1,594
+mm to its 1,595; the 8 mm's agree in 91,065 of 91,067, fed 1,244 to 1,235.
+Before, the 6 mm's differed in 25,966 of 91,046 columns, the walls, and both
+fed under half as far.
+
+Still not compared with a program of Fusion's: Multiple Depths (here, each
+level ramped down to from the one above along the middle, then cut along),
+Backoff Distance (back along the middle off the end wall), Repeat Finishing
+Pass (along the floor again, back the way it came), and Preserve Order.
+
+Trace's program for `ops_2d`'s two V grooves agrees with camcraft's in every
+one of its 48,779 columns, fed 89 mm to Fusion's 101: Fusion writes the
+round groove as some fifty short lines where camcraft writes one arc. Fusion
+runs that groove, an open arc, from its end at +X, where camcraft starts an
+open curve at its end lowest in X; on the curve, it leaves the same. Its
+compensation, multiple depths and the rest are not yet compared.

@@ -591,10 +591,11 @@ fn left_over(result: &SetupResult, job: &Job, inside: impl Fn(DVec2) -> bool, fl
 }
 
 /// Fusion's Slot, a new operation picked by the edges round the slot's floor
-/// or by its floor, with a tool as wide as the slot, ramps back and forth down
-/// to the floor along the middle and cuts along it: clean, verified, every
-/// cut on the middle, and nothing left in the slot. In levels, with a
-/// narrower tool, it goes round the walls too, and still leaves nothing.
+/// or by its floor, ramps back and forth along the middle from over the stock
+/// down to the floor and cuts along it: clean, verified, every ramp and cut on
+/// the middle, and the slot cut to the floor as wide as the tool. A tool as
+/// wide as the slot leaves nothing in it; a narrower one, in levels, leaves
+/// the walls standing, as Fusion's does.
 #[test]
 fn a_slot_is_cut_along_its_middle() {
     use crate::path::toolpath::MoveRole;
@@ -612,18 +613,21 @@ fn a_slot_is_cut_along_its_middle() {
             panic!("reported {:?}", op.detail);
         };
         assert_eq!(report.slots, 1);
-        assert_eq!(report.walls, u64::from(tool < 6.0));
+        assert_eq!(report.narrower, u64::from(tool < 6.0));
         assert!(result.is_clean(), "{tool}: {:?}", result.warnings());
         assert_eq!(result.verify.gouged, 0);
         assert_eq!(op.sim.rapid_contacts, 0);
-        assert!(op.links.ramps > 0, "{tool}: ramped down");
-        let ramps = op.path.moves().iter().filter(|m| m.role == MoveRole::Ramp);
-        // Back and forth along the middle, no further than the slot's ends, or
-        // round the walls, as far from it as the tool goes round them.
-        let reach = 3.0 - tool / 2.0;
-        for m in ramps {
-            let off = dvec2(m.to.x.clamp(-8.0, 8.0), 0.0).distance(m.to.truncate());
-            assert!(off <= reach + 1e-9, "{tool}: {}", m.to);
+        assert!(report.legs > 1, "{tool}: ramped down");
+        // The linker ramps nothing: the slot's ramp is its own.
+        assert_eq!(op.links.ramps, 0);
+        for m in op.path.moves() {
+            if matches!(m.role, MoveRole::Ramp | MoveRole::Cut) {
+                assert!(
+                    m.to.y.abs() < 1e-9 && m.to.x.abs() <= 8.0 + 1e-9,
+                    "{tool}: {}",
+                    m.to
+                );
+            }
         }
         let lowest = op
             .path
@@ -632,17 +636,27 @@ fn a_slot_is_cut_along_its_middle() {
             .map(|m| m.to.z)
             .fold(f64::MAX, f64::min);
         assert!((lowest - 6.0).abs() < 1e-9, "down to {lowest}");
-        if tool >= 6.0 {
-            for m in op.path.moves().iter().filter(|m| m.role == MoveRole::Cut) {
-                assert!(m.to.y.abs() < 1e-9, "{}", m.to);
+        let field_pitch = result.keyframes[0].unpack().unwrap().field().pitch();
+        let pitch = 2.0 * field_pitch;
+        let middle = |p: DVec2| dvec2(p.x.clamp(-8.0, 8.0), 0.0).distance(p);
+        let reach = tool / 2.0;
+        assert!(left_over(&result, &job, |p| middle(p) < reach - pitch, 6.0) > 100);
+        // Beside it, the walls, up to the block's top.
+        if tool < 6.0 {
+            let stock = result.keyframes.last().unwrap().unpack().unwrap();
+            let field = stock.field();
+            let mut walls = 0;
+            for iy in 0..field.ny() {
+                for ix in 0..field.nx() {
+                    let p = field.position(ix, iy).unwrap();
+                    if (reach + pitch..3.0 - pitch).contains(&middle(p)) {
+                        walls += 1;
+                        assert!(field.get(ix, iy).unwrap() > 9.0, "cut at {p}");
+                    }
+                }
             }
+            assert!(walls > 100);
         }
-        let pitch = 2.0 * result.keyframes[0].unpack().unwrap().field().pitch();
-        let inside = |p: DVec2| {
-            let along = dvec2(p.x.clamp(-8.0, 8.0), 0.0);
-            p.distance(along) < 3.0 - pitch
-        };
-        assert!(left_over(&result, &job, inside, 6.0) > 100);
     }
 }
 

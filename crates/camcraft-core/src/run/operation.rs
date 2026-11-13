@@ -507,9 +507,14 @@ pub(super) fn plan_operation(
         )?,
         StrategySpec::Slot {
             backoff_distance,
+            ramp_clearance_height,
             repeat,
             ..
-        } => slot_paths(work, (backoff_distance, repeat), slots, &mut warnings)?,
+        } => slot_paths(
+            work,
+            (backoff_distance, ramp_clearance_height, repeat),
+            slots,
+        )?,
         StrategySpec::Trace {
             compensation,
             axial_offset,

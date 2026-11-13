@@ -183,7 +183,7 @@ topics! {
     BACKOFF: "Backoff distance",
         "How far the tool backs off the wall at the end of each slot before it lifts, so it does not drag up the wall.";
     SLOT_REPEAT: "Repeat finishing pass",
-        "Cuts the last pass at the floor twice, for a tool that springs away from the walls.";
+        "Goes along the floor a second time at the end of each slot, for a tool that springs away from the walls.";
     PRESERVE_ORDER: "Preserve order",
         "Cuts in the order picked. Unticked, the first picked, then always the nearest next.";
     COMPENSATION: "Sideways compensation",

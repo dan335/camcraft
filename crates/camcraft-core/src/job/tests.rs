@@ -1848,7 +1848,7 @@ fn slot_and_trace_read_and_write_back() {
     let finish = "strategy = \"parallel\"\ntool = \"finish-4-ball\"\nangle = 90.0\n";
     let picked =
         "selection = { edges = [{ model = \"part\", index = 3, at = [1.0, 2.0, 3.0] }] }\n";
-    let slot_own = "backoff_distance = 0.5\nrepeat = true\npreserve_order = true\n";
+    let slot_own = "ramp_clearance_height = 1.0\nbackoff_distance = 0.5\nrepeat = true\npreserve_order = true\n";
     let trace_own = "compensation = \"left\"\naxial_offset = -0.2\npass_extension = 1.0\n\
                      max_angle = 45.0\nstepdowns = 3\norder = \"by-area\"\nboth_ways = true\n\
                      repeat = true\npreserve_order = true\nkeep_tool_down = true\n\
@@ -1867,6 +1867,7 @@ fn slot_and_trace_read_and_write_back() {
         let written = toml::to_string(&j).unwrap();
         for key in [
             "backoff_distance",
+            "ramp_clearance_height",
             "repeat",
             "preserve_order",
             "compensation",
@@ -1901,6 +1902,7 @@ fn slot_and_trace_read_and_write_back() {
         let fine = |to: &str| assert!(with(to).validate().is_ok(), "{name}: {to}");
         if name == "slot" {
             refused("backoff_distance = -1.0\n");
+            refused("ramp_clearance_height = -1.0\n");
         } else {
             refused("max_angle = 0.0\n");
             refused("max_angle = 91.0\n");
@@ -1928,12 +1930,24 @@ fn slot_and_trace_read_and_write_back() {
         }
     }
     // Both start with Multiple Depths off, as Fusion's; a slot ramps along
-    // itself, its legs a millimetre down each without levels; a trace has no
-    // ramp, no Top or Bottom, and starts with a full retraction and the tool
-    // lifted between passes.
+    // itself from 2.5 mm over the Top, without levels as far as a tenth of the
+    // tool there and back, or three quarters of its flutes if that is less, as
+    // Fusion's; a trace has no ramp, no Top or Bottom, and starts with a full
+    // retraction and the tool lifted between passes.
     let slot = Operation::new("s", StrategySpec::named("slot").unwrap());
     assert_eq!(slot.passes.stepdown, None);
-    assert_eq!(slot.ramp_stepdown(6.0), 1.0);
+    assert!(matches!(
+        slot.strategy,
+        StrategySpec::Slot {
+            ramp_clearance_height: 2.5,
+            ..
+        }
+    ));
+    assert!((slot.ramp_stepdown(6.0) - 0.6).abs() < 1e-12);
+    assert!((slot.ramp_stepdown_for(6.0, 0.4) - 0.3).abs() < 1e-12);
+    let mut levels = slot.clone();
+    levels.passes.stepdown = Some(1.5);
+    assert_eq!(levels.ramp_stepdown_for(6.0, 20.0), 1.5);
     assert!(slot.strategy.uses().ramp && slot.entry().is_none());
     assert_eq!(slot.strategy.uses().stock_to_leave, Leave::Axial);
     let trace = Operation::new("t", StrategySpec::named("trace").unwrap());

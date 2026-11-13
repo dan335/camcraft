@@ -706,10 +706,13 @@ impl Operation {
             ));
         }
         if let StrategySpec::Slot {
-            backoff_distance, ..
+            backoff_distance,
+            ramp_clearance_height,
+            ..
         } = self.strategy
         {
             at_least_zero(&field("backoff_distance"), backoff_distance)?;
+            at_least_zero(&field("ramp_clearance_height"), ramp_clearance_height)?;
         }
         if let StrategySpec::Trace {
             axial_offset,
