@@ -131,6 +131,21 @@ Only the two binaries reach `import`, through `session`, so work on `geom`, `sim
 `core` and `post` never waits for a STEP kernel to build. `step-check` depends on
 nothing of camcraft's, so any STEP importer can check its own output with it.
 
+### Using the engine in another program
+
+Everything but the two binaries is a library, and another Rust program can
+build on it. The crates are not on crates.io yet, so depend on a release by
+its tag, each crate you use:
+
+```toml
+camcraft-core    = { git = "https://github.com/dan335/camcraft", tag = "v0.8.0" }
+camcraft-session = { git = "https://github.com/dan335/camcraft", tag = "v0.8.0" }
+```
+
+Their interfaces still change from release to release, so move from tag to tag
+when it suits you. A program built on ogeom hands its solids over as they are,
+without writing a STEP file (`camcraft_import::native`, after 0.8.0).
+
 ### Conventions
 
 Millimetres, Z-up, right-handed. The controlled point is the **tool tip**. `f64`

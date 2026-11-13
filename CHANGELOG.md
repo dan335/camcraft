@@ -14,6 +14,14 @@ the same notes at more length.
   repository is LGPL now, nothing needs cmake or a C++ compiler, and the
   crates no longer carry a dependency patched in by path. No release build
   ever included it.
+- **A solid that is ogeom's already loads without a file.**
+  `camcraft_import::native::load_shapes` takes shapes held in memory, and
+  `load_native` the same written in ogeom's native format, and gives the
+  body a STEP file of them would: every face meshed to the tolerance,
+  measured against its surface and kept as a face. For programs built on
+  ogeom that use camcraft's engine, as
+  [PrintCAD-cam-wb](https://github.com/gilbertorconde/PrintCAD-cam-wb) does,
+  whose copy of the engine had this first.
 
 ## 0.8.0 — 2026-11-13
 

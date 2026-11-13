@@ -248,6 +248,13 @@ Accepted costs, all of which were actually hit and resolved during the spike:
   dependency patched in by path. `load_step_with` stays, so another kernel's
   mesh can still be put through the same checks, and step-conformance
   (`scripts/kernel-trial.sh`) still scores readers against each other.
+- **2026-11-13: shapes that are ogeom's already.** A program built on ogeom
+  holds its solids as ogeom shapes, and had to copy this crate to mesh them
+  as a STEP file's are. `native::load_shapes` takes them as they are, and
+  `native::load_native` as ogeom's native text: `step`'s meshing of bodies
+  and its weld, split out of the reading of a file. There is no file to
+  check such a mesh against, so the checks of `step-check` do not run;
+  each face is still measured against its surface.
 
 ## Implemented (0.1-d, 2026-09-22)
 
