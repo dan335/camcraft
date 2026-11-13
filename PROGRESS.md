@@ -24,7 +24,7 @@ has only with its Manufacturing Extension.
 
 | Area                                          | Done | Partial | Not started |
 |-----------------------------------------------|-----:|--------:|------------:|
-| [2D operations](#2d-operations)               |    1 |       8 |           2 |
+| [2D operations](#2d-operations)               |    1 |       9 |           1 |
 | [3D roughing](#3d-roughing)                   |    0 |       2 |           0 |
 | [3D finishing](#3d-finishing)                 |    0 |       7 |           9 |
 | [Drilling](#drilling)                         |    4 |       1 |           3 |
@@ -37,7 +37,7 @@ has only with its Manufacturing Extension.
 | [Posts and programs](#posts-and-programs)     |    6 |       0 |           2 |
 | [App](#app)                                   |    7 |       1 |           0 |
 | [Project](#project)                           |    1 |       0 |           4 |
-| **All**                                       |   55 |      25 |          38 |
+| **All**                                       |   55 |      26 |          37 |
 
 `grep "| not started" PROGRESS.md` lists everything not yet begun.
 
@@ -69,7 +69,7 @@ Roughly in the order they matter:
 | Thread               | not started | |
 | Bore                 | partial     | Holes and bosses picked by their walls, from each wall's top to its bottom; pitch or ramp angle, stepovers, finishing passes, repeat, leads and lead to center, climb or conventional ([0022](docs/decisions/0022-bore-and-circular.md)). Not yet held to Fusion's program. Missing: tapered walls, diameter range and same-diameter selection, hole order choices, compensation in control, bottom-to-top. |
 | Circular             | partial     | Holes and bosses picked by their walls, cut level by level, whole or even stepdowns, ramped on along the circle; stepovers, repeat, leads and lead to center, climb or conventional ([0022](docs/decisions/0022-bore-and-circular.md)). Not yet held to Fusion's program. Missing: diameter range and same-diameter selection, hole order choices, compensation in control. |
-| Engrave              | not started | |
+| Engrave              | partial     | Matches Fusion, on all four of its programs for a plate with a triangle, a stroke and a rectangle sunk into it. Shapes picked by their rims or floors, islands too; the V's flank on the outline, round a wide shape at the depth, along a narrow one's middle, up into corners sharper than the sharp corner angle; depth (0.95 of the flank, as Fusion's Bottom), flat tips, multiple depths; a shape sunk less deep than the V goes is said (CC222) and fails the part check ([0025](docs/decisions/0025-engrave.md)). Missing: Top and Bottom from other references, Keep Tool Down, an island far from its outline joined to it in one pass, entry positions, sketches and text, polar and wrap. |
 | 2D Chamfer           | partial     | Picked edges, or every edge of picked faces, chamfered with a chamfer mill or V-bit: a sharp edge to the chamfer width asked, a chamfer the model has followed from its lower edge; tip offset, clearance (the tool lifted off the part's other faces), finishing overlap, preserve order; the side of the part found from the part; the chamfer asked is held by the checks as cut on purpose, and anything deeper is a gouge ([0024](docs/decisions/0024-chamfer-and-2d-adaptive.md)). Not yet held to Fusion's program. Missing: outer corner modes other than roll, lead-in and lead-out settings (always Fusion's default straight, a tenth of the tool), compensation in control, tangential extension of open chains, sketches. |
 
 ## 3D roughing

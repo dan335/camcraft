@@ -70,8 +70,12 @@ use clearing::{
     planar_paths, pocket_clearing_paths,
 };
 pub(super) use clearing::{drill_holes, heights_of, planar_areas};
-use curves::{ChamferAsked, TraceAsked, chamfer_paths, slot_paths, trace_paths};
-pub(super) use curves::{Chamfers, chamfers_picked, curves_picked, slots_picked};
+use curves::{
+    ChamferAsked, EngraveAsked, TraceAsked, chamfer_paths, engrave_paths, slot_paths, trace_paths,
+};
+pub(super) use curves::{
+    Chamfers, chamfers_picked, curves_picked, engravings_picked, slots_picked,
+};
 use finishing::{
     contour_paths, flat_paths, morphed_spiral_paths, parallel_paths, radial_paths, scallop_paths,
     spiral_paths,
@@ -217,6 +221,8 @@ pub(super) enum Target {
     Curves(Vec<Picked>),
     /// A 2D chamfer's edges, and the faces they do not join.
     Chamfers(Chamfers),
+    /// An engraving's shapes, in the order picked.
+    Engravings(Vec<crate::strategy::engrave::Shape>),
 }
 
 /// An operation's passes, worked out and put in order, its tabs on them: ready
@@ -269,10 +275,11 @@ fn held_clear(
     let how = match op.strategy {
         // Fusion's 2D operations have no Shaft and Holder: the checks still
         // sweep the whole tool.
-        // Nor has its 2D Adaptive.
+        // Nor has its 2D Adaptive, nor its Engrave.
         StrategySpec::Slot { .. }
         | StrategySpec::Trace { .. }
-        | StrategySpec::Adaptive2d { .. } => {
+        | StrategySpec::Adaptive2d { .. }
+        | StrategySpec::Engrave { .. } => {
             return Ok(None);
         }
         _ if mode == HolderMode::Fail => Some(Clear::Trim),
@@ -347,7 +354,7 @@ pub(super) fn plan_operation(
         Target::Holes(holes) => (None, holes.as_slice(), &[][..], &[][..]),
         Target::Areas(areas) => (None, &[][..], areas.as_slice(), &[][..]),
         Target::Rounds(rounds) => (None, &[][..], &[][..], rounds.as_slice()),
-        Target::Slots(_) | Target::Curves(_) | Target::Chamfers(_) => {
+        Target::Slots(_) | Target::Curves(_) | Target::Chamfers(_) | Target::Engravings(_) => {
             (None, &[][..], &[][..], &[][..])
         }
     };
@@ -563,6 +570,25 @@ pub(super) fn plan_operation(
                     preserve_order,
                 },
                 chamfers,
+                &mut warnings,
+            )?
+        }
+        StrategySpec::Engrave {
+            depth,
+            sharp_corner_angle,
+        } => {
+            let Target::Engravings(shapes) = target else {
+                return Err(in_op(op)(
+                    crate::strategy::engrave::EngraveError::NothingPicked,
+                ));
+            };
+            engrave_paths(
+                work,
+                EngraveAsked {
+                    depth,
+                    sharp_corner_angle,
+                },
+                shapes,
                 &mut warnings,
             )?
         }
@@ -889,6 +915,7 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
         StrategySpec::Slot { .. } => StrategyDetail::Slot(SlotReport::default()),
         StrategySpec::Trace { .. } => StrategyDetail::Trace(TraceReport::default()),
         StrategySpec::Chamfer2d { .. } => StrategyDetail::Chamfer2d(Default::default()),
+        StrategySpec::Engrave { .. } => StrategyDetail::Engrave(Default::default()),
         StrategySpec::Adaptive2d { .. } => StrategyDetail::Adaptive2d(Default::default()),
     };
     OperationResult {

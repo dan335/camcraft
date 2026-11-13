@@ -27,11 +27,11 @@ and the transport under the view. The Add menu adds models, stocks, setups and
 operations; View opens the log and the checks in their own windows; the Setup menu
 posts. Operations are grouped as Fusion's toolbar groups them, in the Add menu and
 a setup's right-click menu alike: 2D (face, 2D adaptive clearing, pocket,
-profile, slot, trace, bore, circular, 2D chamfer), 3D
+profile, slot, trace, bore, circular, engrave, 2D chamfer), 3D
 (adaptive clearing, pocket clearing, then parallel, scallop, contour, flat,
 spiral, radial and morphed spiral) and drilling. Fusion's operations not built yet
 are listed after the rest of their group, greyed, and say *Not implemented yet*
-under the pointer: in 2D, thread and engrave; in 3D, after the finishing, steep
+under the pointer: in 2D, thread; in 3D, after the finishing, steep
 and shallow, ramp, pencil, project,
 morph, blend, flow, corner and geodesic. They are listed in `browser::PLANNED`,
 which an operation leaves once it is built.
@@ -150,7 +150,13 @@ it.
   only the clearance and retract heights. A 2D chamfer's *Passes* has *Chamfer
   width*, *Chamfer tip offset*, *Chamfer clearance*, *Finishing overlap* and
   *Preserve order*, and no stock to leave or multiple depths; its *Heights* only
-  the clearance and retract heights, and its *Linking* nothing of its own. 2D
+  the clearance and retract heights, and its *Linking* nothing of its own. An
+  engraving's *Passes* has *Depth*, unset to start, 0.95 of how deep the
+  tool's flank reaches, and *Sharp corner angle*, then *Multiple depths*
+  (a millimetre when ticked) and *Smoothing*; no stock to leave, feed
+  optimization or shaft and holder. Its *Heights* are only the clearance and
+  retract heights, and its *Linking* nothing of its own: it lifts between
+  shapes. 2D
   adaptive's *Passes* is 3D adaptive's less what a 2D pocket has no use for:
   *Minimum cutting radius*, *Slot clearing* and its width, climb, conventional
   or both ways, by depth or by area, the *Optimal load*, and *Multiple depths*,
@@ -248,6 +254,10 @@ the part, where an offset of 0 would only touch its walls.
   in, as for a boundary, or where it closes none the edges running on smoothly
   from it, as for a trace; a face's every edge is chamfered, its outline and the
   rim of every hole in it, and is drawn so.
+- An engraving takes the shapes it engraves: the edges round each one's rim, a
+  click taking the whole loop as for a boundary, or its floor as a face, whose
+  edges are its outline and are drawn so. A loop inside another, an island's
+  rim, is part of the shape's outline.
 - A 2D profile, pocket or 2D adaptive takes faces and edges as what it cuts
   round or clears.
   The view draws that boundary (wide), each piece of it at the height of what is

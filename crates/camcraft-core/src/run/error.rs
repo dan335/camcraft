@@ -13,6 +13,7 @@ use crate::setup::features::FeatureError;
 use crate::strategy::StrategyError;
 use crate::strategy::chamfer::ChamferError;
 use crate::strategy::drilling::HoleError;
+use crate::strategy::engrave::EngraveError;
 use crate::strategy::reach::ReachError;
 use crate::strategy::round::RoundError;
 use crate::strategy::slot::SlotError;
@@ -99,6 +100,14 @@ pub enum RunError {
         op: String,
         /// Why.
         source: ChamferError,
+    },
+    /// An engraving's picks are not shapes, or cannot be engraved.
+    #[error("operation '{op}': {source}")]
+    Engrave {
+        /// Which operation.
+        op: String,
+        /// Why.
+        source: EngraveError,
     },
     /// The rest of the tool would meet the part, and the operation was to
     /// fail where it would: Fusion's Shaft and Holder's Fail.
@@ -228,6 +237,15 @@ impl OperationError for ChamferError {
         match self {
             ChamferError::Strategy(e) => e.named(op),
             source => RunError::Chamfer { op, source },
+        }
+    }
+}
+
+impl OperationError for EngraveError {
+    fn named(self, op: String) -> RunError {
+        match self {
+            EngraveError::Strategy(e) => e.named(op),
+            source => RunError::Engrave { op, source },
         }
     }
 }

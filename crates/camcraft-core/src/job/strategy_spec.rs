@@ -464,6 +464,27 @@ pub enum StrategySpec {
         #[serde(default, skip_serializing_if = "is_default")]
         preserve_order: bool,
     },
+    /// Picked shapes engraved with a V-bit or chamfer mill: the tool walked
+    /// round each shape's outline, its axis at the centre of the largest circle
+    /// that fits in the shape and touches the outline there, as deep as makes
+    /// its flank touch the outline, no deeper than its depth: round the outline
+    /// at that depth where the shape is wide, along its middle where it is
+    /// narrow, and up into its sharp corners. Fusion's Engrave.
+    Engrave {
+        /// How far below each shape's top it goes at most, in millimetres:
+        /// Fusion's Bottom, from the Top, by its offset. Left out, 0.95 of how
+        /// deep the tool's flank reaches, as a new Engrave of Fusion's starts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        depth: Option<f64>,
+        /// Convex corners whose edges meet at less than this, in degrees, are
+        /// run into, up their bisector to the corner at the surface; blunter
+        /// ones are gone round. Fusion's Sharp Corner Angle, 165°.
+        #[serde(
+            default = "default_sharp_corner",
+            skip_serializing_if = "is_default_sharp_corner"
+        )]
+        sharp_corner_angle: f64,
+    },
     /// The picked pockets, open or closed and with islands, cleared with the
     /// tool's load held constant, as adaptive clearing does, at the 2D
     /// pocket's levels: down to each pocket's floor in one level, or a
@@ -542,6 +563,7 @@ impl StrategySpec {
             StrategySpec::Slot { .. } => "slot",
             StrategySpec::Trace { .. } => "trace",
             StrategySpec::Chamfer2d { .. } => "chamfer-2d",
+            StrategySpec::Engrave { .. } => "engrave",
             StrategySpec::Adaptive2d { .. } => "adaptive-2d",
         }
     }
@@ -573,6 +595,7 @@ impl StrategySpec {
             | StrategySpec::Slot { .. }
             | StrategySpec::Trace { .. }
             | StrategySpec::Chamfer2d { .. }
+            | StrategySpec::Engrave { .. }
             | StrategySpec::Adaptive2d { .. } => None,
         }
     }
@@ -604,14 +627,16 @@ impl StrategySpec {
             | StrategySpec::MorphedSpiral { direction, .. } => Some(direction),
             // A slot's tool is as wide as the slot, cutting both ways at once;
             // a trace's side is its compensation; a chamfer climbs, as
-            // Fusion's chains are picked to.
+            // Fusion's chains are picked to; an engraving's walk goes round
+            // each outline anticlockwise, the shape on its left.
             StrategySpec::Parallel { .. }
             | StrategySpec::Radial { .. }
             | StrategySpec::Face { .. }
             | StrategySpec::Drill { .. }
             | StrategySpec::Slot { .. }
             | StrategySpec::Trace { .. }
-            | StrategySpec::Chamfer2d { .. } => None,
+            | StrategySpec::Chamfer2d { .. }
+            | StrategySpec::Engrave { .. } => None,
         }
     }
 
@@ -756,7 +781,8 @@ impl StrategySpec {
             StrategySpec::Contour { .. }
             | StrategySpec::Drill { .. }
             | StrategySpec::Slot { .. }
-            | StrategySpec::Trace { .. } => Vec::new(),
+            | StrategySpec::Trace { .. }
+            | StrategySpec::Engrave { .. } => Vec::new(),
         };
         // A drill's feed down is its cutting feed: it has no plunge of its own.
         if !matches!(self, StrategySpec::Drill { .. }) {
@@ -782,13 +808,15 @@ impl StrategySpec {
     }
 
     /// How high a new operation of this strategy goes between cuts, where that
-    /// is not what a job file that leaves it out reads: a trace and a 2D
-    /// chamfer to the retract height, as Fusion's Trace starts with a full
-    /// retraction and its 2D Chamfer has no other.
+    /// is not what a job file that leaves it out reads: a trace, a 2D chamfer
+    /// and an engraving to the retract height, as Fusion's Trace starts with
+    /// a full retraction, and its 2D Chamfer and Engrave have no other.
     pub fn fresh_retraction(&self) -> Retraction {
         if matches!(
             self,
-            StrategySpec::Trace { .. } | StrategySpec::Chamfer2d { .. }
+            StrategySpec::Trace { .. }
+                | StrategySpec::Chamfer2d { .. }
+                | StrategySpec::Engrave { .. }
         ) {
             Retraction::Full
         } else {
@@ -805,9 +833,10 @@ impl StrategySpec {
     }
 
     /// The multiple depths this strategy starts with: roughing 2 mm a level;
-    /// facing, a 2D profile, a 2D pocket, 2D adaptive, a slot and a trace
-    /// their bottom in one pass, as Fusion's Face, 2D Contour, 2D Pocket, 2D
-    /// Adaptive, Slot and Trace start with Multiple Depths off.
+    /// facing, a 2D profile, a 2D pocket, 2D adaptive, a slot, a trace and an
+    /// engraving their bottom in one pass, as Fusion's Face, 2D Contour, 2D
+    /// Pocket, 2D Adaptive, Slot, Trace and Engrave start with Multiple Depths
+    /// off.
     /// Ticked, a profile's and a pocket's levels start at Fusion's Maximum
     /// Roughing Stepdown ([`StrategySpec::default_expressions`]). A circular
     /// starts with them on, a millimetre apart, as Fusion's Circular does.
@@ -822,6 +851,7 @@ impl StrategySpec {
                     | StrategySpec::Adaptive2d { .. }
                     | StrategySpec::Slot { .. }
                     | StrategySpec::Trace { .. }
+                    | StrategySpec::Engrave { .. }
             ) =>
             {
                 None
@@ -993,6 +1023,13 @@ default_number!(
     /// millimetres: a new 2D Chamfer of Fusion's.
     default_tip_offset,
     is_default_tip_offset = 1.0
+);
+
+default_number!(
+    /// The bluntest a convex corner may be, between its edges, in degrees,
+    /// and still be run into: a new Engrave of Fusion's.
+    default_sharp_corner,
+    is_default_sharp_corner = 165.0
 );
 
 default_number!(

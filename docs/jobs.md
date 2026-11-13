@@ -360,6 +360,73 @@ clearance = 0.6
 selection = { edges = [{ model = "part", index = 21, at = [-20.0, 18.0, 20.0] }] }
 ```
 
+**Engrave** (`strategy = "engrave"`) is Fusion's Engrave
+([decision 0025](decisions/0025-engrave.md)): picked shapes engraved with a
+cone, a V-bit or chamfer mill, and nothing else. A shape is picked by the edges
+round its rim (`selection.edges`; the app takes the whole loop an edge lies in
+at a click), each loop engraved from its own height, as Fusion's Top "from
+contour"; or by its floor (`selection.faces`), whose edges are its outline,
+engraved from the top of the faces standing round it, the surface it is sunk
+into. A loop inside another is an island of it, and its outline is part of the
+shape's. Picked edges that do not close round a shape are refused, saying where.
+
+At each point the tool's flank touches the outline: it goes as deep as the
+circle round its axis that fits in the shape and touches the outline, at the
+cone's angle, less its flat tip, and no deeper than `depth` (Fusion's Bottom,
+from the Top, by its offset). Left out, `depth` is 0.95 of how deep the flank
+reaches, `0.95 * (diameter - tip_diameter) / 2 / tan(angle / 2)`, as Fusion's
+new Engrave starts: 2.85 mm for a 6 mm 90° V. Deeper than the flank reaches is
+refused. So in a shape wider than the V reaches at that depth the tool runs
+round the outline that far in, at the depth; in a stroke narrower than that it
+runs along the stroke's middle, as deep as touches both walls; at a convex
+corner sharper than `sharp_corner_angle` (Fusion's Sharp Corner Angle, 165°,
+between the corner's edges) it runs up the bisector into the corner at the
+surface and back down; a blunter one it goes round. A flat tip leaves out what
+is narrower than the tip, where it would only ride the surface.
+
+The path is a walk round each loop of the outline, anticlockwise round the
+outside and clockwise round an island, the shape on its left: at each point of
+the outline the centre of the largest circle that fits in the shape and touches
+the outline there, no larger than the depth allows. Along a straight wall that
+centre runs straight, and is one move; round an arc, or a reflex corner at the
+depth, an arc, posted as `G2` or `G3`; where it is pulled by a corner, as a
+reflex corner pulls a stroke's middle into a parabola, moves within half the
+tolerance. Each walk starts at the loop's lowest, then leftmost, corner it runs
+into, at the surface, so it goes in without a plunge into material, and what
+it would go back over at its end, cut already, is left off. Shapes are cut in
+the order picked, each outline before its islands; an island whose walk meets
+the outline's, in a channel narrower than the V reaches across, is gone round
+from where they meet, in the same pass. With multiple depths (off to
+start, a millimetre a level when ticked), each loop is walked once at each
+level, no deeper than it, down to the last, without lifting. Between passes,
+shapes and islands apart from their outline, it lifts, to the retract height in a new operation
+(`linking.retraction = "full"`; a job file that leaves it out has the minimum,
+as every other), and plunges onto the next at the plunge feed: it has no ramp.
+Fusion's Keep Tool Down is not offered: Fusion's own programs lift between
+shapes nearer than its stay-down distance, and staying down at the surface would
+drag the point across the part. It has no Top or Bottom of its own, no stock to
+leave, and no Shaft and Holder.
+
+An engraving cuts nothing the model keeps only where the shape is sunk into the
+model at least as deep as the V goes. A shape sunk less deep, or a face with
+nothing sunk into it, is cut into: the run says where and how far (CC222), and
+the finished material fails the check against the part (CC107). camcraft does
+not take the V's cut as meant, as it takes a 2D chamfer's, so model the shape
+sunk at least the depth.
+
+```toml
+[[setup.operation]]
+name = "lettering"
+strategy = "engrave"
+tool = "vbit-90"
+selection = { edges = [
+  { model = "plate", index = 40, at = [-20.0, -15.0, 10.0] },
+  { model = "plate", index = 41, at = [-15.0, -2.5, 10.0] },
+  { model = "plate", index = 42, at = [-25.0, -2.5, 10.0] },
+] }
+linking = { retraction = "full" }
+```
+
 **Tabs** (`passes.tabs`) hold what a cut frees: bridges of material left
 standing across it, as Fusion's holding tabs. They go on profiles, as Fusion's
 go only on a 2D contour: every ring a profile cuts is beside what it keeps,
@@ -808,6 +875,7 @@ with.
 | CC219 | warn    | a slot more than three tools wide left a band uncut              |
 | CC220 | note    | stretches of a trace steeper than its maximum angle left out     |
 | CC221 | warn    | stretches of a 2D chamfer lifted to keep its clearance           |
+| CC222 | warn    | an engraving cuts into the part: its shape is sunk less deep     |
 | CC299 | warn    | a warning from reading the model                                 |
 
 A **plunge** is a continuous descent steeper than `PLUNGE_RATIO` (10:1) that falls

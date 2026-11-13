@@ -746,6 +746,120 @@ fn a_trace_follows_the_picked_edges() {
     assert!(left_over(&result, &job, band, 6.0) > 100);
 }
 
+/// A 6 mm 90° V-bit, as Fusion's Engrave was compared with, its flutes long
+/// enough to stand through the 2 mm of stock over the block.
+fn vee() -> crate::job::ToolSpec {
+    crate::job::ToolSpec {
+        kind: crate::job::ToolKind::Cone,
+        diameter: 6.0,
+        angle: Some(90.0),
+        flute_length: Some(10.0),
+        ..toml::from_str::<Job>(JOB).unwrap().tools["rough"].clone()
+    }
+}
+
+/// The slotted block's edges or faces at `at`, as picks.
+fn picks_at(body: &Body, faces: &[[f64; 3]], edges: &[[f64; 3]]) -> crate::job::Selection {
+    use crate::job::{FeatureRef, Selection};
+    use crate::setup::features::{find_edge, find_face};
+    let pick = |at: [f64; 3]| FeatureRef {
+        model: "dome".into(),
+        index: 0,
+        at,
+    };
+    Selection {
+        faces: faces
+            .iter()
+            .map(|&at| FeatureRef {
+                index: find_face(body, &pick(at), 0.01).unwrap().index,
+                ..pick(at)
+            })
+            .collect(),
+        edges: edges
+            .iter()
+            .map(|&at| FeatureRef {
+                index: find_edge(body, &pick(at), 0.01).unwrap().index,
+                ..pick(at)
+            })
+            .collect(),
+    }
+}
+
+/// Fusion's Engrave, a new operation picked by the slot's rim or by its floor:
+/// the slot is 6 mm wide, wider than the V reaches at its depth, 2.85 mm, so
+/// the V runs round the rim 2.85 mm in at that depth, round the ends as arcs;
+/// the slot is sunk 4 mm, deeper than that, so it is clean and verified, and
+/// cuts only inside the slot. The floor picked engraves the same, from the top
+/// of the walls round it.
+#[test]
+fn a_slot_is_engraved_from_its_rim() {
+    use crate::path::toolpath::{MoveKind, MoveRole};
+    let rim = [
+        [0.0, 3.0, 10.0],
+        [11.0, 0.0, 10.0],
+        [0.0, -3.0, 10.0],
+        [-11.0, 0.0, 10.0],
+    ];
+    let mut paths = Vec::new();
+    for (faces, edges) in [(&[][..], &rim[..]), (&[[0.0, 0.0, 6.0]][..], &[][..])] {
+        let (result, _) = on_slotted_block("engrave", ("vee", vee()), |op| {
+            op.selection = picks_at(&slotted_block(), faces, edges);
+        });
+        let op = &result.operations[0];
+        let StrategyDetail::Engrave(report) = op.detail else {
+            panic!("reported {:?}", op.detail);
+        };
+        assert_eq!((report.shapes, report.loops, report.passes), (1, 1, 1));
+        assert!((report.deepest - 2.85).abs() < 1e-9);
+        assert_eq!(report.into_part, None);
+        assert!(result.is_clean(), "{:?}", result.warnings());
+        assert_eq!(result.verify.gouged, 0);
+        assert_eq!(op.sim.rapid_contacts, 0);
+        let middle = |p: DVec2| dvec2(p.x.clamp(-8.0, 8.0), 0.0).distance(p);
+        let mut arcs = 0;
+        for m in op.path.moves().iter().filter(|m| m.role == MoveRole::Cut) {
+            // As deep as the rim is far, no deeper than 2.85 mm, and inside.
+            let far = 3.0 - middle(m.to.truncate());
+            assert!((10.0 - m.to.z - far.min(2.85)).abs() < 1e-6, "{}", m.to);
+            arcs += usize::from(matches!(m.kind, MoveKind::Arc(_)));
+        }
+        assert!(arcs >= 2, "the round ends as arcs");
+        paths.push(op.path.clone());
+    }
+    assert_eq!(paths[0], paths[1], "the floor engraves as the rim does");
+}
+
+/// A face with nothing sunk into it, the block's top, is engraved into: the
+/// run says where and how far, and the material fails against the part.
+/// Anything but a cone is refused.
+#[test]
+fn an_engraving_into_the_part_is_said() {
+    let (result, _) = on_slotted_block("engrave", ("vee", vee()), |op| {
+        op.selection = picks_at(&slotted_block(), &[[15.0, 0.0, 10.0]], &[]);
+    });
+    let op = &result.operations[0];
+    let StrategyDetail::Engrave(report) = op.detail else {
+        panic!("reported {:?}", op.detail);
+    };
+    // The top and the slot in it: the slot is an island of the top.
+    assert_eq!((report.shapes, report.loops), (1, 2));
+    let (_, deep) = report.into_part.unwrap();
+    assert!((deep - 2.85).abs() < 0.05, "{deep}");
+    assert!(op.warnings.iter().any(|w| w.contains("into the part")));
+    assert!(result.verify.gouged > 0);
+
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    job.setups[0].operations.clear();
+    let mut op = crate::job::Operation::new("engrave", StrategySpec::named("engrave").unwrap());
+    op.tool = Some("rough".into());
+    op.selection = picks_at(&slotted_block(), &[[0.0, 0.0, 6.0]], &[]);
+    job.setups[0].operations.push(op);
+    let body = slotted_block();
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let refused = run_setup(&job, 0, &bodies).unwrap_err().to_string();
+    assert!(refused.contains("cone"), "{refused}");
+}
+
 fn cuts(result: &SetupResult) -> Vec<DVec2> {
     result.operations[0]
         .path

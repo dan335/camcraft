@@ -25,6 +25,7 @@ pub mod round;
 // Along what is picked.
 pub mod chamfer;
 pub mod curve;
+pub mod engrave;
 pub mod slot;
 pub mod trace;
 

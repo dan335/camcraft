@@ -1,6 +1,6 @@
 //! The paths of the strategies that run along what is picked, Fusion's Slot,
-//! Trace and 2D Chamfer, and the slots, curves and edges they run along,
-//! found from the picked edges and faces.
+//! Trace, 2D Chamfer and Engrave, and the slots, curves, edges and shapes
+//! they run along, found from the picked edges and faces.
 
 use camcraft_geom::mesh::TriMesh;
 use camcraft_geom::topology::{Body as Model, EdgeKind};
@@ -12,6 +12,7 @@ use crate::setup::features::{self, find_edge, find_face};
 use crate::setup::frame::Frame;
 use crate::strategy::chamfer::{ChamferEdge, ChamferError, ChamferParams, chamfer};
 use crate::strategy::curve::{Curve, Edge, Piece, join};
+use crate::strategy::engrave::{self, EngraveParams, Shape};
 use crate::strategy::nesting::take_nearest;
 use crate::strategy::slot::{Slot, SlotError, SlotParams, slot, slot_of};
 use crate::strategy::trace::{Beside, TraceError, TraceParams, trace};
@@ -410,6 +411,160 @@ fn part_side(curve: &Curve, cutter: &DropCutter<'_>, tol: f64) -> Result<bool, C
         (false, true) => Ok(false),
         _ => Err(no_side),
     }
+}
+
+/// How high `body`'s face `f` goes, in the setup's frame.
+fn face_top(body: &Model, f: u32, frame: &Frame) -> Option<f64> {
+    let mesh = body.mesh();
+    let face = body.topology().face(f)?;
+    face.triangles
+        .iter()
+        .filter_map(|&t| mesh.triangles().get(t as usize))
+        .flatten()
+        .filter_map(|&v| mesh.vertices().get(v as usize))
+        .map(|&p| frame.to_setup(p).z)
+        .reduce(f64::max)
+}
+
+/// The shapes an engraving's picks go round, in the setup's frame, in the
+/// order picked: each picked face's outline, the loops of its edges, from the
+/// top of what stands round it, the surface it is sunk into; and the loops
+/// the picked edges close, each from its own height, Fusion's Top "from
+/// contour". Loops inside others are their islands ([`engrave::shapes`]).
+pub(in crate::run) fn engravings_picked(
+    job: &Job,
+    op: &Operation,
+    prepared: &Prepared,
+    bodies: &Bodies<'_>,
+) -> Result<Vec<Shape>, RunError> {
+    let frame = &prepared.frame;
+    let tol = job.tolerance.max(0.001);
+    let mut loops: Vec<(Curve, f64)> = Vec::new();
+    let mut taken: Vec<(String, u32)> = Vec::new();
+    let mut add = |model: &str, body: &Model, e: u32, out: &mut Vec<Edge>| {
+        let id = (model.to_string(), e);
+        if taken.contains(&id) {
+            return;
+        }
+        if let Some(edge) = edge_curve(model, body, e, frame, tol) {
+            out.push(edge);
+        }
+        taken.push(id);
+    };
+    for pick in &op.selection.faces {
+        let body = body_of(op, bodies, &pick.model)?;
+        let face =
+            find_face(body, pick, features::tolerance(job.tolerance, body)).map_err(in_op(op))?;
+        let t = body.topology();
+        let mut edges = Vec::new();
+        let mut top = face_top(body, face.index, frame).unwrap_or(f64::NEG_INFINITY);
+        for &e in t.face(face.index).map_or(&[][..], |f| f.edges.as_slice()) {
+            add(&pick.model, body, e, &mut edges);
+            // What stands round it: the faces it shares its edges with.
+            for &other in t.edge(e).map_or(&[][..], |e| e.faces.as_slice()) {
+                if other != face.index
+                    && let Some(z) = face_top(body, other, frame)
+                {
+                    top = top.max(z);
+                }
+            }
+        }
+        loops.extend(join(&edges).into_iter().map(|c| (c, top)));
+    }
+    let mut edges = Vec::new();
+    for pick in &op.selection.edges {
+        let body = body_of(op, bodies, &pick.model)?;
+        let edge =
+            find_edge(body, pick, features::tolerance(job.tolerance, body)).map_err(in_op(op))?;
+        add(&pick.model, body, edge.index, &mut edges);
+    }
+    for c in join(&edges) {
+        let top = c.steps().map(|(_, p)| p.to().z).fold(c.start.z, f64::max);
+        loops.push((c, top));
+    }
+    engrave::shapes(&loops, tol).map_err(in_op(op))
+}
+
+/// What an engraving asks, beyond its operation's passes.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct EngraveAsked {
+    pub(super) depth: Option<f64>,
+    pub(super) sharp_corner_angle: f64,
+}
+
+/// `shapes` engraved, with `work`'s tool, which must be a cone.
+pub(super) fn engrave_paths(
+    work: &Work<'_>,
+    asked: EngraveAsked,
+    shapes: &[Shape],
+    warnings: &mut Vec<String>,
+) -> Result<Paths, RunError> {
+    let op = work.op;
+    let Cutter::Cone(cone) = *work.tool.base() else {
+        return Err(JobError::WrongTool {
+            op: op.name.clone(),
+            tool: op.tool.clone().unwrap_or_default(),
+            why: "an engraving cuts with a cone: use a V-bit or chamfer mill".into(),
+        }
+        .into());
+    };
+    let tolerance = work.job.tolerance.max(0.001);
+    let mut params = EngraveParams {
+        tip: cone.tip(),
+        rise: cone.rise(),
+        radius: cone.max_radius(),
+        depth: 0.0,
+        sharp_corner: asked.sharp_corner_angle.to_radians(),
+        stepdown: op.stepdown(),
+        feed: op.passes.feed,
+        tolerance,
+    };
+    // Fusion's: 0.95 of how deep the flank reaches.
+    params.depth = asked.depth.unwrap_or(0.95 * params.flank());
+    let (path, mut report) = engrave::engrave(shapes, &params).map_err(in_op(op))?;
+    // Where the V would go below what the part lets it: a shape sunk less deep
+    // than the V goes, or a face with nothing sunk into it. The run's check
+    // finds it as a gouge; here it is said why.
+    if let Some((x, y, deep)) = cuts_into_part(work, &path, tolerance) {
+        report.into_part = Some(([x, y], deep));
+        warnings.push(format!(
+            "the V cuts up to {deep:.3} mm into the part, at X{x:.3} Y{y:.3}: the shape is \
+             sunk less deep in the model than the engraving goes ({:.3} mm), or nothing is \
+             sunk there; sink it deeper in the model, or engrave less deep",
+            params.depth
+        ));
+    }
+    Ok((path, report.passes, StrategyDetail::Engrave(report)))
+}
+
+/// The deepest `path`'s cutting moves go below where `work`'s tool rests on
+/// the part, by more than `tolerance`: where, and how far.
+fn cuts_into_part(work: &Work<'_>, path: &Toolpath, tolerance: f64) -> Option<(f64, f64, f64)> {
+    let step = (0.25 * work.tool.max_radius()).clamp(0.05, 0.5);
+    let mut worst: Option<(f64, f64, f64)> = None;
+    let mut from: Option<DVec3> = None;
+    for m in path.moves() {
+        let to = m.to;
+        if let (Some(a), crate::path::toolpath::MoveRole::Cut) = (from, m.role) {
+            let n = camcraft_geom::steps::bounded_count((a.distance(to) / step).ceil());
+            for k in 0..=n {
+                let t = f64::from(k) / f64::from(n);
+                let p = match m.kind {
+                    crate::path::toolpath::MoveKind::Arc(arc) => arc.point_at(a, to, t),
+                    crate::path::toolpath::MoveKind::Linear => a.lerp(to, t),
+                };
+                let Some(rest) = work.cutter.drop_at(work.tool, p.x, p.y) else {
+                    continue;
+                };
+                let deep = rest - p.z;
+                if deep > tolerance && worst.is_none_or(|w| deep > w.2) {
+                    worst = Some((p.x, p.y, deep));
+                }
+            }
+        }
+        from = Some(to);
+    }
+    worst
 }
 
 /// What a 2D chamfer asks of each edge, beyond its operation's passes.

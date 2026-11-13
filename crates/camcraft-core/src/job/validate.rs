@@ -658,6 +658,22 @@ impl Operation {
             at_least_zero(&field("clearance"), clearance)?;
             at_least_zero(&field("finishing_overlap"), finishing_overlap)?;
         }
+        if let StrategySpec::Engrave {
+            depth,
+            sharp_corner_angle,
+        } = self.strategy
+        {
+            if let Some(d) = depth {
+                positive(&field("depth"), d)?;
+            }
+            if !(0.0..=180.0).contains(&sharp_corner_angle) {
+                return Err(bad(
+                    field("sharp_corner_angle"),
+                    sharp_corner_angle,
+                    "from 0 to 180 degrees",
+                ));
+            }
+        }
         if let StrategySpec::Drill { peck, dwell } = self.strategy {
             if let Some(p) = peck {
                 positive(&field("peck"), p)?;
