@@ -4,6 +4,66 @@ What changed in each release, newest first. Each release's page
 ([Releases](https://github.com/dan335/camcraft/releases)) has the downloads and
 the same notes at more length.
 
+## 0.8.0 — 2026-11-13
+
+- **Fusion's other 2D operations**, each a new strategy in the job file and
+  the app's 2D menu, and each held by a test to Fusion's own program for the
+  same part (`fixtures/step/ops_2d.step`, `ops_engrave.step`,
+  `fixtures/nc/ops_2d_*.nc`, `ops_engrave_*.nc`): the two programs leave the
+  same material, column by column.
+  - **Bore** and **Circular** ([decision 0022](docs/decisions/0022-bore-and-circular.md)):
+    holes and bosses picked by their round walls. Bore goes down a helix, by
+    pitch or ramp angle; Circular level by level, each pass down its own lead.
+    Stepovers, finishing passes, repeat, leads and lead to center, climb or
+    conventional.
+  - **Slot** and **Trace** ([decision 0023](docs/decisions/0023-slot-and-trace.md)):
+    Slot cuts a closed slot along its middle, ramping back and forth along
+    its whole length from the ramp clearance height, then once along the
+    floor; a tool narrower than the slot leaves the walls, as Fusion's does.
+    Trace follows picked edges, on the curve or to its left or right, with
+    axial offset, pass extension, maximum angle and multiple depths.
+  - **2D Chamfer** and **2D Adaptive Clearing**
+    ([decision 0024](docs/decisions/0024-chamfer-and-2d-adaptive.md)):
+    2D Chamfer breaks picked edges with a V-bit or chamfer mill, to a width
+    asked or along a chamfer the model has, and the checks hold the chamfer
+    asked as cut on purpose: anything deeper is still a gouge. 2D Adaptive
+    clears a 2D pocket's areas with adaptive's engine, islands and open
+    pockets too.
+  - **Engrave** ([decision 0025](docs/decisions/0025-engrave.md)): a V-bit's
+    flank on a shape's outline, round a wide shape at depth, along the
+    middle of a narrow one, and up into its sharp corners.
+  - **Thread** ([decision 0026](docs/decisions/0026-thread.md)): a thread
+    milled in holes picked by their walls, with a single-profile thread
+    mill: down the centre, a helical lead onto the thread, the helix at
+    the pitch from the bottom to the top, and back to the centre. Pitch,
+    pitch diameter offset, right or left hand, climb or conventional,
+    multiple passes. The thread cut into the wall is held by the checks
+    as cut on purpose. Fusion's helical lead carries the thread's slope
+    below a blind hole's floor, and so does camcraft's: the run says how
+    far (CC224) and the part check refuses it until the Bottom is raised
+    that much or the leads are levelled.
+- **A thread mill** is a kind of tool (`thread-mill`), with its pitch and
+  profile angle, in the tool library and editor and read from Fusion's CSV.
+- **Operations still to come are in the menus**, greyed out, saying "Not
+  implemented yet".
+- **[PROGRESS.md](PROGRESS.md)** says where camcraft stands, feature by
+  feature, against Fusion's 3-axis milling: done, partial or not started,
+  with what each lacks. It replaces `STATUS.md`.
+- **A ramp round a whole circle is a helix.** Where a pass was one arc all
+  the way round, a tool pocketing a hole not much wider than itself, the ramp
+  down onto it went straight down into the material. It now goes round the
+  circle as it falls.
+- New checks: CC218 (a bore or circular left a core standing), CC219 (a slot
+  wider than the tool, its walls left), CC220 (stretches of a trace steeper
+  than its maximum angle left out), CC221 (stretches of a 2D chamfer lifted
+  to keep its clearance), CC222 (a bore's passes past a hole's middle left
+  out), CC223 (an engraving cuts into the part), CC224 (a thread's lead goes
+  below a hole's floor).
+- **`scripts/fusion/`** gained the scripts that made those parts and
+  programs, and `params.py`, which writes out every setting of every Fusion
+  milling strategy as a new operation starts with it: what the new
+  operations' defaults were taken from.
+
 ## 0.7.0 — 2026-11-11
 
 - **A Theme setting**, in Settings and **View → Theme**: *System* (the

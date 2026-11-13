@@ -160,9 +160,10 @@ fn ops_block_centimetre() {
 /// pocket, slots, V grooves, a pocket with an island and chamfered rims.
 /// Written in centimetres, as Fusion writes a design.
 ///
-/// ogeom gives it four triangles whose corners coincide, which the weld drops;
-/// the part still passes every check against its file. When ogeom stops, this
-/// fails: hold it to none.
+/// ogeom gives it four triangles whose corners coincide, one at the point of
+/// each V groove's end, where a cone's two rulings meet
+/// (gilbertorconde/ogeom-rs#982), which the weld drops; the part still passes
+/// every check against its file. When ogeom stops, this fails: hold it to none.
 #[test]
 fn ops_2d_centimetre() {
     check_dropping(

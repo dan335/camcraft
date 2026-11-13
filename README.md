@@ -51,7 +51,7 @@ Autodesk.)
 
 ## Status
 
-Version 0.7, pre-alpha. The app runs, checks, plays back and posts jobs. File
+Version 0.8, pre-alpha. The app runs, checks, plays back and posts jobs. File
 formats change without notice. [Releases](https://github.com/dan335/camcraft/releases)
 carry builds for Windows and Linux, with no installer; on macOS, build it from
 source. [PROGRESS.md](PROGRESS.md) lists, feature by feature against Fusion's
