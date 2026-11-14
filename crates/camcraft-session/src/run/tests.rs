@@ -401,29 +401,23 @@ fn a_watched_run_stopped_ends_stopped_with_what_it_made_told() {
     assert_eq!(told, 1);
 }
 
-/// Fusion's Bore and Circular, each a new operation as the app makes one, cut
-/// the part made in Fusion for the basic operations (`ops_block.step`): its
-/// round pocket, 24 mm across and 8 deep, with a 6 mm flat end mill in
-/// multiple passes, and its two blind holes, 6 mm across, with a 4 mm one, after the
-/// stock's top is faced. Every check passes, every program reads back with
-/// its circles as arcs, and the material each leaves is the hole it was
-/// picked by, to the job's tolerance.
-#[test]
-fn bore_and_circular_cut_the_holes_they_are_picked_by() {
-    use camcraft_core::job::{FeatureRef, Operation};
-
-    use crate::test_support::fixture;
-    use crate::{load_models, models_of, program, setup_profile};
-
-    let model = fixture("ops_block.step")
+/// A job on the part made in Fusion for the basic operations
+/// (`ops_block.step`), its stock 5 mm round it and 2 mm over, with Fusion's
+/// 6 mm flat end mill, `flat6`, and `tools`, and a setup called each of
+/// `setups`, none with operations yet.
+fn on_ops_block(tools: &str, setups: &[&str]) -> Job {
+    let model = crate::test_support::fixture("ops_block.step")
         .display()
         .to_string()
         .replace('\\', "/");
-    let setup = |name: &str| {
-        format!(
-            "\n[[setup]]\nname = \"{name}\"\nmodels = [\"part\"]\nstocks = [\"block\"]\npost = \"masso\"\n"
-        )
-    };
+    let setups: String = setups
+        .iter()
+        .map(|name| {
+            format!(
+                "\n[[setup]]\nname = \"{name}\"\nmodels = [\"part\"]\nstocks = [\"block\"]\npost = \"masso\"\n"
+            )
+        })
+        .collect();
     let text = format!(
         r#"
 version = 1
@@ -440,7 +434,93 @@ shoulder_length = 20.0
 shank_diameter = 6.0
 overall_length = 63.0
 stickout = 22.5
+{tools}
+[[model]]
+name = "part"
+path = "{model}"
 
+[[stock]]
+name = "block"
+kind = "around-models"
+margin = [5.0, 5.0, 2.0]
+{setups}"#
+    );
+    parse_job(&text, "ops_block").unwrap()
+}
+
+/// A new operation called `name` of `strategy` with `job`'s `tool`, as the
+/// app makes one, cutting at 1500 mm/min.
+fn fresh(job: &Job, name: &str, strategy: &str, tool: &str) -> camcraft_core::job::Operation {
+    let mut op = camcraft_core::job::Operation::fresh(
+        name,
+        StrategySpec::named(strategy).unwrap(),
+        (Some(tool.to_string()), job.tools.get(tool), None),
+    );
+    op.passes.feed = 1500.0;
+    op
+}
+
+/// `job` read back, so its expressions are worked out as a job read from disk
+/// has them, and checked.
+fn read_back(job: &Job) -> Job {
+    let job = parse_job(&job_text(job).unwrap(), "ops_block").unwrap();
+    job.validate().unwrap();
+    job
+}
+
+/// A pick on the part at `at`.
+fn on_part(at: [f64; 3]) -> camcraft_core::job::FeatureRef {
+    camcraft_core::job::FeatureRef {
+        model: "part".into(),
+        index: 0,
+        at,
+    }
+}
+
+/// The edges round the rectangular pocket at height `z`, its floor at 14 mm or
+/// its rim at 20, by a point on each: it runs from -40 to 0 in X and -18 to 18
+/// in Y, its corners 6 mm round.
+fn pocket_edges(z: f64) -> Vec<camcraft_core::job::FeatureRef> {
+    let s = 6.0 * std::f64::consts::FRAC_1_SQRT_2;
+    [
+        [-20.0, 18.0],
+        [0.0, 0.0],
+        [-20.0, -18.0],
+        [-40.0, 0.0],
+        [-34.0 - s, 12.0 + s],
+        [-6.0 + s, 12.0 + s],
+        [-34.0 - s, -12.0 - s],
+        [-6.0 + s, -12.0 - s],
+    ]
+    .into_iter()
+    .map(|[x, y]| on_part([x, y, z]))
+    .collect()
+}
+
+/// How many arcs `op`'s program has, written for `setup` of `job`.
+fn arcs_in(job: &Job, setup: usize, op: &camcraft_core::run::OperationResult) -> (usize, String) {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let profile = crate::setup_profile(&job.setups[setup], dir, None).unwrap();
+    let (program, _) = crate::program(op, 54, &profile, &op.name).unwrap();
+    let arcs = program
+        .lines()
+        .filter(|l| l.contains("G2") || l.contains("G3"))
+        .count();
+    (arcs, program)
+}
+
+/// Fusion's Bore and Circular, each a new operation as the app makes one, cut
+/// the part made in Fusion for the basic operations (`ops_block.step`): its
+/// round pocket, 24 mm across and 8 deep, with a 6 mm flat end mill in
+/// multiple passes, and its two blind holes, 6 mm across, with a 4 mm one,
+/// after the stock's top is faced. Every check passes, every program reads
+/// back with its circles as arcs, and the material each leaves is the hole it
+/// was picked by, to the job's tolerance.
+#[test]
+fn bore_and_circular_cut_the_holes_they_are_picked_by() {
+    use crate::{load_models, models_of};
+
+    let flat4 = r#"
 [tools.flat4]
 kind = "flat"
 diameter = 4.0
@@ -452,38 +532,12 @@ shoulder_length = 16.0
 shank_diameter = 4.0
 overall_length = 50.0
 stickout = 20.0
-
-[[model]]
-name = "part"
-path = "{model}"
-
-[[stock]]
-name = "block"
-kind = "around-models"
-margin = [5.0, 5.0, 2.0]
-{}{}"#,
-        setup("bore"),
-        setup("circular")
-    );
-    let mut job = parse_job(&text, "ops_block").unwrap();
-    let pick = |at: [f64; 3]| FeatureRef {
-        model: "part".into(),
-        index: 0,
-        at,
-    };
+"#;
+    let mut job = on_ops_block(flat4, &["bore", "circular"]);
     for (i, strategy) in ["bore", "circular"].into_iter().enumerate() {
-        let make = |name: &str, strategy: &str, tool: &str| {
-            let mut op = Operation::fresh(
-                name,
-                StrategySpec::named(strategy).unwrap(),
-                (Some(tool.to_string()), job.tools.get(tool), None),
-            );
-            op.passes.feed = 1500.0;
-            op
-        };
-        let face = make("face", "face", "flat6");
-        let mut pocket = make("pocket", strategy, "flat6");
-        pocket.selection.faces = vec![pick([37.0, 10.0, 16.0])];
+        let face = fresh(&job, "face", "face", "flat6");
+        let mut pocket = fresh(&job, "pocket", strategy, "flat6");
+        pocket.selection.faces = vec![on_part([37.0, 10.0, 16.0])];
         // Multiple passes, three, half the tool apart: in to its middle.
         if let StrategySpec::Bore {
             multiple_passes,
@@ -499,14 +553,11 @@ margin = [5.0, 5.0, 2.0]
             *multiple_passes = true;
             *stepovers = 3;
         }
-        let mut holes = make("holes", strategy, "flat4");
-        holes.selection.faces = vec![pick([18.0, -22.0, 14.0]), pick([38.0, -22.0, 14.0])];
+        let mut holes = fresh(&job, "holes", strategy, "flat4");
+        holes.selection.faces = vec![on_part([18.0, -22.0, 14.0]), on_part([38.0, -22.0, 14.0])];
         job.setups[i].operations = vec![face, pocket, holes];
     }
-    // Read back, so its expressions are worked out as a job read from disk has
-    // them.
-    let job = parse_job(&job_text(&job).unwrap(), "ops_block").unwrap();
-    job.validate().unwrap();
+    let job = read_back(&job);
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let loaded = load_models(&job, dir, &[0, 1]).unwrap();
     // The round pocket, and the holes, each a centre, radius and floor.
@@ -525,7 +576,6 @@ margin = [5.0, 5.0, 2.0]
             ran.checks
         );
         assert_eq!(ran.result.verify.gouged, 0, "{strategy}");
-        let profile = setup_profile(&job.setups[i], dir, None).unwrap();
         for (index, holes) in &walls {
             let op = &ran.result.operations[*index];
             assert_eq!(op.strategy, strategy);
@@ -536,11 +586,7 @@ margin = [5.0, 5.0, 2.0]
                 op.name,
                 op.warnings
             );
-            let (program, _) = program(op, 54, &profile, &op.name).unwrap();
-            let arcs = program
-                .lines()
-                .filter(|l| l.contains("G2") || l.contains("G3"))
-                .count();
+            let (arcs, program) = arcs_in(&job, i, op);
             assert!(arcs > 10, "{strategy}/{}: {arcs} arcs\n{program}", op.name);
             // Nothing is left in the hole, above its floor, but where the grid
             // meets its wall.
@@ -586,84 +632,19 @@ margin = [5.0, 5.0, 2.0]
 /// edges is refused, as the loop of a pocket, not a slot.
 #[test]
 fn trace_follows_a_pocket_floor_and_slot_refuses_it() {
-    use camcraft_core::job::{Compensation, FeatureRef, Operation};
+    use camcraft_core::job::Compensation;
 
-    use crate::test_support::fixture;
-    use crate::{load_models, models_of, program, setup_profile};
+    use crate::{load_models, models_of};
 
-    let model = fixture("ops_block.step")
-        .display()
-        .to_string()
-        .replace('\\', "/");
-    let text = format!(
-        r#"
-version = 1
-tolerance = 0.01
-
-[tools.flat6]
-kind = "flat"
-diameter = 6.0
-number = 1
-rpm = 18000
-flutes = 3
-flute_length = 20.0
-shoulder_length = 20.0
-shank_diameter = 6.0
-overall_length = 63.0
-stickout = 22.5
-
-[[model]]
-name = "part"
-path = "{model}"
-
-[[stock]]
-name = "block"
-kind = "around-models"
-margin = [5.0, 5.0, 2.0]
-
-[[setup]]
-name = "trace"
-models = ["part"]
-stocks = ["block"]
-post = "masso"
-"#
-    );
-    let mut job = parse_job(&text, "ops_block").unwrap();
-    // The pocket's floor, 14 mm up, from -40 to 0 in X and -18 to 18 in Y,
-    // its corners 6 mm round: a point on each of its eight edges.
-    let s = 6.0 * std::f64::consts::FRAC_1_SQRT_2;
-    let edges: Vec<FeatureRef> = [
-        [-20.0, 18.0],
-        [0.0, 0.0],
-        [-20.0, -18.0],
-        [-40.0, 0.0],
-        [-34.0 - s, 12.0 + s],
-        [-6.0 + s, 12.0 + s],
-        [-34.0 - s, -12.0 - s],
-        [-6.0 + s, -12.0 - s],
-    ]
-    .into_iter()
-    .map(|[x, y]| FeatureRef {
-        model: "part".into(),
-        index: 0,
-        at: [x, y, 14.0],
-    })
-    .collect();
-    let mut trace = Operation::fresh(
-        "trace",
-        StrategySpec::named("trace").unwrap(),
-        (Some("flat6".into()), job.tools.get("flat6"), None),
-    );
-    trace.passes.feed = 1500.0;
+    let mut job = on_ops_block("", &["trace"]);
+    let edges = pocket_edges(14.0);
+    let mut trace = fresh(&job, "trace", "trace", "flat6");
     trace.selection.edges.clone_from(&edges);
     if let StrategySpec::Trace { compensation, .. } = &mut trace.strategy {
         *compensation = Compensation::Left;
     }
     job.setups[0].operations = vec![trace];
-    // Read back, so its expressions are worked out as a job read from disk has
-    // them.
-    let job = parse_job(&job_text(&job).unwrap(), "ops_block").unwrap();
-    job.validate().unwrap();
+    let job = read_back(&job);
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let loaded = load_models(&job, dir, &[0]).unwrap();
     let ran = run_setup(&job, 0, &models_of(&loaded)).unwrap();
@@ -673,12 +654,7 @@ post = "masso"
     assert_eq!(op.strategy, "trace");
     assert_eq!(op.sim.rapid_contacts, 0);
     assert!(op.warnings.is_empty(), "{:?}", op.warnings);
-    let profile = setup_profile(&job.setups[0], dir, None).unwrap();
-    let (program, _) = program(op, 54, &profile, &op.name).unwrap();
-    let arcs = program
-        .lines()
-        .filter(|l| l.contains("G2") || l.contains("G3"))
-        .count();
+    let (arcs, program) = arcs_in(&job, 0, op);
     assert!(arcs >= 4, "{arcs} arcs\n{program}");
     // How far inside the pocket's wall a point is, seen from above.
     let inside = |p: glam::DVec2| {
@@ -705,11 +681,7 @@ post = "masso"
 
     // The same edges picked for a slot: a pocket's floor, not a slot's.
     let mut slotted = job.clone();
-    let mut slot = Operation::fresh(
-        "slot",
-        StrategySpec::named("slot").unwrap(),
-        (Some("flat6".into()), job.tools.get("flat6"), None),
-    );
+    let mut slot = fresh(&job, "slot", "slot", "flat6");
     slot.selection.edges = edges;
     slotted.setups[0].operations = vec![slot];
     let err = run_setup(&slotted, 0, &models_of(&loaded)).unwrap_err();
@@ -725,32 +697,11 @@ post = "masso"
 /// the chamfer asked, to the job's tolerance.
 #[test]
 fn adaptive_2d_clears_a_pocket_and_chamfer_2d_breaks_its_rim() {
-    use camcraft_core::job::{FeatureRef, Operation, StockToLeave};
+    use camcraft_core::job::StockToLeave;
 
-    use crate::test_support::fixture;
     use crate::{load_models, models_of};
 
-    let model = fixture("ops_block.step")
-        .display()
-        .to_string()
-        .replace('\\', "/");
-    let text = format!(
-        r#"
-version = 1
-tolerance = 0.01
-
-[tools.flat6]
-kind = "flat"
-diameter = 6.0
-number = 1
-rpm = 18000
-flutes = 3
-flute_length = 20.0
-shoulder_length = 20.0
-shank_diameter = 6.0
-overall_length = 63.0
-stickout = 22.5
-
+    let v90 = r#"
 [tools.v90]
 kind = "cone"
 angle = 90.0
@@ -761,70 +712,21 @@ flute_length = 4.0
 shank_diameter = 6.35
 overall_length = 50.0
 stickout = 20.0
-
-[[model]]
-name = "part"
-path = "{model}"
-
-[[stock]]
-name = "block"
-kind = "around-models"
-margin = [5.0, 5.0, 2.0]
-
-[[setup]]
-name = "pocket"
-models = ["part"]
-stocks = ["block"]
-post = "masso"
-"#
-    );
-    let mut job = parse_job(&text, "ops_block").unwrap();
-    let fresh = |name: &str, strategy: &str, tool: &str| {
-        let mut op = Operation::fresh(
-            name,
-            StrategySpec::named(strategy).unwrap(),
-            (Some(tool.into()), job.tools.get(tool), None),
-        );
-        op.passes.feed = 1500.0;
-        op
-    };
-    let face = fresh("face", "face", "flat6");
-    let mut adaptive = fresh("adaptive", "adaptive-2d", "flat6");
+"#;
+    let mut job = on_ops_block(v90, &["pocket"]);
+    let face = fresh(&job, "face", "face", "flat6");
+    let mut adaptive = fresh(&job, "adaptive", "adaptive-2d", "flat6");
     adaptive.outline = camcraft_core::job::Outline::Selection;
     adaptive.passes.stock_to_leave = StockToLeave::default();
-    adaptive.selection.faces.push(FeatureRef {
-        model: "part".into(),
-        index: 0,
-        at: [-20.0, 0.0, 14.0],
-    });
-    let mut chamfer = fresh("chamfer", "chamfer-2d", "v90");
-    // The pocket's rim at the top, 20 mm up: a point on each of its edges.
-    let s = 6.0 * std::f64::consts::FRAC_1_SQRT_2;
-    chamfer.selection.edges = [
-        [-20.0, 18.0],
-        [0.0, 0.0],
-        [-20.0, -18.0],
-        [-40.0, 0.0],
-        [-34.0 - s, 12.0 + s],
-        [-6.0 + s, 12.0 + s],
-        [-34.0 - s, -12.0 - s],
-        [-6.0 + s, -12.0 - s],
-    ]
-    .into_iter()
-    .map(|[x, y]| FeatureRef {
-        model: "part".into(),
-        index: 0,
-        at: [x, y, 20.0],
-    })
-    .collect();
+    adaptive.selection.faces.push(on_part([-20.0, 0.0, 14.0]));
+    let mut chamfer = fresh(&job, "chamfer", "chamfer-2d", "v90");
+    // The pocket's rim at the top, 20 mm up.
+    chamfer.selection.edges = pocket_edges(20.0);
     if let StrategySpec::Chamfer2d { width, .. } = &mut chamfer.strategy {
         *width = 1.0;
     }
     job.setups[0].operations = vec![face, adaptive, chamfer];
-    // Read back, so its expressions are worked out as a job read from disk has
-    // them.
-    let job = parse_job(&job_text(&job).unwrap(), "ops_block").unwrap();
-    job.validate().unwrap();
+    let job = read_back(&job);
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let loaded = load_models(&job, dir, &[0]).unwrap();
     let ran = run_setup(&job, 0, &models_of(&loaded)).unwrap();

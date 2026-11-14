@@ -193,7 +193,6 @@ fn a_new_engrave_leaves_what_fusions_does() {
         let c = compare(&job, 0, dir, &ran, name, &fusion(name), job.tolerance).unwrap();
         let d = &c.difference;
         let say = format!("{name}: {d:?}\n{:?}\n{:?}", c.ours, c.theirs);
-        eprintln!("{say}");
         assert!(d.cut > 0, "{say}");
         assert_eq!(c.ours_verify.gouged, 0, "{say}");
         assert_eq!(c.theirs_verify.gouged, 0, "{say}");
