@@ -38,61 +38,8 @@ pub(super) fn geometry(
         outline_form(ui, d, op);
         ui.add_space(theme::SPACE_3);
     }
-    if matches!(op.strategy, StrategySpec::Thread { .. }) {
-        hint(
-            ui,
-            "Pick the round wall of each hole to thread, bored to size first: it is \
-             threaded from its own bottom to its own top. Only holes with straight walls \
-             are threaded; a boss is not yet.",
-        );
-        ui.add_space(theme::SPACE_3);
-    } else if uses.holes == Some(Holes::Walls) {
-        hint(
-            ui,
-            "Pick the round wall of each hole or boss: it is cut from its own top down \
-             to its own bottom, from inside a hole and round the outside of a boss. \
-             Only straight walls are cut.",
-        );
-        ui.add_space(theme::SPACE_3);
-    } else if uses.curves == Some(Curves::Slots) {
-        hint(
-            ui,
-            "Pick the edges round each slot's floor, or its floor: it is cut along its \
-             middle from the Top down to the floor. A slot has two sides a constant \
-             width apart and round ends; the tool may be no wider.",
-        );
-        ui.add_space(theme::SPACE_3);
-    } else if uses.curves == Some(Curves::Traced) {
-        hint(
-            ui,
-            "Pick the edges to follow, open or closed: the tool follows each at its own \
-             height, on it or its radius beside it. Edges joined end to end are \
-             followed as one.",
-        );
-        ui.add_space(theme::SPACE_3);
-    } else if uses.curves == Some(Curves::Chamfered) {
-        hint(
-            ui,
-            "Pick the edges to chamfer, or faces to chamfer all their edges: a sharp \
-            edge, or the lower edge of a chamfer the model has. A click takes the loop \
-            an edge goes round, or the edges running on from it.",
-        );
-        ui.add_space(theme::SPACE_3);
-    } else if uses.curves == Some(Curves::Engraved) {
-        hint(
-            ui,
-            "Pick the rim of each shape to engrave, and of any island in it, or its floor: \
-             the V follows its middle, as deep as its flank touches the walls. A shape \
-             sunk less deep than the V goes is cut into.",
-        );
-        ui.add_space(theme::SPACE_3);
-    } else if drilling {
-        hint(
-            ui,
-            "Pick the round edge at the top of each hole: it is drilled down to its \
-             own bottom, where its wall ends. Pick its bottom edge too to drill to \
-             there instead.",
-        );
+    if let Some(what) = what_to_pick(&op.strategy) {
+        hint(ui, what);
         ui.add_space(theme::SPACE_3);
     } else if uses.boundary {
         boundary_form(ui, d, m, &mut op.boundary, diameter);
@@ -182,6 +129,52 @@ pub(super) fn geometry(
         }
         None => {}
     }
+}
+
+/// What to pick for a strategy whose picks are what it cuts, its holes or what
+/// it runs along, rather than an area: `None` for one that cuts an area.
+fn what_to_pick(strategy: &StrategySpec) -> Option<&'static str> {
+    if matches!(strategy, StrategySpec::Thread { .. }) {
+        return Some(
+            "Pick the round wall of each hole to thread, bored to size first: it is \
+             threaded from its own bottom to its own top. Only holes with straight walls \
+             are threaded; a boss is not yet.",
+        );
+    }
+    let uses = strategy.uses();
+    Some(match (uses.holes, uses.curves) {
+        (Some(Holes::Walls), _) => {
+            "Pick the round wall of each hole or boss: it is cut from its own top down \
+             to its own bottom, from inside a hole and round the outside of a boss. \
+             Only straight walls are cut."
+        }
+        (Some(Holes::Rims), _) => {
+            "Pick the round edge at the top of each hole: it is drilled down to its \
+             own bottom, where its wall ends. Pick its bottom edge too to drill to \
+             there instead."
+        }
+        (None, Some(Curves::Slots)) => {
+            "Pick the edges round each slot's floor, or its floor: it is cut along its \
+             middle from the Top down to the floor. A slot has two sides a constant \
+             width apart and round ends; the tool may be no wider."
+        }
+        (None, Some(Curves::Traced)) => {
+            "Pick the edges to follow, open or closed: the tool follows each at its own \
+             height, on it or its radius beside it. Edges joined end to end are \
+             followed as one."
+        }
+        (None, Some(Curves::Chamfered)) => {
+            "Pick the edges to chamfer, or faces to chamfer all their edges: a sharp \
+             edge, or the lower edge of a chamfer the model has. A click takes the loop \
+             an edge goes round, or the edges running on from it."
+        }
+        (None, Some(Curves::Engraved)) => {
+            "Pick the rim of each shape to engrave, and of any island in it, or its floor: \
+             the V follows its middle, as deep as its flank touches the walls. A shape \
+             sunk less deep than the V goes is cut into."
+        }
+        (None, None) => return None,
+    })
 }
 
 /// How a line in the view is drawn, for its legend.
