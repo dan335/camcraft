@@ -175,6 +175,20 @@ pub(crate) fn slabs(top: f64, bottom: f64, stepdown: f64, flats: &[f64]) -> Vec<
     slabs
 }
 
+/// The levels a 2D cut goes down through from `top` to `bottom`: each a whole
+/// `stepdown` below the one above and the last what is left ([`slabs`]), or,
+/// `even`, evenly spaced no more than `stepdown` apart ([`planar::levels`]);
+/// `bottom` alone with no stepdown, and none when `bottom` is not below `top`.
+pub(crate) fn stepped_levels(top: f64, bottom: f64, stepdown: Option<f64>, even: bool) -> Vec<f64> {
+    match stepdown {
+        Some(d) if !even && top - bottom > 1.0e-9 => slabs(top, bottom, d, &[])
+            .into_iter()
+            .map(|(z, _)| z)
+            .collect(),
+        d => planar::levels(top, bottom, d),
+    }
+}
+
 /// `slabs`, as [`slabs`] makes them from the top down to `top`, with Fusion's
 /// fine stepdown in each: levels `fine` apart up from the slab's level and from
 /// each flat in it, to below the level above, or `top`. Each is cut, as a flat

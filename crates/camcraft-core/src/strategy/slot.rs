@@ -36,7 +36,7 @@ use glam::{DVec2, DVec3};
 
 use crate::path::toolpath::{MoveRole, Toolpath, ToolpathError};
 use crate::strategy::curve::{Curve, Piece, offset};
-use crate::strategy::{StrategyError, at_least_zero, check, slabs};
+use crate::strategy::{StrategyError, at_least_zero, check, stepped_levels};
 
 /// One slot, in the setup's frame.
 #[derive(Debug, Clone, PartialEq)]
@@ -362,13 +362,7 @@ pub fn slot(slots: &[Slot], p: &SlotParams) -> Result<(Toolpath, SlotReport), Sl
         if length.is_nan() || length <= tol {
             return Err(SlotError::NotASlot { x: at.x, y: at.y });
         }
-        let zs: Vec<f64> = match p.stepdown {
-            Some(d) => slabs(s.top, s.bottom, d, &[])
-                .into_iter()
-                .map(|(z, _)| z)
-                .collect(),
-            None => vec![s.bottom],
-        };
+        let zs = stepped_levels(s.top, s.bottom, p.stepdown, false);
         report.slots += 1;
         report.levels = report.levels.max(zs.len() as u64);
         if s.radius - p.radius > tol {

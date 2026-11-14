@@ -55,8 +55,8 @@ use glam::{DVec2, DVec3, dvec3};
 
 use crate::path::toolpath::{Arc, MoveRole, PLUNGE_RATIO, Toolpath, ToolpathError};
 use crate::strategy::nesting::take_nearest;
-use crate::strategy::planar::{LeadArc, WallFinish, levels};
-use crate::strategy::{StrategyError, check, slabs};
+use crate::strategy::planar::{LeadArc, WallFinish};
+use crate::strategy::{StrategyError, check, stepped_levels};
 
 /// A circle no smaller than this, as the tool's centre goes, in millimetres: a
 /// hole that leaves its centre less room is no wider than the tool.
@@ -712,15 +712,12 @@ pub fn circular(
         ..*p
     };
     for round in rounds {
-        let zs: Vec<f64> = match levels_asked.stepdown {
-            Some(d) if !levels_asked.even && round.top - round.bottom > 1.0e-9 => {
-                slabs(round.top, round.bottom, d, &[])
-                    .into_iter()
-                    .map(|(z, _)| z)
-                    .collect()
-            }
-            stepdown => levels(round.top, round.bottom, stepdown),
-        };
+        let zs = stepped_levels(
+            round.top,
+            round.bottom,
+            levels_asked.stepdown,
+            levels_asked.even,
+        );
         if zs.is_empty() {
             return Err(RoundError::NoDepth {
                 x: round.at.x,

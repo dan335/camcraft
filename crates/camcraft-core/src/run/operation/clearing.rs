@@ -249,15 +249,8 @@ pub(super) fn adaptive_2d_paths(
     let mut groups: Vec<(f64, Vec<f64>, Vec<Region>)> = Vec::new();
     let mut too_shallow = 0;
     for area in areas {
-        let zs: Vec<f64> = match stepdown {
-            Some(d) if !asked.even_stepdowns && area.top - area.bottom > 1.0e-9 => {
-                crate::strategy::slabs(area.top, area.bottom, d, &[])
-                    .into_iter()
-                    .map(|(z, _)| z)
-                    .collect()
-            }
-            d => crate::strategy::planar::levels(area.top, area.bottom, d),
-        };
+        let zs =
+            crate::strategy::stepped_levels(area.top, area.bottom, stepdown, asked.even_stepdowns);
         if zs.is_empty() {
             too_shallow += 1;
             continue;
