@@ -4,7 +4,7 @@ What changed in each release, newest first. Each release's page
 ([Releases](https://github.com/dan335/camcraft/releases)) has the downloads and
 the same notes at more length.
 
-## Unreleased
+## 0.8.1 — 2026-11-13
 
 - **OpenCascade is gone from the repository.** It was the STEP reader before
   ogeom, kept behind `camcraft-import`'s `opencascade` feature to cross-check

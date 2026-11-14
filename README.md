@@ -138,13 +138,13 @@ build on it. The crates are not on crates.io yet, so depend on a release by
 its tag, each crate you use:
 
 ```toml
-camcraft-core    = { git = "https://github.com/dan335/camcraft", tag = "v0.8.0" }
-camcraft-session = { git = "https://github.com/dan335/camcraft", tag = "v0.8.0" }
+camcraft-core    = { git = "https://github.com/dan335/camcraft", tag = "v0.8.1" }
+camcraft-session = { git = "https://github.com/dan335/camcraft", tag = "v0.8.1" }
 ```
 
 Their interfaces still change from release to release, so move from tag to tag
 when it suits you. A program built on ogeom hands its solids over as they are,
-without writing a STEP file (`camcraft_import::native`, after 0.8.0).
+without writing a STEP file (`camcraft_import::native`, from 0.8.1).
 
 ### Conventions
 
