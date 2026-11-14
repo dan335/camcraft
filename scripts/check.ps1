@@ -38,15 +38,25 @@ Invoke-Gate 'doc'    { cargo doc --workspace --no-deps }
 # Identical inputs must produce identical results on any core count. The evidence
 # is in tests that compare output against itself (see check.sh for why running the
 # suite at two thread counts proved nothing). `--exact` passes on a name that
-# matches nothing: check the count it reports after renaming one.
+# matches nothing, so each is named by its whole path and the gate fails unless
+# as many ran as are named.
+$determinism = @(
+    'run::tests::bounded_runs_are_deterministic'
+    'cutter::dropcutter::tests::is_deterministic'
+    'strategy::scallop::tests::is_deterministic'
+    'strategy::waterline::tests::is_deterministic'
+    'strategy::morph::tests::is_deterministic'
+    'path::ordering::tests::ordering_is_deterministic'
+)
 Invoke-Gate 'determinism' {
-    cargo test -p camcraft-core --quiet -- --exact `
-        run::tests::bounded_runs_are_deterministic `
-        dropcutter::tests::is_deterministic `
-        scallop::tests::is_deterministic `
-        waterline::tests::is_deterministic `
-        morph::tests::is_deterministic `
-        ordering::tests::ordering_is_deterministic
+    $out = cargo test -p camcraft-core --lib --quiet -- --exact @determinism 2>&1
+    $code = $LASTEXITCODE
+    $out | ForEach-Object { Write-Host $_ }
+    if ($code -eq 0 -and -not ($out -match "test result: ok\. $($determinism.Count) passed")) {
+        Write-Host "expected $($determinism.Count) determinism tests to run: a name matches nothing" -ForegroundColor Red
+        $code = 1
+    }
+    $global:LASTEXITCODE = $code
 }
 
 if ($Full) { Invoke-Gate 'bench' { cargo bench --workspace --no-fail-fast } }

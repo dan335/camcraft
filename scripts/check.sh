@@ -146,16 +146,31 @@ if [ ${#SELECT[@]} -gt 0 ]; then
   # output against itself: bounded_runs_are_deterministic runs a roughing kept to a
   # picked face at one and eight threads and compares the moves. Those tests are in
   # camcraft-core, so this runs when core is being checked. `--exact` passes on a
-  # name that matches nothing, which is how a removed module's test sat here
-  # unnoticed; check the count it reports after renaming one.
+  # name that matches nothing, which is how five of these six, named without
+  # their whole paths, sat here not running; so the gate fails unless as many ran
+  # as are named.
   if [ "$CRATES" = ALL ] || echo "$CRATES" | grep -qx camcraft-core; then
-    run "determinism" cargo test -p camcraft-core --quiet -- --exact \
-      run::tests::bounded_runs_are_deterministic \
-      dropcutter::tests::is_deterministic \
-      scallop::tests::is_deterministic \
-      waterline::tests::is_deterministic \
-      morph::tests::is_deterministic \
-      ordering::tests::ordering_is_deterministic
+    DETERMINISM=(
+      run::tests::bounded_runs_are_deterministic
+      cutter::dropcutter::tests::is_deterministic
+      strategy::scallop::tests::is_deterministic
+      strategy::waterline::tests::is_deterministic
+      strategy::morph::tests::is_deterministic
+      path::ordering::tests::ordering_is_deterministic
+    )
+    determinism() {
+      local out
+      out="$(cargo test -p camcraft-core --lib --quiet -- --exact "${DETERMINISM[@]}" 2>&1)" || {
+        printf '%s\n' "$out"
+        return 1
+      }
+      printf '%s\n' "$out"
+      if ! printf '%s\n' "$out" | grep -q "test result: ok. ${#DETERMINISM[@]} passed"; then
+        echo "expected ${#DETERMINISM[@]} determinism tests to run: a name matches nothing" >&2
+        return 1
+      fi
+    }
+    run "determinism" determinism
   fi
 fi
 
