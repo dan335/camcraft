@@ -319,9 +319,11 @@ mod tests {
     const DARK: &str = "background = \"#1a1b26\"\nforeground = \"#a9b1d6\"\naccent = \"#7aa2f7\"\n";
     const LIGHT: &str = "background = \"#ffffff\"\nforeground = \"#202020\"\n";
 
-    /// A folder of the test's own.
+    /// A folder of the test's own, empty: a run before this one may have had
+    /// the same process id, and left its own behind.
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("camcraft-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -339,6 +341,7 @@ mod tests {
         std::fs::write(dir.join("readme.md"), "not a palette").unwrap();
         assert_eq!(listed(&dir), ["Catppuccin-Latte", "tokyo-night"]);
         assert!(listed(&dir.join("not-there")).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A theme folder is light by its marker, as Omarchy's are; a file of its
@@ -355,6 +358,7 @@ mod tests {
         assert!(!marked.unwrap().dark);
         let (_, _, plain) = read(&files_in(&dir, "plain")).unwrap();
         assert!(plain.unwrap().dark, "a marker beside it is not its own");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A palette is drawn when first read and again only when it changes;
@@ -378,6 +382,7 @@ mod tests {
         assert!(w.look().is_none(), "not a palette");
         std::fs::write(&file, LIGHT).unwrap();
         assert!(w.look().is_some(), "back again");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Every theme Omarchy ships is bundled, and reads as a palette, light
