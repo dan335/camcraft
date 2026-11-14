@@ -167,6 +167,35 @@ impl Curve {
         self.steps().map(|(from, p)| p.flat_length(from)).sum()
     }
 
+    /// Its longest piece seen from above, with where it starts: the last of
+    /// them where several are as long.
+    pub fn longest(&self) -> Option<(DVec3, &Piece)> {
+        self.steps()
+            .max_by(|a, b| a.1.flat_length(a.0).total_cmp(&b.1.flat_length(b.0)))
+    }
+
+    /// The way it runs where it starts (`at_end` false) or ends, seen from
+    /// above: a unit vector, or zero for a curve that goes nowhere.
+    pub fn heading(&self, at_end: bool) -> DVec2 {
+        let step = if at_end {
+            self.steps().last()
+        } else {
+            self.steps().next()
+        };
+        step.map_or(DVec2::ZERO, |(from, p)| p.heading(from, at_end))
+    }
+
+    /// The same curve run anticlockwise seen from above, or clockwise where
+    /// not `anticlockwise`: reversed where it runs the other way.
+    pub fn wound(&self, anticlockwise: bool) -> Curve {
+        let area = self.signed_area();
+        if (anticlockwise && area < 0.0) || (!anticlockwise && area > 0.0) {
+            self.reversed()
+        } else {
+            self.clone()
+        }
+    }
+
     /// The same curve run the other way.
     pub fn reversed(&self) -> Curve {
         let steps: Vec<(DVec3, Piece)> = self.steps().map(|(f, p)| (f, *p)).collect();

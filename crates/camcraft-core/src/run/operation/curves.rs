@@ -381,10 +381,7 @@ pub(in crate::run) fn chamfers_picked(
 /// of its longest piece: the part is level with the edge or above it on its
 /// side, and lower on the other.
 fn part_side(curve: &Curve, cutter: &DropCutter<'_>, tol: f64) -> Result<bool, ChamferError> {
-    let longest = curve
-        .steps()
-        .max_by(|a, b| a.1.flat_length(a.0).total_cmp(&b.1.flat_length(b.0)));
-    let Some((from, piece)) = longest else {
+    let Some((from, piece)) = curve.longest() else {
         return Err(ChamferError::NothingPicked);
     };
     let at = piece.point_at(from, 0.5);

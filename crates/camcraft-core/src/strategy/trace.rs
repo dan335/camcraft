@@ -161,10 +161,7 @@ fn check_params(p: &TraceParams) -> Result<(), StrategyError> {
 /// lowest end when open.
 fn oriented(curve: &Curve, tol: f64) -> Curve {
     if curve.is_closed(tol) {
-        if curve.signed_area() < 0.0 {
-            return curve.reversed();
-        }
-        return curve.clone();
+        return curve.wound(true);
     }
     let (a, b) = (curve.start, curve.end());
     let key = |p: DVec3| [p.x, p.y, p.z];
@@ -184,13 +181,12 @@ fn oriented(curve: &Curve, tol: f64) -> Curve {
 /// The way `curve` runs where it starts (`at_end` false) or ends, in space: a
 /// unit vector, or `None` for a curve that goes nowhere.
 fn tangent(curve: &Curve, at_end: bool) -> Option<DVec3> {
-    let steps: Vec<(DVec3, Piece)> = curve.steps().map(|(f, p)| (f, *p)).collect();
     let (from, p) = if at_end {
-        *steps.last()?
+        curve.steps().last()?
     } else {
-        *steps.first()?
+        curve.steps().next()?
     };
-    match p {
+    match *p {
         Piece::Line { to } => (to - from).try_normalize(),
         Piece::Arc { to, centre, sweep } => {
             let q = if at_end { to } else { from };

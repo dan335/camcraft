@@ -155,11 +155,7 @@ pub fn slot_of(boundary: &Curve, tol: f64) -> Result<(Curve, f64), SlotError> {
         });
     }
     // Anticlockwise, so what it closes is on its left.
-    let ring = if boundary.signed_area() < 0.0 {
-        boundary.reversed()
-    } else {
-        boundary.clone()
-    };
+    let ring = boundary.wound(true);
     let runs = runs(&ring, tol).ok_or_else(not_a_slot)?;
     // Its round ends: arcs turning a half turn, convex.
     let ends: Vec<usize> = runs

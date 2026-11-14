@@ -305,22 +305,6 @@ fn check_params(p: &ChamferParams<'_>) -> Result<(), ChamferError> {
     Ok(())
 }
 
-/// The way a curve runs where it starts (`at_end` false) or ends, seen from
-/// above: a unit vector, or zero for one that goes nowhere.
-fn heading(curve: &Curve, at_end: bool) -> DVec2 {
-    let steps: Vec<(DVec3, Piece)> = curve.steps().map(|(f, p)| (f, *p)).collect();
-    let Some(&(from, p)) = (if at_end { steps.last() } else { steps.first() }) else {
-        return DVec2::ZERO;
-    };
-    match p {
-        Piece::Line { to } => (to - from).truncate().normalize_or_zero(),
-        Piece::Arc { to, centre, sweep } => {
-            let q = if at_end { to } else { from };
-            ((q.truncate() - centre).perp() * sweep.signum()).normalize_or_zero()
-        }
-    }
-}
-
 /// The first `run` millimetres of `curve`, seen from above, at most all of it.
 fn head(curve: &Curve, run: f64) -> Curve {
     curve.reversed().back_from_end(run)
@@ -426,8 +410,8 @@ pub fn chamfer(
         let side = |h: DVec2| h.perp() * away;
         let start = pass.start;
         let end = pass.end();
-        let lead_from = start + (side(heading(&pass, false)) * p.lead).extend(0.0);
-        let lead_to = end + (side(heading(&pass, true)) * p.lead).extend(0.0);
+        let lead_from = start + (side(pass.heading(false)) * p.lead).extend(0.0);
+        let lead_to = end + (side(pass.heading(true)) * p.lead).extend(0.0);
         let mut whole = Curve {
             start: lead_from,
             pieces: Vec::with_capacity(pass.pieces.len() + 2),

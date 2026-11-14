@@ -223,11 +223,9 @@ pub fn shapes(loops: &[(Curve, f64)], tol: f64) -> Result<Vec<Shape>, EngraveErr
     // longest piece is as good as any.
     let probe = |i: usize| -> DVec2 {
         loops.get(i).map_or(DVec2::ZERO, |(c, _)| {
-            c.steps()
-                .max_by(|a, b| a.1.flat_length(a.0).total_cmp(&b.1.flat_length(b.0)))
-                .map_or(c.start.truncate(), |(from, p)| {
-                    p.point_at(from, 0.5).truncate()
-                })
+            c.longest().map_or(c.start.truncate(), |(from, p)| {
+                p.point_at(from, 0.5).truncate()
+            })
         })
     };
     let around = |i: usize| -> Vec<usize> {
@@ -241,15 +239,10 @@ pub fn shapes(loops: &[(Curve, f64)], tol: f64) -> Result<Vec<Shape>, EngraveErr
         if depth.get(i).copied().unwrap_or(0) % 2 == 1 {
             continue;
         }
-        let outer = if c.signed_area() < 0.0 {
-            c.reversed()
-        } else {
-            c.clone()
-        };
         out.push((
             i,
             Shape {
-                loops: vec![outer],
+                loops: vec![c.wound(true)],
                 top: *top,
             },
         ));
@@ -267,14 +260,9 @@ pub fn shapes(loops: &[(Curve, f64)], tol: f64) -> Result<Vec<Shape>, EngraveErr
                 let area = |i: usize| areas.get(i).copied().unwrap_or(f64::INFINITY);
                 area(a).total_cmp(&area(b))
             });
-        let hole = if c.signed_area() > 0.0 {
-            c.reversed()
-        } else {
-            c.clone()
-        };
         if let Some((_, shape)) = out.iter_mut().find(|(j, _)| Some(*j) == parent) {
             shape.top = shape.top.max(*top);
-            shape.loops.push(hole);
+            shape.loops.push(c.wound(false));
         }
     }
     Ok(out.into_iter().map(|(_, s)| s).collect())
