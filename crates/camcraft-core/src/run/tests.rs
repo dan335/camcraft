@@ -344,27 +344,20 @@ fn a_drill_the_wrong_size_is_said() {
     assert!(w.iter().any(|w| w.contains("8.000 mm across")), "{w:?}");
 }
 
+/// A point on the wall of the plate's 8 mm hole.
+const HOLE_WALL: [f64; 3] = [4.0, 0.0, 2.5];
+
 /// The plate's 8 mm hole, picked by its wall and cut with a 6 mm flat end mill
 /// by `strategy`, a new operation of it.
 fn round_wall_cut(strategy: &str) -> (SetupResult, Job) {
-    use crate::job::{FeatureRef, Operation};
-    use crate::setup::features::find_face;
+    use crate::job::Operation;
     let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
     let mut job: Job = toml::from_str(JOB).unwrap();
     job.setups[0].operations.clear();
     let mut op = Operation::new("hole", StrategySpec::named(strategy).unwrap());
     op.tool = Some("rough".into());
     op.passes.stepover = 5.7;
-    let pick = FeatureRef {
-        model: "dome".into(),
-        index: 0,
-        at: [4.0, 0.0, 2.5],
-    };
-    let face = find_face(&body, &pick, 0.01).unwrap().index;
-    op.selection.faces.push(FeatureRef {
-        index: face,
-        ..pick
-    });
+    op.selection = picks_at(&body, &[HOLE_WALL], &[]);
     job.setups[0].operations.push(op);
     let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
     (run_setup(&job, 0, &bodies).unwrap(), job)
@@ -417,20 +410,9 @@ fn a_hole_is_bored_and_milled_round() {
             at = m.to;
         }
         // Nothing is left in the hole.
-        let stock = result.keyframes.last().unwrap().unpack().unwrap();
-        let field = stock.field();
-        let mut inside = 0;
-        for iy in 0..field.ny() {
-            for ix in 0..field.nx() {
-                let p = field.position(ix, iy).unwrap();
-                if p.length() < 4.0 - 2.0 * field.pitch() {
-                    inside += 1;
-                    let h = field.get(ix, iy).unwrap();
-                    assert!(h <= job.tolerance, "{strategy}: {h} left at {p}");
-                }
-            }
-        }
-        assert!(inside > 100);
+        let pitch = result.keyframes[0].unpack().unwrap().field().pitch();
+        let inside = |p: DVec2| p.length() < 4.0 - 2.0 * pitch;
+        assert!(left_over(&result, &job, inside, 0.0) > 100, "{strategy}");
     }
 }
 
@@ -444,8 +426,7 @@ fn a_hole_is_bored_and_milled_round() {
 /// thread it cuts.
 #[test]
 fn a_hole_is_threaded_into_its_wall() {
-    use crate::job::{FeatureRef, Operation, ToolKind, ToolSpec};
-    use crate::setup::features::find_face;
+    use crate::job::{Operation, ToolKind, ToolSpec};
     use crate::strategy::thread::ThreadReport;
     let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
     let mut job: Job = toml::from_str(JOB).unwrap();
@@ -463,22 +444,13 @@ fn a_hole_is_threaded_into_its_wall() {
             ..ToolSpec::default()
         },
     );
-    let pick = FeatureRef {
-        model: "dome".into(),
-        index: 0,
-        at: [4.0, 0.0, 2.5],
-    };
-    let face = find_face(&body, &pick, 0.01).unwrap().index;
-    let wall = FeatureRef {
-        index: face,
-        ..pick
-    };
+    let wall = picks_at(&body, &[HOLE_WALL], &[]);
     let mut bore = Operation::new("bore", StrategySpec::named("bore").unwrap());
     bore.tool = Some("rough".into());
-    bore.selection.faces.push(wall.clone());
+    bore.selection = wall.clone();
     let mut thread = Operation::new("thread", StrategySpec::named("thread").unwrap());
     thread.tool = Some("mill".into());
-    thread.selection.faces.push(wall);
+    thread.selection = wall;
     if let StrategySpec::Thread {
         pitch,
         pitch_diameter_offset,
@@ -615,8 +587,39 @@ fn slotted_block() -> Body {
     Body::with_faces(TriMesh::new(v, t).unwrap(), labels, 8).unwrap()
 }
 
-/// `body`'s floor-of-the-slot edges or face, picked where they are.
-fn slot_pick(body: &Body, face: bool) -> crate::job::Selection {
+/// The slotted block's top, round its slot, at 10 mm.
+const TOP: [f64; 3] = [15.0, 0.0, 10.0];
+
+/// The slotted block's slot's floor, at 6 mm.
+const FLOOR: [f64; 3] = [0.0, 0.0, 6.0];
+
+/// The edges round the slotted block's slot's floor, by a point on each.
+const FLOOR_EDGES: [[f64; 3]; 4] = [
+    [0.0, 3.0, 6.0],
+    [11.0, 0.0, 6.0],
+    [0.0, -3.0, 6.0],
+    [-11.0, 0.0, 6.0],
+];
+
+/// The slotted block's slot's top rim, by a point on each of its four edges.
+const RIM: [[f64; 3]; 4] = [
+    [0.0, 3.0, 10.0],
+    [11.0, 0.0, 10.0],
+    [0.0, -3.0, 10.0],
+    [-11.0, 0.0, 10.0],
+];
+
+/// The slotted block's top outline, 40 by 20 at 10 mm, by a point on each
+/// side.
+const OUTLINE: [[f64; 3]; 4] = [
+    [0.0, 10.0, 10.0],
+    [20.0, 0.0, 10.0],
+    [0.0, -10.0, 10.0],
+    [-20.0, 0.0, 10.0],
+];
+
+/// The faces and edges of `body` nearest each of `faces` and `edges`, picked.
+fn picks_at(body: &Body, faces: &[[f64; 3]], edges: &[[f64; 3]]) -> crate::job::Selection {
     use crate::job::{FeatureRef, Selection};
     use crate::setup::features::{find_edge, find_face};
     let pick = |at: [f64; 3]| FeatureRef {
@@ -624,36 +627,30 @@ fn slot_pick(body: &Body, face: bool) -> crate::job::Selection {
         index: 0,
         at,
     };
-    let mut s = Selection::default();
-    if face {
-        let f = find_face(body, &pick([0.0, 0.0, 6.0]), 0.01).unwrap().index;
-        s.faces.push(FeatureRef {
-            index: f,
-            ..pick([0.0, 0.0, 6.0])
-        });
-    } else {
-        for at in [
-            [0.0, 3.0, 6.0],
-            [11.0, 0.0, 6.0],
-            [0.0, -3.0, 6.0],
-            [-11.0, 0.0, 6.0],
-        ] {
-            let e = find_edge(body, &pick(at), 0.01).unwrap().index;
-            s.edges.push(FeatureRef {
-                index: e,
+    Selection {
+        faces: faces
+            .iter()
+            .map(|&at| FeatureRef {
+                index: find_face(body, &pick(at), 0.01).unwrap().index,
                 ..pick(at)
-            });
-        }
+            })
+            .collect(),
+        edges: edges
+            .iter()
+            .map(|&at| FeatureRef {
+                index: find_edge(body, &pick(at), 0.01).unwrap().index,
+                ..pick(at)
+            })
+            .collect(),
     }
-    s
 }
 
 /// The block's slot cut by `op`, a new operation of `strategy` with tool
-/// `tool` of the job's, changed by `change`.
+/// `tool` of the job's, changed by `change`, given the block.
 fn on_slotted_block(
     strategy: &str,
     tool: (&str, crate::job::ToolSpec),
-    change: impl FnOnce(&mut crate::job::Operation),
+    change: impl FnOnce(&mut crate::job::Operation, &Body),
 ) -> (SetupResult, Job) {
     use crate::job::Operation;
     let body = slotted_block();
@@ -663,7 +660,7 @@ fn on_slotted_block(
     let mut op = Operation::new("along", StrategySpec::named(strategy).unwrap());
     op.tool = Some(tool.0.into());
     op.passes.feed = 1200.0;
-    change(&mut op);
+    change(&mut op, &body);
     job.setups[0].operations.push(op);
     let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
     (run_setup(&job, 0, &bodies).unwrap(), job)
@@ -703,8 +700,12 @@ fn a_slot_is_cut_along_its_middle() {
         ..toml::from_str::<Job>(JOB).unwrap().tools["rough"].clone()
     };
     for (tool, levels, face) in [(6.0, None, false), (4.0, Some(2.0), true)] {
-        let (result, job) = on_slotted_block("slot", ("slotter", flat(tool)), |op| {
-            op.selection = slot_pick(&slotted_block(), face);
+        let (result, job) = on_slotted_block("slot", ("slotter", flat(tool)), |op, body| {
+            op.selection = if face {
+                picks_at(body, &[FLOOR], &[])
+            } else {
+                picks_at(body, &[], &FLOOR_EDGES)
+            };
             op.passes.stepdown = levels;
         });
         let op = &result.operations[0];
@@ -763,7 +764,7 @@ fn a_slot_is_cut_along_its_middle() {
 /// and nothing picked.
 #[test]
 fn a_slot_refuses_what_it_cannot_cut() {
-    use crate::job::{FeatureRef, Operation};
+    use crate::job::Operation;
     let body = slotted_block();
     let wide = crate::job::ToolSpec {
         diameter: 8.0,
@@ -783,28 +784,13 @@ fn a_slot_refuses_what_it_cannot_cut() {
         nothing.contains("pick the edges round the floor"),
         "{nothing}"
     );
-    op.selection = slot_pick(&body, true);
+    op.selection = picks_at(&body, &[FLOOR], &[]);
     op.tool = Some("wide".into());
     let wider = run(op.clone());
     assert!(wider.contains("narrower than the 8.000 mm tool"), "{wider}");
     // The block's top: a rectangle with a slot in it, not a slot.
     op.tool = Some("rough".into());
-    let top = crate::setup::features::find_face(
-        &body,
-        &FeatureRef {
-            model: "dome".into(),
-            index: 0,
-            at: [15.0, 0.0, 10.0],
-        },
-        0.01,
-    )
-    .unwrap()
-    .index;
-    op.selection.faces = vec![FeatureRef {
-        model: "dome".into(),
-        index: top,
-        at: [15.0, 0.0, 10.0],
-    }];
+    op.selection = picks_at(&body, &[TOP], &[]);
     let not = run(op);
     assert!(not.contains("is not a slot"), "{not}");
 }
@@ -823,8 +809,8 @@ fn a_trace_follows_the_picked_edges() {
         flute_length: Some(8.0),
         ..toml::from_str::<Job>(JOB).unwrap().tools["rough"].clone()
     };
-    let (result, job) = on_slotted_block("trace", ("small", small), |op| {
-        op.selection = slot_pick(&slotted_block(), false);
+    let (result, job) = on_slotted_block("trace", ("small", small), |op, body| {
+        op.selection = picks_at(body, &[], &FLOOR_EDGES);
         if let StrategySpec::Trace { compensation, .. } = &mut op.strategy {
             *compensation = Compensation::Left;
         }
@@ -862,33 +848,6 @@ fn vee() -> crate::job::ToolSpec {
     }
 }
 
-/// The slotted block's edges or faces at `at`, as picks.
-fn picks_at(body: &Body, faces: &[[f64; 3]], edges: &[[f64; 3]]) -> crate::job::Selection {
-    use crate::job::{FeatureRef, Selection};
-    use crate::setup::features::{find_edge, find_face};
-    let pick = |at: [f64; 3]| FeatureRef {
-        model: "dome".into(),
-        index: 0,
-        at,
-    };
-    Selection {
-        faces: faces
-            .iter()
-            .map(|&at| FeatureRef {
-                index: find_face(body, &pick(at), 0.01).unwrap().index,
-                ..pick(at)
-            })
-            .collect(),
-        edges: edges
-            .iter()
-            .map(|&at| FeatureRef {
-                index: find_edge(body, &pick(at), 0.01).unwrap().index,
-                ..pick(at)
-            })
-            .collect(),
-    }
-}
-
 /// Fusion's Engrave, a new operation picked by the slot's rim or by its floor:
 /// the slot is 6 mm wide, wider than the V reaches at its depth, 2.85 mm, so
 /// the V runs round the rim 2.85 mm in at that depth, round the ends as arcs;
@@ -898,16 +857,10 @@ fn picks_at(body: &Body, faces: &[[f64; 3]], edges: &[[f64; 3]]) -> crate::job::
 #[test]
 fn a_slot_is_engraved_from_its_rim() {
     use crate::path::toolpath::{MoveKind, MoveRole};
-    let rim = [
-        [0.0, 3.0, 10.0],
-        [11.0, 0.0, 10.0],
-        [0.0, -3.0, 10.0],
-        [-11.0, 0.0, 10.0],
-    ];
     let mut paths = Vec::new();
-    for (faces, edges) in [(&[][..], &rim[..]), (&[[0.0, 0.0, 6.0]][..], &[][..])] {
-        let (result, _) = on_slotted_block("engrave", ("vee", vee()), |op| {
-            op.selection = picks_at(&slotted_block(), faces, edges);
+    for (faces, edges) in [(&[][..], &RIM[..]), (&[FLOOR][..], &[][..])] {
+        let (result, _) = on_slotted_block("engrave", ("vee", vee()), |op, body| {
+            op.selection = picks_at(body, faces, edges);
         });
         let op = &result.operations[0];
         let StrategyDetail::Engrave(report) = op.detail else {
@@ -938,8 +891,8 @@ fn a_slot_is_engraved_from_its_rim() {
 /// Anything but a cone is refused.
 #[test]
 fn an_engraving_into_the_part_is_said() {
-    let (result, _) = on_slotted_block("engrave", ("vee", vee()), |op| {
-        op.selection = picks_at(&slotted_block(), &[[15.0, 0.0, 10.0]], &[]);
+    let (result, _) = on_slotted_block("engrave", ("vee", vee()), |op, body| {
+        op.selection = picks_at(body, &[TOP], &[]);
     });
     let op = &result.operations[0];
     let StrategyDetail::Engrave(report) = op.detail else {
@@ -952,13 +905,13 @@ fn an_engraving_into_the_part_is_said() {
     assert!(op.warnings.iter().any(|w| w.contains("into the part")));
     assert!(result.verify.gouged > 0);
 
+    let body = slotted_block();
     let mut job: Job = toml::from_str(JOB).unwrap();
     job.setups[0].operations.clear();
     let mut op = crate::job::Operation::new("engrave", StrategySpec::named("engrave").unwrap());
     op.tool = Some("rough".into());
-    op.selection = picks_at(&slotted_block(), &[[0.0, 0.0, 6.0]], &[]);
+    op.selection = picks_at(&body, &[FLOOR], &[]);
     job.setups[0].operations.push(op);
-    let body = slotted_block();
     let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
     let refused = run_setup(&job, 0, &bodies).unwrap_err().to_string();
     assert!(refused.contains("cone"), "{refused}");
@@ -2302,8 +2255,19 @@ fn clearing_keeps_the_holder_off_the_part_by_the_region_it_clears() {
     assert!(trimmed.passes > 0 && trimmed.sim.removed_mm3 < off.sim.removed_mm3);
 }
 
-/// What a test does to a new operation.
-type Change = Box<dyn FnOnce(&mut crate::job::Operation)>;
+/// The test job, its stock a block exactly the size of the model it is run on.
+fn flush_stock() -> Job {
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    job.stocks[0].spec = crate::job::StockSpec::AroundModels {
+        models: vec![],
+        margin: [0.0, 0.0, 0.0],
+        below: 0.0,
+    };
+    job
+}
+
+/// What a test does to a new operation, on the body it is run on.
+type Change = Box<dyn FnOnce(&mut crate::job::Operation, &Body)>;
 
 /// A 90° V-bit 6 mm across: what a 2D chamfer cuts with.
 fn vbit() -> crate::job::ToolSpec {
@@ -2316,57 +2280,18 @@ fn vbit() -> crate::job::ToolSpec {
     }
 }
 
-/// The edges of `body` nearest each of `at`, picked.
-fn edges_at(body: &Body, at: &[[f64; 3]]) -> crate::job::Selection {
-    use crate::job::{FeatureRef, Selection};
-    use crate::setup::features::find_edge;
-    let mut s = Selection::default();
-    for &at in at {
-        let pick = FeatureRef {
-            model: "dome".into(),
-            index: 0,
-            at,
-        };
-        let e = find_edge(body, &pick, 0.01).unwrap().index;
-        s.edges.push(FeatureRef { index: e, ..pick });
-    }
-    s
-}
-
-/// The slotted block's top outline, 40 by 20 at 10 mm, by a point on each
-/// side.
-const OUTLINE: [[f64; 3]; 4] = [
-    [0.0, 10.0, 10.0],
-    [20.0, 0.0, 10.0],
-    [0.0, -10.0, 10.0],
-    [-20.0, 0.0, 10.0],
-];
-
-/// The slotted block's slot's top rim, by a point on each of its four edges.
-const RIM: [[f64; 3]; 4] = [
-    [0.0, 3.0, 10.0],
-    [11.0, 0.0, 10.0],
-    [0.0, -3.0, 10.0],
-    [-11.0, 0.0, 10.0],
-];
-
 /// `operations`, each a new one of its strategy made by its function, run on
 /// `body` in a block exactly its size, every one with the job's V-bit.
 fn chamfered(body: &Body, operations: Vec<(&str, Change)>) -> (SetupResult, Job) {
-    use crate::job::{Operation, StockSpec};
-    let mut job: Job = toml::from_str(JOB).unwrap();
+    use crate::job::Operation;
+    let mut job = flush_stock();
     job.tools.insert("vbit".into(), vbit());
-    job.stocks[0].spec = StockSpec::AroundModels {
-        models: vec![],
-        margin: [0.0, 0.0, 0.0],
-        below: 0.0,
-    };
     job.setups[0].operations.clear();
     for (i, (strategy, change)) in operations.into_iter().enumerate() {
         let mut op = Operation::new(format!("op{i}"), StrategySpec::named(strategy).unwrap());
         op.tool = Some("vbit".into());
         op.passes.feed = 1000.0;
-        change(&mut op);
+        change(&mut op, body);
         job.setups[0].operations.push(op);
     }
     job.validate().unwrap();
@@ -2377,8 +2302,8 @@ fn chamfered(body: &Body, operations: Vec<(&str, Change)>) -> (SetupResult, Job)
 /// A chamfer `width` across, its tip offset `tip`, round the slotted block's
 /// top outline.
 fn outline_chamfer(width: f64, tip: f64) -> Change {
-    Box::new(move |op: &mut crate::job::Operation| {
-        op.selection = edges_at(&slotted_block(), &OUTLINE);
+    Box::new(move |op: &mut crate::job::Operation, body: &Body| {
+        op.selection = picks_at(body, &[], &OUTLINE);
         if let StrategySpec::Chamfer2d {
             width: w,
             tip_offset,
@@ -2395,8 +2320,8 @@ fn outline_chamfer(width: f64, tip: f64) -> Change {
 
 /// A V-bit traced along `edges`, its tip `down` below them.
 fn traced(edges: &'static [[f64; 3]], down: f64) -> Change {
-    Box::new(move |op: &mut crate::job::Operation| {
-        op.selection = edges_at(&slotted_block(), edges);
+    Box::new(move |op: &mut crate::job::Operation, body: &Body| {
+        op.selection = picks_at(body, &[], edges);
         if let StrategySpec::Trace { axial_offset, .. } = &mut op.strategy {
             *axial_offset = -down;
         }
@@ -2544,8 +2469,8 @@ fn a_chamfer_the_model_has_is_followed() {
         [-20.0, 0.0, 9.0],
     ];
     let follow = |clearance: f64| -> Change {
-        Box::new(move |op: &mut crate::job::Operation| {
-            op.selection = edges_at(&chamfered_block(), &lower);
+        Box::new(move |op: &mut crate::job::Operation, body: &Body| {
+            op.selection = picks_at(body, &[], &lower);
             if let StrategySpec::Chamfer2d {
                 width,
                 clearance: c,
@@ -2606,7 +2531,7 @@ fn a_chamfer_refuses_what_it_cannot_cut() {
     job.tools.insert("vbit".into(), vbit());
     let mut op = Operation::new("chamfer", StrategySpec::named("chamfer-2d").unwrap());
     op.tool = Some("rough".into());
-    op.selection = edges_at(&body, &OUTLINE);
+    op.selection = picks_at(&body, &[], &OUTLINE);
     job.setups[0].operations = vec![op.clone()];
     let err = job.validate().unwrap_err();
     assert!(
@@ -2776,6 +2701,10 @@ fn pocketed_block() -> Body {
     })
 }
 
+/// The floors of the pocketed block's closed pocket and of its open one.
+const CLOSED_POCKET: [f64; 3] = [-22.0, 0.0, 5.0];
+const OPEN_POCKET: [f64; 3] = [20.0, 0.0, 6.0];
+
 /// Fusion's 2D Adaptive Clearing, a new operation picked by the floors of a
 /// pocket with an island and of one open to the block's side, cut to size: a
 /// helix down into the closed one only, the open one entered from outside the
@@ -2783,33 +2712,16 @@ fn pocketed_block() -> Body {
 /// passing. Each pocket's own floor, as a 2D pocket's.
 #[test]
 fn adaptive_2d_clears_a_pocket_round_an_island_and_one_open_to_the_side() {
-    use crate::job::{FeatureRef, Operation, StockSpec};
-    use crate::setup::features::find_face;
+    use crate::job::Operation;
     let body = pocketed_block();
-    let mut job: Job = toml::from_str(JOB).unwrap();
-    job.stocks[0].spec = StockSpec::AroundModels {
-        models: vec![],
-        margin: [0.0, 0.0, 0.0],
-        below: 0.0,
-    };
+    let mut job = flush_stock();
     let mut op = Operation::new("adaptive", StrategySpec::named("adaptive-2d").unwrap());
     op.tool = Some("rough".into());
     op.passes.feed = 1500.0;
     op.passes.stepover = 2.4;
     op.passes.stock_to_leave = Default::default();
     op.outline = Outline::Selection;
-    for at in [[-22.0, 0.0, 5.0], [20.0, 0.0, 6.0]] {
-        let pick = FeatureRef {
-            model: "dome".into(),
-            index: 0,
-            at,
-        };
-        let face = find_face(&body, &pick, 0.01).unwrap().index;
-        op.selection.faces.push(FeatureRef {
-            index: face,
-            ..pick
-        });
-    }
+    op.selection = picks_at(&body, &[CLOSED_POCKET, OPEN_POCKET], &[]);
     job.setups[0].operations = vec![op];
     job.validate().unwrap();
     let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
@@ -2882,16 +2794,10 @@ fn adaptive_2d_clears_a_pocket_round_an_island_and_one_open_to_the_side() {
 /// same result either way, and a cone refused.
 #[test]
 fn adaptive_2d_cuts_in_levels_as_asked() {
-    use crate::job::{ContourOrder, FeatureRef, Operation, StockSpec};
-    use crate::setup::features::find_face;
+    use crate::job::{ContourOrder, Operation};
     let body = pocketed_block();
     let run = |even: bool, by_area: bool| {
-        let mut job: Job = toml::from_str(JOB).unwrap();
-        job.stocks[0].spec = StockSpec::AroundModels {
-            models: vec![],
-            margin: [0.0, 0.0, 0.0],
-            below: 0.0,
-        };
+        let mut job = flush_stock();
         let mut op = Operation::new("adaptive", StrategySpec::named("adaptive-2d").unwrap());
         op.tool = Some("rough".into());
         op.passes.feed = 1500.0;
@@ -2911,16 +2817,7 @@ fn adaptive_2d_cuts_in_levels_as_asked() {
                 ContourOrder::ByDepth
             };
         }
-        let pick = FeatureRef {
-            model: "dome".into(),
-            index: 0,
-            at: [-22.0, 0.0, 5.0],
-        };
-        let face = find_face(&body, &pick, 0.01).unwrap().index;
-        op.selection.faces.push(FeatureRef {
-            index: face,
-            ..pick
-        });
+        op.selection = picks_at(&body, &[CLOSED_POCKET], &[]);
         job.setups[0].operations = vec![op];
         let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
         run_setup(&job, 0, &bodies).unwrap()
