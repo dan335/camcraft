@@ -3,6 +3,8 @@
 
 use camcraft_geom::topology::EdgeKind;
 
+use super::clearing::level_leads;
+use super::curves::body_of;
 use super::*;
 use crate::job::ThreadHand;
 use crate::setup::features::{self, find_face};
@@ -40,11 +42,7 @@ fn round_params(work: &Work<'_>, asked: RoundAsked) -> RoundParams {
         repeat: asked.repeat,
         feed: op.passes.feed,
         kept_on_right: work.kept_on_right(),
-        leads: op.leads(diameter).map(|l| LeadArc {
-            radius: l.radius,
-            sweep: l.sweep.to_radians(),
-            straight: l.straight,
-        }),
+        leads: op.leads(diameter).map(level_leads),
         to_centre: asked.lead_to_center,
     }
 }
@@ -59,17 +57,23 @@ fn tell(report: &RoundReport, warnings: &mut Vec<String>) {
             report.cores, report.widest_core
         ));
     }
-    if report.dropped > 0 {
-        warnings.push(format!(
-            "{} pass(es) past the middle of a hole left out: fewer stepovers, or narrower ones, would keep them",
-            report.dropped
-        ));
-    }
+    tell_dropped(report.dropped, warnings);
     if report.no_room_to_lead > 0 {
         warnings.push(format!(
             "{} pass(es) have no room for a lead inside the hole, and are entered and \
              left without",
             report.no_room_to_lead
+        ));
+    }
+}
+
+/// The `dropped` passes past a hole's middle a bore, a circular or a thread
+/// left out, said where there are any.
+fn tell_dropped(dropped: u64, warnings: &mut Vec<String>) {
+    if dropped > 0 {
+        warnings.push(format!(
+            "{dropped} pass(es) past the middle of a hole left out: fewer stepovers, or \
+             narrower ones, would keep them"
         ));
     }
 }
@@ -142,11 +146,7 @@ pub(super) fn thread_paths(
         kept_on_right: work.kept_on_right(),
         stepovers: asked.stepovers,
         stepover: op.passes.stepover,
-        leads: op.leads(diameter).map(|l| LeadArc {
-            radius: l.radius,
-            sweep: l.sweep.to_radians(),
-            straight: l.straight,
-        }),
+        leads: op.leads(diameter).map(level_leads),
         helical: asked.helical,
         to_centre: asked.lead_to_center,
         feed: op.passes.feed,
@@ -171,13 +171,7 @@ pub(super) fn thread_paths(
              Bottom that much higher, or level leads"
         ));
     }
-    if report.dropped > 0 {
-        warnings.push(format!(
-            "{} pass(es) past the middle of a hole left out: fewer stepovers, or narrower ones, \
-             would keep them",
-            report.dropped
-        ));
-    }
+    tell_dropped(report.dropped, warnings);
     if let Some(ground) = work.spec.pitch
         && (ground - asked.pitch).abs() > 1.0e-6
     {
@@ -190,10 +184,10 @@ pub(super) fn thread_paths(
     Ok((path, report.passes, StrategyDetail::Thread(report)))
 }
 
-/// The round walls a bore's, a circular's or a thread's picked faces make, in the setup's
-/// frame, in the order they are cut: each from its own top to its own bottom,
-/// or the Top and Bottom where they are set, its bottom raised by the stock to
-/// leave down.
+/// The round walls a bore's, a circular's or a thread's picked faces make, in
+/// the setup's frame, in the order they are cut: each from its own top to its
+/// own bottom, or the Top and Bottom where they are set, its bottom raised by
+/// the stock to leave down.
 pub(in crate::run) fn round_walls(
     job: &Job,
     op: &Operation,
@@ -205,10 +199,7 @@ pub(in crate::run) fn round_walls(
     let mut walls: Vec<Wall> = Vec::new();
     let mut tol = job.tolerance.max(0.01);
     for pick in &op.selection.faces {
-        let body = bodies
-            .get(pick.model.as_str())
-            .copied()
-            .ok_or_else(|| in_op(op)(FeatureError::NotLoaded(pick.model.clone())))?;
+        let body = body_of(op, bodies, &pick.model)?;
         let near = features::tolerance(job.tolerance, body);
         tol = tol.max(near);
         let found = find_face(body, pick, near).map_err(in_op(op))?;

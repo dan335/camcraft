@@ -6,7 +6,7 @@ use camcraft_geom::mesh::TriMesh;
 use camcraft_geom::topology::{Body as Model, EdgeKind};
 
 use super::*;
-use crate::cutter::tool::Cutter;
+use crate::cutter::tool::{Cone, Cutter};
 use crate::job::JobError;
 use crate::setup::features::{self, find_edge, find_face};
 use crate::setup::frame::Frame;
@@ -70,12 +70,36 @@ fn edge_curve(model: &str, body: &Model, index: u32, frame: &Frame, tol: f64) ->
     })
 }
 
-/// The body `model` names.
-fn body_of<'b>(op: &Operation, bodies: &Bodies<'b>, model: &str) -> Result<&'b Model, RunError> {
+/// The body `model` names, which `op` picked on.
+pub(super) fn body_of<'b>(
+    op: &Operation,
+    bodies: &Bodies<'b>,
+    model: &str,
+) -> Result<&'b Model, RunError> {
     bodies
         .get(model)
         .copied()
         .ok_or_else(|| in_op(op)(FeatureError::NotLoaded(model.to_string())))
+}
+
+/// The tolerance the strategies that run along what is picked work to, and
+/// their picks are read to: the job's, but never finer than a micron.
+fn curve_tolerance(job: &Job) -> f64 {
+    job.tolerance.max(0.001)
+}
+
+/// `work`'s tool, which must be a cone, a V-bit or a chamfer mill; or `why`
+/// not, where it is something else.
+fn cone_of(work: &Work<'_>, why: &str) -> Result<Cone, RunError> {
+    match *work.tool.base() {
+        Cutter::Cone(cone) => Ok(cone),
+        _ => Err(JobError::WrongTool {
+            op: work.op.name.clone(),
+            tool: work.op.tool.clone().unwrap_or_default(),
+            why: why.into(),
+        }
+        .into()),
+    }
 }
 
 /// `op`'s picked edges, each once, as pieces of curve in the setup's frame,
@@ -106,7 +130,7 @@ fn picked_edge_ids(
     faces: bool,
 ) -> Result<Vec<PickedEdge>, RunError> {
     let frame = &prepared.frame;
-    let tol = job.tolerance.max(0.001);
+    let tol = curve_tolerance(job);
     let mut found: Vec<(String, u32)> = Vec::new();
     if faces {
         for pick in &op.selection.faces {
@@ -131,7 +155,7 @@ fn picked_edge_ids(
     let mut out: Vec<PickedEdge> = Vec::with_capacity(found.len());
     let mut seen: Vec<(String, u32)> = Vec::with_capacity(found.len());
     for (model, e) in found {
-        if seen.contains(&(model.clone(), e)) {
+        if seen.iter().any(|(m, i)| *i == e && *m == model) {
             continue;
         }
         let body = body_of(op, bodies, &model)?;
@@ -161,7 +185,7 @@ pub(in crate::run) fn slots_picked(
     if edges.is_empty() {
         return Err(in_op(op)(SlotError::NothingPicked));
     }
-    let tol = job.tolerance.max(0.001);
+    let tol = curve_tolerance(job);
     let (top, bottom) = op.levels_3d(ctx);
     let axial = op.stock_to_leave().axial;
     let mut found = Vec::new();
@@ -242,7 +266,7 @@ pub(super) fn slot_paths(
         ramp_clearance,
         backoff,
         repeat,
-        tolerance: work.job.tolerance.max(0.001),
+        tolerance: curve_tolerance(work.job),
     };
     let (path, report) = slot(slots, &params).map_err(in_op(op))?;
     Ok((path, report.passes, StrategyDetail::Slot(report)))
@@ -283,7 +307,7 @@ pub(super) fn trace_paths(
         repeat: asked.repeat,
         preserve_order: asked.preserve_order,
         feed: op.passes.feed,
-        tolerance: work.job.tolerance.max(0.001),
+        tolerance: curve_tolerance(work.job),
     };
     let (path, report) = trace(curves, &params).map_err(in_op(op))?;
     if report.steep > 0 {
@@ -316,7 +340,7 @@ pub(in crate::run) fn chamfers_picked(
     if picked.is_empty() {
         return Err(in_op(op)(ChamferError::NothingPicked));
     }
-    let tol = job.tolerance.max(0.001);
+    let tol = curve_tolerance(job);
     let cutter = prepared.drop_cutter();
     let edges: Vec<Edge> = picked.iter().map(|(_, e)| e.clone()).collect();
     let mut found = Vec::new();
@@ -429,7 +453,7 @@ pub(in crate::run) fn engravings_picked(
     bodies: &Bodies<'_>,
 ) -> Result<Vec<Shape>, RunError> {
     let frame = &prepared.frame;
-    let tol = job.tolerance.max(0.001);
+    let tol = curve_tolerance(job);
     let mut loops: Vec<(Curve, f64)> = Vec::new();
     let mut taken: Vec<(String, u32)> = Vec::new();
     let mut add = |model: &str, body: &Model, e: u32, out: &mut Vec<Edge>| {
@@ -491,15 +515,11 @@ pub(super) fn engrave_paths(
     warnings: &mut Vec<String>,
 ) -> Result<Paths, RunError> {
     let op = work.op;
-    let Cutter::Cone(cone) = *work.tool.base() else {
-        return Err(JobError::WrongTool {
-            op: op.name.clone(),
-            tool: op.tool.clone().unwrap_or_default(),
-            why: "an engraving cuts with a cone: use a V-bit or chamfer mill".into(),
-        }
-        .into());
-    };
-    let tolerance = work.job.tolerance.max(0.001);
+    let cone = cone_of(
+        work,
+        "an engraving cuts with a cone: use a V-bit or chamfer mill",
+    )?;
+    let tolerance = curve_tolerance(work.job);
     let mut params = EngraveParams {
         tip: cone.tip(),
         rise: cone.rise(),
@@ -576,22 +596,18 @@ pub(super) fn chamfer_paths(
     warnings: &mut Vec<String>,
 ) -> Result<Paths, RunError> {
     let op = work.op;
-    let Cutter::Cone(cone) = *work.tool.base() else {
-        return Err(JobError::WrongTool {
-            op: op.name.clone(),
-            tool: op.tool.clone().unwrap_or_default(),
-            why: "a 2D chamfer cuts with a cone: use a chamfer mill or V-bit".into(),
-        }
-        .into());
-    };
+    let cone = cone_of(
+        work,
+        "a 2D chamfer cuts with a cone: use a chamfer mill or V-bit",
+    )?;
     let radius = cone.max_radius();
-    let tolerance = work.job.tolerance.max(0.001);
+    let tolerance = curve_tolerance(work.job);
     // The tool grown by the clearance, dropped onto the faces the edges do
     // not join: as high as its tip must be to keep off them.
     let others = chamfers.others.as_ref().map(DropCutter::new);
     let grown = (asked.clearance > 0.0)
         .then(|| {
-            crate::cutter::tool::Cone::new(
+            Cone::new(
                 radius + asked.clearance,
                 cone.tip() + asked.clearance,
                 (1.0 / cone.rise()).atan(),

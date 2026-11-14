@@ -2,6 +2,7 @@
 //! clearing, 2D cutting, facing and drilling, and what they are cut to.
 
 use super::*;
+use crate::job::LeadSizes;
 
 /// Pocket clearing of the material as it stands, a level each stepdown and, with
 /// flat areas, one on each flat face, within the sweep and `limit`, dropping rings
@@ -327,6 +328,16 @@ fn add_report(to: &mut AdaptiveReport, more: &AdaptiveReport) {
     to.overloads += more.overloads;
 }
 
+/// An operation's leads, `l`, as the 2D strategies and those round walls take
+/// them: level arcs, their sweep in radians.
+pub(super) fn level_leads(l: LeadSizes) -> LeadArc {
+    LeadArc {
+        radius: l.radius,
+        sweep: l.sweep.to_radians(),
+        straight: l.straight,
+    }
+}
+
 /// A 2D profile or pocket of `areas`.
 pub(super) fn planar_paths(
     work: &Work<'_>,
@@ -351,11 +362,7 @@ pub(super) fn planar_paths(
                 .map(|l| l.sizes(diameter)),
             _ => op.leads(diameter),
         }
-        .map(|l| LeadArc {
-            radius: l.radius,
-            sweep: l.sweep.to_radians(),
-            straight: l.straight,
-        }),
+        .map(level_leads),
         // Ramped into, a profile goes down each ring in one spiral, as Fusion's;
         // a pocket ramps along its rings as the linker enters them.
         spiral: (matches!(op.strategy, StrategySpec::Profile { .. })
