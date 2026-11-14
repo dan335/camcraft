@@ -9,6 +9,7 @@ pub mod morph;
 pub mod parallel;
 pub mod patterns;
 pub mod projected;
+pub mod ramp;
 pub mod scallop;
 pub mod waterline;
 

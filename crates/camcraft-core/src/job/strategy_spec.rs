@@ -54,6 +54,27 @@ pub enum StrategySpec {
         #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
         slope_to: f64,
     },
+    /// Each wall gone down without stopping, round and round it a stepdown
+    /// ([`Depths::Required`]) each time, on the part all the way, from the
+    /// wall's top to its foot, and once round there. Fusion's Ramp.
+    Ramp {
+        /// Which way each pass cuts; climbing unless asked: Fusion's
+        /// Direction.
+        #[serde(default = "climb", skip_serializing_if = "is_climb")]
+        direction: CutDirection,
+        /// A level at each flat face too, so a wall standing on one goes down
+        /// to it: Fusion's Flat Area Detection, on.
+        #[serde(default = "yes", skip_serializing_if = "is_yes")]
+        flat_areas: bool,
+        /// Only where the surface is at least this steep, in degrees from
+        /// level: Fusion's From Slope Angle.
+        #[serde(default, skip_serializing_if = "is_default")]
+        slope_from: f64,
+        /// And at most this steep, in degrees from level: Fusion's To Slope
+        /// Angle.
+        #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
+        slope_to: f64,
+    },
     /// Each flat face of the part cleared at its own height, rings a stepover
     /// apart in from its edges, and nothing else. Fusion's Flat.
     Flat {
@@ -596,6 +617,7 @@ impl StrategySpec {
             StrategySpec::Parallel { .. } => "parallel",
             StrategySpec::Scallop { .. } => "scallop",
             StrategySpec::Contour { .. } => "contour",
+            StrategySpec::Ramp { .. } => "ramp",
             StrategySpec::Flat { .. } => "flat",
             StrategySpec::Spiral { .. } => "spiral",
             StrategySpec::Radial { .. } => "radial",
@@ -634,6 +656,7 @@ impl StrategySpec {
             StrategySpec::PocketClearing { .. }
             | StrategySpec::Adaptive { .. }
             | StrategySpec::Contour { .. }
+            | StrategySpec::Ramp { .. }
             | StrategySpec::Flat { .. } => Some(Containment::Outside),
             StrategySpec::Profile { .. }
             | StrategySpec::Pocket { .. }
@@ -673,6 +696,7 @@ impl StrategySpec {
             | StrategySpec::Adaptive2d { direction, .. }
             | StrategySpec::Scallop { direction, .. }
             | StrategySpec::Contour { direction, .. }
+            | StrategySpec::Ramp { direction, .. }
             | StrategySpec::Flat { direction, .. }
             | StrategySpec::Spiral { direction, .. }
             | StrategySpec::MorphedSpiral { direction, .. } => Some(direction),
@@ -716,6 +740,11 @@ impl StrategySpec {
                 ..
             }
             | StrategySpec::Contour {
+                slope_from,
+                slope_to,
+                ..
+            }
+            | StrategySpec::Ramp {
                 slope_from,
                 slope_to,
                 ..
@@ -842,6 +871,7 @@ impl StrategySpec {
                 ("linking.leads.straight", ROUND_LEAD),
             ],
             StrategySpec::Contour { .. }
+            | StrategySpec::Ramp { .. }
             | StrategySpec::Drill { .. }
             | StrategySpec::Slot { .. }
             | StrategySpec::Trace { .. }
@@ -872,9 +902,9 @@ impl StrategySpec {
 
     /// How high a new operation of this strategy goes between cuts, where that
     /// is not what a job file that leaves it out reads: a trace, a 2D chamfer,
-    /// an engraving and a thread to the retract height, as Fusion's Trace
-    /// starts with a full retraction, its 2D Chamfer and Engrave have no
-    /// other, and its Thread's programs go up to it between holes.
+    /// an engraving, a thread and a ramp to the retract height, as Fusion's
+    /// Trace and Ramp start with a full retraction, its 2D Chamfer and Engrave
+    /// have no other, and its Thread's programs go up to it between holes.
     pub fn fresh_retraction(&self) -> Retraction {
         if matches!(
             self,
@@ -882,6 +912,7 @@ impl StrategySpec {
                 | StrategySpec::Chamfer2d { .. }
                 | StrategySpec::Engrave { .. }
                 | StrategySpec::Thread { .. }
+                | StrategySpec::Ramp { .. }
         ) {
             Retraction::Full
         } else {
@@ -921,11 +952,13 @@ impl StrategySpec {
             {
                 None
             }
-            // A finishing waterline's, as Fusion's Contour; and Fusion's
-            // Circular's.
+            // A finishing waterline's, as Fusion's Contour and Ramp; and
+            // Fusion's Circular's.
             _ if matches!(
                 self,
-                StrategySpec::Contour { .. } | StrategySpec::Circular { .. }
+                StrategySpec::Contour { .. }
+                    | StrategySpec::Ramp { .. }
+                    | StrategySpec::Circular { .. }
             ) =>
             {
                 Some(1.0)

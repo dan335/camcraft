@@ -437,3 +437,6 @@ mod tests;
 
 #[cfg(test)]
 mod tests_engrave;
+
+#[cfg(test)]
+mod tests_ramp;

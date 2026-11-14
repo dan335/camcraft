@@ -74,7 +74,7 @@ const MAX_LEVELS: usize = 100_000;
 
 /// How far a point is pulled onto the part each time it is refined: the most
 /// it is left short by is this fraction of the tolerance.
-const PULL_TO: f64 = 0.02;
+pub(crate) const PULL_TO: f64 = 0.02;
 
 /// Which order the levels are cut in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -190,10 +190,75 @@ pub fn waterline<T: DropTest + Sync>(
         });
     }
     let mut report = WaterlineReport::default();
-    let levels = levels(params);
+    let Found {
+        levels,
+        passes: worked,
+    } = passes_at_levels(reach, cutter, tool, area, params)?;
     report.levels = levels.len() as u64;
+
+    // Each level's passes, each with the piece of the footprint it is in.
+    let mut by_level: Vec<Vec<(usize, Run)>> = Vec::with_capacity(worked.len());
+    for level in worked {
+        report.rings += level.rings;
+        report.pulled += level.pulled;
+        report.unpulled += level.unpulled;
+        report.outside_slope += level.slopes.outside_slope + level.slopes.too_steep;
+        report.fragments += level.fragments;
+        by_level.push(level.runs);
+    }
+
+    let mut emit = Emit::new(params.feed);
+    // Onto a ring that starts within half the tool of where the last ended.
+    emit.ramp = params.ramp.map(|angle| (angle, 0.5 * tool.max_radius()));
+    let both_ways = params.direction == Direction::BothWays;
+    let runs = |passes: Vec<(usize, Run)>| passes.into_iter().map(|(_, run)| run).collect();
+    match params.order {
+        Order::ByDepth => {
+            for passes in by_level {
+                emit.nearest_first(runs(passes), both_ways)?;
+            }
+        }
+        Order::ByArea => {
+            while let Some(island) = nearest_island(&by_level, emit.at, both_ways) {
+                for passes in &mut by_level {
+                    let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(passes)
+                        .into_iter()
+                        .partition(|p| p.0 == island);
+                    *passes = rest;
+                    emit.nearest_first(runs(mine), both_ways)?;
+                }
+            }
+        }
+    }
+    report.passes = emit.passes;
+    Ok((emit.path, report))
+}
+
+/// The levels a waterline has, from the top down, and each one's passes.
+pub(crate) struct Found {
+    /// The levels.
+    pub(crate) levels: Vec<f64>,
+    /// Each level's passes, and what was found on the way.
+    pub(crate) passes: Vec<Level>,
+}
+
+/// The levels `params` asks for, and the passes round the part at each: each
+/// ring of where the tool may not be, kept to `area`, pulled onto the part,
+/// kept to the slope range and turned to cut the way asked. What contour
+/// finishing cuts, and what ramp finishing ramps down.
+pub(crate) fn passes_at_levels<T: DropTest + Sync>(
+    reach: &mut LevelReach<'_>,
+    cutter: &DropCutter<'_>,
+    tool: &T,
+    area: &Region,
+    params: &WaterlineParams,
+) -> Result<Found, StrategyError> {
+    let levels = levels(params);
     if levels.is_empty() || area.is_empty() {
-        return Ok((Toolpath::new(), report));
+        return Ok(Found {
+            levels,
+            passes: Vec::new(),
+        });
     }
 
     // Where the tool may not be at each, all at once: the shadows are built
@@ -299,44 +364,8 @@ pub fn waterline<T: DropTest + Sync>(
             Ok(level)
         })
         .collect();
-
-    // Each level's passes, each with the piece of the footprint it is in.
-    let mut by_level: Vec<Vec<(usize, Run)>> = Vec::with_capacity(worked.len());
-    for level in worked {
-        let level = level?;
-        report.rings += level.rings;
-        report.pulled += level.pulled;
-        report.unpulled += level.unpulled;
-        report.outside_slope += level.slopes.outside_slope + level.slopes.too_steep;
-        report.fragments += level.fragments;
-        by_level.push(level.runs);
-    }
-
-    let mut emit = Emit::new(params.feed);
-    // Onto a ring that starts within half the tool of where the last ended.
-    emit.ramp = params.ramp.map(|angle| (angle, 0.5 * tool.max_radius()));
-    let both_ways = params.direction == Direction::BothWays;
-    let runs = |passes: Vec<(usize, Run)>| passes.into_iter().map(|(_, run)| run).collect();
-    match params.order {
-        Order::ByDepth => {
-            for passes in by_level {
-                emit.nearest_first(runs(passes), both_ways)?;
-            }
-        }
-        Order::ByArea => {
-            while let Some(island) = nearest_island(&by_level, emit.at, both_ways) {
-                for passes in &mut by_level {
-                    let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(passes)
-                        .into_iter()
-                        .partition(|p| p.0 == island);
-                    *passes = rest;
-                    emit.nearest_first(runs(mine), both_ways)?;
-                }
-            }
-        }
-    }
-    report.passes = emit.passes;
-    Ok((emit.path, report))
+    let passes = worked.into_iter().collect::<Result<Vec<_>, _>>()?;
+    Ok(Found { levels, passes })
 }
 
 /// The piece of the footprint whose highest pass starts nearest `at`, an open
@@ -356,7 +385,7 @@ fn nearest_island(
 
 /// The levels, from the top down: a stepdown apart, the last at the bottom, and
 /// one at each flat face between.
-fn levels(params: &WaterlineParams) -> Vec<f64> {
+pub(crate) fn levels(params: &WaterlineParams) -> Vec<f64> {
     if params.top < params.bottom {
         return Vec::new();
     }
@@ -373,13 +402,20 @@ fn levels(params: &WaterlineParams) -> Vec<f64> {
 /// One level's passes, each with the piece of the footprint it is in; and what
 /// was found on the way.
 #[derive(Default)]
-struct Level {
-    runs: Vec<(usize, Run)>,
-    rings: u64,
-    pulled: u64,
-    unpulled: u64,
-    slopes: SlopeCounts,
-    fragments: u64,
+pub(crate) struct Level {
+    /// The passes, each with the piece of the footprint it is in, or one past
+    /// the last where the levels are not cut by area.
+    pub(crate) runs: Vec<(usize, Run)>,
+    /// Rings the part has at it, within the area.
+    pub(crate) rings: u64,
+    /// Points pulled onto the part.
+    pub(crate) pulled: u64,
+    /// Points that could not be.
+    pub(crate) unpulled: u64,
+    /// Stretches left out for their slope.
+    pub(crate) slopes: SlopeCounts,
+    /// Stretches too short to cut.
+    pub(crate) fragments: u64,
 }
 
 /// Which of `footprint` the ring `points` lies in, by a point just to its left,
@@ -406,18 +442,20 @@ struct Pulled {
 /// Moves points onto the part at level `z`: towards it until the tool's tip is
 /// within [`PULL_TO`] of the tolerance of first touching it, looking no further
 /// than `reach_by`; and never past.
-struct Puller<'a, 'm, T> {
-    cutter: &'a DropCutter<'m>,
-    tool: &'a T,
-    z: f64,
-    reach_by: f64,
-    tolerance: f64,
-    scratch: Vec<u32>,
+pub(crate) struct Puller<'a, 'm, T> {
+    pub(crate) cutter: &'a DropCutter<'m>,
+    pub(crate) tool: &'a T,
+    /// The level: where the tool's tip is.
+    pub(crate) z: f64,
+    /// How far it looks for the part either way.
+    pub(crate) reach_by: f64,
+    pub(crate) tolerance: f64,
+    pub(crate) scratch: Vec<u32>,
 }
 
 impl<T: DropTest> Puller<'_, '_, T> {
     /// Whether the tool's tip at the level over `p` is in the part.
-    fn touches(&mut self, p: DVec2) -> bool {
+    pub(crate) fn touches(&mut self, p: DVec2) -> bool {
         self.cutter
             .drop_at_in(self.tool, p.x, p.y, &mut self.scratch)
             .is_some_and(|h| h > self.z)
@@ -425,7 +463,7 @@ impl<T: DropTest> Puller<'_, '_, T> {
 
     /// `p` moved along `inward`, towards the part, onto it: `None` if it is not
     /// within reach either way.
-    fn onto(&mut self, p: DVec2, inward: DVec2) -> Option<DVec2> {
+    pub(crate) fn onto(&mut self, p: DVec2, inward: DVec2) -> Option<DVec2> {
         // Between a point clear of the part and one in it: in from `p`, or,
         // where it is already in it, out.
         let (mut clear, mut into) = if self.touches(p) {

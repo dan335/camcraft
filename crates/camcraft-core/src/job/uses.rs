@@ -102,6 +102,24 @@ impl StrategySpec {
                 top: Some(HeightRef::ModelTop),
                 ..cuts_loops
             },
+            // Contour's rings, gone down wall by wall: no stepover, its
+            // stepdown how far down each time round, its order and its way
+            // down its own (`strategy::ramp`). Each wall starts above where
+            // the last ended, and Fusion's programs lift between every two,
+            // to the retract height, and come down onto each along a
+            // vertical arc. Its levels start from the stock's top, as
+            // Fusion's Top does.
+            StrategySpec::Ramp { .. } => Uses {
+                stepover: false,
+                depths: Depths::Required,
+                links: Links::Level,
+                stay_down: false,
+                reach: Reach::Mm(50),
+                helix: HelixSize::Flat,
+                lead_radius: true,
+                ramp: true,
+                ..cuts_loops
+            },
             // Each flat at its own height, once: rings in from its edges, in
             // their own order, as a pocket clearing level's are. Only the
             // part's flats, from its top.

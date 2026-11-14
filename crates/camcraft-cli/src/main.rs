@@ -138,7 +138,8 @@ struct PostArgs {
     #[arg(long, default_value_t = Passes::default().stepover)]
     stepover: f64,
 
-    /// Distance between levels, in millimetres, for contour: 1 mm unless given.
+    /// Distance between levels, in millimetres, for contour and ramp: 1 mm
+    /// unless given.
     #[arg(long)]
     stepdown: Option<f64>,
 
@@ -226,6 +227,9 @@ enum StrategyArg {
     Scallop,
     /// Passes round the part at levels a stepdown apart. Fusion's Contour.
     Contour,
+    /// Down each wall without stopping, a stepdown each time round. Fusion's
+    /// Ramp.
+    Ramp,
     /// Each flat face cleared at its own height. Fusion's Flat.
     Flat,
     /// A spiral about the middle, dropped onto the part. Fusion's Spiral.

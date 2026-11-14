@@ -54,6 +54,9 @@ topics! {
     FLAT_AREAS: "Flat areas",
         "Adds a level at each flat face and peak, so floors are left just the stock to leave, not a stepdown's terrace.",
         Figure::FlatAreas;
+    RAMP_FLAT_AREAS: "Flat areas",
+        "Adds a level at each flat face, so a wall standing on one is gone down to it and once round there, not left a stepdown's terrace above it.",
+        Figure::FlatAreas;
     MIN_FLAT_STEPDOWN: "Minimum stepdown",
         "A flat or peak less than this below the level above gets no level of its own: that much is left on it. Empty for none.";
     MIN_AXIAL_ENGAGEMENT: "Minimum axial engagement",

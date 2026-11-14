@@ -1,6 +1,6 @@
 # Progress
 
-camcraft 0.8.1, updated 2026-11-13.
+camcraft 0.8.1, updated 2026-11-14.
 
 What camcraft does and what it has yet to do, measured against Fusion's
 3-axis milling: each of Fusion's milling operations, and the settings, tools,
@@ -26,7 +26,7 @@ has only with its Manufacturing Extension.
 |-----------------------------------------------|-----:|--------:|------------:|
 | [2D operations](#2d-operations)               |    1 |      10 |           0 |
 | [3D roughing](#3d-roughing)                   |    0 |       2 |           0 |
-| [3D finishing](#3d-finishing)                 |    0 |       7 |           9 |
+| [3D finishing](#3d-finishing)                 |    0 |       8 |           8 |
 | [Drilling](#drilling)                         |    4 |       1 |           3 |
 | [Shared settings](#shared-settings)           |   10 |       2 |           5 |
 | [Linking and entries](#linking-and-entries)   |    4 |       1 |           1 |
@@ -37,7 +37,7 @@ has only with its Manufacturing Extension.
 | [Posts and programs](#posts-and-programs)     |    6 |       0 |           2 |
 | [App](#app)                                   |    7 |       1 |           0 |
 | [Project](#project)                           |    1 |       0 |           4 |
-| **All**                                       |   55 |      28 |          36 |
+| **All**                                       |   55 |      29 |          35 |
 
 `grep "| not started" PROGRESS.md` lists everything not yet begun.
 
@@ -46,7 +46,7 @@ has only with its Manufacturing Extension.
 Roughly in the order they matter:
 
 1. **Cut on a machine.** See [Before the first cut](#before-the-first-cut).
-2. **More strategies:** steep and shallow, pencil, ramp.
+2. **More strategies:** steep and shallow, pencil, project, morph.
 3. **A volumetric stock**, so what a top setup leaves carries to a flipped
    bottom one.
 4. **Exact slicing of the offset surface** for Z-level work
@@ -92,7 +92,7 @@ Roughly in the order they matter:
 | Morphed Spiral    | partial     | Turns from the boundary's shape into its centre. Missing: a centre picked on the model. |
 | Steep and Shallow | not started | Extension. |
 | Pencil            | not started | |
-| Ramp              | not started | |
+| Ramp              | partial     | Held to Fusion's programs for `ops_3d` as a new one starts, at a 2 mm stepdown and at a 0.5° ramp angle: 61.7%, 46.2% and 60.6% of the columns either cuts alike, the 95th percentile 0.31, 0.82 and 0.32 mm. Contour's rings gone down wall by wall: each wall from the level above its top ring along it, once round it there but on the first wall, down to each ring below on the part at every height between, a stepdown a lap round the longer ring and no steeper than the ramp angle, and once round its foot; the next wall the nearest; direction, flat areas, slopes ([0027](docs/decisions/0027-ramp.md)). Missing: where Fusion ends a pocket's wall above its floor (at a 1 mm stepdown it goes once round at Z11 and down Z10's ring on its own; camcraft goes on down, the main reason for the figures above), cusps placed as Fusion's (the outside starts 25° round its corner from Fusion's), horizontal leads, Order Bottom-Up, shallow areas, Minimum Diameter, Minimum Cutting Radius, fillets, ramp types. Stock to leave, slopes, conventional and flat or bull nose tools are not compared. |
 | Project           | not started | |
 | Morph             | not started | |
 | Blend             | not started | Extension. |

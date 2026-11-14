@@ -6,6 +6,22 @@ the same notes at more length.
 
 ## Unreleased
 
+- **Fusion's Ramp**, a new 3D finishing strategy (`strategy = "ramp"`) in the
+  job file and the app's 3D menu
+  ([decision 0027](docs/decisions/0027-ramp.md)). Contour's rings, gone down
+  wall by wall without stopping: each wall entered from the level above its
+  top ring along that ring, once round it there but on the first wall,
+  then down to each ring below with the tool on the part at every height
+  between, a stepdown each time round the longer of the two rings and no
+  steeper than the ramp angle, and once round its foot. Direction, flat areas,
+  the slopes, the stepdown and the ramp angle, as a new Ramp of Fusion's
+  starts; it lifts to the retract height between walls.
+- **A part for the 3D finishing operations to come**,
+  `fixtures/step/ops_3d.step`, made in Fusion by `scripts/fusion/ops_3d/`:
+  steep and drafted walls, a rounded edge, concave fillets, sharp inside
+  corners and a dome. Fusion's programs for its Ramp, as a new one starts, with
+  a stepdown of 2 mm and with a ramp angle of 0.5°, are
+  `fixtures/nc/ops_3d_ramp*.nc`, and a test holds camcraft's Ramp to each.
 - **The example job's programs are written again.** `camcraft job
   examples/rail-jig.camcraft --out DIR` refused its roughing since 0.7.0 at
   the latest: "does not read back to its path". The program was right and

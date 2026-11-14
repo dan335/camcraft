@@ -612,6 +612,7 @@ pub fn strategy_label(s: &StrategySpec) -> &'static str {
         StrategySpec::Parallel { .. } => "Parallel",
         StrategySpec::Scallop { .. } => "Scallop",
         StrategySpec::Contour { .. } => "Contour",
+        StrategySpec::Ramp { .. } => "Ramp",
         StrategySpec::Flat { .. } => "Flat",
         StrategySpec::Spiral { .. } => "Spiral",
         StrategySpec::Radial { .. } => "Radial",
@@ -674,6 +675,7 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
                     "parallel",
                     "scallop",
                     "contour",
+                    "ramp",
                     "flat",
                     "spiral",
                     "radial",
@@ -692,7 +694,6 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
 /// into [`operation_groups`], in the same place.
 pub const PLANNED: &[(&str, usize, &str)] = &[
     ("3D", 1, "Steep and shallow"),
-    ("3D", 1, "Ramp"),
     ("3D", 1, "Pencil"),
     ("3D", 1, "Project"),
     ("3D", 1, "Morph"),
@@ -1031,7 +1032,7 @@ mod menu_tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), offered, "one is offered twice: {names:?}");
-        assert_eq!(offered, 21, "{names:?}");
+        assert_eq!(offered, 22, "{names:?}");
     }
 
     /// The planned operations are listed after their section's own, in the

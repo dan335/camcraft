@@ -123,6 +123,11 @@ pub(super) fn heights(
             "Without a Top or Bottom, its levels run from the part's top down to its \
              bottom.",
         ),
+        StrategySpec::Ramp { .. } => Some(
+            "Without a Top or Bottom, its levels run from the stock's top down to the \
+             part's bottom. Each wall is gone down from the level above its top ring, \
+             and it lifts to the Retract height between walls.",
+        ),
         StrategySpec::Flat { .. } => Some(
             "Only the flats between the Top and Bottom are finished; without them, \
              every flat of the part.",

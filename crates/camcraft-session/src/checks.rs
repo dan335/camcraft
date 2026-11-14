@@ -490,6 +490,22 @@ fn operation_findings(
                 ));
             }
         }
+        StrategyDetail::Ramp(r) => {
+            finished(
+                op,
+                r.passes,
+                "no wall within the boundary, the heights and the slopes asked for",
+                &mut out,
+            );
+            if r.unpulled > 0 {
+                out.push(finding(
+                    Level::Note,
+                    "CC215",
+                    format!("{} ramp point(s) not pulled onto the part", r.unpulled),
+                    "left on the ring they were pulled from, clear of the part".into(),
+                ));
+            }
+        }
         StrategyDetail::Flat(r) => finished(
             op,
             r.passes,

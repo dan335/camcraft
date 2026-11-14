@@ -24,6 +24,7 @@ use crate::strategy::parallel::ParallelReport;
 use crate::strategy::planar::PlanarReport;
 use crate::strategy::pocket_clearing::ClearingReport;
 use crate::strategy::projected::ProjectReport;
+use crate::strategy::ramp::RampReport;
 use crate::strategy::round::RoundReport;
 use crate::strategy::scallop::ScallopReport;
 use crate::strategy::slot::SlotReport;
@@ -44,6 +45,8 @@ pub enum StrategyDetail {
     Scallop(ScallopReport),
     /// Contour finishing: a waterline.
     Contour(WaterlineReport),
+    /// Ramp finishing: down each wall without stopping.
+    Ramp(RampReport),
     /// Flat finishing.
     Flat(FlatReport),
     /// Spiral finishing.

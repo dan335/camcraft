@@ -176,7 +176,7 @@ impl Operation {
                     "a V-bit or chamfer mill cannot rough in Z levels; use a parallel pass",
                 );
             }
-            StrategySpec::Contour { .. } => {
+            StrategySpec::Contour { .. } | StrategySpec::Ramp { .. } => {
                 return Some(
                     "a V-bit or chamfer mill cannot finish in Z levels; use a parallel pass",
                 );

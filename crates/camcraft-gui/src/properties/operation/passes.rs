@@ -61,6 +61,19 @@ pub(super) fn passes(
                 });
                 slopes(ui, d, slope_from, slope_to);
             }
+            // Fusion's Ramp's Direction is climb or conventional only.
+            StrategySpec::Ramp {
+                direction,
+                flat_areas,
+                slope_from,
+                slope_to,
+            } => {
+                climb_direction(ui, d, &pass::DIRECTION_2D, direction);
+                d.row(ui, &pass::RAMP_FLAT_AREAS, "flat_areas", |ui| {
+                    ui.checkbox(flat_areas, "a level on each flat face");
+                });
+                slopes(ui, d, slope_from, slope_to);
+            }
             StrategySpec::Flat { direction, order } => {
                 climb_direction(ui, d, &pass::DIRECTION_2D, direction);
                 pass_order(ui, d, &pass::SCALLOP_ORDER, order);
@@ -628,6 +641,7 @@ fn holder_modes(strategy: &StrategySpec) -> Option<&'static [(HolderMode, &'stat
         // Its 2D Chamfer has one, over the part, as a finish's.
         _ if strategy.uses().links == Links::OverPart => Some(OVER_PART),
         StrategySpec::Contour { .. }
+        | StrategySpec::Ramp { .. }
         | StrategySpec::Flat { .. }
         | StrategySpec::Adaptive { .. }
         | StrategySpec::PocketClearing { .. } => Some(LEVELS),

@@ -183,6 +183,25 @@ fn ops_engrave_centimetre() {
     check("ops_engrave.step", "centimetre", 22, [80.0, 50.0, 10.0], 0);
 }
 
+/// Made in Fusion to hold camcraft's 3D finishing to Fusion's
+/// (`scripts/fusion/ops_3d/part.py`), in centimetres: a block with a pocket
+/// whose one wall is drafted, one corner and its floor filleted, a dome on its
+/// floor and a rounded top edge: planes, cylinders, a sphere and a torus.
+///
+/// ogeom gives it one triangle whose corners coincide, which the weld drops,
+/// as it does ops_2d's four; the part still passes every check against its
+/// file. When ogeom stops, this fails: hold it to none.
+#[test]
+fn ops_3d_centimetre() {
+    check_dropping(
+        TOLERANCE,
+        ("ops_3d.step", "centimetre"),
+        19,
+        [60.0, 40.0, 20.0],
+        (0, 1),
+    );
+}
+
 /// The round edge with its top edge raised 0.006 mm off the torus it bounds, in a
 /// file that states its geometry to 0.01 mm: a modeller fits each face and edge
 /// separately, and a private part's band and the round below it disagreed by

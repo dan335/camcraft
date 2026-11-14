@@ -51,6 +51,7 @@ use crate::strategy::planar::{
 };
 use crate::strategy::pocket_clearing::{ClearingParams, pocket_clearing};
 use crate::strategy::projected::{Curve, ProjectParams, ProjectReport, project};
+use crate::strategy::ramp::{RampParams, ramp};
 use crate::strategy::reach::LevelReach;
 use crate::strategy::round::{Round, RoundReport};
 use crate::strategy::scallop::{ScallopParams, contact_region, scallop_finish_banded};
@@ -77,8 +78,8 @@ pub(super) use curves::{
     Chamfers, chamfers_picked, curves_picked, engravings_picked, slots_picked,
 };
 use finishing::{
-    contour_paths, flat_paths, morphed_spiral_paths, parallel_paths, radial_paths, scallop_paths,
-    spiral_paths,
+    contour_paths, flat_paths, morphed_spiral_paths, parallel_paths, radial_paths, ramp_paths,
+    scallop_paths, spiral_paths,
 };
 use link::{Cutting, OnPart, link_params};
 pub(super) use round::round_walls;
@@ -288,6 +289,7 @@ fn held_clear(
             _ => Clear::Trim,
         }),
         StrategySpec::Contour { .. }
+        | StrategySpec::Ramp { .. }
         | StrategySpec::Flat { .. }
         | StrategySpec::Adaptive { .. }
         | StrategySpec::PocketClearing { .. } => Some(Clear::Trim),
@@ -365,6 +367,11 @@ pub(super) fn plan_operation(
         StrategySpec::Contour {
             direction, order, ..
         } => contour_paths(work, (direction, order), limit, &mut warnings)?,
+        StrategySpec::Ramp {
+            direction,
+            flat_areas,
+            ..
+        } => ramp_paths(work, (direction, flat_areas), limit, &mut warnings)?,
         StrategySpec::Flat { order, .. } => flat_paths(work, order, limit, &mut warnings)?,
         StrategySpec::Spiral {
             centre,
@@ -916,6 +923,7 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
         StrategySpec::Parallel { .. } => StrategyDetail::Parallel(Default::default()),
         StrategySpec::Scallop { .. } => StrategyDetail::Scallop(Default::default()),
         StrategySpec::Contour { .. } => StrategyDetail::Contour(Default::default()),
+        StrategySpec::Ramp { .. } => StrategyDetail::Ramp(Default::default()),
         StrategySpec::Flat { .. } => StrategyDetail::Flat(Default::default()),
         StrategySpec::Spiral { .. } => StrategyDetail::Spiral(Default::default()),
         StrategySpec::Radial { .. } => StrategyDetail::Radial(Default::default()),

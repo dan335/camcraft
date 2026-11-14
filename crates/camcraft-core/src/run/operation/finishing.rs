@@ -305,6 +305,60 @@ pub(super) fn contour_paths(
     Ok((path, report.passes, StrategyDetail::Contour(report)))
 }
 
+/// Ramp finishing: each wall gone down without stopping, a stepdown each time
+/// round, within the sweep and `limit`, from contour finishing's rings
+/// ([decision 0027]).
+///
+/// [decision 0027]: ../../../../../docs/decisions/0027-ramp.md
+pub(super) fn ramp_paths(
+    work: &Work<'_>,
+    (direction, flat_areas): (CutDirection, bool),
+    limit: Option<&Region>,
+    warnings: &mut Vec<String>,
+) -> Result<Paths, RunError> {
+    let (job, op) = (work.job, work.op);
+    // Drawn at three tolerances, not contour finishing's ten: every point of
+    // a ring is pulled onto the part either way, but which rings there are
+    // says where a wall goes on down, and the coarser region closes gaps the
+    // tool fits through, joining walls that are apart: on `ops_3d`, the
+    // 0.11 mm between the dome's foot and the pocket's fillets at Z10
+    // (decision 0027). At three, a ball's region has a third of the bands it
+    // would at one, and overstates by about three tolerances.
+    let fine = (3.0 * job.tolerance)
+        .min(work.tool.max_radius() / 4.0)
+        .max(job.tolerance);
+    let mut reach = LevelReach::new(&work.prepared.part, work.tool, fine).map_err(in_op(op))?;
+    let area = finish_area(work, limit, false)?;
+    let (top, bottom) = op.levels_3d(work.heights);
+    let (slope_from, slope_to) = work.slopes();
+    let params = RampParams {
+        watch: work.watch.clone(),
+        // Checked with the job: it always has one.
+        stepdown: op.stepdown().unwrap_or(f64::NAN),
+        top,
+        bottom,
+        flats: work.flat_levels(flat_areas),
+        tolerance: job.tolerance,
+        feed: op.passes.feed,
+        direction: direction.engine(),
+        climb_right: work.clockwise(),
+        slope_from,
+        slope_to,
+        // Fusion's Ramping Angle, on its Linking tab: the steepest the tool
+        // goes down a wall, where a stepdown each time round would be
+        // steeper.
+        ramp: op.linking.ramp_angle.to_radians(),
+    };
+    let (path, report) =
+        ramp(&mut reach, work.cutter, work.tool, &area, &params).map_err(in_op(op))?;
+    if report.passes == 0 {
+        warnings.push(
+            "found nothing to finish: no wall within the boundary, heights and slopes".into(),
+        );
+    }
+    Ok((path, report.passes, StrategyDetail::Ramp(report)))
+}
+
 /// Flat finishing: each flat face between the top and bottom cleared at its
 /// height, within the sweep and `limit`.
 pub(super) fn flat_paths(

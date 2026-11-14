@@ -30,8 +30,8 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
   simulator and post never see a rotation. With the default orientation and work
   zero, a run is bit-identical to before setups existed.
 
-An operation has a strategy (parallel, scallop, contour, flat, spiral, radial or
-morphed spiral finishing, adaptive clearing, pocket clearing, a 2D profile, a 2D
+An operation has a strategy (parallel, scallop, contour, ramp, flat, spiral,
+radial or morphed spiral finishing, adaptive clearing, pocket clearing, a 2D profile, a 2D
 pocket, 2D adaptive clearing, facing, slot, trace, a 2D chamfer, bore, circular,
 thread or drilling), a tool, heights, passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
 along the surface, offset in from the boundary and from where the tool stops
@@ -53,7 +53,25 @@ beside where the last ended, it goes down the wall rather than off and down, by
 Fusion's default *smooth* transition: along the lower ring at no more than the
 ramp angle (`linking.ramp_angle`, 2°), then once round it from where the ramp
 reaches it. Where it may not stay down (`stay_down = 0`) it lifts as before.
-Into each level otherwise it comes down onto its lead beside the wall. Flat (`"flat"`) is Fusion's too: each flat face of the part between
+Into each level otherwise it comes down onto its lead beside the wall. Ramp
+(`"ramp"`) is Fusion's Ramp: contour's rings, gone down wall by wall without
+stopping, round and round each a stepdown (`passes.stepdown`, 1 mm to start)
+each time, from the wall's top to its foot
+([decision 0027](decisions/0027-ramp.md)). A wall is the rings one below another
+round the same piece of the part, or the same hole in it. Each is entered from
+the level above its top ring (the Top, the stock's top unless set, for the
+first), along that ring down to its level, then, but on the first wall cut,
+once round it there; from there down to each ring below with the tool on the
+part at every height between; and once round the last at its level. It goes
+down at no more than the ramp angle (`linking.ramp_angle`, 2°, Fusion's
+Ramping Angle) and no more than a stepdown each time round the longer of two
+rings one above the other. It climbs unless `direction = "conventional"`, adds
+a level at each flat face unless `flat_areas = false`, keeps to `slope_from` and
+`slope_to`, and lifts to the retract height between walls, going to the nearest
+next; it starts each at its top ring's point nearest the lower left of the box
+round it, as Fusion starts its pocket and its dome. A ring the boundary or
+the slope range breaks open is cut at its level after the walls, as contour cuts
+it. Flat (`"flat"`) is Fusion's too: each flat face of the part between
 the top and bottom cleared at its own height, rings a stepover apart in from its
 edges, climbing unless conventional, `order = "outside-in"` unless
 `"inside-out"`; its stepover starts as a pocket's. Spiral (`"spiral"`), radial
@@ -759,7 +777,8 @@ says: `"minimum"` (the default), the safe distance over the material under the
 way across as the operation found it; `"full"`, the retract height, or higher
 where the material is. A link no longer than the *stay-down*
 distance is made without lifting, at the cutting feed; the distance is Fusion's
-Maximum Stay-Down Distance for the strategy: 50 mm for parallel and contour;
+Maximum Stay-Down Distance for the strategy: 50 mm for parallel and contour
+(ramp lifts between its walls, which each start above where the last ended);
 twice the tool's diameter for scallop and flat; five times for spiral, radial,
 morphed spiral, pocket clearing, adaptive clearing and the 2D strategies but
 bore, circular and thread, which lift between their passes, slot, twice, trace, which lifts
@@ -957,7 +976,7 @@ with.
 | CC212 | warn    | points of a scallop's area not reached from its boundary         |
 | CC213 | warn    | a morphed spiral's laps further apart than the stepover          |
 | CC214 | note    | pieces of a morphed spiral cut in rings, too concave for one spiral |
-| CC215 | note    | contour points not pulled onto the part, left clear of it         |
+| CC215 | note    | contour or ramp points not pulled onto the part, left clear of it |
 | CC216 | note    | the shank and holder were checked with an assumed length or size |
 | CC217 | note    | no holder or spindle nose to check: only the shank was           |
 | CC218 | warn    | a bore or circular left a core standing in a hole                |
@@ -1003,9 +1022,10 @@ the two write the same files under the same names.
 
 `post` writes a single finishing operation described with flags (`camcraft post --help`):
 any 3D finishing strategy, `--strategy parallel` unless another is named as a job
-names it (`scallop`, `contour`, `flat`, `spiral`, `radial`, `morphed-spiral`), each
-with its own defaults, and a ball, flat or bullnose cutter (`--tool bullnose
---corner 0.5`); `--stepdown` sets contour's levels, 1 mm apart unless given.
+names it (`scallop`, `contour`, `ramp`, `flat`, `spiral`, `radial`,
+`morphed-spiral`), each with its own defaults, and a ball, flat or bullnose cutter
+(`--tool bullnose --corner 0.5`); `--stepdown` sets contour's and ramp's levels,
+1 mm apart unless given.
 It builds a one-operation job and goes through the same `run_setup` as `job` and
 the app, so there is exactly one engine path. `crates/camcraft-cli/tests/one_path.rs`
 parses every written program back into positions and compares them with the paths

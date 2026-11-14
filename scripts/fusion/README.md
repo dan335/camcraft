@@ -96,3 +96,18 @@ Three things it has to say, which the panel says with a click:
 triangle, an L 4 mm wide and a rectangle sunk 3 mm into its top, and
 `ops_engrave/cam.py` posts Fusion's Engrave on them with a 90 degree V,
 together and each alone: `fixtures/nc/ops_engrave_*.nc`.
+
+## ops_3d
+
+`ops_3d/part.py` builds `fixtures/step/ops_3d.step`, a 60 x 40 x 20 mm block
+for Fusion's 3D finishing: a pocket 38 x 26 and 10 deep, one wall drafted
+15 degrees and the rest upright, one corner R5 and three left sharp, and its
+floor's edges R4; a dome 14 across and 5 tall standing on its floor, its foot
+a sharp concave circle; and the block's top edge at +X rounded R8, ground
+going from level to upright. Steep, drafted and curved walls, shallow and
+curved ground, concave fillets, sharp inside corners and a dome: what Ramp,
+Pencil, Project, Morph and Steep and Shallow each have to follow. Its one body
+is named `ops_3d`. `ops_3d/cam.py` finds that document by it, so it runs with
+any document active, and posts Fusion's Ramp with the sample library's 6 mm
+ball, as a new one starts, with a stepdown of 2 mm and with a ramp angle of
+0.5 degrees: `fixtures/nc/ops_3d_ramp*.nc`.

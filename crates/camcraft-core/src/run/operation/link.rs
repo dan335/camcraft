@@ -47,11 +47,14 @@ pub(super) fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
             // leads come down beside the wall, where the linker's test for
             // material, under the tool's whole width, would see the wall's
             // stock and go down a helix for nothing.
-            // A slot's is its own too, back and forth along it.
+            // A ramp's is its own, down each wall; a slot's too, back and
+            // forth along it.
             (uses.ramp
                 && !matches!(
                     op.strategy,
-                    StrategySpec::Contour { .. } | StrategySpec::Slot { .. }
+                    StrategySpec::Contour { .. }
+                        | StrategySpec::Ramp { .. }
+                        | StrategySpec::Slot { .. }
                 ))
             .then(|| Ramp {
                 angle: linking.ramp_angle.to_radians(),
