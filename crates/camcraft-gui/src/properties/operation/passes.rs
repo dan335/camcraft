@@ -164,60 +164,14 @@ pub(super) fn passes(
                 min_flat_stepdown,
                 ..
             } => {
-                d.row(ui, &pass::MIN_CUTTING_RADIUS, "min_cutting_radius", |ui| {
-                    widgets::optional_positive(
-                        ui,
-                        min_cutting_radius,
-                        1.0,
-                        "none: into every corner",
-                        |ui, r| {
-                            m.length_field(ui, r, 0.05, 100.0, "");
-                        },
-                    );
-                });
+                min_cutting_radius_row(ui, d, m, min_cutting_radius);
                 d.row(ui, &pass::MACHINE_CAVITIES, "machine_cavities", |ui| {
                     ui.checkbox(machine_cavities, "go down into closed pockets");
                 });
                 widgets::dependent(ui, *machine_cavities, |ui| {
-                    d.row(ui, &pass::SLOT_CLEARING, "slot_clearing", |ui| {
-                        ui.checkbox(slot_clearing, "a slot along the middle first");
-                    });
-                    widgets::dependent(ui, *slot_clearing, |ui| {
-                        d.row(ui, &pass::SLOT_WIDTH, "slot_width", |ui| {
-                            let start = 1.5 * across(diameter);
-                            widgets::optional_positive(
-                                ui,
-                                slot_width,
-                                start,
-                                "the tool's width",
-                                |ui, w| {
-                                    m.length_field(ui, w, 0.05, 1000.0, "");
-                                },
-                            );
-                        });
-                    });
+                    slot_clearing_rows(ui, d, m, (slot_clearing, slot_width), diameter);
                 });
-                d.row(ui, &pass::DIRECTION_ADAPTIVE, "direction", |ui| {
-                    widgets::segmented(
-                        ui,
-                        direction,
-                        &[
-                            (CutDirection::Climb, "climb"),
-                            (CutDirection::Conventional, "conventional"),
-                            (CutDirection::BothWays, "both ways"),
-                        ],
-                    );
-                });
-                d.row(ui, &pass::ADAPTIVE_ORDER, "order", |ui| {
-                    widgets::segmented(
-                        ui,
-                        order,
-                        &[
-                            (ContourOrder::ByDepth, "by depth"),
-                            (ContourOrder::ByArea, "by area"),
-                        ],
-                    );
-                });
+                adaptive_direction_and_order(ui, d, direction, order);
                 d.row(ui, &pass::FLAT_AREAS, "flat_areas", |ui| {
                     ui.checkbox(flat_areas, "a level on each flat face and peak");
                 });
@@ -239,55 +193,9 @@ pub(super) fn passes(
                 slot_width,
                 ..
             } => {
-                d.row(ui, &pass::MIN_CUTTING_RADIUS, "min_cutting_radius", |ui| {
-                    widgets::optional_positive(
-                        ui,
-                        min_cutting_radius,
-                        1.0,
-                        "none: into every corner",
-                        |ui, r| {
-                            m.length_field(ui, r, 0.05, 100.0, "");
-                        },
-                    );
-                });
-                d.row(ui, &pass::SLOT_CLEARING, "slot_clearing", |ui| {
-                    ui.checkbox(slot_clearing, "a slot along the middle first");
-                });
-                widgets::dependent(ui, *slot_clearing, |ui| {
-                    d.row(ui, &pass::SLOT_WIDTH, "slot_width", |ui| {
-                        let start = 1.5 * across(diameter);
-                        widgets::optional_positive(
-                            ui,
-                            slot_width,
-                            start,
-                            "the tool's width",
-                            |ui, w| {
-                                m.length_field(ui, w, 0.05, 1000.0, "");
-                            },
-                        );
-                    });
-                });
-                d.row(ui, &pass::DIRECTION_ADAPTIVE, "direction", |ui| {
-                    widgets::segmented(
-                        ui,
-                        direction,
-                        &[
-                            (CutDirection::Climb, "climb"),
-                            (CutDirection::Conventional, "conventional"),
-                            (CutDirection::BothWays, "both ways"),
-                        ],
-                    );
-                });
-                d.row(ui, &pass::ADAPTIVE_ORDER, "order", |ui| {
-                    widgets::segmented(
-                        ui,
-                        order,
-                        &[
-                            (ContourOrder::ByDepth, "by depth"),
-                            (ContourOrder::ByArea, "by area"),
-                        ],
-                    );
-                });
+                min_cutting_radius_row(ui, d, m, min_cutting_radius);
+                slot_clearing_rows(ui, d, m, (slot_clearing, slot_width), diameter);
+                adaptive_direction_and_order(ui, d, direction, order);
             }
             StrategySpec::Chamfer2d {
                 width,
@@ -456,17 +364,14 @@ pub(super) fn passes(
                     (&pass::DIRECTION_THREAD, "conventional"),
                     conventional,
                 );
-                d.row(ui, &pass::THREAD_PASSES, "multiple_passes", |ui| {
-                    ui.checkbox(multiple_passes, "more than one out to the thread");
-                });
-                widgets::dependent(ui, *multiple_passes, |ui| {
-                    d.row(ui, &pass::THREAD_STEPOVERS, "stepovers", |ui| {
-                        ui.add(widgets::number(stepovers).range(1..=1000));
-                    });
-                    d.row(ui, &pass::STEPOVER, "passes.stepover", |ui| {
-                        m.length_field(ui, &mut op.passes.stepover, 0.05, 100.0, "");
-                    });
-                });
+                passes_out(
+                    ui,
+                    d,
+                    m,
+                    (&pass::THREAD_PASSES, &pass::THREAD_STEPOVERS, "thread"),
+                    (multiple_passes, stepovers),
+                    &mut op.passes.stepover,
+                );
             }
             StrategySpec::Slot {
                 backoff_distance,
@@ -868,8 +773,7 @@ fn finishing(
     });
 }
 
-/// A bore's or a circular's passes out to the wall, as Fusion's Multiple
-/// Passes: ticked, how many, the last at the wall, and how far apart; and
+/// A bore's or a circular's passes out to the wall ([`passes_out`]), and
 /// whether the last is cut twice.
 fn round_passes(
     ui: &mut egui::Ui,
@@ -878,19 +782,103 @@ fn round_passes(
     (multiple, stepovers, repeat): (&mut bool, &mut u32, &mut bool),
     stepover: &mut f64,
 ) {
-    d.row(ui, &pass::MULTIPLE_PASSES, "multiple_passes", |ui| {
-        ui.checkbox(multiple, "more than one out to the wall");
+    passes_out(
+        ui,
+        d,
+        m,
+        (&pass::MULTIPLE_PASSES, &pass::STEPOVERS, "wall"),
+        (multiple, stepovers),
+        stepover,
+    );
+    d.row(ui, &pass::REPEAT_PASS, "repeat", |ui| {
+        ui.checkbox(repeat, "cut the last one twice");
+    });
+}
+
+/// Passes out to a hole's wall or its thread, `to`, as Fusion's Multiple
+/// Passes: ticked, how many, the last at it, and how far apart, each row with
+/// its help, `topics`.
+fn passes_out(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    m: Measure,
+    (multiple_topic, stepovers_topic, to): (&Topic, &Topic, &str),
+    (multiple, stepovers): (&mut bool, &mut u32),
+    stepover: &mut f64,
+) {
+    d.row(ui, multiple_topic, "multiple_passes", |ui| {
+        ui.checkbox(multiple, format!("more than one out to the {to}"));
     });
     widgets::dependent(ui, *multiple, |ui| {
-        d.row(ui, &pass::STEPOVERS, "stepovers", |ui| {
+        d.row(ui, stepovers_topic, "stepovers", |ui| {
             ui.add(widgets::number(stepovers).range(1..=1000));
         });
         d.row(ui, &pass::STEPOVER, "passes.stepover", |ui| {
             m.length_field(ui, stepover, 0.05, 100.0, "");
         });
     });
-    d.row(ui, &pass::REPEAT_PASS, "repeat", |ui| {
-        ui.checkbox(repeat, "cut the last one twice");
+}
+
+/// Adaptive clearing's tightest turn into an inside corner, 3D or 2D: none, or
+/// a radius.
+fn min_cutting_radius_row(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, r: &mut f64) {
+    d.row(ui, &pass::MIN_CUTTING_RADIUS, "min_cutting_radius", |ui| {
+        widgets::optional_positive(ui, r, 1.0, "none: into every corner", |ui, r| {
+            m.length_field(ui, r, 0.05, 100.0, "");
+        });
+    });
+}
+
+/// Adaptive clearing's slot along a closed pocket's middle first, 3D or 2D:
+/// ticked, how wide.
+fn slot_clearing_rows(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    m: Measure,
+    (slot_clearing, slot_width): (&mut bool, &mut f64),
+    diameter: Option<f64>,
+) {
+    d.row(ui, &pass::SLOT_CLEARING, "slot_clearing", |ui| {
+        ui.checkbox(slot_clearing, "a slot along the middle first");
+    });
+    widgets::dependent(ui, *slot_clearing, |ui| {
+        d.row(ui, &pass::SLOT_WIDTH, "slot_width", |ui| {
+            let start = 1.5 * across(diameter);
+            widgets::optional_positive(ui, slot_width, start, "the tool's width", |ui, w| {
+                m.length_field(ui, w, 0.05, 1000.0, "");
+            });
+        });
+    });
+}
+
+/// Which way adaptive clearing's passes cut, 3D or 2D, and whether it clears
+/// level by level or area by area.
+fn adaptive_direction_and_order(
+    ui: &mut egui::Ui,
+    d: &mut Defaults<Operation>,
+    direction: &mut CutDirection,
+    order: &mut ContourOrder,
+) {
+    d.row(ui, &pass::DIRECTION_ADAPTIVE, "direction", |ui| {
+        widgets::segmented(
+            ui,
+            direction,
+            &[
+                (CutDirection::Climb, "climb"),
+                (CutDirection::Conventional, "conventional"),
+                (CutDirection::BothWays, "both ways"),
+            ],
+        );
+    });
+    d.row(ui, &pass::ADAPTIVE_ORDER, "order", |ui| {
+        widgets::segmented(
+            ui,
+            order,
+            &[
+                (ContourOrder::ByDepth, "by depth"),
+                (ContourOrder::ByArea, "by area"),
+            ],
+        );
     });
 }
 
