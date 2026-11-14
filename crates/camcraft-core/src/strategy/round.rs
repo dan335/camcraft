@@ -59,15 +59,17 @@ use crate::strategy::planar::{LeadArc, WallFinish};
 use crate::strategy::{StrategyError, check, stepped_levels};
 
 /// A circle no smaller than this, as the tool's centre goes, in millimetres: a
-/// hole that leaves its centre less room is no wider than the tool.
-const LEAST_RADIUS: f64 = 1.0e-3;
+/// hole that leaves its centre less room is no wider than the tool. A thread's
+/// too.
+pub(super) const LEAST_RADIUS: f64 = 1.0e-3;
 
 /// A pass round a hole on a circle no bigger than this, as the tool's centre
-/// goes, is past its middle, and left out, in millimetres.
-const SLIVER: f64 = 0.1;
+/// goes, is past its middle, and left out, in millimetres; never the last, at
+/// the wall. A thread's too.
+pub(super) const SLIVER: f64 = 0.1;
 
-/// The most turns a helix makes down one pass.
-const MOST_TURNS: f64 = 10_000.0;
+/// The most turns a helix makes down one pass, a bore's or a thread's.
+pub(super) const MOST_TURNS: f64 = 10_000.0;
 
 /// One straight round wall, a hole's or a boss's, in the setup's frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -369,9 +371,7 @@ fn check_params(p: &RoundParams) -> Result<(), StrategyError> {
         check("finishing feed", f.feed)?;
     }
     if let Some(l) = &p.leads {
-        check("lead radius", l.radius)?;
-        check("lead sweep", l.sweep)?;
-        crate::strategy::at_least_zero("lead straight", l.straight)?;
+        l.check()?;
     }
     Ok(())
 }
@@ -453,7 +453,7 @@ struct Lead {
 }
 
 /// The point at `angle` round the circle of `rho` about `centre`.
-fn on_circle(centre: DVec2, rho: f64, angle: f64) -> DVec2 {
+pub(super) fn on_circle(centre: DVec2, rho: f64, angle: f64) -> DVec2 {
     centre + DVec2::from_angle(angle) * rho
 }
 

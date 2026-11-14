@@ -61,18 +61,8 @@ use glam::{DVec2, DVec3, dvec3};
 
 use crate::path::toolpath::{Arc, MoveRole, PLUNGE_RATIO, Toolpath, ToolpathError};
 use crate::strategy::planar::LeadArc;
-use crate::strategy::round::Round;
-use crate::strategy::{StrategyError, at_least_zero, check};
-
-/// A circle no smaller than this, as the tool's centre goes, in millimetres.
-const LEAST_RADIUS: f64 = 1.0e-3;
-
-/// A pass before the last on a circle no bigger than this, as the tool's
-/// centre goes, is past the hole's middle and left out, in millimetres.
-const SLIVER: f64 = 0.1;
-
-/// The most turns one helix makes.
-const MOST_TURNS: f64 = 10_000.0;
+use crate::strategy::round::{LEAST_RADIUS, MOST_TURNS, Round, SLIVER, on_circle};
+use crate::strategy::{StrategyError, check};
 
 /// How the threads are milled.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -242,9 +232,7 @@ fn check_params(p: &ThreadParams) -> Result<(), StrategyError> {
         check("stepover", p.stepover)?;
     }
     if let Some(l) = &p.leads {
-        check("lead radius", l.radius)?;
-        check("lead sweep", l.sweep)?;
-        at_least_zero("lead straight", l.straight)?;
+        l.check()?;
     }
     Ok(())
 }
@@ -335,11 +323,6 @@ pub fn thread(rounds: &[Round], p: &ThreadParams) -> Result<(Toolpath, ThreadRep
         });
     }
     Ok((path, report))
-}
-
-/// The point at `angle` round the circle of `rho` about `centre`.
-fn on_circle(centre: DVec2, rho: f64, angle: f64) -> DVec2 {
-    centre + DVec2::from_angle(angle) * rho
 }
 
 /// An arc about an upright axis through `centre`, turning `sweep`.

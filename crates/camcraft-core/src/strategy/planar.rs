@@ -160,6 +160,16 @@ pub struct LeadArc {
     pub straight: f64,
 }
 
+impl LeadArc {
+    /// It, if it is usable: a radius and a sweep, and a straight that may be
+    /// nothing.
+    pub(crate) fn check(&self) -> Result<(), StrategyError> {
+        check("lead radius", self.radius)?;
+        check("lead sweep", self.sweep)?;
+        at_least_zero("lead straight", self.straight)
+    }
+}
+
 /// What a profile or a pocket did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PlanarReport {
@@ -771,9 +781,7 @@ fn check_params(params: &PlanarParams, areas: &[Area]) -> Result<(), StrategyErr
         at_least_zero("ramp above", s.above)?;
     }
     if let Some(l) = &params.leads {
-        check("lead radius", l.radius)?;
-        check("lead sweep", l.sweep)?;
-        at_least_zero("lead straight", l.straight)?;
+        l.check()?;
     }
     if let Some(f) = &params.finishing {
         check("finishing stepover", f.stepover)?;
