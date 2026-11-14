@@ -303,10 +303,7 @@ pub fn trace(curves: &[Curve], p: &TraceParams) -> Result<(Toolpath, TraceReport
     }
     // How far above the curve each level is, the highest first.
     let lifts: Vec<f64> = match p.levels {
-        Some((d, n)) => (0..=n.min(MOST_LEVELS))
-            .rev()
-            .map(|k| d * f64::from(k))
-            .collect(),
+        Some((d, n)) => (0..=n).rev().map(|k| d * f64::from(k)).collect(),
         None => vec![0.0],
     };
     report.levels = lifts.len() as u64;
