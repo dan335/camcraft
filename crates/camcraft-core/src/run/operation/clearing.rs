@@ -98,7 +98,6 @@ pub(super) fn adaptive_paths(
     } = asked;
     let mut reach = work
         .held(LevelReach::new(&work.prepared.part, work.tool, job.tolerance).map_err(in_op(op))?);
-    let diameter = work.spec.diameter;
     let (top, bottom) = op.levels_3d(work.heights);
     // Flat area detection finds peaks too, each a level as a flat face is.
     let mut flats = work.flat_levels(flat_areas);
@@ -111,31 +110,11 @@ pub(super) fn adaptive_paths(
                 .map(|z| z + axial),
         );
     }
-    // Into a closed area it goes down a helix, or straight: it offers no ramp.
-    let helix_radius = match op.entry() {
-        Some(Entry::Plunge) => 0.0,
-        _ => op.helix_diameter(diameter, work.spec.corner_radius()) / 2.0,
-    };
     let params = AdaptiveParams {
         // Checked with the job: it always has one.
         stepdown: op.stepdown().unwrap_or(f64::NAN),
-        optimal_load: op.passes.stepover,
-        feed: op.passes.feed,
         top,
         bottom,
-        tolerance: job.tolerance,
-        climb_right: work.clockwise(),
-        direction: direction.engine(),
-        helix_radius,
-        stay_down: op.stay_down(diameter),
-        stay_down_level: stay_down_level / 100.0,
-        stay_down_clearance,
-        lift_height,
-        slot_width: slot_clearing.then_some(slot_width.max(diameter)),
-        ramp_angle: op.linking.ramp_angle.to_radians(),
-        ramp_feed: op.ramp_feed(),
-        ramp_stepdown: Some(op.ramp_stepdown(diameter)),
-        safe_distance: op.linking.safe_distance,
         flats,
         fine_stepdown: op.fine_stepdown(),
         min_flat_stepdown,
@@ -145,7 +124,6 @@ pub(super) fn adaptive_paths(
             max_stepover: max_shallow_stepover,
         }),
         machine_cavities,
-        min_cutting_radius,
         by_area: order == ContourOrder::ByArea,
         before: if rest_machining {
             work.before.to_vec()
@@ -153,7 +131,15 @@ pub(super) fn adaptive_paths(
             Vec::new()
         },
         ignore_less_than: ignore_stock_less_than,
-        watch: work.watch.clone(),
+        ..adaptive_params(
+            work,
+            (
+                direction,
+                min_cutting_radius,
+                slot_clearing.then_some(slot_width),
+            ),
+            (stay_down_level, stay_down_clearance, lift_height),
+        )
     };
     // Room past the stock's sides for the whole tool, so a pass can start
     // beside the block rather than going down into it.
@@ -170,11 +156,57 @@ pub(super) fn adaptive_paths(
     let base = *work.tool.base();
     let (path, report) =
         adaptive_rough(&mut reach, &area, work.blocks, &base, &params).map_err(in_op(op))?;
+    tell_adaptive(&report, warnings);
+    Ok((path, report.passes, StrategyDetail::Adaptive(report)))
+}
+
+/// What adaptive clearing, 3D or 2D, takes from every operation of it: its
+/// tool's load and feeds, its helix down into a closed area, and its links,
+/// staying down as far round as `stay_down_level` asks, in percent, that far
+/// off the material and lifted that high; cutting `direction`, turning no
+/// tighter than `min_cutting_radius`, and going down into a closed area along
+/// a slot first, `slot` wide but no narrower than the tool, where asked.
+fn adaptive_params(
+    work: &Work<'_>,
+    (direction, min_cutting_radius, slot): (CutDirection, f64, Option<f64>),
+    (stay_down_level, stay_down_clearance, lift_height): (f64, f64, f64),
+) -> AdaptiveParams {
+    let op = work.op;
+    let diameter = work.spec.diameter;
+    // Into a closed area it goes down a helix, or straight: it offers no ramp.
+    let helix_radius = match op.entry() {
+        Some(Entry::Plunge) => 0.0,
+        _ => op.helix_diameter(diameter, work.spec.corner_radius()) / 2.0,
+    };
+    AdaptiveParams {
+        optimal_load: op.passes.stepover,
+        feed: op.passes.feed,
+        tolerance: work.job.tolerance,
+        climb_right: work.clockwise(),
+        direction: direction.engine(),
+        helix_radius,
+        stay_down: op.stay_down(diameter),
+        stay_down_level: stay_down_level / 100.0,
+        stay_down_clearance,
+        lift_height,
+        slot_width: slot.map(|w| w.max(diameter)),
+        ramp_angle: op.linking.ramp_angle.to_radians(),
+        ramp_feed: op.ramp_feed(),
+        ramp_stepdown: Some(op.ramp_stepdown(diameter)),
+        safe_distance: op.linking.safe_distance,
+        min_cutting_radius,
+        watch: work.watch.clone(),
+        ..AdaptiveParams::default()
+    }
+}
+
+/// What adaptive clearing, 3D or 2D, did, said where it is worth a person's
+/// attention: nothing cleared, areas it could not go down into, and what it
+/// could reach and left.
+fn tell_adaptive(report: &AdaptiveReport, warnings: &mut Vec<String>) {
     if report.passes == 0 {
         warnings.push(
-            "found nothing to clear: the stock may already be below this \
-             operation's top"
-                .into(),
+            "found nothing to clear: the stock may already be below this operation's top".into(),
         );
     }
     if report.no_room > 0 {
@@ -189,7 +221,6 @@ pub(super) fn adaptive_paths(
             report.left_mm2
         ));
     }
-    Ok((path, report.passes, StrategyDetail::Adaptive(report)))
 }
 
 /// What a 2D adaptive clearing operation asks of its strategy.
@@ -216,35 +247,20 @@ pub(super) fn adaptive_2d_paths(
     areas: &[Area],
     warnings: &mut Vec<String>,
 ) -> Result<Paths, RunError> {
-    let (job, op) = (work.job, work.op);
-    let diameter = work.spec.diameter;
-    // Into a closed pocket it goes down a helix, or straight.
-    let helix_radius = match op.entry() {
-        Some(Entry::Plunge) => 0.0,
-        _ => op.helix_diameter(diameter, work.spec.corner_radius()) / 2.0,
-    };
-    let base = AdaptiveParams {
-        optimal_load: op.passes.stepover,
-        feed: op.passes.feed,
-        tolerance: job.tolerance,
-        climb_right: work.clockwise(),
-        direction: asked.direction.engine(),
-        helix_radius,
-        stay_down: op.stay_down(diameter),
-        stay_down_level: asked.stay_down_level / 100.0,
-        stay_down_clearance: asked.stay_down_clearance,
-        lift_height: asked.lift_height,
-        slot_width: asked
-            .slot_clearing
-            .then_some(asked.slot_width.max(diameter)),
-        ramp_angle: op.linking.ramp_angle.to_radians(),
-        ramp_feed: op.ramp_feed(),
-        ramp_stepdown: Some(op.ramp_stepdown(diameter)),
-        safe_distance: op.linking.safe_distance,
-        min_cutting_radius: asked.min_cutting_radius,
-        watch: work.watch.clone(),
-        ..AdaptiveParams::default()
-    };
+    let op = work.op;
+    let base = adaptive_params(
+        work,
+        (
+            asked.direction,
+            asked.min_cutting_radius,
+            asked.slot_clearing.then_some(asked.slot_width),
+        ),
+        (
+            asked.stay_down_level,
+            asked.stay_down_clearance,
+            asked.lift_height,
+        ),
+    );
     // Each area's levels, from its top down, and the areas that share them.
     let stepdown = op.stepdown();
     let mut groups: Vec<(f64, Vec<f64>, Vec<Region>)> = Vec::new();
@@ -290,23 +306,7 @@ pub(super) fn adaptive_2d_paths(
         path.append(cut.moves()).map_err(in_op(op))?;
         add_report(&mut report, &r);
     }
-    if report.passes == 0 {
-        warnings.push(
-            "found nothing to clear: the stock may already be below this operation's top".into(),
-        );
-    }
-    if report.no_room > 0 {
-        warnings.push(format!(
-            "{} area(s) have no room for the tool to go down into, and are left",
-            report.no_room
-        ));
-    }
-    if report.left_mm2 > 1.0 {
-        warnings.push(format!(
-            "{:.0} mm² the tool could reach was left uncleared",
-            report.left_mm2
-        ));
-    }
+    tell_adaptive(&report, warnings);
     Ok((path, report.passes, StrategyDetail::Adaptive2d(report)))
 }
 
