@@ -30,7 +30,7 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
   simulator and post never see a rotation. With the default orientation and work
   zero, a run is bit-identical to before setups existed.
 
-An operation has a strategy (parallel, scallop, contour, ramp, flat, spiral,
+An operation has a strategy (parallel, scallop, contour, ramp, pencil, flat, spiral,
 radial or morphed spiral finishing, adaptive clearing, pocket clearing, a 2D profile, a 2D
 pocket, 2D adaptive clearing, facing, slot, trace, a 2D chamfer, bore, circular,
 thread or drilling), a tool, heights, passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
@@ -71,7 +71,25 @@ a level at each flat face unless `flat_areas = false`, keeps to `slope_from` and
 next; it starts each at its top ring's point nearest the lower left of the box
 round it, as Fusion starts its pocket and its dome. A ring the boundary or
 the slope range breaks open is cut at its level after the walls, as contour cuts
-it. Flat (`"flat"`) is Fusion's too: each flat face of the part between
+it. Pencil (`"pencil"`) is Fusion's Pencil: the tool run along where it touches
+the part in two places at once, the inside corners and valleys a larger tool
+before it left ([decision 0028](decisions/0028-pencil.md)): every crease
+between faces that meet sharper than `bitangency_angle` (20°, Fusion's
+Bitangency Angle), the angle between the two places it touches, and the foot of
+every wall it reaches where what is below faces the wall at that angle or more,
+its side against the wall and its end below; not the top of a fillet a ball
+fits. Each point is where the tool rests dropped onto the part there. A stretch
+falling down an upright corner as steeply as a plunge is left to the linker, and
+it comes straight down onto each line, as Fusion's does, never ramping. `overthickness`
+(none, Fusion's Overthickness) finds the lines for a tool that much larger all
+round and runs this one along them. `stepovers` (none, Fusion's Number of
+Stepovers) adds passes either side of each line, `passes.stepover` apart along
+the surface (half the tool to start, Fusion's), as scallop's are, cut from the
+outermost in before the line. It cuts `direction = "both-ways"` (each line from
+its nearer end) unless `"climb"`, Fusion's *One Way*, the wall on the tool's
+right with a clockwise spindle, or `"conventional"`, its *Other Way*; the
+nearest line next, staying down within five tools as Fusion's does. A cone
+takes no overthickness. Flat (`"flat"`) is Fusion's too: each flat face of the part between
 the top and bottom cleared at its own height, rings a stepover apart in from its
 edges, climbing unless conventional, `order = "outside-in"` unless
 `"inside-out"`; its stepover starts as a pocket's. Spiral (`"spiral"`), radial

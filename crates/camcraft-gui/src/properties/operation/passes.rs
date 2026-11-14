@@ -74,6 +74,38 @@ pub(super) fn passes(
                 });
                 slopes(ui, d, slope_from, slope_to);
             }
+            StrategySpec::Pencil {
+                direction,
+                bitangency_angle,
+                overthickness,
+                stepovers,
+            } => {
+                d.row(ui, &pass::DIRECTION_PENCIL, "direction", |ui| {
+                    widgets::segmented(
+                        ui,
+                        direction,
+                        &[
+                            (CutDirection::BothWays, "both ways"),
+                            (CutDirection::Climb, "one way"),
+                            (CutDirection::Conventional, "other way"),
+                        ],
+                    );
+                });
+                d.row(ui, &pass::BITANGENCY_ANGLE, "bitangency_angle", |ui| {
+                    ui.add(
+                        widgets::number(bitangency_angle)
+                            .speed(1.0)
+                            .range(1.0..=179.0)
+                            .suffix("°"),
+                    );
+                });
+                d.row(ui, &pass::OVERTHICKNESS, "overthickness", |ui| {
+                    m.length_field(ui, overthickness, 0.05, 100.0, "");
+                });
+                d.row(ui, &pass::PENCIL_STEPOVERS, "stepovers", |ui| {
+                    ui.add(widgets::number(stepovers).range(0..=1000));
+                });
+            }
             StrategySpec::Flat { direction, order } => {
                 climb_direction(ui, d, &pass::DIRECTION_2D, direction);
                 pass_order(ui, d, &pass::SCALLOP_ORDER, order);

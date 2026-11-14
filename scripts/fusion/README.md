@@ -110,4 +110,9 @@ Pencil, Project, Morph and Steep and Shallow each have to follow. Its one body
 is named `ops_3d`. `ops_3d/cam.py` finds that document by it, so it runs with
 any document active, and posts Fusion's Ramp with the sample library's 6 mm
 ball, as a new one starts, with a stepdown of 2 mm and with a ramp angle of
-0.5 degrees: `fixtures/nc/ops_3d_ramp*.nc`.
+0.5 degrees: `fixtures/nc/ops_3d_ramp*.nc`; and its Pencil, as a new one
+starts with the library's 12 mm ball, which is larger than the floor's
+fillets and so touches twice all round the pocket's floor, and with its 6 mm
+ball, which fits them, then the 12 mm ball at a bitangency angle of 40 degrees
+and the 6 mm one with two stepovers: `fixtures/nc/ops_3d_pencil*.nc`. Run
+again, it makes every one of them byte for byte (but for Windows line ends).

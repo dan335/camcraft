@@ -83,6 +83,21 @@ impl StrategySpec {
                 bottom: Some(HeightRef::ModelBottom),
                 ..cuts_loops
             },
+            // As scallop, its lines in its own order, the nearest next, each
+            // the way it is asked to cut, staying down within five tools; but
+            // with no ramp: into each line it comes straight down at the
+            // plunge feed onto its vertical lead, as Fusion's Pencil, which
+            // has no ramp settings, does in every program of its compared.
+            StrategySpec::Pencil { .. } => Uses {
+                depths: Depths::None,
+                links: Links::OverPart,
+                reach: Reach::Tools(5),
+                lead_radius: true,
+                ramp: false,
+                top: Some(HeightRef::ModelTop),
+                bottom: Some(HeightRef::ModelBottom),
+                ..cuts_loops
+            },
             // A level each stepdown is what it is, going round, not over: it
             // has no stepover. Its order is its own. Its levels are the
             // part's, from its top, and each runs round the part beside its

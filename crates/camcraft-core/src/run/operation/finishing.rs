@@ -359,6 +359,63 @@ pub(super) fn ramp_paths(
     Ok((path, report.passes, StrategyDetail::Ramp(report)))
 }
 
+/// What a pencil is asked: which way its lines cut, its bitangency angle in
+/// degrees, its overthickness and how many stepovers beside its lines.
+pub(super) struct PencilAsked {
+    pub(super) direction: CutDirection,
+    pub(super) bitangency_angle: f64,
+    pub(super) overthickness: f64,
+    pub(super) stepovers: u32,
+}
+
+/// Pencil finishing: the tool run along where it touches the part in two
+/// places at once, within the sweep, `limit` and where it touches the part
+/// ([decision 0028]).
+///
+/// [decision 0028]: ../../../../../docs/decisions/0028-pencil.md
+pub(super) fn pencil_paths(
+    work: &Work<'_>,
+    asked: &PencilAsked,
+    limit: Option<&Region>,
+    warnings: &mut Vec<String>,
+) -> Result<Paths, RunError> {
+    let (job, op) = (work.job, work.op);
+    let area = finish_area(work, limit, true)?;
+    // The lines are found for the tool grown all round by the overthickness,
+    // on top of its stock to leave, and cut with the tool as it cuts.
+    let stock = work.tool.allowance();
+    let finder = EffectiveTool::of(
+        work.tool.base(),
+        Allowance::new(
+            stock.radial() + asked.overthickness,
+            stock.axial() + asked.overthickness,
+        )?,
+    )?;
+    let params = PencilParams {
+        watch: work.watch.clone(),
+        tolerance: job.tolerance,
+        feed: op.passes.feed,
+        bitangency: asked.bitangency_angle.to_radians(),
+        direction: asked.direction.engine(),
+        climb_right: work.clockwise(),
+        stepovers: asked.stepovers,
+        stepover: op.passes.stepover,
+        max_cut_step: op.max_cut_step(),
+        ..Default::default()
+    };
+    let (path, report) =
+        pencil(work.cutter, work.tool, &finder, &area, &params).map_err(in_op(op))?;
+    if report.passes == 0 {
+        warnings.push(
+            "found nothing to finish: the tool touches the part in two places nowhere \
+             within the boundary at the bitangency angle"
+                .into(),
+        );
+    }
+    sampling_warnings(&report.sweep, warnings);
+    Ok((path, report.passes, StrategyDetail::Pencil(report)))
+}
+
 /// Flat finishing: each flat face between the top and bottom cleared at its
 /// height, within the sweep and `limit`.
 pub(super) fn flat_paths(

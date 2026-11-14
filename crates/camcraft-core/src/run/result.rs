@@ -21,6 +21,7 @@ use crate::strategy::engrave::EngraveReport;
 use crate::strategy::flat::FlatReport;
 use crate::strategy::morph::MorphedSpiralReport;
 use crate::strategy::parallel::ParallelReport;
+use crate::strategy::pencil::PencilReport;
 use crate::strategy::planar::PlanarReport;
 use crate::strategy::pocket_clearing::ClearingReport;
 use crate::strategy::projected::ProjectReport;
@@ -47,6 +48,8 @@ pub enum StrategyDetail {
     Contour(WaterlineReport),
     /// Ramp finishing: down each wall without stopping.
     Ramp(RampReport),
+    /// Pencil finishing: along where the tool touches the part twice.
+    Pencil(PencilReport),
     /// Flat finishing.
     Flat(FlatReport),
     /// Spiral finishing.

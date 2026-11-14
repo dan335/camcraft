@@ -29,10 +29,10 @@ posts. Operations are grouped as Fusion's toolbar groups them, in the Add menu a
 a setup's right-click menu alike: 2D (face, 2D adaptive clearing, pocket,
 profile, slot, trace, thread, bore, circular, engrave, 2D chamfer), 3D
 (adaptive clearing, pocket clearing, then parallel, scallop, contour, ramp,
-flat, spiral, radial and morphed spiral) and drilling. Fusion's operations not built yet
+flat, pencil, spiral, radial and morphed spiral) and drilling. Fusion's operations not built yet
 are listed after the rest of their group, greyed, and say *Not implemented yet*
 under the pointer: in 3D, after the finishing, steep
-and shallow, pencil, project,
+and shallow, project,
 morph, blend, flow, corner and geodesic. They are listed in `browser::PLANNED`,
 which an operation leaves once it is built.
 
@@ -113,6 +113,9 @@ it.
   the slopes, and it has *Multiple depths*, Top and Bottom but no stepover;
   ramp's climb or conventional, *Flat areas* and the slopes, with *Multiple
   depths* (how far down each time round) and the ramp angle on *Linking*;
+  pencil's both ways, one way or other way, its *Bitangency angle*,
+  *Overthickness* and *Number of stepovers*, with the stepover between those
+  passes;
   flat's climb or conventional and outside in or inside out, with Top and Bottom
   keeping it to the flats between. Spiral's and radial's have a *Centre* (the
   boundary's middle unless given), inner and outer radii and the slopes; a

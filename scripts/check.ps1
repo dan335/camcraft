@@ -47,6 +47,7 @@ $determinism = @(
     'strategy::waterline::tests::is_deterministic'
     'strategy::morph::tests::is_deterministic'
     'strategy::ramp::tests::is_deterministic'
+    'strategy::pencil::tests::is_deterministic'
     'path::ordering::tests::ordering_is_deterministic'
 )
 Invoke-Gate 'determinism' {

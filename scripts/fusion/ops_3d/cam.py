@@ -1,20 +1,31 @@
-# Fusion's Ramp on the ops_3d part, as a new operation of Fusion's starts but
-# for what its name says, posted with Fusion's Masso post:
+# Fusion's Ramp and Pencil on the ops_3d part, each as a new operation of
+# Fusion's starts but for what its name says, posted with Fusion's Masso post:
 # fixtures/nc/ops_3d_*.nc. Run through the bridge after part.py (see
 # ../README.md). It finds the document part.py made by its one body, named
 # ops_3d, and works in that document alone.
 #
 # The setup's stock is 5 mm round the part and level with its top, its work
-# zero the model's origin. The tool is the sample library's 6 mm ball end mill
-# (18,000 rev/min, 1500 mm/min, plunging and ramping at 500), without a holder
-# and without coolant, as camcraft's tools have them. The Masso post is looked
-# for beside the bridge's inbox (masso.cps).
+# zero the model's origin. The tools are the sample library's 6 mm ball end
+# mill, T2, and its 12 mm one, T3 (18,000 rev/min, 1500 mm/min, plunging and
+# ramping at 500), without a holder and without coolant, as camcraft's tools
+# have them. The Masso post is looked for beside the bridge's inbox
+# (masso.cps).
 #
 #   ramp        a new Ramp: Maximum Stepdown 1 mm, Ramping Angle the tool's 2
 #               degrees
 #   ramp_step2  the same, Maximum Stepdown 2 mm
 #   ramp_angle  the same, Ramping Angle 0.5 degrees: shallower than a stepdown
 #               each time round every wall but the outside's
+#
+#   pencil              a new Pencil with the 12 mm ball, which is larger than
+#                       the pocket's R4 fillets and its R5 corner, so is held off
+#                       them: Bitangency Angle 20 degrees, no stepovers
+#   pencil_ball6        the same with the 6 mm ball, which fits the fillets and
+#                       touches twice only round the dome's foot and in the
+#                       sharp corners
+#   pencil_bitangency   the 12 mm ball, Bitangency Angle 40 degrees
+#   pencil_stepovers    the 6 mm ball, Number of Stepovers 2, the stepover half
+#                       the tool
 import copy, json, os, time, traceback
 
 BRIDGE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -92,16 +103,21 @@ def make_tool(j, number, desc, rpm, feeds):
 FEEDS = {"v_f": 1500, "v_f_plunge": 500, "v_f_ramp": 500, "v_f_leadIn": 1500, "v_f_leadOut": 1500,
          "v_f_retract": 1500, "v_f_transition": 1500}
 ball6 = make_tool(sample("ball end mill", 6), 2, "6mm ball", 18000, FEEDS)
+ball12 = make_tool(sample("ball end mill", 12), 3, "12mm ball", 18000, FEEDS)
 
 made = []
-for name, settings in (
-    ("ramp", {}),
-    ("ramp_step2", {"maximumStepdown": "2 mm"}),
-    ("ramp_angle", {"rampAngle": "0.5 deg"}),
+for name, strategy, tool, settings in (
+    ("ramp", "ramp", ball6, {}),
+    ("ramp_step2", "ramp", ball6, {"maximumStepdown": "2 mm"}),
+    ("ramp_angle", "ramp", ball6, {"rampAngle": "0.5 deg"}),
+    ("pencil", "pencil_new", ball12, {}),
+    ("pencil_ball6", "pencil_new", ball6, {}),
+    ("pencil_bitangency", "pencil_new", ball12, {"bitangentAngle": "40 deg"}),
+    ("pencil_stepovers", "pencil_new", ball6, {"numberOfStepovers": "2"}),
 ):
     try:
-        oi = setup.operations.createInput("ramp")
-        oi.tool = ball6
+        oi = setup.operations.createInput(strategy)
+        oi.tool = tool
         oi.displayName = name
         op = setup.operations.add(oi)
         for key, expr in settings.items():
@@ -126,9 +142,11 @@ for op in made:
                 notes.append("%s: %s" % (what, v))
         except Exception:
             pass
-    for key in ("maximumStepdown", "rampAngle", "flatAreaMachining", "direction"):
+    for key in ("maximumStepdown", "rampAngle", "flatAreaMachining", "direction",
+                "bitangentAngle", "numberOfStepovers", "stepover", "overthickness"):
         p = op.parameters.itemByName(key)
-        notes.append("%s: %s" % (key, p.expression))
+        if p is not None:
+            notes.append("%s: %s" % (key, p.expression))
     posted = None
     if op.isToolpathValid:
         pi = adsk.cam.PostProcessInput.create("ops_3d_" + op.name, post, OUT,

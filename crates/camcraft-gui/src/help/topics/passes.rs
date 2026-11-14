@@ -57,6 +57,15 @@ topics! {
     RAMP_FLAT_AREAS: "Flat areas",
         "Adds a level at each flat face, so a wall standing on one is gone down to it and once round there, not left a stepdown's terrace above it.",
         Figure::FlatAreas;
+    DIRECTION_PENCIL: "Direction",
+        "Both ways starts each line at its nearer end. One way has the wall on the tool's right, climbing with a clockwise spindle; other way, on its left.",
+        Figure::Climb;
+    BITANGENCY_ANGLE: "Bitangency angle",
+        "Where the tool touches the part in two places whose faces turn at least this far from each other, it runs along. Larger finds only the sharper corners.";
+    OVERTHICKNESS: "Overthickness",
+        "Finds the corners a tool this much larger all round would touch twice, and runs this tool along them: corners a little wider than the tool are cut too.";
+    PENCIL_STEPOVERS: "Number of stepovers",
+        "Passes either side of each line, a stepover apart along the surface, cut before it. None runs along the lines alone.";
     MIN_FLAT_STEPDOWN: "Minimum stepdown",
         "A flat or peak less than this below the level above gets no level of its own: that much is left on it. Empty for none.";
     MIN_AXIAL_ENGAGEMENT: "Minimum axial engagement",

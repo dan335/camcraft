@@ -45,6 +45,7 @@ use crate::strategy::flat::{FlatParams, flat_finish};
 use crate::strategy::morph::{MorphParams, MorphedSpiralReport, morphed_spiral};
 use crate::strategy::parallel::{ParallelParams, ParallelReport, follow, parallel_finish_within};
 use crate::strategy::patterns::{Centred, radial, reaching, spiral};
+use crate::strategy::pencil::{PencilParams, pencil};
 use crate::strategy::planar::{
     Area, LeadArc, PlanarParams, PlanarReport, Spiral, WallFinish, areas, centre_offset, pocket,
     profile,
@@ -78,8 +79,8 @@ pub(super) use curves::{
     Chamfers, chamfers_picked, curves_picked, engravings_picked, slots_picked,
 };
 use finishing::{
-    contour_paths, flat_paths, morphed_spiral_paths, parallel_paths, radial_paths, ramp_paths,
-    scallop_paths, spiral_paths,
+    PencilAsked, contour_paths, flat_paths, morphed_spiral_paths, parallel_paths, pencil_paths,
+    radial_paths, ramp_paths, scallop_paths, spiral_paths,
 };
 use link::{Cutting, OnPart, link_params};
 pub(super) use round::round_walls;
@@ -372,6 +373,22 @@ pub(super) fn plan_operation(
             flat_areas,
             ..
         } => ramp_paths(work, (direction, flat_areas), limit, &mut warnings)?,
+        StrategySpec::Pencil {
+            direction,
+            bitangency_angle,
+            overthickness,
+            stepovers,
+        } => pencil_paths(
+            work,
+            &PencilAsked {
+                direction,
+                bitangency_angle,
+                overthickness,
+                stepovers,
+            },
+            limit,
+            &mut warnings,
+        )?,
         StrategySpec::Flat { order, .. } => flat_paths(work, order, limit, &mut warnings)?,
         StrategySpec::Spiral {
             centre,
@@ -924,6 +941,7 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
         StrategySpec::Scallop { .. } => StrategyDetail::Scallop(Default::default()),
         StrategySpec::Contour { .. } => StrategyDetail::Contour(Default::default()),
         StrategySpec::Ramp { .. } => StrategyDetail::Ramp(Default::default()),
+        StrategySpec::Pencil { .. } => StrategyDetail::Pencil(Default::default()),
         StrategySpec::Flat { .. } => StrategyDetail::Flat(Default::default()),
         StrategySpec::Spiral { .. } => StrategyDetail::Spiral(Default::default()),
         StrategySpec::Radial { .. } => StrategyDetail::Radial(Default::default()),

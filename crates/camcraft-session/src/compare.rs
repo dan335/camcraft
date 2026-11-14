@@ -440,3 +440,6 @@ mod tests_engrave;
 
 #[cfg(test)]
 mod tests_ramp;
+
+#[cfg(test)]
+mod tests_pencil;

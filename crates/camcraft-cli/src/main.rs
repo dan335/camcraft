@@ -232,6 +232,9 @@ enum StrategyArg {
     Ramp,
     /// Each flat face cleared at its own height. Fusion's Flat.
     Flat,
+    /// Along where the tool touches the part in two places at once: inside
+    /// corners and valleys. Fusion's Pencil.
+    Pencil,
     /// A spiral about the middle, dropped onto the part. Fusion's Spiral.
     Spiral,
     /// Spokes out from the middle, dropped onto the part. Fusion's Radial.

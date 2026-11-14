@@ -506,6 +506,17 @@ fn operation_findings(
                 ));
             }
         }
+        StrategyDetail::Pencil(r) => {
+            sampling(&r.sweep, &mut out);
+            finished(
+                op,
+                r.passes,
+                "the tool touches the part in two places nowhere within the boundary at the \
+                 bitangency angle",
+                &mut out,
+            );
+            coarsened(op, r.coarsened, r.pitch, &mut out);
+        }
         StrategyDetail::Flat(r) => finished(
             op,
             r.passes,

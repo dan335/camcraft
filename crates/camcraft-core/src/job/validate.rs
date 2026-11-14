@@ -674,6 +674,21 @@ impl Operation {
                 ));
             }
         }
+        if let StrategySpec::Pencil {
+            bitangency_angle,
+            overthickness,
+            ..
+        } = self.strategy
+        {
+            if !(bitangency_angle > 0.0 && bitangency_angle < 180.0) {
+                return Err(bad(
+                    field("bitangency_angle"),
+                    bitangency_angle,
+                    "greater than 0 and less than 180 degrees",
+                ));
+            }
+            at_least_zero(&field("overthickness"), overthickness)?;
+        }
         if let StrategySpec::Drill { peck, dwell } = self.strategy {
             if let Some(p) = peck {
                 positive(&field("peck"), p)?;

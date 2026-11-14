@@ -479,6 +479,22 @@ fn runs_of(
     )
 }
 
+/// `run`, broken where it falls or climbs further than a cut step while steeper
+/// than a plunge, as a parallel pass is ([`break_steep`]): a closed one as a
+/// ring sampled all the way round is ([`ring`]). For a pass whose points are
+/// found otherwise, as a pencil's.
+pub(crate) fn broken_steep(
+    run: Run,
+    params: &ParallelParams,
+    report: &mut ParallelReport,
+) -> Vec<Run> {
+    if run.closed {
+        ring(run.points, params, report)
+    } else {
+        open_runs(break_steep(run.points, params.max_cut_step, report))
+    }
+}
+
 /// A closed line sampled all the way round without a break: one closed run, or,
 /// broken down steep stretches, the runs between them, those either side of the
 /// join made one.

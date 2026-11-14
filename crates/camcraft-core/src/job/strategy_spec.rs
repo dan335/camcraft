@@ -75,6 +75,32 @@ pub enum StrategySpec {
         #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
         slope_to: f64,
     },
+    /// The tool run along where it touches the part in two places at once,
+    /// the inside corners and valleys a larger tool left: the foot of each
+    /// wall it reaches, and each crease between faces that meet sharper than
+    /// the bitangency angle. Fusion's Pencil.
+    Pencil {
+        /// Which way each line cuts: both ways, from its nearer end, unless
+        /// asked; climbing has the wall on the tool's right with a clockwise
+        /// spindle. Fusion's Direction: Both Ways, One Way, Other Way.
+        #[serde(default, skip_serializing_if = "is_default")]
+        direction: CutDirection,
+        /// The least angle between the two places the tool touches for it to
+        /// be a pencil line, in degrees: Fusion's Bitangency Angle, 20°.
+        #[serde(
+            default = "default_bitangency",
+            skip_serializing_if = "is_default_bitangency"
+        )]
+        bitangency_angle: f64,
+        /// The lines found for a tool this much larger, in millimetres, and
+        /// cut with the tool itself: Fusion's Overthickness, none.
+        #[serde(default, skip_serializing_if = "is_default")]
+        overthickness: f64,
+        /// Passes either side of each line, a stepover apart along the
+        /// surface: Fusion's Number of Stepovers, none.
+        #[serde(default, skip_serializing_if = "is_default")]
+        stepovers: u32,
+    },
     /// Each flat face of the part cleared at its own height, rings a stepover
     /// apart in from its edges, and nothing else. Fusion's Flat.
     Flat {
@@ -618,6 +644,7 @@ impl StrategySpec {
             StrategySpec::Scallop { .. } => "scallop",
             StrategySpec::Contour { .. } => "contour",
             StrategySpec::Ramp { .. } => "ramp",
+            StrategySpec::Pencil { .. } => "pencil",
             StrategySpec::Flat { .. } => "flat",
             StrategySpec::Spiral { .. } => "spiral",
             StrategySpec::Radial { .. } => "radial",
@@ -650,6 +677,7 @@ impl StrategySpec {
         match *self {
             StrategySpec::Parallel { .. }
             | StrategySpec::Scallop { .. }
+            | StrategySpec::Pencil { .. }
             | StrategySpec::Spiral { .. }
             | StrategySpec::Radial { .. }
             | StrategySpec::MorphedSpiral { .. } => Some(Containment::Center),
@@ -695,6 +723,7 @@ impl StrategySpec {
             StrategySpec::Adaptive { direction, .. }
             | StrategySpec::Adaptive2d { direction, .. }
             | StrategySpec::Scallop { direction, .. }
+            | StrategySpec::Pencil { direction, .. }
             | StrategySpec::Contour { direction, .. }
             | StrategySpec::Ramp { direction, .. }
             | StrategySpec::Flat { direction, .. }
@@ -832,6 +861,8 @@ impl StrategySpec {
             | StrategySpec::Spiral { .. }
             | StrategySpec::Radial { .. }
             | StrategySpec::MorphedSpiral { .. } => vec![("passes.stepover", CUSP)],
+            // Fusion's Pencil's, between the passes beside its lines.
+            StrategySpec::Pencil { .. } => vec![("passes.stepover", "tool_diameter * 0.5")],
             StrategySpec::PocketClearing { .. } | StrategySpec::Pocket { .. } => vec![
                 ("passes.stepover", "tool_diameter * 0.6"),
                 ("passes.stepdown", POCKET_STEPDOWN),
@@ -1147,6 +1178,13 @@ default_number!(
     /// and still be run into: a new Engrave of Fusion's.
     default_sharp_corner,
     is_default_sharp_corner = 165.0
+);
+
+default_number!(
+    /// The least angle between where a pencil's tool touches twice, in
+    /// degrees: a new Pencil of Fusion's.
+    default_bitangency,
+    is_default_bitangency = 20.0
 );
 
 default_number!(

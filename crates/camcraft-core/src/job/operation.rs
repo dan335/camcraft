@@ -181,6 +181,12 @@ impl Operation {
                     "a V-bit or chamfer mill cannot finish in Z levels; use a parallel pass",
                 );
             }
+            StrategySpec::Pencil { overthickness, .. } if overthickness != 0.0 => {
+                return Some(
+                    "a V-bit or chamfer mill has no overthickness: a cone grown all round is no \
+                     longer a cone",
+                );
+            }
             StrategySpec::Flat { .. } => {
                 return Some("a V-bit or chamfer mill cannot finish a flat");
             }

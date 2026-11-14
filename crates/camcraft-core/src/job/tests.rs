@@ -2454,6 +2454,96 @@ fn engrave_reads_and_writes_back() {
     assert!(new.cuts_selection());
 }
 
+/// A pencil reads with Fusion's defaults, both ways at a bitangency angle of
+/// 20° with no overthickness and no stepovers, writes back only what differs,
+/// and refuses an angle of none or a half turn, a negative overthickness, and
+/// one with a cone, which grown all round is no longer a cone.
+#[test]
+fn pencil_reads_and_writes_back() {
+    let finish = "strategy = \"parallel\"
+tool = \"finish-4-ball\"
+angle = 90.0
+";
+    let with = |own: &str| -> Job {
+        let mut j: Job = toml::from_str(&SAMPLE.replace(
+            finish,
+            &format!(
+                "strategy = \"pencil\"
+tool = \"finish-4-ball\"
+{own}"
+            ),
+        ))
+        .unwrap();
+        j.tools.insert("v".into(), vbit());
+        j.tools.get_mut("v").unwrap().number = 5;
+        j
+    };
+    let j = with("");
+    j.validate().unwrap();
+    assert_eq!(
+        j.setups[0].operations[1].strategy,
+        StrategySpec::Pencil {
+            direction: CutDirection::BothWays,
+            bitangency_angle: 20.0,
+            overthickness: 0.0,
+            stepovers: 0,
+        }
+    );
+    let written = toml::to_string(&j).unwrap();
+    for name in [
+        "direction",
+        "bitangency_angle",
+        "overthickness",
+        "stepovers",
+    ] {
+        assert!(!written.contains(name), "{written}");
+    }
+    let set = with(
+        "direction = \"climb\"
+bitangency_angle = 40.0
+overthickness = 1.0
+stepovers = 2
+",
+    );
+    set.validate().unwrap();
+    let written = toml::to_string(&set).unwrap();
+    assert_eq!(toml::from_str::<Job>(&written).unwrap(), set);
+
+    assert!(
+        with(
+            "bitangency_angle = 0.0
+"
+        )
+        .validate()
+        .is_err()
+    );
+    assert!(
+        with(
+            "bitangency_angle = 180.0
+"
+        )
+        .validate()
+        .is_err()
+    );
+    assert!(
+        with(
+            "overthickness = -0.5
+"
+        )
+        .validate()
+        .is_err()
+    );
+    let mut cone = with(
+        "overthickness = 1.0
+",
+    );
+    cone.setups[0].operations[1].tool = Some("v".into());
+    assert!(matches!(cone.validate(), Err(JobError::WrongTool { .. })));
+    let mut cone = with("");
+    cone.setups[0].operations[1].tool = Some("v".into());
+    cone.validate().unwrap();
+}
+
 /// Scallop reads with Fusion's defaults, both ways from the boundary in on
 /// every slope, and writes back only what differs; its stepover is parallel's,
 /// its order its own, and a slope range that is no range is refused.
