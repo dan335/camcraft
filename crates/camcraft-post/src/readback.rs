@@ -911,6 +911,10 @@ struct Checker<'a> {
     cut: bool,
     dwells: Vec<f64>,
     ended: bool,
+    /// Where the path has gone since the last move was read, to places the
+    /// tool was already at: the lines for them, if the program has them, are
+    /// still to come.
+    owed: Vec<DVec3>,
 }
 
 impl<'a> Checker<'a> {
@@ -932,6 +936,7 @@ impl<'a> Checker<'a> {
             cut: false,
             dwells: Vec::new(),
             ended: false,
+            owed: Vec::new(),
         }
     }
 
@@ -1239,11 +1244,25 @@ impl<'a> Checker<'a> {
             };
             self.at = g.to;
             // A straight move that stays where the tool is, as rounding can
-            // leave one, is nothing.
-            if group.is_empty() && g.arc.is_none() && end.distance(from) <= tol {
-                continue;
+            // leave one, is nothing. Nor is one to a place the path has been
+            // since the last move was read: a move shorter than the tolerance
+            // is reached before its line is read, and its line comes after, to
+            // those places in the path's order.
+            if group.is_empty() && g.arc.is_none() {
+                if let Some(i) = self.owed.iter().position(|p| end.distance(*p) <= tol) {
+                    self.owed.drain(..=i);
+                    continue;
+                }
+                if end.distance(from) <= tol {
+                    self.owed.clear();
+                    continue;
+                }
             }
+            self.owed.clear();
             group.push((line, g));
+        }
+        if group.is_empty() {
+            self.owed.push(m.to);
         }
         let mut length = 0.0;
         for &(line, g) in &group {

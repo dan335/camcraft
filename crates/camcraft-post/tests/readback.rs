@@ -397,3 +397,54 @@ fn an_arc_too_short_to_write_reads_back_to_itself() {
         }
     }
 }
+
+/// Moves shorter than a written step, one after another, as the rings of a
+/// pocket leave them where two of their corners all but meet: the tool is at
+/// the end of each before its line is read, and the lines still come, each to
+/// its own rounded place. The first run is from `examples/rail-jig.camcraft`,
+/// whose roughing would not post for it.
+#[test]
+fn moves_shorter_than_a_step_read_back_one_after_another() {
+    let mut t = Toolpath::new();
+    t.rapid_to(dvec3(99.1613, 132.0911, 80.0)).unwrap();
+    t.feed_to(dvec3(99.1613, 132.0911, 73.2), MoveRole::Plunge, 300.0)
+        .unwrap();
+    for (x, y) in [
+        (99.2355, 131.4005),
+        (99.2357, 131.4006),
+        (99.236, 131.3978),
+        (99.2376, 131.3806),
+        (99.2734, 131.0483),
+    ] {
+        t.feed_to(dvec3(x, y, 73.2), MoveRole::Cut, 2000.0).unwrap();
+    }
+    // And a walk of steps from a tenth of a micron to six, turning as it goes.
+    let mut at = t.end().unwrap();
+    let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+    let mut next = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        // Its top 24 bits, as a fraction.
+        u32::try_from(seed >> 40).map_or(0.0, f64::from) / f64::from(1u32 << 24)
+    };
+    for _ in 0..2000 {
+        let step = 0.0001 + 0.0059 * next();
+        let turn = TAU * next();
+        at += dvec3(turn.cos(), turn.sin(), 0.0) * step;
+        t.feed_to(at, MoveRole::Cut, 2000.0).unwrap();
+    }
+    t.feed_to(at + DVec3::X * 5.0, MoveRole::Cut, 2000.0)
+        .unwrap();
+    for (name, profile) in profiles() {
+        for units in [ProgramUnits::Mm, ProgramUnits::Inch] {
+            let spec = ProgramSpec { units, ..spec() };
+            reads_back(
+                &t,
+                &spec,
+                &profile,
+                &format!("short moves for {name} in {units:?}"),
+            );
+        }
+    }
+}

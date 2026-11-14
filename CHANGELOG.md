@@ -6,6 +6,18 @@ the same notes at more length.
 
 ## Unreleased
 
+- **The example job's programs are written again.** `camcraft job
+  examples/rail-jig.camcraft --out DIR` refused its roughing since 0.7.0 at
+  the latest: "does not read back to its path". The program was right and
+  the check was wrong. Where a path holds moves shorter than the check's
+  tolerance one after another, as the rings of a pocket do where two corners
+  all but meet, the check took each as reached before reading its line, then
+  took the lines when they came for the move after. It now takes a line to a
+  place the path has just been for what it is. The release's own test of
+  each archive now writes the example's programs, which it never did.
+- The determinism gate ran one of its six tests: the other five were named
+  without their whole paths, and matched nothing. All six ran in the test
+  gate all along. The gate now fails unless as many run as it names.
 - 0.8.0's operations are less code: what they did each their own way, their levels, leads, order and picks, is shared, and so is their tests' set-up; every program they write is unchanged.
 
 ## 0.8.1 — 2026-11-13

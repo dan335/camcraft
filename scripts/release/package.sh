@@ -57,7 +57,8 @@ else
 fi
 echo "packed $out/$archive"
 
-# Unpacked somewhere new, the command line runs the example and its checks pass.
+# Unpacked somewhere new, the command line runs the example, its checks pass
+# and its programs are written.
 smoke="$out/smoke-$platform"
 rm -rf "$smoke"
 mkdir -p "$smoke"
@@ -73,9 +74,16 @@ cd "$name"
 # 0 is clean and 2 ran with warnings worth reading (docs/jobs.md); anything else
 # failed.
 status=0
-"./camcraft$exe" job examples/rail-jig.camcraft > ../job.log 2>&1 || status=$?
+rm -rf ../programs
+"./camcraft$exe" job examples/rail-jig.camcraft --out ../programs > ../job.log 2>&1 || status=$?
 tail -3 ../job.log
 if [ "$status" != 0 ] && [ "$status" != 2 ]; then
     echo "the example job failed: exit $status" >&2
+    exit 1
+fi
+# Run without --out, a program that would be refused is never rendered: 0.7.0 to
+# 0.8.1 went out unable to write this job's roughing.
+if ! ls ../programs/*.nc > /dev/null 2>&1; then
+    echo "the example job wrote no program" >&2
     exit 1
 fi
