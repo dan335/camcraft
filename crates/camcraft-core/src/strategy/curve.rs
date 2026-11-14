@@ -540,6 +540,20 @@ pub fn join(edges: &[Edge]) -> Vec<Curve> {
                 }
             })
         };
+        // The other edge at `corner`, taken, run from there; and the corner
+        // it runs to.
+        let take = |corner: u32, used: &mut [bool]| {
+            let (j, starts) = next(corner, used)?;
+            let e = edges.get(j)?;
+            if let Some(u) = used.get_mut(j) {
+                *u = true;
+            }
+            match (starts, e.ends) {
+                (true, Some([_, b])) => Some((e.curve.clone(), b)),
+                (false, Some([a, _])) => Some((e.curve.reversed(), a)),
+                _ => None,
+            }
+        };
         let mut curve = first.curve.clone();
         // Forward from its end, then back from its start; each edge once.
         let mut at = front;
@@ -548,19 +562,10 @@ pub fn join(edges: &[Edge]) -> Vec<Curve> {
             if closed {
                 break;
             }
-            let Some((j, starts)) = next(at, &used) else {
+            let Some((run, far)) = take(at, &mut used) else {
                 break;
             };
-            let Some(e) = edges.get(j) else { break };
-            if let Some(u) = used.get_mut(j) {
-                *u = true;
-            }
-            let (piece, far) = match (starts, e.ends) {
-                (true, Some([_, b])) => (e.curve.clone(), b),
-                (false, Some([a, _])) => (e.curve.reversed(), a),
-                _ => break,
-            };
-            curve.pieces.extend(piece.pieces);
+            curve.pieces.extend(run.pieces);
             at = far;
             closed = at == back;
         }
@@ -569,23 +574,15 @@ pub fn join(edges: &[Edge]) -> Vec<Curve> {
             if closed {
                 break;
             }
-            let Some((j, starts)) = next(at, &used) else {
+            let Some((run, far)) = take(at, &mut used) else {
                 break;
             };
-            let Some(e) = edges.get(j) else { break };
-            if let Some(u) = used.get_mut(j) {
-                *u = true;
-            }
             // It comes before: run so it ends where the curve starts.
-            let (piece, far) = match (starts, e.ends) {
-                (true, Some([_, b])) => (e.curve.reversed(), b),
-                (false, Some([a, _])) => (e.curve.clone(), a),
-                _ => break,
-            };
-            let mut pieces = piece.pieces;
+            let before = run.reversed();
+            let mut pieces = before.pieces;
             pieces.append(&mut curve.pieces);
             curve = Curve {
-                start: piece.start,
+                start: before.start,
                 pieces,
             };
             at = far;
