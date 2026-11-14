@@ -4,7 +4,7 @@ What changed in each release, newest first. Each release's page
 ([Releases](https://github.com/dan335/camcraft/releases)) has the downloads and
 the same notes at more length.
 
-## 0.8.2 — 2026-11-14
+## Unreleased
 
 - **Fusion's Pencil**, a new 3D finishing strategy (`strategy = "pencil"`) in
   the job file and the app's 3D menu
@@ -17,6 +17,9 @@ the same notes at more length.
   programs for `ops_3d` with its 12 mm ball, its 6 mm ball, a bitangency angle
   of 40° and two stepovers are `fixtures/nc/ops_3d_pencil*.nc`, made again by
   `scripts/fusion/ops_3d/cam.py`, and a test holds camcraft's Pencil to each.
+
+## 0.8.2 — 2026-11-14
+
 - **Fusion's Ramp**, a new 3D finishing strategy (`strategy = "ramp"`) in the
   job file and the app's 3D menu
   ([decision 0027](docs/decisions/0027-ramp.md)). Contour's rings, gone down
