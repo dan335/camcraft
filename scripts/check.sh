@@ -146,7 +146,7 @@ if [ ${#SELECT[@]} -gt 0 ]; then
   # output against itself: bounded_runs_are_deterministic runs a roughing kept to a
   # picked face at one and eight threads and compares the moves. Those tests are in
   # camcraft-core, so this runs when core is being checked. `--exact` passes on a
-  # name that matches nothing, which is how five of these six, named without
+  # name that matches nothing, which is how five of the first six, named without
   # their whole paths, sat here not running; so the gate fails unless as many ran
   # as are named.
   if [ "$CRATES" = ALL ] || echo "$CRATES" | grep -qx camcraft-core; then
@@ -156,6 +156,7 @@ if [ ${#SELECT[@]} -gt 0 ]; then
       strategy::scallop::tests::is_deterministic
       strategy::waterline::tests::is_deterministic
       strategy::morph::tests::is_deterministic
+      strategy::ramp::tests::is_deterministic
       path::ordering::tests::ordering_is_deterministic
     )
     determinism() {

@@ -49,7 +49,7 @@
 //!
 //! [decision 0027]: ../../../../docs/decisions/0027-ramp.md
 
-use camcraft_geom::contour::Region;
+use camcraft_geom::contour::{Region, closed_edges};
 use camcraft_geom::mesh::distance_to_segment;
 use glam::{DVec2, DVec3};
 use rayon::prelude::*;
@@ -71,15 +71,12 @@ const MAX_SPLITS: u32 = 16;
 
 /// The most times round a ring one step down takes: far past any ramp angle
 /// a job asks for on a ring of any size.
-const MAX_LAPS: usize = 4096;
+const MAX_LAPS: u16 = 4096;
 
 /// How far a point of a step is looked for either way when it is put on the
 /// part again at its height, in millimetres: its height only changes by what
 /// the points added between it and the last change the way round.
 const REPULL_REACH: f64 = 2.0;
-
-/// [`MAX_LAPS`], as a length is measured.
-const MOST_LAPS: f64 = 4096.0;
 
 /// How to lay out the passes.
 #[derive(Debug, Clone, PartialEq)]
@@ -315,18 +312,16 @@ impl Ring {
         }
         let mut along = Vec::with_capacity(n);
         let mut length = 0.0;
-        for i in 0..n {
+        for (a, b) in closed_edges(&points) {
             along.push(length);
-            length += points.get(i)?.distance(*points.get((i + 1) % n)?);
+            length += a.distance(b);
         }
         let signed = signed_area(&points);
         // The part is on a ring's left as it is found, so a ring going round
         // anticlockwise as found goes round the part.
         let boss = (signed > 0.0) != against;
         let side = if against { -1.0 } else { 1.0 };
-        let (a, b) = (0..n)
-            .filter_map(|i| Some((*points.get(i)?, *points.get((i + 1) % n)?)))
-            .find(|(a, b)| a.distance(*b) > 4.0 * tolerance)?;
+        let (a, b) = closed_edges(&points).find(|(a, b)| a.distance(*b) > 4.0 * tolerance)?;
         let normal = (b - a).normalize().perp() * side;
         let mid = a.midpoint(b);
         Some(Self {
@@ -367,16 +362,8 @@ impl Ring {
 
     /// How far along it the point nearest `p` is.
     fn nearest(&self, p: DVec2) -> f64 {
-        let n = self.points.len();
         let mut best = (f64::INFINITY, 0.0);
-        for i in 0..n {
-            let (Some(&a), Some(&b), Some(&s)) = (
-                self.points.get(i),
-                self.points.get((i + 1) % n),
-                self.along.get(i),
-            ) else {
-                continue;
-            };
+        for ((a, b), &s) in closed_edges(&self.points).zip(&self.along) {
             let d = b - a;
             let t = if d.length_squared() > 0.0 {
                 ((p - a).dot(d) / d.length_squared()).clamp(0.0, 1.0)
@@ -405,17 +392,10 @@ impl Ring {
 
     /// Whether `p` is inside it.
     fn contains(&self, p: DVec2) -> bool {
-        let n = self.points.len();
-        let mut inside = false;
-        for i in 0..n {
-            let (Some(&a), Some(&b)) = (self.points.get(i), self.points.get((i + 1) % n)) else {
-                continue;
-            };
-            if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
-                inside = !inside;
-            }
-        }
-        inside
+        let crossed = |&(a, b): &(DVec2, DVec2)| {
+            (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x)
+        };
+        closed_edges(&self.points).filter(crossed).count() % 2 == 1
     }
 
     /// Its points after `u` and up to `u + to`, round as far as that goes,
@@ -430,7 +410,7 @@ impl Ring {
             lap = self.length;
         }
         let mut out = Vec::new();
-        let most = n.saturating_mul(MAX_LAPS + 2);
+        let most = n.saturating_mul(usize::from(MAX_LAPS) + 2);
         for _ in 0..most {
             let Some(&s) = self.along.get(i) else {
                 break;
@@ -481,9 +461,8 @@ impl Ring {
 
 /// Twice the signed area of a closed polygon, anticlockwise positive.
 fn signed_area(points: &[DVec2]) -> f64 {
-    let n = points.len();
-    (0..n)
-        .filter_map(|i| Some(points.get(i)?.perp_dot(*points.get((i + 1) % n)?)))
+    closed_edges(points)
+        .map(|(a, b)| a.perp_dot(b))
         .sum::<f64>()
         * 0.5
 }
@@ -689,7 +668,7 @@ impl<T: DropTest + Sync> Down<'_, '_, T> {
         length: f64,
         slope: f64,
     ) -> Result<f64, StrategyError> {
-        let length = length.min(MOST_LAPS * ring.length);
+        let length = length.min(f64::from(MAX_LAPS) * ring.length);
         for (gone, i) in ring.ahead(u, length) {
             if let Some(&p) = ring.points.get(i) {
                 self.cut(p.extend(from - slope * gone))?;
