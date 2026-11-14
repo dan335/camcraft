@@ -713,15 +713,14 @@ fn holder_modes(strategy: &StrategySpec) -> Option<&'static [(HolderMode, &'stat
         (HolderMode::Fail, "fail"),
     ];
     match strategy {
-        // Fusion's 2D Trace has no Shaft and Holder, though it follows its
-        // curves as a finish follows the part.
-        // Nor has its 2D Adaptive, nor its Engrave, nor its Thread.
+        // Fusion's Trace has no Shaft and Holder, though it follows its curves
+        // as a finish follows the part; nor have its 2D Adaptive, its Engrave
+        // and its Thread.
         StrategySpec::Trace { .. }
         | StrategySpec::Adaptive2d { .. }
         | StrategySpec::Engrave { .. }
         | StrategySpec::Thread { .. } => None,
-        // Its 2D Chamfer has one: over the part, as a finish's.
-        StrategySpec::Chamfer2d { .. } => Some(OVER_PART),
+        // Its 2D Chamfer has one, over the part, as a finish's.
         _ if strategy.uses().links == Links::OverPart => Some(OVER_PART),
         StrategySpec::Contour { .. }
         | StrategySpec::Flat { .. }

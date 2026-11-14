@@ -105,8 +105,6 @@ pub(super) struct Work<'a> {
     /// The blocks of material the setup starts from, each its footprint's lower
     /// and upper corner and its top.
     pub(super) blocks: &'a [(DVec2, DVec2, f64)],
-    /// The heights of the part's flat faces, found for the setup when an
-    /// operation first needs them.
     /// The operations before it in the setup, as cut, for a strategy that
     /// clears what they left ([`Uses::rest`](crate::job::Uses::rest)); none
     /// for any other.
@@ -273,9 +271,8 @@ fn held_clear(
     // above it left material over it that it would meet. Failing, any of
     // them that would meet it stops.
     let how = match op.strategy {
-        // Fusion's 2D operations have no Shaft and Holder: the checks still
-        // sweep the whole tool.
-        // Nor has its 2D Adaptive, nor its Engrave, nor its Thread.
+        // Fusion's Slot, Trace, 2D Adaptive, Engrave and Thread have no Shaft
+        // and Holder: the checks still sweep the whole tool.
         StrategySpec::Slot { .. }
         | StrategySpec::Trace { .. }
         | StrategySpec::Adaptive2d { .. }
@@ -284,12 +281,8 @@ fn held_clear(
             return Ok(None);
         }
         _ if mode == HolderMode::Fail => Some(Clear::Trim),
-        // Fusion's 2D Chamfer has one: its passes, over the part, lifted
-        // or trimmed as a finishing pass's are.
-        StrategySpec::Chamfer2d { .. } => Some(match mode {
-            HolderMode::PullAway => Clear::PullAway,
-            _ => Clear::Trim,
-        }),
+        // Its 2D Chamfer has one, and is linked over the part: its passes
+        // are lifted or trimmed as a finishing pass's are.
         _ if op.strategy.uses().links == Links::OverPart => Some(match mode {
             HolderMode::PullAway => Clear::PullAway,
             _ => Clear::Trim,
