@@ -13,7 +13,7 @@ use crate::setup::frame::Frame;
 use crate::strategy::chamfer::{ChamferEdge, ChamferError, ChamferParams, chamfer};
 use crate::strategy::curve::{Curve, Edge, Piece, join};
 use crate::strategy::engrave::{self, EngraveParams, Shape};
-use crate::strategy::nesting::take_nearest;
+use crate::strategy::nesting::nearest_next;
 use crate::strategy::slot::{Slot, SlotError, SlotParams, slot, slot_of};
 use crate::strategy::trace::{Beside, TraceError, TraceParams, trace};
 
@@ -199,13 +199,9 @@ pub(in crate::run) fn slots_picked(
     }
     // From the work zero, always the nearest start. Where a slot ends
     // depends on how many legs its ramp has; its far end is near enough.
-    let mut out = Vec::with_capacity(found.len());
-    let mut at = DVec2::ZERO;
-    while let Some(s) = take_nearest(&mut found, |s| at.distance(s.middle.start.truncate())) {
-        at = s.middle.end().truncate();
-        out.push(s);
-    }
-    Ok(out)
+    Ok(nearest_next(found, DVec2::ZERO, |s| {
+        (s.middle.start.truncate(), s.middle.end().truncate())
+    }))
 }
 
 /// The curves a trace's picked edges make, joined end to end, in the setup's

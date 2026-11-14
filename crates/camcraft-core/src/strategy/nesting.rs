@@ -169,6 +169,23 @@ pub(crate) fn take_nearest<T>(items: &mut Vec<T>, distance: impl Fn(&T) -> f64) 
     Some(items.remove(nearest(items, distance)))
 }
 
+/// `items` in nearest-next order: from `from`, always the one starting nearest
+/// where the last ended, seen from above, `ends` giving where each starts and
+/// ends; ties to the earlier.
+pub(crate) fn nearest_next<T>(
+    mut items: Vec<T>,
+    from: DVec2,
+    ends: impl Fn(&T) -> (DVec2, DVec2),
+) -> Vec<T> {
+    let mut out = Vec::with_capacity(items.len());
+    let mut at = from;
+    while let Some(item) = take_nearest(&mut items, |i| at.distance(ends(i).0)) {
+        at = ends(&item).1;
+        out.push(item);
+    }
+    out
+}
+
 /// How far `to` is from the tool at `at`: from nowhere everything is as near, and
 /// nowhere is as far as can be.
 pub(crate) fn distance(to: Option<DVec2>, at: Option<DVec2>) -> f64 {

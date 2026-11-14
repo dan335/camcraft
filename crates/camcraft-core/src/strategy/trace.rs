@@ -26,11 +26,11 @@
 //! down before the next (Fusion's Order by Depth). Both ways, an open curve's
 //! levels go back and forth.
 
-use glam::DVec3;
+use glam::{DVec2, DVec3};
 
 use crate::path::toolpath::{MoveRole, Toolpath, ToolpathError};
 use crate::strategy::curve::{Curve, Piece, offset};
-use crate::strategy::nesting::take_nearest;
+use crate::strategy::nesting::nearest_next;
 use crate::strategy::{StrategyError, at_least_zero, check};
 
 /// Where the tool goes against a curve: Fusion's Sideways Compensation.
@@ -271,16 +271,10 @@ pub fn trace(curves: &[Curve], p: &TraceParams) -> Result<(Toolpath, TraceReport
     let ordered = if p.preserve_order {
         oriented
     } else {
-        let mut left = oriented;
-        let mut out = Vec::with_capacity(left.len());
-        let mut at = left.first().map(|c| c.start);
-        while let Some(c) = take_nearest(&mut left, |c| {
-            at.map_or(0.0, |a| a.truncate().distance(c.start.truncate()))
-        }) {
-            at = Some(c.end());
-            out.push(c);
-        }
-        out
+        let first = oriented.first().map_or(DVec2::ZERO, |c| c.start.truncate());
+        nearest_next(oriented, first, |c| {
+            (c.start.truncate(), c.end().truncate())
+        })
     };
     // Each curve as the tool's tip follows it: beside it, run on past its
     // ends, and broken where it is too steep.

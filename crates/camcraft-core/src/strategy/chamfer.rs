@@ -45,7 +45,7 @@ use glam::{DVec2, DVec3};
 
 use crate::path::toolpath::{MoveRole, Toolpath, ToolpathError};
 use crate::strategy::curve::{Curve, Piece, offset};
-use crate::strategy::nesting::take_nearest;
+use crate::strategy::nesting::nearest_next;
 use crate::strategy::{StrategyError, at_least_zero, check};
 
 /// An edge to chamfer: a curve along it, and which side of it the part is.
@@ -365,16 +365,12 @@ pub fn chamfer(
     let ordered = if p.preserve_order {
         runs
     } else {
-        let mut left = runs;
-        let mut out = Vec::with_capacity(left.len());
-        let mut at = left.first().map(|e| e.curve.start);
-        while let Some(e) = take_nearest(&mut left, |e| {
-            at.map_or(0.0, |a| a.truncate().distance(e.curve.start.truncate()))
-        }) {
-            at = Some(e.curve.end());
-            out.push(e);
-        }
-        out
+        let first = runs
+            .first()
+            .map_or(DVec2::ZERO, |e| e.curve.start.truncate());
+        nearest_next(runs, first, |e| {
+            (e.curve.start.truncate(), e.curve.end().truncate())
+        })
     };
     let mut path = Toolpath::new();
     for e in &ordered {
