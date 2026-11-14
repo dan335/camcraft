@@ -33,8 +33,8 @@ Autodesk.)
 - **Models:** STEP and STL. STEP files are read in the units they declare, and
   every import is checked against the file it came from.
 - **Roughing:** adaptive clearing and pocket clearing.
-- **Finishing:** parallel, scallop, contour, flat, spiral, radial and morphed
-  spiral.
+- **Finishing:** parallel, scallop, contour, ramp, flat, spiral, radial and
+  morphed spiral.
 - **2D:** profiles, pockets, 2D adaptive clearing, facing, slot, trace, 2D
   chamfer, engraving, bore, circular, thread milling and drilling.
 - **Tools:** flat, ball, bullnose, V-bit and chamfer cutters, drills and
@@ -138,8 +138,8 @@ build on it. The crates are not on crates.io yet, so depend on a release by
 its tag, each crate you use:
 
 ```toml
-camcraft-core    = { git = "https://github.com/dan335/camcraft", tag = "v0.8.1" }
-camcraft-session = { git = "https://github.com/dan335/camcraft", tag = "v0.8.1" }
+camcraft-core    = { git = "https://github.com/dan335/camcraft", tag = "v0.8.2" }
+camcraft-session = { git = "https://github.com/dan335/camcraft", tag = "v0.8.2" }
 ```
 
 Their interfaces still change from release to release, so move from tag to tag

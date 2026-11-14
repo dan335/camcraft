@@ -4,7 +4,7 @@ What changed in each release, newest first. Each release's page
 ([Releases](https://github.com/dan335/camcraft/releases)) has the downloads and
 the same notes at more length.
 
-## Unreleased
+## 0.8.2 — 2026-11-14
 
 - **Fusion's Ramp**, a new 3D finishing strategy (`strategy = "ramp"`) in the
   job file and the app's 3D menu
