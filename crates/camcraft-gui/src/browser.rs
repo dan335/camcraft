@@ -694,10 +694,7 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
 /// there, in the order of Fusion's toolbar. The menus list them after that
 /// section's own, greyed, saying so. One that is built comes out of here and
 /// into [`operation_groups`], in the same place.
-pub const PLANNED: &[(&str, usize, &str)] = &[
-    ("3D", 1, "Project"),
-    ("3D", 1, "Morph"),
-];
+pub const PLANNED: &[(&str, usize, &str)] = &[("3D", 1, "Project"), ("3D", 1, "Morph")];
 
 /// What a planned operation's item says under the pointer.
 pub const NOT_YET: &str = "Not implemented yet";
