@@ -20,11 +20,12 @@
 //! then decide. The codes are kept stable, so that anything written about them
 //! still reads right.
 
+use camcraft_core::arrange::{Arrangement, Laid, Outcome};
 use camcraft_core::cutter::allowance::{Allowance, EffectiveTool};
 use camcraft_core::cutter::assembly::Assembly;
 use camcraft_core::cutter::dropcutter::{DropCutter, DropTest};
 use camcraft_core::cutter::tool::ToolProfile;
-use camcraft_core::job::Job;
+use camcraft_core::job::{Job, Setup, StockSpec};
 use camcraft_core::path::toolpath::{MoveRole, PLUNGE_RATIO, Toolpath};
 use camcraft_core::run::{OperationResult, StrategyDetail};
 use camcraft_core::setup::Prepared;
@@ -32,6 +33,8 @@ use camcraft_core::strategy::parallel::ParallelReport;
 use camcraft_sim::stock::VerifyReport;
 use glam::DVec3;
 use rayon::prelude::*;
+
+use crate::model::quoted;
 
 /// How serious a finding is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -127,20 +130,24 @@ impl Finding {
 pub fn check(
     job: &Job,
     setup: usize,
-    prepared: &Prepared,
+    (prepared, arrangement): (&Prepared, &Arrangement),
     operations: &[OperationResult],
     verify: &VerifyReport,
     verify_budget: f64,
     model_warnings: &[String],
 ) -> Checks {
     let mut groups = Vec::with_capacity(operations.len() + 1);
+    let mut findings = setup_findings(verify, verify_budget, model_warnings);
+    if let Some(s) = job.setups.get(setup) {
+        findings.extend(sheet_findings(job, s, arrangement));
+    }
     groups.push(Group {
         op: None,
         title: job
             .setups
             .get(setup)
             .map_or_else(|| "setup".to_string(), |s| format!("setup {}", s.name)),
-        findings: sorted(setup_findings(verify, verify_budget, model_warnings)),
+        findings: sorted(findings),
     });
     let ops = job.setups.get(setup).map(|s| &s.operations);
     let cutter = prepared.drop_cutter();
@@ -226,6 +233,142 @@ fn setup_findings(verify: &VerifyReport, budget: f64, model_warnings: &[String])
     }
     for w in model_warnings {
         out.push(finding(Level::Warn, "CC299", w.clone(), String::new()));
+    }
+    out
+}
+
+/// What is found of each sheet `setup` uses, as `arrangement` laid it: every
+/// part it holds has room on it (CC109) and stands within its thickness
+/// (CC110), and the setup machines every part it holds, or says which it
+/// does not (CC225).
+///
+/// Every part of the sheet is checked, not only those the setup machines: a
+/// sheet that leaves a part out is not the sheet the job describes, whichever
+/// setup cuts it.
+fn sheet_findings(job: &Job, setup: &Setup, arrangement: &Arrangement) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for stock in &setup.stocks {
+        let Some((def, a)) = job.stock(stock).and_then(|d| match &d.spec {
+            StockSpec::Arranged(a) => Some((d, a)),
+            StockSpec::AroundModels { .. } | StockSpec::FixedBox(_) => None,
+        }) else {
+            continue;
+        };
+        let name = &def.name;
+        let parts = match arrangement.sheet(name).map(|s| &s.laid) {
+            Some(Laid::Done { parts, .. }) => parts,
+            Some(Laid::Waiting(missing)) => {
+                out.push(finding(
+                    Level::Fail,
+                    "CC109",
+                    format!("sheet '{name}' was not arranged"),
+                    format!(
+                        "it waits for {}",
+                        quoted(missing.iter().map(String::as_str))
+                    ),
+                ));
+                continue;
+            }
+            Some(Laid::Failed(e)) => {
+                out.push(finding(
+                    Level::Fail,
+                    "CC109",
+                    format!("sheet '{name}' cannot be arranged"),
+                    e.to_string(),
+                ));
+                continue;
+            }
+            None => {
+                out.push(finding(
+                    Level::Fail,
+                    "CC109",
+                    format!("sheet '{name}' was not arranged"),
+                    String::new(),
+                ));
+                continue;
+            }
+        };
+
+        // CC109: every part has room on its sheet.
+        let mut left_out = false;
+        for p in parts {
+            let (why, detail) = match p.outcome {
+                Outcome::Placed(_) => continue,
+                Outcome::TooLarge => (
+                    format!("sheet '{name}' is too small for '{}'", p.model),
+                    "it does not fit inside the border at any turn it may take",
+                ),
+                Outcome::NoRoom => (
+                    format!("sheet '{name}' has no room for '{}'", p.model),
+                    "it fits alone, but not beside the others",
+                ),
+            };
+            left_out = true;
+            out.push(finding(Level::Fail, "CC109", why, detail.into()));
+        }
+        if !left_out {
+            out.push(finding(
+                Level::Pass,
+                "CC109",
+                format!("sheet '{name}' holds all {} of its parts", parts.len()),
+                String::new(),
+            ));
+        }
+
+        // CC110: what stands on the sheet is within its thickness, as the
+        // seat stands it.
+        let (bottom, top) = (a.corner[2], a.corner[2] + a.size[2]);
+        let tolerance = job.tolerance;
+        let mut outside = false;
+        for p in parts
+            .iter()
+            .filter(|p| matches!(p.outcome, Outcome::Placed(_)))
+        {
+            let [low, high] = p.heights;
+            let (above, below) = (high - top, bottom - low);
+            for (by, side) in [(above, "above"), (below, "below")] {
+                if by > tolerance {
+                    outside = true;
+                    out.push(finding(
+                        Level::Fail,
+                        "CC110",
+                        format!("'{}' stands {by:.3} mm {side} sheet '{name}'", p.model),
+                        format!(
+                            "the sheet is {:.3} mm thick and the part {:.3} mm tall",
+                            a.size[2],
+                            high - low
+                        ),
+                    ));
+                }
+            }
+        }
+        if !outside {
+            out.push(finding(
+                Level::Pass,
+                "CC110",
+                format!("every part on sheet '{name}' stands within its thickness"),
+                String::new(),
+            ));
+        }
+
+        // CC225: parts on the sheet this setup leaves alone.
+        let unlisted: Vec<&str> = a
+            .parts
+            .iter()
+            .map(|p| p.model.as_str())
+            .filter(|m| !setup.models.iter().any(|s| s == m))
+            .collect();
+        if !unlisted.is_empty() {
+            out.push(finding(
+                Level::Warn,
+                "CC225",
+                format!(
+                    "sheet '{name}' holds {}, which this setup neither machines nor checks",
+                    quoted(unlisted.iter().copied())
+                ),
+                "their programs are another setup's, or none".into(),
+            ));
+        }
     }
     out
 }

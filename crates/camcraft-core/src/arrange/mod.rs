@@ -30,9 +30,16 @@
 //! apart than asked, never nearer. Every layout is then checked exactly, with
 //! the outlines themselves ([`verify`]), before it is given back; one that
 //! fails is an error, never a layout.
+//!
+//! # A job's sheets
+//!
+//! [`arrange`] lays each arranged stock of a job with its parts' bodies as
+//! loaded, and gives the one record of where each model on a sheet stands
+//! ([`Arrangement`]). The bodies are never placed again for it.
 
 mod grid;
 mod pack;
+mod sheets;
 mod verify;
 
 #[cfg(test)]
@@ -45,6 +52,7 @@ mod verify;
 mod tests;
 
 pub use pack::pack;
+pub use sheets::{Arrangement, Laid, Outlines, PartLaid, SheetLayout, arrange};
 pub use verify::verify;
 
 use std::hash::{Hash, Hasher};
@@ -52,6 +60,7 @@ use std::hash::{Hash, Hasher};
 use camcraft_geom::contour::{Region, RegionError, TICK};
 use camcraft_geom::turn::Turn;
 use glam::{DVec2, DVec3};
+use serde::{Deserialize, Serialize};
 
 use crate::control::Stopped;
 use crate::must;
@@ -78,6 +87,9 @@ pub struct Stand {
     /// down to seat it.
     pub offset: DVec3,
 }
+
+/// What a model no sheet arranges has: one copy, standing where it is.
+pub const WHERE_IT_IS: &[Stand] = &[Stand::NONE];
 
 impl Stand {
     /// Standing where it is: no turn and no move.
@@ -145,8 +157,10 @@ impl Hash for Stand {
 }
 
 /// The corner of the sheet packing starts from, seen from above: the front
-/// is towards −Y, the left towards −X.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+/// is towards −Y, the left towards −X. A job file names it `front-left` and
+/// so on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Corner {
     /// −X, −Y.
     #[default]
@@ -172,8 +186,9 @@ impl Corner {
 }
 
 /// The axis a sheet is used up along: parts fill across it first, and the
-/// length used is measured along it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+/// length used is measured along it. A job file names it `x` or `y`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Direction {
     /// Along X: parts stack across Y, and the sheet is used from one end of X.
     #[default]
@@ -260,6 +275,9 @@ pub enum ArrangeError {
         /// The shape, by its place.
         shape: usize,
     },
+    /// A model covers nothing seen from above, so it has no outline to lay.
+    #[error("model '{0}' covers nothing seen from above")]
+    NoOutline(String),
     /// A polygon operation failed.
     #[error("region operation failed: {0}")]
     Region(String),

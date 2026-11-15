@@ -66,9 +66,13 @@ pub fn shown(
     let Some(s) = doc.setup(setup) else {
         return out;
     };
+    // The setup's models, one its sheet had no room for among them: a pick on
+    // it is on nothing, and says so.
     let bodies = Bodies::standing(
         scene
-            .setup_models()
+            .models
+            .iter()
+            .filter(|m| m.in_setup || s.models.iter().any(|n| n == m.name()))
             .map(|m| (m.name(), m.body(), m.stands())),
     );
     let tolerance = doc.job.tolerance;
@@ -107,9 +111,13 @@ pub fn shown(
     let sel = &operation.selection;
     // Each pick found, with the model it is on, or why not.
     let find = |r: &FeatureRef, kind: Kind| {
-        let body = bodies
-            .body(&r.model)
+        let copies = bodies
+            .get(&r.model)
             .ok_or_else(|| FeatureError::NotLoaded(r.model.clone()).to_string())?;
+        if copies.stands.is_empty() {
+            return Err(FeatureError::NotPlaced(r.model.clone()).to_string());
+        }
+        let body = copies.body;
         let index = kind.find(body, r, tolerance).map_err(|e| e.to_string())?;
         Ok::<_, String>((body, index))
     };

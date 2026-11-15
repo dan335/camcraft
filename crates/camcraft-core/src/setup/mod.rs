@@ -41,16 +41,13 @@ use camcraft_geom::topology::Body;
 use camcraft_sim::stock::{PartSurface, StockError};
 use glam::DVec3;
 
-use crate::arrange::Stand;
+use crate::arrange::{Arrangement, Stand, WHERE_IT_IS};
 use crate::cutter::dropcutter::DropCutter;
-use crate::job::{BoxOf, HeightContext, Job, JobError, Origin, Setup, StockSpec};
+use crate::job::{Arranged, BoxOf, HeightContext, Job, JobError, Origin, Setup, StockSpec};
 use crate::strategy::adaptive::flat_heights;
 use features::FeatureError;
 use frame::{BadOrientation, Frame, Orientation};
 use memo::Memo;
-
-/// What a model off a sheet has: one copy, standing where it is.
-const WHERE_IT_IS: &[Stand] = &[Stand::NONE];
 
 /// A model as the engine takes it: its body, and where each copy of it stands.
 #[derive(Debug, Clone, Copy)]
@@ -105,6 +102,21 @@ impl<'a> Bodies<'a> {
                 .into_iter()
                 .map(|(name, body, stands)| (name, Copies { body, stands }))
                 .collect(),
+        )
+    }
+
+    /// The bodies `loaded`, by model, each standing where `arrangement` has
+    /// it: as its sheet laid it, or once where it is for a model no sheet
+    /// arranges. A model on a sheet that was not laid stands nowhere yet, and
+    /// is left out, as a model not given is.
+    pub fn arranged(
+        loaded: impl IntoIterator<Item = (&'a str, &'a Body)>,
+        arrangement: &'a Arrangement,
+    ) -> Self {
+        Self::standing(
+            loaded
+                .into_iter()
+                .filter_map(|(name, body)| Some((name, body, arrangement.stands(name)?))),
         )
     }
 
@@ -410,7 +422,17 @@ fn block(spec: &StockSpec, model_box: Aabb, bodies: &Bodies<'_>) -> Result<Aabb,
                 max: min + DVec3::from_array(b.size),
             }
         }
+        StockSpec::Arranged(a) => sheet_block(a),
     })
+}
+
+/// A sheet's block: where it is, wherever its parts stand on it.
+fn sheet_block(a: &Arranged) -> Aabb {
+    let min = DVec3::from_array(a.corner);
+    Aabb {
+        min,
+        max: min + DVec3::from_array(a.size),
+    }
 }
 
 /// A stock block in model coordinates, for a setup machining `models`: where it
@@ -420,7 +442,12 @@ pub fn stock_block(
     models: &[String],
     bodies: &Bodies<'_>,
 ) -> Result<Aabb, PrepareError> {
-    block(spec, bounds_of(models, bodies)?, bodies)
+    match spec {
+        StockSpec::Arranged(a) => Ok(sheet_block(a)),
+        StockSpec::AroundModels { .. } | StockSpec::FixedBox(_) => {
+            block(spec, bounds_of(models, bodies)?, bodies)
+        }
+    }
 }
 
 /// `b` turned the way the part sits. The turn only swaps and negates, so a box

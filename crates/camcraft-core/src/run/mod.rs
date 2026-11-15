@@ -42,7 +42,7 @@ use crate::job::{
     Curves, HeightContext, HolderSegment, Holes, Job, JobError, Machine, Operation, Setup, ToolSpec,
 };
 use crate::path::simadapt::sim_moves;
-use crate::setup::features::Picking;
+use crate::setup::features::{FeatureError, Picking};
 use crate::setup::{Bodies, Prepared};
 use crate::strategy::adaptive::rest::Earlier;
 
@@ -297,6 +297,11 @@ impl<'a> Shared<'a> {
         stock: &Stock,
         before: &[Earlier],
     ) -> Planning<'a> {
+        // A pick on a model with no copy placed finds nothing: every pick on
+        // one is said to be, rather than left to read as nothing picked.
+        if let Some(model) = self.only_unplaced(op) {
+            return Err(in_op(op)(FeatureError::NotPlaced(model.to_string())));
+        }
         // Its picks, found once, however many of its settings read them.
         let picking = self.picking(op);
         let Tooled {
@@ -371,6 +376,18 @@ impl<'a> Shared<'a> {
         };
         let planned = plan_operation(&self.work(op, &tooled, before, watch), &target, stock)?;
         Ok((tooled, planned))
+    }
+
+    /// The model every pick `op` reads is on, where it has picks it reads and
+    /// all are on models with no copy placed: the first of them.
+    fn only_unplaced<'o>(&self, op: &'o Operation) -> Option<&'o str> {
+        if !(op.cuts_selection() || op.heights.measured_from_selection()) {
+            return None;
+        }
+        let unplaced = |model: &str| self.bodies.get(model).is_some_and(|c| c.stands.is_empty());
+        let mut picks = op.selection.iter().map(|r| r.model.as_str());
+        let first = picks.next()?;
+        (unplaced(first) && picks.all(unplaced)).then_some(first)
     }
 
     /// What `op` picks on the part, found when first asked.

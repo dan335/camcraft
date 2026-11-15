@@ -295,7 +295,9 @@ impl App {
             }
             return;
         }
-        let Some(models) = doc.models_for_run(index) else {
+        let (Some(models), Some(arrangement)) =
+            (doc.models_for_run(index), doc.arrangement_for(index))
+        else {
             return;
         };
         let plans = doc.plans(index, None);
@@ -306,6 +308,7 @@ impl App {
             job: Box::new(doc.job.clone()),
             setup: index,
             models,
+            arrangement,
             plans,
             laid_out: doc.laid_out_for_run(index),
             control,
@@ -424,6 +427,12 @@ impl App {
                     doc.cast(layout, result);
                 }
             }
+            (Task::Arrange { seq }, Reply::Arranged(arranged)) => {
+                if let Some(doc) = self.find(id) {
+                    let (key, result, outlines) = *arranged;
+                    doc.arranged(seq, key, result, outlines);
+                }
+            }
             (Task::Post, Reply::Planned(planned)) => self.planned(ctx, id, *planned),
             (Task::Write { dir, refused }, Reply::Written(written)) => {
                 self.written(id, (&dir, &refused), written);
@@ -442,6 +451,9 @@ impl App {
                         if let Task::Shadow { layout } = &task {
                             doc.cast(*layout, Err("the engine stopped".into()));
                         }
+                        if let Task::Arrange { seq } = &task {
+                            doc.arrangement_lost(*seq, "the engine stopped".into());
+                        }
                         doc.note(Level::Error, text);
                     }
                     None => self.log.push((Level::Error, text)),
@@ -451,7 +463,8 @@ impl App {
         }
     }
 
-    /// Start loading every model a job needs and does not have.
+    /// Start loading every model a job needs and does not have, and arranging
+    /// its sheets where they want it.
     fn load_models(&mut self, ctx: &egui::Context) {
         for doc in &mut self.docs {
             let dir = doc.dir();
@@ -477,6 +490,19 @@ impl App {
                     name: def.name,
                     key,
                 };
+                self.worker.start(ctx, doc.id, task, request);
+            }
+            // Its sheets, arranged again as soon as what they are laid from
+            // has changed.
+            if let Some(a) = doc.arrange_wanted() {
+                let request = Request::Arrange {
+                    key: a.key,
+                    job: Box::new(a.job),
+                    models: a.models,
+                    outlines: a.outlines,
+                    control: a.control,
+                };
+                let task = Task::Arrange { seq: a.seq };
                 self.worker.start(ctx, doc.id, task, request);
             }
             // Once loading settles, say once which models were not found.

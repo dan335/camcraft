@@ -154,6 +154,8 @@ pub struct PickModel {
     bvh: Arc<MeshBvh>,
     /// Which of its edges close on themselves.
     closed: Vec<bool>,
+    /// Where each copy stands, in order.
+    stands: Vec<Stand>,
     /// Each copy, in the order its model has them.
     pub copies: Vec<PickCopy>,
 }
@@ -187,7 +189,7 @@ impl PickModel {
 
     /// Where each copy of it stands.
     pub fn stands(&self) -> &[Stand] {
-        &self.model.stands
+        &self.stands
     }
 }
 
@@ -219,11 +221,13 @@ pub struct PickScene {
 }
 
 impl PickScene {
-    /// Ready `prepared` for picking, with the job's models as loaded and their
-    /// indexes, and its stocks. Models it does not machine come after its own.
+    /// Ready `prepared` for picking, with the job's models as loaded, their
+    /// indexes and where their copies stand, and its stocks. Models it does
+    /// not machine come after its own. A model it machines stands where
+    /// `prepared` was laid out with it.
     pub fn new(
         prepared: &Prepared,
-        loaded: impl IntoIterator<Item = (String, Arc<Model>, Arc<MeshBvh>)>,
+        loaded: impl IntoIterator<Item = (String, Arc<Model>, Arc<MeshBvh>, Vec<Stand>)>,
         stocks: Vec<PickStock>,
     ) -> Self {
         let frame = prepared.frame;
@@ -237,10 +241,9 @@ impl PickScene {
         });
         let models = loaded
             .into_iter()
-            .map(|(name, model, bvh)| {
+            .map(|(name, model, bvh, stands)| {
                 if !prepared.machines(&name) {
-                    let copies = model
-                        .stands
+                    let copies = stands
                         .iter()
                         .map(|&stand| PickCopy {
                             stand,
@@ -256,14 +259,21 @@ impl PickScene {
                         model,
                         bvh,
                         closed: Vec::new(),
+                        stands,
                         copies,
                     };
                 }
+                // Where the part was laid out with it.
+                let stands: Vec<Stand> = prepared
+                    .pieces
+                    .iter()
+                    .filter(|p| p.model == name)
+                    .map(|p| p.stand)
+                    .collect();
                 let body = &model.body;
                 let (mesh, t) = (body.mesh(), body.topology());
                 let ids = 0..u32::try_from(t.edges().len()).unwrap_or(u32::MAX);
-                let copies = model
-                    .stands
+                let copies = stands
                     .iter()
                     .map(|&stand| {
                         let to = |p: DVec3| frame.to_setup_as(&stand, p);
@@ -291,6 +301,7 @@ impl PickScene {
                     closed: t.edges().iter().map(|e| e.closed).collect(),
                     model,
                     bvh,
+                    stands,
                     copies,
                 }
             })
@@ -308,11 +319,6 @@ impl PickScene {
     /// The model called `name`.
     pub fn model(&self, name: &str) -> Option<&PickModel> {
         self.models.iter().find(|m| m.name == name)
-    }
-
-    /// The setup's models, in its order.
-    pub fn setup_models(&self) -> impl Iterator<Item = &PickModel> {
-        self.models.iter().filter(|m| m.in_setup)
     }
 
     /// Edge `edge` of `pm`'s body in the setup's frame, as its own transform

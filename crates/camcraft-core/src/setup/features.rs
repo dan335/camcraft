@@ -79,6 +79,10 @@ pub enum FeatureError {
     /// The pick names a model that is not loaded.
     #[error("model '{0}' is not loaded")]
     NotLoaded(String),
+    /// The picks are on a model loaded but with no copy placed: its sheet had
+    /// no room for it, so there is nothing of it to machine.
+    #[error("'{0}' has no copy placed: its sheet has no room for it")]
+    NotPlaced(String),
     /// Nothing passes through the pick's point any more.
     #[error(
         "the {what} picked on '{model}' near ({:.3}, {:.3}, {:.3}) is no longer there; \

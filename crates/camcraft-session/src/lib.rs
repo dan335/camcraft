@@ -36,7 +36,10 @@ pub use error::SessionError;
 pub use finish::{FinishSpec, single_operation};
 pub use job_file::{job_text, parse_job, read_job, write_job};
 pub use machines::{builtin_holders, builtin_machine, builtin_machines};
-pub use model::{Model, Models, load_job_model, load_model, load_models, models_of, units_of};
+pub use model::{
+    Loaded, Model, Models, load_job_model, load_model, load_models, models_of, sheet_notes,
+    units_of,
+};
 pub use post::{
     Posting, Program, builtin_posts, load_profile, plan_posting, program, program_name,
     program_spec, setup_profile, write_posting,

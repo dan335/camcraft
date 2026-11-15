@@ -68,7 +68,7 @@ pub(crate) fn recheck(
     checks::check(
         &job,
         0,
-        &ran.prepared,
+        (&ran.prepared, camcraft_core::arrange::Arrangement::none()),
         &ops,
         &ran.result.verify,
         ran.result.verify_budget,

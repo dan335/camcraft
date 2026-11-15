@@ -103,6 +103,14 @@ mod validate;
     clippy::indexing_slicing
 )]
 mod tests;
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+mod tests_sheets;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -114,7 +122,10 @@ pub use geometry::{Boundary, Containment, MachiningBoundary, Outline, Selection}
 pub use heights::{Height, HeightContext, HeightRef, Heights, Picks};
 pub use linking::{Entry, LeadSizes, Leads, Linking, Retraction};
 pub use machine::Machine;
-pub use model::{FixedBox, LengthUnit, ModelDef, Place, StockDef, StockSpec, Transform};
+pub use model::{
+    Arranged, FixedBox, LengthUnit, ModelDef, Place, Rotation, STEP_DEGREES, Seat, SheetPart,
+    StockDef, StockSpec, Transform,
+};
 pub use operation::{Operation, chamfer_reach, engrave_depth, engrave_flank};
 pub use passes::{
     FeedOptimization, FeedOptimizationSizes, Finishing, FinishingSizes, HolderClearance,
@@ -212,7 +223,7 @@ impl Job {
             }
         };
         for stock in &mut self.stocks {
-            rename(stock.spec.models_mut());
+            stock.spec.rename_model(from, to);
         }
         for setup in &mut self.setups {
             rename(&mut setup.models);
@@ -243,9 +254,18 @@ impl Job {
         let stocks = self
             .stocks
             .iter()
-            .filter(|s| s.spec.models().iter().any(|m| m == name))
+            .filter(|s| s.spec.models().contains(&name))
             .map(|s| format!("stock '{}'", s.name));
         setups.chain(stocks).collect()
+    }
+
+    /// The sheet that arranges model `name`, if one does: the first of the
+    /// job's arranged stocks to list it, as only one may.
+    pub fn sheet_of(&self, name: &str) -> Option<(&StockDef, &Arranged)> {
+        self.stocks.iter().find_map(|s| match &s.spec {
+            StockSpec::Arranged(a) if a.holds(name) => Some((s, a)),
+            _ => None,
+        })
     }
 
     /// The tool an operation names, if it names one the job has.
@@ -276,7 +296,7 @@ impl Job {
         };
         let mut want: BTreeSet<&str> = setup.models.iter().map(String::as_str).collect();
         for s in setup.stocks.iter().filter_map(|s| self.stock(s)) {
-            want.extend(s.spec.models().iter().map(String::as_str));
+            want.extend(s.spec.models());
         }
         self.models
             .iter()

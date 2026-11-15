@@ -103,6 +103,7 @@ pub(super) fn show(
                 &Names {
                     id: id.with("models"),
                     title: "Models",
+                    topic: None,
                     all: &model_names,
                     empty: "None yet: add some to machine them.",
                     pick: Some((
@@ -126,6 +127,7 @@ pub(super) fn show(
                 &Names {
                     id: id.with("stocks"),
                     title: "Stock",
+                    topic: None,
                     all: &stock_names,
                     empty: "None yet: the setup needs material to cut.",
                     pick: Some((

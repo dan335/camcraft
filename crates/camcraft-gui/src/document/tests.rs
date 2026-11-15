@@ -62,7 +62,6 @@ pub(crate) fn with_plate() -> (Document, String) {
         bounds: body.mesh().bounds().unwrap(),
         file: Arc::new(body.clone()),
         body,
-        stands: vec![Stand::NONE],
         path: "p.stl".into(),
         units: "mm".into(),
         notes: Vec::new(),
@@ -1229,12 +1228,12 @@ fn results_know_when_they_are_out_of_date() {
     );
 
     // A stand-in result, as a run would leave it.
-    let inputs = SetupInputs::of(&doc.job, &doc.models, 0).unwrap();
+    let inputs = SetupInputs::of(&doc.job, &doc, 0).unwrap();
     // Whether they are as they were, asked both ways: by making them again,
     // and in place, as the tree asks every frame. The two must agree.
     let same = |doc: &Document| {
-        let made = SetupInputs::of(&doc.job, &doc.models, 0).as_ref() == Some(&inputs);
-        assert_eq!(made, inputs.is_now(&doc.job, &doc.models, 0));
+        let made = SetupInputs::of(&doc.job, doc, 0).as_ref() == Some(&inputs);
+        assert_eq!(made, inputs.is_now(doc, 0));
         made
     };
     assert!(same(&doc));

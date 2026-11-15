@@ -9,8 +9,7 @@ use camcraft_core::setup::{Prepared, prepare};
 use camcraft_geom::shadow::Shadow;
 
 use crate::checks::{self, Checks};
-use crate::model::bodies_of;
-use crate::{Models, SessionError};
+use crate::{Models, SessionError, sheet_notes};
 
 /// A setup, run.
 #[derive(Debug, Clone)]
@@ -133,7 +132,13 @@ pub fn run_setup_watched(
         setup.operations.len(),
         job.tolerance
     )];
-    let bodies = bodies_of(models);
+    // Where each part of its sheets stands, so what was cut is on record.
+    for stock in &setup.stocks {
+        if let Some(sheet) = models.arrangement().sheet(stock) {
+            notes.extend(sheet_notes(sheet));
+        }
+    }
+    let bodies = models.bodies();
     underway(Underway::Stage(Stage::Preparing));
     let prepared = match laid_out {
         LaidOut::Prepared(prepared) => prepared,
@@ -188,7 +193,7 @@ pub fn run_setup_watched(
     let checks = checks::check(
         job,
         index,
-        &prepared,
+        (&prepared, models.arrangement()),
         &result.operations,
         &result.verify,
         result.verify_budget,
@@ -283,3 +288,6 @@ pub fn gate(ran: &Ran, force: bool) -> Result<Passed, SessionError> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp, clippy::indexing_slicing)]
 mod tests;
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests_sheets;

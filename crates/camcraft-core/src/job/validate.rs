@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    Boundary, Depths, FixedBox, JOB_VERSION, Job, JobError, Operation, Origin, Retraction,
-    StockSpec, StockToLeave, StrategySpec, ToolSpec,
+    Arranged, Boundary, Depths, FixedBox, JOB_VERSION, Job, JobError, Operation, Origin,
+    Retraction, Rotation, StockSpec, StockToLeave, StrategySpec, ToolSpec,
 };
 use crate::is_positive;
 use crate::must::{AT_LEAST_ZERO, FINITE, POSITIVE};
@@ -65,10 +65,24 @@ impl Job {
         unique("stock", self.stocks.iter().map(|s| s.name.as_str()))?;
         unique("setup", self.setups.iter().map(|s| s.name.as_str()))?;
 
+        // Which sheet arranges each model, so another that does too is caught.
+        let mut sheet_of: BTreeMap<&str, &str> = BTreeMap::new();
         for stock in &self.stocks {
             let field = |f: &str| format!("stock '{}'.{f}", stock.name);
             self.known_models(&format!("stock '{}'", stock.name), stock.spec.models())?;
             match &stock.spec {
+                StockSpec::Arranged(a) => {
+                    self.check_sheet(&stock.name, a, &field)?;
+                    for model in stock.spec.models() {
+                        if let Some(first) = sheet_of.insert(model, &stock.name) {
+                            return Err(JobError::OnTwoSheets {
+                                model: model.to_string(),
+                                first: first.to_string(),
+                                second: stock.name.clone(),
+                            });
+                        }
+                    }
+                }
                 StockSpec::AroundModels { margin, below, .. } => {
                     for (i, v) in margin.iter().chain(std::iter::once(below)).enumerate() {
                         at_least_zero(&field(if i < 3 { "margin" } else { "below" }), *v)?;
@@ -168,7 +182,10 @@ impl Job {
         if setup.models.is_empty() {
             return Err(JobError::NoModels(name.clone()));
         }
-        self.known_models(&format!("setup '{name}'"), &setup.models)?;
+        self.known_models(
+            &format!("setup '{name}'"),
+            setup.models.iter().map(String::as_str),
+        )?;
         if setup.stocks.is_empty() {
             return Err(JobError::NoStock(name.clone()));
         }
@@ -177,6 +194,18 @@ impl Job {
                 return Err(JobError::UnknownStock {
                     setup: name.clone(),
                     stock: s.clone(),
+                });
+            }
+        }
+        // A model a sheet arranges stands only on that sheet.
+        for model in &setup.models {
+            if let Some((sheet, _)) = self.sheet_of(model)
+                && !setup.stocks.contains(&sheet.name)
+            {
+                return Err(JobError::SheetNotUsed {
+                    setup: name.clone(),
+                    model: model.clone(),
+                    stock: sheet.name.clone(),
                 });
             }
         }
@@ -253,14 +282,69 @@ fn unique<'a>(what: &'static str, names: impl Iterator<Item = &'a str>) -> Resul
 
 impl Job {
     /// Check every one of `models`, named by `owner`, is a model of the job.
-    fn known_models(&self, owner: &str, models: &[String]) -> Result<(), JobError> {
-        match models.iter().find(|m| self.model(m).is_none()) {
+    fn known_models<'a>(
+        &self,
+        owner: &str,
+        models: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), JobError> {
+        match models.into_iter().find(|m| self.model(m).is_none()) {
             Some(m) => Err(JobError::UnknownModel {
                 owner: owner.to_string(),
-                model: m.clone(),
+                model: m.to_string(),
             }),
             None => Ok(()),
         }
+    }
+
+    /// Check sheet `stock`, `a`, can be arranged, `field` naming each of its
+    /// settings: it has a size, its spacing and border are distances, the
+    /// border leaves room inside it, its step is one, it lists each part
+    /// once, and no part has a position its sheet would only replace.
+    fn check_sheet(
+        &self,
+        stock: &str,
+        a: &Arranged,
+        field: &dyn Fn(&str) -> String,
+    ) -> Result<(), JobError> {
+        for v in a.size {
+            positive(&field("size"), v)?;
+        }
+        for v in a.corner {
+            finite(&field("corner"), v)?;
+        }
+        at_least_zero(&field("spacing"), a.spacing)?;
+        at_least_zero(&field("border"), a.border)?;
+        if 2.0 * a.border >= a.size[0].min(a.size[1]) {
+            return Err(bad(
+                field("border"),
+                a.border,
+                "less than half the sheet's length and its width",
+            ));
+        }
+        if let Rotation::Step(step) = a.rotation
+            && a.rotation.turns().is_none()
+        {
+            return Err(bad(field("rotation.step"), step, "from 1 to 180 degrees"));
+        }
+        let mut seen = BTreeSet::new();
+        for part in &a.parts {
+            if !seen.insert(part.model.as_str()) {
+                return Err(JobError::RepeatedPart {
+                    stock: stock.to_string(),
+                    model: part.model.clone(),
+                });
+            }
+            if let Some(m) = self.model(&part.model)
+                && m.transform.position.iter().any(|v| *v != 0.0)
+            {
+                return Err(JobError::PlacedBySheet {
+                    model: part.model.clone(),
+                    position: m.transform.position,
+                    stock: stock.to_string(),
+                });
+            }
+        }
+        Ok(())
     }
 }
 

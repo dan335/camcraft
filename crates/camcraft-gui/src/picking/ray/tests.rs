@@ -2,6 +2,7 @@ use super::*;
 use crate::picking::describe::{describe_box_point, describe_circle};
 use crate::ui::measure::Measure;
 use crate::view::camera::Camera;
+use camcraft_core::arrange::WHERE_IT_IS;
 use camcraft_core::job::{Job, ModelDef, Setup, StockDef, StockSpec};
 use camcraft_core::setup::{Bodies, prepare};
 use camcraft_geom::synthetic;
@@ -27,7 +28,6 @@ fn laid_out() -> (PickScene, Arc<Model>, Prepared) {
         file: Arc::new(body.clone()),
         path: "p.stl".into(),
         units: "mm".into(),
-        stands: vec![camcraft_core::arrange::Stand::NONE],
         notes: Vec::new(),
         warnings: Vec::new(),
     });
@@ -51,7 +51,7 @@ fn laid_out() -> (PickScene, Arc<Model>, Prepared) {
     let prepared = prepare(&j, 0, &bodies).unwrap();
     let scene = PickScene::new(
         &prepared,
-        [("p".to_string(), model.clone(), bvh)],
+        [("p".to_string(), model.clone(), bvh, WHERE_IT_IS.to_vec())],
         Vec::new(),
     );
     (scene, model, prepared)
@@ -204,7 +204,6 @@ fn others_are_picked_only_whole() {
             file: Arc::new(body.clone()),
             path: path.into(),
             units: "mm".into(),
-            stands: vec![camcraft_core::arrange::Stand::NONE],
             notes: Vec::new(),
             warnings: Vec::new(),
         })
@@ -238,7 +237,10 @@ fn others_are_picked_only_whole() {
     };
     let scene = PickScene::new(
         &prepared,
-        [("q".to_string(), q, bvh.clone()), ("p".to_string(), p, bvh)],
+        [
+            ("q".to_string(), q, bvh.clone(), WHERE_IT_IS.to_vec()),
+            ("p".to_string(), p, bvh, WHERE_IT_IS.to_vec()),
+        ],
         vec![PickStock {
             name: "other".into(),
             bounds: far,
@@ -248,7 +250,7 @@ fn others_are_picked_only_whole() {
     assert_eq!(scene.models[0].name(), "p", "the setup's own come first");
     assert!(!scene.models[1].in_setup);
     assert!(scene.models[1].copies[0].edges.is_empty());
-    assert_eq!(scene.setup_models().count(), 1);
+    assert_eq!(scene.models.iter().filter(|m| m.in_setup).count(), 1);
 
     let (_, proj, _) = looking_down();
     let face = proj.screen(dvec3(12.0, 12.0, 5.0)).unwrap();
@@ -288,7 +290,6 @@ fn picks_on_placed_models_are_saved_where_their_file_has_them() {
         file,
         path: "p.stl".into(),
         units: "mm".into(),
-        stands: vec![camcraft_core::arrange::Stand::NONE],
         notes: Vec::new(),
         warnings: Vec::new(),
     };
@@ -322,7 +323,7 @@ fn picks_on_placed_models_are_saved_where_their_file_has_them() {
         });
         let m = Arc::new(at_file.placed(&transform).unwrap());
         let bvh = Arc::new(MeshBvh::new(m.mesh()));
-        loaded.push((name.to_string(), m, bvh));
+        loaded.push((name.to_string(), m, bvh, WHERE_IT_IS.to_vec()));
     }
     j.stocks.push(StockDef {
         name: "s".into(),
@@ -334,7 +335,7 @@ fn picks_on_placed_models_are_saved_where_their_file_has_them() {
     j.setups.push(s);
     let bodies: Bodies<'_> = loaded
         .iter()
-        .map(|(n, m, _)| (n.as_str(), &m.body))
+        .map(|(n, m, ..)| (n.as_str(), &m.body))
         .collect();
     let prepared = prepare(&j, 0, &bodies).unwrap();
     let (p, q) = (loaded[0].1.clone(), loaded[1].1.clone());
@@ -404,9 +405,8 @@ fn a_pick_on_a_copy_is_saved_on_the_body() {
         turn: Turn::from_degrees(90.0).unwrap(),
         offset: dvec3(60.0, 0.0, 0.0),
     };
-    let mut two = (*model).clone();
-    two.stands = vec![Stand::NONE, moved];
-    let two = Arc::new(two);
+    let two = Arc::new((*model).clone());
+    let stands = vec![Stand::NONE, moved];
     let mut j = Job::default();
     j.models.push(ModelDef {
         name: "p".into(),
@@ -422,10 +422,14 @@ fn a_pick_on_a_copy_is_saved_on_the_body() {
     s.models = vec!["p".into()];
     s.stocks = vec!["s".into()];
     j.setups.push(s);
-    let bodies = Bodies::standing([("p", &two.body, two.stands.as_slice())]);
+    let bodies = Bodies::standing([("p", &two.body, stands.as_slice())]);
     let prepared = prepare(&j, 0, &bodies).unwrap();
     let bvh = Arc::new(MeshBvh::new(two.mesh()));
-    let scene = PickScene::new(&prepared, [("p".to_string(), two.clone(), bvh)], Vec::new());
+    let scene = PickScene::new(
+        &prepared,
+        [("p".to_string(), two.clone(), bvh, stands.clone())],
+        Vec::new(),
+    );
     assert_eq!(scene.models[0].copies.len(), 2);
 
     let mut c = Camera::framing(Vec3::new(30.0, 0.0, 2.5), 110.0);

@@ -352,11 +352,14 @@ impl Picking {
             .as_ref()
             .is_none_or(|(d, k, _)| (*d, *k) != (doc.id, layout))
         {
-            // The job's models: one undone out of it may still be loaded.
+            // The job's models: one undone out of it may still be loaded. One
+            // on a sheet never laid stands nowhere yet.
+            let bodies = doc.bodies();
             let loaded = doc.models.iter().filter_map(|(name, slot)| {
                 doc.job.model(name)?;
                 let (model, bvh) = slot.loaded()?;
-                Some((name.clone(), model.clone(), bvh.clone()))
+                let stands = bodies.get(name)?.stands.to_vec();
+                Some((name.clone(), model.clone(), bvh.clone(), stands))
             });
             let stocks = stocks(doc, setup, prepared);
             self.scene = Some((doc.id, layout, PickScene::new(prepared, loaded, stocks)));

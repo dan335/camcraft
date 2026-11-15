@@ -433,8 +433,9 @@ fn job(args: JobArgs) -> Fallible<usize> {
 
     // Each model once, however many setups use it, at the job's tolerance: it
     // decides how finely a STEP model is tessellated.
+    // Each sheet's layout is logged with each setup that uses it.
     let loaded = load_models(&job, &job_dir, &chosen).map_err(explain)?;
-    for (name, model) in &loaded {
+    for (name, model) in &loaded.models {
         log_notes(Some(name), model);
     }
     let models = models_of(&loaded);

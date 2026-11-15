@@ -12,6 +12,7 @@
 //! The types a setup keeps that are not in the job are in [`setup_state`]; editing
 //! the job is in [`edit`]; running it, and what came of a run, in [`run`].
 
+mod arrange;
 mod edit;
 mod history;
 mod passes;
@@ -25,13 +26,22 @@ mod setup_state;
     clippy::float_cmp
 )]
 mod tests;
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::float_cmp
+)]
+mod tests_sheets;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
-use camcraft_core::arrange::Stand;
+use camcraft_core::arrange::{Arrangement, Outlines};
+use camcraft_core::control::Control;
 use camcraft_core::job::{
     ExpressionFault, Job, LengthUnit, ModelDef, Origin, Setup, StockDef, StockSpec,
 };
@@ -42,6 +52,7 @@ use camcraft_session::{Model, SessionError, write_job};
 
 use crate::worker::DocId;
 
+pub use arrange::{ArrangeKey, SheetNow};
 pub use edit::{Wanted, is_stl};
 use history::Step;
 pub use run::{OpStatus, Status};
@@ -69,10 +80,10 @@ pub enum Level {
     Error,
 }
 
-/// What a model was loaded from, where it was placed and where its copies
-/// stand: when this changes, it is loaded again, or only placed again when its
-/// file is the same. What was laid out or run from a model is out of date when
-/// its key is, so a copy standing elsewhere makes it so too.
+/// What a model was loaded from and where it was placed: when this changes, it
+/// is loaded again, or only placed again when its file is the same. Where its
+/// copies stand on a sheet is not here: a sheet arranged again moves them, and
+/// never places the body again ([`arrange`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelKey {
     /// The file, as the file system names it ([`real`]): a job saved
@@ -84,14 +95,10 @@ pub struct ModelKey {
     pub tolerance: u64,
     /// Its position, rotation and scale, as bits.
     pub transform: [u64; 9],
-    /// Where each copy of it stands, as its model has them
-    /// ([`Model::stands`]).
-    pub stands: Vec<Stand>,
 }
 
 impl ModelKey {
-    /// The key for `def` in a job in `dir`, at `tolerance`: standing once,
-    /// where it is, as every model is loaded.
+    /// The key for `def` in a job in `dir`, at `tolerance`.
     pub fn of(dir: &Path, def: &ModelDef, tolerance: f64) -> Self {
         let t = &def.transform;
         let mut transform = [0; 9];
@@ -106,7 +113,6 @@ impl ModelKey {
             units: def.units,
             tolerance: tolerance.to_bits(),
             transform,
-            stands: vec![Stand::NONE],
         }
     }
 
@@ -241,15 +247,26 @@ pub struct Document {
     /// not be ([`Document::work_out_expressions`]).
     worked_out: Job,
     expression_faults: Vec<ExpressionFault>,
+    /// Its sheets arranged, each by what it was made from, the latest last;
+    /// or why one ended without an answer ([`arrange`]).
+    arrangements: Vec<(arrange::ArrangeKey, Result<Arc<Arrangement>, String>)>,
+    /// The arrangement being worked out: which it is, what it is made from,
+    /// and what stops it.
+    arranging: Option<(u64, arrange::ArrangeKey, Control)>,
+    /// Its sheets' parts' outlines, kept for each arrangement to lay rather
+    /// than cast again.
+    outlines: Outlines,
 }
 
 impl Document {
     /// Every model loaded, by name, as the engine takes them: each its body and
-    /// where its copies stand.
+    /// where its copies stand, as its sheet is laid now, or was last while it
+    /// is arranged again. A model on a sheet never laid stands nowhere yet,
+    /// and is left out.
     pub fn bodies(&self) -> Bodies<'_> {
         Bodies::standing(self.models.iter().filter_map(|(n, slot)| {
             let m = slot.model()?;
-            Some((n.as_str(), &m.body, m.stands.as_slice()))
+            Some((n.as_str(), &m.body, self.stands_shown(n)?))
         }))
     }
 
@@ -295,6 +312,9 @@ impl Document {
             turned_shadows: Vec::new(),
             worked_out: Job::default(),
             expression_faults: Vec::new(),
+            arrangements: Vec::new(),
+            arranging: None,
+            outlines: Outlines::default(),
         }
     }
 

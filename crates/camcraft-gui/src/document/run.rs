@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+use camcraft_core::arrange::Stand;
 use camcraft_core::control::{Control, share};
 use camcraft_core::job::{Job, Machine, ModelDef, Operation, Origin, Setup, StockDef, ToolSpec};
 use camcraft_core::run::{Kept, Made, OperationResult, Plan, Stage};
@@ -24,6 +25,18 @@ use crate::playback::transport::marks;
 use crate::view::scene::{Scene, box_edges};
 use crate::view::viewport::{Highlight, Outline, OutlineKind};
 
+/// A model as a setup is made from it: as defined, as loaded, and where its
+/// copies stand ([`Document::stands_now`]), `None` while that is being worked
+/// out.
+type ModelSource = (ModelDef, Option<ModelKey>, Option<Vec<Stand>>);
+
+impl Document {
+    /// What model `name` was loaded as, if it has been asked for.
+    fn model_key(&self, name: &str) -> Option<&ModelKey> {
+        self.models.get(name).map(ModelSlot::key)
+    }
+}
+
 /// Everything a setup's run was made from. When this differs from what the job
 /// holds now, the result is out of date.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,15 +46,12 @@ pub struct SetupInputs {
     tools: BTreeMap<String, ToolSpec>,
     machine: Option<Machine>,
     stocks: Vec<StockDef>,
-    models: Vec<(ModelDef, Option<ModelKey>)>,
+    models: Vec<ModelSource>,
 }
 
 impl SetupInputs {
-    pub(super) fn of(
-        job: &Job,
-        loaded: &BTreeMap<String, ModelSlot>,
-        index: usize,
-    ) -> Option<Self> {
+    /// What setup `index` of `job` is made from now, with `doc`'s models.
+    pub(super) fn of(job: &Job, doc: &Document, index: usize) -> Option<Self> {
         let setup = job.setups.get(index)?.clone();
         let tools = setup
             .operations
@@ -59,7 +69,14 @@ impl SetupInputs {
         let models = job
             .models_for(index)
             .into_iter()
-            .map(|m| (m.clone(), loaded.get(&m.name).map(|s| s.key().clone())))
+            .map(|m| {
+                let key = doc.model_key(&m.name).cloned();
+                (
+                    m.clone(),
+                    key,
+                    doc.stands_now(&m.name).map(<[Stand]>::to_vec),
+                )
+            })
             .collect();
         let machine = job.machine_for(&setup).cloned();
         Some(Self {
@@ -76,7 +93,7 @@ impl SetupInputs {
     /// in another folder has them ([`super::rebase`]).
     pub(super) fn rebase(&mut self, from: &Path, to: &Path) {
         self.setup.post = super::moved_post(&self.setup.post, from, to);
-        for (m, _) in &mut self.models {
+        for (m, ..) in &mut self.models {
             m.path = super::moved(&m.path, from, to);
         }
     }
@@ -89,15 +106,11 @@ impl SetupInputs {
         self
     }
 
-    /// Whether these are what setup `index` of `job` is made from now, with the
-    /// models `loaded`: `SetupInputs::of(job, loaded, index) == Some(self)`, found
-    /// without copying the setup. The tree asks for every operation every frame.
-    pub(super) fn is_now(
-        &self,
-        job: &Job,
-        loaded: &BTreeMap<String, ModelSlot>,
-        index: usize,
-    ) -> bool {
+    /// Whether these are what setup `index` of `doc`'s job is made from now:
+    /// `SetupInputs::of(&doc.job, doc, index) == Some(self)`, found without
+    /// copying the setup. The tree asks for every operation every frame.
+    pub(super) fn is_now(&self, doc: &Document, index: usize) -> bool {
+        let job = &doc.job;
         let Some(setup) = job.setups.get(index) else {
             return false;
         };
@@ -109,16 +122,18 @@ impl SetupInputs {
                 .iter()
                 .filter_map(|op| op.tool.as_ref())
                 .all(|t| self.tools.get(t) == job.tools.get(t))
-            && self.layout_is_now(job, loaded, index)
+            && self.layout_is_now(doc, index)
     }
 
     /// Whether the part of these that decides where the part and stock sit (see
-    /// [`SetupInputs::into_layout`]) is as setup `index` of `job` has it now.
-    fn layout_is_now(&self, job: &Job, loaded: &BTreeMap<String, ModelSlot>, index: usize) -> bool {
-        job.setups
+    /// [`SetupInputs::into_layout`]) is as setup `index` of `doc`'s job has it
+    /// now.
+    fn layout_is_now(&self, doc: &Document, index: usize) -> bool {
+        doc.job
+            .setups
             .get(index)
             .is_some_and(|setup| same_but_operations(&self.setup, setup))
-            && self.cut_is_now(job, loaded, index)
+            && self.cut_is_now(doc, index)
     }
 
     /// Whether operation `i` of `setup`, as `job` has it now, is as these took
@@ -134,31 +149,26 @@ impl SetupInputs {
         then == now && tool_then == tool_now
     }
 
-    /// The first operation of setup `index` of `job`, with the models
-    /// `loaded`, that would cut otherwise now than these took it: changed,
-    /// retooled or removed; the first of all with what shapes every cut
-    /// changed, or the setup gone. `None` where every one would cut the same,
-    /// one added after them all included.
-    pub(super) fn first_changed(
-        &self,
-        job: &Job,
-        loaded: &BTreeMap<String, ModelSlot>,
-        index: usize,
-    ) -> Option<usize> {
-        let Some(setup) = job.setups.get(index) else {
+    /// The first operation of setup `index` of `doc`'s job that would cut
+    /// otherwise now than these took it: changed, retooled or removed; the
+    /// first of all with what shapes every cut changed, or the setup gone.
+    /// `None` where every one would cut the same, one added after them all
+    /// included.
+    pub(super) fn first_changed(&self, doc: &Document, index: usize) -> Option<usize> {
+        let Some(setup) = doc.job.setups.get(index) else {
             return Some(0);
         };
-        if !self.cut_is_now(job, loaded, index) {
+        if !self.cut_is_now(doc, index) {
             return Some(0);
         }
-        (0..self.setup.operations.len()).find(|&i| !self.op_is_now(job, setup, i))
+        (0..self.setup.operations.len()).find(|&i| !self.op_is_now(&doc.job, setup, i))
     }
 
     /// Whether what shapes the cuts, not what is only posted with them, is as
-    /// setup `index` of `job` has it now ([`Cut`]). A setup renamed, or given
-    /// another work offset or post, still cuts the same paths.
-    fn cut_is_now(&self, job: &Job, loaded: &BTreeMap<String, ModelSlot>, index: usize) -> bool {
-        Cut::now(job, loaded, index).is_some_and(|now| now == self.cut())
+    /// setup `index` of `doc`'s job has it now ([`Cut`]). A setup renamed, or
+    /// given another work offset or post, still cuts the same paths.
+    fn cut_is_now(&self, doc: &Document, index: usize) -> bool {
+        Cut::now(doc, index).is_some_and(|now| now == self.cut())
     }
 
     /// Whether these and `other` shape the cuts alike ([`Cut`]).
@@ -181,7 +191,7 @@ impl SetupInputs {
             models: self
                 .models
                 .iter()
-                .map(|(m, key)| (m, key.as_ref()))
+                .map(|(m, key, stands)| (m, key.as_ref(), stands.as_deref()))
                 .collect(),
         }
     }
@@ -200,8 +210,9 @@ impl SetupInputs {
 
 /// What shapes a setup's cuts, as against what is only posted with them: the
 /// tolerance; which models and stocks it has, how the part sits and where its
-/// work zero is; and the stocks and models themselves, each model as loaded.
-/// Every operation's passes are worked out from these.
+/// work zero is; and the stocks and models themselves, each model as loaded
+/// and where its copies stand. Every operation's passes are worked out from
+/// these.
 #[derive(PartialEq)]
 struct Cut<'a> {
     tolerance: u64,
@@ -210,13 +221,18 @@ struct Cut<'a> {
     /// the run checks the rest of the tool with.
     machine: Option<&'a Machine>,
     stocks: Vec<&'a StockDef>,
-    models: Vec<(&'a ModelDef, Option<&'a ModelKey>)>,
+    models: Vec<ModelCut<'a>>,
 }
 
+/// A model as it shapes the cuts: as defined, as loaded, and where its copies
+/// stand ([`ModelSource`], borrowed).
+type ModelCut<'a> = (&'a ModelDef, Option<&'a ModelKey>, Option<&'a [Stand]>);
+
 impl<'a> Cut<'a> {
-    /// What shapes setup `index` of `job`'s cuts now, with the models
-    /// `loaded`: `None` for a setup there is not.
-    fn now(job: &'a Job, loaded: &'a BTreeMap<String, ModelSlot>, index: usize) -> Option<Self> {
+    /// What shapes setup `index` of `doc`'s job's cuts now: `None` for a setup
+    /// there is not.
+    fn now(doc: &'a Document, index: usize) -> Option<Self> {
+        let job = &doc.job;
         let setup = job.setups.get(index)?;
         Some(Self {
             tolerance: job.tolerance.to_bits(),
@@ -231,21 +247,21 @@ impl<'a> Cut<'a> {
             models: job
                 .models_for(index)
                 .into_iter()
-                .map(|m| (m, loaded.get(&m.name).map(ModelSlot::key)))
+                .map(|m| (m, doc.model_key(&m.name), doc.stands_now(&m.name)))
                 .collect(),
         })
     }
 }
 
 /// What a setup's part's shadow in its turned frame is cast from: how the part
-/// sits, and each of its models as loaded, in the setup's order (its file, units,
-/// tolerance and placement, [`ModelKey`]), or `None` for one not loaded. Two
-/// layouts with the same cast the same shadow there, whatever their stock or
-/// work zero, which only moves it.
+/// sits, and each of its models in the setup's order, as loaded (its file,
+/// units, tolerance and placement, [`ModelKey`]), or `None` for one not
+/// loaded, and where its copies stand. Two layouts with the same cast the same
+/// shadow there, whatever their stock or work zero, which only moves it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShadowKey {
     orientation: Orientation,
-    models: Vec<Option<ModelKey>>,
+    models: Vec<(Option<ModelKey>, Option<Vec<Stand>>)>,
 }
 
 /// How often what operations being worked out have shown is drawn again: a
@@ -408,7 +424,8 @@ impl Document {
                 None => return Some(format!("'{}' is not loaded", m.name)),
             }
         }
-        None
+        // Nothing is cut where it may yet stand otherwise.
+        self.sheets_hold_back(index)
     }
 
     /// What a run of setup `index` does with each operation: keeps every one
@@ -440,7 +457,7 @@ impl Document {
             }))
         };
         // Its passes, linked again where they are kept for it as it is now.
-        let now = SetupInputs::of(&self.job, &self.models, index);
+        let now = SetupInputs::of(&self.job, self, index);
         let make = |i: usize| Some(Plan::Relink(state?.passes.find(now.as_ref()?, i)?));
         (0..setup.operations.len())
             .map(|i| match (only, kept.get(i).copied().flatten()) {
@@ -486,7 +503,7 @@ impl Document {
         let Some(setup) = self.job.setups.get(index) else {
             return Vec::new();
         };
-        let laid_out = then.layout_is_now(&self.job, &self.models, index);
+        let laid_out = then.layout_is_now(self, index);
         (0..setup.operations.len())
             .map(|i| laid_out && then.op_is_now(&self.job, setup, i))
             .collect()
@@ -512,7 +529,7 @@ impl Document {
                 // What shapes every cut (see [`SetupInputs::cut_is_now`]), then
                 // each operation and its tool.
                 let then = &ran.inputs;
-                let cut = then.cut_is_now(&self.job, &self.models, index);
+                let cut = then.cut_is_now(self, index);
                 let first = (0..len).find(|&i| !(cut && then.op_is_now(&self.job, setup, i)))?;
                 Some((setup.name.clone(), first))
             })
@@ -540,7 +557,7 @@ impl Document {
         let job = self.job.clone();
         let Some(inputs) = self
             .setup_index(name)
-            .and_then(|i| SetupInputs::of(&job, &self.models, i))
+            .and_then(|i| SetupInputs::of(&job, self, i))
         else {
             return seq;
         };
@@ -721,7 +738,7 @@ impl Document {
             .and_then(|s| s.halted.as_ref())
             .zip(self.setup_index(name))
             .and_then(|((inputs, halt), i)| match halt {
-                Halt::Failed { at, .. } if inputs.is_now(&self.job, &self.models, i) => Some(*at),
+                Halt::Failed { at, .. } if inputs.is_now(self, i) => Some(*at),
                 _ => None,
             });
         let status = |(index, op): (usize, &Operation)| {
@@ -840,7 +857,7 @@ impl Document {
         let Some(index) = self.setup_index(name) else {
             return;
         };
-        let Some(inputs) = SetupInputs::of(&self.job, &self.models, index) else {
+        let Some(inputs) = SetupInputs::of(&self.job, self, index) else {
             return;
         };
         let state = self.setups.entry(name.to_string()).or_default();
@@ -871,7 +888,7 @@ impl Document {
             else {
                 continue;
             };
-            if let Some(first) = running.inputs.first_changed(&self.job, &self.models, index) {
+            if let Some(first) = running.inputs.first_changed(self, index) {
                 running.control.stop_from(first);
             }
         }
@@ -890,7 +907,7 @@ impl Document {
                 let busy = state.is_some_and(|s| s.running.is_some());
                 let held = state
                     .and_then(|s| s.halted.as_ref())
-                    .is_some_and(|(inputs, _)| inputs.is_now(&self.job, &self.models, *index));
+                    .is_some_and(|(inputs, _)| inputs.is_now(self, *index));
                 !busy
                     && !held
                     && setup.operations.iter().any(|o| o.enabled)
@@ -911,7 +928,7 @@ impl Document {
         }
         let index = self.setup_index(name);
         if let Some((inputs, halt)) = &state.halted
-            && index.is_some_and(|i| inputs.is_now(&self.job, &self.models, i))
+            && index.is_some_and(|i| inputs.is_now(self, i))
         {
             return match halt {
                 Halt::Stopped => Status::Stopped,
@@ -921,7 +938,7 @@ impl Document {
         let Some(ran) = &state.ran else {
             return Status::NotRun;
         };
-        let now = index.is_some_and(|i| ran.inputs.is_now(&self.job, &self.models, i));
+        let now = index.is_some_and(|i| ran.inputs.is_now(self, i));
         // Anything changed, an operation that should run left out of it, or
         // not run to the end.
         let partial = !ran.ran.finished
@@ -952,7 +969,12 @@ impl Document {
         if self.layout_now(index).is_some() {
             return None;
         }
-        let inputs = SetupInputs::of(&self.job, &self.models, index)?.into_layout();
+        // While a sheet of it is being arranged, where its parts will stand is
+        // not known: the layout drawn stays until it is.
+        if !self.sheets_laid(index) {
+            return None;
+        }
+        let inputs = SetupInputs::of(&self.job, self, index)?.into_layout();
         let inputs = (inputs, self.ready_models().cloned().collect());
         let meshes = self.bodies();
         let prepared = match prepare(&self.job, index, &meshes) {
@@ -1098,7 +1120,10 @@ impl Document {
                 .job
                 .models_for(index)
                 .iter()
-                .map(|m| self.models.get(&m.name).map(|s| s.key().clone()))
+                .map(|m| {
+                    let stands = self.stands_now(&m.name).map(<[Stand]>::to_vec);
+                    (self.model_key(&m.name).cloned(), stands)
+                })
                 .collect(),
         })
     }
@@ -1124,8 +1149,7 @@ impl Document {
     fn layout_now(&self, index: usize) -> Option<&Layout> {
         let setup = self.job.setups.get(index)?;
         self.setups.get(&setup.name)?.layout.as_ref().filter(|l| {
-            l.inputs.0.layout_is_now(&self.job, &self.models, index)
-                && l.inputs.1.iter().eq(self.ready_models())
+            l.inputs.0.layout_is_now(self, index) && l.inputs.1.iter().eq(self.ready_models())
         })
     }
 

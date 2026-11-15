@@ -177,6 +177,54 @@ pub enum JobError {
         /// The point.
         at: [f64; 3],
     },
+    /// A sheet lists one model twice: it is one part, laid once.
+    #[error("stock '{stock}' lists model '{model}' twice")]
+    RepeatedPart {
+        /// The sheet.
+        stock: String,
+        /// The model.
+        model: String,
+    },
+    /// Two sheets arrange one model, which can stand on only one.
+    #[error(
+        "model '{model}' is on stock '{first}' and on stock '{second}': it can be on one sheet"
+    )]
+    OnTwoSheets {
+        /// The model.
+        model: String,
+        /// The sheet that lists it first.
+        first: String,
+        /// The other.
+        second: String,
+    },
+    /// A model a sheet arranges has a position of its own, which would do
+    /// nothing: the sheet places it.
+    #[error(
+        "model '{model}' has a position, {position:?}, which does nothing: stock '{stock}' \
+         places it; its position must be zero"
+    )]
+    PlacedBySheet {
+        /// The model.
+        model: String,
+        /// Its position.
+        position: [f64; 3],
+        /// The sheet that arranges it.
+        stock: String,
+    },
+    /// A setup machines a model a sheet arranges, without that sheet: the
+    /// model stands only on it.
+    #[error(
+        "setup '{setup}' machines '{model}', which stock '{stock}' arranges, and does not use \
+         that stock"
+    )]
+    SheetNotUsed {
+        /// The setup.
+        setup: String,
+        /// The model.
+        model: String,
+        /// The sheet.
+        stock: String,
+    },
     /// Two different tools the job uses share one tool number. The machine would
     /// load one cutter and run the other's program.
     #[error(

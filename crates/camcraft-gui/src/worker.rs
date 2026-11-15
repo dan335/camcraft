@@ -19,18 +19,21 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
-use camcraft_core::control::Control;
+use camcraft_core::arrange::{Arrangement, Outlines, arrange};
+use camcraft_core::control::{Control, Stopped};
 use camcraft_core::job::{Job, ModelDef, Setup, Transform};
 use camcraft_core::run::{Plan, Stage};
 use camcraft_core::setup::Prepared;
 use camcraft_geom::bvh::MeshBvh;
 use camcraft_geom::shadow::Shadow;
+use camcraft_geom::topology::Body;
 use camcraft_session::{
     LaidOut, Model, Models, Posting, Ran, SessionError, Underway, load_job_model, plan_posting,
     read_job, run_setup_watched, write_posting,
 };
 use eframe::egui;
 
+use crate::document::ArrangeKey;
 use crate::view::scene::Scene;
 
 /// Which open job a piece of work is for.
@@ -59,6 +62,11 @@ pub enum Task {
     Shadow {
         /// The layout's key.
         layout: u64,
+    },
+    /// Arranging a job's sheets.
+    Arrange {
+        /// Which arrangement, to tell it from one since asked for.
+        seq: u64,
     },
     /// Rendering programs, to write them or ask first.
     Post,
@@ -95,6 +103,19 @@ pub enum Request {
         /// Where it goes.
         transform: Transform,
     },
+    /// Arrange a job's sheets with its parts' bodies, as loaded.
+    Arrange {
+        /// What it is made from, to keep it by.
+        key: ArrangeKey,
+        /// The job, as it is in the app, saved or not.
+        job: Box<Job>,
+        /// The bodies of its sheets' parts, by model.
+        models: BTreeMap<String, Arc<Model>>,
+        /// The outlines kept so far, for it to cast none again.
+        outlines: Outlines,
+        /// What stops it: the window holds the same.
+        control: Control,
+    },
     /// Run one setup of a job as it stands, the way `camcraft job` runs it.
     Run {
         /// The job, as it is in the app, saved or not.
@@ -103,6 +124,8 @@ pub enum Request {
         setup: usize,
         /// Its models, loaded, by name.
         models: BTreeMap<String, Arc<Model>>,
+        /// Where its sheets stand their models.
+        arrangement: Arc<Arrangement>,
         /// What to do with each operation; none, to work them all out.
         plans: Vec<Plan>,
         /// What of the setup is laid out already, for the run to take rather
@@ -149,6 +172,9 @@ pub enum Reply {
     /// A part's shadow, cast into its layout, and as it is in the setup's
     /// turned frame, to keep; or why it could not be.
     Shadowed(Result<Arc<Shadow>, String>),
+    /// A job's sheets arranged, or stopped, by what they were arranged from,
+    /// with the outlines kept for it.
+    Arranged(Box<(ArrangeKey, Result<Arrangement, Stopped>, Outlines)>),
     /// Programs rendered, and not written yet.
     Planned(Box<Result<Posting, SessionError>>),
     /// Programs written: how many.
@@ -188,6 +214,7 @@ impl Worker {
             Request::Open { .. } => "opening job",
             Request::Load { .. } => "loading model",
             Request::Place { .. } => "placing model",
+            Request::Arrange { .. } => "arranging sheets",
             Request::Run { .. } => "running setup",
             Request::Shadow { .. } => "working out the part's silhouette",
             Request::Post { .. } => "rendering programs",
@@ -251,15 +278,29 @@ fn execute(request: Request, word: &mut dyn FnMut(Reply)) -> Reply {
             let bvh = Arc::new(MeshBvh::new(m.mesh()));
             (Arc::new(m), bvh)
         })),
+        Request::Arrange {
+            key,
+            job,
+            models,
+            mut outlines,
+            control,
+        } => {
+            let bodies: BTreeMap<&str, &Body> =
+                models.iter().map(|(n, m)| (n.as_str(), &m.body)).collect();
+            let arranged = arrange(&job, &bodies, &mut outlines, &control.watch(0));
+            Reply::Arranged(Box::new((key, arranged, outlines)))
+        }
         Request::Run {
             job,
             setup,
             models,
+            arrangement,
             plans,
             laid_out,
             control,
         } => {
-            let refs: Models<'_> = models.iter().map(|(n, m)| (n.as_str(), &**m)).collect();
+            let refs =
+                Models::arranged(models.iter().map(|(n, m)| (n.as_str(), &**m)), &arrangement);
             let scene_of = |ran: &Ran| {
                 job.setups
                     .get(setup)

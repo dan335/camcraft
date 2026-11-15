@@ -7,8 +7,8 @@ use eframe::egui;
 
 use super::{PropAction, ViewPicks, header, renamed};
 use crate::document::{Document, ModelSlot, Selection, is_stl};
-use crate::help::Help;
 use crate::help::topics::model as topics;
+use crate::help::{Help, Topic};
 use crate::picking::slots::Slot;
 use crate::ui::defaults::Defaults;
 use crate::ui::measure::Measure;
@@ -22,6 +22,8 @@ pub(super) struct Names<'a> {
     pub id: egui::Id,
     /// The card's title.
     pub title: &'a str,
+    /// The help its title shows, where it is a setting of its own.
+    pub topic: Option<&'a Topic>,
     /// Every name that could be included, in order.
     pub all: &'a [String],
     /// What an empty list means.
@@ -43,9 +45,10 @@ pub(super) fn names(
     let others: Vec<&String> = n.all.iter().filter(|x| !included.contains(x)).collect();
     let mut add = None;
     let mut remove = None;
-    widgets::card(
+    widgets::card_helped(
         ui,
-        Some(n.title),
+        n.title,
+        n.topic,
         |ui| {
             // Right to left: picking in the view, then adding from a list.
             if let Some((slot, why_not)) = &n.pick {
@@ -201,6 +204,7 @@ pub(super) fn model(
         return;
     }
     let failed = matches!(doc.models.get(name), Some(ModelSlot::Failed { .. }));
+    let sheet = doc.job.sheet_of(name).map(|(s, _)| s.name.clone());
     if let Some(def) = doc.job.models.get_mut(i) {
         form(ui, "model", |ui| {
             widgets::key_label(ui, "File");
@@ -220,7 +224,7 @@ pub(super) fn model(
             }
         });
         ui.add_space(theme::SPACE_3);
-        transform(ui, m, name, &mut def.transform);
+        transform(ui, m, (name, sheet.as_deref()), &mut def.transform);
     }
 
     ui.add_space(theme::SPACE_3);
@@ -270,9 +274,16 @@ pub(super) fn model(
     );
 }
 
-/// Where a model sits in the job: its position, its rotation about the job's X,
-/// then Y, then Z, and its scale, uniform unless unlocked, as Fusion's.
-fn transform(ui: &mut egui::Ui, m: Measure, name: &str, t: &mut Transform) {
+/// Where model `name` sits in the job: its position, its rotation about the
+/// job's X, then Y, then Z, and its scale, uniform unless unlocked, as
+/// Fusion's. On a sheet, `sheet`, the sheet places it: its rotation and scale
+/// say which face is up, and it has no position to give.
+fn transform(
+    ui: &mut egui::Ui,
+    m: Measure,
+    (name, sheet): (&str, Option<&str>),
+    t: &mut Transform,
+) {
     ui.horizontal(|ui| {
         ui.label(widgets::section_label("Transform"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -292,9 +303,14 @@ fn transform(ui: &mut egui::Ui, m: Measure, name: &str, t: &mut Transform) {
     // Where its file puts it is where it is unless moved.
     let mut d = Defaults::of(&*t, &Transform::default());
     form(ui, "transform", |ui| {
-        d.row(ui, &topics::POSITION, "position", |ui| {
-            for (axis, v) in ["X ", "Y ", "Z "].into_iter().zip(t.position.iter_mut()) {
-                m.signed_length_field(ui, v, 0.1, 100_000.0, axis);
+        d.row(ui, &topics::POSITION, "position", |ui| match sheet {
+            Some(sheet) => {
+                hint(ui, &format!("placed by sheet '{sheet}'"));
+            }
+            None => {
+                for (axis, v) in ["X ", "Y ", "Z "].into_iter().zip(t.position.iter_mut()) {
+                    m.signed_length_field(ui, v, 0.1, 100_000.0, axis);
+                }
             }
         });
         d.row(ui, &topics::ROTATION, "rotation", |ui| {

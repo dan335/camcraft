@@ -1,5 +1,6 @@
 //! What stops a session before it produces anything.
 
+use camcraft_core::arrange::ArrangeError;
 use camcraft_core::job::JobError;
 use camcraft_core::run::RunError;
 use camcraft_core::setup::PrepareError;
@@ -109,6 +110,14 @@ pub enum SessionError {
         name: String,
         /// Why.
         source: Box<SessionError>,
+    },
+    /// A sheet a setup uses could not be arranged.
+    #[error("stock '{stock}' cannot be arranged: {source}")]
+    Arrange {
+        /// The sheet.
+        stock: String,
+        /// Why not.
+        source: ArrangeError,
     },
     /// A setup's models and stock could not be laid out.
     #[error(transparent)]

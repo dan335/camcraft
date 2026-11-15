@@ -5,7 +5,27 @@ use crate::help::figures::Margin;
 
 topics! {
     SHAPE: "Shape",
-        "Around models grows a box round the parts by margins. A fixed box is a size you give, placed against them.";
+        "Around models grows a box round the parts by margins. A fixed box is a size you give, placed against them. A sheet lays its parts out on itself.";
+    SHEET_SIZE: "Size",
+        "The sheet's length along X, width along Y and thickness, as bought.";
+    CORNER: "Corner",
+        "Where the sheet's front-left bottom corner is, whatever its parts.";
+    SPACING: "Spacing",
+        "The least gap between two parts, seen from above. Leave at least the cutter's width to cut between them.";
+    BORDER: "Border",
+        "The least gap between a part and the sheet's edge, seen from above.";
+    ROTATION: "Rotation",
+        "The turns about Z a part may be laid at to fit. None keeps every part as it stands, for grain that must run one way.";
+    STEP: "Step",
+        "A part may be turned by any whole number of this many degrees.";
+    FROM: "Pack from",
+        "The corner of the sheet parts are laid from first.";
+    ALONG: "Along",
+        "The direction the sheet is used up in: parts fill across it first, so an offcut is left whole at the far end.";
+    SEAT: "Seat",
+        "Bottom stands each part on the sheet's bottom face, to be cut out of it. Top puts its highest point on the sheet's top.";
+    PARTS: "Parts",
+        "The models the sheet lays out, each where it fits. Its sheet places a part, so the part keeps no position of its own.";
     SIZE: "Size",
         "How long the block is along each axis.";
     POSITION: "Position",

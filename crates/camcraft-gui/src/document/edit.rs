@@ -214,10 +214,11 @@ impl Document {
 
     /// Copy a model, as another of the same part: the same file, turned and scaled
     /// the same, beside it along X by its width and a gap, rounded up to a whole
-    /// millimetre, so it is seen as
-    /// another. Every setup and stock that names it names the copy too, so it is
-    /// machined with it. Its picks stay the original's. Loaded, the copy starts
-    /// from the one loaded rather than reading the file again.
+    /// millimetre, so it is seen as another; or, on a sheet, where the sheet
+    /// lays it, as its sheet places it. Every setup and stock that names it
+    /// names the copy too, so it is machined with it. Its picks stay the
+    /// original's. Loaded, the copy starts from the one loaded rather than
+    /// reading the file again.
     pub fn duplicate_model(&mut self, name: &str) -> Option<String> {
         /// Between the original and its copy, millimetres.
         const GAP: f64 = 10.0;
@@ -229,7 +230,9 @@ impl Document {
         );
         let new = copy.name.clone();
         let slot = self.models.get(name).cloned();
-        if let Some(ModelSlot::Ready(_, model, _)) = &slot {
+        if let Some(ModelSlot::Ready(_, model, _)) = &slot
+            && self.job.sheet_of(name).is_none()
+        {
             // In whole millimetres, so the copy's position reads as typed.
             copy.transform.position[0] += (model.bounds.extent().x + GAP).ceil();
         }
@@ -240,10 +243,7 @@ impl Document {
             }
         }
         for s in &mut self.job.stocks {
-            let models = s.spec.models_mut();
-            if models.iter().any(|m| m == name) {
-                models.push(new.clone());
-            }
+            s.spec.copy_model(name, &new);
         }
         // Where the original is: the copy is placed again from it, not read.
         if let Some(slot @ ModelSlot::Ready(..)) = slot {
@@ -251,6 +251,20 @@ impl Document {
         }
         self.selection = Selection::Model(new.clone());
         Some(new)
+    }
+
+    /// Clear the position of each of `names` a sheet now holds: its sheet
+    /// places it, so a position would do nothing, and the job refuses one.
+    /// Made with the edit that put it there, it is undone with it.
+    pub fn placed_by_sheets(&mut self, names: &[String]) {
+        for name in names {
+            if self.job.sheet_of(name).is_none() {
+                continue;
+            }
+            if let Some(m) = self.job.models.iter_mut().find(|m| m.name == *name) {
+                m.transform.position = [0.0; 3];
+            }
+        }
     }
 
     /// Remove a model nothing uses.

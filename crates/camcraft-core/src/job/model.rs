@@ -1,9 +1,11 @@
 //! The models a job machines and the blocks of material it starts from.
 
+use camcraft_geom::turn::Turn;
 use glam::{DAffine3, DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 
 use super::is_default;
+use crate::arrange::{Corner, Direction};
 
 /// Units for a file that does not say, as an STL does not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -109,6 +111,9 @@ pub enum StockSpec {
     },
     /// A box of a fixed size, placed against models.
     FixedBox(FixedBox),
+    /// A sheet of a fixed size where it is, which arranges its parts on
+    /// itself.
+    Arranged(Arranged),
 }
 
 impl Default for StockSpec {
@@ -123,21 +128,265 @@ impl Default for StockSpec {
 }
 
 impl StockSpec {
-    /// The models it is placed against, by name. Empty means the models of
-    /// whichever setup uses it.
-    pub fn models(&self) -> &[String] {
+    /// The models it names, by name, in order: those a box is placed against,
+    /// where empty means the models of whichever setup uses it, or those a
+    /// sheet arranges.
+    pub fn models(&self) -> Vec<&str> {
         match self {
             StockSpec::AroundModels { models, .. }
-            | StockSpec::FixedBox(FixedBox { models, .. }) => models,
+            | StockSpec::FixedBox(FixedBox { models, .. }) => {
+                models.iter().map(String::as_str).collect()
+            }
+            StockSpec::Arranged(a) => a.parts.iter().map(|p| p.model.as_str()).collect(),
         }
     }
 
-    /// The models it is placed against, to change.
-    pub fn models_mut(&mut self) -> &mut Vec<String> {
+    /// Name model `to` wherever it names model `from`, for when a model is
+    /// renamed.
+    pub fn rename_model(&mut self, from: &str, to: &str) {
+        for n in self.names_mut().filter(|n| *n == from) {
+            *n = to.to_string();
+        }
+    }
+
+    /// Name model `copy` too wherever it names model `of`, after the names it
+    /// has: for a copy of a model, made with it.
+    pub fn copy_model(&mut self, of: &str, copy: &str) {
+        if !self.models().contains(&of) {
+            return;
+        }
         match self {
             StockSpec::AroundModels { models, .. }
-            | StockSpec::FixedBox(FixedBox { models, .. }) => models,
+            | StockSpec::FixedBox(FixedBox { models, .. }) => models.push(copy.to_string()),
+            StockSpec::Arranged(a) => a.parts.push(SheetPart::of(copy)),
         }
+    }
+
+    /// Every name it holds, to change.
+    fn names_mut(&mut self) -> Box<dyn Iterator<Item = &mut String> + '_> {
+        match self {
+            StockSpec::AroundModels { models, .. }
+            | StockSpec::FixedBox(FixedBox { models, .. }) => Box::new(models.iter_mut()),
+            StockSpec::Arranged(a) => Box::new(a.parts.iter_mut().map(|p| &mut p.model)),
+        }
+    }
+}
+
+/// A sheet of material of a fixed size, at a corner of its own, that arranges
+/// its parts on itself: where each stands is worked out from their shapes and
+/// these settings, and is never written down
+/// ([`crate::arrange::arrange`]).
+///
+/// Left out of its file, the corner is the origin, parts are kept 10 mm apart
+/// and 10 mm in from the edge, may be turned by quarter turns, are packed from
+/// the front-left corner along X, and stand on the sheet's bottom face. Its
+/// size has no default: a sheet is the size it is bought at.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Arranged {
+    /// Its size along X, Y and Z: its length, its width and its thickness.
+    pub size: [f64; 3],
+    /// Its corner at the front, left and bottom, in model coordinates,
+    /// wherever the models are.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub corner: [f64; 3],
+    /// The least distance between two parts, seen from above.
+    #[serde(default = "default_spacing")]
+    pub spacing: f64,
+    /// The least distance between a part and the sheet's edge, seen from
+    /// above.
+    #[serde(default = "default_border")]
+    pub border: f64,
+    /// The turns about Z each part may be laid at.
+    #[serde(default)]
+    pub rotation: Rotation,
+    /// The corner packing starts from.
+    #[serde(default)]
+    pub from: Corner,
+    /// The axis the sheet is used up along.
+    #[serde(default)]
+    pub along: Direction,
+    /// Which face of the sheet the parts stand on.
+    #[serde(default)]
+    pub seat: Seat,
+    /// The models it arranges, in order: each one copy, as it stands by its
+    /// own rotation and scale, with no position of its own.
+    #[serde(default)]
+    pub parts: Vec<SheetPart>,
+}
+
+fn default_spacing() -> f64 {
+    10.0
+}
+
+fn default_border() -> f64 {
+    10.0
+}
+
+impl Arranged {
+    /// A sheet of `size` at the origin, with no parts, every other setting as
+    /// a file that leaves it out has it.
+    pub fn new(size: [f64; 3]) -> Self {
+        Self {
+            size,
+            corner: [0.0; 3],
+            spacing: default_spacing(),
+            border: default_border(),
+            rotation: Rotation::default(),
+            from: Corner::default(),
+            along: Direction::default(),
+            seat: Seat::default(),
+            parts: Vec::new(),
+        }
+    }
+
+    /// Whether it arranges model `name`.
+    pub fn holds(&self, name: &str) -> bool {
+        self.parts.iter().any(|p| p.model == name)
+    }
+}
+
+/// One of the models a sheet arranges.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SheetPart {
+    /// The model, by name.
+    pub model: String,
+}
+
+impl SheetPart {
+    /// Model `name`, as a part.
+    pub fn of(name: &str) -> Self {
+        Self {
+            model: name.to_string(),
+        }
+    }
+}
+
+/// Which face of its sheet a part stands on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Seat {
+    /// Its lowest point on the sheet's bottom face: the part is inside the
+    /// sheet, to be cut out of it.
+    #[default]
+    Bottom,
+    /// Its highest point on the sheet's top face: the part is cut down from
+    /// the sheet's top.
+    Top,
+}
+
+/// The turns about Z a sheet's parts may be laid at.
+///
+/// In a job file, a name, `"none"`, `"half-turn"` or `"quarter-turns"`, or a
+/// table, `{ step = 15.0 }`, for every whole number of a step in degrees.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum Rotation {
+    /// As it stands only.
+    None,
+    /// As it stands, or turned half round.
+    HalfTurn,
+    /// By any number of quarter turns.
+    #[default]
+    QuarterTurns,
+    /// By any whole number of this many degrees, from one to 180.
+    Step(f64),
+}
+
+/// The least and most a [`Rotation::Step`] may be, in degrees.
+pub const STEP_DEGREES: std::ops::RangeInclusive<f64> = 1.0..=180.0;
+
+impl Rotation {
+    /// Every turn it allows, the turn of none first and the rest in the order
+    /// they go round; `None` for a step outside [`STEP_DEGREES`].
+    pub fn turns(&self) -> Option<Vec<Turn>> {
+        let degrees: Vec<f64> = match *self {
+            Rotation::None => vec![0.0],
+            Rotation::HalfTurn => vec![0.0, 180.0],
+            Rotation::QuarterTurns => vec![0.0, 90.0, 180.0, 270.0],
+            Rotation::Step(step) => {
+                if !(step.is_finite() && STEP_DEGREES.contains(&step)) {
+                    return None;
+                }
+                // A whole turn is the turn of none again; a step that goes
+                // into it a whole number of times rounds just short of it, or
+                // just past.
+                (0..360_u32)
+                    .map(|k| f64::from(k) * step)
+                    .take_while(|d| *d < 360.0 - 1e-9)
+                    .collect()
+            }
+        };
+        degrees.into_iter().map(Turn::from_degrees).collect()
+    }
+
+    /// Its name as a job file writes it, and for a step, the step.
+    fn named(&self) -> (&'static str, Option<f64>) {
+        match *self {
+            Rotation::None => ("none", None),
+            Rotation::HalfTurn => ("half-turn", None),
+            Rotation::QuarterTurns => ("quarter-turns", None),
+            Rotation::Step(step) => ("step", Some(step)),
+        }
+    }
+}
+
+impl Serialize for Rotation {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+        match self.named() {
+            (name, None) => s.serialize_str(name),
+            (name, Some(step)) => {
+                let mut map = s.serialize_map(Some(1))?;
+                map.serialize_entry(name, &step)?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Rotation {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(RotationVisitor)
+    }
+}
+
+/// Reads a [`Rotation`]: a name, or a table holding a step.
+struct RotationVisitor;
+
+impl<'de> serde::de::Visitor<'de> for RotationVisitor {
+    type Value = Rotation;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("\"none\", \"half-turn\", \"quarter-turns\" or { step = degrees }")
+    }
+
+    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Rotation, E> {
+        match v {
+            "none" => Ok(Rotation::None),
+            "half-turn" => Ok(Rotation::HalfTurn),
+            "quarter-turns" => Ok(Rotation::QuarterTurns),
+            other => Err(E::unknown_variant(
+                other,
+                &["none", "half-turn", "quarter-turns"],
+            )),
+        }
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Rotation, A::Error> {
+        use serde::de::Error as _;
+        let mut step = None;
+        while let Some(key) = map.next_key::<String>()? {
+            if key != "step" {
+                return Err(A::Error::unknown_field(&key, &["step"]));
+            }
+            if step.is_some() {
+                return Err(A::Error::duplicate_field("step"));
+            }
+            step = Some(map.next_value::<f64>()?);
+        }
+        step.map(Rotation::Step)
+            .ok_or_else(|| A::Error::missing_field("step"))
     }
 }
 

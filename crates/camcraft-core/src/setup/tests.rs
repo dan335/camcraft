@@ -526,3 +526,62 @@ fn a_work_zero_is_picked_on_a_model_that_stands_once() {
         );
     }
 }
+
+/// A setup on an arranged sheet: its stock is the sheet, where it is however
+/// its parts stand; it machines the models it lists, each where the
+/// arrangement stands it, and a model listed with no room on the sheet adds
+/// nothing. A model no sheet holds stands where it is beside them.
+#[test]
+fn a_setup_on_a_sheet_machines_its_parts_where_they_stand() {
+    use crate::arrange::{Outlines, arrange};
+    use crate::control::Watch;
+    use crate::job::{Arranged, SheetPart};
+    use camcraft_geom::synthetic::cuboid;
+
+    let mut sheet = Arranged::new([200.0, 100.0, 18.0]);
+    sheet.corner = [100.0, 50.0, -18.0];
+    sheet.parts = vec![SheetPart::of("m"), SheetPart::of("big")];
+    let mut j = job(StockSpec::Arranged(sheet));
+    for name in ["big", "loose"] {
+        j.models.push(ModelDef {
+            name: name.into(),
+            path: format!("{name}.stl"),
+            units: None,
+            transform: Default::default(),
+        });
+    }
+    j.setups[0].models = vec!["m".into(), "big".into(), "loose".into()];
+    let m = Body::derived(cuboid(DVec3::ZERO, dvec3(40.0, 30.0, 10.0)));
+    let big = Body::derived(cuboid(DVec3::ZERO, dvec3(500.0, 30.0, 10.0)));
+    let loose = Body::derived(cuboid(dvec3(-50.0, -50.0, -5.0), dvec3(-40.0, -40.0, 0.0)));
+    let loaded = [("m", &m), ("big", &big), ("loose", &loose)];
+    let arrangement = arrange(
+        &j,
+        &loaded.iter().copied().collect(),
+        &mut Outlines::default(),
+        &Watch::default(),
+    )
+    .unwrap();
+    assert_eq!(arrangement.stands("big"), Some(&[][..]), "too large");
+    let bodies = Bodies::arranged(loaded, &arrangement);
+    let p = prepare(&j, 0, &bodies).unwrap();
+
+    assert_eq!(p.stocks[0].min, dvec3(100.0, 50.0, -18.0));
+    assert_eq!(p.stocks[0].max, dvec3(300.0, 150.0, 0.0));
+    assert!(p.machines("m") && !p.machines("big") && p.machines("loose"));
+    let stood = &p.pieces[0];
+    assert_eq!(stood.model, "m");
+    assert_eq!(Some(&[stood.stand][..]), arrangement.stands("m"));
+    // The part is the sheet's part where it stands, and the loose model where
+    // it is.
+    let on_sheet = bodies.get("m").unwrap().bounds().unwrap();
+    assert!(
+        on_sheet.min.x >= 110.0 - 1e-6 && on_sheet.max.x <= 290.0 + 1e-6,
+        "{on_sheet:?}"
+    );
+    assert_eq!(on_sheet.min.z, -18.0);
+    assert_eq!(
+        p.model_bounds,
+        on_sheet.union(&loose.mesh().bounds().unwrap())
+    );
+}

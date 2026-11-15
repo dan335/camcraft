@@ -530,6 +530,23 @@ mod tests {
         let wrong = no_such_settings();
         assert!(wrong.is_empty(), "no such setting: {wrong:?}");
 
+        // A sheet, turning its parts by a step, so the step's row is drawn
+        // too: nothing changed as a new one starts, every row a setting.
+        use camcraft_core::job::{Arranged, Rotation, SheetPart};
+        let mut sheet = Arranged::new([2440.0, 1220.0, 18.0]);
+        sheet.parts = vec![SheetPart::of("p")];
+        h.state_mut().job.stocks[0].spec = StockSpec::Arranged(sheet.clone());
+        h.run();
+        h.run();
+        assert_eq!(resets(&h), 1, "a sheet: changed as new, but for its kind");
+        sheet.rotation = Rotation::Step(15.0);
+        h.state_mut().job.stocks[0].spec = StockSpec::Arranged(sheet);
+        ASKED.with(|a| a.borrow_mut().clear());
+        h.run();
+        h.run();
+        let wrong = no_such_settings();
+        assert!(wrong.is_empty(), "no such setting: {wrong:?}");
+
         // A new tool of each kind, with a preset, on every page.
         for kind in [
             ToolKind::Flat,

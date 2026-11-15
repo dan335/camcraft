@@ -1019,6 +1019,18 @@ pub fn topic_card<R>(
     card_titled(ui, Some((topic.title, Some(topic))), actions, body)
 }
 
+/// A [`card`] titled `title`, whose help, where it has some, `topic`, its
+/// title shows on hover.
+pub fn card_helped<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    topic: Option<&Topic>,
+    actions: impl FnOnce(&mut egui::Ui),
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    card_titled(ui, Some((title, topic)), actions, body)
+}
+
 fn card_titled<R>(
     ui: &mut egui::Ui,
     title: Option<(&str, Option<&Topic>)>,

@@ -5,8 +5,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use camcraft_core::arrange::Stand;
+use camcraft_core::arrange::{Arrangement, Laid, Outcome, Outlines, SheetLayout, arrange};
+use camcraft_core::control::Watch;
 use camcraft_core::job::{Job, LengthUnit, ModelDef, Transform};
+use camcraft_core::run::RunError;
 use camcraft_core::setup::Bodies;
 use camcraft_geom::mesh::{Aabb, TriMesh};
 use camcraft_geom::topology::{Body, FaceSource};
@@ -16,13 +18,15 @@ use camcraft_import::stl::{Units, load_stl};
 use crate::{SessionError, fs};
 
 /// A model, loaded, placed and measured.
+///
+/// Where its copies stand is not the model's: a model a sheet arranges stands
+/// where the job's [`Arrangement`] has it, which changes with the sheet while
+/// the body stays as it is.
 #[derive(Debug, Clone)]
 pub struct Model {
     /// The triangles, in millimetres, and their faces, edges and vertices, where
     /// the job places them: one body, however many copies of it stand.
     pub body: Body,
-    /// Where each copy of the body stands: one, where it is, as loaded.
-    pub stands: Vec<Stand>,
     /// The body's bounds, as the job places it.
     pub bounds: Aabb,
     /// The body where its file put it, to place it again from.
@@ -43,8 +47,7 @@ impl Model {
         self.body.mesh()
     }
 
-    /// The model placed by `transform` instead, without reading its file again;
-    /// its copies stand where they stood.
+    /// The model placed by `transform` instead, without reading its file again.
     pub fn placed(&self, transform: &Transform) -> Result<Model, SessionError> {
         let body = self.file.placed(transform.matrix())?;
         let bounds = body.mesh().bounds().ok_or(SessionError::EmptyModel)?;
@@ -52,7 +55,6 @@ impl Model {
         // throw it away.
         Ok(Model {
             body,
-            stands: self.stands.clone(),
             bounds,
             file: Arc::clone(&self.file),
             path: self.path.clone(),
@@ -202,7 +204,6 @@ pub fn load_model(
     Ok(Model {
         file: Arc::new(body.clone()),
         body,
-        stands: vec![Stand::NONE],
         bounds,
         path: path.display().to_string(),
         units: label,
@@ -247,40 +248,165 @@ pub fn load_job_model(
         })
 }
 
-/// A job's models, loaded, by name.
-pub type Models<'a> = BTreeMap<&'a str, &'a Model>;
+/// A job's models, loaded, by name, and where the job's sheets stand them: what
+/// a run takes besides the job.
+///
+/// Collected from name and model pairs, the job has no sheets, and each model
+/// stands once, where it is.
+#[derive(Debug, Clone)]
+pub struct Models<'a> {
+    loaded: BTreeMap<&'a str, &'a Model>,
+    arrangement: &'a Arrangement,
+}
+
+impl<'a> Models<'a> {
+    /// The models `loaded`, by name, standing where `arrangement` has them.
+    pub fn arranged(
+        loaded: impl IntoIterator<Item = (&'a str, &'a Model)>,
+        arrangement: &'a Arrangement,
+    ) -> Self {
+        Self {
+            loaded: loaded.into_iter().collect(),
+            arrangement,
+        }
+    }
+
+    /// Model `name`, if it is loaded.
+    pub fn get(&self, name: &str) -> Option<&'a Model> {
+        self.loaded.get(name).copied()
+    }
+
+    /// Where the job's sheets stand their models.
+    pub fn arrangement(&self) -> &'a Arrangement {
+        self.arrangement
+    }
+
+    /// The models as the engine takes them: each its body and where its
+    /// copies stand.
+    pub(crate) fn bodies(&self) -> Bodies<'a> {
+        Bodies::arranged(
+            self.loaded.iter().map(|(&n, &m)| (n, &m.body)),
+            self.arrangement,
+        )
+    }
+}
+
+impl<'a> FromIterator<(&'a str, &'a Model)> for Models<'a> {
+    /// Each model standing once, where it is.
+    fn from_iter<I: IntoIterator<Item = (&'a str, &'a Model)>>(models: I) -> Self {
+        Self::arranged(models, Arrangement::none())
+    }
+}
+
+/// A job's models loaded, by name, and its sheets arranged with them.
+#[derive(Debug, Clone)]
+pub struct Loaded {
+    /// Each model, by name.
+    pub models: BTreeMap<String, Model>,
+    /// Where the job's sheets stand their parts.
+    pub arrangement: Arrangement,
+}
 
 /// Load every model the setups at `setups` use, each once however many use it,
-/// found relative to `job_dir` at the job's tolerance, by name.
-pub fn load_models(
-    job: &Job,
-    job_dir: &Path,
-    setups: &[usize],
-) -> Result<BTreeMap<String, Model>, SessionError> {
-    let mut loaded = BTreeMap::new();
+/// found relative to `job_dir` at the job's tolerance, by name; then arrange
+/// the job's sheets with them. A sheet those setups use that cannot be
+/// arranged is an error, named.
+pub fn load_models(job: &Job, job_dir: &Path, setups: &[usize]) -> Result<Loaded, SessionError> {
+    let mut models = BTreeMap::new();
     for &i in setups {
         for m in job.models_for(i) {
-            if !loaded.contains_key(&m.name) {
-                loaded.insert(m.name.clone(), load_job_model(job_dir, m, job.tolerance)?);
+            if !models.contains_key(&m.name) {
+                models.insert(m.name.clone(), load_job_model(job_dir, m, job.tolerance)?);
             }
         }
     }
-    Ok(loaded)
+    let bodies: BTreeMap<&str, &Body> = models.iter().map(|(n, m)| (n.as_str(), &m.body)).collect();
+    let arrangement = arrange(job, &bodies, &mut Outlines::default(), &Watch::default())
+        .map_err(|_| SessionError::Run(RunError::Stopped))?;
+    let used: Vec<&str> = setups
+        .iter()
+        .filter_map(|&i| job.setups.get(i))
+        .flat_map(|s| s.stocks.iter().map(String::as_str))
+        .collect();
+    for sheet in arrangement.sheets() {
+        if let Laid::Failed(e) = &sheet.laid
+            && used.contains(&sheet.stock.as_str())
+        {
+            return Err(SessionError::Arrange {
+                stock: sheet.stock.clone(),
+                source: e.clone(),
+            });
+        }
+    }
+    Ok(Loaded {
+        models,
+        arrangement,
+    })
 }
 
 /// Loaded models as a run takes them.
-pub fn models_of(loaded: &BTreeMap<String, Model>) -> Models<'_> {
-    loaded.iter().map(|(n, m)| (n.as_str(), m)).collect()
+pub fn models_of(loaded: &Loaded) -> Models<'_> {
+    Models::arranged(
+        loaded.models.iter().map(|(n, m)| (n.as_str(), m)),
+        &loaded.arrangement,
+    )
 }
 
-/// Loaded models as the engine takes them: each its body and where its copies
-/// stand.
-pub(crate) fn bodies_of<'a>(models: &Models<'a>) -> Bodies<'a> {
-    Bodies::standing(
-        models
-            .iter()
-            .map(|(&n, &m)| (n, &m.body, m.stands.as_slice())),
-    )
+/// What became of each part of sheet `sheet`, a line each, for a log: where
+/// it stands, or why it was left out, and how much of the sheet they use.
+pub fn sheet_notes(sheet: &SheetLayout) -> Vec<String> {
+    let name = &sheet.stock;
+    let (parts, used, length) = match &sheet.laid {
+        Laid::Done {
+            parts,
+            used,
+            length,
+        } => (parts, used, length),
+        Laid::Waiting(missing) => {
+            return vec![format!(
+                "sheet '{name}': not arranged, waiting for {}",
+                quoted(missing.iter().map(String::as_str))
+            )];
+        }
+        Laid::Failed(e) => return vec![format!("sheet '{name}': cannot be arranged: {e}")],
+    };
+    let placed = parts
+        .iter()
+        .filter(|p| matches!(p.outcome, Outcome::Placed(_)))
+        .count();
+    let mut out = vec![format!(
+        "sheet '{name}': {placed} of {} part(s) placed, {used:.1} of {length:.1} mm used",
+        parts.len()
+    )];
+    out.extend(parts.iter().map(|p| match p.outcome {
+        Outcome::Placed(s) => format!(
+            "sheet '{name}': '{}' at ({:.3}, {:.3}, {:.3}), turned {}°",
+            p.model,
+            s.offset.x,
+            s.offset.y,
+            s.offset.z,
+            s.turn.degrees()
+        ),
+        Outcome::TooLarge => format!(
+            "sheet '{name}': '{}' left out: it does not fit inside the border at any turn it \
+             may take",
+            p.model
+        ),
+        Outcome::NoRoom => format!(
+            "sheet '{name}': '{}' left out: there is no room left for it",
+            p.model
+        ),
+    }));
+    out
+}
+
+/// `names`, each in quotes, as a list in a sentence: 'a', 'b' and 'c'.
+pub(crate) fn quoted<'a>(names: impl IntoIterator<Item = &'a str>) -> String {
+    let all: Vec<String> = names.into_iter().map(|n| format!("'{n}'")).collect();
+    match all.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => all.concat(),
+    }
 }
 
 #[cfg(test)]
