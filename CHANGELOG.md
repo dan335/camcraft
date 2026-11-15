@@ -4,7 +4,7 @@ What changed in each release, newest first. Each release's page
 ([Releases](https://github.com/dan335/camcraft/releases)) has the downloads and
 the same notes at more length.
 
-## Unreleased
+## 0.9.0 — 2026-11-15
 
 - **Sheets that arrange their parts**, a third kind of stock
   (`kind = "arranged"`) in the job file and the app's stock panel

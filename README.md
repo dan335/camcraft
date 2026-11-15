@@ -53,7 +53,7 @@ Autodesk.)
 
 ## Status
 
-Version 0.8, pre-alpha. The app runs, checks, plays back and posts jobs. File
+Version 0.9, pre-alpha. The app runs, checks, plays back and posts jobs. File
 formats change without notice. [Releases](https://github.com/dan335/camcraft/releases)
 carry builds for Windows and Linux, with no installer; on macOS, build it from
 source. [PROGRESS.md](PROGRESS.md) lists, feature by feature against Fusion's
@@ -140,8 +140,8 @@ build on it. The crates are not on crates.io yet, so depend on a release by
 its tag, each crate you use:
 
 ```toml
-camcraft-core    = { git = "https://github.com/dan335/camcraft", tag = "v0.8.2" }
-camcraft-session = { git = "https://github.com/dan335/camcraft", tag = "v0.8.2" }
+camcraft-core    = { git = "https://github.com/dan335/camcraft", tag = "v0.9.0" }
+camcraft-session = { git = "https://github.com/dan335/camcraft", tag = "v0.9.0" }
 ```
 
 Their interfaces still change from release to release, so move from tag to tag
