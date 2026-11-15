@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Package a camcraft release for this platform from built executables, and
-# smoke-test it: the archive unpacked, the command line run on the example job.
+# smoke-test it: the archive unpacked, the command line run on each example job.
 #
 #   scripts/release/package.sh VERSION OUT_DIR TARGET_DIR LICENCES
 #
@@ -32,8 +32,9 @@ done
 if [ "$platform" = linux-x86_64 ]; then
     strip "$stage/camcraft" "$stage/camcraft-gui"
 fi
-cp "$repo/examples/rail-jig.camcraft" "$stage/examples/"
-cp "$repo/fixtures/step/sled_base.step" "$stage/fixtures/step/"
+cp "$repo/examples/rail-jig.camcraft" "$repo/examples/sheet.camcraft" "$stage/examples/"
+cp "$repo/fixtures/step/sled_base.step" "$repo/fixtures/step/ops_2d.step" \
+    "$repo/fixtures/step/ops_block.step" "$stage/fixtures/step/"
 cp "$repo/LICENSE-MIT" "$repo/LICENSE-APACHE" "$repo/NOTICE" "$repo/README.md" "$stage/"
 fonts="$repo/crates/camcraft-gui/assets/fonts"
 cp "$fonts/OFL-FiraCode.txt" "$fonts/OFL-IBMPlexSans.txt" "$fonts/LICENSE-Lucide.txt" \
@@ -73,17 +74,20 @@ cd "$name"
 "./camcraft$exe" --version
 # 0 is clean and 2 ran with warnings worth reading (docs/jobs.md); anything else
 # failed.
-status=0
-rm -rf ../programs
-"./camcraft$exe" job examples/rail-jig.camcraft --out ../programs > ../job.log 2>&1 || status=$?
-tail -3 ../job.log
-if [ "$status" != 0 ] && [ "$status" != 2 ]; then
-    echo "the example job failed: exit $status" >&2
-    exit 1
-fi
-# Run without --out, a program that would be refused is never rendered: 0.7.0 to
-# 0.8.1 went out unable to write this job's roughing.
-if ! ls ../programs/*.nc > /dev/null 2>&1; then
-    echo "the example job wrote no program" >&2
-    exit 1
-fi
+for example in rail-jig sheet; do
+    status=0
+    rm -rf "../programs-$example"
+    "./camcraft$exe" job "examples/$example.camcraft" --out "../programs-$example" \
+        > "../$example.log" 2>&1 || status=$?
+    tail -3 "../$example.log"
+    if [ "$status" != 0 ] && [ "$status" != 2 ]; then
+        echo "the example job $example failed: exit $status" >&2
+        exit 1
+    fi
+    # Run without --out, a program that would be refused is never rendered: 0.7.0
+    # to 0.8.1 went out unable to write rail-jig's roughing.
+    if ! ls "../programs-$example"/*.nc > /dev/null 2>&1; then
+        echo "the example job $example wrote no program" >&2
+        exit 1
+    fi
+done

@@ -1,0 +1,119 @@
+# A sheet that lays its parts out on itself: three copies of a plate and two of
+# a block, nested on one board 20 mm thick, then machined and cut out in one
+# setup (docs/jobs.md, "An arranged sheet").
+#
+# Where each copy stands is worked out from the parts' shapes and the sheet's
+# settings every time the job is run or opened, and is written nowhere here:
+# `camcraft job` logs it. The plates may turn by quarter turns, the sheet's
+# default; the blocks have a grain of their own and keep the way they are drawn.
+# Each pick is made once, on the model, and cuts every copy.
+#
+# The app writes this file when you save; comments written by hand do not survive
+# a save from the app.
+
+version = 1
+tolerance = 0.05
+
+[tools.flat-6]
+kind = "flat"
+diameter = 6.0
+number = 1
+rpm = 18000
+flute_length = 22.0
+shank_diameter = 6.0
+stickout = 30.0
+comment = "6mm flat"
+
+[tools.drill-6]
+kind = "drill"
+diameter = 6.0
+number = 2
+rpm = 3000
+flute_length = 40.0
+shank_diameter = 6.0
+stickout = 45.0
+comment = "6mm drill"
+
+# Models are found relative to this file. A model on a sheet has no position:
+# the sheet places it.
+[[model]]
+name = "plate"
+path = "../fixtures/step/ops_2d.step"
+
+[[model]]
+name = "block"
+path = "../fixtures/step/ops_block.step"
+
+# The board, from the origin. Parts at least 12 mm apart, room for the 6 mm
+# cutter between them, and 10 mm in from its edge; packed from the front-left
+# corner along X, standing on its bottom face.
+[[stock]]
+name = "sheet"
+kind = "arranged"
+size = [520.0, 260.0, 20.0]
+spacing = 12.0
+parts = [
+  { model = "plate", copies = 3 },
+  { model = "block", copies = 2, rotation = "none" },
+]
+
+# Work zero at the board's front-left corner, on its top.
+[[setup]]
+name = "top"
+models = ["plate", "block"]
+stocks = ["sheet"]
+wcs = 54
+post = "masso"
+origin = { kind = "box-point", of = "stock", x = "min", y = "min", z = "max" }
+
+# The plate's pocket with an island, picked by its floor.
+[[setup.operation]]
+name = "plate pocket"
+strategy = "pocket"
+tool = "flat-6"
+outline = "selection"
+selection = { faces = [{ model = "plate", index = 28, at = [-47.0, -22.0, 12.0] }] }
+passes = { stepdown = 3.0, stepover = 3.0, feed = 1500.0 }
+
+# The plate's through hole and blind hole, picked by their walls: six holes.
+[[setup.operation]]
+name = "plate holes"
+strategy = "bore"
+tool = "flat-6"
+multiple_passes = true
+selection = { faces = [
+  { model = "plate", index = 46, at = [-47.0, 35.0, 10.0] },
+  { model = "plate", index = 44, at = [-23.0, 35.0, 15.0] },
+] }
+# Two passes out to each wall, 2.5 mm apart, so no core is left standing.
+passes = { stepover = 2.5, feed = 1500.0 }
+
+# The block's two pockets, picked by their floors.
+[[setup.operation]]
+name = "block pockets"
+strategy = "pocket"
+tool = "flat-6"
+outline = "selection"
+selection = { faces = [
+  { model = "block", index = 11, at = [-20.0, 0.0, 14.0] },
+  { model = "block", index = 5, at = [25.0, 10.0, 12.0] },
+] }
+passes = { stepdown = 3.0, stepover = 3.0, feed = 1500.0 }
+
+# The block's two blind holes, picked by their rims: four holes.
+[[setup.operation]]
+name = "block holes"
+strategy = "drill"
+tool = "drill-6"
+selection = { edges = [
+  { model = "block", index = 3, at = [18.0, -22.0, 20.0] },
+  { model = "block", index = 1, at = [38.0, -22.0, 20.0] },
+] }
+linking = { plunge_feed = 300.0 }
+
+# Every copy cut out of the board, round its outline, down to its bottom.
+[[setup.operation]]
+name = "cut out"
+strategy = "profile"
+tool = "flat-6"
+passes = { stepdown = 5.0, feed = 1500.0 }

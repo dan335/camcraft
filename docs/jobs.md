@@ -16,7 +16,8 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
   placed; a pick's point stays where the file has it, so picks move with their
   model.
 - **Stocks**: blocks of material in the job's coordinates, either around models (by
-  name, or the setup's own when none are named) with margins, or a fixed box. A
+  name, or the setup's own when none are named) with margins, a fixed box, or a
+  sheet that arranges its parts on itself (below). A
   fixed box has a size and, on each axis, a place against the same models, as
   Fusion's fixed size box does: centred, offset from the low or high side, or at
   a coordinate. So it follows the models when they move. A top and a bottom
@@ -29,6 +30,75 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
   (`core::setup::prepare`) is in the setup's own frame, so strategies, linker,
   simulator and post never see a rotation. With the default orientation and work
   zero, a run is bit-identical to before setups existed.
+
+**An arranged sheet** (`kind = "arranged"`,
+[decision 0031](decisions/0031-arranged-sheets.md)) is a sheet of a fixed size
+where it is, which lays its parts out on itself: where each copy of each part
+stands is worked out from their shapes and the sheet's settings, again whenever
+a part, the sheet or a setting changes, and is never written in the file.
+`examples/sheet.camcraft` is one. Its settings:
+
+- `size`, its length along X, width along Y and thickness, each more than zero.
+  It has no default: a sheet is the size it is bought at.
+- `corner`, its front-left bottom corner in the job's coordinates, wherever the
+  models are; the origin when left out.
+- `spacing` (10 mm), the least gap between two parts seen from above, and
+  `border` (10 mm), the least gap between a part and the sheet's edge. Neither
+  may be below zero, and twice the border must be less than the sheet's length
+  and its width. Leave at least the cutter's width between parts to cut out
+  between them.
+- `rotation`, the turns about Z a part may be laid at: `"none"`, `"half-turn"`,
+  `"quarter-turns"` (the default), or `{ step = 15.0 }`, every whole number of a
+  step of 1 to 180 degrees.
+- `from`, the corner packing starts from, seen from above, the front towards −Y
+  and the left towards −X: `"front-left"` (the default), `"front-right"`,
+  `"back-left"` or `"back-right"`.
+- `along`, the axis the sheet is used up along, `"x"` (the default) or `"y"`:
+  parts fill across it first, so what is left over is whole at the far end.
+- `seat`, the face the parts stand on: `"bottom"` (the default) stands each by
+  its lowest point on the sheet's bottom face, to be cut out of the sheet;
+  `"top"` puts its highest point at the sheet's top.
+- `parts`, the models it lays, each once, in order: `{ model = "bracket" }`,
+  with `copies` (1, up to 1000) and `rotation`, the part's grain, used instead
+  of the sheet's (`"none"` or `"half-turn"` keeps it running the way the part
+  is drawn).
+
+A model on a sheet keeps its own rotation and scale, which say which way up it
+stands; its outline seen from above, holes and all, is what is laid. Its
+position must be zero: the sheet places it. Each copy is the model turned about
+Z and moved, and seated by the seat. Parts are never nearer each other than the
+spacing, nor the edge than the border, and may stand up to a quarter of the
+spacing further apart; a smaller part can stand in a larger one's hole. A copy
+there is no room for is left out, and CC109 fails until it fits; the rest are
+placed and cut. One sheet lays out its own parts only: nothing goes on to a
+second sheet, and no part can be placed by hand.
+
+```toml
+[[stock]]
+name = "sheet"
+kind = "arranged"
+size = [2440.0, 1220.0, 18.0]
+spacing = 12.0
+rotation = { step = 15.0 }
+parts = [
+  { model = "bracket", copies = 6 },
+  { model = "side", rotation = "half-turn" },
+]
+```
+
+A setup that uses the sheet machines the parts it lists, every copy of each; the
+sheet's other parts stand on it as material, neither machined nor checked
+(CC225). A setup that lists a model on a sheet must use that sheet. A pick on
+such a model is on every copy, so one pick cuts them all, and an operation runs
+along its picks copy by copy, each copy's in the order picked; picks only on a
+model with no copy placed say so. The job refuses a model on two sheets, a part
+of a model it does not have or listed twice, copies outside 1 to 1000, a size
+not more than zero, a spacing or border below zero, a border that leaves no room,
+a step outside 1 to 180 degrees, a position on a model a sheet places, a setup
+that machines a sheet's model without using the sheet, a work zero picked on a
+model its sheet lays more than once (the pick is on every copy, so it is no one
+place: put it on the stock), and a Morph whose curves are picked on one (Morph
+cannot yet morph across copies).
 
 An operation has a strategy (parallel, scallop, contour, ramp, pencil, project, morph, flat, spiral,
 radial or morphed spiral finishing, adaptive clearing, pocket clearing, a 2D profile, a 2D
@@ -1013,6 +1083,8 @@ with.
 | CC106 | fail    | simulator: a rapid touched material                              |
 | CC107 | fail    | simulator: the finished stock is below the part (a gouge)        |
 | CC108 | fail    | simulator: the shank, holder or spindle nose met the material    |
+| CC109 | fail    | a sheet left a copy of a part out, or could not be arranged      |
+| CC110 | fail    | a part stands above or below its sheet                           |
 | CC201 | warn    | spans hit the refinement limit                                   |
 | CC202 | warn    | plunges that do not start above the surface                      |
 | CC203 | note    | spans stopped at a surface discontinuity                         |
@@ -1037,7 +1109,16 @@ with.
 | CC222 | note    | a bore's or circular's passes past a hole's middle left out      |
 | CC223 | warn    | an engraving cuts into the part: its shape is sunk less deep     |
 | CC224 | warn    | a thread's helical lead goes below a hole's floor                |
+| CC225 | warn    | a sheet holds parts the setup neither machines nor checks        |
 | CC299 | warn    | a warning from reading the model                                 |
+
+A sheet's checks are the setup's, once for each sheet it uses. CC109 says how
+many copies of which part were left out and why: too large for the sheet,
+inside its border, at every turn they may take, or each fitting alone but not
+beside the others. It holds every part of the sheet, not only those the setup
+machines, since a sheet that leaves a part out is not the sheet the job
+describes. CC110 holds every copy placed to the sheet's thickness, to within the
+tolerance, as the seat stands it.
 
 A **plunge** is a continuous descent steeper than `PLUNGE_RATIO` (10:1) that falls
 further than `max_cut_step`, measured over the whole run of moves, not move by
@@ -1068,6 +1149,25 @@ cargo run --release -p camcraft-cli -- job examples/rail-jig.camcraft --out out
 
 With `--out`, every setup passes or nothing is written, and every program is
 rendered before any is written: half a job's programs are a trap on the machine.
+
+A setup that uses an arranged sheet logs how it was laid before its operations,
+so what was cut is on record: how many copies it placed of how many and how
+much of its length they use, then each copy where it stands, the move of the
+model's origin and its turn about Z, or why it was left out. From
+`examples/sheet.camcraft`:
+
+```text
+sheet 'sheet': 5 of 5 part(s) placed, 336.1 of 520.0 mm used
+sheet 'sheet': 'plate' copy 1 of 3 at (60.420, 80.794, 0.000), turned 90°
+sheet 'sheet': 'plate' copy 2 of 3 at (173.260, 80.794, 0.000), turned 90°
+sheet 'sheet': 'plate' copy 3 of 3 at (286.100, 80.794, 0.000), turned 90°
+sheet 'sheet': 'block' copy 1 of 2 at (60.420, 199.119, 0.000), turned 0°
+sheet 'sheet': 'block' copy 2 of 2 at (173.260, 199.119, 0.000), turned 0°
+```
+
+A part of one copy is named alone; a copy left out says why (*there is no room
+left for it*, or *it does not fit inside the border at any turn it may take*).
+A sheet that cannot be arranged stops the run, saying why.
 The app's Post goes through the same code (`camcraft_session::plan_posting`), so
 the two write the same files under the same names.
 

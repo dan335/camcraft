@@ -43,6 +43,8 @@ Autodesk.)
   libraries import from CSV.
 - **Setups:** several per job, each with its own orientation, work zero and work
   offset.
+- **Stock:** a box around the models, a box of a fixed size, or a sheet that
+  lays its parts out on itself, copies of a part too, by their true shape.
 - **Checking:** every program is simulated against the stock. camcraft refuses
   to write one that gouges the part or fails another check, and says why.
 - **Playback:** watch the material come off, move by move, before posting.

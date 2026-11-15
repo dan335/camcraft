@@ -1,6 +1,6 @@
 # Progress
 
-camcraft 0.8.2, updated 2026-11-14.
+camcraft 0.8.2, updated 2026-11-15.
 
 What camcraft does and what it has yet to do, measured against Fusion's
 3-axis milling: each of Fusion's milling operations, and the settings, tools,
@@ -31,13 +31,13 @@ Manufacturing Extension is [not planned](#not-planned).
 | [Shared settings](#shared-settings)           |   10 |       2 |           5 |
 | [Linking and entries](#linking-and-entries)   |    4 |       1 |           1 |
 | [Models](#models)                             |    3 |       2 |           1 |
-| [Setups and stock](#setups-and-stock)         |    4 |       1 |           5 |
+| [Setups and stock](#setups-and-stock)         |    4 |       2 |           5 |
 | [Tools](#tools)                               |    8 |       1 |           5 |
 | [Simulation and checks](#simulation-and-checks) |  7 |     0 |           1 |
 | [Posts and programs](#posts-and-programs)     |    6 |       0 |           2 |
 | [App](#app)                                   |    7 |       1 |           0 |
 | [Project](#project)                           |    1 |       0 |           4 |
-| **All**                                       |   55 |      32 |          26 |
+| **All**                                       |   55 |      33 |          26 |
 
 `grep "| not started" PROGRESS.md` lists everything not yet begun.
 
@@ -125,7 +125,7 @@ What Fusion's Geometry, Heights, Passes and Linking tabs hold, across operations
 | Tabs                                   | partial     | On profiles, as Fusion's. Missing: tab positions picked on the model. |
 | Rest machining                         | partial     | Adaptive and pocket clearing, from earlier operations. Missing: from the setup's stock or a file, and on finishing. |
 | Avoid and touch surfaces               | not started | |
-| Operation patterns                     | not started | |
+| Operation patterns                     | not started | Copies on an arranged sheet are not patterns: each is a copy of the part, and every operation cuts them all. |
 | Templates                              | not started | |
 | Toolpath trimming                      | not started | |
 | Manual NC                              | not started | |
@@ -160,6 +160,7 @@ What Fusion's Geometry, Heights, Passes and Linking tabs hold, across operations
 | Work zero                              | done        | The model's, a point on the stock or model box, or picked; with an offset. |
 | Work offset                            | done        | |
 | Box stock                              | done        | Around models with margins, or a fixed box placed against them. |
+| Sheets that arrange their parts        | partial     | A sheet of a given size that lays its parts out on itself by their true shape seen from above, holes and all, laid again whenever a part, the sheet or a setting changes, never stored; every layout checked exactly. Spacing, border, rotation (none, half turn, quarter turns or a step), the corner packing starts from, the axis it is used up along, the face parts stand on; up to 1000 copies of a part and a grain of its own; parts in other parts' holes; a pick cuts every copy; CC109, CC110 and CC225 ([0031](docs/decisions/0031-arranged-sheets.md)). Missing: several sheets (parts with no room are reported, not put on another), parts placed by hand, Morph across copies, a work zero picked on a part of several copies, the same layout promised across platforms. Parts may stand up to a quarter of the spacing further apart than asked. |
 | Orientation                            | partial     | The 24 square ways a part sits. Missing: an axis or plane picked on the model. |
 | Cylinder and tube stock                | not started | |
 | Stock from a solid                     | not started | |

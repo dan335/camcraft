@@ -993,6 +993,8 @@ fn strategy_parameters_belong_to_their_strategy() {
 fn the_examples_validate() {
     let job: Job = toml::from_str(include_str!("../../../../examples/rail-jig.camcraft")).unwrap();
     job.validate().unwrap();
+    let job: Job = toml::from_str(include_str!("../../../../examples/sheet.camcraft")).unwrap();
+    job.validate().unwrap();
     sample().validate().unwrap();
 }
 

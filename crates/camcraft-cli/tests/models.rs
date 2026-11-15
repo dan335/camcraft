@@ -138,3 +138,23 @@ fn the_example_job_passes_its_checks() {
         "{err}"
     );
 }
+
+/// The sheet example, shipped and smoke-tested beside it, passes its checks as
+/// it is: every copy of both parts placed, where each stands on record.
+#[test]
+fn the_sheet_example_passes_its_checks() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/sheet.camcraft");
+    let out = camcraft(&["job", example.to_str().unwrap()]);
+    let err = stderr(&out);
+    // Warnings to review are 2; a failed check, 1.
+    assert!(matches!(out.status.code(), Some(0 | 2)), "{err}");
+    assert!(
+        err.contains("checks passed") && !err.contains("FAILED"),
+        "{err}"
+    );
+    assert!(
+        err.contains("sheet 'sheet': 5 of 5 part(s) placed"),
+        "{err}"
+    );
+    assert!(err.contains("'plate' copy 3 of 3 at ("), "{err}");
+}

@@ -54,6 +54,17 @@ to the part, stock or tolerance takes the whole run. A new setup name, work
 offset or post changes no path, so the paths stay; the setup is out of date
 until it is generated again, since its checks and program depend on those.
 
+An arranged sheet is laid out again, off the window's thread, whenever one of
+its settings or parts changes, or a part's model loads or is turned or scaled;
+a newer change stops the one in flight. A change to a sheet is a change to the
+stock, and where its parts stand is where the part sits, so every setup that
+uses that sheet is out of date and its whole run goes; setups on other stocks,
+and other sheets, keep theirs. Until the sheet is laid again, nothing that uses
+it is generated or laid out again: the setup says *'sheet' is being arranged*,
+and the view keeps the parts where they were last laid. The last few
+arrangements are kept by what they were laid from, so an edit undone or redone
+finds its layout at once.
+
 ## Properties
 
 The properties panel only edits; what the tree and its menus do is not repeated in
@@ -66,12 +77,41 @@ it.
   Right-click a model in the tree to duplicate it: another of the same part,
   beside it along X by its width and 10 mm (to the next whole millimetre), in
   every setup and stock that has
-  the original.
-- **Stock**: laid out as the tool library lays out a tool. At the top is a
+  the original. A model on an arranged sheet has no position to give: its
+  panel says *placed by sheet 'sheet'* in its place, and its rotation and scale
+  say which way up it stands. Its duplicate is on the sheet too, as a part of
+  its own with the same copies and grain, where the sheet lays it.
+- **Stock**: laid out as the tool library lays out a tool. Its shape is around
+  models, a fixed box or an arranged sheet. For a box, at the top is a
   drawing of the block (amber) around the models, from the top and the front,
   with its size under each view and its corners in model coordinates below.
   Then its fields: for a fixed box, one row per axis with the size, where it
   sits against the models and the offset; around models, one row per margin.
+
+  An arranged sheet ([jobs](jobs.md#a-job-file)) starts as a whole board,
+  2440 by 1220 and 18 thick, holding the models of the setups that use the
+  stock that no other sheet holds. At the top is a drawing of it from above, to
+  scale: the sheet in amber with its border dashed inside it, the corner packing
+  starts from marked, every copy's outline where it stands, holes too, in its
+  part's colour, and a bar beside the sheet as far along it as the parts reach.
+  Under it, *14 of 16 placed · 1830 of 2440 mm used*, in the panel's units, and
+  each part with copies left out, in red, worded as the checks word it (*'side':
+  no room for 2 of 6*), the reason on hover; a click on one chooses the part.
+  While the sheet is arranged again it is drawn faint, as it was last laid,
+  with a spinner in the corner, and *Being arranged: drawn as it was last laid*
+  under it; one never laid says *Arranging…*. A sheet waiting for its parts to
+  load says which in the drawing's place, and one that cannot be arranged says
+  why, in red. Then the sheet's settings, a row each: size, corner, spacing,
+  border, rotation (with its step), pack from, along and seat. Then its parts,
+  a card with a row for each: its colour, its model, how many of its copies are
+  placed (red when not all are), a way to take it out, and under them its
+  copies and its grain, the turns it may take (as the sheet, or its own).
+  Pointing at a copy in the drawing lights its part's row; pointing at a row,
+  or choosing it, lights the part's copies in the drawing and in the view. Add
+  offers no model another sheet holds, and says why when that leaves none to
+  add. A model put on the sheet loses its position with the same edit, so an
+  undo puts both back. Spacing and border, and pack from and along, have
+  sketches in their help.
 - **Setup**, on tabs:
   - *Parts*: cards for the models and stocks it includes, each with a remove
     button. Add lists the job's others; **Select in view…** picks them in the view,
@@ -228,7 +268,11 @@ faces found from the triangles for STL (`camcraft_geom::topology`). As in Fusion
 the view picks only while a slot is armed by its button in the panel (**Select in
 view…**); otherwise a click does nothing. Hovering lights what a click would pick,
 and a slot being picked into brings its tab forward. Choosing another tab stops
-picking. Legends under the picks name what the view draws.
+picking. Legends under the picks name what the view draws. On an arranged
+sheet, a click on any copy of a part picks the model's own face, edge or
+corner: one pick, the same whichever copy was clicked, drawn on every copy and
+cut on every copy. A work zero picked on a part of several copies is no one
+place, and is refused.
 
 - The work zero takes a corner, a round edge's centre or an edge's middle on a
   model, or a corner, edge or side of the stock.

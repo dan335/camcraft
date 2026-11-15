@@ -6,6 +6,28 @@ the same notes at more length.
 
 ## Unreleased
 
+- **Sheets that arrange their parts**, a third kind of stock
+  (`kind = "arranged"`) in the job file and the app's stock panel
+  ([decision 0031](docs/decisions/0031-arranged-sheets.md)). A sheet of a size
+  you give, at a corner of its own, lays its parts out on itself by their true
+  shape seen from above, holes and all, and lays them again whenever a part,
+  the sheet or a setting changes; where they stand is never written down.
+  Spacing and border (10 mm each to start), the turns a part may take (none, a
+  half turn, quarter turns or a step), the corner packing starts from, the axis
+  it is used up along, and the face the parts stand on. A part can ask for up
+  to 1000 copies and have a grain of its own; a smaller part stands in a larger
+  one's hole. A model is one body and each copy a turn and a move of it, so a
+  face or hole picked once is cut on every copy. Every layout is checked
+  exactly before it is used. CC109 fails a sheet that leaves a part out, CC110
+  a part standing above or below its sheet, and CC225 says which parts on a
+  sheet a setup does not machine; `camcraft job` logs where each copy stands.
+  Fifty mixed parts at a 15° step on a 2440 by 1220 sheet are laid in about a
+  second on four threads. Parts may stand up to a quarter of the spacing
+  further apart than asked; there is one sheet only, so parts with no room are
+  reported, not put on another; no part can be placed by hand; and neither a
+  work zero nor a Morph's curves can be picked on a part of several copies.
+  `examples/sheet.camcraft` lays three copies of one part and two of another on
+  a board and cuts them out.
 - **Fusion's Morph**, a new 3D finishing strategy (`strategy = "morph"`) in the
   job file and the app's 3D menu
   ([decision 0030](docs/decisions/0030-morph.md)), the last of Fusion's 3-axis
