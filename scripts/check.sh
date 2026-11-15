@@ -160,6 +160,7 @@ if [ ${#SELECT[@]} -gt 0 ]; then
       strategy::pencil::tests::is_deterministic
       strategy::project::tests::is_deterministic
       strategy::morph_curves::tests::is_deterministic
+      arrange::tests::is_deterministic
       path::ordering::tests::ordering_is_deterministic
     )
     determinism() {

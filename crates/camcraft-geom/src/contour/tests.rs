@@ -518,3 +518,37 @@ fn growing_loosely_holds_the_exact_growth_and_little_more() {
         points(&exact)
     );
 }
+
+/// A frame with a hole, turned a quarter at a time: each corner goes exactly
+/// where swapping and negating puts it, the outer still winds anticlockwise
+/// and the hole clockwise, and four quarter turns give back the very region.
+#[test]
+fn a_quarter_turn_moves_every_point_exactly() {
+    let quarter = Turn::from_degrees(90.0).unwrap();
+    let frame = Region::rectangle(dvec2(0.3, -1.7), dvec2(10.1, 4.9))
+        .difference(&square_at(5.0, 1.0, 1.1))
+        .unwrap();
+    let turned = frame.rotated(quarter);
+    for (a, b) in frame.rings().iter().zip(turned.rings()) {
+        for (p, q) in a.points().iter().zip(b.points()) {
+            assert_eq!(*q, dvec2(-p.y, p.x));
+        }
+        assert_eq!(a.signed_area().signum(), b.signed_area().signum());
+    }
+    let back = (0..4).fold(frame.clone(), |r, _| r.rotated(quarter));
+    assert_eq!(back, frame);
+    assert_eq!(frame.rotated(Turn::NONE), frame);
+}
+
+/// Any other turn keeps the area and turns the bounds with the region.
+#[test]
+fn a_free_turn_keeps_the_area() {
+    let r = Region::rectangle(dvec2(0.0, 0.0), dvec2(4.0, 2.0));
+    let turned = r.rotated(Turn::from_degrees(45.0).unwrap());
+    assert!((turned.area() - 8.0).abs() < 1e-12, "{}", turned.area());
+    let (lo, hi) = turned.bounds().unwrap();
+    let h = std::f64::consts::FRAC_1_SQRT_2;
+    assert!((lo - dvec2(-2.0 * h, 0.0)).length() < 1e-12, "{lo}");
+    assert!((hi - dvec2(4.0 * h, 6.0 * h)).length() < 1e-12, "{hi}");
+    assert!(turned.rings()[0].signed_area() > 0.0);
+}

@@ -13,6 +13,10 @@ use glam::{DVec2, dvec2};
 /// sits many orders of magnitude inside Clipper's coordinate range.
 const TICKS_PER_MM: f64 = 10_000.0;
 
+/// The clipper's tick, in millimetres: every point a region operation takes
+/// or makes is put on a whole number of them.
+pub const TICK: f64 = 1.0 / TICKS_PER_MM;
+
 impl Region {
     /// A region from rings that do not cross one another, in any winding.
     ///
@@ -65,9 +69,10 @@ impl Region {
     /// offset no tool can actually produce. A round join is drawn as chords whose
     /// ends lie on the true arc, so the chords fall short of it by up to
     /// `arc_tolerance`. Offsetting by that much more than asked makes the error
-    /// one-sided: a grown region always **contains** the exact offset, and a shrunk
-    /// one always lies **within** it, each by at most `arc_tolerance`. That is the
-    /// side a forbidden region and the room left inside it have to err on.
+    /// one-sided: a grown region **contains** the exact offset, and a shrunk one
+    /// lies **within** it, each to within the clipper's rounding to its [`TICK`]
+    /// and by at most `arc_tolerance`. That is the side a forbidden region and the
+    /// room left inside it have to err on.
     pub fn offset(&self, delta: f64, arc_tolerance: f64) -> Self {
         if self.rings.is_empty() || !delta.is_finite() || !arc_tolerance.is_finite() {
             return Self::default();

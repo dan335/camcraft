@@ -24,6 +24,8 @@
 mod clip;
 mod pole;
 
+pub use clip::TICK;
+
 pub use pole::Indexed;
 mod stock;
 
@@ -33,6 +35,7 @@ use clipper2_rust::{Path64, PointInPolygonResult, point_in_polygon};
 use glam::{DVec2, dvec2};
 
 use crate::mesh::distance_to_segment;
+use crate::turn::Turn;
 
 /// A closed ring of points, in millimetres.
 ///
@@ -158,6 +161,21 @@ impl Region {
                 .iter()
                 .map(|r| Contour {
                     points: r.points.iter().map(|p| *p + by).collect(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The same region turned about the origin. Turning keeps every ring's
+    /// winding, as moving does; a quarter turn moves each point exactly
+    /// ([`Turn::apply`]).
+    pub fn rotated(&self, turn: Turn) -> Self {
+        Self {
+            rings: self
+                .rings
+                .iter()
+                .map(|r| Contour {
+                    points: r.points.iter().map(|&p| turn.apply(p)).collect(),
                 })
                 .collect(),
         }
