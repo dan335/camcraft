@@ -99,6 +99,16 @@ impl Stand {
         self.turn.apply(p.truncate()).extend(p.z) + self.offset
     }
 
+    /// The point of the part that this copy has at `p`: [`point`](Self::point)
+    /// undone. No stand gives back `p` itself, bit for bit.
+    pub fn undo_point(&self, p: DVec3) -> DVec3 {
+        if self.is_none() {
+            return p;
+        }
+        let q = p - self.offset;
+        self.turn.undo(q.truncate()).extend(q.z)
+    }
+
     /// The direction `v` of the part, as this copy has it: turned, not moved.
     pub fn direction(&self, v: DVec3) -> DVec3 {
         if self.turn.is_none() {

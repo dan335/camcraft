@@ -326,14 +326,8 @@ struct Placement {
 /// own models. One around a model not loaded is left out.
 fn placements(doc: &Document, name: &str, spec: &StockSpec) -> Vec<Placement> {
     let bodies = doc.bodies();
-    let bounds = |models: &[String]| {
-        models
-            .iter()
-            .map(|n| doc.models.get(n)?.model().map(|m| m.bounds))
-            .collect::<Option<Vec<_>>>()?
-            .into_iter()
-            .reduce(|a, b| a.union(&b))
-    };
+    // Around every copy of the models, as the block is.
+    let bounds = |models: &[String]| camcraft_core::setup::bounds_of(models, &bodies).ok();
     let own = spec.models();
     let place = |setup: &str, models: &[String]| {
         let stock = camcraft_core::setup::stock_block(spec, models, &bodies).ok()?;
@@ -365,8 +359,8 @@ fn placements(doc: &Document, name: &str, spec: &StockSpec) -> Vec<Placement> {
     if out.is_empty()
         && let StockSpec::FixedBox(b) = spec
         && !b.placed()
-        && let Some(any) = bodies.keys().next()
-        && let Ok(stock) = camcraft_core::setup::stock_block(spec, &[(*any).to_string()], &bodies)
+        && let Some(any) = bodies.names().next()
+        && let Ok(stock) = camcraft_core::setup::stock_block(spec, &[any.to_string()], &bodies)
     {
         out.push(Placement {
             setup: String::new(),

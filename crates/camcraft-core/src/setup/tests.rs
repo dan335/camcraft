@@ -212,7 +212,7 @@ fn a_stock_in_frame_is_where_prepare_puts_it() {
 
 #[test]
 fn a_missing_mesh_is_named() {
-    let meshes: Bodies<'_> = BTreeMap::new();
+    let meshes = Bodies::default();
     let j = job(StockSpec::default());
     assert!(matches!(
         prepare(&j, 0, &meshes),
@@ -291,8 +291,9 @@ fn pieces_name_the_models_merged_in_order() {
     assert_eq!(p.part.len(), 3);
     let names: Vec<&str> = p.pieces.iter().map(|p| p.model.as_str()).collect();
     assert_eq!(names, ["n", "m"]);
-    assert!(p.piece("m").is_some());
-    assert_eq!(p.piece("o"), None);
+    assert!(p.machines("m"));
+    assert!(!p.machines("o"));
+    assert!(p.pieces.iter().all(|p| p.copy == 0 && p.stand.is_none()));
 }
 
 /// The part's shadow is cast once and kept, and is the part seen from above.
@@ -338,4 +339,190 @@ fn a_turned_shadow_serves_any_work_zero() {
         assert!(a.area().difference(b.area()).unwrap().area() < 1e-9);
     }
     assert!(!other.adopt_shadow(&turned), "one it has is kept");
+}
+
+/// A turn about Z by `degrees`, then a move by `by`.
+fn stand(degrees: f64, by: DVec3) -> Stand {
+    Stand {
+        turn: camcraft_geom::turn::Turn::from_degrees(degrees).unwrap(),
+        offset: by,
+    }
+}
+
+/// The box around `mesh`'s points where the copy at `stand` has them.
+fn stood_box(mesh: &TriMesh, stand: &Stand) -> Aabb {
+    let moved = mesh.mapped(|p| stand.point(p)).unwrap();
+    moved.bounds().unwrap()
+}
+
+/// A model collected from its name and body stands once, where it is, and is
+/// laid out bit for bit as one given that stand outright.
+#[test]
+fn a_model_collected_from_its_body_stands_once_where_it_is() {
+    let body = Body::derived(brick());
+    let collected: Bodies<'_> = [("m", &body)].into_iter().collect();
+    let copies = collected.get("m").unwrap();
+    assert_eq!(copies.stands, [Stand::NONE]);
+    let stood = Bodies::standing([("m", &body, &[Stand::NONE][..])]);
+    let j = job(StockSpec::default());
+    let (a, b) = (
+        prepare(&j, 0, &collected).unwrap(),
+        prepare(&j, 0, &stood).unwrap(),
+    );
+    assert_eq!(a.part, b.part);
+    assert_eq!(a.part, brick());
+    assert_eq!(a.model_bounds, b.model_bounds);
+    assert_eq!(a.stocks, b.stocks);
+    assert_eq!(a.pieces, b.pieces);
+}
+
+/// Three copies of the brick, where it is, a quarter turn round and moved,
+/// and turned by a free angle and moved: the part is all three, each where
+/// its stand puts it; the box holds them all, the free angle's by its turned
+/// points; and the pieces name each copy in order.
+#[test]
+fn every_copy_is_merged_into_the_part() {
+    let body = Body::derived(brick());
+    let stands = [
+        Stand::NONE,
+        stand(90.0, dvec3(100.0, 0.0, 0.0)),
+        stand(30.0, dvec3(0.0, 100.0, 0.0)),
+    ];
+    let bodies = Bodies::standing([("m", &body, &stands[..])]);
+    let p = prepare(&job(StockSpec::default()), 0, &bodies).unwrap();
+    assert_eq!(p.part.len(), 3);
+    let copies: Vec<(usize, Stand)> = p.pieces.iter().map(|q| (q.copy, q.stand)).collect();
+    assert_eq!(copies, [(0, stands[0]), (1, stands[1]), (2, stands[2])]);
+    assert!(p.pieces.iter().all(|q| q.model == "m"));
+    // Each copy's triangle is where its stand puts the brick's.
+    for (k, s) in stands.iter().enumerate() {
+        let want = brick()
+            .triangle(0)
+            .unwrap()
+            .map(|v| p.frame.to_setup_as(s, v));
+        assert_eq!(p.part.triangle(k).unwrap(), want, "copy {k}");
+    }
+    // The quarter turn takes (10, 20) to (-20, 10), exactly.
+    assert_eq!(p.part.triangle(1).unwrap()[1], dvec3(80.0, 10.0, 5.0));
+    let all = stands
+        .iter()
+        .map(|s| stood_box(&brick(), s))
+        .reduce(|a, b| a.union(&b))
+        .unwrap();
+    assert_eq!(p.model_bounds, all);
+    assert_eq!(bodies.get("m").unwrap().bounds(), Some(all));
+    assert_eq!(bounds_of(&["m".into()], &bodies).unwrap(), all);
+    // The stock, around the models, is around every copy.
+    let s = p.stocks[0];
+    assert!(
+        s.min.cmple(all.min).all() && s.max.cmpge(all.max).all(),
+        "{s:?}"
+    );
+}
+
+/// A model with no copy standing, as one its sheet had no room for, adds
+/// nothing to the part, its box or its stock; a setup or a stock with no copy
+/// of anything is refused, never laid out around nothing.
+#[test]
+fn a_model_with_no_copy_adds_nothing() {
+    let body = Body::derived(brick());
+    let far = Body::derived(brick().mapped(|p| p + dvec3(500.0, 0.0, 0.0)).unwrap());
+    let one = [Stand::NONE];
+    let bodies = Bodies::standing([("m", &body, &one[..]), ("n", &far, &[][..])]);
+    let mut j = job(StockSpec::default());
+    j.models.push(ModelDef {
+        name: "n".into(),
+        path: "n.stl".into(),
+        units: None,
+        transform: Default::default(),
+    });
+    j.setups[0].models = vec!["m".into(), "n".into()];
+    let p = prepare(&j, 0, &bodies).unwrap();
+    assert_eq!(p.part, brick());
+    assert!(p.machines("m") && !p.machines("n"));
+    assert_eq!(p.model_bounds, brick().bounds().unwrap());
+    assert!(p.stocks[0].max.x < 100.0, "{:?}", p.stocks[0]);
+    assert_eq!(bodies.get("n").unwrap().bounds(), None);
+
+    j.setups[0].models = vec!["n".into()];
+    let err = prepare(&j, 0, &bodies).unwrap_err();
+    assert!(
+        matches!(&err, PrepareError::NoCopies(m) if m == "'n'"),
+        "{err}"
+    );
+    assert_eq!(err.to_string(), "no copy of 'n' stands anywhere");
+    let around_n = StockSpec::AroundModels {
+        models: vec!["n".into()],
+        margin: [1.0; 3],
+        below: 0.0,
+    };
+    assert!(matches!(
+        stock_block(&around_n, &["m".into()], &bodies),
+        Err(PrepareError::NoCopies(_))
+    ));
+}
+
+/// A work zero picked on a model is where the model's one stand puts it; on a
+/// model with no copy, or several, it is no one place, and is refused.
+#[test]
+fn a_work_zero_is_picked_on_a_model_that_stands_once() {
+    use crate::job::{PointRef, Snap};
+    use camcraft_geom::synthetic;
+    use camcraft_geom::topology::EdgeKind;
+    let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 32));
+    let rim = body
+        .topology()
+        .edges()
+        .iter()
+        .position(|e| matches!(e.kind, EdgeKind::Circle(c) if c.center.z > 2.5))
+        .unwrap();
+    let mut j = job(StockSpec::default());
+    j.setups[0].origin = Origin::Point {
+        point: PointRef {
+            model: "m".into(),
+            snap: Snap::CircleCenter,
+            index: u32::try_from(rim).unwrap(),
+            at: [0.0, 0.0, 5.0],
+        },
+        offset: [0.0; 3],
+    };
+    let moved = [stand(90.0, dvec3(60.0, -10.0, 0.0))];
+    let once = Bodies::standing([("m", &body, &moved[..])]);
+    let p = prepare(&j, 0, &once).unwrap();
+    let centre = p.frame.to_setup_as(&moved[0], dvec3(0.0, 0.0, 5.0));
+    assert!(centre.length() < 1e-9, "{centre}");
+    assert_eq!(p.frame.origin, dvec3(60.0, -10.0, 5.0));
+
+    // With no copy of it, another model is what the setup machines.
+    let other = Body::derived(brick());
+    j.models.push(ModelDef {
+        name: "n".into(),
+        path: "n.stl".into(),
+        units: None,
+        transform: Default::default(),
+    });
+    j.setups[0].models.push("n".into());
+    let two = [Stand::NONE, moved[0]];
+    let one = [Stand::NONE];
+    for (stands, copies) in [(&[][..], 0), (&two[..], 2)] {
+        let bodies = Bodies::standing([("m", &body, stands), ("n", &other, &one[..])]);
+        let err = prepare(&j, 0, &bodies).unwrap_err();
+        assert!(
+            matches!(&err, PrepareError::NotOnce { model, copies: c } if model == "m" && *c == copies),
+            "{err}"
+        );
+    }
+    for (stands, says) in [
+        (&[][..], "has no copy placed"),
+        (&two[..], "stands 2 times"),
+    ] {
+        let bodies = Bodies::standing([("m", &body, stands), ("n", &other, &one[..])]);
+        assert_eq!(
+            prepare(&j, 0, &bodies).unwrap_err().to_string(),
+            format!(
+                "the work zero is picked on 'm', which {says}: pick it on the stock, or on a \
+                 model that stands once"
+            )
+        );
+    }
 }

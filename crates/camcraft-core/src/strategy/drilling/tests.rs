@@ -10,6 +10,7 @@ fn rim(edge: u32, centre: DVec3, radius: f64) -> Chain {
         .collect();
     Chain {
         model: "plate".into(),
+        copy: 0,
         edge,
         points,
         closed: true,

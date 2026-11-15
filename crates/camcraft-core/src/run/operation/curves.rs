@@ -6,8 +6,10 @@ use camcraft_geom::mesh::TriMesh;
 use camcraft_geom::topology::{Body as Model, EdgeKind};
 
 use super::*;
+use crate::arrange::Stand;
 use crate::cutter::tool::{Cone, Cutter};
 use crate::job::JobError;
+use crate::setup::Copies;
 use crate::setup::features::{self, find_edge, find_face};
 use crate::setup::frame::Frame;
 use crate::strategy::chamfer::{ChamferEdge, ChamferError, ChamferParams, chamfer};
@@ -17,24 +19,34 @@ use crate::strategy::nesting::nearest_next;
 use crate::strategy::slot::{Slot, SlotError, SlotParams, slot, slot_of};
 use crate::strategy::trace::{Beside, TraceError, TraceParams, trace};
 
-/// Edge `index` of `body`, placed as the setup has it, as a piece of curve:
-/// a round edge lying level an arc about its centre, anything else the line
-/// through its points.
-fn edge_curve(model: &str, body: &Model, index: u32, frame: &Frame, tol: f64) -> Option<Edge> {
+/// An edge or face on one copy of a model: the model, which copy, and the
+/// feature's number.
+type OnCopy = (String, usize, u32);
+
+/// Edge `index` of `body`, on its copy `copy` standing at `stand`, placed as
+/// the setup has it, as a piece of curve: a round edge lying level an arc
+/// about its centre, anything else the line through its points.
+fn edge_curve(
+    (model, copy, stand): (&str, usize, &Stand),
+    body: &Model,
+    index: u32,
+    frame: &Frame,
+    tol: f64,
+) -> Option<Edge> {
     let t = body.topology();
     let edge = t.edge(index)?;
     let points: Vec<DVec3> = t
         .edge_points(body.mesh(), index)
-        .map(|p| frame.to_setup(p))
+        .map(|p| frame.to_setup_as(stand, p))
         .collect();
     let first = *points.first()?;
     let level = points.iter().all(|p| (p.z - first.z).abs() <= tol);
     let mut pieces = Vec::new();
     match edge.kind {
         EdgeKind::Circle(c)
-            if level && frame.orientation.apply(c.normal).z.abs() >= 1.0 - 1.0e-6 =>
+            if level && frame.direction_to_setup_as(stand, c.normal).z.abs() >= 1.0 - 1.0e-6 =>
         {
-            let centre = frame.to_setup(c.center).truncate();
+            let centre = frame.to_setup_as(stand, c.center).truncate();
             // How far round it turns, point by point.
             let mut ring = points.clone();
             if edge.closed {
@@ -62,6 +74,7 @@ fn edge_curve(model: &str, body: &Model, index: u32, frame: &Frame, tol: f64) ->
     }
     Some(Edge {
         model: model.to_string(),
+        copy,
         ends: edge.ends,
         curve: Curve {
             start: first,
@@ -70,15 +83,14 @@ fn edge_curve(model: &str, body: &Model, index: u32, frame: &Frame, tol: f64) ->
     })
 }
 
-/// The body `model` names, which `op` picked on.
-pub(super) fn body_of<'b>(
+/// The body `model` names, which `op` picked on, and where its copies stand.
+pub(super) fn copies_of<'b>(
     op: &Operation,
     bodies: &Bodies<'b>,
     model: &str,
-) -> Result<&'b Model, RunError> {
+) -> Result<Copies<'b>, RunError> {
     bodies
         .get(model)
-        .copied()
         .ok_or_else(|| in_op(op)(FeatureError::NotLoaded(model.to_string())))
 }
 
@@ -117,11 +129,13 @@ fn picked_edges(
         .collect())
 }
 
-/// A picked edge, with its model and its place in its model's edges.
-type PickedEdge = ((String, u32), Edge);
+/// A picked edge on one copy, with its model, its copy and its place in its
+/// model's edges.
+type PickedEdge = (OnCopy, Edge);
 
-/// [`picked_edges`], each with its model and its place in its model's
-/// edges.
+/// [`picked_edges`], each with its model, its copy and its place in its
+/// model's edges: each edge found once on its model's body, then taken into
+/// the frame for every copy, edge by edge.
 fn picked_edge_ids(
     job: &Job,
     op: &Operation,
@@ -134,7 +148,7 @@ fn picked_edge_ids(
     let mut found: Vec<(String, u32)> = Vec::new();
     if faces {
         for pick in &op.selection.faces {
-            let body = body_of(op, bodies, &pick.model)?;
+            let body = copies_of(op, bodies, &pick.model)?.body;
             let face = find_face(body, pick, features::tolerance(job.tolerance, body))
                 .map_err(in_op(op))?;
             for &e in body
@@ -147,20 +161,23 @@ fn picked_edge_ids(
         }
     }
     for pick in &op.selection.edges {
-        let body = body_of(op, bodies, &pick.model)?;
+        let body = copies_of(op, bodies, &pick.model)?.body;
         let edge =
             find_edge(body, pick, features::tolerance(job.tolerance, body)).map_err(in_op(op))?;
         found.push((pick.model.clone(), edge.index));
     }
     let mut out: Vec<PickedEdge> = Vec::with_capacity(found.len());
+    // An edge is on every copy or none, so each is seen once for them all.
     let mut seen: Vec<(String, u32)> = Vec::with_capacity(found.len());
     for (model, e) in found {
         if seen.iter().any(|(m, i)| *i == e && *m == model) {
             continue;
         }
-        let body = body_of(op, bodies, &model)?;
-        if let Some(edge) = edge_curve(&model, body, e, frame, tol) {
-            out.push(((model.clone(), e), edge));
+        let Copies { body, stands } = copies_of(op, bodies, &model)?;
+        for (copy, stand) in stands.iter().enumerate() {
+            if let Some(edge) = edge_curve((&model, copy, stand), body, e, frame, tol) {
+                out.push(((model.clone(), copy, e), edge));
+            }
         }
         seen.push((model, e));
     }
@@ -351,32 +368,36 @@ pub(in crate::run) fn chamfers_picked(
             part_on_left,
         });
     }
-    // The faces the chamfered edges join, by model.
-    let mut joined: Vec<(String, u32)> = Vec::new();
-    for ((model, e), _) in &picked {
-        let body = body_of(op, bodies, model)?;
+    // The faces the chamfered edges join, by model and copy.
+    let mut joined: Vec<OnCopy> = Vec::new();
+    for ((model, copy, e), _) in &picked {
+        let body = copies_of(op, bodies, model)?.body;
         for &f in body
             .topology()
             .edge(*e)
             .map_or(&[][..], |e| e.faces.as_slice())
         {
-            joined.push((model.clone(), f));
+            joined.push((model.clone(), *copy, f));
         }
     }
     let mut vertices: Vec<DVec3> = Vec::new();
     let mut triangles: Vec<[u32; 3]> = Vec::new();
     for piece in &prepared.pieces {
-        let Some(body) = bodies.get(piece.model.as_str()) else {
+        let Some(body) = bodies.body(&piece.model) else {
             continue;
         };
         let mesh = body.mesh();
         let first = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
-        vertices.extend(mesh.vertices().iter().map(|&p| prepared.frame.to_setup(p)));
+        vertices.extend(
+            mesh.vertices()
+                .iter()
+                .map(|&p| prepared.frame.to_setup_as(&piece.stand, p)),
+        );
         for (t, tri) in mesh.triangles().iter().enumerate() {
             let face = u32::try_from(t)
                 .ok()
                 .and_then(|t| body.topology().face_of(t));
-            if face.is_some_and(|f| joined.contains(&(piece.model.clone(), f))) {
+            if face.is_some_and(|f| joined.contains(&(piece.model.clone(), piece.copy, f))) {
                 continue;
             }
             triangles.push(tri.map(|v| v.saturating_add(first)));
@@ -428,8 +449,9 @@ fn part_side(curve: &Curve, cutter: &DropCutter<'_>, tol: f64) -> Result<bool, C
     }
 }
 
-/// How high `body`'s face `f` goes, in the setup's frame.
-fn face_top(body: &Model, f: u32, frame: &Frame) -> Option<f64> {
+/// How high `body`'s face `f` goes, in the setup's frame, on the copy
+/// standing at `stand`.
+fn face_top(body: &Model, f: u32, frame: &Frame, stand: &Stand) -> Option<f64> {
     let mesh = body.mesh();
     let face = body.topology().face(f)?;
     face.triangles
@@ -437,7 +459,7 @@ fn face_top(body: &Model, f: u32, frame: &Frame) -> Option<f64> {
         .filter_map(|&t| mesh.triangles().get(t as usize))
         .flatten()
         .filter_map(|&v| mesh.vertices().get(v as usize))
-        .map(|&p| frame.to_setup(p).z)
+        .map(|&p| frame.to_setup_as(stand, p).z)
         .reduce(f64::max)
 }
 
@@ -455,43 +477,49 @@ pub(in crate::run) fn engravings_picked(
     let frame = &prepared.frame;
     let tol = curve_tolerance(job);
     let mut loops: Vec<(Curve, f64)> = Vec::new();
-    let mut taken: Vec<(String, u32)> = Vec::new();
-    let mut add = |model: &str, body: &Model, e: u32, out: &mut Vec<Edge>| {
-        let id = (model.to_string(), e);
+    let mut taken: Vec<OnCopy> = Vec::new();
+    let mut add = |on: (&str, usize, &Stand), body: &Model, e: u32, out: &mut Vec<Edge>| {
+        let id = (on.0.to_string(), on.1, e);
         if taken.contains(&id) {
             return;
         }
-        if let Some(edge) = edge_curve(model, body, e, frame, tol) {
+        if let Some(edge) = edge_curve(on, body, e, frame, tol) {
             out.push(edge);
         }
         taken.push(id);
     };
     for pick in &op.selection.faces {
-        let body = body_of(op, bodies, &pick.model)?;
+        let Copies { body, stands } = copies_of(op, bodies, &pick.model)?;
         let face =
             find_face(body, pick, features::tolerance(job.tolerance, body)).map_err(in_op(op))?;
         let t = body.topology();
-        let mut edges = Vec::new();
-        let mut top = face_top(body, face.index, frame).unwrap_or(f64::NEG_INFINITY);
-        for &e in t.face(face.index).map_or(&[][..], |f| f.edges.as_slice()) {
-            add(&pick.model, body, e, &mut edges);
-            // What stands round it: the faces it shares its edges with.
-            for &other in t.edge(e).map_or(&[][..], |e| e.faces.as_slice()) {
-                if other != face.index
-                    && let Some(z) = face_top(body, other, frame)
-                {
-                    top = top.max(z);
+        let edges_of_face = t.face(face.index).map_or(&[][..], |f| f.edges.as_slice());
+        // Each copy's outline, from the top of what stands round it there.
+        for (copy, stand) in stands.iter().enumerate() {
+            let mut edges = Vec::new();
+            let mut top = face_top(body, face.index, frame, stand).unwrap_or(f64::NEG_INFINITY);
+            for &e in edges_of_face {
+                add((&pick.model, copy, stand), body, e, &mut edges);
+                // What stands round it: the faces it shares its edges with.
+                for &other in t.edge(e).map_or(&[][..], |e| e.faces.as_slice()) {
+                    if other != face.index
+                        && let Some(z) = face_top(body, other, frame, stand)
+                    {
+                        top = top.max(z);
+                    }
                 }
             }
+            loops.extend(join(&edges).into_iter().map(|c| (c, top)));
         }
-        loops.extend(join(&edges).into_iter().map(|c| (c, top)));
     }
     let mut edges = Vec::new();
     for pick in &op.selection.edges {
-        let body = body_of(op, bodies, &pick.model)?;
+        let Copies { body, stands } = copies_of(op, bodies, &pick.model)?;
         let edge =
             find_edge(body, pick, features::tolerance(job.tolerance, body)).map_err(in_op(op))?;
-        add(&pick.model, body, edge.index, &mut edges);
+        for (copy, stand) in stands.iter().enumerate() {
+            add((&pick.model, copy, stand), body, edge.index, &mut edges);
+        }
     }
     for c in join(&edges) {
         let top = c.steps().map(|(_, p)| p.to().z).fold(c.start.z, f64::max);

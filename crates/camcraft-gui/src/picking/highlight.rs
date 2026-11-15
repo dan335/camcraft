@@ -11,14 +11,17 @@ use crate::picking::slots::Slot;
 use crate::view::scene::box_edges;
 use crate::view::viewport::{Highlight, Outline, OutlineKind};
 
-/// What is under the pointer, drawn over the part.
+/// What is under the pointer, drawn over the part: on every copy of its model,
+/// as a pick of it means it on every copy.
 pub fn hovered(scene: &PickScene, target: &Target) -> Highlight {
     let mut h = Highlight::default();
-    let to_setup = |p: DVec3| scene.frame.to_setup(p);
     match target {
         Target::Face { model, face, .. } => {
             if let Some(pm) = scene.model(model) {
-                h.faces = face_triangles(pm.body(), *face, &to_setup).collect();
+                for c in &pm.copies {
+                    let to_setup = |p: DVec3| scene.frame.to_setup_as(&c.stand, p);
+                    h.faces.extend(face_triangles(pm.body(), *face, &to_setup));
+                }
             }
         }
         Target::Edge { model, edge, .. } => {
@@ -39,13 +42,19 @@ pub fn hovered(scene: &PickScene, target: &Target) -> Highlight {
             if point.snap == Snap::CircleCenter
                 && let Some(pm) = scene.model(&point.model)
             {
-                h.lines = edge_lines(pm.edges.get(point.index as usize), true, OutlineKind::Hover);
+                for c in &pm.copies {
+                    h.lines.extend(edge_lines(
+                        c.edges.get(point.index as usize),
+                        true,
+                        OutlineKind::Hover,
+                    ));
+                }
             }
         }
         Target::StockPoint { setup, .. } => h.markers.push(*setup),
         Target::Model { model } => {
             if let Some(pm) = scene.model(model) {
-                h.faces = model_triangles(pm.body(), &to_setup).collect();
+                h.faces = every_copy(scene, pm).collect();
             }
         }
         Target::Stock { stock } => {
@@ -62,11 +71,10 @@ pub fn hovered(scene: &PickScene, target: &Target) -> Highlight {
 /// them.
 pub fn ghosts(scene: &PickScene, slot: &Slot) -> Highlight {
     let mut h = Highlight::default();
-    let to_setup = |p: DVec3| scene.frame.to_setup(p);
     match slot {
         Slot::Models { .. } => {
             for m in scene.models.iter().filter(|m| !m.in_setup) {
-                h.faces.extend(model_triangles(m.body(), &to_setup));
+                h.faces.extend(every_copy(scene, m));
             }
         }
         Slot::Stocks { .. } => {
@@ -83,15 +91,14 @@ pub fn ghosts(scene: &PickScene, slot: &Slot) -> Highlight {
     h
 }
 
-/// Every triangle of `body`, in the setup's frame.
-fn model_triangles<'a>(
-    body: &'a Body,
-    to_setup: &'a impl Fn(DVec3) -> DVec3,
-) -> impl Iterator<Item = [Vec3; 3]> + 'a {
-    let mesh = body.mesh();
-    (0..mesh.len())
-        .filter_map(|t| mesh.triangle(t))
-        .map(move |t| t.map(|p| to_setup(p).as_vec3()))
+/// Every triangle of every copy of `pm`, in the setup's frame.
+fn every_copy<'a>(scene: &'a PickScene, pm: &'a PickModel) -> impl Iterator<Item = [Vec3; 3]> + 'a {
+    let mesh = pm.body().mesh();
+    pm.copies.iter().flat_map(move |c| {
+        (0..mesh.len())
+            .filter_map(|t| mesh.triangle(t))
+            .map(move |t| t.map(|p| scene.frame.to_setup_as(&c.stand, p).as_vec3()))
+    })
 }
 
 /// A box's twelve edges.
@@ -116,10 +123,13 @@ pub(super) fn face_triangles<'a>(
         .map(move |t| t.map(|p| to_setup(p).as_vec3()))
 }
 
-/// Edge `edge` of `pm` as lines, closed where it closes on itself.
+/// Edge `edge` of every copy of `pm` as lines, closed where it closes on itself.
 pub(super) fn model_edge_lines(pm: &PickModel, edge: u32, kind: OutlineKind) -> Vec<Outline> {
     let closed = pm.body().topology().edge(edge).is_some_and(|e| e.closed);
-    edge_lines(pm.edges.get(edge as usize), closed, kind)
+    pm.copies
+        .iter()
+        .flat_map(|c| edge_lines(c.edges.get(edge as usize), closed, kind))
+        .collect()
 }
 
 /// An edge's `points` as lines, joined back to the first when `closed`.

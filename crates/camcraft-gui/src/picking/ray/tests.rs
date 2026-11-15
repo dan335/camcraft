@@ -27,6 +27,7 @@ fn laid_out() -> (PickScene, Arc<Model>, Prepared) {
         file: Arc::new(body.clone()),
         path: "p.stl".into(),
         units: "mm".into(),
+        stands: vec![camcraft_core::arrange::Stand::NONE],
         notes: Vec::new(),
         warnings: Vec::new(),
     });
@@ -166,13 +167,13 @@ fn hidden_points_are_not_picked() {
     let at = DVec3::from(point.at);
     assert!(at.distance(dvec3(20.0, 20.0, 5.0)) < 1e-9, "{at}");
     // A bottom corner lies straight under the top one, and is hidden by it.
-    let v = scene.models[0]
+    let v = scene.models[0].copies[0]
         .vertices
         .iter()
         .position(|p| (*p - dvec3(-20.0, -20.0, 0.0)).length() < 1e-9)
         .unwrap();
     let (c, _, _) = looking_down();
-    assert!(!scene.visible(c.sight(), scene.models[0].vertices[v]));
+    assert!(!scene.visible(c.sight(), scene.models[0].copies[0].vertices[v]));
 }
 
 #[test]
@@ -203,6 +204,7 @@ fn others_are_picked_only_whole() {
             file: Arc::new(body.clone()),
             path: path.into(),
             units: "mm".into(),
+            stands: vec![camcraft_core::arrange::Stand::NONE],
             notes: Vec::new(),
             warnings: Vec::new(),
         })
@@ -245,7 +247,7 @@ fn others_are_picked_only_whole() {
     );
     assert_eq!(scene.models[0].name(), "p", "the setup's own come first");
     assert!(!scene.models[1].in_setup);
-    assert!(scene.models[1].edges.is_empty());
+    assert!(scene.models[1].copies[0].edges.is_empty());
     assert_eq!(scene.setup_models().count(), 1);
 
     let (_, proj, _) = looking_down();
@@ -286,6 +288,7 @@ fn picks_on_placed_models_are_saved_where_their_file_has_them() {
         file,
         path: "p.stl".into(),
         units: "mm".into(),
+        stands: vec![camcraft_core::arrange::Stand::NONE],
         notes: Vec::new(),
         warnings: Vec::new(),
     };
@@ -384,6 +387,96 @@ fn picks_on_placed_models_are_saved_where_their_file_has_them() {
     assert!(setup.distance(to_setup(centre)) < 1e-9, "{setup}");
     let (found, _) = find_point(&p.body, &point, 0.01).unwrap();
     assert!(found.distance(centre) < 1e-9, "{found}");
+}
+
+/// Two copies of the plate, one where it is and one a quarter turn round and
+/// moved: picking keeps the one index, and takes the ray into each copy's
+/// place. A face, an edge and a rim's centre clicked on the moved copy are
+/// found there, and saved where the body has them, as no copy stands.
+#[test]
+fn a_pick_on_a_copy_is_saved_on_the_body() {
+    use camcraft_core::arrange::Stand;
+    use camcraft_core::job::FeatureRef;
+    use camcraft_core::setup::features::{find_edge, find_face, find_point};
+    use camcraft_geom::turn::Turn;
+    let (_, model, _) = laid_out();
+    let moved = Stand {
+        turn: Turn::from_degrees(90.0).unwrap(),
+        offset: dvec3(60.0, 0.0, 0.0),
+    };
+    let mut two = (*model).clone();
+    two.stands = vec![Stand::NONE, moved];
+    let two = Arc::new(two);
+    let mut j = Job::default();
+    j.models.push(ModelDef {
+        name: "p".into(),
+        path: "p.stl".into(),
+        units: None,
+        transform: Default::default(),
+    });
+    j.stocks.push(StockDef {
+        name: "s".into(),
+        spec: StockSpec::default(),
+    });
+    let mut s = Setup::new("top");
+    s.models = vec!["p".into()];
+    s.stocks = vec!["s".into()];
+    j.setups.push(s);
+    let bodies = Bodies::standing([("p", &two.body, two.stands.as_slice())]);
+    let prepared = prepare(&j, 0, &bodies).unwrap();
+    let bvh = Arc::new(MeshBvh::new(two.mesh()));
+    let scene = PickScene::new(&prepared, [("p".to_string(), two.clone(), bvh)], Vec::new());
+    assert_eq!(scene.models[0].copies.len(), 2);
+
+    let mut c = Camera::framing(Vec3::new(30.0, 0.0, 2.5), 110.0);
+    c.pitch = 1.5;
+    c.yaw = -std::f32::consts::FRAC_PI_2;
+    let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+    let aspect = 800.0 / 600.0;
+    let proj = Projector::new(c.view_projection(aspect), rect);
+    let view = (c, proj, aspect);
+
+    // The moved copy's top, where the body has (12, -12, 5).
+    let screen = proj.screen(dvec3(72.0, 12.0, 5.0)).unwrap();
+    let Some(Target::Face { model, face, at }) = pick_from(view, &scene, screen, Accept::Faces)
+    else {
+        unreachable!("no face");
+    };
+    assert!(at.distance(dvec3(12.0, -12.0, 5.0)) < 0.05, "{at}");
+    let saved = FeatureRef {
+        model,
+        index: face,
+        at: at.to_array(),
+    };
+    assert_eq!(find_face(&two.body, &saved, 0.01).unwrap().index, face);
+    // Over its hole the ray goes through, as it does over the other's.
+    let hole = proj.screen(dvec3(60.0, 0.0, 5.0)).unwrap();
+    assert_eq!(pick_from(view, &scene, hole, Accept::Faces), None);
+
+    // Its rim, between two of its points: the edge, saved on the body's rim,
+    // and its centre, where the copy has it.
+    let a = std::f64::consts::TAU / 64.0;
+    let rim = proj
+        .screen(dvec3(60.0 + 4.0 * a.cos(), 4.0 * a.sin(), 5.0))
+        .unwrap();
+    let Some(Target::Edge { model, edge, at }) = pick_from(view, &scene, rim, Accept::Edges) else {
+        unreachable!("no edge");
+    };
+    assert!((at.truncate().length() - 4.0).abs() < 0.05, "{at}");
+    let saved = FeatureRef {
+        model,
+        index: edge,
+        at: at.to_array(),
+    };
+    assert_eq!(find_edge(&two.body, &saved, 0.01).unwrap().index, edge);
+    let Some(Target::Point { point, setup }) = pick_from(view, &scene, rim, Accept::Points) else {
+        unreachable!("no point");
+    };
+    assert_eq!(point.snap, Snap::CircleCenter);
+    assert!(setup.distance(dvec3(60.0, 0.0, 5.0)) < 1e-9, "{setup}");
+    assert!(DVec3::from(point.at).distance(dvec3(0.0, 0.0, 5.0)) < 1e-9);
+    let (found, _) = find_point(&two.body, &point, 0.01).unwrap();
+    assert!(found.distance(dvec3(0.0, 0.0, 5.0)) < 1e-9, "{found}");
 }
 
 #[test]

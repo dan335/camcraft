@@ -62,6 +62,7 @@ pub(crate) fn with_plate() -> (Document, String) {
         bounds: body.mesh().bounds().unwrap(),
         file: Arc::new(body.clone()),
         body,
+        stands: vec![Stand::NONE],
         path: "p.stl".into(),
         units: "mm".into(),
         notes: Vec::new(),

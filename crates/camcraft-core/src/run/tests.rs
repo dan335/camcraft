@@ -344,6 +344,110 @@ fn a_drill_the_wrong_size_is_said() {
     assert!(w.iter().any(|w| w.contains("8.000 mm across")), "{w:?}");
 }
 
+/// Where the plate's three copies stand: where it is, a quarter turn round and
+/// moved, and turned by a free angle and moved; and where each has its hole.
+fn three_copies() -> ([crate::arrange::Stand; 3], [DVec2; 3]) {
+    use crate::arrange::Stand;
+    let stand = |degrees: f64, x: f64, y: f64| Stand {
+        turn: camcraft_geom::turn::Turn::from_degrees(degrees).unwrap(),
+        offset: DVec3::new(x, y, 0.0),
+    };
+    (
+        [
+            Stand::NONE,
+            stand(90.0, 100.0, 0.0),
+            stand(30.0, 0.0, 100.0),
+        ],
+        [dvec2(0.0, 0.0), dvec2(100.0, 0.0), dvec2(0.0, 100.0)],
+    )
+}
+
+/// The plate's hole, picked once by its rim, is drilled in each of three
+/// copies, where each stands and each still 8 mm across, so the 8 mm drill is
+/// right for all of them; traced, the rim is a circle about each.
+#[test]
+fn a_hole_picked_once_is_drilled_in_every_copy() {
+    let (_, job) = drilled(None);
+    let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
+    let (stands, holes) = three_copies();
+    let bodies = Bodies::standing([("dome", &body, &stands[..])]);
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let op = &result.operations[0];
+    let StrategyDetail::Drill(report) = &op.detail else {
+        panic!("reported {:?}", op.detail);
+    };
+    assert_eq!(report.holes.len(), 3);
+    for want in holes {
+        let hole = report
+            .holes
+            .iter()
+            .find(|h| h.at.distance(want) < 1e-9)
+            .unwrap_or_else(|| panic!("no hole at {want}: {:?}", report.holes));
+        assert!((hole.radius - 4.0).abs() < 1e-9, "{hole:?}");
+        assert!((hole.top - hole.bottom - 5.0).abs() < 1e-6, "{hole:?}");
+    }
+    assert!(op.warnings.is_empty(), "{:?}", op.warnings);
+    assert_eq!(result.verify.gouged, 0);
+
+    let prepared = crate::setup::prepare(&job, 0, &bodies).unwrap();
+    let curves = curves_picked(&job, &job.setups[0].operations[0], &prepared, &bodies).unwrap();
+    assert_eq!(curves.len(), 3);
+    for (curve, want) in curves.iter().zip(holes) {
+        let crate::strategy::curve::Piece::Arc { centre, sweep, .. } = curve.pieces[0] else {
+            panic!("the rim is not an arc: {curve:?}");
+        };
+        assert!(centre.distance(want) < 1e-9, "{centre} for {want}");
+        assert!((curve.start.truncate().distance(centre) - 4.0).abs() < 1e-9);
+        let turned: f64 = curve
+            .pieces
+            .iter()
+            .map(|p| match p {
+                crate::strategy::curve::Piece::Arc { sweep, .. } => *sweep,
+                crate::strategy::curve::Piece::Line { .. } => f64::NAN,
+            })
+            .sum();
+        assert!(
+            (turned.abs() - std::f64::consts::TAU).abs() < 1e-9,
+            "{sweep}"
+        );
+    }
+}
+
+/// The plate's hole, picked once by its wall, is bored in each of three
+/// copies, round about each, the tool's radius in from a wall that is still
+/// 8 mm across.
+#[test]
+fn a_round_wall_picked_once_is_bored_in_every_copy() {
+    let (_, job) = round_wall_cut("bore");
+    let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
+    let (stands, holes) = three_copies();
+    let bodies = Bodies::standing([("dome", &body, &stands[..])]);
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let op = &result.operations[0];
+    let StrategyDetail::Bore(report) = &op.detail else {
+        panic!("reported {:?}", op.detail);
+    };
+    assert_eq!((report.holes, report.bosses, report.cores), (3, 0, 0));
+    assert_eq!(result.verify.gouged, 0);
+    let mut about = [0; 3];
+    let mut at = DVec3::ZERO;
+    for m in op.path.moves() {
+        if m.role == crate::path::toolpath::MoveRole::Cut {
+            let crate::path::toolpath::MoveKind::Arc(a) = m.kind else {
+                panic!("a straight cut to {}", m.to);
+            };
+            let k = holes
+                .iter()
+                .position(|h| a.centre.truncate().distance(*h) < 1e-6)
+                .unwrap_or_else(|| panic!("an arc about {}", a.centre));
+            about[k] += 1;
+            assert!((a.radius(at) - 1.0).abs() < 1e-6, "{}", a.radius(at));
+        }
+        at = m.to;
+    }
+    assert!(about.iter().all(|&n| n > 0), "{about:?}");
+}
+
 /// A point on the wall of the plate's 8 mm hole.
 const HOLE_WALL: [f64; 3] = [4.0, 0.0, 2.5];
 

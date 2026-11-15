@@ -177,6 +177,24 @@ fn a_stand_turns_then_moves() {
     }
 }
 
+/// Undoing a stand brings a point back: exactly at a quarter turn, to within
+/// rounding at any other, and no stand leaves it as it was, bits and all.
+#[test]
+fn a_stand_undone_brings_a_point_back() {
+    let p = dvec3(1.0, 2.0, 3.0);
+    let quarter = Stand {
+        offset: dvec3(10.0, -0.5, -18.0),
+        ..stand(90.0, 0.0, 0.0)
+    };
+    assert_eq!(quarter.undo_point(quarter.point(p)), p);
+    let free = stand(23.0, 4.0, 5.0);
+    assert!(free.undo_point(free.point(p)).distance(p) < 1e-12);
+    let odd = dvec3(-0.0, f64::INFINITY, -0.0);
+    let back = Stand::NONE.undo_point(odd);
+    assert_eq!(back.x.to_bits(), odd.x.to_bits());
+    assert_eq!(back.y, f64::INFINITY);
+}
+
 /// Stands are equal and hash alike by their turns and their offsets' bits,
 /// up and down as well as across.
 #[test]

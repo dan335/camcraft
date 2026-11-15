@@ -367,12 +367,13 @@ pub(super) fn used_by(
     }
 }
 
-/// The box around every loaded model, in model coordinates.
+/// The box around every copy of every loaded model, in model coordinates.
 pub(super) fn all_model_bounds(doc: &Document) -> Option<camcraft_geom::mesh::Aabb> {
     // The job's models: one undone out of it may still be loaded, for a redo.
+    let bodies = doc.bodies();
     doc.job
         .models
         .iter()
-        .filter_map(|d| doc.models.get(&d.name)?.model().map(|m| m.bounds))
+        .filter_map(|d| bodies.get(&d.name)?.bounds())
         .reduce(|a, b| a.union(&b))
 }

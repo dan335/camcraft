@@ -164,6 +164,7 @@ fn a_corner_too_tight_inside_is_refused() {
 fn edges_join_where_two_meet() {
     let edge = |ends: [u32; 2], a: [f64; 2], b: [f64; 2]| Edge {
         model: "m".into(),
+        copy: 0,
         ends: Some(ends),
         curve: lines(&[a, b], 0.0),
     };
@@ -195,6 +196,11 @@ fn edges_join_where_two_meet() {
     let mut other = edge([2, 3], [5.0, 0.0], [6.0, 0.0]);
     other.model = "n".into();
     let two = join(&[edge([1, 2], [0.0, 0.0], [1.0, 0.0]), other]);
+    assert_eq!(two.len(), 2);
+    // So they are on another copy of the same model.
+    let mut copy = edge([2, 3], [5.0, 0.0], [6.0, 0.0]);
+    copy.copy = 1;
+    let two = join(&[edge([1, 2], [0.0, 0.0], [1.0, 0.0]), copy]);
     assert_eq!(two.len(), 2);
 }
 

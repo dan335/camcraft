@@ -282,11 +282,12 @@ impl Picking {
         scene
             .models
             .iter()
-            .flat_map(|m| {
+            .flat_map(|m| m.copies.iter().map(move |copy| (m, copy)))
+            .flat_map(|(m, copy)| {
                 let t = m.body().topology();
                 t.edges()
                     .iter()
-                    .zip(&m.edges)
+                    .zip(&copy.edges)
                     .filter_map(|(e, pts)| match e.kind {
                         EdgeKind::Circle(c) if c.full && c.radius > 2.0 => {
                             // A chord's middle, on the side facing the eye.
@@ -297,7 +298,7 @@ impl Picking {
                                     _ => None,
                                 })
                                 .min_by(|x, y| x.distance(eye).total_cmp(&y.distance(eye)))?;
-                            Some((near, scene.frame.to_setup(c.center)))
+                            Some((near, scene.frame.to_setup_as(&copy.stand, c.center)))
                         }
                         _ => None,
                     })

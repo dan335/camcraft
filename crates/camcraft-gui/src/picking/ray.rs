@@ -7,6 +7,11 @@
 //! against that model's triangles; a face is then the face its triangle belongs to,
 //! exactly the face a saved pick will name. Nothing is picked from `f32`.
 //!
+//! A model with several copies has one body and one index: the ray is taken back
+//! through each copy's stand as well, into the body, and the nearest copy it meets
+//! is the one hit. What is picked on any copy is saved on the body, where no copy
+//! need stand, so it means the same feature on every copy.
+//!
 //! Points and edges are thin, so they are found on the screen instead: the nearest
 //! one within a few points of the pointer that is not hidden behind the part. The
 //! order of preference is a point, then a point on the stock, then an edge, then the
@@ -18,6 +23,7 @@
 
 use std::sync::Arc;
 
+use camcraft_core::arrange::Stand;
 use camcraft_core::job::{Along, PointRef, Snap};
 use camcraft_core::setup::Prepared;
 use camcraft_core::setup::features::{snap_point, unplaced};
@@ -70,7 +76,8 @@ pub enum Target {
         model: String,
         /// The face's number.
         face: u32,
-        /// Where on it, in the job's coordinates, where the model is placed.
+        /// Where on it, in the job's coordinates, on the model's body where it is
+        /// placed: where no copy need stand.
         at: DVec3,
     },
     /// An edge of a model.
@@ -79,7 +86,8 @@ pub enum Target {
         model: String,
         /// The edge's number.
         edge: u32,
-        /// Where on it, in the job's coordinates, where the model is placed.
+        /// Where on it, in the job's coordinates, on the model's body where it is
+        /// placed: where no copy need stand.
         at: DVec3,
     },
     /// A loop of a model's edges, end to end, as picking edges takes them: the
@@ -132,19 +140,32 @@ pub struct PickStock {
     pub in_setup: bool,
 }
 
-/// One model, as picking needs it: its faces and edges, its index, and where its
-/// edges and points sit in the setup's frame, worked out once per layout.
+/// One model, as picking needs it: its faces and edges, its one index, and where
+/// each copy's edges and points sit in the setup's frame, worked out once per
+/// layout.
 pub struct PickModel {
     name: String,
     /// Whether the setup machines it. One that does not is picked only whole, so
     /// its edges and points are not worked out.
     pub in_setup: bool,
     model: Arc<Model>,
+    /// The index of its body, as no copy need stand: a ray is taken into each
+    /// copy's place rather than an index built for each.
     bvh: Arc<MeshBvh>,
+    /// Which of its edges close on themselves.
+    closed: Vec<bool>,
+    /// Each copy, in the order its model has them.
+    pub copies: Vec<PickCopy>,
+}
+
+/// One copy of a model, as picking needs it: where it stands, and where its
+/// edges and points sit in the setup's frame. A copy of a model the setup does
+/// not machine has only its stand.
+pub struct PickCopy {
+    /// Where it stands.
+    pub stand: Stand,
     /// Each edge's points, in the setup's frame.
     pub edges: Vec<Vec<DVec3>>,
-    /// Which of them close on themselves.
-    closed: Vec<bool>,
     /// Each vertex, in the setup's frame.
     vertices: Vec<DVec3>,
     /// Each edge's circle centre, if it is round, in the setup's frame.
@@ -159,10 +180,28 @@ impl PickModel {
         &self.name
     }
 
-    /// The model's triangles and topology.
+    /// The model's triangles and topology: the one body its copies are of.
     pub fn body(&self) -> &Body {
         &self.model.body
     }
+
+    /// Where each copy of it stands.
+    pub fn stands(&self) -> &[Stand] {
+        &self.model.stands
+    }
+}
+
+/// Where a ray first meets a model.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Hit {
+    /// Which model, by its place in the scene.
+    pub model: usize,
+    /// Which copy of it.
+    pub copy: usize,
+    /// Which of its body's triangles.
+    pub triangle: u32,
+    /// How far along the ray.
+    pub t: f64,
 }
 
 /// A laid-out setup, ready to pick from.
@@ -199,46 +238,60 @@ impl PickScene {
         let models = loaded
             .into_iter()
             .map(|(name, model, bvh)| {
-                if prepared.piece(&name).is_none() {
+                if !prepared.machines(&name) {
+                    let copies = model
+                        .stands
+                        .iter()
+                        .map(|&stand| PickCopy {
+                            stand,
+                            edges: Vec::new(),
+                            vertices: Vec::new(),
+                            centres: Vec::new(),
+                            middles: Vec::new(),
+                        })
+                        .collect();
                     return PickModel {
                         name,
                         in_setup: false,
                         model,
                         bvh,
-                        edges: Vec::new(),
                         closed: Vec::new(),
-                        vertices: Vec::new(),
-                        centres: Vec::new(),
-                        middles: Vec::new(),
+                        copies,
                     };
                 }
                 let body = &model.body;
                 let (mesh, t) = (body.mesh(), body.topology());
-                let to = |p: DVec3| frame.to_setup(p);
                 let ids = 0..u32::try_from(t.edges().len()).unwrap_or(u32::MAX);
-                let edges = ids
-                    .clone()
-                    .map(|e| t.edge_points(mesh, e).map(to).collect())
-                    .collect();
-                let closed = t.edges().iter().map(|e| e.closed).collect();
-                let vertices = t.vertices().iter().map(|v| to(v.position)).collect();
-                let centres = ids
-                    .clone()
-                    .map(|e| snap_point(body, Snap::CircleCenter, e).map(to))
-                    .collect();
-                let middles = ids
-                    .map(|e| snap_point(body, Snap::EdgeMiddle, e).map(to))
+                let copies = model
+                    .stands
+                    .iter()
+                    .map(|&stand| {
+                        let to = |p: DVec3| frame.to_setup_as(&stand, p);
+                        PickCopy {
+                            stand,
+                            edges: ids
+                                .clone()
+                                .map(|e| t.edge_points(mesh, e).map(to).collect())
+                                .collect(),
+                            vertices: t.vertices().iter().map(|v| to(v.position)).collect(),
+                            centres: ids
+                                .clone()
+                                .map(|e| snap_point(body, Snap::CircleCenter, e).map(to))
+                                .collect(),
+                            middles: ids
+                                .clone()
+                                .map(|e| snap_point(body, Snap::EdgeMiddle, e).map(to))
+                                .collect(),
+                        }
+                    })
                     .collect();
                 PickModel {
                     name,
                     in_setup: true,
+                    closed: t.edges().iter().map(|e| e.closed).collect(),
                     model,
                     bvh,
-                    edges,
-                    closed,
-                    vertices,
-                    centres,
-                    middles,
+                    copies,
                 }
             })
             .collect();
@@ -262,25 +315,47 @@ impl PickScene {
         self.models.iter().filter(|m| m.in_setup)
     }
 
+    /// Edge `edge` of `pm`'s body in the setup's frame, as its own transform
+    /// places it, where no copy need stand. A pick names the same edges on
+    /// every copy, so which edges a click takes with it (a loop, a chain) is
+    /// worked out on this, once for them all, whichever copy was clicked.
+    pub fn body_edge(&self, pm: &PickModel, edge: u32) -> Vec<DVec3> {
+        let body = pm.body();
+        body.topology()
+            .edge_points(body.mesh(), edge)
+            .map(|p| self.frame.to_setup(p))
+            .collect()
+    }
+
     /// The first surface of the setup's models the ray from `o` along unit `d`
-    /// meets within `max`: which model, which of its triangles, and how far.
-    pub fn cast(&self, o: DVec3, d: DVec3, max: f64) -> Option<(usize, u32, f64)> {
+    /// meets within `max`: which model, which copy of it, which of its
+    /// triangles, and how far.
+    pub fn cast(&self, o: DVec3, d: DVec3, max: f64) -> Option<Hit> {
         self.cast_among(o, d, max, false)
     }
 
-    /// The same, among the job's other models too when `all`.
-    fn cast_among(&self, o: DVec3, d: DVec3, max: f64, all: bool) -> Option<(usize, u32, f64)> {
-        let om = self.frame.to_model(o);
-        let dm = self.frame.to_model(o + d) - om;
+    /// The same, among the job's other models too when `all`. The ray is taken
+    /// into each copy's place on its model's body, so one index serves every
+    /// copy.
+    fn cast_among(&self, o: DVec3, d: DVec3, max: f64, all: bool) -> Option<Hit> {
         self.models
             .iter()
             .enumerate()
             .filter(|(_, m)| all || m.in_setup)
-            .filter_map(|(i, m)| {
-                let hit = m.bvh.cast_ray(m.body().mesh(), om, dm, max)?;
-                Some((i, hit.triangle, hit.t))
+            .flat_map(|(model, m)| {
+                m.copies.iter().enumerate().filter_map(move |(copy, c)| {
+                    let om = self.frame.to_model_as(&c.stand, o);
+                    let dm = self.frame.to_model_as(&c.stand, o + d) - om;
+                    let hit = m.bvh.cast_ray(m.body().mesh(), om, dm, max)?;
+                    Some(Hit {
+                        model,
+                        copy,
+                        triangle: hit.triangle,
+                        t: hit.t,
+                    })
+                })
             })
-            .min_by(|a, b| a.2.total_cmp(&b.2))
+            .min_by(|a, b| a.t.total_cmp(&b.t))
     }
 
     /// Whether `p` can be seen along its line of `sight`, and is not behind the
@@ -293,7 +368,7 @@ impl PickScene {
             return true;
         }
         self.cast(eye, to / dist, dist)
-            .is_none_or(|(_, _, t)| t >= dist - self.eps)
+            .is_none_or(|hit| hit.t >= dist - self.eps)
     }
 
     /// What is under `cursor`, for a ray `(start, unit direction)` through it,
@@ -308,9 +383,9 @@ impl PickScene {
     ) -> Option<Target> {
         match accept {
             Accept::Models => {
-                let (mi, _, _) = self.cast_among(eye, dir, f64::INFINITY, true)?;
+                let hit = self.cast_among(eye, dir, f64::INFINITY, true)?;
                 Some(Target::Model {
-                    model: self.models.get(mi)?.name.clone(),
+                    model: self.models.get(hit.model)?.name.clone(),
                 })
             }
             Accept::Stocks => {
@@ -327,20 +402,21 @@ impl PickScene {
                 .model_point(sight, proj, cursor)
                 .or_else(|| self.stock_point(sight, proj, cursor)),
             Accept::Edges => {
-                let (mi, edge, at) = self.nearest_edge(sight, proj, cursor)?;
+                let near = self.nearest_edge(sight, proj, cursor)?;
+                let m = self.models.get(near.model)?;
                 Some(Target::Edge {
-                    model: self.models.get(mi)?.name.clone(),
-                    edge,
-                    at: self.frame.to_model(at),
+                    model: m.name.clone(),
+                    edge: near.edge,
+                    at: self.on_body(m, near.copy, near.at)?,
                 })
             }
             Accept::Faces => {
-                let (mi, tri, t) = self.cast(eye, dir, f64::INFINITY)?;
-                let m = self.models.get(mi)?;
+                let hit = self.cast(eye, dir, f64::INFINITY)?;
+                let m = self.models.get(hit.model)?;
                 Some(Target::Face {
                     model: m.name.clone(),
-                    face: m.body().topology().face_of(tri)?,
-                    at: self.frame.to_model(eye + dir * t),
+                    face: m.body().topology().face_of(hit.triangle)?,
+                    at: self.on_body(m, hit.copy, eye + dir * hit.t)?,
                 })
             }
         }
@@ -362,36 +438,39 @@ impl PickScene {
     fn model_point(&self, sight: Sight, proj: &Projector, cursor: Pos2) -> Option<Target> {
         let mut best: Option<(f32, f64, Target)> = None;
         for m in &self.models {
-            let points = (m.vertices.iter().map(|p| (Snap::Vertex, Some(*p))))
-                .enumerate()
-                .chain(
-                    m.centres
-                        .iter()
-                        .map(|p| (Snap::CircleCenter, *p))
-                        .enumerate(),
-                )
-                .chain(m.middles.iter().map(|p| (Snap::EdgeMiddle, *p)).enumerate());
-            for (i, (snap, p)) in points {
-                let Some(p) = p else { continue };
-                let Some(d) = near(proj, cursor, p, POINT_REACH) else {
-                    continue;
-                };
-                let was = best.as_ref().map(|(b, depth, _)| (*b, *depth));
-                if !self.better(sight, d, p, was) || !self.visible(sight, p) {
-                    continue;
-                }
-                if let Ok(index) = u32::try_from(i) {
-                    best = Some((d, sight.depth(p), self.point(m, snap, index, p)));
+            for c in &m.copies {
+                let points = (c.vertices.iter().map(|p| (Snap::Vertex, Some(*p))))
+                    .enumerate()
+                    .chain(
+                        c.centres
+                            .iter()
+                            .map(|p| (Snap::CircleCenter, *p))
+                            .enumerate(),
+                    )
+                    .chain(c.middles.iter().map(|p| (Snap::EdgeMiddle, *p)).enumerate());
+                for (i, (snap, p)) in points {
+                    let Some(p) = p else { continue };
+                    let Some(d) = near(proj, cursor, p, POINT_REACH) else {
+                        continue;
+                    };
+                    let was = best.as_ref().map(|(b, depth, _)| (*b, *depth));
+                    if !self.better(sight, d, p, was) || !self.visible(sight, p) {
+                        continue;
+                    }
+                    if let Ok(index) = u32::try_from(i) {
+                        best = Some((d, sight.depth(p), self.point(m, c, snap, index, p)));
+                    }
                 }
             }
         }
         if let Some((.., t)) = best {
             return Some(t);
         }
-        let (mi, e, _) = self.nearest_edge(sight, proj, cursor)?;
-        let m = self.models.get(mi)?;
-        let c = (*m.centres.get(e as usize)?)?;
-        Some(self.point(m, Snap::CircleCenter, e, c))
+        let near = self.nearest_edge(sight, proj, cursor)?;
+        let m = self.models.get(near.model)?;
+        let c = m.copies.get(near.copy)?;
+        let centre = (*c.centres.get(near.edge as usize)?)?;
+        Some(self.point(m, c, Snap::CircleCenter, near.edge, centre))
     }
 
     /// The nearest point on the stock's box within reach of `cursor` that can be
@@ -416,31 +495,42 @@ impl PickScene {
         best.map(|(.., t)| t)
     }
 
-    fn point(&self, m: &PickModel, snap: Snap, index: u32, setup: DVec3) -> Target {
+    /// Point `setup`, in the setup's frame, on copy `c` of `m`: snap `snap` of
+    /// its vertex or edge `index`.
+    fn point(&self, m: &PickModel, c: &PickCopy, snap: Snap, index: u32, setup: DVec3) -> Target {
         Target::Point {
             point: PointRef {
                 model: m.name.clone(),
                 snap,
                 index,
-                // Saved where the model's file puts it, so it moves with the model.
-                at: unplaced(m.body(), self.frame.to_model(setup)),
+                // Saved where the model's file puts it, so it moves with the model,
+                // and wherever its copies stand.
+                at: unplaced(m.body(), self.frame.to_model_as(&c.stand, setup)),
             },
             setup,
         }
     }
 
+    /// Setup point `p`, on copy `copy` of `m`, on the model's body where it is
+    /// placed: where the copy has it, taken back to where no copy need stand.
+    fn on_body(&self, m: &PickModel, copy: usize, p: DVec3) -> Option<DVec3> {
+        let c = m.copies.get(copy)?;
+        Some(self.frame.to_model_as(&c.stand, p))
+    }
+
     /// The nearest edge on the screen within reach of `cursor` that is not hidden:
-    /// which model, which edge, and the point of it nearest the cursor, in the
-    /// setup's frame.
-    fn nearest_edge(
-        &self,
-        sight: Sight,
-        proj: &Projector,
-        cursor: Pos2,
-    ) -> Option<(usize, u32, DVec3)> {
-        let mut near: Vec<(f32, usize, u32, DVec3)> = Vec::new();
-        for (mi, m) in self.models.iter().enumerate() {
-            for (e, points) in m.edges.iter().enumerate() {
+    /// which model and copy, which edge, and the point of it nearest the cursor,
+    /// in the setup's frame.
+    fn nearest_edge(&self, sight: Sight, proj: &Projector, cursor: Pos2) -> Option<NearEdge> {
+        let mut near: Vec<(f32, NearEdge)> = Vec::new();
+        let copies = self.models.iter().enumerate().flat_map(|(mi, m)| {
+            m.copies
+                .iter()
+                .enumerate()
+                .map(move |(ci, c)| (mi, m, ci, c))
+        });
+        for (mi, m, ci, c) in copies {
+            for (e, points) in c.edges.iter().enumerate() {
                 let closed = m.closed.get(e).copied().unwrap_or(false);
                 let closing = points.first().filter(|_| closed && points.len() > 2);
                 let pairs = points.windows(2).filter_map(|w| match w {
@@ -465,8 +555,14 @@ impl PickScene {
                         best = Some((d, a + (b - a) * f64::from(s)));
                     }
                 }
-                if let (Some((d, p)), Ok(e)) = (best, u32::try_from(e)) {
-                    near.push((d, mi, e, p));
+                if let (Some((d, at)), Ok(edge)) = (best, u32::try_from(e)) {
+                    let edge = NearEdge {
+                        model: mi,
+                        copy: ci,
+                        edge,
+                        at,
+                    };
+                    near.push((d, edge));
                 }
             }
         }
@@ -477,14 +573,26 @@ impl PickScene {
         near.sort_by(|a, b| {
             place(a.0)
                 .cmp(&place(b.0))
-                .then(sight.depth(a.3).total_cmp(&sight.depth(b.3)))
+                .then(sight.depth(a.1.at).total_cmp(&sight.depth(b.1.at)))
                 .then(a.0.total_cmp(&b.0))
         });
         near.into_iter()
             .take(EDGE_TRIES)
-            .find(|(_, _, _, p)| self.visible(sight, *p))
-            .map(|(_, mi, e, p)| (mi, e, p))
+            .find(|(_, e)| self.visible(sight, e.at))
+            .map(|(_, e)| e)
     }
+}
+
+/// An edge near the pointer, on one copy of one model.
+struct NearEdge {
+    /// The model, by its place in the scene.
+    model: usize,
+    /// Which copy of it.
+    copy: usize,
+    /// The edge's number.
+    edge: u32,
+    /// Its point nearest the pointer, in the setup's frame.
+    at: DVec3,
 }
 
 /// How far from `cursor` `p` is drawn, if it is within `reach` of it.

@@ -959,8 +959,9 @@ impl Document {
             // A work zero picked on something no longer there: draw the part from
             // the model's own zero instead, without the axes, which would be a lie,
             // so it can be seen to pick again. The panel says what is wrong, and a
-            // run refuses the setup until it is fixed.
-            Err(PrepareError::Feature(_)) => {
+            // run refuses the setup until it is fixed. So too for one picked on a
+            // model that does not stand once, which is no one place.
+            Err(PrepareError::Feature(_) | PrepareError::NotOnce { .. }) => {
                 let mut job = self.job.clone();
                 if let Some(s) = job.setups.get_mut(index) {
                     s.origin = Origin::ModelOrigin {

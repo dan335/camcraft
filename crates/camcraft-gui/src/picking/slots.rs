@@ -280,7 +280,7 @@ pub fn smooth_chain(scene: &PickScene, model: &str, edge: u32) -> Vec<u32> {
         return vec![edge];
     };
     let t = pm.body().topology();
-    let points = |e: u32| pm.edges.get(e as usize).cloned().unwrap_or_default();
+    let points = |e: u32| scene.body_edge(pm, e);
     t.smooth_chain(edge, points, SMOOTH)
 }
 
@@ -297,7 +297,7 @@ pub fn chamfer_run(scene: &PickScene, model: &str, edge: u32) -> (Vec<u32>, bool
         return (vec![edge], false);
     };
     let t = pm.body().topology();
-    let points = |e: u32| pm.edges.get(e as usize).cloned().unwrap_or_default();
+    let points = |e: u32| scene.body_edge(pm, e);
     match t.level_loop(edge, points, t.tolerance()) {
         Some(round) => (round, true),
         None => (t.smooth_chain(edge, points, SMOOTH), false),
@@ -320,7 +320,7 @@ pub fn edge_loop(scene: &PickScene, model: &str, edge: u32) -> Vec<u32> {
         return vec![edge];
     };
     let t = pm.body().topology();
-    let points = |e: u32| pm.edges.get(e as usize).cloned().unwrap_or_default();
+    let points = |e: u32| scene.body_edge(pm, e);
     t.level_loop(edge, points, t.tolerance())
         .unwrap_or_else(|| vec![edge])
 }

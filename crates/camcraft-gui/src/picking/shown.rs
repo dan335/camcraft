@@ -13,7 +13,7 @@ use camcraft_core::job::{
 };
 use camcraft_core::run::cutting_tool;
 use camcraft_core::setup::features::{self, FeatureError};
-use camcraft_core::setup::{Bodies, Prepared};
+use camcraft_core::setup::{Bodies, PrepareError, Prepared};
 use camcraft_core::strategy::planar::{centre_offset, picked_pieces};
 use camcraft_geom::contour::Region;
 use glam::{DVec2, DVec3};
@@ -66,16 +66,23 @@ pub fn shown(
     let Some(s) = doc.setup(setup) else {
         return out;
     };
-    let bodies: Bodies<'_> = scene.setup_models().map(|m| (m.name(), m.body())).collect();
+    let bodies = Bodies::standing(
+        scene
+            .setup_models()
+            .map(|m| (m.name(), m.body(), m.stands())),
+    );
     let tolerance = doc.job.tolerance;
-    let to_setup = |p: DVec3| scene.frame.to_setup(p);
 
     if let Origin::Point { point, .. } = &s.origin {
-        out.origin = Some(match bodies.get(point.model.as_str()) {
-            Some(body) => {
+        // The work zero is one place, so it is found on a model only where the
+        // model stands once, as laying the setup out finds it.
+        out.origin = Some(match bodies.standing_once(&point.model) {
+            Ok((body, stand)) => {
                 match features::find_point(body, point, features::tolerance(tolerance, body)) {
                     Ok((p, found)) => {
-                        out.highlight.markers.push(to_setup(p));
+                        out.highlight
+                            .markers
+                            .push(scene.frame.to_setup_as(stand, p));
                         Ok(describe_point(
                             body,
                             &point.model,
@@ -87,7 +94,10 @@ pub fn shown(
                     Err(e) => Err(e.to_string()),
                 }
             }
-            None => Err(FeatureError::NotLoaded(point.model.clone()).to_string()),
+            // The pick's own words: the row it is shown in says it is the work
+            // zero's.
+            Err(PrepareError::Feature(e)) => Err(e.to_string()),
+            Err(e) => Err(e.to_string()),
         });
     }
 
@@ -98,17 +108,21 @@ pub fn shown(
     // Each pick found, with the model it is on, or why not.
     let find = |r: &FeatureRef, kind: Kind| {
         let body = bodies
-            .get(r.model.as_str())
+            .body(&r.model)
             .ok_or_else(|| FeatureError::NotLoaded(r.model.clone()).to_string())?;
         let index = kind.find(body, r, tolerance).map_err(|e| e.to_string())?;
-        Ok::<_, String>((*body, index))
+        Ok::<_, String>((body, index))
     };
     let curves = operation.strategy.uses().curves;
     for r in &sel.faces {
         out.faces.push(find(r, Kind::Face).map(|(body, face)| {
-            out.highlight
-                .faces
-                .extend(face_triangles(body, face, &to_setup));
+            // Found once on the body, drawn on every copy.
+            for stand in bodies.get(&r.model).map_or(&[][..], |c| c.stands) {
+                let to_setup = |p: DVec3| scene.frame.to_setup_as(stand, p);
+                out.highlight
+                    .faces
+                    .extend(face_triangles(body, face, &to_setup));
+            }
             // A chamfer's face is its edges, each chamfered, and an
             // engraving's its outline, engraved: drawn as picked.
             if matches!(curves, Some(Curves::Chamfered | Curves::Engraved))
@@ -167,7 +181,7 @@ pub fn shown(
                 "Loop of {n} edges{} · on '{model}'",
                 scene
                     .model(model)
-                    .and_then(|pm| loop_size(pm, &round, m))
+                    .and_then(|pm| loop_size(scene, pm, &round, m))
                     .unwrap_or_default()
             )),
         };
@@ -248,12 +262,11 @@ pub fn shown(
     out
 }
 
-/// " · 31.80 × 15.80 mm", the size of loop `round` of `pm`'s edges seen from above.
-fn loop_size(pm: &PickModel, round: &[u32], m: Measure) -> Option<String> {
-    let mut points = round
-        .iter()
-        .filter_map(|&e| pm.edges.get(e as usize))
-        .flatten();
+/// " · 31.80 × 15.80 mm", the size of loop `round` of `pm`'s edges seen from
+/// above, on its body as its own transform places it: the loop is the same
+/// loop on every copy.
+fn loop_size(scene: &PickScene, pm: &PickModel, round: &[u32], m: Measure) -> Option<String> {
+    let mut points = round.iter().flat_map(|&e| scene.body_edge(pm, e));
     let first = points.next()?.truncate();
     let (lo, hi) = points.fold((first, first), |(lo, hi), p| {
         (lo.min(p.truncate()), hi.max(p.truncate()))

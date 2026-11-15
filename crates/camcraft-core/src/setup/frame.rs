@@ -10,9 +10,16 @@
 //! can sit square on a 3-axis table. So a box stays a box, exactly, and turning a
 //! point only swaps and negates its coordinates: no rounding, and the identity
 //! orientation changes nothing bit for bit.
+//!
+//! A model laid on a sheet stands once for each copy of it: its body is turned
+//! about Z and moved, in model coordinates, before the setup turns it
+//! ([`Frame::to_setup_as`]). A model off a sheet stands once, where it is, and
+//! its stand does nothing at all.
 
 use glam::{DMat4, DVec3, DVec4};
 use serde::{Deserialize, Serialize};
+
+use crate::arrange::Stand;
 
 /// A model axis, either way along it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -221,6 +228,25 @@ impl Frame {
     /// A setup point in model coordinates.
     pub fn to_model(&self, q: DVec3) -> DVec3 {
         self.orientation.inverse(q + self.origin)
+    }
+
+    /// A point of a model's body in the setup frame, where the copy standing
+    /// at `stand` has it: the stand first, then [`to_setup`](Self::to_setup).
+    /// For a copy standing where it is, exactly [`to_setup`](Self::to_setup).
+    pub fn to_setup_as(&self, stand: &Stand, p: DVec3) -> DVec3 {
+        self.to_setup(stand.point(p))
+    }
+
+    /// A direction of a model's body in the setup frame, as the copy standing
+    /// at `stand` has it: turned, never moved.
+    pub fn direction_to_setup_as(&self, stand: &Stand, v: DVec3) -> DVec3 {
+        self.orientation.apply(stand.direction(v))
+    }
+
+    /// The point of a model's body that the copy standing at `stand` has at
+    /// setup point `q`: [`to_setup_as`](Self::to_setup_as) undone.
+    pub fn to_model_as(&self, stand: &Stand, q: DVec3) -> DVec3 {
+        stand.undo_point(self.to_model(q))
     }
 
     /// [`to_setup`](Self::to_setup) as a matrix, for drawing.

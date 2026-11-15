@@ -31,9 +31,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
+use camcraft_core::arrange::Stand;
 use camcraft_core::job::{
     ExpressionFault, Job, LengthUnit, ModelDef, Origin, Setup, StockDef, StockSpec,
 };
+use camcraft_core::setup::Bodies;
 use camcraft_geom::bvh::MeshBvh;
 use camcraft_session::fs::{job_dir, real, relative_path, resolve, with_job_extension};
 use camcraft_session::{Model, SessionError, write_job};
@@ -67,8 +69,10 @@ pub enum Level {
     Error,
 }
 
-/// What a model was loaded from and where it was placed: when this changes, it is
-/// loaded again, or only placed again when its file is the same.
+/// What a model was loaded from, where it was placed and where its copies
+/// stand: when this changes, it is loaded again, or only placed again when its
+/// file is the same. What was laid out or run from a model is out of date when
+/// its key is, so a copy standing elsewhere makes it so too.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelKey {
     /// The file, as the file system names it ([`real`]): a job saved
@@ -80,10 +84,14 @@ pub struct ModelKey {
     pub tolerance: u64,
     /// Its position, rotation and scale, as bits.
     pub transform: [u64; 9],
+    /// Where each copy of it stands, as its model has them
+    /// ([`Model::stands`]).
+    pub stands: Vec<Stand>,
 }
 
 impl ModelKey {
-    /// The key for `def` in a job in `dir`, at `tolerance`.
+    /// The key for `def` in a job in `dir`, at `tolerance`: standing once,
+    /// where it is, as every model is loaded.
     pub fn of(dir: &Path, def: &ModelDef, tolerance: f64) -> Self {
         let t = &def.transform;
         let mut transform = [0; 9];
@@ -98,6 +106,7 @@ impl ModelKey {
             units: def.units,
             tolerance: tolerance.to_bits(),
             transform,
+            stands: vec![Stand::NONE],
         }
     }
 
@@ -235,12 +244,13 @@ pub struct Document {
 }
 
 impl Document {
-    /// Every model loaded, by name, as the engine takes them.
-    pub fn bodies(&self) -> camcraft_core::setup::Bodies<'_> {
-        self.models
-            .iter()
-            .filter_map(|(n, slot)| Some((n.as_str(), &slot.model()?.body)))
-            .collect()
+    /// Every model loaded, by name, as the engine takes them: each its body and
+    /// where its copies stand.
+    pub fn bodies(&self) -> Bodies<'_> {
+        Bodies::standing(self.models.iter().filter_map(|(n, slot)| {
+            let m = slot.model()?;
+            Some((n.as_str(), &m.body, m.stands.as_slice()))
+        }))
     }
 
     /// A new, empty job: one stock around whatever models are added, and one setup

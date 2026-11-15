@@ -4,9 +4,10 @@
 use camcraft_geom::topology::EdgeKind;
 
 use super::clearing::level_leads;
-use super::curves::body_of;
+use super::curves::copies_of;
 use super::*;
 use crate::job::ThreadHand;
+use crate::setup::Copies;
 use crate::setup::features::{self, find_face};
 use crate::strategy::round::{
     Down, Levels, RoundParams, Wall, bore, circular, nearest_first, rounds,
@@ -197,46 +198,49 @@ pub(in crate::run) fn round_walls(
 ) -> Result<Vec<Round>, RunError> {
     let frame = &prepared.frame;
     let mut walls: Vec<Wall> = Vec::new();
+    // A face is on every copy or none, so each is seen once for them all.
+    let mut seen: Vec<(&str, u32)> = Vec::new();
     let mut tol = job.tolerance.max(0.01);
     for pick in &op.selection.faces {
-        let body = body_of(op, bodies, &pick.model)?;
+        let Copies { body, stands } = copies_of(op, bodies, &pick.model)?;
         let near = features::tolerance(job.tolerance, body);
         tol = tol.max(near);
         let found = find_face(body, pick, near).map_err(in_op(op))?;
-        if walls
-            .iter()
-            .any(|w| w.model == pick.model && w.face == found.index)
-        {
+        if seen.contains(&(pick.model.as_str(), found.index)) {
             continue;
         }
+        seen.push((&pick.model, found.index));
         let t = body.topology();
         let Some(face) = t.face(found.index) else {
             continue;
         };
-        let circles = face
-            .edges
-            .iter()
-            .filter_map(|&e| match t.edge(e)?.kind {
-                EdgeKind::Circle(c) => Some((
-                    frame.to_setup(c.center),
-                    c.radius,
-                    frame.orientation.apply(c.normal).z.abs() >= 1.0 - 1.0e-6,
-                )),
-                EdgeKind::Line | EdgeKind::Curve => None,
-            })
-            .collect();
-        let triangles = face
-            .triangles
-            .iter()
-            .filter_map(|&i| body.mesh().triangle(i as usize))
-            .map(|tri| tri.map(|p| frame.to_setup(p)))
-            .collect();
-        walls.push(Wall {
-            model: pick.model.clone(),
-            face: found.index,
-            circles,
-            triangles,
-        });
+        // Each copy's wall, where the copy stands.
+        for stand in stands {
+            let circles = face
+                .edges
+                .iter()
+                .filter_map(|&e| match t.edge(e)?.kind {
+                    EdgeKind::Circle(c) => Some((
+                        frame.to_setup_as(stand, c.center),
+                        c.radius,
+                        frame.direction_to_setup_as(stand, c.normal).z.abs() >= 1.0 - 1.0e-6,
+                    )),
+                    EdgeKind::Line | EdgeKind::Curve => None,
+                })
+                .collect();
+            let triangles = face
+                .triangles
+                .iter()
+                .filter_map(|&i| body.mesh().triangle(i as usize))
+                .map(|tri| tri.map(|p| frame.to_setup_as(stand, p)))
+                .collect();
+            walls.push(Wall {
+                model: pick.model.clone(),
+                face: found.index,
+                circles,
+                triangles,
+            });
+        }
     }
     let mut found = rounds(&walls, tol).map_err(in_op(op))?;
     // A Top or Bottom set goes for every wall; left out, each its own, as

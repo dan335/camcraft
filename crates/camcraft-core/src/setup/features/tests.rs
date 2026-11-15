@@ -1,4 +1,5 @@
 use super::*;
+use crate::arrange::Stand;
 use camcraft_geom::synthetic;
 use camcraft_geom::topology::FaceKind;
 use glam::{dvec2, dvec3};
@@ -462,4 +463,171 @@ fn a_gone_pick_is_an_error_not_a_smaller_boundary() {
         boundary(&body, &b, &s, 1.0),
         Err(FeatureError::NotLoaded(_))
     ));
+}
+
+/// Where the plate's three copies stand: where it is, a quarter turn round and
+/// moved, and turned by a free angle and moved, each well clear of the others.
+fn three_stands() -> [Stand; 3] {
+    let stand = |degrees: f64, by: DVec3| Stand {
+        turn: camcraft_geom::turn::Turn::from_degrees(degrees).unwrap(),
+        offset: by,
+    };
+    [
+        Stand::NONE,
+        stand(90.0, dvec3(100.0, 0.0, 0.0)),
+        stand(30.0, dvec3(0.0, 100.0, 0.0)),
+    ]
+}
+
+/// The plate laid out standing at each of `stands`.
+fn laid_out_standing(body: &Body, stands: &[Stand]) -> Prepared {
+    use crate::job::{Job, ModelDef, Setup, StockDef, StockSpec};
+    let mut j = Job::default();
+    j.models.push(ModelDef {
+        name: "p".into(),
+        path: "p.stl".into(),
+        units: None,
+        transform: Default::default(),
+    });
+    j.stocks.push(StockDef {
+        name: "s".into(),
+        spec: StockSpec::default(),
+    });
+    let mut setup = Setup::new("top");
+    setup.models = vec!["p".into()];
+    setup.stocks = vec!["s".into()];
+    j.setups.push(setup);
+    crate::setup::prepare(&j, 0, &Bodies::standing([("p", body, stands)])).unwrap()
+}
+
+/// A face and an edge picked once are found on every copy, each with its
+/// copy, and each where its copy stands: the body's own taken through the
+/// copy's stand.
+#[test]
+fn a_pick_is_found_on_every_copy_where_it_stands() {
+    let body = plate();
+    let stands = three_stands();
+    let prepared = laid_out_standing(&body, &stands);
+    let bodies = Bodies::standing([("p", &body, &stands[..])]);
+    let s = Selection {
+        faces: vec![face_at(&body, [10.0, 10.0, 5.0])],
+        edges: vec![edge_at(&body, [4.0, 0.0, 5.0])],
+    };
+    let found = Picked::find(&s, &prepared, &bodies, 0.01).unwrap();
+    let frame = &prepared.frame;
+    let face = s.faces[0].index;
+    let triangles: Vec<[DVec3; 3]> = body
+        .topology()
+        .face(face)
+        .unwrap()
+        .triangles
+        .iter()
+        .map(|&t| body.mesh().triangle(t as usize).unwrap())
+        .collect();
+    assert_eq!(found.faces.len(), 3);
+    for (copy, (f, stand)) in found.faces.iter().zip(&stands).enumerate() {
+        assert_eq!((f.model.as_str(), f.copy, f.face), ("p", copy, face));
+        let want: Vec<[DVec3; 3]> = triangles
+            .iter()
+            .map(|t| t.map(|p| frame.to_setup_as(stand, p)))
+            .collect();
+        assert_eq!(f.triangles, want, "copy {copy}");
+    }
+    let edge = s.edges[0].index;
+    let points: Vec<DVec3> = body.topology().edge_points(body.mesh(), edge).collect();
+    assert_eq!(found.chains.len(), 3);
+    for (copy, (c, stand)) in found.chains.iter().zip(&stands).enumerate() {
+        assert_eq!((c.model.as_str(), c.copy, c.edge), ("p", copy, edge));
+        let want: Vec<DVec3> = points
+            .iter()
+            .map(|&p| frame.to_setup_as(stand, p))
+            .collect();
+        assert_eq!(c.points, want, "copy {copy}");
+    }
+    // The quarter-turned copy's rim, about (100, 0) now, exactly as far out.
+    for p in &found.chains[1].points {
+        let r = (p.truncate() - dvec2(100.0, 0.0)).length();
+        assert!((r - 4.0).abs() < 1e-9, "{p}");
+    }
+    // Picked twice, they are still found once on each copy.
+    let twice = Selection {
+        faces: vec![s.faces[0].clone(), s.faces[0].clone()],
+        edges: vec![s.edges[0].clone(), s.edges[0].clone()],
+    };
+    let again = Picked::find(&twice, &prepared, &bodies, 0.01).unwrap();
+    assert_eq!((again.faces.len(), again.chains.len()), (3, 3));
+    // A selection of the top face is that face on every copy, seen from above.
+    let area = boundary_shape(Boundary::Selection, &s, &prepared, &bodies, 0.01)
+        .unwrap()
+        .unwrap();
+    for (stand, at) in stands.iter().zip([dvec2(10.0, 10.0); 3]) {
+        let there = frame.to_setup_as(stand, at.extend(5.0)).truncate();
+        assert!(area.contains(there), "{there}");
+    }
+}
+
+/// Edges join into loops only on one copy: two copies of a triangle, their
+/// corners numbered alike, are two loops, each on its own copy, never one
+/// running between them.
+#[test]
+fn loops_do_not_join_across_copies() {
+    let side = |copy: usize, ends: [u32; 2], a: DVec3, b: DVec3| Chain {
+        model: "p".into(),
+        copy,
+        edge: ends[0],
+        points: vec![a, b],
+        closed: false,
+        ends: Some(ends),
+    };
+    let corners = |by: f64| {
+        [
+            dvec3(by, 0.0, 0.0),
+            dvec3(by + 10.0, 0.0, 0.0),
+            dvec3(by, 10.0, 0.0),
+        ]
+    };
+    let mut chains = Vec::new();
+    for (copy, [a, b, c]) in [(0, corners(0.0)), (1, corners(50.0))] {
+        chains.push(side(copy, [1, 2], a, b));
+        chains.push(side(copy, [2, 3], b, c));
+        chains.push(side(copy, [3, 1], c, a));
+    }
+    // Interleaved, so the next chain at a corner is always the other copy's
+    // first.
+    chains.sort_by_key(|c| c.edge);
+    let rings = loops(&chains).unwrap();
+    assert_eq!(rings.len(), 2);
+    for (ring, by) in rings.iter().zip([0.0, 50.0]) {
+        assert_eq!(ring.len(), 3);
+        assert!(
+            ring.iter().all(|p| p.x >= by && p.x <= by + 10.0),
+            "{ring:?}"
+        );
+    }
+    // A copy whose loop is not all picked is open, whatever the other has.
+    chains.retain(|c| !(c.copy == 1 && c.edge == 3));
+    assert!(matches!(loops(&chains), Err(FeatureError::OpenLoop { .. })));
+}
+
+/// A model with no copy standing has nothing picked on it to find, though its
+/// picks are still looked for on its body.
+#[test]
+fn a_model_with_no_copy_has_no_picks() {
+    let body = plate();
+    let prepared = laid_out_standing(&body, &[Stand::NONE]);
+    let bodies = Bodies::standing([("p", &body, &[][..])]);
+    let s = Selection {
+        faces: vec![face_at(&body, [10.0, 10.0, 5.0])],
+        edges: vec![edge_at(&body, [4.0, 0.0, 5.0])],
+    };
+    let found = Picked::find(&s, &prepared, &bodies, 0.01).unwrap();
+    assert!(found.faces.is_empty() && found.chains.is_empty());
+    let gone = Selection {
+        faces: vec![FeatureRef {
+            at: [7.0, 7.0, 7.0],
+            ..s.faces[0].clone()
+        }],
+        ..Selection::default()
+    };
+    assert!(Picked::find(&gone, &prepared, &bodies, 0.01).is_err());
 }

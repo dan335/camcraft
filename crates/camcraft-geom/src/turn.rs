@@ -97,6 +97,22 @@ impl Turn {
             ),
         }
     }
+
+    /// `p` turned back: what [`apply`](Self::apply) turns to `p`. A whole
+    /// number of quarter turns swaps and negates back, and no turn gives back
+    /// `p` itself.
+    pub fn undo(&self, p: DVec2) -> DVec2 {
+        match self.quarters {
+            Some(0) => p,
+            Some(1) => dvec2(p.y, -p.x),
+            Some(2) => -p,
+            Some(3) => dvec2(-p.y, p.x),
+            _ => dvec2(
+                self.cos * p.x + self.sin * p.y,
+                -self.sin * p.x + self.cos * p.y,
+            ),
+        }
+    }
 }
 
 impl Default for Turn {
@@ -170,6 +186,22 @@ mod tests {
         assert!((q - dvec2(3f64.sqrt(), 1.0)).length() < 1e-12, "{q}");
         assert_eq!(t.degrees(), 30.0);
         assert_eq!(turn(-30.0).degrees(), 330.0);
+    }
+
+    /// Undoing a turn brings a point back: exactly for a quarter turn, and to
+    /// within rounding for any other.
+    #[test]
+    fn a_turn_undone_brings_a_point_back() {
+        let p = dvec2(0.1, -7.3);
+        for degrees in [0.0, 90.0, 180.0, 270.0] {
+            let t = turn(degrees);
+            assert_eq!(t.undo(t.apply(p)), p, "{degrees}");
+            assert_eq!(t.apply(t.undo(p)), p, "{degrees}");
+        }
+        let t = turn(37.5);
+        assert!((t.undo(t.apply(p)) - p).length() < 1e-12);
+        let back = Turn::NONE.undo(dvec2(-0.0, 1.0));
+        assert_eq!(back.x.to_bits(), (-0.0f64).to_bits());
     }
 
     /// Turns are equal, and hash alike, by their angle from 0 to 360.

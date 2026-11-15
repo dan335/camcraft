@@ -5,7 +5,23 @@
 //! simulator and the post never see a rotation or a model coordinate. The one way
 //! back is [`Prepared::frame`]: a pick is found on its own model, where its point
 //! is in model coordinates, and brought into the frame ([`crate::setup::features`]).
-//! [`Prepared::pieces`] names the models the part was merged from.
+//! [`Prepared::pieces`] names the copies the part was merged from.
+//!
+//! # Copies
+//!
+//! A model is one body and where each copy of it stands ([`Bodies`]): a model
+//! laid on a sheet stands once for each copy, turned about Z and moved
+//! ([`Stand`]); any other stands once, where it is. The body is never placed
+//! again for a copy. Whatever is read from it, a pick above all, is found once
+//! on the body and taken into the frame for each copy, through its stand and
+//! then the frame ([`Frame::to_setup_as`]). A copy standing where it is does
+//! nothing at all on the way, so a job without sheets is laid out bit for bit
+//! as it was before copies.
+//!
+//! A stand only turns about Z and moves, so it keeps what lies level level and
+//! a circle a circle of the same radius: a round edge's or hole's radius is read
+//! from the body for every copy, and only its centre and axis are taken where
+//! the copy stands.
 //!
 //! What every operation of the setup reads from the part alone is worked out
 //! once, when first asked for, and kept with it: its shadow from above.
@@ -25,6 +41,7 @@ use camcraft_geom::topology::Body;
 use camcraft_sim::stock::{PartSurface, StockError};
 use glam::DVec3;
 
+use crate::arrange::Stand;
 use crate::cutter::dropcutter::DropCutter;
 use crate::job::{BoxOf, HeightContext, Job, JobError, Origin, Setup, StockSpec};
 use crate::strategy::adaptive::flat_heights;
@@ -32,8 +49,108 @@ use features::FeatureError;
 use frame::{BadOrientation, Frame, Orientation};
 use memo::Memo;
 
-/// A setup's models, by name, in model coordinates, with their topology.
-pub type Bodies<'a> = BTreeMap<&'a str, &'a Body>;
+/// What a model off a sheet has: one copy, standing where it is.
+const WHERE_IT_IS: &[Stand] = &[Stand::NONE];
+
+/// A model as the engine takes it: its body, and where each copy of it stands.
+#[derive(Debug, Clone, Copy)]
+pub struct Copies<'a> {
+    /// Its triangles and topology, in model coordinates, where its own
+    /// transform places it: one body however many copies stand.
+    pub body: &'a Body,
+    /// Where each copy stands, in order: one, [`Stand::NONE`], for a model off
+    /// a sheet; none for one its sheet had no room for, which has nothing to
+    /// machine.
+    pub stands: &'a [Stand],
+}
+
+impl Copies<'_> {
+    /// The box around every copy, in model coordinates; `None` when no copy
+    /// stands or the body is empty. One copy standing where it is has the
+    /// body's own box, bit for bit.
+    pub fn bounds(&self) -> Option<Aabb> {
+        let mesh = self.body.mesh();
+        self.stands
+            .iter()
+            .filter_map(|s| stood_bounds(mesh, s))
+            .reduce(|a, b| a.union(&b))
+    }
+}
+
+/// The box around `mesh` where the copy standing at `stand` has it.
+fn stood_bounds(mesh: &TriMesh, stand: &Stand) -> Option<Aabb> {
+    if stand.is_none() {
+        return mesh.bounds();
+    }
+    // A turn by a free angle turns the box too, so the box is the stood
+    // points', not the body's box stood.
+    let mut points = mesh.vertices().iter().map(|&p| stand.point(p));
+    let first = points.next()?;
+    let (min, max) = points.fold((first, first), |(lo, hi), p| (lo.min(p), hi.max(p)));
+    Some(Aabb { min, max })
+}
+
+/// A job's models, by name, as the engine takes them: each its body, in model
+/// coordinates with its topology, and where each copy of it stands.
+///
+/// Collected from name and body pairs, each model stands once, where it is.
+#[derive(Debug, Clone, Default)]
+pub struct Bodies<'a>(BTreeMap<&'a str, Copies<'a>>);
+
+impl<'a> Bodies<'a> {
+    /// The models named, each with its body and where its copies stand.
+    pub fn standing(models: impl IntoIterator<Item = (&'a str, &'a Body, &'a [Stand])>) -> Self {
+        Self(
+            models
+                .into_iter()
+                .map(|(name, body, stands)| (name, Copies { body, stands }))
+                .collect(),
+        )
+    }
+
+    /// Model `name`'s body and where its copies stand, if it is loaded.
+    pub fn get(&self, name: &str) -> Option<Copies<'a>> {
+        self.0.get(name).copied()
+    }
+
+    /// Model `name`'s body, if it is loaded: the one body all its copies are
+    /// of, in model coordinates, where no copy need stand.
+    pub fn body(&self, name: &str) -> Option<&'a Body> {
+        self.0.get(name).map(|c| c.body)
+    }
+
+    /// The loaded models' names, in order.
+    pub fn names(&self) -> impl Iterator<Item = &'a str> + '_ {
+        self.0.keys().copied()
+    }
+
+    /// Model `name`'s body and its one stand, for a pick that must mean one
+    /// place, as the work zero does: refused where the model has no copy or
+    /// several, since which copy is first is no reason to pick it.
+    pub fn standing_once(&self, name: &str) -> Result<(&'a Body, &'a Stand), PrepareError> {
+        let c = self
+            .get(name)
+            .ok_or_else(|| FeatureError::NotLoaded(name.to_string()))?;
+        match c.stands {
+            [one] => Ok((c.body, one)),
+            many => Err(PrepareError::NotOnce {
+                model: name.to_string(),
+                copies: many.len(),
+            }),
+        }
+    }
+}
+
+impl<'a> FromIterator<(&'a str, &'a Body)> for Bodies<'a> {
+    /// Each model standing once, where it is.
+    fn from_iter<I: IntoIterator<Item = (&'a str, &'a Body)>>(models: I) -> Self {
+        Self::standing(
+            models
+                .into_iter()
+                .map(|(name, body)| (name, body, WHERE_IT_IS)),
+        )
+    }
+}
 
 /// A setup that could not be prepared.
 #[derive(Debug, thiserror::Error)]
@@ -56,13 +173,42 @@ pub enum PrepareError {
     /// The work zero was picked on something that is no longer there.
     #[error("work zero: {0}")]
     Feature(#[from] FeatureError),
+    /// The work zero was picked on a model that does not stand exactly once,
+    /// so the pick is no one place.
+    #[error(
+        "the work zero is picked on '{model}', which {}: pick it on the stock, or on a model \
+         that stands once",
+        standing(.copies)
+    )]
+    NotOnce {
+        /// The model.
+        model: String,
+        /// How many copies of it stand.
+        copies: usize,
+    },
+    /// No copy of any of the models stands anywhere, so there is nothing to
+    /// machine or to be around.
+    #[error("no copy of {0} stands anywhere")]
+    NoCopies(String),
 }
 
-/// One of the models merged into the part.
+/// How many copies of a model stand, as a sentence goes on.
+fn standing(copies: &usize) -> String {
+    match *copies {
+        0 => "has no copy placed".into(),
+        n => format!("stands {n} times"),
+    }
+}
+
+/// One copy of one of the models merged into the part.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Piece {
     /// The model, by name.
     pub model: String,
+    /// Which copy of it, by its place among the model's stands.
+    pub copy: usize,
+    /// Where the copy stands.
+    pub stand: Stand,
 }
 
 /// A setup in its own frame.
@@ -75,7 +221,8 @@ pub struct Piece {
 pub struct Prepared {
     /// Every model the setup machines, as one mesh.
     pub part: TriMesh,
-    /// The models it was merged from, in the setup's order.
+    /// The copies it was merged from: each of the setup's models in its
+    /// order, and each model's copies in theirs.
     pub pieces: Vec<Piece>,
     /// Its bounds.
     pub model_bounds: Aabb,
@@ -96,9 +243,9 @@ pub struct Prepared {
 }
 
 impl Prepared {
-    /// Model `model`, if the part was merged from it.
-    pub fn piece(&self, model: &str) -> Option<&Piece> {
-        self.pieces.iter().find(|p| p.model == model)
+    /// Whether the part was merged from a copy of model `model`.
+    pub fn machines(&self, model: &str) -> bool {
+        self.pieces.iter().any(|p| p.model == model)
     }
 
     /// The box around every stock block.
@@ -187,20 +334,35 @@ impl Prepared {
     }
 }
 
-/// The box around the named models, in model coordinates.
-fn bounds_of(names: &[String], bodies: &Bodies<'_>) -> Result<Aabb, PrepareError> {
+/// The box around every copy of the named models, in model coordinates. A
+/// model with no copy standing adds nothing, but some copy must stand.
+pub fn bounds_of(names: &[String], bodies: &Bodies<'_>) -> Result<Aabb, PrepareError> {
+    if names.is_empty() {
+        return Err(JobError::NoModels(String::new()).into());
+    }
     let mut out: Option<Aabb> = None;
     for n in names {
-        let body = bodies
+        let copies = bodies
             .get(n.as_str())
             .ok_or_else(|| PrepareError::NotLoaded(n.clone()))?;
-        let b = body
-            .mesh()
-            .bounds()
-            .ok_or_else(|| PrepareError::EmptyModel(n.clone()))?;
-        out = Some(out.map_or(b, |o| o.union(&b)));
+        // What has no box has no geometry, however many copies of it stand.
+        if copies.body.mesh().vertices().is_empty() {
+            return Err(PrepareError::EmptyModel(n.clone()));
+        }
+        if let Some(b) = copies.bounds() {
+            out = Some(out.map_or(b, |o| o.union(&b)));
+        }
     }
-    out.ok_or_else(|| PrepareError::Job(JobError::NoModels(String::new())))
+    out.ok_or_else(|| PrepareError::NoCopies(quoted(names)))
+}
+
+/// `names`, each in quotes, as a list in a sentence: 'a', 'b' or 'c'.
+fn quoted(names: &[String]) -> String {
+    let all: Vec<String> = names.iter().map(|n| format!("'{n}'")).collect();
+    match all.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+        _ => all.concat(),
+    }
 }
 
 /// A stock block in model coordinates. One around no named models is around
@@ -292,17 +454,21 @@ pub fn prepare(job: &Job, index: usize, bodies: &Bodies<'_>) -> Result<Prepared,
         return Err(JobError::NoModels(setup.name.clone()).into());
     }
 
-    // The part, in model coordinates.
-    let parts = setup
-        .models
-        .iter()
-        .map(|n| {
-            bodies
-                .get(n.as_str())
-                .map(|b| b.mesh())
-                .ok_or_else(|| PrepareError::NotLoaded(n.clone()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    // Each copy of each model, in the setup's order.
+    let mut pieces: Vec<(Piece, &TriMesh)> = Vec::new();
+    for n in &setup.models {
+        let copies = bodies
+            .get(n.as_str())
+            .ok_or_else(|| PrepareError::NotLoaded(n.clone()))?;
+        pieces.extend(copies.stands.iter().enumerate().map(|(copy, &stand)| {
+            let piece = Piece {
+                model: n.clone(),
+                copy,
+                stand,
+            };
+            (piece, copies.body.mesh())
+        }));
+    }
     let model_box = bounds_of(&setup.models, bodies)?;
     let blocks = blocks_of(job, setup, model_box, bodies)?;
 
@@ -315,19 +481,18 @@ pub fn prepare(job: &Job, index: usize, bodies: &Bodies<'_>) -> Result<Prepared,
         origin,
     };
 
-    let merged;
-    let part_in_model = if let [one] = parts.as_slice() {
-        *one
-    } else {
-        merged = TriMesh::merged(&parts)?;
-        &merged
-    };
-    let pieces = setup
-        .models
+    // Each copy is taken into the frame alone, then they are merged: each point
+    // is moved the same either way, so a model standing once where it is lays
+    // out exactly as it would merged first and moved after.
+    let laid: Vec<TriMesh> = pieces
         .iter()
-        .map(|m| Piece { model: m.clone() })
-        .collect();
-    let part = part_in_model.mapped(|p| frame.to_setup(p))?;
+        .map(|(piece, mesh)| mesh.mapped(|p| frame.to_setup_as(&piece.stand, p)))
+        .collect::<Result<_, _>>()?;
+    let part = match <[TriMesh; 1]>::try_from(laid) {
+        Ok([one]) => one,
+        Err(laid) => TriMesh::merged(&laid.iter().collect::<Vec<_>>())?,
+    };
+    let pieces = pieces.into_iter().map(|(piece, _)| piece).collect();
     let model_bounds = part
         .bounds()
         .ok_or_else(|| PrepareError::EmptyModel(setup.name.clone()))?;
@@ -382,12 +547,10 @@ fn work_zero(
     Ok(match &setup.origin {
         Origin::ModelOrigin { offset } => DVec3::from_array(*offset),
         Origin::Point { point, offset } => {
-            let body = bodies
-                .get(point.model.as_str())
-                .ok_or_else(|| FeatureError::NotLoaded(point.model.clone()))?;
+            let (body, stand) = bodies.standing_once(&point.model)?;
             let tol = features::tolerance(job.tolerance, body);
             let (p, _) = features::find_point(body, point, tol)?;
-            o.apply(p) + DVec3::from_array(*offset)
+            o.apply(stand.point(p)) + DVec3::from_array(*offset)
         }
         &Origin::BoxPoint {
             of,

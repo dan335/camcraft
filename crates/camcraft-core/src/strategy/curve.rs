@@ -484,12 +484,15 @@ fn arc_distance(q: DVec2, (a, b): (DVec2, DVec2), c: DVec2, sweep: f64) -> f64 {
     }
 }
 
-/// A picked edge as a piece of curve: which model's corners it runs between,
-/// and its shape.
+/// A picked edge as a piece of curve: which copy of which model's corners it
+/// runs between, and its shape.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Edge {
     /// The model it is on.
     pub model: String,
+    /// Which copy of the model, by its place among the model's stands: copies
+    /// number their corners alike, and stand apart.
+    pub copy: usize,
     /// The corners it ends at, in its model's numbering; `None` for an edge
     /// that closes on itself.
     pub ends: Option<[u32; 2]>,
@@ -499,13 +502,14 @@ pub struct Edge {
 
 /// `edges` joined end to end where exactly two of them meet at a corner, each
 /// curve as far as it goes both ways, or round to where it started. In the
-/// order of their first edge as given; each runs the way that edge does.
+/// order of their first edge as given; each runs the way that edge does. Only
+/// edges on one copy of one model meet.
 pub fn join(edges: &[Edge]) -> Vec<Curve> {
-    // How many of the edges' ends are at a corner of `model`.
-    let meeting = |model: &str, v: u32| {
+    // How many of the edges' ends are at a corner of `model`'s `copy`.
+    let meeting = |model: &str, copy: usize, v: u32| {
         edges
             .iter()
-            .filter(|e| e.model == model)
+            .filter(|e| e.model == model && e.copy == copy)
             .filter_map(|e| e.ends)
             .map(|[a, b]| usize::from(a == v) + usize::from(b == v))
             .sum::<usize>()
@@ -526,11 +530,14 @@ pub fn join(edges: &[Edge]) -> Vec<Curve> {
         // The other edge at `corner`, where only two ends meet: its place, and
         // whether it starts there.
         let next = |corner: u32, used: &[bool]| {
-            if meeting(&first.model, corner) != 2 {
+            if meeting(&first.model, first.copy, corner) != 2 {
                 return None;
             }
             edges.iter().enumerate().find_map(|(j, e)| {
-                if used.get(j).copied().unwrap_or(true) || e.model != first.model {
+                if used.get(j).copied().unwrap_or(true)
+                    || e.model != first.model
+                    || e.copy != first.copy
+                {
                     return None;
                 }
                 match e.ends {

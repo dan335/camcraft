@@ -5,10 +5,11 @@ use camcraft_core::job::{Job, JobError};
 use camcraft_core::run::{Made, Plan, Progress, SetupResult, Stage, run_prepared_planned};
 use std::sync::Arc;
 
-use camcraft_core::setup::{Bodies, Prepared, prepare};
+use camcraft_core::setup::{Prepared, prepare};
 use camcraft_geom::shadow::Shadow;
 
 use crate::checks::{self, Checks};
+use crate::model::bodies_of;
 use crate::{Models, SessionError};
 
 /// A setup, run.
@@ -132,7 +133,7 @@ pub fn run_setup_watched(
         setup.operations.len(),
         job.tolerance
     )];
-    let bodies: Bodies<'_> = models.iter().map(|(n, m)| (*n, &m.body)).collect();
+    let bodies = bodies_of(models);
     underway(Underway::Stage(Stage::Preparing));
     let prepared = match laid_out {
         LaidOut::Prepared(prepared) => prepared,

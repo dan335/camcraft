@@ -25,6 +25,12 @@
 //! ([`placed`]). The same functions serve the engine and the app, so what the app
 //! highlights is what gets cut.
 //!
+//! A model with several copies is one body ([`crate::setup::Bodies`]): a pick is
+//! found once, on the body, and what it found is taken into the setup's frame for
+//! each copy, where that copy stands. So a face picked once is a face on every
+//! copy, each found and kept with its copy, and edges join into loops only on one
+//! copy.
+//!
 //! # Boundaries
 //!
 //! An operation kept to picked faces and edges is kept to a [`machining_boundary`],
@@ -47,7 +53,7 @@ use crate::job::{
     Boundary, Containment, FeatureRef, MachiningBoundary, Operation, Outline, Picks, PointRef,
     Selection, Snap,
 };
-use crate::setup::{Bodies, Prepared};
+use crate::setup::{Bodies, Copies, Prepared};
 
 /// How a pick was found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -325,11 +331,13 @@ pub fn find_point(body: &Body, pick: &PointRef, tol: f64) -> Result<(DVec3, Foun
         .ok_or_else(|| gone(&pick.model, "point", pick.at))
 }
 
-/// A picked edge, found, in the setup's frame.
+/// A picked edge, found, in the setup's frame, on one copy of its model.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Chain {
     /// The model it is on.
     pub model: String,
+    /// Which copy of the model, by its place among the model's stands.
+    pub copy: usize,
     /// Its number there.
     pub edge: u32,
     /// Its points, in order, in the setup's frame.
@@ -340,72 +348,85 @@ pub struct Chain {
     pub ends: Option<[u32; 2]>,
 }
 
-/// A picked face, found, in the setup's frame.
+/// A picked face, found, in the setup's frame, on one copy of its model.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PickedFace {
     /// The model it is on.
     pub model: String,
+    /// Which copy of the model, by its place among the model's stands.
+    pub copy: usize,
     /// Its number there.
     pub face: u32,
     /// Its triangles, in the setup's frame.
     pub triangles: Vec<[DVec3; 3]>,
 }
 
-fn body<'a>(bodies: &Bodies<'a>, model: &str) -> Result<&'a Body, FeatureError> {
+fn copies<'a>(bodies: &Bodies<'a>, model: &str) -> Result<Copies<'a>, FeatureError> {
     bodies
         .get(model)
-        .copied()
         .ok_or_else(|| FeatureError::NotLoaded(model.to_string()))
 }
 
-/// The picked faces, found, each once.
+/// The picked faces, found, each once on every copy of its model: found on
+/// the model's body, and taken into the frame where each copy stands.
 fn picked_faces(
     selection: &Selection,
     prepared: &Prepared,
     bodies: &Bodies<'_>,
     job_tolerance: f64,
 ) -> Result<Vec<PickedFace>, FeatureError> {
+    let frame = &prepared.frame;
     let mut out: Vec<PickedFace> = Vec::new();
     for pick in &selection.faces {
-        let body = body(bodies, &pick.model)?;
+        let Copies { body, stands } = copies(bodies, &pick.model)?;
         let found = find_face(body, pick, tolerance(job_tolerance, body))?;
+        // A face is on every copy or none, so it is seen once by its first.
         if out
             .iter()
             .any(|f| f.model == pick.model && f.face == found.index)
         {
             continue;
         }
-        let triangles = body
+        let triangles: Vec<[DVec3; 3]> = body
             .topology()
             .face(found.index)
             .map(|f| {
                 f.triangles
                     .iter()
                     .filter_map(|&t| body.mesh().triangle(t as usize))
-                    .map(|t| t.map(|p| prepared.frame.to_setup(p)))
                     .collect()
             })
             .unwrap_or_default();
-        out.push(PickedFace {
-            model: pick.model.clone(),
-            face: found.index,
-            triangles,
-        });
+        out.extend(stands.iter().enumerate().map(|(copy, stand)| {
+            PickedFace {
+                model: pick.model.clone(),
+                copy,
+                face: found.index,
+                triangles: triangles
+                    .iter()
+                    .map(|t| t.map(|p| frame.to_setup_as(stand, p)))
+                    .collect(),
+            }
+        }));
     }
     Ok(out)
 }
 
-/// The picked edges, found, each once, in the setup's frame.
+/// The picked edges, found, each once on every copy of its model, in the
+/// setup's frame: found on the model's body, and taken into the frame where
+/// each copy stands.
 pub fn picked_chains(
     selection: &Selection,
     prepared: &Prepared,
     bodies: &Bodies<'_>,
     job_tolerance: f64,
 ) -> Result<Vec<Chain>, FeatureError> {
+    let frame = &prepared.frame;
     let mut out: Vec<Chain> = Vec::new();
     for pick in &selection.edges {
-        let body = body(bodies, &pick.model)?;
+        let Copies { body, stands } = copies(bodies, &pick.model)?;
         let found = find_edge(body, pick, tolerance(job_tolerance, body))?;
+        // An edge is on every copy or none, so it is seen once by its first.
         if out
             .iter()
             .any(|c| c.model == pick.model && c.edge == found.index)
@@ -415,23 +436,31 @@ pub fn picked_chains(
         let Some(edge) = body.topology().edge(found.index) else {
             continue;
         };
-        out.push(Chain {
-            model: pick.model.clone(),
-            edge: found.index,
-            points: body
-                .topology()
-                .edge_points(body.mesh(), found.index)
-                .map(|p| prepared.frame.to_setup(p))
-                .collect(),
-            closed: edge.closed,
-            ends: edge.ends,
-        });
+        let points: Vec<DVec3> = body
+            .topology()
+            .edge_points(body.mesh(), found.index)
+            .collect();
+        out.extend(stands.iter().enumerate().map(|(copy, stand)| {
+            Chain {
+                model: pick.model.clone(),
+                copy,
+                edge: found.index,
+                points: points
+                    .iter()
+                    .map(|&p| frame.to_setup_as(stand, p))
+                    .collect(),
+                closed: edge.closed,
+                ends: edge.ends,
+            }
+        }));
     }
     Ok(out)
 }
 
 /// Picked edges joined into closed loops, end to end through the vertices they
-/// share, each loop as its points in order.
+/// share, each loop as its points in order. Only edges on one copy of one
+/// model share a vertex: copies of a model number theirs alike, and stand
+/// apart.
 ///
 /// Every chain must be part of a loop: a loose end is [`FeatureError::OpenLoop`],
 /// never a guess at how to close it.
@@ -452,10 +481,11 @@ fn loops(chains: &[Chain]) -> Result<Vec<Vec<DVec3>>, FeatureError> {
         let mut ring = first.points.clone();
         let mut last = first;
         while at != origin {
-            // The next picked chain on this model that ends here, lowest first.
+            // The next picked chain on this copy that ends here, lowest first.
             let next = chains.iter().enumerate().find(|(j, c)| {
                 !used.get(*j).copied().unwrap_or(true)
                     && c.model == first.model
+                    && c.copy == first.copy
                     && c.ends.is_some_and(|e| e.contains(&at))
             });
             let Some((j, c)) = next else {

@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use camcraft_core::arrange::Stand;
 use camcraft_core::job::{Job, LengthUnit, ModelDef, Transform};
+use camcraft_core::setup::Bodies;
 use camcraft_geom::mesh::{Aabb, TriMesh};
 use camcraft_geom::topology::{Body, FaceSource};
 use camcraft_import::step::{FileCheck, StepError, load_step};
@@ -17,9 +19,11 @@ use crate::{SessionError, fs};
 #[derive(Debug, Clone)]
 pub struct Model {
     /// The triangles, in millimetres, and their faces, edges and vertices, where
-    /// the job places them.
+    /// the job places them: one body, however many copies of it stand.
     pub body: Body,
-    /// Their bounds.
+    /// Where each copy of the body stands: one, where it is, as loaded.
+    pub stands: Vec<Stand>,
+    /// The body's bounds, as the job places it.
     pub bounds: Aabb,
     /// The body where its file put it, to place it again from.
     pub file: Arc<Body>,
@@ -39,7 +43,8 @@ impl Model {
         self.body.mesh()
     }
 
-    /// The model placed by `transform` instead, without reading its file again.
+    /// The model placed by `transform` instead, without reading its file again;
+    /// its copies stand where they stood.
     pub fn placed(&self, transform: &Transform) -> Result<Model, SessionError> {
         let body = self.file.placed(transform.matrix())?;
         let bounds = body.mesh().bounds().ok_or(SessionError::EmptyModel)?;
@@ -47,6 +52,7 @@ impl Model {
         // throw it away.
         Ok(Model {
             body,
+            stands: self.stands.clone(),
             bounds,
             file: Arc::clone(&self.file),
             path: self.path.clone(),
@@ -196,6 +202,7 @@ pub fn load_model(
     Ok(Model {
         file: Arc::new(body.clone()),
         body,
+        stands: vec![Stand::NONE],
         bounds,
         path: path.display().to_string(),
         units: label,
@@ -264,6 +271,16 @@ pub fn load_models(
 /// Loaded models as a run takes them.
 pub fn models_of(loaded: &BTreeMap<String, Model>) -> Models<'_> {
     loaded.iter().map(|(n, m)| (n.as_str(), m)).collect()
+}
+
+/// Loaded models as the engine takes them: each its body and where its copies
+/// stand.
+pub(crate) fn bodies_of<'a>(models: &Models<'a>) -> Bodies<'a> {
+    Bodies::standing(
+        models
+            .iter()
+            .map(|(&n, &m)| (n, &m.body, m.stands.as_slice())),
+    )
 }
 
 #[cfg(test)]

@@ -601,23 +601,24 @@ pub(super) fn drill_paths(
     Ok((path, holes.len() as u64, StrategyDetail::Drill(report)))
 }
 
-/// The setup's models' round edges that lie level as the part sits, seen from
-/// above: each a centre and a radius, the model's own, for a 2D cut to follow
-/// exactly.
+/// The round edges of every copy of the setup's models that lie level as the
+/// part sits, seen from above: each a centre and a radius, the model's own,
+/// for a 2D cut to follow exactly.
 pub(super) fn level_circles(prepared: &Prepared, bodies: &Bodies<'_>) -> Vec<(DVec2, f64)> {
+    let frame = &prepared.frame;
     let mut out: Vec<(DVec2, f64)> = Vec::new();
     for piece in &prepared.pieces {
-        let Some(body) = bodies.get(piece.model.as_str()) else {
+        let Some(body) = bodies.body(&piece.model) else {
             continue;
         };
         for edge in body.topology().edges() {
             let EdgeKind::Circle(c) = edge.kind else {
                 continue;
             };
-            if prepared.frame.orientation.apply(c.normal).z.abs() < 1.0 - 1e-6 {
+            if frame.direction_to_setup_as(&piece.stand, c.normal).z.abs() < 1.0 - 1e-6 {
                 continue;
             }
-            let centre = prepared.frame.to_setup(c.center).truncate();
+            let centre = frame.to_setup_as(&piece.stand, c.center).truncate();
             // The top and bottom of a round wall are the same circle from above.
             let known = out
                 .iter()
@@ -641,12 +642,18 @@ pub(in crate::run) fn drill_holes(
 ) -> Result<Vec<Hole>, RunError> {
     let chains =
         picked_chains(&op.selection, prepared, bodies, job.tolerance).map_err(in_op(op))?;
+    // The body a chain was found on, and where its copy stands.
+    let on = |c: &Chain| {
+        let copies = bodies.get(&c.model)?;
+        Some((copies.body, copies.stands.get(c.copy)?))
+    };
     let circle = |c: &Chain| {
-        let body = bodies.get(c.model.as_str())?;
+        let (body, stand) = on(c)?;
         match body.topology().edge(c.edge)?.kind {
-            EdgeKind::Circle(circle) => {
-                Some((prepared.frame.to_setup(circle.center), circle.radius))
-            }
+            EdgeKind::Circle(circle) => Some((
+                prepared.frame.to_setup_as(stand, circle.center),
+                circle.radius,
+            )),
             _ => None,
         }
     };
@@ -659,13 +666,12 @@ pub(in crate::run) fn drill_holes(
         if set {
             return op_bottom;
         }
-        bodies
-            .get(c.model.as_str())
-            .and_then(|body| {
+        on(c)
+            .and_then(|(body, stand)| {
                 hole_bottom(
                     c.edge,
                     body,
-                    |p| prepared.frame.to_setup(p).z,
+                    |p| prepared.frame.to_setup_as(stand, p).z,
                     crate::setup::features::tolerance(job.tolerance, body),
                 )
             })
