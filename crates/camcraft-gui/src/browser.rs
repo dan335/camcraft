@@ -695,13 +695,8 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
 /// section's own, greyed, saying so. One that is built comes out of here and
 /// into [`operation_groups`], in the same place.
 pub const PLANNED: &[(&str, usize, &str)] = &[
-    ("3D", 1, "Steep and shallow"),
     ("3D", 1, "Project"),
     ("3D", 1, "Morph"),
-    ("3D", 1, "Blend"),
-    ("3D", 1, "Flow"),
-    ("3D", 1, "Corner"),
-    ("3D", 1, "Geodesic"),
 ];
 
 /// What a planned operation's item says under the pointer.

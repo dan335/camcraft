@@ -106,7 +106,7 @@ floor's edges R4; a dome 14 across and 5 tall standing on its floor, its foot
 a sharp concave circle; and the block's top edge at +X rounded R8, ground
 going from level to upright. Steep, drafted and curved walls, shallow and
 curved ground, concave fillets, sharp inside corners and a dome: what Ramp,
-Pencil, Project, Morph and Steep and Shallow each have to follow. Its one body
+Pencil, Project and Morph each have to follow. Its one body
 is named `ops_3d`. `ops_3d/cam.py` finds that document by it, so it runs with
 any document active, and posts Fusion's Ramp with the sample library's 6 mm
 ball, as a new one starts, with a stepdown of 2 mm and with a ramp angle of

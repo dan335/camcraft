@@ -19,15 +19,15 @@ each release brought.
 
 *Matches Fusion* means a test holds a new operation to Fusion's own program for
 the same part, and the two leave the same material to 0.01 mm
-(`crates/camcraft-session/src/compare/tests.rs`). *Extension* marks what Fusion
-has only with its Manufacturing Extension.
+(`crates/camcraft-session/src/compare/tests.rs`). What Fusion has only with its
+Manufacturing Extension is [not planned](#not-planned).
 
 | Area                                          | Done | Partial | Not started |
 |-----------------------------------------------|-----:|--------:|------------:|
 | [2D operations](#2d-operations)               |    1 |      10 |           0 |
 | [3D roughing](#3d-roughing)                   |    0 |       2 |           0 |
-| [3D finishing](#3d-finishing)                 |    0 |       9 |           7 |
-| [Drilling](#drilling)                         |    4 |       1 |           3 |
+| [3D finishing](#3d-finishing)                 |    0 |       9 |           2 |
+| [Drilling](#drilling)                         |    4 |       1 |           2 |
 | [Shared settings](#shared-settings)           |   10 |       2 |           5 |
 | [Linking and entries](#linking-and-entries)   |    4 |       1 |           1 |
 | [Models](#models)                             |    3 |       2 |           1 |
@@ -37,7 +37,7 @@ has only with its Manufacturing Extension.
 | [Posts and programs](#posts-and-programs)     |    6 |       0 |           2 |
 | [App](#app)                                   |    7 |       1 |           0 |
 | [Project](#project)                           |    1 |       0 |           4 |
-| **All**                                       |   55 |      30 |          34 |
+| **All**                                       |   55 |      30 |          28 |
 
 `grep "| not started" PROGRESS.md` lists everything not yet begun.
 
@@ -46,7 +46,7 @@ has only with its Manufacturing Extension.
 Roughly in the order they matter:
 
 1. **Cut on a machine.** See [Before the first cut](#before-the-first-cut).
-2. **More strategies:** steep and shallow, project, morph.
+2. **More strategies:** project, morph.
 3. **A volumetric stock**, so what a top setup leaves carries to a flipped
    bottom one.
 4. **Exact slicing of the offset surface** for Z-level work
@@ -90,15 +90,10 @@ Roughly in the order they matter:
 | Spiral            | partial     | Centre, radii, slopes, both directions and orders ([0011](docs/decisions/0011-patterns-dropped-onto-the-part.md)). Missing: a centre picked on the model. |
 | Radial            | partial     | Centre, radii, angles, slopes. Missing: a centre picked on the model. |
 | Morphed Spiral    | partial     | Turns from the boundary's shape into its centre. Missing: a centre picked on the model. |
-| Steep and Shallow | not started | Extension. |
 | Pencil            | partial     | Held to Fusion's programs for `ops_3d` as a new one starts with a 12 mm ball, larger than its floor's fillets, and a 6 mm one, which fits them, at a 40° bitangency angle and with two stepovers: 95.3%, 74.5%, 95.3% and 69.3% of the columns either cuts alike, the 95th percentile 0.0098, 2.35, 0.0098 and 0.73 mm. Where the tool touches the part twice, found on a grid of drops and each point found exactly across the line: every crease between sheets of where the tool rests that meet sharper than the bitangency angle, and every wall's foot where what is below faces the wall at that angle or more; the nearest line next, both ways, one way (the wall on the right) or the other; overthickness; stepovers, passes either side a stepover apart along the surface ([0028](docs/decisions/0028-pencil.md)). Missing: Fusion's order and links (with the 6 mm ball its links lift where camcraft's stay down through the roughing's leftovers, most of what its figures lose), straight plunges down an upright corner at the cutting feed (left to the linker), Up/Down Milling, Inside/Outside Direction, unlimited stepovers, fragment settings, fillets, smoothing, a slope range, a contact point boundary, rest machining. Overthickness, one way and the other, stock to leave and flat or bull nose tools are not compared. |
 | Ramp              | partial     | Held to Fusion's programs for `ops_3d` as a new one starts, at a 2 mm stepdown and at a 0.5° ramp angle: 61.7%, 46.2% and 60.6% of the columns either cuts alike, the 95th percentile 0.31, 0.82 and 0.32 mm. Contour's rings gone down wall by wall: each wall from the level above its top ring along it, once round it there but on the first wall, down to each ring below on the part at every height between, a stepdown a lap round the longer ring and no steeper than the ramp angle, and once round its foot; the next wall the nearest; direction, flat areas, slopes ([0027](docs/decisions/0027-ramp.md)). Missing: where Fusion ends a pocket's wall above its floor (at a 1 mm stepdown it goes once round at Z11 and down Z10's ring on its own; camcraft goes on down, the main reason for the figures above), cusps placed as Fusion's (the outside starts 25° round its corner from Fusion's), horizontal leads, Order Bottom-Up, shallow areas, Minimum Diameter, Minimum Cutting Radius, fillets, ramp types. Stock to leave, slopes, conventional and flat or bull nose tools are not compared. |
 | Project           | not started | |
 | Morph             | not started | |
-| Blend             | not started | Extension. |
-| Flow              | not started | Extension. |
-| Corner            | not started | Extension. |
-| Geodesic          | not started | Extension. |
 
 ## Drilling
 
@@ -111,7 +106,6 @@ Roughly in the order they matter:
 | Canned cycles in the program    | partial     | Posted when a profile asks; off in every built-in post until dry-run on a machine. |
 | Tapping                         | not started | |
 | Reaming and boring cycles       | not started | |
-| Hole recognition                | not started | Extension. |
 
 ## Shared settings
 
@@ -245,6 +239,9 @@ What Fusion's Geometry, Heights, Passes and Linking tabs hold, across operations
 ## Not planned
 
 Turning, multi-axis (3+2, 4- and 5-axis), probing and additive.
+
+What Fusion has only with its Manufacturing Extension: steep and shallow,
+blend, flow, corner, geodesic and hole recognition.
 
 ## Before the first cut
 

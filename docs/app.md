@@ -31,10 +31,10 @@ profile, slot, trace, thread, bore, circular, engrave, 2D chamfer), 3D
 (adaptive clearing, pocket clearing, then parallel, scallop, contour, ramp,
 flat, pencil, spiral, radial and morphed spiral) and drilling. Fusion's operations not built yet
 are listed after the rest of their group, greyed, and say *Not implemented yet*
-under the pointer: in 3D, after the finishing, steep
-and shallow, project,
-morph, blend, flow, corner and geodesic. They are listed in `browser::PLANNED`,
-which an operation leaves once it is built.
+under the pointer: in 3D, after the finishing, project and morph. They are
+listed in `browser::PLANNED`, which an operation leaves once it is built.
+Fusion's operations that need its Manufacturing Extension are not listed: they
+are not planned.
 
 ## The tree
 

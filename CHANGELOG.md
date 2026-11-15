@@ -25,6 +25,10 @@ the same notes at more length.
   them was made a half turn that wide, which is no arc. Passes in line, no
   further apart than the tolerance, are now joined by the straight line
   between them. No program was written wrong: the operation was refused.
+- **Fusion's Manufacturing Extension operations are not planned.** Steep and
+  shallow, blend, flow, corner and geodesic are gone from the app's 3D menu,
+  where they were listed greyed as not implemented yet, and with hole
+  recognition from `PROGRESS.md`'s list, which names them under Not planned.
 
 ## 0.8.2 — 2026-11-14
 
