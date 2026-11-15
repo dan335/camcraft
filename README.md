@@ -33,8 +33,8 @@ Autodesk.)
 - **Models:** STEP and STL. STEP files are read in the units they declare, and
   every import is checked against the file it came from.
 - **Roughing:** adaptive clearing and pocket clearing.
-- **Finishing:** parallel, scallop, contour, ramp, flat, pencil, project, spiral,
-  radial and morphed spiral.
+- **Finishing:** parallel, scallop, contour, ramp, flat, pencil, project, morph,
+  spiral, radial and morphed spiral.
 - **2D:** profiles, pockets, 2D adaptive clearing, facing, slot, trace, 2D
   chamfer, engraving, bore, circular, thread milling and drilling.
 - **Tools:** flat, ball, bullnose, V-bit and chamfer cutters, drills and

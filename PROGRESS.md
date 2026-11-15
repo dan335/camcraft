@@ -26,7 +26,7 @@ Manufacturing Extension is [not planned](#not-planned).
 |-----------------------------------------------|-----:|--------:|------------:|
 | [2D operations](#2d-operations)               |    1 |      10 |           0 |
 | [3D roughing](#3d-roughing)                   |    0 |       2 |           0 |
-| [3D finishing](#3d-finishing)                 |    0 |      10 |           1 |
+| [3D finishing](#3d-finishing)                 |    0 |      11 |           0 |
 | [Drilling](#drilling)                         |    4 |       1 |           2 |
 | [Shared settings](#shared-settings)           |   10 |       2 |           5 |
 | [Linking and entries](#linking-and-entries)   |    4 |       1 |           1 |
@@ -37,7 +37,7 @@ Manufacturing Extension is [not planned](#not-planned).
 | [Posts and programs](#posts-and-programs)     |    6 |       0 |           2 |
 | [App](#app)                                   |    7 |       1 |           0 |
 | [Project](#project)                           |    1 |       0 |           4 |
-| **All**                                       |   55 |      31 |          27 |
+| **All**                                       |   55 |      32 |          26 |
 
 `grep "| not started" PROGRESS.md` lists everything not yet begun.
 
@@ -46,14 +46,13 @@ Manufacturing Extension is [not planned](#not-planned).
 Roughly in the order they matter:
 
 1. **Cut on a machine.** See [Before the first cut](#before-the-first-cut).
-2. **More strategies:** morph.
-3. **A volumetric stock**, so what a top setup leaves carries to a flipped
+2. **A volumetric stock**, so what a top setup leaves carries to a flipped
    bottom one.
-4. **Exact slicing of the offset surface** for Z-level work
+3. **Exact slicing of the offset surface** for Z-level work
    ([decision 0003](docs/decisions/0003-grids-only-for-stock.md)).
-5. **Exact circles from the B-rep**, rather than through the tessellation's
+4. **Exact circles from the B-rep**, rather than through the tessellation's
    points.
-6. The work offset manager in the toolbar; Fusion's `.json` tool libraries,
+5. The work offset manager in the toolbar; Fusion's `.json` tool libraries,
    which carry holders; tapered ball mills.
 
 ## 2D operations
@@ -93,7 +92,7 @@ Roughly in the order they matter:
 | Pencil            | partial     | Held to Fusion's programs for `ops_3d` as a new one starts with a 12 mm ball, larger than its floor's fillets, and a 6 mm one, which fits them, at a 40° bitangency angle and with two stepovers: 95.3%, 74.5%, 95.3% and 69.3% of the columns either cuts alike, the 95th percentile 0.0098, 2.35, 0.0098 and 0.73 mm. Where the tool touches the part twice, found on a grid of drops and each point found exactly across the line: every crease between sheets of where the tool rests that meet sharper than the bitangency angle, and every wall's foot where what is below faces the wall at that angle or more; the nearest line next, both ways, one way (the wall on the right) or the other; overthickness; stepovers, passes either side a stepover apart along the surface ([0028](docs/decisions/0028-pencil.md)). Missing: Fusion's order and links (with the 6 mm ball its links lift where camcraft's stay down through the roughing's leftovers, most of what its figures lose), straight plunges down an upright corner at the cutting feed (left to the linker), Up/Down Milling, Inside/Outside Direction, unlimited stepovers, fragment settings, fillets, smoothing, a slope range, a contact point boundary, rest machining. Overthickness, one way and the other, stock to leave and flat or bull nose tools are not compared. |
 | Ramp              | partial     | Held to Fusion's programs for `ops_3d` as a new one starts, at a 2 mm stepdown and at a 0.5° ramp angle: 61.7%, 46.2% and 60.6% of the columns either cuts alike, the 95th percentile 0.31, 0.82 and 0.32 mm. Contour's rings gone down wall by wall: each wall from the level above its top ring along it, once round it there but on the first wall, down to each ring below on the part at every height between, a stepdown a lap round the longer ring and no steeper than the ramp angle, and once round its foot; the next wall the nearest; direction, flat areas, slopes ([0027](docs/decisions/0027-ramp.md)). Missing: where Fusion ends a pocket's wall above its floor (at a 1 mm stepdown it goes once round at Z11 and down Z10's ring on its own; camcraft goes on down, the main reason for the figures above), cusps placed as Fusion's (the outside starts 25° round its corner from Fusion's), horizontal leads, Order Bottom-Up, shallow areas, Minimum Diameter, Minimum Cutting Radius, fillets, ramp types. Stock to leave, slopes, conventional and flat or bull nose tools are not compared. |
 | Project           | partial     | Held to Fusion's programs for `ops_3d` along the dome's foot, the floor's edge and the round's lower edge, as a new one starts, the other way, a millimetre up and with the 12 mm ball: 98.8%, 98.8%, 99.1% and 90.1% of the columns either cuts alike, the 95th percentile 0.0045, 0.0045, 0.0044 and 0.012 mm. Picked edges, open or closed, joined end to end, each seen from above and dropped onto the part where the tool rests, within the boundary, in the order picked; one way (closed clockwise, open as picked), the other way, or both ways (an open curve from its nearer end); each closed curve started nearest where the tool is; axial offset; slopes; lifted between curves, as Fusion's ([0029](docs/decisions/0029-project.md)). Missing: the other projection modes (greyed out for 3-axis), sketches, a chain's direction picked, Up/Down Milling, multiple depths, fillets, rest machining, a contact point boundary. One way, slopes, stock to leave, negative axial offsets and flat or bull nose tools are not compared. |
-| Morph             | not started | |
+| Morph             | partial     | Held to Fusion's programs for `ops_3d` between the dome's foot and the floor's edge, as a new one starts and one way, and between the R8 round's two edges: 91.9%, 91.9% and 99.4% of the columns either cuts alike, the 95th percentile 0.014, 0.014 and 0.0048 mm. Passes between two picked curves, both open or both closed, each a step of the way from every point of the one to its match as far along the other, as many as keep each within the stepover of its match on the next, dropped onto the part within the boundary; two open curves matched end to end, the second turned round where it runs the other way; two closed ones clockwise, the second started where the matched points are closest; from the curve nearer the work zero; both ways, one way or the other way; slopes ([0030](docs/decisions/0030-morph.md)). Missing: Fusion's own start for two closed curves (its passes between the dome and the floor bend elsewhere, and it lays fewer than the stepover asks, most of what those figures lose), Morph Mode (closest, automatic), Pass Extension, Contour Offset, a number of stepovers, offset stepovers, Up/Down Milling, multiple depths, fillets, rest machining, a contact point boundary, sketches, a chain's direction picked, Fusion's linker's order. Other way, slopes, stock to leave and flat or bull nose tools are not compared. |
 
 ## Drilling
 

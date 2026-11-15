@@ -1,6 +1,6 @@
-# Fusion's Ramp, Pencil and Project on the ops_3d part, each as a new operation of
-# Fusion's starts but for what its name says, posted with Fusion's Masso post:
-# fixtures/nc/ops_3d_*.nc. Run through the bridge after part.py (see
+# Fusion's Ramp, Pencil, Project and Morph on the ops_3d part, each as a new
+# operation of Fusion's starts but for what its name says, posted with Fusion's
+# Masso post: fixtures/nc/ops_3d_*.nc. Run through the bridge after part.py (see
 # ../README.md). It finds the document part.py made by its one body, named
 # ops_3d, and works in that document alone.
 #
@@ -33,6 +33,13 @@
 #   project_other_way   the same, Direction Other Way
 #   project_axial       the same, Axial Offset 1 mm
 #   project_ball12      the same with the 12 mm ball
+#
+#   morph               a new Morph with the 6 mm ball between two closed
+#                       curves picked on the part: the dome's foot, then the
+#                       floor's edge
+#   morph_one_way       the same, Direction One Way
+#   morph_open          a new Morph between two open curves: the R8 round's
+#                       upper edge, then its lower edge, reverted
 import copy, json, os, time, traceback
 
 BRIDGE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -124,28 +131,42 @@ def edge_through(x, y, z):
         raise LookupError((x, y, z))
     return best
 
-# Project's curves, picked as the panel picks them: a click on an edge takes
-# its chain, closed round the loop it is in unless the chain is open. The
-# dome's foot, the circle where it meets the floor; the floor's edge, where
-# the fillets round it start, a loop from its edge along +Y; and the R8
-# round's lower edge, along the block's side at X30, alone. Each has the
-# roughing's leftovers to cut where the tool rests over it: round the dome's
-# foot, in the fillets and on the round. Fusion's new closed chains run
-# clockwise seen from above, and an open one from its edge's start.
-PROJECTED = (
-    (edge_through(-15, 0, 10), False),
-    (edge_through(-6.13, 9, 10), False),
-    (edge_through(30, 0, 12), True),
-)
+def picking(*chains):
+    """Curves picked as the panel picks them, each (edge, open, reverted): a
+    click on an edge takes its chain, closed round the loop it is in unless
+    the chain is open, and run the other way where it is reverted."""
+    def pick(op):
+        v = op.parameters.itemByName("curves").value
+        cs = v.getCurveSelections()
+        for edge, is_open, reverted in chains:
+            chain = cs.createNewChainSelection()
+            chain.isOpen = is_open
+            chain.isReverted = reverted
+            chain.inputGeometry = [edge]
+        v.applyCurveSelections(cs)
+    return pick
 
-def project_curves(op):
-    v = op.parameters.itemByName("curves").value
-    cs = v.getCurveSelections()
-    for edge, is_open in PROJECTED:
-        chain = cs.createNewChainSelection()
-        chain.isOpen = is_open
-        chain.inputGeometry = [edge]
-    v.applyCurveSelections(cs)
+# The dome's foot, the circle where it meets the floor; the floor's edge,
+# where the fillets round it start, a loop from its edge along +Y; and the R8
+# round's lower edge, along the block's side at X30, and its upper edge,
+# where it meets the top at X22. Fusion's new closed chains run clockwise
+# seen from above, and an open one from its edge's start: the round's upper
+# edge from Y20 to Y-20, its lower from Y-20 to Y20.
+DOME_FOOT = edge_through(-15, 0, 10)
+FLOOR_EDGE = edge_through(-6.13, 9, 10)
+ROUND_LOW = edge_through(30, 0, 12)
+ROUND_TOP = edge_through(22, 0, 20)
+
+# Project's curves: each has the roughing's leftovers to cut where the tool
+# rests over it, round the dome's foot, in the fillets and on the round.
+project_curves = picking((DOME_FOOT, False, False), (FLOOR_EDGE, False, False),
+                         (ROUND_LOW, True, False))
+# Morph's two closed curves: the passes between them cover the floor and the
+# dome's flank, from the circle to the floor's edge.
+morph_closed = picking((DOME_FOOT, False, False), (FLOOR_EDGE, False, False))
+# Morph's two open ones, the round's edges, the lower reverted to run as the
+# upper does: Fusion's Morph gives no passes for two that run opposite ways.
+morph_open = picking((ROUND_TOP, True, False), (ROUND_LOW, True, True))
 
 made = []
 for name, strategy, tool, select, settings in (
@@ -160,6 +181,9 @@ for name, strategy, tool, select, settings in (
     ("project_other_way", "project", ball6, project_curves, {"direction": "'other way'"}),
     ("project_axial", "project", ball6, project_curves, {"axialOffset": "1 mm"}),
     ("project_ball12", "project", ball12, project_curves, {}),
+    ("morph", "morph", ball6, morph_closed, {}),
+    ("morph_one_way", "morph", ball6, morph_closed, {"direction": "'one way'"}),
+    ("morph_open", "morph", ball6, morph_open, {}),
 ):
     try:
         oi = setup.operations.createInput(strategy)
@@ -192,7 +216,7 @@ for op in made:
             pass
     for key in ("maximumStepdown", "rampAngle", "flatAreaMachining", "direction",
                 "bitangentAngle", "numberOfStepovers", "stepover", "overthickness",
-                "axialOffset", "boundaryMode", "boundaryContainment"):
+                "axialOffset", "boundaryMode", "boundaryContainment", "morphMode"):
         p = op.parameters.itemByName(key)
         if p is not None:
             notes.append("%s: %s" % (key, p.expression))

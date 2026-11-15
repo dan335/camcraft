@@ -615,6 +615,7 @@ pub fn strategy_label(s: &StrategySpec) -> &'static str {
         StrategySpec::Ramp { .. } => "Ramp",
         StrategySpec::Pencil { .. } => "Pencil",
         StrategySpec::Project { .. } => "Project",
+        StrategySpec::Morph { .. } => "Morph",
         StrategySpec::Flat { .. } => "Flat",
         StrategySpec::Spiral { .. } => "Spiral",
         StrategySpec::Radial { .. } => "Radial",
@@ -681,6 +682,7 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
                     "flat",
                     "pencil",
                     "project",
+                    "morph",
                     "spiral",
                     "radial",
                     "morphed-spiral",
@@ -695,8 +697,9 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
 /// menus that add operations and the section of it it goes in, and its name
 /// there, in the order of Fusion's toolbar. The menus list them after that
 /// section's own, greyed, saying so. One that is built comes out of here and
-/// into [`operation_groups`], in the same place.
-pub const PLANNED: &[(&str, usize, &str)] = &[("3D", 1, "Morph")];
+/// into [`operation_groups`], in the same place. Every one is built now: what
+/// Fusion has only with its Manufacturing Extension is not planned.
+pub const PLANNED: &[(&str, usize, &str)] = &[];
 
 /// What a planned operation's item says under the pointer.
 pub const NOT_YET: &str = "Not implemented yet";
@@ -883,7 +886,8 @@ mod tests {
     }
 
     /// Each planned operation is in its menu, greyed, saying so under the
-    /// pointer, and clicked adds nothing; one there is, clicked, adds it.
+    /// pointer, and clicked adds nothing; one there is, clicked, adds it, as
+    /// does each that was planned once and is built now.
     #[test]
     fn planned_operations_are_greyed_in_the_menus() {
         let mut h = Harness::new_ui_state(
@@ -914,13 +918,15 @@ mod tests {
         assert_eq!(h.state().len(), 1);
         assert_eq!(h.state()[0].name(), "bore");
         // Built since they were planned: offered, and added.
-        for (label, name) in [
-            ("2D adaptive clearing", "adaptive-2d"),
-            ("2D chamfer", "chamfer-2d"),
-            ("Engrave", "engrave"),
-            ("Thread", "thread"),
+        for (group, label, name) in [
+            ("2D", "2D adaptive clearing", "adaptive-2d"),
+            ("2D", "2D chamfer", "chamfer-2d"),
+            ("2D", "Engrave", "engrave"),
+            ("2D", "Thread", "thread"),
+            ("3D", "Project", "project"),
+            ("3D", "Morph", "morph"),
         ] {
-            h.get_by_label("2D").click();
+            h.get_by_label(group).click();
             h.run();
             let item = h.get_by_label(label);
             assert!(!item.accesskit_node().is_disabled(), "{label} is greyed");
@@ -1027,7 +1033,7 @@ mod menu_tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), offered, "one is offered twice: {names:?}");
-        assert_eq!(offered, 24, "{names:?}");
+        assert_eq!(offered, 25, "{names:?}");
     }
 
     /// The planned operations are listed after their section's own, in the
@@ -1106,6 +1112,31 @@ mod menu_tests {
                 "Circular",
                 "Engrave",
                 "2D chamfer"
+            ]
+        );
+        // 3D finishing: Project after Pencil, and Morph after it. Nothing of
+        // 3D is planned now.
+        let finishing: Vec<String> = operation_menu_items()[1].1[1]
+            .iter()
+            .map(|m| match m {
+                MenuItem::Operation((l, _)) => (*l).to_string(),
+                MenuItem::Planned(l) => format!("({l})"),
+            })
+            .collect();
+        assert_eq!(
+            finishing,
+            [
+                "Parallel",
+                "Scallop",
+                "Contour",
+                "Ramp",
+                "Flat",
+                "Pencil",
+                "Project",
+                "Morph",
+                "Spiral",
+                "Radial",
+                "Morphed spiral"
             ]
         );
     }

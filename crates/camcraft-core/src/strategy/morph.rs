@@ -360,15 +360,33 @@ fn spiral_through(rings: &[Vec<DVec2>], centre: DVec2, spacing: f64) -> Vec<DVec
     out
 }
 
-/// A ring cut at its seam, measured along from there.
-struct Lap {
-    points: Vec<DVec2>,
+/// A line measured along from its start: a ring cut at its seam, or a curve a
+/// morph's passes are laid between ([`crate::strategy::morph_curves`]).
+pub(crate) struct Lap {
+    pub(crate) points: Vec<DVec2>,
     /// How far along each point is.
-    along: Vec<f64>,
-    length: f64,
+    pub(crate) along: Vec<f64>,
+    pub(crate) length: f64,
 }
 
 impl Lap {
+    /// The line through `points`, measured.
+    pub(crate) fn through(points: Vec<DVec2>) -> Self {
+        let mut along = Vec::with_capacity(points.len());
+        let mut length = 0.0;
+        for (i, p) in points.iter().enumerate() {
+            if i > 0 {
+                length += points.get(i - 1).map_or(0.0, |q| q.distance(*p));
+            }
+            along.push(length);
+        }
+        Self {
+            points,
+            along,
+            length,
+        }
+    }
+
     /// `ring`, cut where the ray from `centre` towards `toward` crosses it: of
     /// the places it does, the one nearest `seam_at`'s distance along the ray,
     /// which is then its own.
@@ -408,23 +426,11 @@ impl Lap {
         if let Some(&first) = points.first() {
             points.push(first);
         }
-        let mut along = Vec::with_capacity(points.len());
-        let mut length = 0.0;
-        for (i, p) in points.iter().enumerate() {
-            if i > 0 {
-                length += points.get(i - 1).map_or(0.0, |q| q.distance(*p));
-            }
-            along.push(length);
-        }
-        Self {
-            points,
-            along,
-            length,
-        }
+        Self::through(points)
     }
 
     /// The point `t` of the way round.
-    fn at(&self, t: f64) -> DVec2 {
+    pub(crate) fn at(&self, t: f64) -> DVec2 {
         let want = t * self.length;
         let i = self.along.partition_point(|&a| a < want).max(1);
         let (Some(&a), Some(&b), Some(&la), Some(&lb)) = (

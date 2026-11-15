@@ -42,7 +42,8 @@ pub(super) fn geometry(
         hint(ui, what);
         ui.add_space(theme::SPACE_3);
     }
-    // A project's picks are its curves, so its boundary is not picked.
+    // A project's or a morph's picks are its curves, so its boundary is not
+    // picked.
     if uses.boundary {
         boundary_form(
             ui,
@@ -147,6 +148,13 @@ fn what_to_pick(strategy: &StrategySpec) -> Option<&'static str> {
             "Pick the edges to follow, open or closed: each is seen from above and dropped \
              onto the part, the tool run along it where it rests, within the boundary. Edges \
              joined end to end are followed as one.",
+        );
+    }
+    if matches!(strategy, StrategySpec::Morph { .. }) {
+        return Some(
+            "Pick the two curves to morph between, both open or both closed: the passes \
+             change shape from the one into the other a stepover apart, each dropped onto the \
+             part, within the boundary. Edges joined end to end are one curve.",
         );
     }
     if matches!(strategy, StrategySpec::Thread { .. }) {

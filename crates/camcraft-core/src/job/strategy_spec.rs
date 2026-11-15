@@ -123,6 +123,24 @@ pub enum StrategySpec {
         #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
         slope_to: f64,
     },
+    /// Passes between two picked curves, open or closed, each a step of the
+    /// way from the one to the other, no point of one more than a stepover
+    /// from its match on the next, seen from above and dropped onto the part
+    /// within the boundary. Fusion's Morph.
+    Morph {
+        /// Which way each pass runs: Fusion's Direction, both ways unless
+        /// asked.
+        #[serde(default, skip_serializing_if = "is_default")]
+        direction: ProjectDirection,
+        /// Only where the surface is at least this steep, in degrees from
+        /// level: Fusion's From Slope Angle.
+        #[serde(default, skip_serializing_if = "is_default")]
+        slope_from: f64,
+        /// And at most this steep, in degrees from level: Fusion's To Slope
+        /// Angle.
+        #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
+        slope_to: f64,
+    },
     /// Each flat face of the part cleared at its own height, rings a stepover
     /// apart in from its edges, and nothing else. Fusion's Flat.
     Flat {
@@ -668,6 +686,7 @@ impl StrategySpec {
             StrategySpec::Ramp { .. } => "ramp",
             StrategySpec::Pencil { .. } => "pencil",
             StrategySpec::Project { .. } => "project",
+            StrategySpec::Morph { .. } => "morph",
             StrategySpec::Flat { .. } => "flat",
             StrategySpec::Spiral { .. } => "spiral",
             StrategySpec::Radial { .. } => "radial",
@@ -702,6 +721,7 @@ impl StrategySpec {
             | StrategySpec::Scallop { .. }
             | StrategySpec::Pencil { .. }
             | StrategySpec::Project { .. }
+            | StrategySpec::Morph { .. }
             | StrategySpec::Spiral { .. }
             | StrategySpec::Radial { .. }
             | StrategySpec::MorphedSpiral { .. } => Some(Containment::Center),
@@ -757,9 +777,11 @@ impl StrategySpec {
             // a trace's side is its compensation; a chamfer climbs, as
             // Fusion's chains are picked to; an engraving's walk goes round
             // each outline anticlockwise, the shape on its left; a project's
-            // curves run clockwise or as picked, not to climb.
+            // curves and a morph's passes run clockwise or as picked, not to
+            // climb.
             StrategySpec::Parallel { .. }
             | StrategySpec::Project { .. }
+            | StrategySpec::Morph { .. }
             | StrategySpec::Radial { .. }
             | StrategySpec::Face { .. }
             | StrategySpec::Drill { .. }
@@ -809,6 +831,11 @@ impl StrategySpec {
                 slope_to,
                 ..
             }
+            | StrategySpec::Morph {
+                slope_from,
+                slope_to,
+                ..
+            }
             | StrategySpec::Spiral {
                 slope_from,
                 slope_to,
@@ -850,7 +877,7 @@ impl StrategySpec {
     /// defaults it changed in 2022 ([decision 0020]).
     ///
     /// - **Stepover:** for parallel finishing and the patterns dropped onto
-    ///   the part (scallop, spiral, radial, morphed spiral), the spacing that
+    ///   the part (scallop, morph, spiral, radial, morphed spiral), the spacing that
     ///   leaves a cusp no taller than the tolerance with a round end, a quarter
     ///   of the diameter with a square one, to the micron; for 3D and 2D
     ///   pockets, 0.6 of the diameter; adaptive's optimal load, 0.4 of it;
@@ -886,9 +913,11 @@ impl StrategySpec {
         const ROUND_STEPOVER: &str = "tool_diameter * 0.5";
         const ROUND_LEAD: &str = "tool_diameter * 0.05";
         let mut own: Vec<(&'static str, &'static str)> = match self {
-            // A scallop pass is parallel's cusp, kept on a slope too.
+            // A scallop pass is parallel's cusp, kept on a slope too; a
+            // morph's Maximum Stepover is the same expression.
             StrategySpec::Parallel { .. }
             | StrategySpec::Scallop { .. }
+            | StrategySpec::Morph { .. }
             | StrategySpec::Spiral { .. }
             | StrategySpec::Radial { .. }
             | StrategySpec::MorphedSpiral { .. } => vec![("passes.stepover", CUSP)],
@@ -1159,16 +1188,19 @@ impl RadialDirection {
     }
 }
 
-/// Which way a project's curves run: Fusion's Direction.
+/// Which way a project's curves run, or a morph's passes: Fusion's
+/// Direction.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProjectDirection {
-    /// As one way, but an open curve from whichever end is nearer where the
-    /// tool is. Fusion's default.
+    /// A project's as one way, but an open curve from whichever end is nearer
+    /// where the tool is; a morph's each the other way from the one before.
+    /// Fusion's default.
     #[default]
     BothWays,
     /// A closed curve clockwise seen from above, as Fusion's new chains run;
-    /// an open one as picked, from its first edge's start.
+    /// an open one as picked, from its first edge's start. A morph's passes
+    /// as the first curve picked runs.
     OneWay,
     /// The other way round: a closed curve anticlockwise, an open one from
     /// its far end.

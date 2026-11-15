@@ -128,6 +128,24 @@ pub(super) fn passes(
                 });
                 slopes(ui, d, slope_from, slope_to);
             }
+            StrategySpec::Morph {
+                direction,
+                slope_from,
+                slope_to,
+            } => {
+                d.row(ui, &pass::DIRECTION_MORPH, "direction", |ui| {
+                    widgets::segmented(
+                        ui,
+                        direction,
+                        &[
+                            (ProjectDirection::BothWays, "both ways"),
+                            (ProjectDirection::OneWay, "one way"),
+                            (ProjectDirection::OtherWay, "other way"),
+                        ],
+                    );
+                });
+                slopes(ui, d, slope_from, slope_to);
+            }
             StrategySpec::Flat { direction, order } => {
                 climb_direction(ui, d, &pass::DIRECTION_2D, direction);
                 pass_order(ui, d, &pass::SCALLOP_ORDER, order);

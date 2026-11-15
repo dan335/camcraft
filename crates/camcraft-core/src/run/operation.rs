@@ -43,6 +43,7 @@ use crate::strategy::drilling::{DrillParams, DrillReport, Hole, drill, holes, ne
 use crate::strategy::face::{FaceParams, LevelsAsked, face};
 use crate::strategy::flat::{FlatParams, flat_finish};
 use crate::strategy::morph::{MorphParams, MorphedSpiralReport, morphed_spiral};
+use crate::strategy::morph_curves::{MorphCurvesParams, morph_curves};
 use crate::strategy::parallel::{ParallelParams, ParallelReport, follow, parallel_finish_within};
 use crate::strategy::patterns::{Centred, radial, reaching, spiral};
 use crate::strategy::pencil::{PencilParams, pencil};
@@ -80,8 +81,8 @@ pub(super) use curves::{
     Chamfers, chamfers_picked, curves_picked, engravings_picked, slots_picked,
 };
 use finishing::{
-    PencilAsked, contour_paths, flat_paths, morphed_spiral_paths, parallel_paths, pencil_paths,
-    project_paths, radial_paths, ramp_paths, scallop_paths, spiral_paths,
+    PencilAsked, contour_paths, flat_paths, morph_paths, morphed_spiral_paths, parallel_paths,
+    pencil_paths, project_paths, radial_paths, ramp_paths, scallop_paths, spiral_paths,
 };
 use link::{Cutting, OnPart, link_params};
 pub(super) use round::round_walls;
@@ -220,8 +221,8 @@ pub(super) enum Target {
     Slots(Vec<Slot>),
     /// A trace's curves, in the order picked.
     Curves(Vec<Picked>),
-    /// A project's boundary its tool's centre is kept to, if any, and the
-    /// curves it runs along, in the order picked.
+    /// A project's or a morph's boundary its tool's centre is kept to, if
+    /// any, and the curves it runs along or between, in the order picked.
     Along(Option<Region>, Vec<Picked>),
     /// A 2D chamfer's edges, and the faces they do not join.
     Chamfers(Chamfers),
@@ -405,6 +406,9 @@ pub(super) fn plan_operation(
             (limit, curves),
             &mut warnings,
         )?,
+        StrategySpec::Morph { direction, .. } => {
+            morph_paths(work, direction, (limit, curves), &mut warnings)?
+        }
         StrategySpec::Flat { order, .. } => flat_paths(work, order, limit, &mut warnings)?,
         StrategySpec::Spiral {
             centre,
@@ -959,6 +963,7 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
         StrategySpec::Ramp { .. } => StrategyDetail::Ramp(Default::default()),
         StrategySpec::Pencil { .. } => StrategyDetail::Pencil(Default::default()),
         StrategySpec::Project { .. } => StrategyDetail::Project(Default::default()),
+        StrategySpec::Morph { .. } => StrategyDetail::Morph(Default::default()),
         StrategySpec::Flat { .. } => StrategyDetail::Flat(Default::default()),
         StrategySpec::Spiral { .. } => StrategyDetail::Spiral(Default::default()),
         StrategySpec::Radial { .. } => StrategyDetail::Radial(Default::default()),

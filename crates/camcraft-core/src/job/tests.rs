@@ -2531,6 +2531,80 @@ slope_to = 80.0
     ));
 }
 
+/// A morph reads with Fusion's defaults, both ways on every slope, writes
+/// back only what differs, starts as Fusion's does, on the part's silhouette
+/// with the tool's centre in it, its stepover the cusp a parallel's is and
+/// staying down within 50 mm; and refuses its picks as its boundary too,
+/// since they are its curves.
+#[test]
+fn morph_reads_and_writes_back() {
+    let finish = "strategy = \"parallel\"
+tool = \"finish-4-ball\"
+angle = 90.0
+";
+    let with = |own: &str| -> Job {
+        toml::from_str(&SAMPLE.replace(
+            finish,
+            &format!(
+                "strategy = \"morph\"
+tool = \"finish-4-ball\"
+{own}"
+            ),
+        ))
+        .unwrap()
+    };
+    let j = with("");
+    j.validate().unwrap();
+    assert_eq!(
+        j.setups[0].operations[1].strategy,
+        StrategySpec::Morph {
+            direction: ProjectDirection::BothWays,
+            slope_from: 0.0,
+            slope_to: 90.0,
+        }
+    );
+    let written = toml::to_string(&j).unwrap();
+    for name in ["direction", "slope_from", "slope_to"] {
+        assert!(!written.contains(name), "{written}");
+    }
+    let set = with(
+        "direction = \"one-way\"
+slope_from = 10.0
+slope_to = 80.0
+",
+    );
+    set.validate().unwrap();
+    let written = toml::to_string(&set).unwrap();
+    assert_eq!(toml::from_str::<Job>(&written).unwrap(), set);
+
+    let spec = StrategySpec::named("morph").unwrap();
+    assert_eq!(spec.name(), "morph");
+    let uses = spec.uses();
+    assert!(uses.boundary && uses.stepover && uses.stay_down && !uses.ramp);
+    assert_eq!(uses.curves, Some(Curves::Traced));
+    assert_eq!(uses.reach, Reach::Mm(50));
+    assert_eq!(uses.links, Links::OverPart);
+    let parallel = StrategySpec::named("parallel").unwrap();
+    assert!(
+        spec.default_expressions()
+            .contains(&parallel.default_expressions()[0])
+    );
+    let fresh = Operation::fresh("m", spec, (None, None, None));
+    assert_eq!(fresh.boundary.kind, Boundary::Silhouette);
+    assert_eq!(fresh.boundary.containment, Containment::Center);
+
+    let mut picked = with("");
+    picked.setups[0].operations[1].boundary.kind = Boundary::Selection;
+    assert!(matches!(
+        picked.validate(),
+        Err(JobError::NotOffered {
+            value: "selection",
+            strategy: "morph",
+            ..
+        })
+    ));
+}
+
 /// A pencil reads with Fusion's defaults, both ways at a bitangency angle of
 /// 20° with no overthickness and no stepovers, writes back only what differs,
 /// and refuses an angle of none or a half turn, a negative overthickness, and

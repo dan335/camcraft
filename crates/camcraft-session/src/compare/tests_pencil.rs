@@ -42,7 +42,7 @@ use crate::test_support::fixture;
 use crate::{job_text, load_models, models_of, parse_job, run_setup};
 
 /// The part, its stock and setup, the roughing flat and the two balls, with no
-/// operations: Project's tests' too.
+/// operations: Project's and Morph's tests' too.
 pub(super) fn base() -> String {
     format!(
         r#"
@@ -162,11 +162,11 @@ fn held(job: &Job, name: &str) -> Compared {
 }
 
 /// How near a Pencil's material and program are held to Fusion's, or a
-/// Project's: the least share of the columns either cuts that agree to the
-/// tolerance, the most the median and the 95th percentile of the difference
-/// may be, in millimetres, how far apart the volumes removed and the lengths
-/// fed may be, as shares of Fusion's, and how far apart the lowest each goes,
-/// in millimetres.
+/// Project's or a Morph's: the least share of the columns either cuts that
+/// agree to the tolerance, the most the median and the 95th percentile of the
+/// difference may be, in millimetres, how far apart the volumes removed and
+/// the lengths fed may be, as shares of Fusion's, and how far apart the lowest
+/// each goes, in millimetres.
 pub(super) struct Bounds {
     pub(super) agree: f64,
     pub(super) median: f64,

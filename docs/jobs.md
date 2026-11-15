@@ -30,7 +30,7 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
   simulator and post never see a rotation. With the default orientation and work
   zero, a run is bit-identical to before setups existed.
 
-An operation has a strategy (parallel, scallop, contour, ramp, pencil, project, flat, spiral,
+An operation has a strategy (parallel, scallop, contour, ramp, pencil, project, morph, flat, spiral,
 radial or morphed spiral finishing, adaptive clearing, pocket clearing, a 2D profile, a 2D
 pocket, 2D adaptive clearing, facing, slot, trace, a 2D chamfer, bore, circular,
 thread or drilling), a tool, heights, passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
@@ -104,7 +104,25 @@ Axial Offset) runs every pass that far above where the tool rests, below when
 negative. It has the slopes, and no stepover; its boundary cannot be its picks,
 which are its curves. It lifts to the retract height between curves, however
 near, and comes straight down onto each along its vertical lead, as Fusion's
-does. Flat (`"flat"`) is Fusion's too: each flat face of the part between
+does. Morph (`"morph"`) is Fusion's Morph ([decision 0030](decisions/0030-morph.md)):
+passes between two curves picked as a project's are (`selection.edges`, both
+open or both closed), each a step of the way from the one to the other, seen
+from above and dropped onto the part within the boundary (the part's
+silhouette with the tool's centre in it, to start). A point a fraction of the
+way along the one is matched with the point as far along the other, and every
+pass is the same step from each to its match, so the passes change shape from
+the one curve into the other, as many as keep each point of one within the
+stepover (parallel's, to start) of its match on the next. Two open curves are
+matched end to end, the second turned round where it runs the other way; two
+closed ones both run clockwise, the second started where the matched points
+are closest on the whole. The passes start at the curve nearer the work zero.
+With `direction = "one-way"` each runs as the first curve picked runs;
+`"other-way"` reverses them; and `"both-ways"`, as a new one starts, turns each
+the other way from the one before, the first, open, from its end nearer the
+work zero, and closed, anticlockwise. It has the slopes; its boundary cannot be
+its picks. It stays down between passes within 50 mm, as parallel does, and
+comes straight down onto the first along its vertical lead, as Fusion's does.
+Flat (`"flat"`) is Fusion's too: each flat face of the part between
 the top and bottom cleared at its own height, rings a stepover apart in from its
 edges, climbing unless conventional, `order = "outside-in"` unless
 `"inside-out"`; its stepover starts as a pocket's. Spiral (`"spiral"`), radial

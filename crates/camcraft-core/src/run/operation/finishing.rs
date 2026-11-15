@@ -529,6 +529,36 @@ pub(super) fn project_paths(
     Ok((path, report.passes, StrategyDetail::Project(report)))
 }
 
+/// Morph finishing: passes between the two `curves` picked on the part, each
+/// a step of the way from the one to the other, dropped onto the part within
+/// the sweep, `limit` and where the tool touches the part ([decision 0030]).
+///
+/// [decision 0030]: ../../../../../docs/decisions/0030-morph.md
+pub(super) fn morph_paths(
+    work: &Work<'_>,
+    direction: ProjectDirection,
+    (limit, curves): (Option<&Region>, &[Picked]),
+    warnings: &mut Vec<String>,
+) -> Result<Paths, RunError> {
+    let op = work.op;
+    let area = finish_area(work, limit, true)?;
+    let params = MorphCurvesParams {
+        drop: project_params(work),
+        way: direction.engine(),
+    };
+    let (path, report) =
+        morph_curves(work.cutter, work.tool, &area, curves, &params).map_err(in_op(op))?;
+    if report.cut.passes == 0 {
+        warnings.push(
+            "found nothing to finish: no pass between the picked curves passes over the part \
+             within the boundary and slopes"
+                .into(),
+        );
+    }
+    sampling_warnings(&report.cut.sweep, warnings);
+    Ok((path, report.cut.passes, StrategyDetail::Morph(report)))
+}
+
 /// `curves` dropped onto the part within `area`, kept to `limit`, off the
 /// steep ground, which rings round the walls finish ([`steep_band_of`]); and
 /// what that found to say.

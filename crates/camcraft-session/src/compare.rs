@@ -446,3 +446,6 @@ mod tests_pencil;
 
 #[cfg(test)]
 mod tests_project;
+
+#[cfg(test)]
+mod tests_morph;

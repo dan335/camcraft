@@ -14,6 +14,7 @@ use crate::strategy::StrategyError;
 use crate::strategy::chamfer::ChamferError;
 use crate::strategy::drilling::HoleError;
 use crate::strategy::engrave::EngraveError;
+use crate::strategy::morph_curves::MorphError;
 use crate::strategy::reach::ReachError;
 use crate::strategy::round::RoundError;
 use crate::strategy::slot::SlotError;
@@ -101,6 +102,14 @@ pub enum RunError {
         op: String,
         /// Why.
         source: TraceError,
+    },
+    /// A morph's picks are not two curves to morph between.
+    #[error("operation '{op}': {source}")]
+    Morph {
+        /// Which operation.
+        op: String,
+        /// Why.
+        source: MorphError,
     },
     /// A 2D chamfer's picks cannot be chamfered.
     #[error("operation '{op}': {source}")]
@@ -246,6 +255,15 @@ impl OperationError for TraceError {
         match self {
             TraceError::Strategy(e) => e.named(op),
             source => RunError::Trace { op, source },
+        }
+    }
+}
+
+impl OperationError for MorphError {
+    fn named(self, op: String) -> RunError {
+        match self {
+            MorphError::Strategy(e) => e.named(op),
+            source => RunError::Morph { op, source },
         }
     }
 }

@@ -6,6 +6,19 @@ the same notes at more length.
 
 ## Unreleased
 
+- **Fusion's Morph**, a new 3D finishing strategy (`strategy = "morph"`) in the
+  job file and the app's 3D menu
+  ([decision 0030](docs/decisions/0030-morph.md)), the last of Fusion's 3-axis
+  milling operations: the app's menus list none as planned now. Passes between
+  two curves picked on the part, both open or both closed, each a step of the
+  way from the one to the other, as many as keep each point of one within a
+  stepover of its match on the next, dropped onto the part within the
+  boundary. Direction (both ways, one way, other way), the stepover and the
+  slopes, as a new Morph of Fusion's starts. Fusion's programs for `ops_3d`
+  between the dome's foot and the floor's edge, as a new one starts and one
+  way, and between the R8 round's two edges, are `fixtures/nc/ops_3d_morph*.nc`,
+  made by `scripts/fusion/ops_3d/cam.py`, and a test holds camcraft's Morph to
+  each.
 - **Fusion's Project**, a new 3D finishing strategy (`strategy = "project"`) in
   the job file and the app's 3D menu
   ([decision 0029](docs/decisions/0029-project.md)). Edges picked on the part,

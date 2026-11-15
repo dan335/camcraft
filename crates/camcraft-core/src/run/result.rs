@@ -20,6 +20,7 @@ use crate::strategy::drilling::DrillReport;
 use crate::strategy::engrave::EngraveReport;
 use crate::strategy::flat::FlatReport;
 use crate::strategy::morph::MorphedSpiralReport;
+use crate::strategy::morph_curves::MorphCurvesReport;
 use crate::strategy::parallel::ParallelReport;
 use crate::strategy::pencil::PencilReport;
 use crate::strategy::planar::PlanarReport;
@@ -52,6 +53,9 @@ pub enum StrategyDetail {
     Pencil(PencilReport),
     /// Project finishing: picked curves dropped onto the part.
     Project(ProjectReport),
+    /// Morph finishing: passes between two picked curves, dropped onto the
+    /// part.
+    Morph(MorphCurvesReport),
     /// Flat finishing.
     Flat(FlatReport),
     /// Spiral finishing.

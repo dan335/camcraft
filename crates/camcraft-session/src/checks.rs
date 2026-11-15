@@ -536,6 +536,16 @@ fn operation_findings(
                 &mut out,
             );
         }
+        StrategyDetail::Morph(r) => {
+            sampling(&r.cut.sweep, &mut out);
+            finished(
+                op,
+                r.cut.passes,
+                "no pass between the picked curves passes over the part within the boundary and \
+                 slopes",
+                &mut out,
+            );
+        }
         StrategyDetail::Spiral(r) | StrategyDetail::Radial(r) => {
             sampling(&r.sweep, &mut out);
             finished(op, r.passes, NOTHING_IN_SLOPES, &mut out);

@@ -119,6 +119,25 @@ impl StrategySpec {
                 bottom: Some(HeightRef::ModelBottom),
                 ..cuts_loops
             },
+            // Its picks are two curves, as a project's are edges, and its
+            // passes between them are dropped onto the part within its
+            // boundary, in its own order: its stepover how far apart they
+            // are. Linked as parallel is, staying down within 50 mm, as
+            // Fusion's Morph's linking starts; but with no ramp: into each
+            // pass it comes straight down at the plunge feed onto its
+            // vertical lead, as Fusion's, which has no ramp settings, does in
+            // every program of its compared.
+            StrategySpec::Morph { .. } => Uses {
+                curves: Some(Curves::Traced),
+                depths: Depths::None,
+                links: Links::OverPart,
+                reach: Reach::Mm(50),
+                lead_radius: true,
+                ramp: false,
+                top: Some(HeightRef::ModelTop),
+                bottom: Some(HeightRef::ModelBottom),
+                ..cuts_loops
+            },
             // A level each stepdown is what it is, going round, not over: it
             // has no stepover. Its order is its own. Its levels are the
             // part's, from its top, and each runs round the part beside its
@@ -456,7 +475,7 @@ pub enum Curves {
     /// middle is what it runs along, as Fusion's Slot has them.
     Slots,
     /// Edges, open or closed, the tool follows, as Fusion's Trace and Project
-    /// have them.
+    /// have them, or a morph's passes are laid between.
     Traced,
     /// Edges to chamfer, or faces whose edges to chamfer, as Fusion's 2D
     /// Chamfer has them: its chains or its face contours.

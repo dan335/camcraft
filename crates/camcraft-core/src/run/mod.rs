@@ -311,8 +311,8 @@ impl<'a> Shared<'a> {
             let limit = picking
                 .machining_boundary(&op.boundary, tool.cutter_radius())
                 .map_err(in_op(op))?;
-            // A project's picks are the curves it runs along, within its
-            // boundary.
+            // A project's picks are the curves it runs along, and a morph's
+            // those its passes are laid between, within its boundary.
             if uses.curves == Some(Curves::Traced) {
                 Target::Along(
                     limit,

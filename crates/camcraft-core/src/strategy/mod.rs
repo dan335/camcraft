@@ -6,6 +6,7 @@
 // Finishing.
 pub mod flat;
 pub mod morph;
+pub mod morph_curves;
 pub mod parallel;
 pub mod patterns;
 pub mod pencil;

@@ -70,6 +70,8 @@ topics! {
         "One way runs a closed curve clockwise from above, an open one as picked; other way, the reverse. Both ways starts an open curve at its end nearer the tool.";
     PROJECT_AXIAL_OFFSET: "Axial offset",
         "Moves every pass up from where the tool rests on the part, or down into it when negative.";
+    DIRECTION_MORPH: "Direction",
+        "One way runs each pass as the first curve picked runs, closed ones clockwise; other way, the reverse. Both ways turns each the other way from the last.";
     MIN_FLAT_STEPDOWN: "Minimum stepdown",
         "A flat or peak less than this below the level above gets no level of its own: that much is left on it. Empty for none.";
     MIN_AXIAL_ENGAGEMENT: "Minimum axial engagement",
