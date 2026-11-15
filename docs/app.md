@@ -30,7 +30,7 @@ a setup's right-click menu alike: 2D (face, 2D adaptive clearing, pocket,
 profile, slot, trace, thread, bore, circular, engrave, 2D chamfer), 3D
 (adaptive clearing, pocket clearing, then parallel, scallop, contour, ramp,
 flat, pencil, project, morph, spiral, radial and morphed spiral) and drilling.
-Every 3-axis milling operation of Fusion's is built. One planned would be listed
+Every operation that was planned is built. One planned would be listed
 in `browser::PLANNED`, after the rest of its group, greyed, saying *Not
 implemented yet* under the pointer; nothing is there now. Fusion's operations
 that need its Manufacturing Extension are not listed: they are not planned.
