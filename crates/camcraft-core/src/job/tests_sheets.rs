@@ -141,9 +141,174 @@ fn a_sheet_reads_back_as_written() {
         );
         assert!(toml::from_str::<Job>(&text).is_err(), "{wrong}");
     }
-    // A part has nothing but its model, yet.
-    let text = SHEET.replace("{ model = \"side\" }", "{ model = \"side\", copies = 2 }");
+    // A part has its model, its copies and its grain, and nothing else.
+    let text = SHEET.replace("{ model = \"side\" }", "{ model = \"side\", count = 2 }");
     assert!(toml::from_str::<Job>(&text).is_err());
+}
+
+/// A part's copies and grain read as a person writes them, and are written
+/// back the same: each left out where it is as a part starts, one copy turned
+/// as its sheet allows.
+#[test]
+fn a_parts_copies_and_grain_read_back_as_written() {
+    let text = SHEET.replace(
+        "parts = [{ model = \"bracket\" }, { model = \"side\" }]",
+        "parts = [{ model = \"bracket\", copies = 6 }, { model = \"side\", rotation = \"half-turn\" }]",
+    );
+    let mut j: Job = toml::from_str(&text).unwrap();
+    j.validate().unwrap();
+    let parts = sheet(&mut j).parts.clone();
+    assert_eq!(
+        parts,
+        [
+            SheetPart {
+                copies: 6,
+                ..SheetPart::of("bracket")
+            },
+            SheetPart {
+                rotation: Some(Rotation::HalfTurn),
+                ..SheetPart::of("side")
+            },
+        ]
+    );
+    assert_eq!(j.copies_asked("bracket").0, 6);
+    assert_eq!(j.copies_asked("side").0, 1);
+    assert_eq!(j.copies_asked("jig"), (1, None));
+
+    let written = toml::to_string(&j.stocks[0]).unwrap();
+    assert!(written.contains("copies = 6"), "{written}");
+    assert!(written.contains("rotation = \"half-turn\""), "{written}");
+    assert!(!written.contains("copies = 1"), "{written}");
+    assert_eq!(toml::from_str::<StockDef>(&written).unwrap(), j.stocks[0]);
+    // A step of its own, as the sheet's is written.
+    sheet(&mut j).parts[1].rotation = Some(Rotation::Step(30.0));
+    let written = toml::to_string(&j.stocks[0]).unwrap();
+    assert!(written.contains("step = 30.0"), "{written}");
+    assert_eq!(toml::from_str::<StockDef>(&written).unwrap(), j.stocks[0]);
+    // One copy, turned as the sheet allows, is written as a part always was.
+    let plain = sheet_job();
+    let written = toml::to_string(&plain.stocks[0]).unwrap();
+    assert!(!written.contains("copies"), "{written}");
+    assert_eq!(
+        written.matches("rotation").count(),
+        1,
+        "the sheet's: {written}"
+    );
+
+    // A copy of a model on the sheet is a copy of its part: as many copies,
+    // with the same grain.
+    j.stocks[0].spec.copy_model("bracket", "bracket copy");
+    assert_eq!(
+        sheet(&mut j).parts[2],
+        SheetPart {
+            copies: 6,
+            ..SheetPart::of("bracket copy")
+        }
+    );
+}
+
+/// A part asking for no copy, or for more than a sheet lays, is refused, and
+/// says how many it may have; so is a grain by a step that is not one.
+#[test]
+fn a_parts_copies_and_grain_are_held_to_what_a_sheet_lays() {
+    let mut j = sheet_job();
+    for copies in [0, MOST_COPIES + 1] {
+        sheet(&mut j).parts[0].copies = copies;
+        let e = j.validate().unwrap_err();
+        assert_eq!(
+            e,
+            JobError::Copies {
+                stock: "sheet".into(),
+                model: "bracket".into(),
+                copies
+            }
+        );
+        assert!(
+            e.to_string()
+                .contains(&format!("from 1 to {MOST_COPIES} copies")),
+            "{e}"
+        );
+    }
+    for copies in [1, MOST_COPIES] {
+        sheet(&mut j).parts[0].copies = copies;
+        j.validate().unwrap();
+    }
+    for step in [0.5, 181.0, f64::NAN] {
+        sheet(&mut j).parts[1].rotation = Some(Rotation::Step(step));
+        match j.validate().unwrap_err() {
+            JobError::BadValue { field, .. } => {
+                assert_eq!(field, "stock 'sheet'.parts.1.rotation.step");
+            }
+            other => panic!("{other}"),
+        }
+    }
+    sheet(&mut j).parts[1].rotation = Some(Rotation::Step(180.0));
+    j.validate().unwrap();
+}
+
+/// The work zero picked on a part of several copies is no one place, and a
+/// Morph's curves picked on one are two on each copy: both are refused from
+/// the job alone, before anything is run, and say what to do instead. On a
+/// part of one copy, each is as it ever was.
+#[test]
+fn what_means_one_place_is_refused_on_a_part_of_several_copies() {
+    let mut j = sheet_job();
+    j.setups[0].origin = Origin::Point {
+        point: PointRef {
+            model: "bracket".into(),
+            snap: Snap::Vertex,
+            index: 0,
+            at: [0.0; 3],
+        },
+        offset: [0.0; 3],
+    };
+    j.validate().unwrap();
+    sheet(&mut j).parts[0].copies = 3;
+    let e = j.validate().unwrap_err();
+    assert_eq!(
+        e,
+        JobError::ZeroOnCopies {
+            setup: "top".into(),
+            model: "bracket".into(),
+            copies: 3,
+            stock: "sheet".into()
+        }
+    );
+    assert!(e.to_string().contains("pick it on the stock"), "{e}");
+
+    let mut j = sheet_job();
+    let mut morph = Operation::fresh(
+        "morph",
+        StrategySpec::named("morph").unwrap(),
+        (Some("flat6".into()), j.tools.get("flat6"), None),
+    );
+    morph.selection.edges = vec![FeatureRef {
+        model: "side".into(),
+        index: 0,
+        at: [0.0; 3],
+    }];
+    j.setups[0].operations.push(morph);
+    j.validate().unwrap();
+    sheet(&mut j).parts[1].copies = 2;
+    let e = j.validate().unwrap_err();
+    assert_eq!(
+        e,
+        JobError::MorphOnCopies {
+            op: "top/morph".into(),
+            model: "side".into(),
+            copies: 2,
+            stock: "sheet".into()
+        }
+    );
+    assert!(
+        e.to_string()
+            .contains("Morph cannot yet morph across copies"),
+        "{e}"
+    );
+    assert!(e.to_string().contains("a Morph of its own"), "{e}");
+    // Turned off, it is not run, so not refused.
+    j.setups[0].operations[1].enabled = false;
+    j.validate().unwrap();
 }
 
 /// What the sheet names follows its models: a rename, a copy made with one,

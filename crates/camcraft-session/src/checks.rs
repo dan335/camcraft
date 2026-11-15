@@ -20,7 +20,7 @@
 //! then decide. The codes are kept stable, so that anything written about them
 //! still reads right.
 
-use camcraft_core::arrange::{Arrangement, Laid, Outcome};
+use camcraft_core::arrange::{Arrangement, Laid, PartLaid};
 use camcraft_core::cutter::allowance::{Allowance, EffectiveTool};
 use camcraft_core::cutter::assembly::Assembly;
 use camcraft_core::cutter::dropcutter::{DropCutter, DropTest};
@@ -289,30 +289,59 @@ fn sheet_findings(job: &Job, setup: &Setup, arrangement: &Arrangement) -> Vec<Fi
             }
         };
 
-        // CC109: every part has room on its sheet.
+        // CC109: every copy of every part has room on its sheet.
         let mut left_out = false;
         for p in parts {
-            let (why, detail) = match p.outcome {
-                Outcome::Placed(_) => continue,
-                Outcome::TooLarge => (
-                    format!("sheet '{name}' is too small for '{}'", p.model),
-                    "it does not fit inside the border at any turn it may take",
-                ),
-                Outcome::NoRoom => (
-                    format!("sheet '{name}' has no room for '{}'", p.model),
-                    "it fits alone, but not beside the others",
-                ),
-            };
-            left_out = true;
-            out.push(finding(Level::Fail, "CC109", why, detail.into()));
+            let (copies, model) = (p.copies.len(), &p.model);
+            let too_large = p.too_large();
+            if too_large > 0 {
+                let why = match (copies, too_large == copies) {
+                    (1, _) => format!("sheet '{name}' is too small for '{model}'"),
+                    (_, true) => format!(
+                        "sheet '{name}' is too small for '{model}': none of its {copies} copies \
+                         is placed"
+                    ),
+                    (_, false) => {
+                        format!("sheet '{name}' is too small for {too_large} of {copies} '{model}'")
+                    }
+                };
+                let detail = "it does not fit inside the border at any turn it may take";
+                out.push(finding(Level::Fail, "CC109", why, detail.into()));
+                left_out = true;
+            }
+            let no_room = p.no_room();
+            if no_room > 0 {
+                let (why, detail) = if copies == 1 {
+                    (
+                        format!("sheet '{name}' has no room for '{model}'"),
+                        "it fits alone, but not beside the others",
+                    )
+                } else {
+                    (
+                        format!("sheet '{name}' has no room for {no_room} of {copies} '{model}'"),
+                        "each fits alone, but not beside the others",
+                    )
+                };
+                out.push(finding(Level::Fail, "CC109", why, detail.into()));
+                left_out = true;
+            }
         }
         if !left_out {
-            out.push(finding(
-                Level::Pass,
-                "CC109",
-                format!("sheet '{name}' holds all {} of its parts", parts.len()),
-                String::new(),
-            ));
+            let placed: usize = parts.iter().map(PartLaid::placed).sum();
+            let message = match parts.as_slice() {
+                _ if placed == parts.len() => {
+                    format!("sheet '{name}' holds all {placed} of its parts")
+                }
+                [one] => format!(
+                    "sheet '{name}' holds all {placed} copies of '{}'",
+                    one.model
+                ),
+                _ => format!(
+                    "sheet '{name}' holds all {placed} copies of its {} parts",
+                    parts.len()
+                ),
+            };
+            out.push(finding(Level::Pass, "CC109", message, String::new()));
         }
 
         // CC110: what stands on the sheet is within its thickness, as the
@@ -320,19 +349,22 @@ fn sheet_findings(job: &Job, setup: &Setup, arrangement: &Arrangement) -> Vec<Fi
         let (bottom, top) = (a.corner[2], a.corner[2] + a.size[2]);
         let tolerance = job.tolerance;
         let mut outside = false;
-        for p in parts
-            .iter()
-            .filter(|p| matches!(p.outcome, Outcome::Placed(_)))
-        {
+        // Every copy of a part reaches as high and as low as the others, as a
+        // turn about Z moves neither: one finding for them all.
+        for p in parts.iter().filter(|p| p.placed() > 0) {
             let [low, high] = p.heights;
             let (above, below) = (high - top, bottom - low);
+            let which = match p.copies.len() {
+                1 => format!("'{}'", p.model),
+                _ => format!("every copy of '{}'", p.model),
+            };
             for (by, side) in [(above, "above"), (below, "below")] {
                 if by > tolerance {
                     outside = true;
                     out.push(finding(
                         Level::Fail,
                         "CC110",
-                        format!("'{}' stands {by:.3} mm {side} sheet '{name}'", p.model),
+                        format!("{which} stands {by:.3} mm {side} sheet '{name}'"),
                         format!(
                             "the sheet is {:.3} mm thick and the part {:.3} mm tall",
                             a.size[2],

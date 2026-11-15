@@ -7,6 +7,10 @@
 //! what they are cast from: a sheet's spacing changed lays the same outlines
 //! again, and casts none.
 //!
+//! Each copy of a part is a part to the packer, of its model's one outline,
+//! at the turns its part allows: its own grain where it gives one, else the
+//! sheet's. A part some of whose copies have no room keeps those that fit.
+//!
 //! The packing moves parts across the sheet only; the sheet's seat stands
 //! each on the sheet's bottom face or up to its top, by the body's own lowest
 //! or highest point. Re-arranging changes only where parts stand: no body is
@@ -19,12 +23,13 @@ use std::sync::Arc;
 use camcraft_geom::contour::{Region, RegionError};
 use camcraft_geom::mesh::TriMesh;
 use camcraft_geom::topology::Body;
+use camcraft_geom::turn::Turn;
 use glam::{DVec2, DVec3};
 use rayon::prelude::*;
 
 use super::{ArrangeError, Direction, Outcome, Part, Sheet, Stand, WHERE_IT_IS, pack};
 use crate::control::{Stopped, Watch, share};
-use crate::job::{Arranged, Job, Seat, StockSpec};
+use crate::job::{Arranged, Job, MOST_COPIES, Seat, StockSpec};
 use crate::must;
 use crate::setup::features::silhouette;
 
@@ -155,19 +160,61 @@ pub enum Laid {
     },
 }
 
-/// One part of a sheet, laid.
+/// One part of a sheet, laid: each of its copies.
 #[derive(Debug, Clone)]
 pub struct PartLaid {
     /// The model, by name.
     pub model: String,
+    /// Each copy, in order: where it stands, or why it is left out. Copies
+    /// are laid in their order, so any left out are the last.
+    pub copies: Vec<CopyLaid>,
+    /// How low and how high each copy reaches, seated on the sheet: where it
+    /// stands, or would stand were there room for it. A turn about Z moves
+    /// neither, so every copy reaches the same.
+    pub heights: [f64; 2],
+}
+
+/// One copy of a part, laid.
+#[derive(Debug, Clone)]
+pub struct CopyLaid {
     /// Where it stands, turned and moved and seated; or why it is left out.
     pub outcome: Outcome,
-    /// Its outline seen from above, where it stands; none for a part left
+    /// Its outline seen from above, where it stands; none for a copy left
     /// out.
     pub outline: Option<Region>,
-    /// How low and how high it reaches, seated on the sheet: where it stands,
-    /// or would stand were there room for it.
-    pub heights: [f64; 2],
+}
+
+impl PartLaid {
+    /// Where each copy placed stands, in copy order.
+    pub fn stands(&self) -> impl Iterator<Item = Stand> + '_ {
+        self.copies.iter().filter_map(|c| match c.outcome {
+            Outcome::Placed(stand) => Some(stand),
+            Outcome::TooLarge | Outcome::NoRoom => None,
+        })
+    }
+
+    /// How many of its copies were placed.
+    pub fn placed(&self) -> usize {
+        self.stands().count()
+    }
+
+    /// How many of its copies were left out as too large for the sheet at any
+    /// turn they may take.
+    pub fn too_large(&self) -> usize {
+        self.copies
+            .iter()
+            .filter(|c| c.outcome == Outcome::TooLarge)
+            .count()
+    }
+
+    /// How many of its copies were left out for want of room among the
+    /// others.
+    pub fn no_room(&self) -> usize {
+        self.copies
+            .iter()
+            .filter(|c| c.outcome == Outcome::NoRoom)
+            .count()
+    }
 }
 
 impl Arrangement {
@@ -191,8 +238,9 @@ impl Arrangement {
         self.sheets.iter().find(|s| s.stock == stock)
     }
 
-    /// Where each copy of model `name` stands: as its sheet laid it, none
-    /// where the sheet had no room for it; once, where it is, for a model no
+    /// Where each copy of model `name` stands: each copy its sheet placed, in
+    /// copy order, none of those it had no room for; once, where it is, for a
+    /// model no
     /// sheet arranges. `None` for one on a sheet that was not laid, waiting
     /// for a body or failed, which stands nowhere yet.
     pub fn stands(&self, name: &str) -> Option<&[Stand]> {
@@ -208,15 +256,26 @@ impl Arrangement {
 }
 
 impl SheetLayout {
-    /// Each part left out, with why, where the sheet was laid.
-    pub fn left_out(&self) -> impl Iterator<Item = &PartLaid> {
-        let parts = match &self.laid {
-            Laid::Done { parts, .. } => parts.as_slice(),
+    /// Each part, where the sheet was laid; none where it was not.
+    pub fn parts(&self) -> &[PartLaid] {
+        match &self.laid {
+            Laid::Done { parts, .. } => parts,
             Laid::Waiting(_) | Laid::Failed(_) => &[],
-        };
-        parts
-            .iter()
-            .filter(|p| !matches!(p.outcome, Outcome::Placed(_)))
+        }
+    }
+
+    /// Each part some copy of which is left out, where the sheet was laid:
+    /// its copies say which and why.
+    pub fn left_out(&self) -> impl Iterator<Item = &PartLaid> {
+        self.parts().iter().filter(|p| p.placed() < p.copies.len())
+    }
+
+    /// How many copies it placed, of how many its parts ask for, where it was
+    /// laid.
+    pub fn placed(&self) -> (usize, usize) {
+        self.parts().iter().fold((0, 0), |(placed, all), p| {
+            (placed + p.placed(), all + p.copies.len())
+        })
     }
 }
 
@@ -253,13 +312,10 @@ pub fn arrange(
             Err(e) => Laid::Failed(e),
         };
         if let Laid::Done { parts, .. } = &laid {
+            // One outline for each part, however many copies of it.
             used += parts.len();
             for p in parts {
-                let stands = match p.outcome {
-                    Outcome::Placed(stand) => vec![stand],
-                    Outcome::TooLarge | Outcome::NoRoom => Vec::new(),
-                };
-                out.stands.insert(p.model.clone(), stands);
+                out.stands.insert(p.model.clone(), p.stands().collect());
             }
         }
         out.sheets.push(SheetLayout {
@@ -292,10 +348,26 @@ fn lay(
     if !missing.is_empty() {
         return Ok(Laid::Waiting(missing));
     }
-    let turns = a.rotation.turns().ok_or(ArrangeError::Sheet {
+    let sheet_turns = a.rotation.turns().ok_or(ArrangeError::Sheet {
         what: "step between turns",
         must: "from 1 to 180 degrees",
     })?;
+    // Each part's turns: its grain where it has one, the sheet's where not.
+    let mut turns: Vec<Vec<Turn>> = Vec::with_capacity(a.parts.len());
+    for p in &a.parts {
+        if !(1..=MOST_COPIES).contains(&p.copies) {
+            return Err(ArrangeError::Copies {
+                model: p.model.clone(),
+                copies: p.copies,
+            });
+        }
+        turns.push(match p.rotation {
+            Some(grain) => grain
+                .turns()
+                .ok_or_else(|| ArrangeError::Grain(p.model.clone()))?,
+            None => sheet_turns.clone(),
+        });
+    }
     let shapes = outlines_of(&given, outlines, &watch.part(0.0, 0.2))?;
     for (p, shape) in a.parts.iter().zip(&shapes) {
         if shape.area() <= 0.0 {
@@ -324,19 +396,26 @@ fn lay(
         from: a.from,
         along: a.along,
     };
-    let parts: Vec<Part> = (0..shapes.len())
-        .map(|shape| Part {
-            shape,
-            turns: turns.clone(),
+    // Each copy is a part to the packer, of its model's outline and turns,
+    // the copies of a part one after another in their order.
+    let packed: Vec<Part> = turns
+        .iter()
+        .zip(&a.parts)
+        .enumerate()
+        .flat_map(|(shape, (turns, p))| {
+            (0..p.copies).map(move |_| Part {
+                shape,
+                turns: turns.clone(),
+            })
         })
         .collect();
-    let outcomes = pack(&sheet, &shapes, &parts, &watch.part(0.2, 1.0))?;
+    let mut outcomes = pack(&sheet, &shapes, &packed, &watch.part(0.2, 1.0))?.into_iter();
 
     // Seated on the sheet by the body's own lowest or highest point: a turn
     // about Z moves neither.
     let (bottom, top) = (z, z + thickness);
-    let mut laid = Vec::with_capacity(outcomes.len());
-    for (((p, body), shape), outcome) in a.parts.iter().zip(&given).zip(&shapes).zip(outcomes) {
+    let mut laid = Vec::with_capacity(a.parts.len());
+    for ((p, body), shape) in a.parts.iter().zip(&given).zip(&shapes) {
         let b = body
             .mesh()
             .bounds()
@@ -345,24 +424,38 @@ fn lay(
             Seat::Bottom => bottom - b.min.z,
             Seat::Top => top - b.max.z,
         };
-        let (outcome, outline) = match outcome {
-            Outcome::Placed(stand) => {
-                let stand = Stand {
-                    turn: stand.turn,
-                    offset: DVec3::new(stand.offset.x, stand.offset.y, rise),
-                };
-                (Outcome::Placed(stand), Some(stand.region(shape)))
-            }
-            left_out => (left_out, None),
-        };
+        let copies = outcomes
+            .by_ref()
+            .take(usize::try_from(p.copies).unwrap_or(0))
+            .map(|outcome| match outcome {
+                Outcome::Placed(stand) => {
+                    let stand = Stand {
+                        turn: stand.turn,
+                        offset: DVec3::new(stand.offset.x, stand.offset.y, rise),
+                    };
+                    CopyLaid {
+                        outcome: Outcome::Placed(stand),
+                        outline: Some(stand.region(shape)),
+                    }
+                }
+                left_out => CopyLaid {
+                    outcome: left_out,
+                    outline: None,
+                },
+            })
+            .collect();
         laid.push(PartLaid {
             model: p.model.clone(),
-            outcome,
-            outline,
+            copies,
             heights: [b.min.z + rise, b.max.z + rise],
         });
     }
-    let used = used(&sheet, laid.iter().filter_map(|p| p.outline.as_ref()));
+    let used = used(
+        &sheet,
+        laid.iter()
+            .flat_map(|p| &p.copies)
+            .filter_map(|c| c.outline.as_ref()),
+    );
     let length = match sheet.along {
         Direction::X => length,
         Direction::Y => width,

@@ -680,3 +680,59 @@ fn benchmark() {
         }
     }
 }
+
+/// How long copies take to lay, for the most a part may have
+/// ([`crate::job::MOST_COPIES`]): ever more copies of two small blocks, of a
+/// disc and of an L, on a 2440 by 1220 sheet, 10 apart and then 3 apart (a
+/// finer grid), at quarter turns and at a 15° step, on four threads, in all
+/// three orders as a sheet is laid.
+/// `cargo test --release -p camcraft-core --lib arrange::tests::copies_benchmark -- --ignored --nocapture`.
+#[test]
+#[ignore = "times laying copies: a few minutes, in a release build"]
+fn copies_benchmark() {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    for spacing in [10.0, 3.0] {
+        let sheet = Sheet {
+            border: 10.0,
+            spacing,
+            ..sheet(2440.0, 1220.0)
+        };
+        for (name, shape) in [
+            ("a 30 by 20 block", rect(30.0, 20.0)),
+            ("a 60 by 40 block", rect(60.0, 40.0)),
+            ("a disc 40 across", disc(20.0)),
+            ("a 120 by 90 L", ell(120.0, 90.0, 30.0)),
+        ] {
+            let shapes = vec![shape];
+            for (how, degrees) in [("quarter turns", QUARTERS.to_vec()), ("15°", Vec::new())] {
+                for copies in [500, 1000, 2000, 5000] {
+                    let part = Part {
+                        shape: 0,
+                        turns: if degrees.is_empty() {
+                            stepped(15.0)
+                        } else {
+                            turns(&degrees)
+                        },
+                    };
+                    let parts: Vec<Part> = vec![part; copies];
+                    let start = Instant::now();
+                    let outcomes = pool
+                        .install(|| pack(&sheet, &shapes, &parts, &Watch::default()))
+                        .unwrap();
+                    let took = start.elapsed();
+                    let placed = outcomes
+                        .iter()
+                        .filter(|o| matches!(o, Outcome::Placed(_)))
+                        .count();
+                    println!(
+                        "{spacing} apart, {how}, {copies} copies of {name}: {:.3} s, {placed} placed",
+                        took.as_secs_f64()
+                    );
+                }
+            }
+        }
+    }
+}

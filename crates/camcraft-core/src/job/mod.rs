@@ -123,8 +123,8 @@ pub use heights::{Height, HeightContext, HeightRef, Heights, Picks};
 pub use linking::{Entry, LeadSizes, Leads, Linking, Retraction};
 pub use machine::Machine;
 pub use model::{
-    Arranged, FixedBox, LengthUnit, ModelDef, Place, Rotation, STEP_DEGREES, Seat, SheetPart,
-    StockDef, StockSpec, Transform,
+    Arranged, FixedBox, LengthUnit, MOST_COPIES, ModelDef, Place, Rotation, STEP_DEGREES, Seat,
+    SheetPart, StockDef, StockSpec, Transform,
 };
 pub use operation::{Operation, chamfer_reach, engrave_depth, engrave_flank};
 pub use passes::{
@@ -266,6 +266,16 @@ impl Job {
             StockSpec::Arranged(a) if a.holds(name) => Some((s, a)),
             _ => None,
         })
+    }
+
+    /// How many copies of model `name` the job asks for, and the sheet that
+    /// lays them: as many as its sheet's part says, or one, on no sheet, for a
+    /// model no sheet arranges.
+    pub fn copies_asked(&self, name: &str) -> (u32, Option<&StockDef>) {
+        match self.sheet_of(name) {
+            Some((def, a)) => (a.part(name).map_or(1, |p| p.copies), Some(def)),
+            None => (1, None),
+        }
     }
 
     /// The tool an operation names, if it names one the job has.

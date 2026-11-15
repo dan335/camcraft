@@ -157,7 +157,10 @@ fn a_part_left_out_is_said_to_be() {
     let SheetNow::Laid(_, laid) = doc.sheet_now("Stock 1") else {
         panic!("not laid");
     };
-    let left: Vec<Outcome> = laid.left_out().map(|p| p.outcome).collect();
+    let left: Vec<Outcome> = laid
+        .left_out()
+        .flat_map(|p| p.copies.iter().map(|c| c.outcome))
+        .collect();
     assert_eq!(left, [Outcome::TooLarge]);
     assert_eq!(doc.stands_now("p"), Some(&[][..]));
     assert!(matches!(doc.sheet_now("nothing"), SheetNow::NotASheet));
@@ -202,4 +205,94 @@ fn a_model_put_on_a_sheet_has_no_position() {
     assert_eq!(doc.job.stocks[0].spec.models(), ["p", copy.as_str()]);
     assert_eq!(doc.job.model(&copy).unwrap().transform.position, [0.0; 3]);
     doc.job.check_common().unwrap();
+}
+
+/// Three copies of the plate on the sheet, laid live: the setup is laid out
+/// with each, where the sheet stands it. A ray down onto any copy's top meets
+/// that copy and the one face of the body, which is what a click saves; the
+/// face picked once is drawn on every copy.
+#[test]
+fn a_pick_on_any_real_copy_is_one_pick_drawn_on_every_copy() {
+    use camcraft_core::job::FeatureRef;
+    use camcraft_core::setup::features::find_face;
+
+    use crate::picking::ray::PickScene;
+    use crate::picking::shown::shown;
+    use crate::ui::measure::Measure;
+
+    let (mut doc, setup) = on_a_sheet();
+    sheet(&mut doc).size = [400.0, 100.0, 18.0];
+    sheet(&mut doc).parts[0].copies = 3;
+    arrange_now(&mut doc);
+    let stands = doc.stands_now("p").unwrap().to_vec();
+    assert_eq!(stands.len(), 3);
+    doc.refresh_layout(&setup);
+    let prepared = doc.setups[&setup]
+        .layout
+        .as_ref()
+        .unwrap()
+        .prepared
+        .clone()
+        .unwrap();
+    assert_eq!(prepared.pieces.len(), 3);
+    let bodies = doc.bodies();
+    let (model, bvh) = doc.models["p"].loaded().unwrap();
+    let scene = PickScene::new(
+        &prepared,
+        [(
+            "p".to_string(),
+            model.clone(),
+            bvh.clone(),
+            bodies.get("p").unwrap().stands.to_vec(),
+        )],
+        Vec::new(),
+    );
+    assert_eq!(scene.models[0].copies.len(), 3);
+
+    // Straight down onto each copy's top, beside its hole: that copy, and
+    // the body's top face, whichever copy.
+    let mut faces = Vec::new();
+    for (k, stand) in stands.iter().enumerate() {
+        let on_top = prepared
+            .frame
+            .to_setup_as(stand, glam::dvec3(12.0, 12.0, 5.0));
+        let hit = scene
+            .cast(
+                on_top + glam::DVec3::Z * 50.0,
+                -glam::DVec3::Z,
+                f64::INFINITY,
+            )
+            .unwrap();
+        assert_eq!(hit.copy, k);
+        faces.push(model.body.topology().face_of(hit.triangle).unwrap());
+    }
+    assert!(faces.iter().all(|f| *f == faces[0]), "{faces:?}");
+
+    // Saved once, on the body, and drawn on every copy.
+    let top = FeatureRef {
+        model: "p".into(),
+        index: faces[0],
+        at: [12.0, 12.0, 5.0],
+    };
+    assert_eq!(find_face(&model.body, &top, 0.01).unwrap().index, faces[0]);
+    let op = 0;
+    doc.job.setups[0].operations[op].selection.faces = vec![top];
+    let one = model
+        .body
+        .topology()
+        .face(faces[0])
+        .unwrap()
+        .triangles
+        .len();
+    let drawn = shown(
+        &doc,
+        &setup,
+        Some(op),
+        (&prepared, Ok(None)),
+        &scene,
+        Measure::Metric,
+    );
+    assert_eq!(drawn.faces.len(), 1, "one pick");
+    assert!(drawn.faces[0].is_ok(), "{:?}", drawn.faces);
+    assert_eq!(drawn.highlight.faces.len(), 3 * one, "on every copy");
 }

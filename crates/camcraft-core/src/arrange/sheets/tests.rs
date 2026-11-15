@@ -5,7 +5,7 @@ use camcraft_geom::topology::Body;
 use glam::{DVec3, dvec3};
 
 use super::*;
-use crate::job::{ModelDef, Rotation, SheetPart, StockDef};
+use crate::job::{MOST_COPIES, ModelDef, Rotation, SheetPart, StockDef};
 
 /// A job with a sheet `size` from `corner` holding `parts`, and a model for
 /// each part.
@@ -56,8 +56,14 @@ fn done(a: &Arrangement) -> (&[PartLaid], f64, f64) {
     }
 }
 
+/// A part's one copy's outcome.
+fn outcome(p: &PartLaid) -> Outcome {
+    assert_eq!(p.copies.len(), 1, "{}", p.model);
+    p.copies[0].outcome
+}
+
 fn stand(p: &PartLaid) -> Stand {
-    match p.outcome {
+    match outcome(p) {
         Outcome::Placed(s) => s,
         other => panic!("{} not placed: {other:?}", p.model),
     }
@@ -108,7 +114,7 @@ fn parts_stand_inside_their_sheet_on_its_bottom() {
             );
         }
         // To within the clipper's tick, a tenth of a micrometre.
-        let outline = p.outline.as_ref().unwrap();
+        let outline = p.copies[0].outline.as_ref().unwrap();
         let (olo, ohi) = outline.bounds().unwrap();
         let (plo, phi) = points
             .iter()
@@ -118,7 +124,7 @@ fn parts_stand_inside_their_sheet_on_its_bottom() {
     }
     let far = parts
         .iter()
-        .filter_map(|p| p.outline.as_ref()?.bounds())
+        .filter_map(|p| p.copies[0].outline.as_ref()?.bounds())
         .map(|(_, h)| h.x)
         .fold(f64::MIN, f64::max);
     assert!((used - (far - 50.0)).abs() < 1e-9, "{used}");
@@ -172,19 +178,19 @@ fn parts_left_out_say_why_and_stand_nowhere() {
     )
     .unwrap();
     let (parts, ..) = done(&a);
-    assert_eq!(parts[0].outcome, Outcome::TooLarge);
+    assert_eq!(outcome(&parts[0]), Outcome::TooLarge);
     let placed = parts[1..]
         .iter()
-        .filter(|p| matches!(p.outcome, Outcome::Placed(_)))
+        .filter(|p| matches!(outcome(p), Outcome::Placed(_)))
         .count();
     assert_eq!(placed, 1);
-    assert!(parts[1..].iter().any(|p| p.outcome == Outcome::NoRoom));
+    assert!(parts[1..].iter().any(|p| outcome(p) == Outcome::NoRoom));
     let left: Vec<&str> = a.sheets()[0].left_out().map(|p| p.model.as_str()).collect();
     assert_eq!(left.len(), 2);
     assert_eq!(a.stands("big"), Some(&[][..]));
-    for p in parts.iter().filter(|p| p.outcome == Outcome::NoRoom) {
+    for p in parts.iter().filter(|p| outcome(p) == Outcome::NoRoom) {
         assert_eq!(a.stands(&p.model), Some(&[][..]));
-        assert!(p.outline.is_none());
+        assert!(p.copies[0].outline.is_none());
     }
 }
 
@@ -271,7 +277,7 @@ fn the_sheets_rotation_is_its_parts_turns() {
         &Watch::default(),
     )
     .unwrap();
-    assert_eq!(done(&a).0[0].outcome, Outcome::TooLarge);
+    assert_eq!(outcome(&done(&a).0[0]), Outcome::TooLarge);
     sheet_mut(&mut j).rotation = Rotation::QuarterTurns;
     let a = arrange(
         &j,
@@ -307,8 +313,7 @@ fn it_is_the_same_each_time_and_casts_each_outline_once() {
         ("b", block(dvec3(-10.0, -10.0, 0.0), dvec3(40.0, 60.0, 9.0))),
         ("c", block(DVec3::ZERO, dvec3(80.0, 30.0, 5.0))),
     ];
-    let stands =
-        |a: &Arrangement| -> Vec<Outcome> { done(a).0.iter().map(|p| p.outcome).collect() };
+    let stands = |a: &Arrangement| -> Vec<Outcome> { done(a).0.iter().map(outcome).collect() };
     let mut outlines = Outlines::default();
     let first = arrange(&j, &bodies(&named), &mut outlines, &Watch::default()).unwrap();
     // Two bodies alike share one outline.
@@ -366,4 +371,222 @@ fn outlines_merged_are_kept_latest() {
     mine.merge(theirs);
     assert_eq!(mine.len(), KEPT);
     assert_eq!(mine.kept.last().map(|(c, _)| *c), Some(Cast::of(&newest)));
+}
+
+/// Model `name`'s part on the sheet of `j`.
+fn part_mut<'a>(j: &'a mut Job, name: &str) -> &'a mut SheetPart {
+    sheet_mut(j)
+        .parts
+        .iter_mut()
+        .find(|p| p.model == name)
+        .unwrap()
+}
+
+/// Every copy laid, each a part to the packer: each placed, at least the
+/// spacing from the others, as the layout's check holds it; the arrangement
+/// stands the model once for each, in copy order, and one outline is cast
+/// for them all.
+#[test]
+fn every_copy_of_a_part_is_laid() {
+    let mut j = job([400.0, 200.0, 18.0], [0.0; 3], &["a"]);
+    part_mut(&mut j, "a").copies = 5;
+    let named = [("a", block(DVec3::ZERO, dvec3(60.0, 40.0, 5.0)))];
+    let mut outlines = Outlines::default();
+    let a = arrange(&j, &bodies(&named), &mut outlines, &Watch::default()).unwrap();
+    assert_eq!(outlines.len(), 1, "one outline for every copy");
+    let (parts, ..) = done(&a);
+    assert_eq!(parts.len(), 1);
+    let p = &parts[0];
+    assert_eq!((p.copies.len(), p.placed(), p.no_room()), (5, 5, 0));
+    let stands: Vec<Stand> = p.stands().collect();
+    assert_eq!(a.stands("a"), Some(stands.as_slice()));
+    assert_eq!(a.sheets()[0].placed(), (5, 5));
+    assert!(a.sheets()[0].left_out().next().is_none());
+    // Apart by the spacing, every two of them.
+    let outlines: Vec<&Region> = p
+        .copies
+        .iter()
+        .map(|c| c.outline.as_ref().unwrap())
+        .collect();
+    for (i, x) in outlines.iter().enumerate() {
+        for y in &outlines[i + 1..] {
+            let grown = x.offset(10.0 - 1e-3, 1e-3);
+            assert!(grown.intersection(y).unwrap().is_empty(), "too near");
+        }
+    }
+}
+
+/// A part some of whose copies have no room keeps those that fit: the last
+/// are left out, each said to be, and the model stands once for each placed.
+/// The sheet places as many of a part with copies as of as many parts.
+#[test]
+fn copies_with_no_room_are_left_out_and_the_rest_placed() {
+    let mut j = job([200.0, 100.0, 18.0], [0.0; 3], &["a"]);
+    part_mut(&mut j, "a").copies = 4;
+    let named = [("a", block(DVec3::ZERO, dvec3(80.0, 60.0, 5.0)))];
+    let a = arrange(
+        &j,
+        &bodies(&named),
+        &mut Outlines::default(),
+        &Watch::default(),
+    )
+    .unwrap();
+    let p = &done(&a).0[0];
+    let placed = p.placed();
+    assert_eq!(placed, 2, "{:?}", p.copies);
+    assert_eq!(p.no_room(), 2);
+    assert_eq!(p.too_large(), 0);
+    for (k, c) in p.copies.iter().enumerate() {
+        assert_eq!(matches!(c.outcome, Outcome::Placed(_)), k < placed, "{k}");
+        assert_eq!(c.outline.is_some(), k < placed, "{k}");
+    }
+    assert_eq!(a.stands("a").map(<[Stand]>::len), Some(placed));
+    assert_eq!(a.sheets()[0].placed(), (2, 4));
+    let left: Vec<&str> = a.sheets()[0].left_out().map(|p| p.model.as_str()).collect();
+    assert_eq!(left, ["a"]);
+
+    // As many parts of one copy each lay the same.
+    let each = job([200.0, 100.0, 18.0], [0.0; 3], &["a", "b", "c", "d"]);
+    let named4 = [
+        ("a", block(DVec3::ZERO, dvec3(80.0, 60.0, 5.0))),
+        ("b", block(DVec3::ZERO, dvec3(80.0, 60.0, 5.0))),
+        ("c", block(DVec3::ZERO, dvec3(80.0, 60.0, 5.0))),
+        ("d", block(DVec3::ZERO, dvec3(80.0, 60.0, 5.0))),
+    ];
+    let four = arrange(
+        &each,
+        &bodies(&named4),
+        &mut Outlines::default(),
+        &Watch::default(),
+    )
+    .unwrap();
+    let stood: Vec<Option<Stand>> = done(&four).0.iter().map(|p| p.stands().next()).collect();
+    let copies: Vec<Option<Stand>> = p
+        .copies
+        .iter()
+        .map(|c| match c.outcome {
+            Outcome::Placed(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stood, copies);
+}
+
+/// A part's grain is used instead of the sheet's: on a sheet too narrow for
+/// a long part as it stands, the copies of one free to turn are turned, and
+/// those of one kept as it stands are too large, though the sheet allows
+/// quarter turns. A half turn allows only none or half round.
+#[test]
+fn a_parts_grain_limits_its_copies_turns() {
+    let mut j = job([100.0, 400.0, 18.0], [0.0; 3], &["free", "grain"]);
+    part_mut(&mut j, "free").copies = 2;
+    part_mut(&mut j, "grain").copies = 2;
+    part_mut(&mut j, "grain").rotation = Some(Rotation::None);
+    let named = [
+        ("free", block(DVec3::ZERO, dvec3(150.0, 20.0, 5.0))),
+        ("grain", block(DVec3::ZERO, dvec3(150.0, 20.0, 5.0))),
+    ];
+    let a = arrange(
+        &j,
+        &bodies(&named),
+        &mut Outlines::default(),
+        &Watch::default(),
+    )
+    .unwrap();
+    let (parts, ..) = done(&a);
+    assert_eq!(parts[0].placed(), 2);
+    for s in parts[0].stands() {
+        assert!([90.0, 270.0].contains(&s.turn.degrees()), "{s:?}");
+    }
+    assert_eq!(parts[1].too_large(), 2);
+    assert_eq!(a.stands("grain"), Some(&[][..]));
+
+    // Half round at most: on a sheet long enough, turned by none or a half.
+    let mut j = job([400.0, 400.0, 18.0], [0.0; 3], &["grain"]);
+    part_mut(&mut j, "grain").copies = 6;
+    part_mut(&mut j, "grain").rotation = Some(Rotation::HalfTurn);
+    let named = [("grain", block(DVec3::ZERO, dvec3(150.0, 20.0, 5.0)))];
+    let a = arrange(
+        &j,
+        &bodies(&named),
+        &mut Outlines::default(),
+        &Watch::default(),
+    )
+    .unwrap();
+    let p = &done(&a).0[0];
+    assert_eq!(p.placed(), 6);
+    assert!(p.stands().all(|s| [0.0, 180.0].contains(&s.turn.degrees())));
+
+    // A grain by a step that is not one says whose it is.
+    part_mut(&mut j, "grain").rotation = Some(Rotation::Step(0.5));
+    let a = arrange(
+        &j,
+        &bodies(&named),
+        &mut Outlines::default(),
+        &Watch::default(),
+    )
+    .unwrap();
+    match &a.sheets()[0].laid {
+        Laid::Failed(e) => assert_eq!(*e, ArrangeError::Grain("grain".into())),
+        other => panic!("{other:?}"),
+    }
+    // So does a part asking for more copies than a sheet lays.
+    part_mut(&mut j, "grain").rotation = None;
+    part_mut(&mut j, "grain").copies = MOST_COPIES + 1;
+    let a = arrange(
+        &j,
+        &bodies(&named),
+        &mut Outlines::default(),
+        &Watch::default(),
+    )
+    .unwrap();
+    assert!(matches!(
+        &a.sheets()[0].laid,
+        Laid::Failed(ArrangeError::Copies { copies, .. }) if *copies == MOST_COPIES + 1
+    ));
+}
+
+/// Copies of a part with a hole take another part inside each hole: two
+/// plates fill the sheet, and the small blocks go in their holes.
+#[test]
+fn copies_of_a_part_with_a_hole_take_others_inside_it() {
+    let mut j = job([180.0, 95.0, 18.0], [0.0; 3], &["plate", "peg"]);
+    {
+        let a = sheet_mut(&mut j);
+        a.spacing = 5.0;
+        a.border = 5.0;
+    }
+    part_mut(&mut j, "plate").copies = 2;
+    part_mut(&mut j, "peg").copies = 2;
+    let named = [
+        (
+            "plate",
+            Body::derived(camcraft_geom::synthetic::plate_with_hole(
+                40.0, 5.0, 25.0, 64,
+            )),
+        ),
+        ("peg", block(DVec3::ZERO, dvec3(10.0, 10.0, 5.0))),
+    ];
+    let a = arrange(
+        &j,
+        &bodies(&named),
+        &mut Outlines::default(),
+        &Watch::default(),
+    )
+    .unwrap();
+    let (parts, ..) = done(&a);
+    assert_eq!(parts[0].placed(), 2, "{:?}", parts[0].copies);
+    assert_eq!(parts[1].placed(), 2, "{:?}", parts[1].copies);
+    // Each peg in a hole: its middle within the hole's radius of a plate's.
+    let plates: Vec<DVec2> = parts[0]
+        .stands()
+        .map(|s| s.point(DVec3::ZERO).truncate())
+        .collect();
+    for s in parts[1].stands() {
+        let middle = s.point(dvec3(5.0, 5.0, 0.0)).truncate();
+        assert!(
+            plates.iter().any(|p| p.distance(middle) < 25.0 - 7.0),
+            "a peg at {middle} in no hole: {plates:?}"
+        );
+    }
 }

@@ -370,33 +370,37 @@ pub fn sheet_notes(sheet: &SheetLayout) -> Vec<String> {
         }
         Laid::Failed(e) => return vec![format!("sheet '{name}': cannot be arranged: {e}")],
     };
-    let placed = parts
-        .iter()
-        .filter(|p| matches!(p.outcome, Outcome::Placed(_)))
-        .count();
+    let (placed, copies) = sheet.placed();
     let mut out = vec![format!(
-        "sheet '{name}': {placed} of {} part(s) placed, {used:.1} of {length:.1} mm used",
-        parts.len()
+        "sheet '{name}': {placed} of {copies} part(s) placed, {used:.1} of {length:.1} mm used"
     )];
-    out.extend(parts.iter().map(|p| match p.outcome {
-        Outcome::Placed(s) => format!(
-            "sheet '{name}': '{}' at ({:.3}, {:.3}, {:.3}), turned {}°",
-            p.model,
-            s.offset.x,
-            s.offset.y,
-            s.offset.z,
-            s.turn.degrees()
-        ),
-        Outcome::TooLarge => format!(
-            "sheet '{name}': '{}' left out: it does not fit inside the border at any turn it \
-             may take",
-            p.model
-        ),
-        Outcome::NoRoom => format!(
-            "sheet '{name}': '{}' left out: there is no room left for it",
-            p.model
-        ),
-    }));
+    for p in parts {
+        // A part of one copy is named alone; of several, each copy by its
+        // place among them.
+        let n = p.copies.len();
+        for (k, c) in p.copies.iter().enumerate() {
+            let which = match n {
+                1 => format!("'{}'", p.model),
+                _ => format!("'{}' copy {} of {n}", p.model, k + 1),
+            };
+            out.push(match c.outcome {
+                Outcome::Placed(s) => format!(
+                    "sheet '{name}': {which} at ({:.3}, {:.3}, {:.3}), turned {}°",
+                    s.offset.x,
+                    s.offset.y,
+                    s.offset.z,
+                    s.turn.degrees()
+                ),
+                Outcome::TooLarge => format!(
+                    "sheet '{name}': {which} left out: it does not fit inside the border at any \
+                     turn it may take"
+                ),
+                Outcome::NoRoom => {
+                    format!("sheet '{name}': {which} left out: there is no room left for it")
+                }
+            });
+        }
+    }
     out
 }
 

@@ -150,15 +150,26 @@ impl StockSpec {
     }
 
     /// Name model `copy` too wherever it names model `of`, after the names it
-    /// has: for a copy of a model, made with it.
+    /// has: for a copy of a model, made with it. On a sheet the copy is a
+    /// copy of the part too, as many copies with the same grain: the same
+    /// shape cut from the same board.
     pub fn copy_model(&mut self, of: &str, copy: &str) {
-        if !self.models().contains(&of) {
-            return;
-        }
         match self {
             StockSpec::AroundModels { models, .. }
-            | StockSpec::FixedBox(FixedBox { models, .. }) => models.push(copy.to_string()),
-            StockSpec::Arranged(a) => a.parts.push(SheetPart::of(copy)),
+            | StockSpec::FixedBox(FixedBox { models, .. }) => {
+                if models.iter().any(|m| m == of) {
+                    models.push(copy.to_string());
+                }
+            }
+            StockSpec::Arranged(a) => {
+                if let Some(part) = a.part(of) {
+                    let part = SheetPart {
+                        model: copy.to_string(),
+                        ..part.clone()
+                    };
+                    a.parts.push(part);
+                }
+            }
         }
     }
 
@@ -209,8 +220,8 @@ pub struct Arranged {
     /// Which face of the sheet the parts stand on.
     #[serde(default)]
     pub seat: Seat,
-    /// The models it arranges, in order: each one copy, as it stands by its
-    /// own rotation and scale, with no position of its own.
+    /// The models it arranges, in order: each as many copies as it asks, as
+    /// it stands by its own rotation and scale, with no position of its own.
     #[serde(default)]
     pub parts: Vec<SheetPart>,
 }
@@ -244,21 +255,62 @@ impl Arranged {
     pub fn holds(&self, name: &str) -> bool {
         self.parts.iter().any(|p| p.model == name)
     }
+
+    /// Its part of model `name`, if it arranges it.
+    pub fn part(&self, name: &str) -> Option<&SheetPart> {
+        self.parts.iter().find(|p| p.model == name)
+    }
 }
 
-/// One of the models a sheet arranges.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+/// One of the models a sheet arranges, how many copies of it, and the turns
+/// they may take.
+///
+/// Left out of its file, a part is one copy, turned as its sheet allows.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SheetPart {
     /// The model, by name.
     pub model: String,
+    /// How many copies of it the sheet lays: from one to [`MOST_COPIES`].
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub copies: u32,
+    /// The turns its copies may be laid at, used instead of the sheet's: its
+    /// grain, where it must run one way. `None` for the sheet's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<Rotation>,
+}
+
+/// The most copies of one part a sheet lays.
+///
+/// Copies are laid one at a time, each searched for across the sheet, so the
+/// time grows faster than how many there are. Measured in a release build on
+/// four threads (`arrange::tests::copies_benchmark`, a 2440 by 1220 sheet):
+/// 1000 copies of a small block, a disc or an L are laid in under 1 s at
+/// quarter turns and in under 6 s at a 15° step, the slowest an L 3 apart;
+/// 2000 take up to 13 s and 5000 up to 34 s. An arrangement follows every
+/// edit in the app, so a few seconds is the most it may take. Such a sheet
+/// holds fewer than 1000 of anything 60 mm square 10 apart (it held 799 of a
+/// 60 by 40 block), so a part asked for more is a part far smaller than a
+/// router's work, or a slip, and is refused rather than laid for a minute.
+pub const MOST_COPIES: u32 = 1000;
+
+fn one() -> u32 {
+    1
+}
+
+// Serde's `skip_serializing_if` hands the field by reference.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_one(n: &u32) -> bool {
+    *n == 1
 }
 
 impl SheetPart {
-    /// Model `name`, as a part.
+    /// Model `name`, as a part: one copy, turned as its sheet allows.
     pub fn of(name: &str) -> Self {
         Self {
             model: name.to_string(),
+            copies: 1,
+            rotation: None,
         }
     }
 }

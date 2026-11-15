@@ -1,6 +1,6 @@
 //! Why a job cannot be run as written.
 
-use super::{JOB_VERSION, ToolFieldError};
+use super::{JOB_VERSION, MOST_COPIES, ToolFieldError};
 use crate::setup::frame::BadOrientation;
 
 /// A job that cannot be run as written.
@@ -177,13 +177,63 @@ pub enum JobError {
         /// The point.
         at: [f64; 3],
     },
-    /// A sheet lists one model twice: it is one part, laid once.
-    #[error("stock '{stock}' lists model '{model}' twice")]
+    /// A sheet lists one model twice: it is one part, which says how many
+    /// copies of it to lay.
+    #[error("stock '{stock}' lists model '{model}' twice: give the one part more copies")]
     RepeatedPart {
         /// The sheet.
         stock: String,
         /// The model.
         model: String,
+    },
+    /// A sheet asks for no copy of a part, or for more than a sheet lays.
+    #[error(
+        "stock '{stock}' asks for {copies} copies of '{model}': a part is from 1 to {} copies",
+        MOST_COPIES
+    )]
+    Copies {
+        /// The sheet.
+        stock: String,
+        /// The model.
+        model: String,
+        /// How many it asks for.
+        copies: u32,
+    },
+    /// A setup's work zero is picked on a model its sheet lays more than
+    /// once: the pick is on every copy, so it is no one place, and which copy
+    /// the packer laid first is no reason to choose it.
+    #[error(
+        "setup '{setup}': the work zero is picked on '{model}', which stock '{stock}' lays \
+         {copies} copies of, so it is no one place: pick it on the stock, or on a model that \
+         stands once"
+    )]
+    ZeroOnCopies {
+        /// The setup.
+        setup: String,
+        /// The model.
+        model: String,
+        /// How many copies its sheet lays.
+        copies: u32,
+        /// The sheet.
+        stock: String,
+    },
+    /// A Morph's curves are picked on a model its sheet lays more than once:
+    /// a Morph lays its passes between two curves, and picked on several
+    /// copies they are two on each.
+    #[error(
+        "operation '{op}': Morph cannot yet morph across copies, and its curves are picked on \
+         '{model}', which stock '{stock}' lays {copies} copies of: give the part one copy, or \
+         make each copy a model of its own with a Morph of its own"
+    )]
+    MorphOnCopies {
+        /// Which operation, as `setup/operation`.
+        op: String,
+        /// The model.
+        model: String,
+        /// How many copies its sheet lays.
+        copies: u32,
+        /// The sheet.
+        stock: String,
     },
     /// Two sheets arrange one model, which can stand on only one.
     #[error(

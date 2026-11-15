@@ -540,12 +540,35 @@ mod tests {
         h.run();
         assert_eq!(resets(&h), 1, "a sheet: changed as new, but for its kind");
         sheet.rotation = Rotation::Step(15.0);
+        h.state_mut().job.stocks[0].spec = StockSpec::Arranged(sheet.clone());
+        ASKED.with(|a| a.borrow_mut().clear());
+        h.run();
+        h.run();
+        let wrong = no_such_settings();
+        assert!(wrong.is_empty(), "no such setting: {wrong:?}");
+        // Its part of several copies, with a grain of its own by a step, so
+        // that step's row is drawn too: its copies, its grain and its step
+        // each changed, every row a setting.
+        sheet.parts[0].copies = 4;
+        sheet.parts[0].rotation = Some(Rotation::Step(30.0));
         h.state_mut().job.stocks[0].spec = StockSpec::Arranged(sheet);
         ASKED.with(|a| a.borrow_mut().clear());
         h.run();
         h.run();
         let wrong = no_such_settings();
         assert!(wrong.is_empty(), "no such setting: {wrong:?}");
+        let asked: Vec<String> =
+            ASKED.with(|a| a.borrow().iter().map(|(_, p, _)| p.clone()).collect());
+        for path in [
+            "parts.0.copies",
+            "parts.0.rotation",
+            "parts.0.rotation.step",
+        ] {
+            assert!(
+                asked.iter().any(|p| p == path),
+                "{path} not drawn: {asked:?}"
+            );
+        }
 
         // A new tool of each kind, with a preset, on every page.
         for kind in [

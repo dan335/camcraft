@@ -52,7 +52,7 @@ mod verify;
 mod tests;
 
 pub use pack::pack;
-pub use sheets::{Arrangement, Laid, Outlines, PartLaid, SheetLayout, arrange};
+pub use sheets::{Arrangement, CopyLaid, Laid, Outlines, PartLaid, SheetLayout, arrange};
 pub use verify::verify;
 
 use std::hash::{Hash, Hasher};
@@ -275,6 +275,20 @@ pub enum ArrangeError {
         /// The shape, by its place.
         shape: usize,
     },
+    /// A part asks for no copy, or for more than a sheet lays.
+    #[error(
+        "'{model}' asks for {copies} copies, and a part is from 1 to {} copies",
+        crate::job::MOST_COPIES
+    )]
+    Copies {
+        /// The model.
+        model: String,
+        /// How many it asks for.
+        copies: u32,
+    },
+    /// A part's own turns, its grain, are by a step that is not one.
+    #[error("the step between the turns of '{0}' must be from 1 to 180 degrees")]
+    Grain(String),
     /// A model covers nothing seen from above, so it has no outline to lay.
     #[error("model '{0}' covers nothing seen from above")]
     NoOutline(String),

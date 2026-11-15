@@ -39,12 +39,14 @@ use crate::control::{Control, Watch};
 use crate::cutter::allowance::{Allowance, EffectiveTool};
 use crate::cutter::dropcutter::DropCutter;
 use crate::job::{
-    Curves, HeightContext, HolderSegment, Holes, Job, JobError, Machine, Operation, Setup, ToolSpec,
+    Curves, HeightContext, HolderSegment, Holes, Job, JobError, Machine, Operation, Setup,
+    StrategySpec, ToolSpec,
 };
 use crate::path::simadapt::sim_moves;
 use crate::setup::features::{FeatureError, Picking};
 use crate::setup::{Bodies, Prepared};
 use crate::strategy::adaptive::rest::Earlier;
+use crate::strategy::morph_curves::MorphError;
 
 pub use crate::path::toolpath::PLUNGE_RATIO;
 pub use error::RunError;
@@ -301,6 +303,16 @@ impl<'a> Shared<'a> {
         // one is said to be, rather than left to read as nothing picked.
         if let Some(model) = self.only_unplaced(op) {
             return Err(in_op(op)(FeatureError::NotPlaced(model.to_string())));
+        }
+        // A morph is between two curves, and a pick on a model of several
+        // copies is on each: said, rather than left to read as more than two.
+        if matches!(op.strategy, StrategySpec::Morph { .. })
+            && let Some((model, copies)) = op.selection.iter().find_map(|r| {
+                let n = self.bodies.get(&r.model)?.stands.len();
+                (n > 1).then(|| (r.model.clone(), n))
+            })
+        {
+            return Err(in_op(op)(MorphError::Copies { model, copies }));
         }
         // Its picks, found once, however many of its settings read them.
         let picking = self.picking(op);

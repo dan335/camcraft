@@ -448,6 +448,72 @@ fn a_round_wall_picked_once_is_bored_in_every_copy() {
     assert!(about.iter().all(|&n| n > 0), "{about:?}");
 }
 
+/// What runs along picks takes them copy by copy, each copy's in the order
+/// picked: the hole's top rim and then its bottom one, on the first copy,
+/// then both on the second, and on the third; not one rim on every copy and
+/// then the other, crossing the sheet once a pick.
+#[test]
+fn picked_curves_are_taken_copy_by_copy() {
+    let (_, mut job) = drilled(None);
+    let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
+    let (stands, holes) = three_copies();
+    job.setups[0].operations[0].selection =
+        picks_at(&body, &[], &[[4.0, 0.0, 5.0], [4.0, 0.0, 0.0]]);
+    let bodies = Bodies::standing([("dome", &body, &stands[..])]);
+    let prepared = crate::setup::prepare(&job, 0, &bodies).unwrap();
+    let curves = curves_picked(&job, &job.setups[0].operations[0], &prepared, &bodies).unwrap();
+    let found: Vec<(usize, f64)> = curves
+        .iter()
+        .map(|c| {
+            let crate::strategy::curve::Piece::Arc { centre, .. } = c.pieces[0] else {
+                panic!("a rim is not an arc: {c:?}");
+            };
+            let copy = holes
+                .iter()
+                .position(|h| h.distance(centre) < 1e-9)
+                .unwrap();
+            (copy, c.start.z)
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [(0, 5.0), (0, 0.0), (1, 5.0), (1, 0.0), (2, 5.0), (2, 0.0)],
+        "{found:?}"
+    );
+}
+
+/// A Morph whose curves are picked on a model of several copies is refused,
+/// saying it cannot morph across copies and what to do, rather than that the
+/// edges make more than two curves.
+#[test]
+fn a_morph_across_copies_is_refused() {
+    let (_, mut job) = round_wall_cut("bore");
+    let body = Body::derived(synthetic::plate_with_hole(20.0, 5.0, 4.0, 48));
+    let op = &mut job.setups[0].operations[0];
+    op.strategy = StrategySpec::named("morph").unwrap();
+    // The hole's top rim, and the plate's top outline, its four sides.
+    op.selection = picks_at(
+        &body,
+        &[],
+        &[
+            [4.0, 0.0, 5.0],
+            [20.0, 0.0, 5.0],
+            [0.0, 20.0, 5.0],
+            [-20.0, 0.0, 5.0],
+            [0.0, -20.0, 5.0],
+        ],
+    );
+    let (stands, _) = three_copies();
+    let bodies = Bodies::standing([("dome", &body, &stands[..])]);
+    let e = run_setup(&job, 0, &bodies).unwrap_err().to_string();
+    assert!(e.contains("Morph cannot yet morph across copies"), "{e}");
+    assert!(e.contains("'dome', which stands 3 times"), "{e}");
+    assert!(e.contains("a Morph of its own"), "{e}");
+    // On one copy it is a morph like any other.
+    let one: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    run_setup(&job, 0, &one).unwrap();
+}
+
 /// A point on the wall of the plate's 8 mm hole.
 const HOLE_WALL: [f64; 3] = [4.0, 0.0, 2.5];
 

@@ -26,6 +26,12 @@ topics! {
         "Bottom stands each part on the sheet's bottom face, to be cut out of it. Top puts its highest point on the sheet's top.";
     PARTS: "Parts",
         "The models the sheet lays out, each where it fits. Its sheet places a part, so the part keeps no position of its own.";
+    COPIES: "Copies",
+        "How many of this part the sheet lays. What is picked on one copy is picked on every copy. Copies with no room are left out; the rest are cut.";
+    GRAIN: "Grain",
+        "The turns this part may take instead of the sheet's. None, or a half turn, keeps its grain running the way the part is drawn.";
+    GRAIN_STEP: "Grain step",
+        "This part's copies may be turned by any whole number of this many degrees.";
     SIZE: "Size",
         "How long the block is along each axis.";
     POSITION: "Position",

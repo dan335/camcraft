@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    Arranged, Boundary, Depths, FixedBox, JOB_VERSION, Job, JobError, Operation, Origin,
-    Retraction, Rotation, StockSpec, StockToLeave, StrategySpec, ToolSpec,
+    Arranged, Boundary, Depths, FixedBox, JOB_VERSION, Job, JobError, MOST_COPIES, Operation,
+    Origin, Retraction, Rotation, StockSpec, StockToLeave, StrategySpec, ToolSpec,
 };
 use crate::is_positive;
 use crate::must::{AT_LEAST_ZERO, FINITE, POSITIVE};
@@ -227,6 +227,15 @@ impl Job {
         };
         if let Origin::Point { point, .. } = &setup.origin {
             pick(format!("setup '{name}' work zero"), &point.model, &point.at)?;
+            // A pick is on every copy, and the work zero is one place.
+            if let (copies @ 2.., Some(stock)) = self.copies_asked(&point.model) {
+                return Err(JobError::ZeroOnCopies {
+                    setup: name.clone(),
+                    model: point.model.clone(),
+                    copies,
+                    stock: stock.name.clone(),
+                });
+            }
         }
         // Only picks something reads: ones left over from a boundary or an
         // outline since changed are kept, and not found, so cannot stop it.
@@ -234,6 +243,20 @@ impl Job {
         {
             for r in op.selection.iter() {
                 pick(format!("operation '{name}/{}'", op.name), &r.model, &r.at)?;
+            }
+        }
+        // A Morph lays its passes between two curves, which picked on a part
+        // of several copies are two on each.
+        for op in running().filter(|op| matches!(op.strategy, StrategySpec::Morph { .. })) {
+            for r in op.selection.iter() {
+                if let (copies @ 2.., Some(stock)) = self.copies_asked(&r.model) {
+                    return Err(JobError::MorphOnCopies {
+                        op: format!("{name}/{}", op.name),
+                        model: r.model.clone(),
+                        copies,
+                        stock: stock.name.clone(),
+                    });
+                }
             }
         }
 
@@ -298,8 +321,9 @@ impl Job {
 
     /// Check sheet `stock`, `a`, can be arranged, `field` naming each of its
     /// settings: it has a size, its spacing and border are distances, the
-    /// border leaves room inside it, its step is one, it lists each part
-    /// once, and no part has a position its sheet would only replace.
+    /// border leaves room inside it, its step and each part's are steps, it
+    /// lists each part once and asks for from one to [`MOST_COPIES`] copies
+    /// of it, and no part has a position its sheet would only replace.
     fn check_sheet(
         &self,
         stock: &str,
@@ -321,18 +345,31 @@ impl Job {
                 "less than half the sheet's length and its width",
             ));
         }
-        if let Rotation::Step(step) = a.rotation
-            && a.rotation.turns().is_none()
-        {
-            return Err(bad(field("rotation.step"), step, "from 1 to 180 degrees"));
-        }
+        let step = |r: Rotation, at: String| match r {
+            Rotation::Step(step) if r.turns().is_none() => {
+                Err(bad(at, step, "from 1 to 180 degrees"))
+            }
+            _ => Ok(()),
+        };
+        step(a.rotation, field("rotation.step"))?;
         let mut seen = BTreeSet::new();
-        for part in &a.parts {
+        for (k, part) in a.parts.iter().enumerate() {
             if !seen.insert(part.model.as_str()) {
                 return Err(JobError::RepeatedPart {
                     stock: stock.to_string(),
                     model: part.model.clone(),
                 });
+            }
+            if !(1..=MOST_COPIES).contains(&part.copies) {
+                return Err(JobError::Copies {
+                    stock: stock.to_string(),
+                    model: part.model.clone(),
+                    copies: part.copies,
+                });
+            }
+            // Its grain is held to what the sheet's turns are.
+            if let Some(r) = part.rotation {
+                step(r, field(&format!("parts.{k}.rotation.step")))?;
             }
             if let Some(m) = self.model(&part.model)
                 && m.transform.position.iter().any(|v| *v != 0.0)

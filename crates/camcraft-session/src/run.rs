@@ -289,5 +289,5 @@ pub fn gate(ran: &Ran, force: bool) -> Result<Passed, SessionError> {
 #[allow(clippy::unwrap_used, clippy::float_cmp, clippy::indexing_slicing)]
 mod tests;
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests_sheets;

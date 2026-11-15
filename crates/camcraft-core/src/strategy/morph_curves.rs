@@ -82,6 +82,19 @@ pub enum MorphError {
     /// The picked edges, joined end to end, are not two curves.
     #[error("pick two curves to morph between: the edges picked make {0}")]
     NotTwo(usize),
+    /// The curves are picked on a model that stands more than once: a pick is
+    /// on every copy, so they are two on each, and a morph is between two.
+    #[error(
+        "Morph cannot yet morph across copies, and its curves are picked on '{model}', which \
+         stands {copies} times: give the part one copy, or make each copy a model of its own \
+         with a Morph of its own"
+    )]
+    Copies {
+        /// The model.
+        model: String,
+        /// How many copies of it stand.
+        copies: usize,
+    },
     /// One curve is open and the other closed.
     #[error("pick two open curves or two closed ones: one picked is open and the other closed")]
     OpenAndClosed,

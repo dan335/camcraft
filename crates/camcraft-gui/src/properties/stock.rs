@@ -5,9 +5,9 @@
 //! For an arranged sheet, one row per setting, the parts it lays out, and how
 //! it lays them as it is now.
 
-use camcraft_core::arrange::{Corner, Direction, Laid, Outcome};
+use camcraft_core::arrange::{Corner, Direction, Laid, PartLaid};
 use camcraft_core::job::{
-    Arranged, FixedBox, Place, Rotation, STEP_DEGREES, Seat, SheetPart, StockSpec,
+    Arranged, FixedBox, MOST_COPIES, Place, Rotation, STEP_DEGREES, Seat, SheetPart, StockSpec,
 };
 use camcraft_geom::mesh::Aabb;
 use eframe::egui;
@@ -113,9 +113,10 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
             models: b.models.clone(),
             ..FixedBox::centred(fit.map_or([100.0, 100.0, 25.0], |f| f.extent().to_array()))
         }),
-        // Its size and its parts are its own, which nothing defaults.
+        // Its size and which parts it holds are its own, which nothing
+        // defaults; each part is one copy, turned as the sheet allows.
         StockSpec::Arranged(a) => StockSpec::Arranged(Arranged {
-            parts: a.parts.clone(),
+            parts: a.parts.iter().map(|p| SheetPart::of(&p.model)).collect(),
             ..Arranged::new(a.size)
         }),
     };
@@ -147,6 +148,7 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
                     a.parts.push(SheetPart::of(p));
                 }
             }
+            part_fields(ui, &mut d, a);
         }
         StockSpec::AroundModels {
             models,
@@ -302,7 +304,7 @@ fn sheet_fields(ui: &mut egui::Ui, d: &mut Defaults<StockSpec>, m: Measure, a: &
             m.length_field(ui, &mut a.border, 0.1, 1000.0, "")
         });
         d.row(ui, &topics::ROTATION, "rotation", |ui| {
-            rotation_choice(ui, &mut a.rotation);
+            rotation_choice(ui, "sheet-rotation", &mut a.rotation);
         });
         if let Rotation::Step(step) = &mut a.rotation {
             d.row(ui, &topics::STEP, "rotation.step", |ui| {
@@ -358,27 +360,64 @@ fn corner_text(c: Corner) -> &'static str {
 
 /// The turns a sheet's parts may take. A step chosen starts at 15 degrees; one
 /// chosen again keeps the step it had.
-fn rotation_choice(ui: &mut egui::Ui, r: &mut Rotation) {
-    let text = |r: &Rotation| match r {
+fn rotation_choice(ui: &mut egui::Ui, id: impl egui::AsIdSalt, r: &mut Rotation) {
+    let mut given = Some(*r);
+    turns_choice(ui, id, &mut given, None);
+    if let Some(chosen) = given {
+        *r = chosen;
+    }
+}
+
+/// What a person calls a way of turning.
+fn rotation_text(r: &Rotation) -> &'static str {
+    match r {
         Rotation::None => "none",
         Rotation::HalfTurn => "half turn",
         Rotation::QuarterTurns => "quarter turns",
         Rotation::Step(_) => "by a step",
+    }
+}
+
+/// The turns something may take, where `sheet` is the sheet's, for a part
+/// that may take the sheet's instead, `None`: what `r` is then. A step chosen
+/// starts at 15 degrees; one chosen again keeps the step it had.
+fn turns_choice(
+    ui: &mut egui::Ui,
+    id: impl egui::AsIdSalt,
+    r: &mut Option<Rotation>,
+    sheet: Option<Rotation>,
+) {
+    let text = |r: &Option<Rotation>| match (r, sheet) {
+        (Some(r), _) => rotation_text(r).to_string(),
+        (None, Some(s)) => format!("as the sheet ({})", rotation_text(&s)),
+        (None, None) => String::new(),
     };
     let step = match *r {
-        Rotation::Step(s) => s,
-        Rotation::None | Rotation::HalfTurn | Rotation::QuarterTurns => 15.0,
+        Some(Rotation::Step(s)) => s,
+        _ => 15.0,
     };
-    egui::ComboBox::from_id_salt("sheet-rotation")
+    let mut choices = Vec::new();
+    if sheet.is_some() {
+        choices.push((None, "Turned as the sheet allows its parts"));
+    }
+    choices.extend([
+        (Some(Rotation::None), "Each part as it stands"),
+        (
+            Some(Rotation::HalfTurn),
+            "As it stands, or turned half round",
+        ),
+        (
+            Some(Rotation::QuarterTurns),
+            "By any number of quarter turns",
+        ),
+        (Some(Rotation::Step(step)), "By any whole number of a step"),
+    ]);
+    let kind = |r: &Option<Rotation>| r.as_ref().map(std::mem::discriminant);
+    egui::ComboBox::from_id_salt(id)
         .selected_text(text(r))
         .show_ui(ui, |ui| {
-            for (choice, why) in [
-                (Rotation::None, "Each part as it stands"),
-                (Rotation::HalfTurn, "As it stands, or turned half round"),
-                (Rotation::QuarterTurns, "By any number of quarter turns"),
-                (Rotation::Step(step), "By any whole number of a step"),
-            ] {
-                let on = std::mem::discriminant(r) == std::mem::discriminant(&choice);
+            for (choice, why) in choices {
+                let on = kind(r) == kind(&choice);
                 if ui
                     .selectable_label(on, text(&choice))
                     .on_hover_text(why)
@@ -389,6 +428,42 @@ fn rotation_choice(ui: &mut egui::Ui, r: &mut Rotation) {
                 }
             }
         });
+}
+
+/// Each part's copies and grain, under its model's name: how many of it the
+/// sheet lays, and the turns its copies may take, the sheet's or its own.
+fn part_fields(ui: &mut egui::Ui, d: &mut Defaults<StockSpec>, a: &mut Arranged) {
+    let sheet = a.rotation;
+    for (k, p) in a.parts.iter_mut().enumerate() {
+        widgets::section(ui, &p.model);
+        form(ui, ("sheet-part", k), |ui| {
+            d.row(ui, &topics::COPIES, &format!("parts.{k}.copies"), |ui| {
+                ui.add(
+                    widgets::number(&mut p.copies)
+                        .speed(0.1)
+                        .range(1..=MOST_COPIES),
+                )
+            });
+            d.row(ui, &topics::GRAIN, &format!("parts.{k}.rotation"), |ui| {
+                turns_choice(ui, ("part-grain", k), &mut p.rotation, Some(sheet));
+            });
+            if let Some(Rotation::Step(step)) = &mut p.rotation {
+                d.row(
+                    ui,
+                    &topics::GRAIN_STEP,
+                    &format!("parts.{k}.rotation.step"),
+                    |ui| {
+                        ui.add(
+                            widgets::number(step)
+                                .speed(1.0)
+                                .range(*STEP_DEGREES.start()..=*STEP_DEGREES.end())
+                                .suffix("°"),
+                        )
+                    },
+                );
+            }
+        });
+    }
 }
 
 /// How sheet `name` is laid now: how many of its parts it holds and how much
@@ -413,12 +488,8 @@ fn sheet_status(ui: &mut egui::Ui, doc: &Document, name: &str, m: Measure) {
         SheetNow::Laid(_, sheet) => sheet,
     };
     ui.add_space(theme::SPACE_3);
-    let (parts, used, length) = match &sheet.laid {
-        Laid::Done {
-            parts,
-            used,
-            length,
-        } => (parts, *used, *length),
+    let (used, length) = match &sheet.laid {
+        Laid::Done { used, length, .. } => (*used, *length),
         Laid::Waiting(missing) => {
             let names: Vec<String> = missing.iter().map(|n| format!("'{n}'")).collect();
             hint(ui, &format!("It waits for {} to load.", names.join(", ")));
@@ -429,15 +500,11 @@ fn sheet_status(ui: &mut egui::Ui, doc: &Document, name: &str, m: Measure) {
             return;
         }
     };
-    let placed = parts
-        .iter()
-        .filter(|p| matches!(p.outcome, Outcome::Placed(_)))
-        .count();
+    let (placed, copies) = sheet.placed();
     ui.label(
         widgets::mono(
             format!(
-                "{placed} of {} placed · {} of {} used",
-                parts.len(),
+                "{placed} of {copies} placed · {} of {} used",
                 m.number(used, 0),
                 m.length(length, 0)
             ),
@@ -446,12 +513,31 @@ fn sheet_status(ui: &mut egui::Ui, doc: &Document, name: &str, m: Measure) {
         .color(theme::egui_color(theme::text_2())),
     );
     for p in sheet.left_out() {
-        let why = match p.outcome {
-            Outcome::TooLarge => "too large for the sheet at any turn it may take",
-            Outcome::NoRoom | Outcome::Placed(_) => "no room left for it",
-        };
-        error(ui, &format!("'{}' left out: {why}", p.model));
+        for line in left_out_lines(p) {
+            error(ui, &line);
+        }
     }
+}
+
+/// What of part `p` is left out, a line for each reason: how many of its
+/// copies, and why.
+fn left_out_lines(p: &PartLaid) -> Vec<String> {
+    let n = p.copies.len();
+    let mut out = Vec::new();
+    for (count, why) in [
+        (
+            p.too_large(),
+            "too large for the sheet at any turn it may take",
+        ),
+        (p.no_room(), "no room left"),
+    ] {
+        match (count, n) {
+            (0, _) => {}
+            (_, 1) => out.push(format!("'{}' left out: {why}", p.model)),
+            _ => out.push(format!("{count} of {n} '{}' left out: {why}", p.model)),
+        }
+    }
+    out
 }
 
 /// One axis of a fixed box, as a person names its sides.
