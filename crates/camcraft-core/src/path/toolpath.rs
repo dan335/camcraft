@@ -31,8 +31,9 @@ use glam::DVec3;
 use crate::is_positive;
 
 /// How far, in millimetres, an arc's end may be from where its shape says it
-/// ends: rounding, and nothing more.
-const ARC_END: f64 = 1.0e-6;
+/// ends: rounding, and nothing more. An arc of no more radius than this is
+/// refused, as no arc at all.
+pub(crate) const ARC_END: f64 = 1.0e-6;
 
 /// Whether a three-axis machine cuts an arc about `axis` as one: it turns only
 /// about X, Y or Z (`G19`, `G18`, `G17`).

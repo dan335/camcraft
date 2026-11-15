@@ -17,6 +17,14 @@ the same notes at more length.
   programs for `ops_3d` with its 12 mm ball, its 6 mm ball, a bitangency angle
   of 40° and two stepovers are `fixtures/nc/ops_3d_pencil*.nc`, made again by
   `scripts/fusion/ops_3d/cam.py`, and a test holds camcraft's Pencil to each.
+- **Radial is no longer refused where a spoke stops short of the middle.**
+  `camcraft post fixtures/step/ops_3d.step --strategy radial --stepover 0.5`
+  ended "the arc to … is not a usable arc from where the path is", and wrote
+  nothing. A spoke broken on its way in, and the next one out from the
+  middle, lie in line, a micron or two apart by rounding; the link between
+  them was made a half turn that wide, which is no arc. Passes in line, no
+  further apart than the tolerance, are now joined by the straight line
+  between them. No program was written wrong: the operation was refused.
 
 ## 0.8.2 — 2026-11-14
 

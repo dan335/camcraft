@@ -500,6 +500,40 @@ fn a_turn_between_passes_of_different_lengths() {
     );
 }
 
+/// Passes in line, the next starting on ahead and coming back along the last,
+/// are joined by the straight line between them, not a turn: a radial spoke
+/// that stops short of the middle, and the next one out from it, whose lines
+/// are a micron or two apart there by rounding. A turn that small is no arc
+/// the path takes, and the operation was refused for it.
+#[test]
+fn passes_in_line_are_joined_straight() {
+    let plane = ClearancePlane::new(10.0).unwrap();
+    for apart in [0.0, 1.0e-9, 1.6e-6, 0.005, 0.015] {
+        let mut t = Toolpath::new();
+        t.feed_to(dvec3(15.0, 0.0, 0.0), MoveRole::Link, 1000.0)
+            .unwrap();
+        t.feed_to(dvec3(10.0, 0.0, 0.0), MoveRole::Cut, 1000.0)
+            .unwrap();
+        t.feed_to(dvec3(0.0, apart, 0.0), MoveRole::Link, 1000.0)
+            .unwrap();
+        t.feed_to(dvec3(8.0, apart, 0.0), MoveRole::Cut, 1000.0)
+            .unwrap();
+        let (out, report) = link(&t, &plane, &mut Air, &FlatPart(0.0), &staying(50.0))
+            .unwrap_or_else(|e| panic!("{apart} apart: {e}"));
+        assert_eq!(report.stayed_down, 1, "{apart} apart");
+        let joins: Vec<&Move> = out
+            .moves()
+            .iter()
+            .filter(|m| m.role == MoveRole::Transition)
+            .collect();
+        assert!(
+            joins.iter().all(|m| m.kind == MoveKind::Linear),
+            "{apart} apart: {joins:?}"
+        );
+        assert_eq!(joins.last().unwrap().to, dvec3(0.0, apart, 0.0));
+    }
+}
+
 /// A link that stays down rides over the part where it rises above the line
 /// between the cuts, and never reaches into it.
 #[test]

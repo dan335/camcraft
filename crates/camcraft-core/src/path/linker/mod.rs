@@ -53,7 +53,7 @@ pub use world::{Air, Material, NoPart, Surface, Unchanging};
 use crate::control::{Watch, share};
 use crate::is_positive;
 use crate::must::{AT_LEAST_ZERO, POSITIVE};
-use crate::path::toolpath::{Arc, Move, MoveRole, PLUNGE_RATIO, Toolpath, steep};
+use crate::path::toolpath::{ARC_END, Arc, Move, MoveRole, PLUNGE_RATIO, Toolpath, steep};
 
 /// Resolve every [`MoveRole::Link`], cutting what is linked into `material` as it
 /// goes.
@@ -494,7 +494,9 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
     /// first, or after, so the turn is at the further end. Level as seen from
     /// above, it goes from one pass's height to the other's as it goes.
     ///
-    /// `None` where the passes do not run so, or are further apart than the
+    /// `None` where the passes do not run so: in line, no further apart than
+    /// the tolerance, as a spoke that stops short of the middle and the next
+    /// one out from it are. Or where they are further apart than the
     /// tool is wide, as a turn that size would swing far off the work; or
     /// where the part rises into the turn, the turn would cut more than a cut
     /// step into the material, or would fall steeply further than a descent at
@@ -526,7 +528,11 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         // and the turn's width: the gap square to the passes.
         let along = (b - a).dot(out);
         let width = (b - a - out * along).length();
-        if width < 1e-6 || width > 2.0 * self.p.tool_radius {
+        // In line, one behind the other, they are not side by side: a turn
+        // of less radius than the tolerance is the straight line, and one of
+        // less than an arc may have is no arc.
+        let least = 2.0 * self.p.tolerance.max(ARC_END);
+        if width <= least || width > 2.0 * self.p.tool_radius {
             return None;
         }
         // The straight on, before the turn or after it, and the turn's ends.
