@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use camcraft_core::arrange::{Outcome, arrange};
+use camcraft_core::arrange::{Laid, Outcome, arrange};
 use camcraft_core::job::{Arranged, SheetPart, StockSpec, StrategySpec, ToolSpec, Transform};
 use camcraft_geom::topology::Body;
 
@@ -164,6 +164,23 @@ fn a_part_left_out_is_said_to_be() {
     assert_eq!(left, [Outcome::TooLarge]);
     assert_eq!(doc.stands_now("p"), Some(&[][..]));
     assert!(matches!(doc.sheet_now("nothing"), SheetNow::NotASheet));
+}
+
+/// While a sheet is arranged again its panel draws it as it was last laid,
+/// whatever that was laid from; one never laid has nothing to draw.
+#[test]
+fn a_sheet_being_arranged_is_drawn_as_it_was_last_laid() {
+    let (mut doc, _) = on_a_sheet();
+    assert!(doc.sheet_last_laid("Stock 1").is_none());
+    arrange_now(&mut doc);
+    sheet(&mut doc).spacing = 4.0;
+    assert!(matches!(doc.sheet_now("Stock 1"), SheetNow::Arranging));
+    let last = doc.sheet_last_laid("Stock 1").unwrap();
+    assert!(matches!(
+        last.sheet("Stock 1").unwrap().laid,
+        Laid::Done { .. }
+    ));
+    assert!(doc.sheet_last_laid("nothing").is_none());
 }
 
 /// Put on a sheet, a model's position goes, with the same edit; a copy of a

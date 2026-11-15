@@ -8,6 +8,7 @@
 mod geometry;
 mod linking;
 mod passes;
+mod sheet;
 mod sketch;
 mod tool;
 
@@ -93,6 +94,10 @@ pub enum Figure {
     ToolKinds,
     /// A stock box's margins round the models.
     Margin(Margin),
+    /// The gaps a sheet keeps round its parts, from above.
+    SheetGap(Gap),
+    /// Where a sheet's packing starts, and which way it is used up.
+    Packing(Packing),
 }
 
 /// Which of facing's distances.
@@ -192,6 +197,24 @@ pub enum Margin {
     Under,
 }
 
+/// Which of the gaps a sheet keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gap {
+    /// Between two parts.
+    Spacing,
+    /// Between a part and the sheet's edge.
+    Border,
+}
+
+/// Which of how a sheet is packed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Packing {
+    /// The corner it starts from.
+    From,
+    /// The way it is used up.
+    Along,
+}
+
 /// How tall a figure is in its popup.
 const HEIGHT: f32 = 120.0;
 
@@ -248,6 +271,8 @@ impl Figure {
             Figure::ToolDim(d) => tool::dimensions(painter, rect, d),
             Figure::ToolKinds => tool::kinds(painter, rect),
             Figure::Margin(m) => geometry::margins(painter, rect, m),
+            Figure::SheetGap(g) => sheet::gaps(painter, rect, g),
+            Figure::Packing(p) => sheet::packing(painter, rect, p),
         }
     }
 }
@@ -328,6 +353,8 @@ mod tests {
             .map(Figure::ToolDim),
         );
         all.extend([Margin::X, Margin::Y, Margin::Top, Margin::Under].map(Figure::Margin));
+        all.extend([Gap::Spacing, Gap::Border].map(Figure::SheetGap));
+        all.extend([Packing::From, Packing::Along].map(Figure::Packing));
         all
     }
 

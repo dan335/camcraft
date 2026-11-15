@@ -666,6 +666,9 @@ impl App {
             .show(ui, |ui| properties::show(ui, doc, m, picks))
             .inner;
         self.operation_tab = panel.operation_tab;
+        if self.picking.light_model(id, panel.lit) {
+            ctx.request_repaint();
+        }
         match asked {
             Some((setup, generating::Asked::Stop)) => self.stop_generating(&setup),
             Some((setup, generating::Asked::Generate)) => self.generate(&ctx, &setup),

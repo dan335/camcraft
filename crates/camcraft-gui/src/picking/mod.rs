@@ -185,6 +185,9 @@ pub struct Picking {
     /// the one last shown.
     row: Option<(Kind, usize)>,
     shown_row: Option<(Kind, usize)>,
+    /// A model the panel lights, for which job: a sheet's part under the
+    /// pointer there, or chosen.
+    lit: Option<(DocId, String)>,
     /// The showing setup, ready to pick from: for which job and layout.
     scene: Option<(DocId, u64, PickScene)>,
     /// What the selection's picks show, with the key its upload goes by.
@@ -316,6 +319,18 @@ impl Picking {
         self.shown_row != self.row
     }
 
+    /// Light every copy of model `name` of job `doc` as under the pointer, as
+    /// the panel lights it, or none. Asked every frame, so what it lit goes
+    /// as soon as the panel lights nothing; shown from the next frame, as
+    /// [`hover_row`](Self::hover_row): whether that frame is needed, because
+    /// what is lit changed.
+    pub fn light_model(&mut self, doc: DocId, name: Option<String>) -> bool {
+        let lit = name.map(|n| (doc, n));
+        let changed = self.lit != lit;
+        self.lit = lit;
+        changed
+    }
+
     /// Esc: stop picking. Whether anything was being picked.
     pub fn escape(&mut self) -> bool {
         self.armed.take().is_some()
@@ -445,7 +460,16 @@ impl Picking {
                 _ => slots::whole_loop(scene, t),
             })
         });
-        let under = row.or_else(|| self.hover.clone());
+        // Then a model the panel lights, on every copy, as hovering it whole
+        // in the view lights it.
+        let lit = self
+            .lit
+            .as_ref()
+            .filter(|(d, name)| *d == doc.id && scene.model(name).is_some())
+            .map(|(_, name)| Target::Model {
+                model: name.clone(),
+            });
+        let under = row.or(lit).or_else(|| self.hover.clone());
         match under {
             None => self.hovered = None,
             Some(t) if self.hovered.as_ref().is_none_or(|(h, ..)| *h != t) => {

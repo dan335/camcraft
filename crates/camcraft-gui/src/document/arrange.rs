@@ -63,7 +63,7 @@ pub enum SheetNow<'a> {
     /// now.
     Arranging,
     /// Laid as it is now, in this arrangement.
-    Laid(&'a Arrangement, &'a SheetLayout),
+    Laid(&'a Arc<Arrangement>, &'a SheetLayout),
     /// Its arrangement ended without an answer, and why.
     Lost(&'a str),
 }
@@ -140,6 +140,21 @@ impl Document {
             };
         }
         SheetNow::Arranging
+    }
+
+    /// The latest arrangement kept that laid sheet `stock` out, whatever it
+    /// was laid from: what the sheet is drawn as while it is being arranged
+    /// again, so it is not lost from view meanwhile.
+    pub fn sheet_last_laid(&self, stock: &str) -> Option<Arc<Arrangement>> {
+        self.arrangements
+            .iter()
+            .rev()
+            .filter_map(|(_, r)| r.as_ref().ok())
+            .find(|a| {
+                a.sheet(stock)
+                    .is_some_and(|s| matches!(s.laid, Laid::Done { .. }))
+            })
+            .cloned()
     }
 
     /// Where each copy of model `name` stands now: once where it is, for one

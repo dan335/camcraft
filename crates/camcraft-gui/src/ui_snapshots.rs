@@ -594,6 +594,138 @@ fn setup_panel() {
     shoot(&mut h, "stock_fixed_placed");
 }
 
+/// An arranged sheet's panel: five parts, some in copies, laid live on a
+/// sheet too short for them all, one too large for it, and a pin standing in
+/// a plate's through hole. Then one part chosen, its copies lit in the
+/// drawing and the view; and the sheet being arranged again, drawn faint as
+/// it was last laid.
+#[test]
+#[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
+fn stock_arranged() {
+    use crate::document::{Selection, SheetNow};
+    use camcraft_core::arrange::Laid;
+    use camcraft_core::job::StockSpec;
+
+    let dir = output_dir().join("stock-arranged");
+    std::fs::create_dir_all(&dir).unwrap();
+    let step = |f: &str| repo(&format!("fixtures/step/{f}")).display().to_string();
+    let job = format!(
+        r#"version = 1
+tolerance = 0.05
+
+[[model]]
+name = "plate"
+path = '{plate}'
+
+[[model]]
+name = "brick"
+path = '{brick}'
+
+[[model]]
+name = "jig"
+path = '{jig}'
+
+[[model]]
+name = "pin"
+path = '{pin}'
+transform = {{ scale = [0.3, 0.3, 0.3] }}
+
+[[model]]
+name = "bowl"
+path = '{bowl}'
+
+[[stock]]
+name = "sheet"
+kind = "arranged"
+size = [420.0, 112.0, 40.0]
+spacing = 4.0
+border = 4.0
+parts = [
+  {{ model = "plate", copies = 2 }},
+  {{ model = "brick", copies = 3 }},
+  {{ model = "jig", copies = 4, rotation = "none" }},
+  {{ model = "pin" }},
+  {{ model = "bowl" }},
+]
+
+[[setup]]
+name = "top"
+models = ["plate", "brick", "jig", "pin", "bowl"]
+stocks = ["sheet"]
+"#,
+        plate = step("ops_2d.step"),
+        brick = step("lego_4x2_01.step"),
+        jig = step("hinge_jig.step"),
+        pin = step("cone_point.step"),
+        bowl = step("bowl_01.step"),
+    );
+    let path = dir.join("sheet.camcraft");
+    std::fs::write(&path, job).unwrap();
+
+    let mut h = harness();
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    h.state_mut().open_job(&ctx, path);
+    settle(&mut h);
+    let id = {
+        let doc = h.state_mut().doc_for_snapshot().unwrap();
+        doc.selection = Selection::Stock("sheet".into());
+        doc.active = Some("top".into());
+        doc.id
+    };
+    settle(&mut h);
+    h.run_steps(4);
+
+    // Laid: the bowl too large, a brick or more with no room, and the pin in
+    // a plate's hole: inside one of the rings that are its outline's holes.
+    {
+        use camcraft_geom::contour::Region;
+        let doc = h.state_mut().doc_for_snapshot().unwrap();
+        let SheetNow::Laid(_, sheet) = doc.sheet_now("sheet") else {
+            panic!("the sheet was not laid");
+        };
+        let Laid::Done { parts, .. } = &sheet.laid else {
+            panic!("the sheet was not laid: {:?}", sheet.laid);
+        };
+        let part = |m: &str| parts.iter().find(|p| p.model == m).unwrap();
+        assert_eq!(part("bowl").too_large(), 1);
+        assert!(part("brick").no_room() > 0, "every brick placed");
+        let pin = part("pin").copies[0].outline.as_ref().unwrap();
+        let (lo, hi) = pin.bounds().unwrap();
+        let middle = (lo + hi) / 2.0;
+        let in_a_hole = part("plate")
+            .copies
+            .iter()
+            .filter_map(|c| c.outline.as_ref())
+            .flat_map(|o| o.rings())
+            .filter(|r| r.signed_area() < 0.0)
+            .any(|r| Region::new(vec![r.clone()]).contains(middle));
+        assert!(in_a_hole, "the pin is not in a plate's hole");
+    }
+    shoot(&mut h, "stock_arranged");
+
+    // The bricks chosen: their row marked, their copies lit in the drawing
+    // and in the view.
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            crate::properties::chosen_id(id, "sheet"),
+            "brick".to_string(),
+        );
+    });
+    h.run_steps(4);
+    shoot(&mut h, "stock_arranged_chosen");
+
+    // Spaced further apart: drawn faint as it was last laid while it is
+    // arranged again, if the picture is taken before it is.
+    if let Some(doc) = h.state_mut().doc_for_snapshot()
+        && let Some(StockSpec::Arranged(a)) = doc.job.stocks.first_mut().map(|s| &mut s.spec)
+    {
+        a.spacing = 8.0;
+    }
+    h.run_steps(1);
+    shoot(&mut h, "stock_arranged_arranging");
+}
+
 /// The file dialog, open on the job filter: drawn inside the app, themed with it.
 /// A model's panel with its transform, and three copies of a part moved, turned
 /// and scaled through the app, one unevenly: each placed again from the one

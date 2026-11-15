@@ -1,7 +1,8 @@
-//! A stock's panel: its shape, and its size and place round the models.
+//! A stock's panel: its shape, and its size and place round the models; for
+//! a sheet, how it lays its parts out.
 
 use crate::help::Figure;
-use crate::help::figures::Margin;
+use crate::help::figures::{Gap, Margin, Packing};
 
 topics! {
     SHAPE: "Shape",
@@ -11,21 +12,25 @@ topics! {
     CORNER: "Corner",
         "Where the sheet's front-left bottom corner is, whatever its parts.";
     SPACING: "Spacing",
-        "The least gap between two parts, seen from above. Leave at least the cutter's width to cut between them.";
+        "The least gap between two parts, seen from above. Leave at least the cutter's width to cut between them.",
+        Figure::SheetGap(Gap::Spacing);
     BORDER: "Border",
-        "The least gap between a part and the sheet's edge, seen from above.";
+        "The least gap between a part and the sheet's edge, seen from above.",
+        Figure::SheetGap(Gap::Border);
     ROTATION: "Rotation",
         "The turns about Z a part may be laid at to fit. None keeps every part as it stands, for grain that must run one way.";
     STEP: "Step",
         "A part may be turned by any whole number of this many degrees.";
     FROM: "Pack from",
-        "The corner of the sheet parts are laid from first.";
+        "The corner parts are laid from first, seen from above: the front is towards −Y, the left towards −X.",
+        Figure::Packing(Packing::From);
     ALONG: "Along",
-        "The direction the sheet is used up in: parts fill across it first, so an offcut is left whole at the far end.";
+        "The direction the sheet is used up in: parts fill across it first, so an offcut is left whole at the far end.",
+        Figure::Packing(Packing::Along);
     SEAT: "Seat",
         "Bottom stands each part on the sheet's bottom face, to be cut out of it. Top puts its highest point on the sheet's top.";
     PARTS: "Parts",
-        "The models the sheet lays out, each where it fits. Its sheet places a part, so the part keeps no position of its own.";
+        "The models the sheet lays out, each where it fits. Its sheet places a part, so it keeps no position of its own. A model goes on one sheet only.";
     COPIES: "Copies",
         "How many of this part the sheet lays. What is picked on one copy is picked on every copy. Copies with no room are left out; the rest are cut.";
     GRAIN: "Grain",

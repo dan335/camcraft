@@ -32,6 +32,31 @@ pub(super) struct Names<'a> {
     pub pick: Option<(Slot, Option<&'a str>)>,
     /// What the popup's last row asks for: files to add, for models.
     pub more: Option<(&'a str, PropAction)>,
+    /// Names of `all` it may not include, and why, which the popup says
+    /// where it has nothing else to offer: a model on another sheet, for a
+    /// sheet's parts.
+    pub withheld: Option<(&'a [String], &'a str)>,
+}
+
+impl<'a> Names<'a> {
+    /// What its popup offers to add, with `included` in already: the rest
+    /// of `all`, in order, but those withheld.
+    pub(super) fn offered(&self, included: &[String]) -> Vec<&'a String> {
+        let withheld = self.withheld.map_or(&[][..], |(w, _)| w);
+        self.all
+            .iter()
+            .filter(|x| !included.contains(x) && !withheld.contains(x))
+            .collect()
+    }
+
+    /// What its popup says when it offers nothing, with `included` in
+    /// already: why, where it withholds any of the rest.
+    pub(super) fn none_offered(&self, included: &[String]) -> &'a str {
+        match self.withheld {
+            Some((w, why)) if w.iter().any(|x| !included.contains(x)) => why,
+            _ => "All of them are in already.",
+        }
+    }
 }
 
 /// `names` as a card, editing `included`.
@@ -42,7 +67,23 @@ pub(super) fn names(
     picks: ViewPicks<'_>,
     actions: &mut Vec<PropAction>,
 ) {
-    let others: Vec<&String> = n.all.iter().filter(|x| !included.contains(x)).collect();
+    names_with(ui, n, included, picks, actions, |ui, _, name| {
+        row(ui, name, !n.all.iter().any(|x| x == name))
+    });
+}
+
+/// As [`names`], each included name's row drawn by `each`, given its place
+/// in the list and the name: whether its remove button was clicked.
+pub(super) fn names_with(
+    ui: &mut egui::Ui,
+    n: &Names<'_>,
+    included: &mut Vec<String>,
+    picks: ViewPicks<'_>,
+    actions: &mut Vec<PropAction>,
+    mut each: impl FnMut(&mut egui::Ui, usize, &str) -> bool,
+) {
+    let others = n.offered(included);
+    let none = n.none_offered(included);
     let mut add = None;
     let mut remove = None;
     widgets::card_helped(
@@ -76,7 +117,7 @@ pub(super) fn names(
                 .align(egui::RectAlign::BOTTOM_END)
                 .width(220.0)
                 .show(|ui| {
-                    add = add_list(ui, n, &others, actions);
+                    add = add_list(ui, n, (&others, none), actions);
                 });
         },
         |ui| {
@@ -84,7 +125,7 @@ pub(super) fn names(
                 hint(ui, n.empty);
             }
             for (i, name) in included.iter().enumerate() {
-                if row(ui, name, !n.all.contains(name)) {
+                if each(ui, i, name) {
                     remove = Some(i);
                 }
             }
@@ -98,12 +139,12 @@ pub(super) fn names(
     }
 }
 
-/// The popup's list: the names not yet included, filtered by what is typed.
-/// The one clicked, if any.
+/// The popup's list: the names offered, `others`, filtered by what is typed,
+/// or why there are none, `none`. The one clicked, if any.
 fn add_list(
     ui: &mut egui::Ui,
     n: &Names<'_>,
-    others: &[&String],
+    (others, none): (&[&String], &str),
     actions: &mut Vec<PropAction>,
 ) -> Option<String> {
     let filter_id = n.id.with("filter");
@@ -129,7 +170,7 @@ fn add_list(
                 hint(
                     ui,
                     if others.is_empty() {
-                        "All of them are in already."
+                        none
                     } else {
                         "None match."
                     },

@@ -19,10 +19,14 @@
 mod operation;
 mod parts;
 mod setup;
+mod sheet;
 mod stock;
 mod work_zero;
 
 pub use operation::{HeightPlanes, OperationTab, show_tab_of};
+/// Where a sheet's chosen part is kept: the snapshots choose one.
+#[cfg(all(test, feature = "ui-snapshots"))]
+pub(crate) use sheet::chosen_id;
 
 use eframe::egui;
 
@@ -71,12 +75,16 @@ pub struct Panel {
     pub actions: Vec<PropAction>,
     /// The tab of the selected operation showing, when an operation is selected.
     pub operation_tab: Option<OperationTab>,
+    /// The model whose every copy the view lights: a sheet's part under the
+    /// pointer in its panel, or chosen there.
+    pub lit: Option<String>,
 }
 
 /// The panel for `doc`'s selection.
 pub fn show(ui: &mut egui::Ui, doc: &mut Document, m: Measure, picks: ViewPicks<'_>) -> Panel {
     let mut actions = Vec::new();
     let mut operation_tab = None;
+    let mut lit = None;
     // A name being typed when something else was chosen: its field will not be
     // drawn to say it was left, so it is applied here.
     if let Some(p) = ui.data(|d| d.get_temp::<PendingName>(pending_id()))
@@ -120,7 +128,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, m: Measure, picks: ViewPicks<
                 doc.add_stock();
             }
         }
-        Selection::Stock(name) => stock::stock(ui, doc, m, &name),
+        Selection::Stock(name) => lit = stock::stock(ui, doc, m, &name),
         Selection::Setups => {
             let mut add = false;
             group(
@@ -146,6 +154,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, m: Measure, picks: ViewPicks<
     Panel {
         actions,
         operation_tab,
+        lit,
     }
 }
 
@@ -531,19 +540,21 @@ mod tests {
         assert!(wrong.is_empty(), "no such setting: {wrong:?}");
 
         // A sheet, turning its parts by a step, so the step's row is drawn
-        // too: nothing changed as a new one starts, every row a setting.
+        // too: nothing changed as a new one starts, every row a setting. No
+        // worker arranges it here, so its drawing spins as it waits: a few
+        // frames are drawn, not as many as it takes to stop.
         use camcraft_core::job::{Arranged, Rotation, SheetPart};
         let mut sheet = Arranged::new([2440.0, 1220.0, 18.0]);
         sheet.parts = vec![SheetPart::of("p")];
         h.state_mut().job.stocks[0].spec = StockSpec::Arranged(sheet.clone());
-        h.run();
-        h.run();
-        assert_eq!(resets(&h), 1, "a sheet: changed as new, but for its kind");
+        h.run_steps(4);
+        // Its kind is not one: a job file must give it, so it has no
+        // default to go back to.
+        assert_eq!(resets(&h), 0, "a sheet: changed as new");
         sheet.rotation = Rotation::Step(15.0);
         h.state_mut().job.stocks[0].spec = StockSpec::Arranged(sheet.clone());
         ASKED.with(|a| a.borrow_mut().clear());
-        h.run();
-        h.run();
+        h.run_steps(4);
         let wrong = no_such_settings();
         assert!(wrong.is_empty(), "no such setting: {wrong:?}");
         // Its part of several copies, with a grain of its own by a step, so
@@ -553,8 +564,7 @@ mod tests {
         sheet.parts[0].rotation = Some(Rotation::Step(30.0));
         h.state_mut().job.stocks[0].spec = StockSpec::Arranged(sheet);
         ASKED.with(|a| a.borrow_mut().clear());
-        h.run();
-        h.run();
+        h.run_steps(4);
         let wrong = no_such_settings();
         assert!(wrong.is_empty(), "no such setting: {wrong:?}");
         let asked: Vec<String> =

@@ -2,36 +2,40 @@
 //! the block around the part, its size and corners in figures, then its fields.
 //! For a fixed box, those are one row per axis with the size, the place and the
 //! offset side by side. For a box around models, they are one row per margin.
-//! For an arranged sheet, one row per setting, the parts it lays out, and how
-//! it lays them as it is now.
+//! An arranged sheet has a panel of its own, in `sheet`.
 
-use camcraft_core::arrange::{Corner, Direction, Laid, PartLaid};
-use camcraft_core::job::{
-    Arranged, FixedBox, MOST_COPIES, Place, Rotation, STEP_DEGREES, Seat, SheetPart, StockSpec,
-};
+use camcraft_core::job::{Arranged, FixedBox, Place, SheetPart, StockSpec};
 use camcraft_geom::mesh::Aabb;
 use eframe::egui;
 use glam::DVec3;
 
 use super::parts::{Names, all_model_bounds, names, used_by};
+use super::sheet::{self, on_other_sheets};
 use super::{ViewPicks, header, renamed};
-use crate::document::{Document, Selection, SheetNow};
+use crate::document::{Document, Selection};
 use crate::help::Help;
 use crate::help::topics::stock as topics;
 use crate::ui::defaults::Defaults;
 use crate::ui::measure::Measure;
 use crate::ui::theme;
-use crate::ui::widgets::{self, Size, Variant, error, form, hint};
+use crate::ui::widgets::{self, Size, Variant, form, hint};
 
 /// How tall the drawing is, as the tool's.
 const PICTURE: f32 = 180.0;
 /// How wide a place chooser is, so the rows' offsets line up.
 const PLACE_WIDTH: f32 = 116.0;
 
-pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &str) {
+/// Stock `name`'s panel. The model whose every copy it lights, for the view
+/// to light too: a sheet's part under the pointer, or chosen.
+pub(super) fn stock(
+    ui: &mut egui::Ui,
+    doc: &mut Document,
+    m: Measure,
+    name: &str,
+) -> Option<String> {
     let Some(i) = doc.job.stocks.iter().position(|x| x.name == name) else {
         doc.selection = Selection::Stocks;
-        return;
+        return None;
     };
     let id = ui.id().with(("stock", name));
     if let Some(to) = header(
@@ -43,9 +47,15 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
     ) {
         let r = doc.rename_stock(name, &to);
         renamed(doc, r);
-        return;
+        return None;
     }
     let model_names: Vec<String> = doc.job.models.iter().map(|x| x.name.clone()).collect();
+    // A sheet as it is laid out before this frame's edits: drawn, then edited.
+    let shown = doc.job.stocks.get(i).and_then(|s| match &s.spec {
+        StockSpec::Arranged(a) => sheet::Shown::of(doc, name, a),
+        StockSpec::AroundModels { .. } | StockSpec::FixedBox(_) => None,
+    });
+    let elsewhere = on_other_sheets(&doc.job, name);
     let fit = all_model_bounds(doc);
     // What a sheet made of it starts with: the models of the setups using it
     // that no other sheet holds.
@@ -71,9 +81,7 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
         .get(i)
         .map(|s| owned(&s.spec))
         .unwrap_or_default();
-    let Some(spec) = doc.job.stocks.get_mut(i).map(|s| &mut s.spec) else {
-        return;
-    };
+    let spec = doc.job.stocks.get_mut(i).map(|s| &mut s.spec)?;
     let mut shape = Defaults::of(&*spec, &StockSpec::default());
     form(ui, "stock", |ui| {
         shape.row(ui, &topics::SHAPE, "kind", |ui| {
@@ -83,23 +91,25 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
     shape.apply(spec);
     ui.add_space(theme::SPACE_4);
 
-    // The block as it stands before this frame's edits: drawn, then edited.
-    let placed = doc
-        .job
-        .stocks
-        .get(i)
-        .map(|s| placements(doc, name, &s.spec))
-        .unwrap_or_default();
-    if let Some(first) = placed.first() {
-        paint_stock(ui, first, m);
-        ui.add_space(theme::SPACE_3);
+    // The block as it stands before this frame's edits: drawn, then edited. A
+    // sheet draws itself.
+    if !matches!(spec, StockSpec::Arranged(_)) {
+        let placed = doc
+            .job
+            .stocks
+            .get(i)
+            .map(|s| placements(doc, name, &s.spec))
+            .unwrap_or_default();
+        if let Some(first) = placed.first() {
+            paint_stock(ui, first, m);
+            ui.add_space(theme::SPACE_3);
+        }
+        corners(ui, &placed, m);
+        ui.add_space(theme::SPACE_4);
     }
-    corners(ui, &placed, m);
-    ui.add_space(theme::SPACE_4);
 
-    let Some(spec) = doc.job.stocks.get_mut(i).map(|s| &mut s.spec) else {
-        return;
-    };
+    let doc_id = doc.id;
+    let spec = doc.job.stocks.get_mut(i).map(|s| &mut s.spec)?;
     let def = match &*spec {
         StockSpec::AroundModels { models, .. } => match StockSpec::default() {
             StockSpec::AroundModels { margin, below, .. } => StockSpec::AroundModels {
@@ -121,34 +131,18 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
         }),
     };
     let mut d = Defaults::of(&*spec, &def);
+    let mut lit = None;
     match spec {
         StockSpec::Arranged(a) => {
-            sheet_fields(ui, &mut d, m, a);
-            ui.add_space(theme::SPACE_4);
-            let mut parts: Vec<String> = a.parts.iter().map(|p| p.model.clone()).collect();
-            names(
-                ui,
-                &Names {
-                    id: id.with("parts"),
-                    title: topics::PARTS.title,
-                    topic: Some(&topics::PARTS),
-                    all: &model_names,
-                    empty: "None yet: add the models it lays out.",
-                    pick: None,
-                    more: None,
-                },
-                &mut parts,
-                ViewPicks::default(),
-                &mut Vec::new(),
-            );
-            // Each part kept as it is, those added after.
-            a.parts.retain(|p| parts.contains(&p.model));
-            for p in &parts {
-                if !a.holds(p) {
-                    a.parts.push(SheetPart::of(p));
-                }
-            }
-            part_fields(ui, &mut d, a);
+            let cx = sheet::Context {
+                doc: doc_id,
+                stock: name,
+                id: id.with("parts"),
+                models: &model_names,
+                elsewhere: elsewhere.as_ref(),
+                shown,
+            };
+            lit = sheet::panel(ui, &mut d, m, a, &cx);
         }
         StockSpec::AroundModels {
             models,
@@ -167,6 +161,7 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
                     empty: "The models of the setup using it.",
                     pick: None,
                     more: None,
+                    withheld: None,
                 },
                 models,
                 ViewPicks::default(),
@@ -201,6 +196,7 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
                     empty: "The models of the setup using it.",
                     pick: None,
                     more: None,
+                    withheld: None,
                 },
                 &mut b.models,
                 ViewPicks::default(),
@@ -215,7 +211,6 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
         .collect();
     // Its sheet places a model put on it, with the same edit.
     doc.placed_by_sheets(&added);
-    sheet_status(ui, doc, name, m);
     ui.add_space(theme::SPACE_3);
     used_by(
         ui,
@@ -224,6 +219,7 @@ pub(super) fn stock(ui: &mut egui::Ui, doc: &mut Document, m: Measure, name: &st
         "No setup uses it.",
         "Used by",
     );
+    lit
 }
 
 /// The size a new sheet starts at: a whole sheet of board as it is sold,
@@ -280,264 +276,6 @@ fn kind_choice(ui: &mut egui::Ui, spec: &mut StockSpec, fit: Option<Aabb>, seata
                 }
             }
         });
-}
-
-/// A sheet's settings, a row each: its size and corner, the gaps it keeps,
-/// the turns its parts may take, where packing starts and which way it goes,
-/// and the face its parts stand on.
-fn sheet_fields(ui: &mut egui::Ui, d: &mut Defaults<StockSpec>, m: Measure, a: &mut Arranged) {
-    form(ui, "sheet", |ui| {
-        d.row(ui, &topics::SHEET_SIZE, "size", |ui| {
-            for (axis, v) in ["X ", "Y ", "Z "].into_iter().zip(a.size.iter_mut()) {
-                m.length_field(ui, v, 1.0, 100_000.0, axis);
-            }
-        });
-        d.row(ui, &topics::CORNER, "corner", |ui| {
-            for (axis, v) in ["X ", "Y ", "Z "].into_iter().zip(a.corner.iter_mut()) {
-                m.signed_length_field(ui, v, 1.0, 100_000.0, axis);
-            }
-        });
-        d.row(ui, &topics::SPACING, "spacing", |ui| {
-            m.length_field(ui, &mut a.spacing, 0.1, 1000.0, "")
-        });
-        d.row(ui, &topics::BORDER, "border", |ui| {
-            m.length_field(ui, &mut a.border, 0.1, 1000.0, "")
-        });
-        d.row(ui, &topics::ROTATION, "rotation", |ui| {
-            rotation_choice(ui, "sheet-rotation", &mut a.rotation);
-        });
-        if let Rotation::Step(step) = &mut a.rotation {
-            d.row(ui, &topics::STEP, "rotation.step", |ui| {
-                ui.add(
-                    widgets::number(step)
-                        .speed(1.0)
-                        .range(*STEP_DEGREES.start()..=*STEP_DEGREES.end())
-                        .suffix("°"),
-                )
-            });
-        }
-        d.row(ui, &topics::FROM, "from", |ui| {
-            egui::ComboBox::from_id_salt("sheet-from")
-                .selected_text(corner_text(a.from))
-                .show_ui(ui, |ui| {
-                    for c in [
-                        Corner::FrontLeft,
-                        Corner::FrontRight,
-                        Corner::BackLeft,
-                        Corner::BackRight,
-                    ] {
-                        ui.selectable_value(&mut a.from, c, corner_text(c));
-                    }
-                })
-                .response
-        });
-        d.row(ui, &topics::ALONG, "along", |ui| {
-            widgets::segmented(
-                ui,
-                &mut a.along,
-                &[(Direction::X, "X"), (Direction::Y, "Y")],
-            )
-        });
-        d.row(ui, &topics::SEAT, "seat", |ui| {
-            widgets::segmented(
-                ui,
-                &mut a.seat,
-                &[(Seat::Bottom, "bottom"), (Seat::Top, "top")],
-            )
-        });
-    });
-}
-
-/// A corner of a sheet, as a person names it.
-fn corner_text(c: Corner) -> &'static str {
-    match c {
-        Corner::FrontLeft => "front left",
-        Corner::FrontRight => "front right",
-        Corner::BackLeft => "back left",
-        Corner::BackRight => "back right",
-    }
-}
-
-/// The turns a sheet's parts may take. A step chosen starts at 15 degrees; one
-/// chosen again keeps the step it had.
-fn rotation_choice(ui: &mut egui::Ui, id: impl egui::AsIdSalt, r: &mut Rotation) {
-    let mut given = Some(*r);
-    turns_choice(ui, id, &mut given, None);
-    if let Some(chosen) = given {
-        *r = chosen;
-    }
-}
-
-/// What a person calls a way of turning.
-fn rotation_text(r: &Rotation) -> &'static str {
-    match r {
-        Rotation::None => "none",
-        Rotation::HalfTurn => "half turn",
-        Rotation::QuarterTurns => "quarter turns",
-        Rotation::Step(_) => "by a step",
-    }
-}
-
-/// The turns something may take, where `sheet` is the sheet's, for a part
-/// that may take the sheet's instead, `None`: what `r` is then. A step chosen
-/// starts at 15 degrees; one chosen again keeps the step it had.
-fn turns_choice(
-    ui: &mut egui::Ui,
-    id: impl egui::AsIdSalt,
-    r: &mut Option<Rotation>,
-    sheet: Option<Rotation>,
-) {
-    let text = |r: &Option<Rotation>| match (r, sheet) {
-        (Some(r), _) => rotation_text(r).to_string(),
-        (None, Some(s)) => format!("as the sheet ({})", rotation_text(&s)),
-        (None, None) => String::new(),
-    };
-    let step = match *r {
-        Some(Rotation::Step(s)) => s,
-        _ => 15.0,
-    };
-    let mut choices = Vec::new();
-    if sheet.is_some() {
-        choices.push((None, "Turned as the sheet allows its parts"));
-    }
-    choices.extend([
-        (Some(Rotation::None), "Each part as it stands"),
-        (
-            Some(Rotation::HalfTurn),
-            "As it stands, or turned half round",
-        ),
-        (
-            Some(Rotation::QuarterTurns),
-            "By any number of quarter turns",
-        ),
-        (Some(Rotation::Step(step)), "By any whole number of a step"),
-    ]);
-    let kind = |r: &Option<Rotation>| r.as_ref().map(std::mem::discriminant);
-    egui::ComboBox::from_id_salt(id)
-        .selected_text(text(r))
-        .show_ui(ui, |ui| {
-            for (choice, why) in choices {
-                let on = kind(r) == kind(&choice);
-                if ui
-                    .selectable_label(on, text(&choice))
-                    .on_hover_text(why)
-                    .clicked()
-                    && !on
-                {
-                    *r = choice;
-                }
-            }
-        });
-}
-
-/// Each part's copies and grain, under its model's name: how many of it the
-/// sheet lays, and the turns its copies may take, the sheet's or its own.
-fn part_fields(ui: &mut egui::Ui, d: &mut Defaults<StockSpec>, a: &mut Arranged) {
-    let sheet = a.rotation;
-    for (k, p) in a.parts.iter_mut().enumerate() {
-        widgets::section(ui, &p.model);
-        form(ui, ("sheet-part", k), |ui| {
-            d.row(ui, &topics::COPIES, &format!("parts.{k}.copies"), |ui| {
-                ui.add(
-                    widgets::number(&mut p.copies)
-                        .speed(0.1)
-                        .range(1..=MOST_COPIES),
-                )
-            });
-            d.row(ui, &topics::GRAIN, &format!("parts.{k}.rotation"), |ui| {
-                turns_choice(ui, ("part-grain", k), &mut p.rotation, Some(sheet));
-            });
-            if let Some(Rotation::Step(step)) = &mut p.rotation {
-                d.row(
-                    ui,
-                    &topics::GRAIN_STEP,
-                    &format!("parts.{k}.rotation.step"),
-                    |ui| {
-                        ui.add(
-                            widgets::number(step)
-                                .speed(1.0)
-                                .range(*STEP_DEGREES.start()..=*STEP_DEGREES.end())
-                                .suffix("°"),
-                        )
-                    },
-                );
-            }
-        });
-    }
-}
-
-/// How sheet `name` is laid now: how many of its parts it holds and how much
-/// of it they use, and each part left out, with why; or that it is being
-/// arranged, or cannot be.
-fn sheet_status(ui: &mut egui::Ui, doc: &Document, name: &str, m: Measure) {
-    let sheet = match doc.sheet_now(name) {
-        SheetNow::NotASheet => return,
-        SheetNow::Arranging => {
-            ui.add_space(theme::SPACE_3);
-            ui.horizontal(|ui| {
-                ui.spinner();
-                hint(ui, "arranging");
-            });
-            return;
-        }
-        SheetNow::Lost(why) => {
-            ui.add_space(theme::SPACE_3);
-            error(ui, &format!("it could not be arranged: {why}"));
-            return;
-        }
-        SheetNow::Laid(_, sheet) => sheet,
-    };
-    ui.add_space(theme::SPACE_3);
-    let (used, length) = match &sheet.laid {
-        Laid::Done { used, length, .. } => (*used, *length),
-        Laid::Waiting(missing) => {
-            let names: Vec<String> = missing.iter().map(|n| format!("'{n}'")).collect();
-            hint(ui, &format!("It waits for {} to load.", names.join(", ")));
-            return;
-        }
-        Laid::Failed(e) => {
-            error(ui, &format!("It cannot be arranged: {e}."));
-            return;
-        }
-    };
-    let (placed, copies) = sheet.placed();
-    ui.label(
-        widgets::mono(
-            format!(
-                "{placed} of {copies} placed · {} of {} used",
-                m.number(used, 0),
-                m.length(length, 0)
-            ),
-            theme::TEXT_SM,
-        )
-        .color(theme::egui_color(theme::text_2())),
-    );
-    for p in sheet.left_out() {
-        for line in left_out_lines(p) {
-            error(ui, &line);
-        }
-    }
-}
-
-/// What of part `p` is left out, a line for each reason: how many of its
-/// copies, and why.
-fn left_out_lines(p: &PartLaid) -> Vec<String> {
-    let n = p.copies.len();
-    let mut out = Vec::new();
-    for (count, why) in [
-        (
-            p.too_large(),
-            "too large for the sheet at any turn it may take",
-        ),
-        (p.no_room(), "no room left"),
-    ] {
-        match (count, n) {
-            (0, _) => {}
-            (_, 1) => out.push(format!("'{}' left out: {why}", p.model)),
-            _ => out.push(format!("{count} of {n} '{}' left out: {why}", p.model)),
-        }
-    }
-    out
 }
 
 /// One axis of a fixed box, as a person names its sides.
@@ -696,28 +434,11 @@ struct Placement {
     part: Option<Aabb>,
 }
 
-/// Stock `name`, shaped `spec`, for each setup using it. Setups that give the
-/// same block share one; a stock no setup uses is placed only when it names its
-/// own models. One around a model not loaded is left out.
+/// Stock `name`, a box shaped `spec`, for each setup using it. Setups that
+/// give the same block share one; a stock no setup uses is placed only when
+/// it names its own models. One around a model not loaded is left out.
 fn placements(doc: &Document, name: &str, spec: &StockSpec) -> Vec<Placement> {
     let bodies = doc.bodies();
-    // A sheet is where it is, whichever setup uses it; its parts, where they
-    // stand on it.
-    if let StockSpec::Arranged(_) = spec {
-        let Ok(stock) = camcraft_core::setup::stock_block(spec, &[], &bodies) else {
-            return Vec::new();
-        };
-        let part = spec
-            .models()
-            .into_iter()
-            .filter_map(|m| bodies.get(m)?.bounds())
-            .reduce(|a, b| a.union(&b));
-        return vec![Placement {
-            setup: String::new(),
-            stock,
-            part,
-        }];
-    }
     // Around every copy of the models, as the block is.
     let bounds = |models: &[String]| camcraft_core::setup::bounds_of(models, &bodies).ok();
     let own: Vec<String> = spec.models().into_iter().map(String::from).collect();
