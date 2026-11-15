@@ -124,7 +124,7 @@ pub use pick::{FeatureRef, PointRef, Snap};
 pub use setup::{Along, BoxOf, Origin, Setup};
 pub use strategy_spec::{
     Compensation, ContourOrder, CutDirection, FaceDirection, PassOrder, ProfileSide,
-    RadialDirection, StrategySpec, ThreadHand,
+    ProjectDirection, RadialDirection, StrategySpec, ThreadHand,
 };
 pub use tool::{
     Coolant, DRILL_POINT, Holder, HolderSegment, Preset, SpindleDirection, THREAD_PROFILE,

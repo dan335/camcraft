@@ -50,6 +50,8 @@ pub enum StrategyDetail {
     Ramp(RampReport),
     /// Pencil finishing: along where the tool touches the part twice.
     Pencil(PencilReport),
+    /// Project finishing: picked curves dropped onto the part.
+    Project(ProjectReport),
     /// Flat finishing.
     Flat(FlatReport),
     /// Spiral finishing.

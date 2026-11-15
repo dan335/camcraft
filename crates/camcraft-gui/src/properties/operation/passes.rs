@@ -3,8 +3,8 @@
 
 use camcraft_core::job::{
     Compensation, ContourOrder, CutDirection, Depths, FaceDirection, FeedOptimization, Finishing,
-    HolderClearance, HolderMode, Leave, Links, Operation, PassOrder, Passes, RadialDirection,
-    StockToLeave, StrategySpec, TabShape, Tabs, ThreadHand,
+    HolderClearance, HolderMode, Leave, Links, Operation, PassOrder, Passes, ProjectDirection,
+    RadialDirection, StockToLeave, StrategySpec, TabShape, Tabs, ThreadHand,
 };
 use eframe::egui;
 
@@ -105,6 +105,28 @@ pub(super) fn passes(
                 d.row(ui, &pass::PENCIL_STEPOVERS, "stepovers", |ui| {
                     ui.add(widgets::number(stepovers).range(0..=1000));
                 });
+            }
+            StrategySpec::Project {
+                direction,
+                axial_offset,
+                slope_from,
+                slope_to,
+            } => {
+                d.row(ui, &pass::DIRECTION_PROJECT, "direction", |ui| {
+                    widgets::segmented(
+                        ui,
+                        direction,
+                        &[
+                            (ProjectDirection::BothWays, "both ways"),
+                            (ProjectDirection::OneWay, "one way"),
+                            (ProjectDirection::OtherWay, "other way"),
+                        ],
+                    );
+                });
+                d.row(ui, &pass::PROJECT_AXIAL_OFFSET, "axial_offset", |ui| {
+                    m.signed_length_field(ui, axial_offset, 0.05, 1000.0, "");
+                });
+                slopes(ui, d, slope_from, slope_to);
             }
             StrategySpec::Flat { direction, order } => {
                 climb_direction(ui, d, &pass::DIRECTION_2D, direction);

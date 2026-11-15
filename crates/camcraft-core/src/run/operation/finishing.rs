@@ -488,7 +488,45 @@ pub(super) fn project_params(work: &Work<'_>) -> ProjectParams {
         max_cut_step: work.op.max_cut_step(),
         slope_from,
         slope_to,
+        raise: 0.0,
     }
+}
+
+/// Project finishing: `curves`, picked on the part, each dropped onto it and
+/// cut along where the tool rests there, raised by `axial_offset`, within the
+/// sweep, `limit` and where the tool touches the part ([decision 0029]).
+///
+/// [decision 0029]: ../../../../../docs/decisions/0029-project.md
+pub(super) fn project_paths(
+    work: &Work<'_>,
+    (direction, axial_offset): (ProjectDirection, f64),
+    (limit, curves): (Option<&Region>, &[Picked]),
+    warnings: &mut Vec<String>,
+) -> Result<Paths, RunError> {
+    let op = work.op;
+    let area = finish_area(work, limit, true)?;
+    let params = ProjectCurvesParams {
+        drop: ProjectParams {
+            // A curve has no stepover: each is seeded every quarter of the
+            // tool's width, as a link over the part is, so nothing that narrow
+            // is passed over, and refined from there to the tolerance.
+            stepover: (0.5 * work.tool.max_radius()).max(work.job.tolerance),
+            raise: axial_offset,
+            ..project_params(work)
+        },
+        way: direction.engine(),
+    };
+    let (path, report) =
+        project_curves(work.cutter, work.tool, &area, curves, &params).map_err(in_op(op))?;
+    if report.passes == 0 {
+        warnings.push(
+            "found nothing to finish: no picked curve passes over the part within the boundary \
+             and slopes"
+                .into(),
+        );
+    }
+    sampling_warnings(&report.sweep, warnings);
+    Ok((path, report.passes, StrategyDetail::Project(report)))
 }
 
 /// `curves` dropped onto the part within `area`, kept to `limit`, off the

@@ -41,8 +41,16 @@ pub(super) fn geometry(
     if let Some(what) = what_to_pick(&op.strategy) {
         hint(ui, what);
         ui.add_space(theme::SPACE_3);
-    } else if uses.boundary {
-        boundary_form(ui, d, m, &mut op.boundary, diameter);
+    }
+    // A project's picks are its curves, so its boundary is not picked.
+    if uses.boundary {
+        boundary_form(
+            ui,
+            d,
+            m,
+            (&mut op.boundary, uses.curves.is_none()),
+            diameter,
+        );
         ui.add_space(theme::SPACE_3);
         if rest_form(ui, d, m, op) {
             ui.add_space(theme::SPACE_3);
@@ -67,7 +75,7 @@ pub(super) fn geometry(
             actions,
         );
     }
-    if drilling || uses.curves.is_some() {
+    if drilling || (uses.curves.is_some() && !uses.boundary) {
         return;
     }
     if picks.shown.is_some_and(|s| s.waiting) {
@@ -134,6 +142,13 @@ pub(super) fn geometry(
 /// What to pick for a strategy whose picks are what it cuts, its holes or what
 /// it runs along, rather than an area: `None` for one that cuts an area.
 fn what_to_pick(strategy: &StrategySpec) -> Option<&'static str> {
+    if matches!(strategy, StrategySpec::Project { .. }) {
+        return Some(
+            "Pick the edges to follow, open or closed: each is seen from above and dropped \
+             onto the part, the tool run along it where it rests, within the boundary. Edges \
+             joined end to end are followed as one.",
+        );
+    }
     if matches!(strategy, StrategySpec::Thread { .. }) {
         return Some(
             "Pick the round wall of each hole to thread, bored to size first: it is \
@@ -355,34 +370,34 @@ fn rest_form(
 }
 
 /// The machining boundary, where the tool may go against it, and how far past it:
-/// Fusion's Geometry tab.
+/// Fusion's Geometry tab. Picks are offered as the boundary only where
+/// `picked`.
 fn boundary_form(
     ui: &mut egui::Ui,
     d: &mut Defaults<Operation>,
     m: Measure,
-    g: &mut MachiningBoundary,
+    (g, picked): (&mut MachiningBoundary, bool),
     diameter: Option<f64>,
 ) {
     let before = (g.kind, g.containment);
+    let kinds: &[Boundary] = if picked {
+        &[
+            Boundary::Stock,
+            Boundary::BoundingBox,
+            Boundary::Silhouette,
+            Boundary::Selection,
+        ]
+    } else {
+        &[Boundary::Stock, Boundary::BoundingBox, Boundary::Silhouette]
+    };
     form(ui, "geometry", |ui| {
         d.row(ui, &geo::BOUNDARY, "boundary.kind", |ui| {
-            widgets::select(
-                ui,
-                "boundary",
-                &mut g.kind,
-                &[
-                    Boundary::Stock,
-                    Boundary::BoundingBox,
-                    Boundary::Silhouette,
-                    Boundary::Selection,
-                ],
-                |b| match b {
-                    Boundary::Stock => "the stock",
-                    Boundary::BoundingBox => "the part's bounding box",
-                    Boundary::Silhouette => "the part's silhouette",
-                    Boundary::Selection => "picked faces and edges",
-                },
-            );
+            widgets::select(ui, "boundary", &mut g.kind, kinds, |b| match b {
+                Boundary::Stock => "the stock",
+                Boundary::BoundingBox => "the part's bounding box",
+                Boundary::Silhouette => "the part's silhouette",
+                Boundary::Selection => "picked faces and edges",
+            });
         });
         if g.kind != Boundary::Stock {
             d.row(ui, &geo::CONTAINMENT, "boundary.containment", |ui| {

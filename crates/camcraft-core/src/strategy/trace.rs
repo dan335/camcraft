@@ -98,8 +98,8 @@ pub enum TraceError {
     /// Nothing was picked.
     #[error("pick the edges to follow")]
     NothingPicked,
-    /// Faces were picked: a trace follows edges.
-    #[error("a trace follows edges: pick the edges to follow, not faces")]
+    /// Faces were picked: a trace follows edges, as a project does.
+    #[error("it follows edges: pick the edges to follow, not faces")]
     FacesPicked,
     /// A curve that turns too tightly for the tool to keep beside it.
     #[error(

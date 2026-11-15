@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    Depths, FixedBox, JOB_VERSION, Job, JobError, Operation, Origin, Retraction, StockSpec,
-    StockToLeave, StrategySpec, ToolSpec,
+    Boundary, Depths, FixedBox, JOB_VERSION, Job, JobError, Operation, Origin, Retraction,
+    StockSpec, StockToLeave, StrategySpec, ToolSpec,
 };
 use crate::is_positive;
 use crate::must::{AT_LEAST_ZERO, FINITE, POSITIVE};
@@ -342,6 +342,15 @@ impl Operation {
         self.check_linking(&field)?;
         if uses.boundary {
             finite(&field("boundary.margin"), self.boundary.margin)?;
+            // Its picks are the curves it runs along, so they cannot be its
+            // boundary too.
+            if uses.curves.is_some() && self.boundary.kind == Boundary::Selection {
+                return Err(JobError::NotOffered {
+                    field: field("boundary.kind"),
+                    value: "selection",
+                    strategy: self.strategy.name(),
+                });
+            }
         }
         if let Some(stepdown) = self.stepdown() {
             positive(&field("passes.stepdown"), stepdown)?;
@@ -688,6 +697,9 @@ impl Operation {
                 ));
             }
             at_least_zero(&field("overthickness"), overthickness)?;
+        }
+        if let StrategySpec::Project { axial_offset, .. } = self.strategy {
+            finite(&field("axial_offset"), axial_offset)?;
         }
         if let StrategySpec::Drill { peck, dwell } = self.strategy {
             if let Some(p) = peck {

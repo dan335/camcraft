@@ -114,5 +114,12 @@ ball, as a new one starts, with a stepdown of 2 mm and with a ramp angle of
 starts with the library's 12 mm ball, which is larger than the floor's
 fillets and so touches twice all round the pocket's floor, and with its 6 mm
 ball, which fits them, then the 12 mm ball at a bitangency angle of 40 degrees
-and the 6 mm one with two stepovers: `fixtures/nc/ops_3d_pencil*.nc`. Run
-again, it makes every one of them byte for byte (but for Windows line ends).
+and the 6 mm one with two stepovers: `fixtures/nc/ops_3d_pencil*.nc`; and its
+Project with the 6 mm ball along three curves picked on the part (the dome's
+foot, the floor's edge where its fillets start and the round's lower edge), as a
+new one starts, the other way, with an axial offset of 1 mm and with the 12 mm
+ball: `fixtures/nc/ops_3d_project*.nc`. A click on an edge picks its chain,
+which Fusion closes round the loop it is in unless it is told the chain is
+open (`isOpen`); a new closed chain runs clockwise seen from above, and
+`isReverted` turns it round. Run again, it makes every one of them byte for
+byte (but for Windows line ends).

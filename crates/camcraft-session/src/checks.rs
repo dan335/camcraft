@@ -527,6 +527,15 @@ fn operation_findings(
             },
             &mut out,
         ),
+        StrategyDetail::Project(r) => {
+            sampling(&r.sweep, &mut out);
+            finished(
+                op,
+                r.passes,
+                "no picked curve passes over the part within the boundary and slopes",
+                &mut out,
+            );
+        }
         StrategyDetail::Spiral(r) | StrategyDetail::Radial(r) => {
             sampling(&r.sweep, &mut out);
             finished(op, r.passes, NOTHING_IN_SLOPES, &mut out);

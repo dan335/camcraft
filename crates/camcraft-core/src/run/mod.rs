@@ -308,11 +308,19 @@ impl<'a> Shared<'a> {
         // outline is what it cuts round or clears, not a limit.
         let uses = op.strategy.uses();
         let target = if uses.boundary {
-            Target::Limit(
-                picking
-                    .machining_boundary(&op.boundary, tool.cutter_radius())
-                    .map_err(in_op(op))?,
-            )
+            let limit = picking
+                .machining_boundary(&op.boundary, tool.cutter_radius())
+                .map_err(in_op(op))?;
+            // A project's picks are the curves it runs along, within its
+            // boundary.
+            if uses.curves == Some(Curves::Traced) {
+                Target::Along(
+                    limit,
+                    curves_picked(self.job, op, self.prepared, self.bodies)?,
+                )
+            } else {
+                Target::Limit(limit)
+            }
         } else if uses.outline {
             Target::Areas(planar_areas(
                 self.job,

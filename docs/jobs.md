@@ -30,7 +30,7 @@ A job (`.camcraft`, TOML) has three groups, as in Fusion.
   simulator and post never see a rotation. With the default orientation and work
   zero, a run is bit-identical to before setups existed.
 
-An operation has a strategy (parallel, scallop, contour, ramp, pencil, flat, spiral,
+An operation has a strategy (parallel, scallop, contour, ramp, pencil, project, flat, spiral,
 radial or morphed spiral finishing, adaptive clearing, pocket clearing, a 2D profile, a 2D
 pocket, 2D adaptive clearing, facing, slot, trace, a 2D chamfer, bore, circular,
 thread or drilling), a tool, heights, passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
@@ -89,7 +89,22 @@ outermost in before the line. It cuts `direction = "both-ways"` (each line from
 its nearer end) unless `"climb"`, Fusion's *One Way*, the wall on the tool's
 right with a clockwise spindle, or `"conventional"`, its *Other Way*; the
 nearest line next, staying down within five tools as Fusion's does. A cone
-takes no overthickness. Flat (`"flat"`) is Fusion's too: each flat face of the part between
+takes no overthickness. Project (`"project"`) is Fusion's Project in its Drop
+mode ([decision 0029](decisions/0029-project.md)): the edges picked
+(`selection.edges`, open or closed, joined end to end where they meet), each
+seen from above and dropped onto the part, the tool run along it where it
+rests there, within the boundary (the part's silhouette with the tool's centre
+in it, to start), in the order picked. A closed curve runs clockwise seen from
+above, as Fusion's new chains do, and an open one as picked, from its first
+edge's start, with `direction = "one-way"`; `"other-way"` reverses both; and
+`"both-ways"`, as a new one starts, runs each as one way but an open curve from
+whichever end is nearer where the last left the tool. Each closed curve starts
+where the last left off, at its nearest point. `axial_offset` (none, Fusion's
+Axial Offset) runs every pass that far above where the tool rests, below when
+negative. It has the slopes, and no stepover; its boundary cannot be its picks,
+which are its curves. It lifts to the retract height between curves, however
+near, and comes straight down onto each along its vertical lead, as Fusion's
+does. Flat (`"flat"`) is Fusion's too: each flat face of the part between
 the top and bottom cleared at its own height, rings a stepover apart in from its
 edges, climbing unless conventional, `order = "outside-in"` unless
 `"inside-out"`; its stepover starts as a pocket's. Spiral (`"spiral"`), radial

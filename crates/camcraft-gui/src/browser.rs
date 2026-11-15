@@ -614,6 +614,7 @@ pub fn strategy_label(s: &StrategySpec) -> &'static str {
         StrategySpec::Contour { .. } => "Contour",
         StrategySpec::Ramp { .. } => "Ramp",
         StrategySpec::Pencil { .. } => "Pencil",
+        StrategySpec::Project { .. } => "Project",
         StrategySpec::Flat { .. } => "Flat",
         StrategySpec::Spiral { .. } => "Spiral",
         StrategySpec::Radial { .. } => "Radial",
@@ -679,6 +680,7 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
                     "ramp",
                     "flat",
                     "pencil",
+                    "project",
                     "spiral",
                     "radial",
                     "morphed-spiral",
@@ -694,7 +696,7 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
 /// there, in the order of Fusion's toolbar. The menus list them after that
 /// section's own, greyed, saying so. One that is built comes out of here and
 /// into [`operation_groups`], in the same place.
-pub const PLANNED: &[(&str, usize, &str)] = &[("3D", 1, "Project"), ("3D", 1, "Morph")];
+pub const PLANNED: &[(&str, usize, &str)] = &[("3D", 1, "Morph")];
 
 /// What a planned operation's item says under the pointer.
 pub const NOT_YET: &str = "Not implemented yet";
@@ -1025,7 +1027,7 @@ mod menu_tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), offered, "one is offered twice: {names:?}");
-        assert_eq!(offered, 23, "{names:?}");
+        assert_eq!(offered, 24, "{names:?}");
     }
 
     /// The planned operations are listed after their section's own, in the

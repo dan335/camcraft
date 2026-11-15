@@ -3,7 +3,8 @@
 //!
 //! A strategy lays out its pattern as lines in the plane, in the order they are
 //! cut and each the way it runs: a spiral, spokes, a spiral morphed to the
-//! boundary. [`project`] keeps them to the area, and to the slopes asked for, and
+//! boundary, a project's picked curves. [`project`] keeps them to the area, and
+//! to the slopes asked for, and
 //! samples each on the part exactly, as a parallel pass is
 //! ([`crate::strategy::parallel::sweep_polyline`]): refined until it is within tolerance,
 //! and broken where nothing is under the tool, at a wall, and down a plunge. It
@@ -77,6 +78,10 @@ pub struct ProjectParams {
     pub slope_from: f64,
     /// And at most this steep.
     pub slope_to: f64,
+    /// How far above where the tool rests on the part each pass runs, in
+    /// millimetres, negative to go below: a project's axial offset; none for
+    /// a pattern.
+    pub raise: f64,
     /// What it tells how far it has got, and asks whether to stop.
     pub watch: Watch,
 }
@@ -90,6 +95,7 @@ impl Default for ProjectParams {
             max_cut_step: 0.5,
             slope_from: 0.0,
             slope_to: std::f64::consts::FRAC_PI_2,
+            raise: 0.0,
             watch: Watch::default(),
         }
     }
@@ -135,6 +141,12 @@ pub fn project<T: DropTest + Sync>(
     check("feed", params.feed)?;
     check("max_cut_step", params.max_cut_step)?;
     slope::check_range(params.slope_from, params.slope_to)?;
+    if !params.raise.is_finite() {
+        return Err(StrategyError::BadParameter {
+            name: "raise",
+            value: params.raise,
+        });
+    }
     let mut report = ProjectReport::default();
     // Slopes judged as scallop's grid does, and kept to the range asked for and
     // nothing else, as Fusion's: a steep stretch is cut down the part as a
@@ -218,6 +230,10 @@ pub fn project<T: DropTest + Sync>(
                 && let Some(at) = emit.at
             {
                 start_near(&mut run, at);
+            }
+            // Judged and broken where the tool rests, then raised.
+            for p in &mut run.points {
+                p.z += params.raise;
             }
             emit.emit(&run)?;
         }

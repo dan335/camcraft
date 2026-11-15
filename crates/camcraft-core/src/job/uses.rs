@@ -98,6 +98,27 @@ impl StrategySpec {
                 bottom: Some(HeightRef::ModelBottom),
                 ..cuts_loops
             },
+            // Its picks are edges, open or closed, as a trace's, but each
+            // dropped onto the part within its boundary, as a pattern is: no
+            // stepover, no levels, its curves in the order picked. Between
+            // curves it lifts, and comes straight down onto each along its
+            // vertical lead, as Fusion's Project, which has no ramp settings,
+            // does in every program of its compared: it lifted even between
+            // two curves 10 mm apart on the same flat top, within its
+            // Maximum Stay-Down Distance of five tools.
+            StrategySpec::Project { .. } => Uses {
+                curves: Some(Curves::Traced),
+                stepover: false,
+                depths: Depths::None,
+                links: Links::OverPart,
+                stay_down: false,
+                reach: Reach::Tools(5),
+                lead_radius: true,
+                ramp: false,
+                top: Some(HeightRef::ModelTop),
+                bottom: Some(HeightRef::ModelBottom),
+                ..cuts_loops
+            },
             // A level each stepdown is what it is, going round, not over: it
             // has no stepover. Its order is its own. Its levels are the
             // part's, from its top, and each runs round the part beside its
@@ -434,7 +455,8 @@ pub enum Curves {
     /// Slots, by the edges round their floors, or their floors: a slot's
     /// middle is what it runs along, as Fusion's Slot has them.
     Slots,
-    /// Edges, open or closed, the tool follows, as Fusion's Trace has them.
+    /// Edges, open or closed, the tool follows, as Fusion's Trace and Project
+    /// have them.
     Traced,
     /// Edges to chamfer, or faces whose edges to chamfer, as Fusion's 2D
     /// Chamfer has them: its chains or its face contours.
@@ -472,8 +494,9 @@ pub struct Uses {
     /// measured from them, since each hole goes to its own bottom. How they
     /// are picked, where it has them.
     pub holes: Option<Holes>,
-    /// Curves: its picks are what it runs along, slots or edges, not an area.
-    /// Which, where it has them.
+    /// Curves: its picks are what it runs along, slots or edges, not an area,
+    /// nor a boundary where it has one too, as a project does. Which, where it
+    /// has them.
     pub curves: Option<Curves>,
     /// The distance between passes.
     pub stepover: bool,

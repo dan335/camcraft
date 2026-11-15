@@ -6,6 +6,19 @@ the same notes at more length.
 
 ## Unreleased
 
+- **Fusion's Project**, a new 3D finishing strategy (`strategy = "project"`) in
+  the job file and the app's 3D menu
+  ([decision 0029](docs/decisions/0029-project.md)). Edges picked on the part,
+  open or closed, each seen from above and dropped onto it, the tool run along
+  where it rests there, within the boundary, in the order picked: Fusion's
+  Project in its Drop mode. Direction (both ways, one way, other way), Axial
+  Offset and the slopes, as a new Project of Fusion's starts. Fusion's
+  programs for `ops_3d` along the dome's foot, the floor's edge and the
+  round's lower edge, as a new one starts, the other way, a millimetre up
+  and with the 12 mm ball, are `fixtures/nc/ops_3d_project*.nc`, made by
+  `scripts/fusion/ops_3d/cam.py`, and a test holds camcraft's Project to each.
+  A strategy whose picks are the curves it follows can no longer be given
+  them as its boundary too.
 - **Fusion's Pencil**, a new 3D finishing strategy (`strategy = "pencil"`) in
   the job file and the app's 3D menu
   ([decision 0028](docs/decisions/0028-pencil.md)). The tool run along where

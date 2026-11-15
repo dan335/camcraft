@@ -66,6 +66,10 @@ topics! {
         "Finds the corners a tool this much larger all round would touch twice, and runs this tool along them: corners a little wider than the tool are cut too.";
     PENCIL_STEPOVERS: "Number of stepovers",
         "Passes either side of each line, a stepover apart along the surface, cut before it. None runs along the lines alone.";
+    DIRECTION_PROJECT: "Direction",
+        "One way runs a closed curve clockwise from above, an open one as picked; other way, the reverse. Both ways starts an open curve at its end nearer the tool.";
+    PROJECT_AXIAL_OFFSET: "Axial offset",
+        "Moves every pass up from where the tool rests on the part, or down into it when negative.";
     MIN_FLAT_STEPDOWN: "Minimum stepdown",
         "A flat or peak less than this below the level above gets no level of its own: that much is left on it. Empty for none.";
     MIN_AXIAL_ENGAGEMENT: "Minimum axial engagement",

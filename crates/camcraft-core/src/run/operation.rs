@@ -17,8 +17,8 @@ use crate::cutter::dropcutter::DropCutter;
 use crate::cutter::tool::ToolProfile;
 use crate::job::{
     Compensation, ContourOrder, CutDirection, Depths, Entry, FaceDirection, HeightContext,
-    HolderMode, HolderSegment, Job, Links, Operation, PassOrder, Picks, RadialDirection,
-    Retraction, SpindleDirection, StrategySpec, ToolSpec,
+    HolderMode, HolderSegment, Job, Links, Operation, PassOrder, Picks, ProjectDirection,
+    RadialDirection, Retraction, SpindleDirection, StrategySpec, ToolSpec,
 };
 use crate::path::corners::{CornerParams, CornerReport, slow_corners};
 use crate::path::fit::{FitReport, fit_arcs};
@@ -51,6 +51,7 @@ use crate::strategy::planar::{
     profile,
 };
 use crate::strategy::pocket_clearing::{ClearingParams, pocket_clearing};
+use crate::strategy::project::{ProjectCurvesParams, project_curves};
 use crate::strategy::projected::{Curve, ProjectParams, ProjectReport, project};
 use crate::strategy::ramp::{RampParams, ramp};
 use crate::strategy::reach::LevelReach;
@@ -80,7 +81,7 @@ pub(super) use curves::{
 };
 use finishing::{
     PencilAsked, contour_paths, flat_paths, morphed_spiral_paths, parallel_paths, pencil_paths,
-    radial_paths, ramp_paths, scallop_paths, spiral_paths,
+    project_paths, radial_paths, ramp_paths, scallop_paths, spiral_paths,
 };
 use link::{Cutting, OnPart, link_params};
 pub(super) use round::round_walls;
@@ -219,6 +220,9 @@ pub(super) enum Target {
     Slots(Vec<Slot>),
     /// A trace's curves, in the order picked.
     Curves(Vec<Picked>),
+    /// A project's boundary its tool's centre is kept to, if any, and the
+    /// curves it runs along, in the order picked.
+    Along(Option<Region>, Vec<Picked>),
     /// A 2D chamfer's edges, and the faces they do not join.
     Chamfers(Chamfers),
     /// An engraving's shapes, in the order picked.
@@ -347,7 +351,9 @@ pub(super) fn plan_operation(
     let mut warnings = Vec::new();
 
     let (limit, holes, found, rounds) = match target {
-        Target::Limit(limit) => (limit.as_ref(), &[][..], &[][..], &[][..]),
+        Target::Limit(limit) | Target::Along(limit, _) => {
+            (limit.as_ref(), &[][..], &[][..], &[][..])
+        }
         Target::Holes(holes) => (None, holes.as_slice(), &[][..], &[][..]),
         Target::Areas(areas) => (None, &[][..], areas.as_slice(), &[][..]),
         Target::Rounds(rounds) => (None, &[][..], &[][..], rounds.as_slice()),
@@ -357,7 +363,7 @@ pub(super) fn plan_operation(
     };
     let (slots, curves) = match target {
         Target::Slots(slots) => (slots.as_slice(), &[][..]),
-        Target::Curves(curves) => (&[][..], curves.as_slice()),
+        Target::Curves(curves) | Target::Along(_, curves) => (&[][..], curves.as_slice()),
         _ => (&[][..], &[][..]),
     };
     let (raw, passes, detail) = match op.strategy {
@@ -387,6 +393,16 @@ pub(super) fn plan_operation(
                 stepovers,
             },
             limit,
+            &mut warnings,
+        )?,
+        StrategySpec::Project {
+            direction,
+            axial_offset,
+            ..
+        } => project_paths(
+            work,
+            (direction, axial_offset),
+            (limit, curves),
             &mut warnings,
         )?,
         StrategySpec::Flat { order, .. } => flat_paths(work, order, limit, &mut warnings)?,
@@ -942,6 +958,7 @@ pub(super) fn not_made(op: &Operation, spec: Option<&ToolSpec>, made: Made) -> O
         StrategySpec::Contour { .. } => StrategyDetail::Contour(Default::default()),
         StrategySpec::Ramp { .. } => StrategyDetail::Ramp(Default::default()),
         StrategySpec::Pencil { .. } => StrategyDetail::Pencil(Default::default()),
+        StrategySpec::Project { .. } => StrategyDetail::Project(Default::default()),
         StrategySpec::Flat { .. } => StrategyDetail::Flat(Default::default()),
         StrategySpec::Spiral { .. } => StrategyDetail::Spiral(Default::default()),
         StrategySpec::Radial { .. } => StrategyDetail::Radial(Default::default()),

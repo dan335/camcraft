@@ -42,8 +42,8 @@ use crate::test_support::fixture;
 use crate::{job_text, load_models, models_of, parse_job, run_setup};
 
 /// The part, its stock and setup, the roughing flat and the two balls, with no
-/// operations.
-fn base() -> String {
+/// operations: Project's tests' too.
+pub(super) fn base() -> String {
     format!(
         r#"
 version = 1
@@ -138,7 +138,7 @@ fn fusion(op: &str) -> String {
     .unwrap()
 }
 
-/// `job`'s pencil, `name`, run and compared with Fusion's program for it.
+/// `job`'s operation `name`, run and compared with Fusion's program for it.
 fn held(job: &Job, name: &str) -> Compared {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let loaded = load_models(job, dir, &[0]).unwrap();
@@ -161,17 +161,19 @@ fn held(job: &Job, name: &str) -> Compared {
     c
 }
 
-/// How near a Pencil's material and program are held to Fusion's: the least
-/// share of the columns either cuts that agree to the tolerance, the most the
-/// median and the 95th percentile of the difference may be, in millimetres,
-/// and how far apart the volumes removed and the lengths fed may be, as
-/// shares of Fusion's.
-struct Bounds {
-    agree: f64,
-    median: f64,
-    p95: f64,
-    removed: f64,
-    fed: f64,
+/// How near a Pencil's material and program are held to Fusion's, or a
+/// Project's: the least share of the columns either cuts that agree to the
+/// tolerance, the most the median and the 95th percentile of the difference
+/// may be, in millimetres, how far apart the volumes removed and the lengths
+/// fed may be, as shares of Fusion's, and how far apart the lowest each goes,
+/// in millimetres.
+pub(super) struct Bounds {
+    pub(super) agree: f64,
+    pub(super) median: f64,
+    pub(super) p95: f64,
+    pub(super) removed: f64,
+    pub(super) fed: f64,
+    pub(super) lowest: f64,
 }
 
 /// `name`, a new Pencil with `tool` but for `change`, held to Fusion's program
@@ -194,8 +196,13 @@ fn holds(
     bounds: &Bounds,
     contacts: u64,
 ) {
-    let job = job(name, tool, change);
-    let c = held(&job, name);
+    held_to(&job(name, tool, change), name, bounds, contacts);
+}
+
+/// `job`'s operation `name` held to Fusion's program for it, to `bounds`;
+/// Fusion's own rapids may meet the stock `contacts` times.
+pub(super) fn held_to(job: &Job, name: &str, bounds: &Bounds, contacts: u64) {
+    let c = held(job, name);
     let d = &c.difference;
     let say = format!("{name}: {d:?}\n{:?}\n{:?}", c.ours, c.theirs);
     assert!(d.cut > 0, "{say}");
@@ -212,7 +219,10 @@ fn holds(
     let (ours, theirs) = d.removed;
     assert!((ours - theirs).abs() <= bounds.removed * theirs, "{say}");
     // As deep, and about as far.
-    assert!((c.ours.lowest - c.theirs.lowest).abs() <= 1e-3, "{say}");
+    assert!(
+        (c.ours.lowest - c.theirs.lowest).abs() <= bounds.lowest,
+        "{say}"
+    );
     assert!(
         (c.ours.fed - c.theirs.fed).abs() <= bounds.fed * c.theirs.fed,
         "{say}"
@@ -230,6 +240,7 @@ fn a_new_pencil_leaves_what_fusions_does() {
         p95: 0.015,
         removed: 0.005,
         fed: 0.09,
+        lowest: 1e-3,
     };
     holds(("pencil", "ball12"), |_| {}, &bounds, 0);
 }
@@ -247,6 +258,7 @@ fn a_pencil_with_a_ball_that_fits_the_fillets_leaves_what_fusions_does() {
         p95: 2.6,
         removed: 0.06,
         fed: 0.12,
+        lowest: 1e-3,
     };
     holds(("pencil_ball6", "ball6"), |_| {}, &bounds, 0);
 }
@@ -262,6 +274,7 @@ fn a_pencil_at_forty_degrees_leaves_what_fusions_does() {
         p95: 0.015,
         removed: 0.005,
         fed: 0.03,
+        lowest: 1e-3,
     };
     holds(
         ("pencil_bitangency", "ball12"),
@@ -293,6 +306,7 @@ fn a_pencil_with_stepovers_leaves_what_fusions_does() {
         p95: 0.85,
         removed: 0.035,
         fed: 0.10,
+        lowest: 1e-3,
     };
     holds(
         ("pencil_stepovers", "ball6"),

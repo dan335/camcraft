@@ -26,7 +26,7 @@ Manufacturing Extension is [not planned](#not-planned).
 |-----------------------------------------------|-----:|--------:|------------:|
 | [2D operations](#2d-operations)               |    1 |      10 |           0 |
 | [3D roughing](#3d-roughing)                   |    0 |       2 |           0 |
-| [3D finishing](#3d-finishing)                 |    0 |       9 |           2 |
+| [3D finishing](#3d-finishing)                 |    0 |      10 |           1 |
 | [Drilling](#drilling)                         |    4 |       1 |           2 |
 | [Shared settings](#shared-settings)           |   10 |       2 |           5 |
 | [Linking and entries](#linking-and-entries)   |    4 |       1 |           1 |
@@ -37,7 +37,7 @@ Manufacturing Extension is [not planned](#not-planned).
 | [Posts and programs](#posts-and-programs)     |    6 |       0 |           2 |
 | [App](#app)                                   |    7 |       1 |           0 |
 | [Project](#project)                           |    1 |       0 |           4 |
-| **All**                                       |   55 |      30 |          28 |
+| **All**                                       |   55 |      31 |          27 |
 
 `grep "| not started" PROGRESS.md` lists everything not yet begun.
 
@@ -46,7 +46,7 @@ Manufacturing Extension is [not planned](#not-planned).
 Roughly in the order they matter:
 
 1. **Cut on a machine.** See [Before the first cut](#before-the-first-cut).
-2. **More strategies:** project, morph.
+2. **More strategies:** morph.
 3. **A volumetric stock**, so what a top setup leaves carries to a flipped
    bottom one.
 4. **Exact slicing of the offset surface** for Z-level work
@@ -92,7 +92,7 @@ Roughly in the order they matter:
 | Morphed Spiral    | partial     | Turns from the boundary's shape into its centre. Missing: a centre picked on the model. |
 | Pencil            | partial     | Held to Fusion's programs for `ops_3d` as a new one starts with a 12 mm ball, larger than its floor's fillets, and a 6 mm one, which fits them, at a 40° bitangency angle and with two stepovers: 95.3%, 74.5%, 95.3% and 69.3% of the columns either cuts alike, the 95th percentile 0.0098, 2.35, 0.0098 and 0.73 mm. Where the tool touches the part twice, found on a grid of drops and each point found exactly across the line: every crease between sheets of where the tool rests that meet sharper than the bitangency angle, and every wall's foot where what is below faces the wall at that angle or more; the nearest line next, both ways, one way (the wall on the right) or the other; overthickness; stepovers, passes either side a stepover apart along the surface ([0028](docs/decisions/0028-pencil.md)). Missing: Fusion's order and links (with the 6 mm ball its links lift where camcraft's stay down through the roughing's leftovers, most of what its figures lose), straight plunges down an upright corner at the cutting feed (left to the linker), Up/Down Milling, Inside/Outside Direction, unlimited stepovers, fragment settings, fillets, smoothing, a slope range, a contact point boundary, rest machining. Overthickness, one way and the other, stock to leave and flat or bull nose tools are not compared. |
 | Ramp              | partial     | Held to Fusion's programs for `ops_3d` as a new one starts, at a 2 mm stepdown and at a 0.5° ramp angle: 61.7%, 46.2% and 60.6% of the columns either cuts alike, the 95th percentile 0.31, 0.82 and 0.32 mm. Contour's rings gone down wall by wall: each wall from the level above its top ring along it, once round it there but on the first wall, down to each ring below on the part at every height between, a stepdown a lap round the longer ring and no steeper than the ramp angle, and once round its foot; the next wall the nearest; direction, flat areas, slopes ([0027](docs/decisions/0027-ramp.md)). Missing: where Fusion ends a pocket's wall above its floor (at a 1 mm stepdown it goes once round at Z11 and down Z10's ring on its own; camcraft goes on down, the main reason for the figures above), cusps placed as Fusion's (the outside starts 25° round its corner from Fusion's), horizontal leads, Order Bottom-Up, shallow areas, Minimum Diameter, Minimum Cutting Radius, fillets, ramp types. Stock to leave, slopes, conventional and flat or bull nose tools are not compared. |
-| Project           | not started | |
+| Project           | partial     | Held to Fusion's programs for `ops_3d` along the dome's foot, the floor's edge and the round's lower edge, as a new one starts, the other way, a millimetre up and with the 12 mm ball: 98.8%, 98.8%, 99.1% and 90.1% of the columns either cuts alike, the 95th percentile 0.0045, 0.0045, 0.0044 and 0.012 mm. Picked edges, open or closed, joined end to end, each seen from above and dropped onto the part where the tool rests, within the boundary, in the order picked; one way (closed clockwise, open as picked), the other way, or both ways (an open curve from its nearer end); each closed curve started nearest where the tool is; axial offset; slopes; lifted between curves, as Fusion's ([0029](docs/decisions/0029-project.md)). Missing: the other projection modes (greyed out for 3-axis), sketches, a chain's direction picked, Up/Down Milling, multiple depths, fillets, rest machining, a contact point boundary. One way, slopes, stock to leave, negative axial offsets and flat or bull nose tools are not compared. |
 | Morph             | not started | |
 
 ## Drilling

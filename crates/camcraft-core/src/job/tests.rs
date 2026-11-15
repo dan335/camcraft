@@ -2454,6 +2454,83 @@ fn engrave_reads_and_writes_back() {
     assert!(new.cuts_selection());
 }
 
+/// A project reads with Fusion's defaults, both ways with no axial offset on
+/// every slope, writes back only what differs, starts as Fusion's does, on the
+/// part's silhouette with the tool's centre in it, to the retract height
+/// between curves, with no stepover; and refuses an axial offset that is no
+/// number, and its picks as its boundary too, since they are its curves.
+#[test]
+fn project_reads_and_writes_back() {
+    let finish = "strategy = \"parallel\"
+tool = \"finish-4-ball\"
+angle = 90.0
+";
+    let with = |own: &str| -> Job {
+        toml::from_str(&SAMPLE.replace(
+            finish,
+            &format!(
+                "strategy = \"project\"
+tool = \"finish-4-ball\"
+{own}"
+            ),
+        ))
+        .unwrap()
+    };
+    let j = with("");
+    j.validate().unwrap();
+    assert_eq!(
+        j.setups[0].operations[1].strategy,
+        StrategySpec::Project {
+            direction: ProjectDirection::BothWays,
+            axial_offset: 0.0,
+            slope_from: 0.0,
+            slope_to: 90.0,
+        }
+    );
+    let written = toml::to_string(&j).unwrap();
+    for name in ["direction", "axial_offset", "slope_from", "slope_to"] {
+        assert!(!written.contains(name), "{written}");
+    }
+    let set = with(
+        "direction = \"other-way\"
+axial_offset = -0.5
+slope_from = 10.0
+slope_to = 80.0
+",
+    );
+    set.validate().unwrap();
+    let written = toml::to_string(&set).unwrap();
+    assert_eq!(toml::from_str::<Job>(&written).unwrap(), set);
+
+    let spec = StrategySpec::named("project").unwrap();
+    let uses = spec.uses();
+    assert!(uses.boundary && !uses.stepover && !uses.ramp);
+    assert_eq!(uses.curves, Some(Curves::Traced));
+    let fresh = Operation::fresh("p", spec, (None, None, None));
+    assert_eq!(fresh.boundary.kind, Boundary::Silhouette);
+    assert_eq!(fresh.boundary.containment, Containment::Center);
+    assert_eq!(fresh.linking.retraction, Retraction::Full);
+
+    assert!(
+        with(
+            "axial_offset = inf
+"
+        )
+        .validate()
+        .is_err()
+    );
+    let mut picked = with("");
+    picked.setups[0].operations[1].boundary.kind = Boundary::Selection;
+    assert!(matches!(
+        picked.validate(),
+        Err(JobError::NotOffered {
+            value: "selection",
+            strategy: "project",
+            ..
+        })
+    ));
+}
+
 /// A pencil reads with Fusion's defaults, both ways at a bitangency angle of
 /// 20° with no overthickness and no stepovers, writes back only what differs,
 /// and refuses an angle of none or a half turn, a negative overthickness, and

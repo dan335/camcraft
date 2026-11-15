@@ -443,3 +443,6 @@ mod tests_ramp;
 
 #[cfg(test)]
 mod tests_pencil;
+
+#[cfg(test)]
+mod tests_project;

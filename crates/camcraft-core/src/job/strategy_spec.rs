@@ -101,6 +101,28 @@ pub enum StrategySpec {
         #[serde(default, skip_serializing_if = "is_default")]
         stepovers: u32,
     },
+    /// Picked edges, open or closed, seen from above and dropped onto the
+    /// part: the tool run along each where it rests on the part below it,
+    /// within the boundary, in the order picked. Fusion's Project, its Drop
+    /// mode.
+    Project {
+        /// Which way each curve runs: Fusion's Direction, both ways unless
+        /// asked.
+        #[serde(default, skip_serializing_if = "is_default")]
+        direction: ProjectDirection,
+        /// How far above where the tool rests the passes run, in millimetres,
+        /// negative to go below: Fusion's Axial Offset, none.
+        #[serde(default, skip_serializing_if = "is_default")]
+        axial_offset: f64,
+        /// Only where the surface is at least this steep, in degrees from
+        /// level: Fusion's From Slope Angle.
+        #[serde(default, skip_serializing_if = "is_default")]
+        slope_from: f64,
+        /// And at most this steep, in degrees from level: Fusion's To Slope
+        /// Angle.
+        #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
+        slope_to: f64,
+    },
     /// Each flat face of the part cleared at its own height, rings a stepover
     /// apart in from its edges, and nothing else. Fusion's Flat.
     Flat {
@@ -645,6 +667,7 @@ impl StrategySpec {
             StrategySpec::Contour { .. } => "contour",
             StrategySpec::Ramp { .. } => "ramp",
             StrategySpec::Pencil { .. } => "pencil",
+            StrategySpec::Project { .. } => "project",
             StrategySpec::Flat { .. } => "flat",
             StrategySpec::Spiral { .. } => "spiral",
             StrategySpec::Radial { .. } => "radial",
@@ -678,6 +701,7 @@ impl StrategySpec {
             StrategySpec::Parallel { .. }
             | StrategySpec::Scallop { .. }
             | StrategySpec::Pencil { .. }
+            | StrategySpec::Project { .. }
             | StrategySpec::Spiral { .. }
             | StrategySpec::Radial { .. }
             | StrategySpec::MorphedSpiral { .. } => Some(Containment::Center),
@@ -732,8 +756,10 @@ impl StrategySpec {
             // A slot's tool is as wide as the slot, cutting both ways at once;
             // a trace's side is its compensation; a chamfer climbs, as
             // Fusion's chains are picked to; an engraving's walk goes round
-            // each outline anticlockwise, the shape on its left.
+            // each outline anticlockwise, the shape on its left; a project's
+            // curves run clockwise or as picked, not to climb.
             StrategySpec::Parallel { .. }
+            | StrategySpec::Project { .. }
             | StrategySpec::Radial { .. }
             | StrategySpec::Face { .. }
             | StrategySpec::Drill { .. }
@@ -774,6 +800,11 @@ impl StrategySpec {
                 ..
             }
             | StrategySpec::Ramp {
+                slope_from,
+                slope_to,
+                ..
+            }
+            | StrategySpec::Project {
                 slope_from,
                 slope_to,
                 ..
@@ -901,8 +932,10 @@ impl StrategySpec {
                 ),
                 ("linking.leads.straight", ROUND_LEAD),
             ],
+            // A project's curves have no stepover between them.
             StrategySpec::Contour { .. }
             | StrategySpec::Ramp { .. }
+            | StrategySpec::Project { .. }
             | StrategySpec::Drill { .. }
             | StrategySpec::Slot { .. }
             | StrategySpec::Trace { .. }
@@ -933,9 +966,10 @@ impl StrategySpec {
 
     /// How high a new operation of this strategy goes between cuts, where that
     /// is not what a job file that leaves it out reads: a trace, a 2D chamfer,
-    /// an engraving, a thread and a ramp to the retract height, as Fusion's
-    /// Trace and Ramp start with a full retraction, its 2D Chamfer and Engrave
-    /// have no other, and its Thread's programs go up to it between holes.
+    /// an engraving, a thread, a ramp and a project to the retract height, as
+    /// Fusion's Trace, Ramp and Project start with a full retraction, its 2D
+    /// Chamfer and Engrave have no other, and its Thread's programs go up to
+    /// it between holes.
     pub fn fresh_retraction(&self) -> Retraction {
         if matches!(
             self,
@@ -944,6 +978,7 @@ impl StrategySpec {
                 | StrategySpec::Engrave { .. }
                 | StrategySpec::Thread { .. }
                 | StrategySpec::Ramp { .. }
+                | StrategySpec::Project { .. }
         ) {
             Retraction::Full
         } else {
@@ -1120,6 +1155,33 @@ impl RadialDirection {
             RadialDirection::BothWays => crate::strategy::patterns::Spokes::BothWays,
             RadialDirection::Outward => crate::strategy::patterns::Spokes::Outward,
             RadialDirection::Inward => crate::strategy::patterns::Spokes::Inward,
+        }
+    }
+}
+
+/// Which way a project's curves run: Fusion's Direction.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProjectDirection {
+    /// As one way, but an open curve from whichever end is nearer where the
+    /// tool is. Fusion's default.
+    #[default]
+    BothWays,
+    /// A closed curve clockwise seen from above, as Fusion's new chains run;
+    /// an open one as picked, from its first edge's start.
+    OneWay,
+    /// The other way round: a closed curve anticlockwise, an open one from
+    /// its far end.
+    OtherWay,
+}
+
+impl ProjectDirection {
+    /// The generator's own.
+    pub fn engine(self) -> crate::strategy::project::Way {
+        match self {
+            ProjectDirection::BothWays => crate::strategy::project::Way::BothWays,
+            ProjectDirection::OneWay => crate::strategy::project::Way::OneWay,
+            ProjectDirection::OtherWay => crate::strategy::project::Way::OtherWay,
         }
     }
 }

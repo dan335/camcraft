@@ -1,4 +1,4 @@
-# Fusion's Ramp and Pencil on the ops_3d part, each as a new operation of
+# Fusion's Ramp, Pencil and Project on the ops_3d part, each as a new operation of
 # Fusion's starts but for what its name says, posted with Fusion's Masso post:
 # fixtures/nc/ops_3d_*.nc. Run through the bridge after part.py (see
 # ../README.md). It finds the document part.py made by its one body, named
@@ -26,6 +26,13 @@
 #   pencil_bitangency   the 12 mm ball, Bitangency Angle 40 degrees
 #   pencil_stepovers    the 6 mm ball, Number of Stepovers 2, the stepover half
 #                       the tool
+#
+#   project             a new Project with the 6 mm ball along three curves
+#                       picked on the part: the dome's foot, the floor's edge
+#                       where its fillets start, and the R8 round's lower edge
+#   project_other_way   the same, Direction Other Way
+#   project_axial       the same, Axial Offset 1 mm
+#   project_ball12      the same with the 12 mm ball
 import copy, json, os, time, traceback
 
 BRIDGE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -105,21 +112,62 @@ FEEDS = {"v_f": 1500, "v_f_plunge": 500, "v_f_ramp": 500, "v_f_leadIn": 1500, "v
 ball6 = make_tool(sample("ball end mill", 6), 2, "6mm ball", 18000, FEEDS)
 ball12 = make_tool(sample("ball end mill", 12), 3, "12mm ball", 18000, FEEDS)
 
+def edge_through(x, y, z):
+    """The edge whose own point is nearest (x, y, z), within half a millimetre."""
+    best, far = None, 0.5 * MM
+    for e in body.edges:
+        m = e.pointOnEdge
+        d = ((m.x - x * MM) ** 2 + (m.y - y * MM) ** 2 + (m.z - z * MM) ** 2) ** 0.5
+        if d < far:
+            best, far = e, d
+    if best is None:
+        raise LookupError((x, y, z))
+    return best
+
+# Project's curves, picked as the panel picks them: a click on an edge takes
+# its chain, closed round the loop it is in unless the chain is open. The
+# dome's foot, the circle where it meets the floor; the floor's edge, where
+# the fillets round it start, a loop from its edge along +Y; and the R8
+# round's lower edge, along the block's side at X30, alone. Each has the
+# roughing's leftovers to cut where the tool rests over it: round the dome's
+# foot, in the fillets and on the round. Fusion's new closed chains run
+# clockwise seen from above, and an open one from its edge's start.
+PROJECTED = (
+    (edge_through(-15, 0, 10), False),
+    (edge_through(-6.13, 9, 10), False),
+    (edge_through(30, 0, 12), True),
+)
+
+def project_curves(op):
+    v = op.parameters.itemByName("curves").value
+    cs = v.getCurveSelections()
+    for edge, is_open in PROJECTED:
+        chain = cs.createNewChainSelection()
+        chain.isOpen = is_open
+        chain.inputGeometry = [edge]
+    v.applyCurveSelections(cs)
+
 made = []
-for name, strategy, tool, settings in (
-    ("ramp", "ramp", ball6, {}),
-    ("ramp_step2", "ramp", ball6, {"maximumStepdown": "2 mm"}),
-    ("ramp_angle", "ramp", ball6, {"rampAngle": "0.5 deg"}),
-    ("pencil", "pencil_new", ball12, {}),
-    ("pencil_ball6", "pencil_new", ball6, {}),
-    ("pencil_bitangency", "pencil_new", ball12, {"bitangentAngle": "40 deg"}),
-    ("pencil_stepovers", "pencil_new", ball6, {"numberOfStepovers": "2"}),
+for name, strategy, tool, select, settings in (
+    ("ramp", "ramp", ball6, None, {}),
+    ("ramp_step2", "ramp", ball6, None, {"maximumStepdown": "2 mm"}),
+    ("ramp_angle", "ramp", ball6, None, {"rampAngle": "0.5 deg"}),
+    ("pencil", "pencil_new", ball12, None, {}),
+    ("pencil_ball6", "pencil_new", ball6, None, {}),
+    ("pencil_bitangency", "pencil_new", ball12, None, {"bitangentAngle": "40 deg"}),
+    ("pencil_stepovers", "pencil_new", ball6, None, {"numberOfStepovers": "2"}),
+    ("project", "project", ball6, project_curves, {}),
+    ("project_other_way", "project", ball6, project_curves, {"direction": "'other way'"}),
+    ("project_axial", "project", ball6, project_curves, {"axialOffset": "1 mm"}),
+    ("project_ball12", "project", ball12, project_curves, {}),
 ):
     try:
         oi = setup.operations.createInput(strategy)
         oi.tool = tool
         oi.displayName = name
         op = setup.operations.add(oi)
+        if select:
+            select(op)
         for key, expr in settings.items():
             op.parameters.itemByName(key).expression = expr
         made.append(op)
@@ -143,7 +191,8 @@ for op in made:
         except Exception:
             pass
     for key in ("maximumStepdown", "rampAngle", "flatAreaMachining", "direction",
-                "bitangentAngle", "numberOfStepovers", "stepover", "overthickness"):
+                "bitangentAngle", "numberOfStepovers", "stepover", "overthickness",
+                "axialOffset", "boundaryMode", "boundaryContainment"):
         p = op.parameters.itemByName(key)
         if p is not None:
             notes.append("%s: %s" % (key, p.expression))
