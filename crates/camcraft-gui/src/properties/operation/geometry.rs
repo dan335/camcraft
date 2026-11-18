@@ -34,6 +34,7 @@ pub(super) fn geometry(
     let uses = op.strategy.uses();
     let drilling = uses.holes.is_some();
     let flat = uses.outline;
+    let cut_selection = op.cuts_selection();
     if flat {
         outline_form(ui, d, op);
         ui.add_space(theme::SPACE_3);
@@ -67,6 +68,16 @@ pub(super) fn geometry(
         } else {
             &[Kind::Face, Kind::Edge]
         };
+        // Its outline or boundary set to what is picked just now, with nothing
+        // picked: picking starts at once, as Fusion's selection does when it
+        // is chosen, rather than waiting for the card's button to be found.
+        if !cut_selection
+            && op.selection.faces.is_empty()
+            && op.selection.edges.is_empty()
+            && let Some(&kind) = kinds.first()
+        {
+            actions.push(PropAction::Arm(slot_of(kind, uses.curves, setup, index)));
+        }
         pick_cards(
             ui,
             (setup, index),
@@ -452,6 +463,21 @@ fn boundary_hint(g: &MachiningBoundary) -> &'static str {
     }
 }
 
+/// What a click in the view fills when picks of `kind` are wanted for
+/// operation `op` of `setup`, whose picks are `curves` where they are curves.
+fn slot_of(kind: Kind, curves: Option<Curves>, setup: &str, op: usize) -> Slot {
+    let setup = setup.to_string();
+    match (kind, curves) {
+        (Kind::Face, _) => Slot::Faces { setup, op },
+        // A trace's edges run on along smooth joints, open or closed.
+        (Kind::Edge, Some(Curves::Traced)) => Slot::Curves { setup, op },
+        // A chamfer's, round their loop, or along their chain where they
+        // close none.
+        (Kind::Edge, Some(Curves::Chamfered)) => Slot::Chains { setup, op },
+        (Kind::Edge, _) => Slot::Edges { setup, op },
+    }
+}
+
 /// The cards of picked faces and edges, each with a way to pick more in the view.
 fn pick_cards(
     ui: &mut egui::Ui,
@@ -471,27 +497,7 @@ fn pick_cards(
             (Kind::Edge, Some(Curves::Engraved)) => &geo::ENGRAVE_EDGES,
             (Kind::Edge, _) => &geo::EDGES,
         };
-        let slot = match (kind, curves) {
-            (Kind::Face, _) => Slot::Faces {
-                setup: setup.to_string(),
-                op: index,
-            },
-            // A trace's edges run on along smooth joints, open or closed.
-            (Kind::Edge, Some(Curves::Traced)) => Slot::Curves {
-                setup: setup.to_string(),
-                op: index,
-            },
-            // A chamfer's, round their loop, or along their chain where
-            // they close none.
-            (Kind::Edge, Some(Curves::Chamfered)) => Slot::Chains {
-                setup: setup.to_string(),
-                op: index,
-            },
-            (Kind::Edge, _) => Slot::Edges {
-                setup: setup.to_string(),
-                op: index,
-            },
-        };
+        let slot = slot_of(kind, curves, setup, index);
         let list = match kind {
             Kind::Face => &mut selection.faces,
             Kind::Edge => &mut selection.edges,

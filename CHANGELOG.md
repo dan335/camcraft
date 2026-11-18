@@ -19,6 +19,12 @@ the same notes at more length.
   otherwise is saved back to it. On Linux a dialog needs a file chooser portal
   or `zenity`: with neither, none appears, and that looks like Cancel. The
   dialog is not drawn in the app's theme.
+- **A boundary or outline set to picked faces and edges starts picking at
+  once** when nothing is picked yet, as Fusion's selection does when it is
+  chosen. Before, the view waited for **Select in view…** on the Faces or
+  Edges card to be pressed, and the operation failed to generate meanwhile.
+- **An operation's status line wraps beside its button.** A long reason for a
+  failure ran under **Try again** and was cut off.
 
 ## 0.9.0 — 2026-11-15
 

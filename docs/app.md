@@ -145,7 +145,9 @@ it.
   or picked faces and edges; where the tool goes against it; an additional
   offset. For a 2D profile or pocket, the outline it cuts round or clears (the
   part's silhouette or picked faces and edges) and whether a profile cuts
-  outside, inside or on it. New operations start on the
+  outside, inside or on it. Choosing picked faces and edges with none picked
+  starts picking in the view at once: click faces, then **Done** or Esc; their
+  cards' **Select in view…** picks more later. New operations start on the
   part's silhouette: parallel with the tool's centre inside it, adaptive and pocket
   clearing reaching in from outside with a channel a tool wide), *Heights* (clearance, top and bottom,
   drawn in the view as planes), *Passes* and *Linking* (retract feed, safe

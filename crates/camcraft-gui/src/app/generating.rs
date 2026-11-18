@@ -115,31 +115,45 @@ pub(super) fn footer(
                 ),
             },
         };
-        ui.vertical(|ui| {
+        asked = said(ui, &text, detail.as_deref(), button);
+    });
+    asked
+}
+
+/// `text`, with `detail` under it, and at the right the `button` for what can
+/// be done about it; what it asks for, pressed. The button is laid out first,
+/// so the text wraps in what is left beside it rather than running under it.
+fn said(
+    ui: &mut egui::Ui,
+    text: &str,
+    detail: Option<&str>,
+    button: Option<(&str, Asked)>,
+) -> Option<Asked> {
+    let mut asked = None;
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if let Some((label, what)) = button {
+            let icon = match what {
+                Asked::Stop => widgets::Icon::Square,
+                Asked::Generate => widgets::Icon::Play,
+            };
+            if widgets::button(
+                ui,
+                widgets::Variant::Secondary,
+                widgets::Size::Md,
+                Some(icon),
+                label,
+            )
+            .clicked()
+            {
+                asked = Some(what);
+            }
+        }
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.label(egui::RichText::new(text).strong());
             if let Some(detail) = detail {
                 ui.label(hint_text(detail));
             }
         });
-        if let Some((label, what)) = button {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let icon = match what {
-                    Asked::Stop => widgets::Icon::Square,
-                    Asked::Generate => widgets::Icon::Play,
-                };
-                if widgets::button(
-                    ui,
-                    widgets::Variant::Secondary,
-                    widgets::Size::Md,
-                    Some(icon),
-                    label,
-                )
-                .clicked()
-                {
-                    asked = Some(what);
-                }
-            });
-        }
     });
     asked
 }
@@ -180,4 +194,59 @@ pub(super) fn banner(ui: &mut egui::Ui, status: Status, share: Option<f64>) {
         widgets::diagnostic(ui, level, &text, |_| {});
     }
     ui.add_space(6.0);
+}
+
+#[cfg(all(test, feature = "ui-snapshots"))]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable as _;
+
+    /// A long reason for a failure wraps beside the button, in a panel as
+    /// narrow as the operation's: no line of it runs under the button.
+    #[test]
+    fn a_long_reason_wraps_beside_the_button() {
+        let why = "operation 'finish': the machining boundary is a selection, and no face or \
+                   edge is picked";
+        let mut fonts = false;
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(380.0, 160.0))
+            .build_ui(move |ui| {
+                if !fonts {
+                    crate::ui::theme::apply(ui.ctx());
+                    fonts = true;
+                    return;
+                }
+                ui.horizontal(|ui| {
+                    said(
+                        ui,
+                        "Generating it failed",
+                        Some(why),
+                        Some(("Try again", Asked::Generate)),
+                    );
+                });
+            });
+        h.run();
+        h.run();
+        let button = h
+            .get_by(|n| {
+                n.role() == egui::accesskit::Role::Button
+                    && n.label().is_some_and(|l| l.contains("Try again"))
+            })
+            .rect();
+        let texts: Vec<egui::Rect> = h
+            .query_all_by(|n| n.role() == egui::accesskit::Role::Label)
+            .map(|n| n.rect())
+            .collect();
+        assert_eq!(texts.len(), 2, "{texts:?}");
+        for text in texts {
+            assert!(
+                text.right() <= button.left(),
+                "{text:?} runs under the button at {button:?}"
+            );
+            assert!(text.left() >= 0.0 && text.width() > 100.0, "{text:?}");
+        }
+        assert!(button.right() <= 380.0, "{button:?}");
+    }
 }

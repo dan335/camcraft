@@ -628,4 +628,60 @@ mod tests {
             }
         }
     }
+
+    /// A boundary set to what is picked, with nothing picked, starts picking
+    /// faces in the view at once; shown again as it is, it does not.
+    #[test]
+    fn a_boundary_set_to_picks_starts_picking() {
+        use camcraft_core::job::StrategySpec;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let (mut doc, setup) = crate::document::with_plate();
+        let parallel = crate::browser::operation_groups()
+            .into_iter()
+            .flat_map(|(_, sections)| sections.into_iter().flatten())
+            .map(|(_, s)| s)
+            .find(|s| matches!(s, StrategySpec::Parallel { .. }))
+            .unwrap();
+        let i = doc.add_operation(&setup, parallel).unwrap();
+        doc.selection = Selection::Operation(setup.clone(), i);
+        let asked: Rc<RefCell<Vec<PropAction>>> = Rc::default();
+        let (said, mut fonts) = (asked.clone(), false);
+        let mut h = Harness::new_ui_state(
+            move |ui, doc: &mut Document| {
+                if !fonts {
+                    theme::apply(ui.ctx());
+                    fonts = true;
+                    return;
+                }
+                let panel = show(ui, doc, Measure::Metric, ViewPicks::default());
+                said.borrow_mut().extend(panel.actions);
+            },
+            doc,
+        );
+        h.run();
+        h.ctx
+            .data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 1_usize));
+        h.run();
+        assert!(asked.borrow().is_empty(), "{:?}", asked.borrow());
+        h.get_by(|n| {
+            n.role() == egui::accesskit::Role::ComboBox
+                && n.value().as_deref() == Some("the part's silhouette")
+        })
+        .click();
+        h.run();
+        h.get_by_label("picked faces and edges").click();
+        h.run();
+        assert_eq!(
+            *asked.borrow(),
+            [PropAction::Arm(Slot::Faces {
+                setup: setup.clone(),
+                op: i
+            })]
+        );
+        // Drawn again with the boundary as it now is: nothing more is asked.
+        asked.borrow_mut().clear();
+        h.run();
+        assert!(asked.borrow().is_empty(), "{:?}", asked.borrow());
+    }
 }
