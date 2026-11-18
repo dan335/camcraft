@@ -28,7 +28,13 @@ camcraft-session = { path = "crates/camcraft-session", version = "0.9.0" }
 bytemuck           = { version = "1", features = ["derive"] }
 eframe             = "0.36"
 egui_extras        = "0.36"
-egui-file-dialog   = { version = "0.15", default-features = false, features = ["serde"] }
+# The operating system's own file dialogs (docs/decisions/0032-native-file-dialogs.md).
+# Linux's backend is the XDG portal, which loads libdbus as it runs: nothing to
+# build against, so Linux builds without GTK. `wayland` parents a dialog on a
+# Wayland window. `gtk3` and `gtk4` are left out on purpose.
+rfd                = { version = "0.18", default-features = false, features = ["xdg-portal", "wayland"] }
+# Waits on a file dialog's answer, off the window's thread.
+pollster           = "1.0"
 egui_kittest       = { version = "0.36", features = ["eframe", "wgpu", "snapshot"] }
 clap               = { version = "4.6", features = ["derive"] }
 clipper2-rust      = "1.2"

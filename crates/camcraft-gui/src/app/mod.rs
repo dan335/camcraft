@@ -28,7 +28,7 @@ use eframe::egui;
 
 use crate::browser::{self, BrowserAction};
 use crate::document::{Document, Level, ModelSlot, Selection, Status, Wanted, next_key};
-use crate::file_dialog::{AppFileDialog, FileRequest};
+use crate::file_dialog::{self, AppFileDialog, FileRequest, Finished, SaveTo};
 use crate::picking::Picking;
 use crate::playback;
 use crate::playback::transport;
@@ -45,7 +45,8 @@ use crate::worker::{DocId, Reply, Request, Task, Worker};
 
 use prompts::Prompt;
 
-const STORAGE_DIALOG: &str = "file_dialog";
+/// Where each kind of file was last picked from ([`file_dialog::Folders`]).
+const STORAGE_FOLDERS: &str = "file_folders";
 const STORAGE_SETTINGS: &str = "settings";
 const STORAGE_RECENT: &str = "recent_jobs";
 /// Jobs remembered under Open Recent.
@@ -73,6 +74,25 @@ fn log_color(level: Level) -> egui::Color32 {
         Level::Info => theme::egui_color(theme::text_2()),
         Level::Warn => widgets::Level::Warn.color(),
         Level::Error => widgets::Level::Err.color(),
+    }
+}
+
+/// The file a dialog for `request` is about, if there is one, for it to start
+/// beside: the job's own file for Save As, or a bare `{title}.camcraft` for a
+/// job never saved; where a missing model was, for finding it.
+fn dialog_about(docs: &[Document], request: &FileRequest) -> Option<PathBuf> {
+    let doc = docs.iter().find(|d| Some(d.id) == request.doc())?;
+    match request {
+        FileRequest::SaveJob(_) => Some(
+            doc.path
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(format!("{}.camcraft", doc.title()))),
+        ),
+        FileRequest::Locate(_, name) => {
+            let model = doc.job.models.iter().find(|m| &m.name == name)?;
+            Some(camcraft_session::fs::resolve(&doc.dir(), &model.path))
+        }
+        _ => None,
     }
 }
 
@@ -112,6 +132,9 @@ pub struct App {
     log: Vec<(Level, String)>,
     /// Programs rendered and waiting on [`Prompt::Post`], for job `doc`.
     post_plan: Option<(DocId, Posting)>,
+    /// Job `doc`, to be saved at a path the file dialog never asked about,
+    /// waiting on [`Prompt::Replace`]: see [`file_dialog::SaveTo::AskFirst`].
+    replace: Option<(DocId, PathBuf)>,
     /// Whether posting setups that did not pass their checks has been confirmed.
     post_anyway: bool,
     /// The field that had the keyboard last frame, to tell when it moves on.
@@ -129,9 +152,10 @@ impl App {
     /// The app, restoring what it remembers.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
-        let dialog = cc
+        let folders = cc
             .storage
-            .and_then(|s| eframe::get_value(s, STORAGE_DIALOG));
+            .and_then(|s| eframe::get_value(s, STORAGE_FOLDERS))
+            .unwrap_or_default();
         let settings: Settings = cc
             .storage
             .and_then(|s| eframe::get_value(s, STORAGE_SETTINGS))
@@ -151,7 +175,7 @@ impl App {
             picking: Picking::default(),
             operation_tab: None,
             planes: HeightPlanes::default(),
-            dialog: AppFileDialog::new(dialog),
+            dialog: AppFileDialog::new(folders),
             tools: ToolManager::new(),
             picker: None,
             settings,
@@ -164,6 +188,7 @@ impl App {
             close_after_save: None,
             log: Vec::new(),
             post_plan: None,
+            replace: None,
             post_anyway: false,
             focus: None,
         }
@@ -248,12 +273,10 @@ impl App {
         }
     }
 
+    /// Ask where to save job `id`: the dialog starts at its own file, or with
+    /// its title in the folder jobs were last in ([`dialog_about`]).
     fn save_as(&mut self, id: DocId) {
-        let name = self
-            .find(id)
-            .map(|d| format!("{}.camcraft", d.title()))
-            .unwrap_or_default();
-        self.dialog.open(FileRequest::SaveJob(id), &name);
+        self.dialog.open(FileRequest::SaveJob(id));
     }
 
     /// Close job `id`, asking first if it has unsaved changes.
@@ -555,7 +578,7 @@ impl App {
             self.new_job();
         }
         if pressed(Modifiers::COMMAND, Key::O) {
-            self.dialog.open(FileRequest::OpenJobs, "");
+            self.dialog.open(FileRequest::OpenJobs);
         }
         if pressed(Modifiers::COMMAND, Key::W)
             && let Some(id) = id
@@ -629,8 +652,8 @@ impl App {
         }
         for a in actions {
             match a {
-                BrowserAction::AddModels => self.dialog.open(FileRequest::AddModels(id, None), ""),
-                BrowserAction::Locate(name) => self.dialog.open(FileRequest::Locate(id, name), ""),
+                BrowserAction::AddModels => self.dialog.open(FileRequest::AddModels(id, None)),
+                BrowserAction::Locate(name) => self.dialog.open(FileRequest::Locate(id, name)),
                 BrowserAction::Generate(name) => self.generate(&ctx, &name),
                 BrowserAction::Stop(name) => self.stop_generating(&name),
             }
@@ -683,13 +706,9 @@ impl App {
                         ctx.request_repaint();
                     }
                 }
-                PropAction::AddModels(setup) => {
-                    self.dialog.open(FileRequest::AddModels(id, setup), "")
-                }
-                PropAction::Locate(name) => self.dialog.open(FileRequest::Locate(id, name), ""),
-                PropAction::ProfileFile(setup) => {
-                    self.dialog.open(FileRequest::Profile(id, setup), "")
-                }
+                PropAction::AddModels(setup) => self.dialog.open(FileRequest::AddModels(id, setup)),
+                PropAction::Locate(name) => self.dialog.open(FileRequest::Locate(id, name)),
+                PropAction::ProfileFile(setup) => self.dialog.open(FileRequest::Profile(id, setup)),
                 PropAction::PickTool(setup, op) => {
                     if let Some(doc) = self.find(id) {
                         let picker = ToolPicker::new(id, setup, op, &doc.job);
@@ -789,10 +808,20 @@ impl App {
         self.shown = now;
     }
 
-    /// Do what a file dialog that has just finished was for.
-    fn file_dialog_results(&mut self, ctx: &egui::Context) {
-        let Some((request, paths)) = self.dialog.update(ctx) else {
-            return;
+    /// Show the file dialog asked for, parented on `window`, and do what one
+    /// that has just finished was for.
+    fn file_dialog_results(&mut self, ctx: &egui::Context, window: &eframe::Frame) {
+        let docs = &self.docs;
+        let finished = self
+            .dialog
+            .update(ctx, window, |request| dialog_about(docs, request));
+        let (request, paths) = match finished {
+            None => return,
+            Some(Finished::Chosen(request, paths)) => (request, paths),
+            Some(Finished::Failed(request, why)) => {
+                self.file_dialog_failed(&request, why);
+                return;
+            }
         };
         match request {
             FileRequest::OpenJobs => {
@@ -801,8 +830,11 @@ impl App {
                 }
             }
             FileRequest::SaveJob(id) => {
-                if let Some(path) = paths.into_iter().next() {
-                    self.save_job(id, Some(path));
+                if let Some(chosen) = paths.first() {
+                    match file_dialog::save_target(chosen, Path::exists) {
+                        SaveTo::Write(path) => self.save_job(id, Some(path)),
+                        SaveTo::AskFirst(path) => self.replace = Some((id, path)),
+                    }
                 }
             }
             FileRequest::AddModels(id, setup) => {
@@ -840,6 +872,19 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// Say that the file dialog for `request` failed, and `why`: on its job,
+    /// in the tool library for an import, or the app's own log for opening.
+    fn file_dialog_failed(&mut self, request: &FileRequest, why: String) {
+        if *request == FileRequest::ImportTools {
+            self.tools.report_error(why);
+            return;
+        }
+        match request.doc().and_then(|id| self.find(id)) {
+            Some(doc) => doc.note(Level::Error, why),
+            None => self.log.push((Level::Error, why)),
         }
     }
 
@@ -961,7 +1006,7 @@ impl eframe::App for App {
         self.tools.measure = m;
         self.tools.show(&ctx);
         if std::mem::take(&mut self.tools.import_requested) {
-            self.dialog.open(FileRequest::ImportTools, "");
+            self.dialog.open(FileRequest::ImportTools);
         }
 
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
@@ -970,12 +1015,13 @@ impl eframe::App for App {
         self.themes.show(&ctx, &self.settings.theme);
         self.log_window(&ctx);
         self.checks_window(&ctx);
-        self.file_dialog_results(&ctx);
+        self.file_dialog_results(&ctx, frame);
         // A tab set to close once saved closes on that save or not at all: the
         // save it waits for was cancelled, or failed, once nothing is asking
-        // where to save it.
+        // where to save it, nor whether to replace a file to save it.
         if let Some(id) = self.close_after_save
             && !self.dialog.saving(id)
+            && self.replace.as_ref().is_none_or(|(d, _)| *d != id)
         {
             self.close_after_save = None;
         }
@@ -1071,7 +1117,7 @@ impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         // eframe saves on the way out, so a library edit still in a field is kept.
         self.tools.save_library();
-        eframe::set_value(storage, STORAGE_DIALOG, self.dialog.storage());
+        eframe::set_value(storage, STORAGE_FOLDERS, self.dialog.folders());
         eframe::set_value(storage, STORAGE_SETTINGS, &self.settings);
         eframe::set_value(storage, STORAGE_RECENT, &self.recent);
     }

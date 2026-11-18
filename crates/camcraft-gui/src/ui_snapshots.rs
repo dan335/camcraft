@@ -834,16 +834,6 @@ fn model_transform() {
     shoot(&mut h, "models_duplicated");
 }
 
-#[test]
-#[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
-fn open_job_dialog() {
-    let mut h = harness();
-    h.run_steps(2);
-    h.state_mut().open_dialog_for_snapshot();
-    h.run_steps(4);
-    shoot(&mut h, "open_job_dialog");
-}
-
 /// The tool manager, rendered from its real UI: the library with a fully
 /// described tool, the same in inches, and a validation error.
 #[test]

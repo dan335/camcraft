@@ -172,6 +172,11 @@ impl ToolManager {
         &self.library.edited
     }
 
+    /// Say `text` as an error on the status bar, as a failed import is said.
+    pub fn report_error(&mut self, text: String) {
+        self.message = Some(Message::err(text));
+    }
+
     /// Show `name` selected in the folder showing, after `tool` is put there under
     /// it. Only the snapshot harness asks.
     #[cfg(all(test, feature = "ui-snapshots"))]

@@ -7,7 +7,6 @@ use eframe::egui;
 
 use super::App;
 use crate::document::Document;
-use crate::file_dialog::FileRequest;
 use crate::playback;
 use crate::tools::manager::ToolManager;
 use crate::tools::picker::ToolPicker;
@@ -203,11 +202,6 @@ impl App {
     /// Press Esc: stop picking. Only the snapshot harness asks.
     pub fn escape_for_snapshot(&mut self) {
         self.picking.escape();
-    }
-
-    /// Open the job dialog, as File › Open would. Only the snapshot harness asks.
-    pub fn open_dialog_for_snapshot(&mut self) {
-        self.dialog.open(FileRequest::OpenJobs, "");
     }
 
     /// Ask to close the showing job, as ⌘W would. Only the snapshot harness asks.

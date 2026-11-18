@@ -22,7 +22,7 @@ impl App {
                     ui.close();
                 }
                 if ui.button("Open…").clicked() {
-                    self.dialog.open(FileRequest::OpenJobs, "");
+                    self.dialog.open(FileRequest::OpenJobs);
                     ui.close();
                 }
                 ui.add_enabled_ui(!self.recent.is_empty(), |ui| {
@@ -144,7 +144,7 @@ impl App {
                     post = Some((doc.id, None));
                 }
                 if let Some((id, scope)) = post {
-                    self.dialog.open(FileRequest::PostTo(id, scope), "");
+                    self.dialog.open(FileRequest::PostTo(id, scope));
                     ui.close();
                 }
             });
@@ -181,7 +181,7 @@ impl App {
         };
         let id = doc.id;
         if ui.button("Model…").clicked() {
-            self.dialog.open(FileRequest::AddModels(id, None), "");
+            self.dialog.open(FileRequest::AddModels(id, None));
             ui.close();
             return;
         }
@@ -262,7 +262,7 @@ impl App {
             }
             ui.add_space(theme::SPACE_3);
             if widgets::button(ui, Variant::Secondary, Size::Md, None, "Open job…").clicked() {
-                self.dialog.open(FileRequest::OpenJobs, "");
+                self.dialog.open(FileRequest::OpenJobs);
             }
             if !self.worker.idle() {
                 ui.add_space(8.0);

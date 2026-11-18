@@ -22,6 +22,23 @@ there comes back. A job's models load in the background; a model not where the j
 about, and can be found elsewhere. Save As keeps relative model paths pointing at
 the same files.
 
+Files are chosen in the operating system's own dialog: Explorer's on Windows,
+the desktop's file chooser on Linux, the open and save panels on macOS
+([decision 0032](decisions/0032-native-file-dialogs.md)). It sorts, searches and
+lists recent files, and is modal to the window, which keeps drawing behind it.
+Each kind of file starts in the folder that kind was last picked from,
+remembered between runs: jobs, models, machine profiles, Fusion tool
+libraries, and the folder programs were last posted into. Save As starts at the
+job's own file, and finding a missing model starts where it was. Models,
+profiles and tool libraries can be picked from *All files* too, and `.STEP` is
+a model as `.step` is. A job saved under a name without `.camcraft` is given
+it; if a file already has that name, the dialog did not ask about it, so the
+app asks before replacing it. A job opened from a file named otherwise is saved
+back to that file. On Linux the dialog needs a file chooser portal
+(`xdg-desktop-portal` with `xdg-desktop-portal-gtk`, `-gnome` or `-kde`) or
+`zenity`. With neither, no dialog appears, and the app cannot tell that from
+Cancel: rfd, which shows the dialog, answers both alike.
+
 The window is the job's tree on the left, the properties panel beside it, the view,
 and the transport under the view. The Add menu adds models, stocks, setups and
 operations; View opens the log and the checks in their own windows; the Setup menu
@@ -377,7 +394,8 @@ in the Show panel, and work the same way.
 
 **Post {setup}…** and **Post all…** write the same programs, names and folder
 layout as `camcraft job --out`, all setups or none, from results that are up to
-date. They ask before replacing files, and a setup that failed a check is posted
+date, into a folder chosen in the system's folder dialog, which starts in the
+folder last posted into. They ask before replacing files, and a setup that failed a check is posted
 only after ticking "I know why" and pressing Post anyway.
 
 ## The view
@@ -500,8 +518,9 @@ feed. Nothing uses the ramp feed until entries ramp.
 A tool says which way its spindle turns (M3, or M4 for a left-hand cutter) and its
 coolant (off, flood M8 or mist M7), and the program says so.
 
-**Import…** reads a Fusion tool library exported as CSV, as makers such as
-Bits & Bits publish theirs (`fixtures/tools/` holds two), into the folder showing.
+**Import…** reads Fusion tool libraries exported as CSV, as makers such as
+Bits & Bits publish theirs (`fixtures/tools/` holds two), into the folder
+showing; the file dialog starts where the last was imported from.
 Each tool's rows become one tool with a preset per row, in millimetres; columns
 are found by their key, not their place. A tool the folder already has (same
 product and diameter) gets the file's presets beside its own instead of a twin.

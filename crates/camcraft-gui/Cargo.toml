@@ -22,9 +22,11 @@ bytemuck.workspace         = true
 directories.workspace      = true
 eframe = { workspace = true, features = ["persistence"] }
 egui_extras.workspace      = true
-egui-file-dialog.workspace = true
 glam.workspace             = true
+# The operating system's file dialogs, and what waits on their answers.
+pollster.workspace         = true
 rayon.workspace            = true
+rfd.workspace              = true
 serde.workspace            = true
 # The job's settings as a job file has them, to tell a form's changed
 # ones from its defaults (`ui::defaults`).

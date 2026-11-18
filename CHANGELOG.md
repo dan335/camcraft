@@ -4,6 +4,22 @@ What changed in each release, newest first. Each release's page
 ([Releases](https://github.com/dan335/camcraft/releases)) has the downloads and
 the same notes at more length.
 
+## Unreleased
+
+- **The operating system's own file dialogs** in the app, in place of one drawn
+  inside it ([decision 0032](docs/decisions/0032-native-file-dialogs.md)):
+  Explorer's on Windows, the desktop's file chooser through the XDG portal on
+  Linux, and the open and save panels on macOS, which sort, search and list
+  recent files. Each kind of file (jobs, models, machine profiles, tool
+  libraries, the folder posted into) starts in the folder it was last picked
+  from, remembered between runs; Save As starts at the job's own file, and
+  finding a missing model where it was. A job saved under a name without
+  `.camcraft` is given it, and the app asks before replacing a file of that
+  name, which the dialog did not ask about; a job opened from a file named
+  otherwise is saved back to it. On Linux a dialog needs a file chooser portal
+  or `zenity`: with neither, none appears, and that looks like Cancel. The
+  dialog is not drawn in the app's theme.
+
 ## 0.9.0 — 2026-11-15
 
 - **Sheets that arrange their parts**, a third kind of stock

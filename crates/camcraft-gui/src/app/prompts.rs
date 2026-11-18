@@ -1,7 +1,10 @@
 //! The questions the app stops to ask: close or quit with unsaved changes, find
-//! models that are missing, and post programs although something stands in the
-//! way. Each is the design system's Dialog: a title, what it is about, and the
-//! answers on the right, the one that cannot be undone in red.
+//! models that are missing, post programs although something stands in the
+//! way, and save a job over a file the file dialog did not ask about. Each is
+//! the design system's Dialog: a title, what it is about, and the answers on
+//! the right, the one that cannot be undone in red.
+
+use std::path::Path;
 
 use eframe::egui;
 
@@ -25,6 +28,8 @@ pub(super) enum Prompt {
     Missing(DocId),
     /// Post the planned programs? Something stands in the way: see `post_plan`.
     Post,
+    /// Save a job over a file the file dialog did not ask about? See `replace`.
+    Replace,
 }
 
 /// A dialog's button, at the size its footer has them.
@@ -34,11 +39,15 @@ fn answer(ui: &mut egui::Ui, variant: Variant, label: &str) -> egui::Response {
 
 impl App {
     /// The prompt waiting, if one is, over everything: what answering it does is
-    /// done once it is drawn. Programs rendered while another question waited
-    /// are asked about once it is answered.
+    /// done once it is drawn. Programs rendered, or a file to save over, while
+    /// another question waited are asked about once it is answered.
     pub(super) fn prompts(&mut self, ctx: &egui::Context) {
-        if self.prompt.is_none() && self.post_plan.is_some() {
-            self.prompt = Some(Prompt::Post);
+        if self.prompt.is_none() {
+            if self.post_plan.is_some() {
+                self.prompt = Some(Prompt::Post);
+            } else if self.replace.is_some() {
+                self.prompt = Some(Prompt::Replace);
+            }
         }
         let Some(prompt) = self.prompt.clone() else {
             return;
@@ -52,6 +61,7 @@ impl App {
                 Prompt::Quit => self.quit_prompt(ui, &mut then, &mut done),
                 Prompt::Missing(id) => self.missing_prompt(ui, *id, &mut then, &mut done),
                 Prompt::Post => self.post_prompt(ui, ctx, &mut then, &mut done),
+                Prompt::Replace => self.replace_prompt(ui, &mut then, &mut done),
             }
         });
         if let Some(f) = then {
@@ -62,10 +72,50 @@ impl App {
             }
         } else if done || modal.should_close() {
             self.prompt = None;
-            if prompt == Prompt::Post {
-                self.post_plan = None;
+            match prompt {
+                Prompt::Post => self.post_plan = None,
+                Prompt::Replace => self.replace = None,
+                Prompt::Close(_) | Prompt::Quit | Prompt::Missing(_) => {}
             }
         }
+    }
+
+    /// Save a job at a name the app completed with `.camcraft`, over a file
+    /// already there that the file dialog never asked about: replace it, or
+    /// not save.
+    fn replace_prompt(&self, ui: &mut egui::Ui, then: &mut Option<Answer>, done: &mut bool) {
+        let Some((_, path)) = &self.replace else {
+            *done = true;
+            return;
+        };
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        let folder = path.parent().map_or(Path::new(""), |p| p).display();
+        widgets::dialog(
+            ui,
+            &format!("Replace {name}?"),
+            |ui| {
+                ui.label(format!(
+                    "{folder} already has a file of that name. The name given had no \
+                     .camcraft, so it was added, and the file dialog did not ask \
+                     about this file. Replacing it loses what it holds."
+                ));
+            },
+            |ui| {
+                if answer(ui, Variant::Danger, "Replace").clicked() {
+                    *then = Some(Box::new(|app: &mut Self| {
+                        if let Some((id, path)) = app.replace.take() {
+                            app.save_job(id, Some(path));
+                        }
+                    }));
+                }
+                if answer(ui, Variant::Ghost, "Cancel").clicked() {
+                    *done = true;
+                }
+            },
+        );
     }
 
     /// Close a job with unsaved changes: save it first, or not.
@@ -176,7 +226,7 @@ impl App {
                             .clicked()
                         {
                             *then = Some(Box::new(move |app: &mut Self| {
-                                app.dialog.open(FileRequest::Locate(id, name), "");
+                                app.dialog.open(FileRequest::Locate(id, name));
                             }));
                         }
                     });

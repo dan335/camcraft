@@ -47,7 +47,7 @@ use camcraft_core::job::{
 };
 use camcraft_core::setup::Bodies;
 use camcraft_geom::bvh::MeshBvh;
-use camcraft_session::fs::{job_dir, real, relative_path, resolve, with_job_extension};
+use camcraft_session::fs::{job_dir, real, relative_path, resolve};
 use camcraft_session::{Model, SessionError, write_job};
 
 use crate::worker::DocId;
@@ -373,10 +373,12 @@ impl Document {
 
     // ---- saving and undo ------------------------------------------------------
 
-    /// Save to `path`: model paths made relative to it, tools no operation uses
-    /// dropped, written whole or not at all.
+    /// Save to `path`, as it is named: model paths made relative to it, tools no
+    /// operation uses dropped, written whole or not at all. A name chosen
+    /// without the job extension is given it before this, where the person can
+    /// be asked about a file of that name ([`crate::file_dialog::save_target`]).
     pub fn save_to(&mut self, path: &Path) -> Result<(), SessionError> {
-        let path = with_job_extension(path);
+        let path = path.to_path_buf();
         let new_dir = job_dir(&path);
         let old_dir = self.dir();
         let mut job = self.job.clone();

@@ -219,6 +219,23 @@ fn an_edit_is_unsaved_until_saved() {
     assert!(!doc.dirty(), "back as it was is not a change");
 }
 
+/// A job is saved at exactly the path given, named otherwise or not: a job
+/// opened from `rail.job` is saved back to it, not beside it as
+/// `rail.job.camcraft`, over whatever that file held.
+#[test]
+fn a_job_is_saved_where_it_is_told() {
+    let dir = std::env::temp_dir().join(format!("camcraft-doc-told-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut doc = Document::untitled(1);
+    let path = dir.join("rail.job");
+    doc.save_to(&path).unwrap();
+    assert_eq!(doc.path.as_deref(), Some(path.as_path()));
+    assert!(path.is_file());
+    assert!(!dir.join("rail.job.camcraft").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Models added to a new job land in its setup, and save relative to the job.
 #[test]
 fn models_are_added_and_saved_relative() {
@@ -235,7 +252,7 @@ fn models_are_added_and_saved_relative() {
     assert_eq!(doc.job.setups[0].models, ["part"]);
     assert!(Path::new(&doc.job.models[0].path).is_absolute());
 
-    doc.save_to(&dir.join("jobs/first")).unwrap();
+    doc.save_to(&dir.join("jobs/first.camcraft")).unwrap();
     assert_eq!(
         doc.path.as_deref(),
         Some(dir.join("jobs/first.camcraft").as_path())
@@ -297,7 +314,7 @@ fn saving_a_new_job_beside_its_model_loads_nothing_again() {
     doc.refresh_layout(&setup);
     let laid = doc.setups[&setup].layout.as_ref().unwrap().key;
 
-    doc.save_to(&dir.join("jobs/tray")).unwrap();
+    doc.save_to(&dir.join("jobs/tray.camcraft")).unwrap();
     assert_eq!(doc.job.models[0].path, "../models/part.stl");
     assert!(doc.wanted_loads().is_empty(), "{:?}", doc.wanted_loads());
     doc.refresh_layout(&setup);
