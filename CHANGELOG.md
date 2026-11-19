@@ -25,13 +25,13 @@ the same notes at more length.
   touches a face machined and one avoided at once, where Fusion's Parallel,
   Scallop and Spiral run on up the face avoided, and keeps the ring there that
   Fusion's Contour and Ramp cut out; it lifts and ramps back onto each piece
-  where Fusion plunges or stays down, so it feeds further: about twice as far as
-  Fusion's Parallel with the dome avoided, nine times as far as its Scallop
-  with only the floor machined. Refused: groups on roughing, 2D operations and drilling, a face
-  in two groups, the model avoided with nothing machined, and a V-bit or
-  chamfer mill where anything is avoided. A roughing before such a finish still
-  cuts beside the faces avoided. `camcraft post` cannot pick faces. An
-  operation with no groups is cut as before.
+  where Fusion plunges or stays down, so it feeds further: about twice as far
+  as Fusion's Parallel with the dome avoided, nine times as far as its Scallop
+  with only the floor machined. Refused: groups on roughing, 2D operations and
+  drilling, a face in two groups, the model avoided with nothing machined, and
+  a V-bit or chamfer mill where anything is avoided. A roughing before such a
+  finish still cuts beside the faces avoided. `camcraft post` cannot pick
+  faces. An operation with no groups is cut as before.
 - **The operating system's own file dialogs** in the app, in place of one drawn
   inside it ([decision 0032](docs/decisions/0032-native-file-dialogs.md)):
   Explorer's on Windows, the desktop's file chooser through the XDG portal on
