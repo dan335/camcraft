@@ -213,12 +213,13 @@ laps no more than a stepover apart. Pocket clearing (`"pocket-clearing"`) is Fus
 level's rings a stepover apart in from its edges, cut from the middle out so the
 ring along the walls is last, climbing unless `conventional = true`, with a level
 on each flat face unless `flat_areas = false`. What
-Fusion's Geometry tab holds is three settings, each read only by the strategies
+Fusion's Geometry tab holds is four settings, each read only by the strategies
 `StrategySpec::uses` says: `selection`, the faces and edges picked on the
 models; a 3D operation's `boundary`, which, as Fusion's machining boundary, keeps
 it to the stock (the default), the part's bounding box or silhouette, or the
 selection, with the tool's `containment` and an additional offset (`margin`);
-and a 2D operation's `outline`, what it cuts round or clears. `heights` holds
+a 3D finish's `surfaces`, the faces it machines and those it keeps clear of
+(below); and a 2D operation's `outline`, what it cuts round or clears. `heights` holds
 the clearance (where the tool arrives and leaves, 10 mm over the stock), the
 retract height (Fusion's, 5 mm over it) and the top and bottom it cuts between. `passes.stepdown` is
 Fusion's multiple depths, shared the same way: adaptive and pocket clearing must have one,
@@ -237,6 +238,56 @@ tool = "finish-4-ball"
 boundary = { kind = "silhouette", containment = "center", margin = 1.0 }
 heights = { clearance = { ref = "stock-top", offset = 10.0 }, bottom = { ref = "model-bottom" } }
 ```
+
+**Faces machined and avoided** (`[setup.operation.surfaces]`) are Fusion's
+Surface Manager, its Machine and Avoid
+([decision 0033](decisions/0033-surface-groups.md)). Each
+`[[setup.operation.surfaces.group]]` is faces picked on the models (`faces`, as
+a selection's are), `action = "machine"` or `"avoid"`, and offsets of its own in
+millimetres, `radial` beside and `axial` down (none, which is not written),
+added to the operation's stock to leave: on a face machined, more stock left on
+it; on a face avoided, how far the tool keeps from it. `model` says what is done
+with every face in no group: `action = "machine"` unless `"avoid"`. Each group's
+faces are met by the tool grown by its offsets, and the tool rests on whatever
+is highest. A pass is kept where the tool touches a face machined and cut out
+where it touches only faces avoided; touching both at once, it is machined. What
+is cut out is not lifted over: the pieces either side are passes of their own,
+and a link that would stay down resting on or rubbing a face avoided lifts
+instead. A flat avoided gets no passes from flat finishing; contour, ramp and
+the rings round the walls of a finish over the part keep a level at it, raised
+by its clearance, so a wall machined standing on a floor avoided is finished
+down to there. A face picked once is machined or avoided on every copy a sheet
+lays. Parallel, scallop, spiral, radial, morphed spiral, pencil, project, morph,
+contour, ramp and flat take them. Left out, as every operation starts, the whole
+part is machined, as before there were groups.
+
+The job refuses groups on any other strategy, roughing among them, an offset
+below zero or not finite, a group with no faces, a face of a model the setup
+does not machine, and the model avoided with no group machined, which leaves
+nothing to cut (Fusion's cuts everything). The run refuses a face in two groups
+(Fusion's lets the lower group win), and a V-bit or chamfer mill on an operation
+that avoids anything: grown by a clearance, a cone is no cone. An operation
+turned off is not checked, so its groups may be unfinished. CC111 fails a program
+that comes within an avoided face's clearance anywhere it feeds, its links,
+leads and ramps included, as posted. `camcraft post` cannot pick faces.
+
+```toml
+[setup.operation.surfaces]
+model = { action = "avoid" }
+
+[[setup.operation.surfaces.group]]
+action = "machine"
+radial = 0.5
+faces = [ { model = "part", index = 3, at = [1.0, 2.0, 3.0] } ]
+
+[[setup.operation.surfaces.group]]
+action = "avoid"
+axial = 1.0
+faces = [ { model = "part", index = 7, at = [4.0, 5.0, 6.0] } ]
+```
+
+This finish avoids the whole part but one face, which it machines leaving half a
+millimetre more beside it, and keeps a millimetre above another.
 
 **2D profiles and pockets** are Fusion's 2D Contour and 2D Pocket
 ([decision 0005](decisions/0005-2d-profile-and-pocket.md)). Their `outline` is
@@ -1085,6 +1136,7 @@ with.
 | CC108 | fail    | simulator: the shank, holder or spindle nose met the material    |
 | CC109 | fail    | a sheet left a copy of a part out, or could not be arranged      |
 | CC110 | fail    | a part stands above or below its sheet                           |
+| CC111 | fail    | the tool comes within an avoided surface's clearance             |
 | CC201 | warn    | spans hit the refinement limit                                   |
 | CC202 | warn    | plunges that do not start above the surface                      |
 | CC203 | note    | spans stopped at a surface discontinuity                         |

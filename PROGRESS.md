@@ -1,6 +1,6 @@
 # Progress
 
-camcraft 0.9.0, updated 2026-11-15.
+camcraft 0.9.0, updated 2026-11-19.
 
 What camcraft does and what it has yet to do, measured against Fusion's
 3-axis milling: each of Fusion's milling operations, and the settings, tools,
@@ -28,7 +28,7 @@ Manufacturing Extension is [not planned](#not-planned).
 | [3D roughing](#3d-roughing)                   |    0 |       2 |           0 |
 | [3D finishing](#3d-finishing)                 |    0 |      11 |           0 |
 | [Drilling](#drilling)                         |    4 |       1 |           2 |
-| [Shared settings](#shared-settings)           |   10 |       2 |           5 |
+| [Shared settings](#shared-settings)           |   10 |       3 |           4 |
 | [Linking and entries](#linking-and-entries)   |    4 |       1 |           1 |
 | [Models](#models)                             |    3 |       2 |           1 |
 | [Setups and stock](#setups-and-stock)         |    4 |       2 |           5 |
@@ -37,7 +37,7 @@ Manufacturing Extension is [not planned](#not-planned).
 | [Posts and programs](#posts-and-programs)     |    6 |       0 |           2 |
 | [App](#app)                                   |    7 |       1 |           0 |
 | [Project](#project)                           |    1 |       0 |           4 |
-| **All**                                       |   55 |      33 |          26 |
+| **All**                                       |   55 |      34 |          25 |
 
 `grep "| not started" PROGRESS.md` lists everything not yet begun.
 
@@ -46,13 +46,21 @@ Manufacturing Extension is [not planned](#not-planned).
 Roughly in the order they matter:
 
 1. **Cut on a machine.** See [Before the first cut](#before-the-first-cut).
-2. **A volumetric stock**, so what a top setup leaves carries to a flipped
+2. **Fixtures on the setup**: clamps and jigs as a setup's own, planned on
+   their own, rather than as surfaces each operation avoids.
+3. **3D finishing's entries and linking of cut pieces**: onto a pass where a
+   face avoided cut it, plunging as Fusion does, or turning back at the
+   clearance and staying down, rather than lifting and ramping back on
+   ([decision 0033](docs/decisions/0033-surface-groups.md)).
+4. **Surface groups for roughing**, once Fusion's rule there is known: its
+   Adaptive and Pocket Clearing gave no toolpath with any group set.
+5. **A volumetric stock**, so what a top setup leaves carries to a flipped
    bottom one.
-3. **Exact slicing of the offset surface** for Z-level work
+6. **Exact slicing of the offset surface** for Z-level work
    ([decision 0003](docs/decisions/0003-grids-only-for-stock.md)).
-4. **Exact circles from the B-rep**, rather than through the tessellation's
+7. **Exact circles from the B-rep**, rather than through the tessellation's
    points.
-5. The work offset manager in the toolbar; Fusion's `.json` tool libraries,
+8. The work offset manager in the toolbar; Fusion's `.json` tool libraries,
    which carry holders; tapered ball mills.
 
 ## 2D operations
@@ -124,7 +132,7 @@ What Fusion's Geometry, Heights, Passes and Linking tabs hold, across operations
 | Fusion's defaults for new operations   | done        | As expressions where they follow the tool ([0020](docs/decisions/0020-defaults.md)). |
 | Tabs                                   | partial     | On profiles, as Fusion's. Missing: tab positions picked on the model. |
 | Rest machining                         | partial     | Adaptive and pocket clearing, from earlier operations. Missing: from the setup's stock or a file, and on finishing. |
-| Avoid and touch surfaces               | not started | |
+| Machine and avoid surfaces             | partial     | Fusion's Surface Manager on every 3D finish: the model machined or avoided, and groups of picked faces, each machined or avoided with its own radial and axial offsets. The tool meets each group grown by its offsets and rests on whatever is highest; a pass is kept where it touches a face machined, cut out where it touches only faces avoided, machined where it touches both; a flat avoided gets no passes; links lift off faces avoided; CC111 fails a program inside an avoided face's clearance. In the app, on an operation's Geometry tab, the model set to machine or avoid, and groups of picked faces each machined or avoided with their own radial and axial offsets, tinted in the view. Held to Fusion's programs for `ops_3d` with Parallel, Scallop, Spiral, Contour, Ramp and Flat, eleven with groups ([0033](docs/decisions/0033-surface-groups.md)). Missing: roughing (Fusion's rule there is not known), 2D operations and drilling, Ignore, fixture surfaces, machining over holes, V-bits and chamfer mills where anything is avoided, picking faces in `camcraft post`, and Fusion's linking of cut pieces (camcraft lifts and ramps back on where Fusion plunges or stays down, so it feeds further), its Scallop's lines laid anew round what is avoided, and its runs past where the tool touches a face machined and one avoided at once. |
 | Operation patterns                     | not started | Copies on an arranged sheet are not patterns: each is a copy of the part, and every operation cuts them all. |
 | Templates                              | not started | |
 | Toolpath trimming                      | not started | |

@@ -6,6 +6,32 @@ the same notes at more length.
 
 ## Unreleased
 
+- **Faces machined and avoided**, Fusion's Surface Manager, on every 3D
+  finish: Parallel, Scallop, Spiral, Radial, Morphed Spiral, Pencil, Project,
+  Morph, Contour, Ramp and Flat
+  ([decision 0033](docs/decisions/0033-surface-groups.md)). In the job file,
+  `[setup.operation.surfaces]` says whether the model is machined or avoided,
+  and each `[[setup.operation.surfaces.group]]` is picked faces, machined or
+  avoided, with a radial and an axial offset of its own added to the stock to
+  leave. In the app, on an operation's Geometry tab, the model is set to
+  machine or avoid, and groups of picked faces are each machined or avoided
+  with their own radial and axial offsets, tinted in the view. The tool meets
+  each group grown by its offsets and rests on whatever is highest; a pass is
+  kept where it touches a face machined, and cut out, not lifted over, where it
+  touches only faces avoided. A link that would stay down on or beside a face
+  avoided lifts. CC111 fails a program that comes within an avoided face's
+  clearance, which Fusion does not check. Held to sixteen of Fusion's programs
+  for `ops_3d`, eleven of them with groups. camcraft stops where the tool
+  touches a face machined and one avoided at once, where Fusion's Parallel,
+  Scallop and Spiral run on up the face avoided, and keeps the ring there that
+  Fusion's Contour and Ramp cut out; it lifts and ramps back onto each piece
+  where Fusion plunges or stays down, so it feeds further: about twice as far as
+  Fusion's Parallel with the dome avoided, nine times as far as its Scallop
+  with only the floor machined. Refused: groups on roughing, 2D operations and drilling, a face
+  in two groups, the model avoided with nothing machined, and a V-bit or
+  chamfer mill where anything is avoided. A roughing before such a finish still
+  cuts beside the faces avoided. `camcraft post` cannot pick faces. An
+  operation with no groups is cut as before.
 - **The operating system's own file dialogs** in the app, in place of one drawn
   inside it ([decision 0032](docs/decisions/0032-native-file-dialogs.md)):
   Explorer's on Windows, the desktop's file chooser through the XDG portal on
