@@ -106,11 +106,12 @@ floor's edges R4; a dome 14 across and 5 tall standing on its floor, its foot
 a sharp concave circle; and the block's top edge at +X rounded R8, ground
 going from level to upright. Steep, drafted and curved walls, shallow and
 curved ground, concave fillets, sharp inside corners and a dome: what Ramp,
-Pencil, Project, Morph, Parallel, Scallop and Spiral each have to follow. Its one body
-is named `ops_3d`. `ops_3d/cam.py` finds that document by it, so it runs with
-any document active, and posts Fusion's Ramp with the sample library's 6 mm
-ball, as a new one starts, with a stepdown of 2 mm and with a ramp angle of
-0.5 degrees: `fixtures/nc/ops_3d_ramp*.nc`; and its Pencil, as a new one
+Pencil, Project, Morph, Parallel, Scallop, Spiral, Contour and Flat each have to
+follow. Its one body is named `ops_3d`. `ops_3d/cam.py` finds that document by
+it, so it runs with any document active, and posts Fusion's Ramp with the
+sample library's 6 mm ball, as a new one starts, with a stepdown of 2 mm, with
+a ramp angle of 0.5 degrees and with the dome avoided 1 mm each way:
+`fixtures/nc/ops_3d_ramp*.nc`; and its Pencil, as a new one
 starts with the library's 12 mm ball, which is larger than the floor's
 fillets and so touches twice all round the pocket's floor, and with its 6 mm
 ball, which fits them, then the 12 mm ball at a bitangency angle of 40 degrees
@@ -127,9 +128,12 @@ with none, the model avoided with only the pocket's floor machined, the floor
 machined with stock of its own, and the block's top avoided 2 mm down:
 `fixtures/nc/ops_3d_parallel*.nc`; and its Scallop with the 6 mm ball as a new
 one starts, with the dome avoided 1 mm each way, and with the model avoided and
-only the floor machined: `fixtures/nc/ops_3d_scallop*.nc`; and its Spiral as a
+only the floor machined: `fixtures/nc/ops_3d_scallop*.nc`; its Spiral as a
 new one starts and with the dome avoided 1 mm each way:
-`fixtures/nc/ops_3d_spiral*.nc`. A group's radial and axial offsets are given
+`fixtures/nc/ops_3d_spiral*.nc`; its Contour, the same two ways:
+`fixtures/nc/ops_3d_contour*.nc`; and its Flat with the library's 6 mm flat
+end mill, the same two ways: `fixtures/nc/ops_3d_flat*.nc`. A group's radial
+and axial offsets are given
 to the API in millimetres, not the centimetres its lengths are elsewhere. A
 click on an edge picks its chain, which Fusion closes round the loop it is in
 unless it is told the chain is open (`isOpen`); a new closed chain runs
@@ -144,4 +148,7 @@ programs came out as the fixtures (`parallel` differed the first time,
 `spiral` the third). One that differed had the same passes with some sixty to
 two hundred of its points moved along them, by a few hundredths of a
 millimetre: its point reduction. So a fixture of those three is one of
-Fusion's answers, which Fusion makes again only to within that.
+Fusion's answers, which Fusion makes again only to within that. Contour's,
+Flat's and `ramp_avoid_dome` were made once, by these same rows in a copy of
+the script that made only them, and not yet again: whether Fusion posts the
+same bytes for them each time is not known.

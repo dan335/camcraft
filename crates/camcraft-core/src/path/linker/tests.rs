@@ -785,6 +785,53 @@ fn a_level_link_stays_down_only_clear_of_the_part() {
     assert_eq!(up.stayed_down, 0, "never across and up");
 }
 
+/// A part flat at -5, the tool beside faces it avoids wherever it is between
+/// x = 2 and 3, rubbing them.
+struct AvoidedBeside;
+
+impl Surface for AvoidedBeside {
+    fn at(&self, _p: DVec2) -> Option<f64> {
+        Some(-5.0)
+    }
+
+    fn along(&self, from: DVec2, to: DVec2) -> Vec<DVec3> {
+        vec![from.extend(-5.0), to.extend(-5.0)]
+    }
+
+    fn rubs_avoided(&self, from: DVec3, to: DVec3) -> bool {
+        from.x.min(to.x) <= 3.0 && from.x.max(to.x) >= 2.0
+    }
+}
+
+/// Two passes along a line either side of where the tool would rub faces it
+/// avoids, the second at the level of the first or below it: the link at the
+/// level between them, across or across and then down, does not stay down
+/// there, rubbing them, but lifts; with nothing avoided it stays down.
+#[test]
+fn a_level_link_beside_faces_avoided_lifts() {
+    let plane = ClearancePlane::new(10.0).unwrap();
+    let level = LinkParams {
+        stay_down: StayDown::Level { max: 50.0 },
+        ..params()
+    };
+    for z in [0.0, -1.0] {
+        let mut t = Toolpath::new();
+        t.feed_to(dvec3(0.0, 0.0, 0.0), MoveRole::Link, 1000.0)
+            .unwrap();
+        t.feed_to(dvec3(1.5, 0.0, 0.0), MoveRole::Cut, 1000.0)
+            .unwrap();
+        t.feed_to(dvec3(3.5, 0.0, z), MoveRole::Link, 1000.0)
+            .unwrap();
+        t.feed_to(dvec3(5.0, 0.0, z), MoveRole::Cut, 1000.0)
+            .unwrap();
+        let (out, rubbing) = link(&t, &plane, &mut Air, &AvoidedBeside, &level).unwrap();
+        assert_eq!(rubbing.stayed_down, 0, "at {z}");
+        assert!(!roles(&out).contains(&MoveRole::Transition), "at {z}");
+        let (_, clear) = link(&t, &plane, &mut Air, &FlatPart(-5.0), &level).unwrap();
+        assert_eq!(clear.stayed_down, 1, "at {z}");
+    }
+}
+
 /// The tool arrives at the clearance height above the first pass, and only
 /// then comes down to where it goes across between passes; a full
 /// retraction never goes across lower than the retract height.

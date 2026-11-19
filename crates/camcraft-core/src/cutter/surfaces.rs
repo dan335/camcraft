@@ -195,17 +195,20 @@ impl<'a> PartSurfaces<'a> {
     /// The heights of each group's flat faces that face up, found to
     /// `tolerance` as [`flat_heights`] finds them, each raised by the group's
     /// own axial offset: a level at a flat is raised by that as well as by the
-    /// operation's stock to leave. Heights within a tenth of the tolerance of
-    /// each other are one, the highest. `None` for the whole part, whose flats
-    /// are its own ([`Prepared::flat_heights`]).
+    /// operation's stock to leave. The groups avoided too, where `avoided`: a
+    /// wall machined standing on a flat avoided has its foot that flat's
+    /// clearance above it. Heights within a tenth of the tolerance of each
+    /// other are one, the highest. `None` for the whole part, whose flats are
+    /// its own ([`Prepared::flat_heights`]).
     ///
     /// [`Prepared::flat_heights`]: crate::setup::Prepared::flat_heights
-    pub fn flat_heights(&self, tolerance: f64) -> Option<Vec<f64>> {
+    pub fn flat_heights(&self, tolerance: f64, avoided: bool) -> Option<Vec<f64>> {
         let Form::Grouped(groups) = &self.form else {
             return None;
         };
         let raised = groups
             .iter()
+            .filter(|g| g.machined || avoided)
             .flat_map(|g| {
                 let axial = g.offset.axial();
                 flat_heights(&g.mesh, tolerance)
@@ -332,6 +335,18 @@ impl Seat<'_> {
         avoided
     }
 
+    /// Whether the tool with its tip at `p` comes within `tolerance` of a face
+    /// it machines: on the whole part, of any of it. In the air, touching
+    /// nothing, it does not.
+    pub fn machines(&self, p: DVec3, tolerance: f64) -> bool {
+        match &self.on {
+            On::Whole(cutter) => {
+                drop_by(cutter, &self.tool, (p.x, p.y), tolerance).is_some_and(|z| z >= p.z)
+            }
+            On::Grouped(held) => held.iter().any(|h| h.machined && h.meets(p, tolerance)),
+        }
+    }
+
     /// How far the tool with its tip at `p` is inside the clearance of a face
     /// it avoids, past `slack`: how much higher than `p` it would come to rest
     /// dropped onto the faces avoided, their clearance less `slack`. Nothing
@@ -356,23 +371,34 @@ impl Held<'_> {
     }
 
     /// Where the tool, grown by `by` all round, comes to rest dropped at
-    /// `(x, y)`; shrunk, where `by` is less than nothing. Grown, it is the tool
-    /// with a ball of `by` round it, so it rests at or above a point just where
-    /// the tool there is within `by` of the faces. A tool that cannot be so,
-    /// shrunk past nothing, or a cone, which grown is no cone, has its drop
-    /// taken `by` higher instead, as if lowered that far: as much nearer the
-    /// faces from above, if not from the side. No operation that avoids faces
-    /// cuts with a cone ([`Operation::cannot_use`]).
-    ///
-    /// [`Operation::cannot_use`]: crate::job::Operation::cannot_use
+    /// `(x, y)` onto these faces ([`drop_by`]).
     fn drop_by(&self, x: f64, y: f64, by: f64) -> Option<f64> {
-        let reshaped = Allowance::isotropic(by)
-            .ok()
-            .and_then(|by| EffectiveTool::of(self.tool.base(), *self.tool.allowance() + by).ok());
-        match reshaped {
-            Some(tool) => self.cutter.drop_at(&tool, x, y),
-            None => self.cutter.drop_at(&self.tool, x, y).map(|z| z + by),
-        }
+        drop_by(&self.cutter, &self.tool, (x, y), by)
+    }
+}
+
+/// Where `tool`, grown by `by` all round, comes to rest dropped at `(x, y)`
+/// by `cutter`; shrunk, where `by` is less than nothing. Grown, it is the tool
+/// with a ball of `by` round it, so it rests at or above a point just where
+/// the tool there is within `by` of the faces. A tool that cannot be so,
+/// shrunk past nothing, or a cone, which grown is no cone, has its drop taken
+/// `by` higher instead, as if lowered that far: as much nearer the faces from
+/// above, if not from the side. No operation that avoids faces cuts with a
+/// cone ([`Operation::cannot_use`]).
+///
+/// [`Operation::cannot_use`]: crate::job::Operation::cannot_use
+fn drop_by(
+    cutter: &DropCutter<'_>,
+    tool: &EffectiveTool,
+    (x, y): (f64, f64),
+    by: f64,
+) -> Option<f64> {
+    let reshaped = Allowance::isotropic(by)
+        .ok()
+        .and_then(|by| EffectiveTool::of(tool.base(), *tool.allowance() + by).ok());
+    match reshaped {
+        Some(grown) => cutter.drop_at(&grown, x, y),
+        None => cutter.drop_at(tool, x, y).map(|z| z + by),
     }
 }
 

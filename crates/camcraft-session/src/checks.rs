@@ -697,7 +697,7 @@ fn operation_findings(
             op,
             r.passes,
             if r.flats == 0 {
-                "the part has no flat face between the top and the bottom"
+                "the part has no flat face it machines between the top and the bottom"
             } else {
                 "no flat within the boundary has room for the tool"
             },

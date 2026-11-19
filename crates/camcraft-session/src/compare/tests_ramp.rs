@@ -14,7 +14,8 @@
 //!
 //! - `ramp`, a new Ramp: Maximum Stepdown 1 mm, Ramping Angle the tool's 2°;
 //! - `ramp_step2`, Maximum Stepdown 2 mm;
-//! - `ramp_angle`, Ramping Angle 0.5°.
+//! - `ramp_angle`, Ramping Angle 0.5°;
+//! - `ramp_avoid_dome`, the dome avoided, 1 mm sideways and 1 mm down.
 //!
 //! Each job here roughs the part first with camcraft's adaptive clearing and a
 //! 6 mm flat, as a new one starts, leaving half a millimetre, then makes one
@@ -28,8 +29,9 @@
     clippy::cast_precision_loss
 )]
 
-use camcraft_core::job::{Operation, StrategySpec};
+use camcraft_core::job::{Operation, StrategySpec, SurfaceAction};
 
+use super::tests_parallel::{DOME, group};
 use super::tests_pencil::{base, held};
 use super::*;
 use crate::{job_text, parse_job};
@@ -157,4 +159,35 @@ fn a_ramp_at_half_a_degree_leaves_what_fusions_does() {
         fed: 0.03,
     };
     holds("ramp_angle", |op| op.linking.ramp_angle = 0.5, &bounds, 1);
+}
+
+/// The dome avoided, 1 mm sideways and 1 mm down: 59.7% of 611,524 columns
+/// alike, the median 0.0054 mm and the 95th percentile 1.57, 5.3% more
+/// removed and 0.6% more fed, both lifting 4 times. Neither goes down the
+/// dome: camcraft's way down it is cut out, and the way down to it, from
+/// above, touching nothing, left out with it. What camcraft keeps of it is
+/// once round its foot, where the ball touches the floor machined and the
+/// dome's clearance at once, 10.04 mm from its axis; Fusion's ring at the
+/// floor is cut out there, as its Contour's is, and goes round the dome's
+/// foot nowhere, leaving the roughing's half millimetre on the floor round
+/// it. camcraft's run passes every check, CC111 among them.
+#[test]
+fn a_ramp_avoiding_the_dome_leaves_what_fusions_does() {
+    let bounds = Bounds {
+        agree: 0.59,
+        median: 0.007,
+        p95: 1.7,
+        removed: 0.06,
+        fed: 0.02,
+    };
+    holds(
+        "ramp_avoid_dome",
+        |op| {
+            op.surfaces
+                .groups
+                .push(group(SurfaceAction::Avoid, DOME, (1.0, 1.0)));
+        },
+        &bounds,
+        0,
+    );
 }

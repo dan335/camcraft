@@ -180,9 +180,9 @@ fn surface_groups_that_cannot_be_cut_are_refused() {
     j.validate().unwrap();
 }
 
-/// Every finish that drops its tool onto the part takes groups; every other
-/// strategy refuses them, the level finishes for now among them: what
-/// refuses them is that it does not take them
+/// Every 3D finish takes groups, those that drop their tool onto the part
+/// and those that go round it at levels; every other strategy refuses them,
+/// roughing among them: what refuses them is that it does not take them
 /// ([`surface_groups_that_cannot_be_cut_are_refused`]).
 #[test]
 fn only_the_finishes_over_the_part_take_surface_groups() {
@@ -195,11 +195,11 @@ fn only_the_finishes_over_the_part_take_surface_groups() {
         "pencil",
         "project",
         "morph",
-    ];
-    let refusing = [
         "contour",
         "ramp",
         "flat",
+    ];
+    let refusing = [
         "pocket-clearing",
         "adaptive",
         "profile",

@@ -234,4 +234,19 @@ impl Surface for OnPart<'_> {
                 .rest_at(p.x, p.y, self.tolerance)
                 .is_some_and(|rest| !rest.machined && rest.z >= p.z - self.tolerance)
     }
+
+    fn rubs_avoided(&self, from: DVec3, to: DVec3) -> bool {
+        if !self.avoids {
+            return false;
+        }
+        // Looked at as the passes were cut out where they rub them
+        // (`machined_only`): nothing narrower than a quarter of the tool is
+        // passed over.
+        let step = (self.seat.tool().max_radius() * 0.5).max(self.tolerance);
+        let n = camcraft_geom::steps::bounded_count((from.distance(to) / step).ceil());
+        (0..=n).any(|k| {
+            let p = from.lerp(to, f64::from(k) / f64::from(n));
+            self.seat.avoids(p, self.tolerance)
+        })
+    }
 }

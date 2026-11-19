@@ -71,6 +71,31 @@ fn a_pass_is_cut_where_it_rests_on_faces_avoided_alone() {
     }
 }
 
+/// A pass at a level, towards the wall avoided, as a way down along a ring
+/// goes: up off the shelf, it touches nothing until it would rub the wall,
+/// and is left out whole; on the shelf, which it machines all along, it is
+/// kept, up to the wall's foot.
+#[test]
+fn a_piece_touching_nothing_machined_is_left_out() {
+    let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
+    let part = step(0.0);
+    let seat = part.under(&tool).unwrap();
+    let level = |z: f64| {
+        let mut p = Toolpath::new();
+        p.feed_to(dvec3(8.0, 0.0, z), MoveRole::Link, 1000.0)
+            .unwrap();
+        p.feed_to(dvec3(2.0, 0.0, z), MoveRole::Cut, 1000.0)
+            .unwrap();
+        p
+    };
+    let (kept, report) = machined_only(&level(1.0), &seat, TOLERANCE).unwrap();
+    assert!(kept.is_empty(), "{:?}", kept.moves());
+    assert_eq!((report.before, report.after), (1, 0));
+    let (kept, report) = machined_only(&level(0.0), &seat, TOLERANCE).unwrap();
+    assert_eq!((report.before, report.after), (1, 1));
+    assert_eq!(kept, level(0.0));
+}
+
 /// With nothing avoided, a pass is as it was.
 #[test]
 fn nothing_avoided_keeps_every_pass() {

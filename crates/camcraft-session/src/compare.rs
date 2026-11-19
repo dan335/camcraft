@@ -458,3 +458,9 @@ mod tests_scallop;
 
 #[cfg(test)]
 mod tests_spiral;
+
+#[cfg(test)]
+mod tests_contour;
+
+#[cfg(test)]
+mod tests_flat;

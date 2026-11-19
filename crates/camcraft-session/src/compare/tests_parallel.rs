@@ -61,9 +61,18 @@ pub(super) fn group(
 
 /// A job that roughs the part and then finishes it with the 6 mm ball by
 /// `strategy`, as `name`: a new one but for `change`, read back, so its
-/// expressions are worked out as a job read from disk has them. Scallop's and
-/// Spiral's tests' too.
+/// expressions are worked out as a job read from disk has them. Scallop's,
+/// Spiral's and Contour's tests' too.
 pub(super) fn job(name: &str, strategy: &str, change: impl FnOnce(&mut Operation)) -> Job {
+    job_with(name, (strategy, "ball6"), change)
+}
+
+/// [`job`], finishing with `tool`: Flat's tests', with the 6 mm flat.
+pub(super) fn job_with(
+    name: &str,
+    (strategy, tool): (&str, &str),
+    change: impl FnOnce(&mut Operation),
+) -> Job {
     let mut job = parse_job(&base(), "ops_3d").unwrap();
     let make = |name: &str, strategy: &str, tool: &str| {
         let spec = job.tools.get(tool);
@@ -76,7 +85,7 @@ pub(super) fn job(name: &str, strategy: &str, change: impl FnOnce(&mut Operation
         op
     };
     let rough = make("rough", "adaptive", "flat6");
-    let mut finish = make(name, strategy, "ball6");
+    let mut finish = make(name, strategy, tool);
     change(&mut finish);
     job.setups[0].operations.extend([rough, finish]);
     parse_job(&job_text(&job).unwrap(), "ops_3d").unwrap()

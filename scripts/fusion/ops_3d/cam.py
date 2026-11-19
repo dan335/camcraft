@@ -1,21 +1,24 @@
-# Fusion's Ramp, Pencil, Project, Morph, Parallel, Scallop and Spiral on the
-# ops_3d part, each as a new operation of Fusion's starts but for what its name
-# says, posted with Fusion's Masso post: fixtures/nc/ops_3d_*.nc. Run through
-# the bridge after part.py (see ../README.md). It finds the document part.py
-# made by its one body, named ops_3d, and works in that document alone.
+# Fusion's Ramp, Pencil, Project, Morph, Parallel, Scallop, Spiral, Contour and
+# Flat on the ops_3d part, each as a new operation of Fusion's starts but for
+# what its name says, posted with Fusion's Masso post: fixtures/nc/ops_3d_*.nc.
+# Run through the bridge after part.py (see ../README.md). It finds the
+# document part.py made by its one body, named ops_3d, and works in that
+# document alone.
 #
 # The setup's stock is 5 mm round the part and level with its top, its work
-# zero the model's origin. The tools are the sample library's 6 mm ball end
-# mill, T2, and its 12 mm one, T3 (18,000 rev/min, 1500 mm/min, plunging and
-# ramping at 500), without a holder and without coolant, as camcraft's tools
-# have them. The Masso post is looked for beside the bridge's inbox
-# (masso.cps).
+# zero the model's origin. The tools are the sample library's 6 mm flat end
+# mill, T1, its 6 mm ball end mill, T2, and its 12 mm one, T3 (18,000
+# rev/min, 1500 mm/min, plunging and ramping at 500), without a holder and
+# without coolant, as camcraft's tools have them. The Masso post is looked for
+# beside the bridge's inbox (masso.cps).
 #
 #   ramp        a new Ramp: Maximum Stepdown 1 mm, Ramping Angle the tool's 2
 #               degrees
 #   ramp_step2  the same, Maximum Stepdown 2 mm
 #   ramp_angle  the same, Ramping Angle 0.5 degrees: shallower than a stepdown
 #               each time round every wall but the outside's
+#   ramp_avoid_dome  a new Ramp, the dome avoided, radial and axial offsets
+#                    1 mm
 #
 #   pencil              a new Pencil with the 12 mm ball, which is larger than
 #                       the pocket's R4 fillets and its R5 corner, so is held off
@@ -55,6 +58,12 @@
 #
 #   spiral                  a new Spiral with the 6 mm ball, no surface groups
 #   spiral_avoid_dome       the dome avoided, radial and axial offsets 1 mm
+#
+#   contour                 a new Contour with the 6 mm ball, no surface groups
+#   contour_avoid_dome      the dome avoided, radial and axial offsets 1 mm
+#
+#   flat                    a new Flat with the 6 mm flat, no surface groups
+#   flat_avoid_dome         the dome avoided, radial and axial offsets 1 mm
 #
 # A surface group is added as the Surface Manager adds one: a direct selection
 # of faces, machined or avoided, with its own radial and axial offsets, which
@@ -137,6 +146,7 @@ def make_tool(j, number, desc, rpm, feeds):
 
 FEEDS = {"v_f": 1500, "v_f_plunge": 500, "v_f_ramp": 500, "v_f_leadIn": 1500, "v_f_leadOut": 1500,
          "v_f_retract": 1500, "v_f_transition": 1500}
+flat6 = make_tool(sample("flat end mill", 6), 1, "6mm flat", 18000, FEEDS)
 ball6 = make_tool(sample("ball end mill", 6), 2, "6mm ball", 18000, FEEDS)
 ball12 = make_tool(sample("ball end mill", 12), 3, "12mm ball", 18000, FEEDS)
 
@@ -256,6 +266,11 @@ for name, strategy, tool, select, settings in (
     ("scallop_floor_only", "scallop", ball6, grouping(AVOID, (MACHINE, FLOOR, 0, 0)), {}),
     ("spiral", "spiral", ball6, None, {}),
     ("spiral_avoid_dome", "spiral", ball6, grouping(None, (AVOID, DOME, 1, 1)), {}),
+    ("contour", "contour3d", ball6, None, {}),
+    ("contour_avoid_dome", "contour3d", ball6, grouping(None, (AVOID, DOME, 1, 1)), {}),
+    ("ramp_avoid_dome", "ramp", ball6, grouping(None, (AVOID, DOME, 1, 1)), {}),
+    ("flat", "flat", flat6, None, {}),
+    ("flat_avoid_dome", "flat", flat6, grouping(None, (AVOID, DOME, 1, 1)), {}),
 ):
     try:
         oi = setup.operations.createInput(strategy)

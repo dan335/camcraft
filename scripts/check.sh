@@ -154,6 +154,7 @@ if [ ${#SELECT[@]} -gt 0 ]; then
       run::tests::bounded_runs_are_deterministic
       run::tests_surfaces::grouped_runs_are_deterministic
       run::tests_surfaces::grouped_scallops_are_deterministic
+      run::tests_surfaces::grouped_contours_are_deterministic
       cutter::dropcutter::tests::is_deterministic
       strategy::scallop::tests::is_deterministic
       strategy::waterline::tests::is_deterministic

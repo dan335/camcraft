@@ -71,6 +71,15 @@ pub trait Surface {
     fn rests_avoided(&self, _p: DVec3) -> bool {
         false
     }
+
+    /// Whether the tool going straight from `from` to `to` comes anywhere
+    /// within the tolerance of faces of the part it is kept clear of, and of
+    /// none it machines: beside them, as a link at a level runs past a wall,
+    /// as well as on them. A link that stays down so would rub them. Never,
+    /// unless the operation avoids some.
+    fn rubs_avoided(&self, _from: DVec3, _to: DVec3) -> bool {
+        false
+    }
 }
 
 /// No part anywhere.

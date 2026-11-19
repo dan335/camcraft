@@ -170,6 +170,10 @@ impl StrategySpec {
                 lead_radius: true,
                 ramp: true,
                 top: Some(HeightRef::ModelTop),
+                // Its rings are where the tool meets each group of faces as
+                // it grows it, and cut out where they touch only one avoided:
+                // a ring at a wall's foot, touching a floor machined, stays.
+                surfaces: true,
                 ..cuts_loops
             },
             // Contour's rings, gone down wall by wall: no stepover, its
@@ -188,6 +192,9 @@ impl StrategySpec {
                 helix: HelixSize::Flat,
                 lead_radius: true,
                 ramp: true,
+                // Contour's rings, and the way down a wall cut out where it
+                // touches only faces avoided, as a contour's rings are.
+                surfaces: true,
                 ..cuts_loops
             },
             // Each flat at its own height, once: rings in from its edges, in
@@ -197,6 +204,9 @@ impl StrategySpec {
                 depths: Depths::None,
                 reach: Reach::Tools(2),
                 top: Some(HeightRef::ModelTop),
+                // Only the flats it machines, each raised by its group's
+                // axial offset, kept clear of the faces it avoids.
+                surfaces: true,
                 ..cuts_loops
             },
             // Slice by slice is what it is. Its order is its own, each level's
@@ -524,8 +534,8 @@ pub struct Uses {
     /// A machining boundary that keeps the tool in: a 3D strategy's.
     pub boundary: bool,
     /// Faces it machines and faces it keeps clear of
-    /// ([`Surfaces`](super::Surfaces)): a 3D finish's that drops its tool
-    /// onto the part.
+    /// ([`Surfaces`](super::Surfaces)): a 3D finish's, dropping its tool onto
+    /// the part or going round it at levels.
     pub surfaces: bool,
     /// An outline it cuts round or clears: a 2D strategy's.
     pub outline: bool,

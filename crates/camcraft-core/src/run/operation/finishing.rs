@@ -231,7 +231,7 @@ fn steep_walls(
         // floor beside a wall is the rings' where the band takes it in, as in
         // a channel narrower than the tool's width twice over, and a ring a
         // level above it leaves a step on it.
-        flats: work.flat_levels(true),
+        flats: work.flat_levels(Flats::All),
         tolerance: job.tolerance,
         feed: op.passes.feed,
         direction: direction.engine(),
@@ -271,7 +271,7 @@ pub(super) fn contour_paths(
         stepdown: op.stepdown().unwrap_or(f64::NAN),
         top,
         bottom,
-        flats: work.flat_levels(true),
+        flats: work.flat_levels(Flats::All),
         tolerance: job.tolerance,
         feed: op.passes.feed,
         direction: direction.engine(),
@@ -324,7 +324,7 @@ pub(super) fn ramp_paths(
         stepdown: op.stepdown().unwrap_or(f64::NAN),
         top,
         bottom,
-        flats: work.flat_levels(flat_areas),
+        flats: work.flat_levels(Flats::all_if(flat_areas)),
         tolerance: job.tolerance,
         feed: op.passes.feed,
         direction: direction.engine(),
@@ -402,8 +402,8 @@ pub(super) fn pencil_paths(
     Ok((path, report.passes, StrategyDetail::Pencil(report)))
 }
 
-/// Flat finishing: each flat face between the top and bottom cleared at its
-/// height, within the sweep and `limit`.
+/// Flat finishing: each flat face it machines between the top and bottom
+/// cleared at its height, within the sweep and `limit`.
 pub(super) fn flat_paths(
     work: &Work<'_>,
     order: PassOrder,
@@ -421,7 +421,7 @@ pub(super) fn flat_paths(
         tolerance: job.tolerance,
         feed: op.passes.feed,
         flats: work
-            .flat_levels(true)
+            .flat_levels(Flats::Machined)
             .into_iter()
             .filter(|z| (bottom - slack..=top + slack).contains(z))
             .collect(),
@@ -432,8 +432,8 @@ pub(super) fn flat_paths(
     let (path, report) = flat_finish(&mut reach, &area, &params).map_err(in_op(op))?;
     if report.passes == 0 {
         warnings.push(if report.flats == 0 {
-            "found nothing to finish: the part has no flat face between the top and \
-             bottom"
+            "found nothing to finish: the part has no flat face it machines between the \
+             top and bottom"
                 .into()
         } else {
             "found nothing to finish: no flat within the boundary has room for the tool".into()

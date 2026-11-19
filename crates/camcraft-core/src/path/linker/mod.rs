@@ -426,8 +426,9 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
     /// From `off`, where the tool came off the last cut, across without lifting
     /// and down `way` onto `to` at a lower level, if the link is short and its
     /// way clear: as Fusion goes down to a ring's next depth. Across level at
-    /// the height it came off, clear of the part and cutting little more than a
-    /// descent at cutting feed may; then down.
+    /// the height it came off, clear of the part, rubbing no face it is kept
+    /// clear of, and cutting little more than a descent at cutting feed may;
+    /// then down.
     fn down_into(
         &mut self,
         off: DVec3,
@@ -458,11 +459,12 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
             .material
             .highest(off.truncate(), xy, self.p.tool_radius)
             .is_some_and(|h| h > off.z + self.p.max_cut_step);
-        if reached || cuts {
+        // Across beside a face it is kept clear of, the tool would rub it.
+        let across = xy.extend(off.z);
+        if reached || cuts || self.surface.rubs_avoided(off, across) {
             return Ok(false);
         }
-        self.out
-            .feed_to(xy.extend(off.z), MoveRole::Transition, feed)?;
+        self.out.feed_to(across, MoveRole::Transition, feed)?;
         self.descend(way, to, feed)?;
         Ok(true)
     }
@@ -681,7 +683,9 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                     .grazing_along(a, b)
                     .iter()
                     .any(|p| p.z > to.z + 1e-6);
-                if reached || self.ploughs(a, b, to.z) {
+                // Beside or over a face it is kept clear of, the tool would
+                // rub what the rings were cut out along: it lifts.
+                if reached || self.ploughs(a, b, to.z) || self.surface.rubs_avoided(from, to) {
                     return Ok(false);
                 }
                 vec![to]

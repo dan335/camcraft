@@ -191,16 +191,18 @@ impl<'a> Work<'a> {
         self.clockwise() != self.op.strategy.conventional()
     }
 
-    /// The heights of the part's flat faces, raised by the stock to leave down,
-    /// and each group's of its own by its axial offset, where flat area
-    /// detection adds a level; none unless `on`.
-    fn flat_levels(&self, on: bool) -> Vec<f64> {
-        if !on {
-            return Vec::new();
-        }
+    /// The heights of the part's flat faces, `which` of them, raised by the
+    /// stock to leave down, and each group's of its own by its axial offset,
+    /// where flat area detection adds a level.
+    fn flat_levels(&self, which: Flats) -> Vec<f64> {
+        let avoided = match which {
+            Flats::None => return Vec::new(),
+            Flats::All => true,
+            Flats::Machined => false,
+        };
         let axial = self.op.stock_to_leave().axial;
         let tolerance = self.job.tolerance;
-        match self.surfaces.flat_heights(tolerance) {
+        match self.surfaces.flat_heights(tolerance, avoided) {
             Some(grouped) => grouped.iter().map(|z| z + axial).collect(),
             None => self
                 .prepared
@@ -235,6 +237,29 @@ impl<'a> Work<'a> {
             dvec2(lo.x - reach, lo.y - reach),
             dvec2(hi.x + reach, hi.y + reach),
         )
+    }
+}
+
+/// Which of the part's flat faces a strategy has a level at
+/// ([`Work::flat_levels`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Flats {
+    /// None.
+    None,
+    /// Every one, those of faces avoided too: a wall machined standing on
+    /// one has its foot there, the face's clearance above it.
+    All,
+    /// Only those of faces it machines, as flat finishing clears them: a
+    /// flat avoided has no level, so no ring on it, not even along its
+    /// edges, where a flat end mill resting on it touches the top of the
+    /// face machined beside it, and would be kept as touching both.
+    Machined,
+}
+
+impl Flats {
+    /// Every flat where `on`, as flat area detection asks; otherwise none.
+    pub(super) fn all_if(on: bool) -> Self {
+        if on { Self::All } else { Self::None }
     }
 }
 

@@ -28,7 +28,7 @@ pub(super) fn pocket_clearing_paths(
         bottom,
         min_ring_length,
         kept_on_right: work.kept_on_right(),
-        flats: work.flat_levels(flat_areas),
+        flats: work.flat_levels(Flats::all_if(flat_areas)),
     };
     let (sweep_lo, sweep_hi) = work.sweep();
     let sweep = Region::rectangle(sweep_lo, sweep_hi);
@@ -98,7 +98,7 @@ pub(super) fn adaptive_paths(
     let mut reach = work.held(work.reach(job.tolerance)?);
     let (top, bottom) = op.levels_3d(work.heights);
     // Flat area detection finds peaks too, each a level as a flat face is.
-    let mut flats = work.flat_levels(flat_areas);
+    let mut flats = work.flat_levels(Flats::all_if(flat_areas));
     if flat_areas {
         let axial = op.stock_to_leave().axial;
         let radius = work.tool.cutter_radius();

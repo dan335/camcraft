@@ -8,7 +8,7 @@ use crate::path::toolpath::{MoveRole, Toolpath};
 use camcraft_geom::mesh::TriMesh;
 use camcraft_geom::synthetic;
 use camcraft_geom::topology::Body;
-use glam::{DVec3, dvec3};
+use glam::{DVec2, DVec3, dvec2, dvec3};
 
 /// The step, 5 high over `x <= 0` and 0 beyond, its wall at `x = 0`, with its
 /// faces named: the plateau 0, the shelf 1 and the wall 2.
@@ -475,6 +475,307 @@ fn grouped_scallops_are_deterministic() {
     let body = ridges();
     let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
     let job = on_ridges("scallop", true);
+    let on = |threads: usize| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| run_setup(&job, 0, &bodies).unwrap())
+    };
+    let (one, eight) = (on(1), on(8));
+    assert!(!one.operations[0].path.is_empty());
+    assert_eq!(one.operations[0].path, eight.operations[0].path);
+}
+
+/// A plate 16 across at Z0 with a boss 4 square and 3 tall standing in its
+/// middle, with its faces named: the plate 0, the boss's top 1, its sides
+/// facing X 2 and those facing Y 3.
+fn boss() -> Body {
+    let plate = synthetic::plane(0.0, 8.0);
+    let boss = synthetic::cuboid(dvec3(-2.0, -2.0, 0.0), dvec3(2.0, 2.0, 3.0));
+    // Its bottom, on the plate, is not part of it.
+    let boss = TriMesh::new(boss.vertices().to_vec(), boss.triangles()[2..].to_vec()).unwrap();
+    let mesh = TriMesh::merged(&[&plate, &boss]).unwrap();
+    let mut labels = vec![0; plate.len()];
+    // Its top, its sides facing -Y and +Y, then -X and +X.
+    labels.extend([1, 1, 3, 3, 3, 3, 2, 2, 2, 2]);
+    Body::with_faces(mesh, labels, 4).unwrap()
+}
+
+/// The boss's top, its sides facing X and those facing Y, and the plate, by
+/// a point on each.
+const BOSS_TOP: [f64; 3] = [0.0, 0.0, 3.0];
+const BOSS_X: [f64; 3] = [2.0, 0.0, 1.5];
+const BOSS_Y: [f64; 3] = [0.0, 2.0, 1.5];
+const PLATE_BESIDE: [f64; 3] = [5.0, 5.0, 0.0];
+
+/// A group of the boss's faces: what is done with them, the faces, and the
+/// offsets `(radial, axial)`.
+type Grouping<'a> = (SurfaceAction, &'a [[f64; 3]], (f64, f64));
+
+/// `JOB`'s finish as a new operation of `strategy`, a stepdown of 1 mm, with
+/// its 4 mm ball, or flat finishing with the 6 mm flat, its faces in
+/// `groups` and the rest machined.
+fn on_boss(strategy: &str, groups: &[Grouping<'_>]) -> Job {
+    let mut job: Job = toml::from_str(JOB).unwrap();
+    // Coarser than `JOB`, to be quick: none of it is near the tolerance.
+    job.tolerance = 0.1;
+    job.setups[0].operations.retain(|op| op.name == "finish");
+    let op = &mut job.setups[0].operations[0];
+    op.strategy = StrategySpec::named(strategy).unwrap();
+    op.passes.stepdown = Some(1.0);
+    op.passes.stepover = 1.0;
+    if strategy == "flat" {
+        op.tool = Some("rough".into());
+    }
+    op.surfaces.groups = groups
+        .iter()
+        .map(|&(action, faces, (radial, axial))| SurfaceGroup {
+            action,
+            radial,
+            axial,
+            faces: faces.iter().map(|&at| face(at)).collect(),
+        })
+        .collect();
+    job
+}
+
+/// `strategy` on the boss, its faces as `groups` have them, and with all of
+/// it machined. Run grouped, no move that feeds goes into the clearance of
+/// what it avoids, no cut is where the tool would only rub it, and nothing
+/// is cut into the part.
+fn run_on_boss(strategy: &str, groups: &[Grouping<'_>]) -> (SetupResult, SetupResult) {
+    let body = boss();
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let job = on_boss(strategy, groups);
+    let grouped = run_setup(&job, 0, &bodies).unwrap();
+    let whole = run_setup(&on_boss(strategy, &[]), 0, &bodies).unwrap();
+    assert_eq!(into_clearance(&job, &bodies, &grouped), 0.0, "{strategy}");
+    assert_eq!(grouped.verify.gouged, 0, "{strategy}");
+    (grouped, whole)
+}
+
+/// The points `result` cuts to, beside the boss and on the plate.
+fn cuts(result: &SetupResult) -> Vec<DVec3> {
+    result.operations[0]
+        .path
+        .moves()
+        .iter()
+        .filter(|m| m.role == MoveRole::Cut && m.to.x.abs() < 7.0 && m.to.y.abs() < 7.0)
+        .map(|m| m.to)
+        .collect()
+}
+
+/// How far `p` is from the boss, seen from above.
+fn off_the_boss(p: DVec3) -> f64 {
+    let off = (dvec2(p.x.abs(), p.y.abs()) - dvec2(2.0, 2.0)).max(DVec2::ZERO);
+    if off.x > 0.0 && off.y > 0.0 {
+        off.length()
+    } else {
+        off.x.max(off.y)
+    }
+}
+
+/// Of `cuts`, those within the tolerance of height `z`.
+fn at_height(cuts: &[DVec3], z: f64, tolerance: f64) -> Vec<DVec3> {
+    cuts.iter()
+        .copied()
+        .filter(|p| (p.z - z).abs() <= tolerance)
+        .collect()
+}
+
+/// The boss avoided, 1 mm sideways: what goes round it above its foot, which
+/// machining all of it cuts, is cut out; the ring at its foot, where the
+/// ball touches the plate machined and the boss's clearance at once, stays,
+/// the ball its radius and the clearance off it. The cuts at the foot, run
+/// grouped and machining all of it.
+fn keeps_off_the_boss_but_round_its_foot(strategy: &str) -> (Vec<DVec3>, Vec<DVec3>) {
+    let all = [BOSS_TOP, BOSS_X, BOSS_Y];
+    let (grouped, whole) = run_on_boss(strategy, &[(SurfaceAction::Avoid, &all, (1.0, 0.0))]);
+    let tol = 0.1;
+    let high =
+        |r: &SetupResult| -> Vec<DVec3> { cuts(r).into_iter().filter(|p| p.z > tol).collect() };
+    assert!(!high(&whole).is_empty(), "{strategy} machining all of it");
+    let left = high(&grouped);
+    assert!(left.is_empty(), "{strategy} cuts round the boss: {left:?}");
+    let foot = at_height(&cuts(&grouped), 0.0, tol);
+    assert!(
+        foot.len() > 10,
+        "{strategy}: {} cuts at its foot",
+        foot.len()
+    );
+    for p in &foot {
+        let off = off_the_boss(*p);
+        assert!(
+            (off - 3.0).abs() < 2.0 * tol,
+            "{strategy}: {p} is {off} off"
+        );
+    }
+    (foot, at_height(&cuts(&whole), 0.0, tol))
+}
+
+/// Which way `points` go round, seen from above: twice the area they sweep,
+/// anticlockwise positive.
+fn turning(points: &[DVec3]) -> f64 {
+    points
+        .iter()
+        .zip(points.iter().cycle().skip(1))
+        .map(|(a, b)| a.truncate().perp_dot(b.truncate()))
+        .sum()
+}
+
+/// The plate avoided, half a millimetre up, and the boss machined: the boss
+/// is still finished from above its top's edge down to the plate's
+/// clearance, the ball touching its sides below where its middle is level
+/// with the top, and what goes round it there, touching the boss and the
+/// clearance at once, stays; nothing is cut lower.
+fn keeps_above_the_plate_and_finishes_the_boss(strategy: &str) {
+    let (grouped, _) = run_on_boss(
+        strategy,
+        &[(SurfaceAction::Avoid, &[PLATE_BESIDE], (0.0, 0.5))],
+    );
+    let tol = 0.1;
+    let cut = cuts(&grouped);
+    let lowest = cut.iter().map(|p| p.z).fold(f64::INFINITY, f64::min);
+    assert!(
+        (lowest - 0.5).abs() < tol,
+        "{strategy} goes down to {lowest}"
+    );
+    assert!(
+        cut.iter().any(|p| p.z > 1.5),
+        "{strategy} finishes the top's edge"
+    );
+    let foot = at_height(&cut, 0.5, tol);
+    assert!(
+        foot.len() > 10,
+        "{strategy}: {} cuts at its foot",
+        foot.len()
+    );
+    for p in cut.iter().filter(|p| p.z <= 1.0) {
+        let off = off_the_boss(*p);
+        assert!((off - 2.0).abs() < tol, "{strategy}: {p} is {off} off");
+    }
+}
+
+#[test]
+fn a_contour_keeps_off_an_avoided_boss_but_round_its_foot() {
+    keeps_off_the_boss_but_round_its_foot("contour");
+}
+
+#[test]
+fn a_contour_keeps_above_an_avoided_floor() {
+    keeps_above_the_plate_and_finishes_the_boss("contour");
+}
+
+/// Its way down the boss is cut out but for its last time round, at the
+/// foot, which goes round the way it does machining all of it.
+#[test]
+fn a_ramp_keeps_off_an_avoided_boss_but_round_its_foot() {
+    let (grouped, whole) = keeps_off_the_boss_but_round_its_foot("ramp");
+    let (grouped, whole) = (turning(&grouped), turning(&whole));
+    assert!(grouped * whole > 0.0, "{grouped} {whole}");
+}
+
+#[test]
+fn a_ramp_keeps_above_an_avoided_floor() {
+    keeps_above_the_plate_and_finishes_the_boss("ramp");
+}
+
+/// The boss's top avoided: flat finishing cuts nothing on it, which it
+/// does machining all of it, and still clears the plate.
+#[test]
+fn a_flat_avoided_gets_no_passes() {
+    let (grouped, whole) = run_on_boss("flat", &[(SurfaceAction::Avoid, &[BOSS_TOP], (0.0, 0.0))]);
+    let tol = 0.1;
+    assert!(!at_height(&cuts(&whole), 3.0, tol).is_empty());
+    let on_top = at_height(&cuts(&grouped), 3.0, tol);
+    assert!(on_top.is_empty(), "cuts on the top: {on_top:?}");
+    assert!(at_height(&cuts(&grouped), 0.0, tol).len() > 10);
+}
+
+/// The boss's sides avoided 1 mm sideways: the plate is cleared round it,
+/// the flat end mill its radius and the clearance off it.
+#[test]
+fn a_flat_keeps_its_clearance_off_an_avoided_wall() {
+    let (grouped, whole) = run_on_boss(
+        "flat",
+        &[(SurfaceAction::Avoid, &[BOSS_X, BOSS_Y], (1.0, 0.0))],
+    );
+    let nearest = |r: &SetupResult| {
+        at_height(&cuts(r), 0.0, 0.1)
+            .into_iter()
+            .map(off_the_boss)
+            .fold(f64::INFINITY, f64::min)
+    };
+    let (grouped, whole) = (nearest(&grouped), nearest(&whole));
+    assert!((whole - 3.0).abs() < 0.1, "machining all of it: {whole}");
+    assert!((grouped - 4.0).abs() < 0.1, "{grouped}");
+}
+
+/// The plate machined with half a millimetre of stock of its own: flat
+/// finishing clears it half a millimetre up, and the boss's top where it is.
+#[test]
+fn a_flat_machined_with_stock_of_its_own_is_cleared_above_it() {
+    let (grouped, _) = run_on_boss(
+        "flat",
+        &[(SurfaceAction::Machine, &[PLATE_BESIDE], (0.0, 0.5))],
+    );
+    let cut = cuts(&grouped);
+    assert!(at_height(&cut, 0.0, 0.1).is_empty());
+    assert!(at_height(&cut, 0.5, 1e-6).len() > 10);
+    assert!(!at_height(&cut, 3.0, 1e-6).is_empty());
+}
+
+/// The boss's sides facing Y avoided with no clearance, those facing X
+/// machined: each ring round it is cut in two, either side, and the link
+/// from one piece to the other at its level, though short, does not stay
+/// down along the side avoided, rubbing it all the way, but lifts.
+#[test]
+fn a_contour_lifts_over_a_side_avoided() {
+    let body = boss();
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let job = on_boss(
+        "contour",
+        &[(SurfaceAction::Avoid, &[BOSS_TOP, BOSS_Y], (0.0, 0.0))],
+    );
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    assert_eq!(into_clearance(&job, &bodies, &result), 0.0);
+    let ring = at_height(&cuts(&result), 1.0, 1e-6);
+    assert!(ring.iter().any(|p| p.x > 3.0) && ring.iter().any(|p| p.x < -3.0));
+    let prepared = crate::setup::prepare(&job, 0, &bodies).unwrap();
+    let op = &job.setups[0].operations[0];
+    let surfaces = part_surfaces(&job, op, &prepared, &bodies).unwrap();
+    let seat = surfaces.under(&cutting_tool(&job, op).unwrap()).unwrap();
+    let moves = result.operations[0].path.moves();
+    let mut at = moves[0].to;
+    let mut rubbing = Vec::new();
+    for m in moves {
+        if m.role == MoveRole::Transition {
+            for k in 0..=20 {
+                let p = m.point_at(at, f64::from(k) / 20.0);
+                if seat.avoids(p, job.tolerance) {
+                    rubbing.push(p);
+                }
+            }
+        }
+        at = m.to;
+    }
+    assert!(
+        rubbing.is_empty(),
+        "links rubbing a side avoided: {rubbing:?}"
+    );
+}
+
+/// A contour finish keeping clear of faces gives the same moves on any
+/// number of threads.
+#[test]
+fn grouped_contours_are_deterministic() {
+    let body = boss();
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let job = on_boss(
+        "contour",
+        &[(SurfaceAction::Avoid, &[BOSS_TOP, BOSS_Y], (0.5, 0.5))],
+    );
     let on = |threads: usize| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads)

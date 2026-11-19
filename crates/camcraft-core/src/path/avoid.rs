@@ -23,6 +23,12 @@ use crate::cutter::tool::ToolProfile;
 /// every half the tool's radius, and cut where that changes to within the
 /// tolerance.
 ///
+/// A piece left that touches no face it machines anywhere ([`Seat::machines`])
+/// is left out too: it would only go through the air towards what it avoids,
+/// as the way down along a ring at a level does, from above, to a ring cut
+/// out. A pass dropped onto the part rests on it at every point it was laid
+/// at, so only passes that go round the part at levels have such pieces.
+///
 /// [`MoveRole::Link`]: super::toolpath::MoveRole::Link
 pub fn machined_only(
     path: &Toolpath,
@@ -32,12 +38,21 @@ pub fn machined_only(
     // As finely as a pass is sampled where it is flat: nothing narrower than
     // a quarter of the tool is passed over.
     let step = (seat.tool().max_radius() * 0.5).max(tolerance);
-    let (kept, report) = cut_out(path, |p| seat.avoids(p, tolerance), step, tolerance)?;
+    let (pieces, report) = cut_out(path, |p| seat.avoids(p, tolerance), step, tolerance)?;
+    let mut kept = Toolpath::new();
+    let mut after = 0;
+    for pass in pieces
+        .passes()
+        .filter(|pass| pass.iter().any(|m| seat.machines(m.to, tolerance)))
+    {
+        kept.append(pass)?;
+        after += 1;
+    }
     Ok((
         kept,
         Trimmed {
             before: report.before,
-            after: report.after,
+            after,
         },
     ))
 }
