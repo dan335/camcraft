@@ -136,10 +136,12 @@ unless it is told the chain is open (`isOpen`); a new closed chain runs
 clockwise seen from above, and `isReverted` turns it round. Morph gives no passes between two open
 chains that run opposite ways, so the round's lower edge is reverted. Run
 again, it makes every one of them byte for byte (but for Windows line ends),
-but for Parallel's: Fusion's Parallel does not post the same bytes from one
-generation to the next. On 2026-11-19 the committed `ops_3d/cam.py` was run
-twice, and the five grouped programs and the plain one came out as the
-fixtures but for one program each run (`parallel` the first time,
-`parallel_floor_leave` the second), which differed in a few points of its point
-reduction. So a Parallel fixture is one of Fusion's answers, which Fusion
-makes again only to within that.
+but for Parallel's, Scallop's and Spiral's: Fusion does not post the same
+bytes for those from one generation to the next. On 2026-11-19 the committed
+`ops_3d/cam.py` was run three times, and each run all but a few of their
+programs came out as the fixtures (`parallel` differed the first time,
+`parallel_floor_leave` the second, and those two with `scallop_avoid_dome` and
+`spiral` the third). One that differed had the same passes with some sixty to
+two hundred of its points moved along them, by a few hundredths of a
+millimetre: its point reduction. So a fixture of those three is one of
+Fusion's answers, which Fusion makes again only to within that.
