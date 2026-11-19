@@ -103,10 +103,12 @@ impl<T: Serialize + DeserializeOwned> Defaults<T> {
 
     /// What a new expression for the setting at `path` starts as, the number
     /// it holds, where the row offers one: a thing that has expressions, one
-    /// setting, and that a number. Empty where it holds none yet.
+    /// setting, not in a list, and that a number. Empty where it holds none
+    /// yet. A setting in a list, a surface group's, has none: its place, which
+    /// names its expression, moves when one before it is taken out.
     fn expression_start(&self, path: &str) -> Option<String> {
         self.expressions.as_ref()?;
-        if path.contains(',') {
+        if path.contains(',') || path.split('.').any(|k| k.parse::<usize>().is_ok()) {
             return None;
         }
         // An operation's strategy decides which settings it has.
@@ -520,6 +522,11 @@ mod tests {
             d.expression_start("slope_from,slope_to"),
             None,
             "two at once"
+        );
+        assert_eq!(
+            d.expression_start("surfaces.group.0.radial"),
+            None,
+            "in a list"
         );
         assert_eq!(
             Defaults::of(&op, &def).expression_start("passes.stepover"),

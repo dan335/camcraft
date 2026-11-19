@@ -1,7 +1,8 @@
-//! An operation's Geometry tab: where it may cut, and what it cuts round.
+//! An operation's Geometry tab: where it may cut, what it cuts round, and the
+//! faces it machines and keeps clear of.
 
 use crate::help::Figure;
-use crate::help::figures::Facing;
+use crate::help::figures::{Clearance, Facing, LeaveOn};
 
 topics! {
     BOUNDARY: "Boundary",
@@ -40,4 +41,22 @@ topics! {
         "The rim of each shape to engrave, and of any island in it. A click takes the whole loop, engraved from its own height.";
     ENGRAVE_FACES: "Faces",
         "The floor of each shape to engrave: its outline, islands too, engraved from the top of the walls round it.";
+    SURFACES_MODEL: "Model",
+        "What is done to every face in no group: machined, or avoided. Roughing and 2D operations take no groups: they machine the whole part.";
+    SURFACE_GROUP: "Group",
+        "Faces picked in the view, machined or avoided with offsets of their own. A face is in one group: picking it into another moves it there.";
+    SURFACE_ACTION: "Action",
+        "Machined faces are cut; avoided ones are kept clear of, and on Flat get no passes at all. Avoiding any rules out a V-bit or chamfer mill.";
+    EXTRA_WALLS: "Extra on walls",
+        "More stock left on these faces' walls, added to the operation's stock to leave.",
+        Figure::Leave(LeaveOn::Walls);
+    EXTRA_FLOORS: "Extra on floors",
+        "More stock left on these faces' floors, added to the operation's stock to leave.",
+        Figure::Leave(LeaveOn::Floors);
+    CLEARANCE_BESIDE: "Clearance beside",
+        "How far the tool keeps from these faces sideways, added to the operation's stock to leave.",
+        Figure::Clearance(Clearance::Beside);
+    CLEARANCE_ABOVE: "Clearance above",
+        "How far above these faces the tool keeps, added to the operation's stock to leave.",
+        Figure::Clearance(Clearance::Above);
 }

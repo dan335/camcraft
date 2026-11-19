@@ -141,6 +141,9 @@ pub(super) struct Gpu {
     frame: wgpu::Buffer,
     frame_group: wgpu::BindGroup,
     part_object: Object,
+    /// The tints of faces an operation machines and of those it avoids.
+    machined_object: Object,
+    avoided_object: Object,
     selection_object: Object,
     hover_object: Object,
     ghost_object: Object,
@@ -379,6 +382,15 @@ impl Gpu {
             frame,
             frame_group,
             part_object: object("camcraft part", theme::PART, 1.0, theme::PART_FINISH),
+            // Fainter than what is picked, which is drawn over them and must
+            // still be told from them.
+            machined_object: object(
+                "camcraft machined",
+                theme::MACHINED,
+                0.35,
+                theme::MARK_FINISH,
+            ),
+            avoided_object: object("camcraft avoided", theme::AVOIDED, 0.35, theme::MARK_FINISH),
             selection_object: object(
                 "camcraft selection",
                 theme::SELECTED,
@@ -564,8 +576,8 @@ impl Gpu {
         }
     }
 
-    /// Everything over the part, into `pass`: what could be picked in, picked
-    /// faces, the material, height planes, lines, and the cutter.
+    /// Everything over the part, into `pass`: what could be picked in, the
+    /// faces an operation machines and avoids, picked faces, the material, height planes, lines, and the cutter.
     fn draw_rest(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -591,8 +603,21 @@ impl Gpu {
                 pass.draw(0..*n, 0..1);
             }
 
-            // Picked faces over the part, then the one under the pointer.
+            // The faces an operation machines and avoids, tinted; picked
+            // faces over them, then the one under the pointer.
             pass.set_pipeline(&self.highlight_pipeline);
+            if let Some(tint) = &self.up.tint {
+                for (faces, object) in [
+                    (&tint.machined, &self.machined_object),
+                    (&tint.avoided, &self.avoided_object),
+                ] {
+                    if let Some((buffer, n)) = faces {
+                        pass.set_bind_group(1, &object.bind_group, &[]);
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                        pass.draw(0..*n, 0..1);
+                    }
+                }
+            }
             for (up, object) in [
                 (&self.up.selection, &self.selection_object),
                 (&self.up.hover, &self.hover_object),

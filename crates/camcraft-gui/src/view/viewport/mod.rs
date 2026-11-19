@@ -15,7 +15,8 @@
 //!
 //! What is picked, and what is under the pointer, is drawn over the part: its faces
 //! again, in the accent, through a pipeline that passes where the part's own depth
-//! is equal, so they lie exactly on it; its edges as wide lines; its points as
+//! is equal, so they lie exactly on it, over the faces an operation machines or
+//! avoids, tinted so the same way; its edges as wide lines; its points as
 //! marks painted over the picture. What the view hits is not decided here: the view
 //! reports where the pointer is and whether it clicked, as a ray, and
 //! [`crate::picking::ray`] answers.
@@ -39,8 +40,8 @@ use crate::view::viewcube::{self, Action};
 use gpu::Gpu;
 
 pub use content::{
-    Content, Highlight, Outline, OutlineKind, Plane, PlaneKind, PointerEvent, StockChange,
-    StockRef, StockShow, View,
+    Content, FaceTint, Highlight, Outline, OutlineKind, Plane, PlaneKind, PointerEvent,
+    StockChange, StockRef, StockShow, View,
 };
 
 /// Toolpath width, in points.

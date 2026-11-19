@@ -1,12 +1,14 @@
 //! An operation's panel, on Fusion's tabs: the tool it cuts with ([`tool`]), its
 //! geometry, what it is kept to, what it cuts round and what is picked
-//! ([`geometry`]), its heights ([`heights`]), its passes ([`passes`]), and how
-//! its passes are linked ([`linking`]).
+//! ([`geometry`]) with the faces it machines and avoids ([`surfaces`]), its
+//! heights ([`heights`]), its passes ([`passes`]), and how its passes are linked
+//! ([`linking`]).
 
 mod geometry;
 mod heights;
 mod linking;
 mod passes;
+mod surfaces;
 mod tool;
 
 pub use heights::HeightPlanes;
@@ -76,9 +78,15 @@ pub fn tab_of(setting: &str) -> OperationTab {
         (_, "tool" | "preset" | "passes.feed" | "passes.rpm" | "linking.plunge_feed") => {
             OperationTab::Tool
         }
-        ("selection" | "boundary" | "outline" | "rest_machining" | "ignore_stock_less_than", _) => {
-            OperationTab::Geometry
-        }
+        (
+            "selection"
+            | "boundary"
+            | "outline"
+            | "surfaces"
+            | "rest_machining"
+            | "ignore_stock_less_than",
+            _,
+        ) => OperationTab::Geometry,
         ("heights", _) => OperationTab::Heights,
         ("linking" | "stay_down_level" | "stay_down_clearance" | "lift_height", _) => {
             OperationTab::Linking
@@ -100,9 +108,16 @@ pub fn show_tab_of(ctx: &egui::Context, setting: &str) {
 /// show.
 /// `def`, an operation's default, with each optional group `op` has given as
 /// ticking it starts it: tabs, a pocket's finishing passes, leads and
-/// levels, each as its box makes it.
+/// levels, each as its box makes it; and each of its surface groups as Add
+/// group starts it, with its own action and faces.
 fn started(op: &Operation, def: &Operation) -> Operation {
     let mut started = def.clone();
+    started.surfaces.groups = op
+        .surfaces
+        .groups
+        .iter()
+        .map(|g| surfaces::new_group(g.action, g.faces.clone()))
+        .collect();
     let (passes, linking) = (&mut started.passes, &mut started.linking);
     if op.passes.tabs.is_some() && passes.tabs.is_none() {
         passes.tabs = Some(Tabs::default());
@@ -168,7 +183,11 @@ pub(super) fn show(
         |t| op.least_stock_to_leave(t),
     );
     let lost = picks.shown.is_some_and(|s| {
-        s.faces.iter().chain(&s.edges).any(Result::is_err)
+        s.faces
+            .iter()
+            .chain(&s.edges)
+            .chain(s.groups.iter().flatten())
+            .any(Result::is_err)
             || s.boundary.as_ref().is_some_and(Result::is_err)
     });
     let tabs = [
@@ -184,7 +203,11 @@ pub(super) fn show(
         matches!(
             picks.armed,
             Some(
-                Slot::Faces { .. } | Slot::Edges { .. } | Slot::Curves { .. } | Slot::Chains { .. }
+                Slot::Faces { .. }
+                    | Slot::Edges { .. }
+                    | Slot::Curves { .. }
+                    | Slot::Chains { .. }
+                    | Slot::GroupFaces { .. }
             )
         )
     });

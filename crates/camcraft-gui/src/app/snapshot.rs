@@ -113,54 +113,21 @@ impl App {
     /// view: the two largest that face up. How many faces the model has. Only the
     /// snapshot harness asks.
     pub fn pick_faces_for_snapshot(&mut self, op: usize) -> usize {
-        use camcraft_core::job::FeatureRef;
-        use camcraft_geom::topology::FaceKind;
         let Some(doc) = self.docs.get_mut(self.active) else {
             return 0;
         };
         let (Some(setup), id) = (doc.active.clone(), doc.id) else {
             return 0;
         };
-        let Some(model) = doc.setup(&setup).and_then(|s| s.models.first().cloned()) else {
+        let Some((up, faces)) = faces_up(doc, &setup) else {
             return 0;
         };
-        let Some((loaded, _)) = doc.models.get(&model).and_then(|s| s.loaded()) else {
-            return 0;
-        };
-        let t = loaded.body.topology();
-        let mut up: Vec<(u32, f64, [f64; 3])> = t
-            .faces()
-            .iter()
-            .enumerate()
-            .filter_map(|(i, f)| match f.kind {
-                FaceKind::Plane { normal, .. } if normal.z > 0.9 => {
-                    let tri = loaded
-                        .body
-                        .mesh()
-                        .triangle(*f.triangles.first()? as usize)?;
-                    let at = (tri[0] + tri[1] + tri[2]) / 3.0;
-                    let at = camcraft_core::setup::features::unplaced(&loaded.body, at);
-                    Some((u32::try_from(i).ok()?, f.area, at))
-                }
-                _ => None,
-            })
-            .collect();
-        up.sort_by(|a, b| b.1.total_cmp(&a.1));
-        let faces = t.faces().len();
         doc.selection = crate::document::Selection::Operation(setup.clone(), op);
         let Some(o) = doc.operation_mut(&setup, op) else {
             return faces;
         };
         cut_selection(o);
-        o.selection.faces = up
-            .iter()
-            .take(2)
-            .map(|(i, _, at)| FeatureRef {
-                model: model.clone(),
-                index: *i,
-                at: *at,
-            })
-            .collect();
+        o.selection.faces = up.into_iter().take(2).collect();
         self.picking.arm(
             id,
             crate::picking::slots::Slot::Faces {
@@ -169,6 +136,61 @@ impl App {
             },
         );
         faces
+    }
+
+    /// Select operation `op` of the showing setup and give it two surface
+    /// groups of the faces that face up: the largest machined with more stock
+    /// left on it, the next avoided with clearance; and pick into the avoided
+    /// one when `picking`. Whether it had two such faces. Only the snapshot
+    /// harness asks.
+    #[cfg(all(test, feature = "ui-snapshots"))]
+    pub fn surface_groups_for_snapshot(&mut self, op: usize, picking: bool) -> bool {
+        use crate::picking::slots::Slot;
+        use camcraft_core::job::{SurfaceAction, SurfaceGroup};
+        let Some(doc) = self.docs.get_mut(self.active) else {
+            return false;
+        };
+        let (Some(setup), id) = (doc.active.clone(), doc.id) else {
+            return false;
+        };
+        let Some((up, _)) = faces_up(doc, &setup) else {
+            return false;
+        };
+        let (Some(largest), Some(next)) = (up.first(), up.get(1)) else {
+            return false;
+        };
+        doc.selection = crate::document::Selection::Operation(setup.clone(), op);
+        let Some(o) = doc.operation_mut(&setup, op) else {
+            return false;
+        };
+        o.surfaces.groups = vec![
+            SurfaceGroup {
+                action: SurfaceAction::Machine,
+                radial: 0.0,
+                axial: 0.5,
+                faces: vec![largest.clone()],
+            },
+            SurfaceGroup {
+                action: SurfaceAction::Avoid,
+                radial: 1.0,
+                axial: 0.5,
+                faces: vec![next.clone()],
+            },
+        ];
+        if picking {
+            self.picking.arm(
+                id,
+                Slot::GroupFaces {
+                    setup,
+                    op,
+                    group: 1,
+                    groups: 2,
+                },
+            );
+        } else {
+            self.picking.disarm();
+        }
+        true
     }
 
     /// Select the showing setup and arm its work zero for picking; where a round
@@ -368,6 +390,43 @@ impl App {
         self.settings.measure = measure;
         self.settings_open = true;
     }
+}
+
+/// The faces of setup `setup`'s first model that face up, largest first, as
+/// picks, and how many faces it has.
+fn faces_up(doc: &Document, setup: &str) -> Option<(Vec<camcraft_core::job::FeatureRef>, usize)> {
+    use camcraft_core::job::FeatureRef;
+    use camcraft_geom::topology::FaceKind;
+    let model = doc.setup(setup)?.models.first()?.clone();
+    let (loaded, _) = doc.models.get(&model)?.loaded()?;
+    let t = loaded.body.topology();
+    let mut up: Vec<(u32, f64, [f64; 3])> = t
+        .faces()
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| match f.kind {
+            FaceKind::Plane { normal, .. } if normal.z > 0.9 => {
+                let tri = loaded
+                    .body
+                    .mesh()
+                    .triangle(*f.triangles.first()? as usize)?;
+                let at = (tri[0] + tri[1] + tri[2]) / 3.0;
+                let at = camcraft_core::setup::features::unplaced(&loaded.body, at);
+                Some((u32::try_from(i).ok()?, f.area, at))
+            }
+            _ => None,
+        })
+        .collect();
+    up.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let picks = up
+        .into_iter()
+        .map(|(index, _, at)| FeatureRef {
+            model: model.clone(),
+            index,
+            at,
+        })
+        .collect();
+    Some((picks, t.faces().len()))
 }
 
 /// Keep `o` to its picks: a 2D operation's outline, or a 3D one's boundary.

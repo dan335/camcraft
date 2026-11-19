@@ -594,6 +594,28 @@ fn setup_panel() {
     shoot(&mut h, "stock_fixed_placed");
 }
 
+/// The router jig's parallel finish with two surface groups on its Geometry
+/// tab: its largest upward face machined with more stock left on it, the next
+/// avoided and kept clear of, and the part tinted by what is done to each
+/// face. Then picking into the avoided group, its face drawn as picked.
+#[test]
+#[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
+fn surface_groups() {
+    let mut h = harness();
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    h.state_mut()
+        .open_job(&ctx, repo("examples/rail-jig.camcraft"));
+    settle(&mut h);
+    assert!(h.state_mut().surface_groups_for_snapshot(1, false));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 1_usize));
+    h.run_steps(4);
+    shoot(&mut h, "operation_geometry_surfaces");
+    assert!(h.state_mut().surface_groups_for_snapshot(1, true));
+    h.run_steps(4);
+    shoot(&mut h, "operation_geometry_surfaces_picking");
+}
+
 /// An arranged sheet's panel: five parts, some in copies, laid live on a
 /// sheet too short for them all, one too large for it, and a pin standing in
 /// a plate's through hole. Then one part chosen, its copies lit in the

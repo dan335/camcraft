@@ -176,6 +176,17 @@ pub struct Highlight {
     pub markers: Vec<DVec3>,
 }
 
+/// The part's faces as an operation meets them, tinted under what is picked:
+/// those it machines and those it keeps clear of, as triangles in the setup's
+/// frame.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FaceTint {
+    /// The faces it machines.
+    pub machined: Vec<[Vec3; 3]>,
+    /// The faces it keeps clear of.
+    pub avoided: Vec<[Vec3; 3]>,
+}
+
 /// Where the pointer is over the view, as the picker needs it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PointerEvent {
@@ -213,6 +224,9 @@ pub struct Content<'a> {
     pub stock: Option<StockShow<'a>>,
     /// What is visible.
     pub view: View,
+    /// The part's faces tinted by what the selected operation does to them,
+    /// drawn under what is picked.
+    pub tint: Option<(u64, &'a FaceTint)>,
     /// What is picked.
     pub selection: Option<(u64, &'a Highlight)>,
     /// What is under the pointer.
@@ -277,6 +291,7 @@ impl Content<'_> {
             stock_box: None,
             stock: None,
             view: View::default(),
+            tint: None,
             selection: None,
             hover: None,
             ghost: None,

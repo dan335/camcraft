@@ -86,7 +86,8 @@ pub fn ghosts(scene: &PickScene, slot: &Slot) -> Highlight {
         | Slot::Faces { .. }
         | Slot::Edges { .. }
         | Slot::Curves { .. }
-        | Slot::Chains { .. } => {}
+        | Slot::Chains { .. }
+        | Slot::GroupFaces { .. } => {}
     }
     h
 }

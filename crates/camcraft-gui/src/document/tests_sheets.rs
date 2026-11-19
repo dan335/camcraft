@@ -227,7 +227,8 @@ fn a_model_put_on_a_sheet_has_no_position() {
 /// Three copies of the plate on the sheet, laid live: the setup is laid out
 /// with each, where the sheet stands it. A ray down onto any copy's top meets
 /// that copy and the one face of the body, which is what a click saves; the
-/// face picked once is drawn on every copy.
+/// face picked once is drawn on every copy, for a surface group as for the
+/// boundary, and tinted avoided on every copy.
 #[test]
 fn a_pick_on_any_real_copy_is_one_pick_drawn_on_every_copy() {
     use camcraft_core::job::FeatureRef;
@@ -303,8 +304,7 @@ fn a_pick_on_any_real_copy_is_one_pick_drawn_on_every_copy() {
         .len();
     let drawn = shown(
         &doc,
-        &setup,
-        Some(op),
+        (&setup, Some(op), None),
         (&prepared, Ok(None)),
         &scene,
         Measure::Metric,
@@ -312,4 +312,56 @@ fn a_pick_on_any_real_copy_is_one_pick_drawn_on_every_copy() {
     assert_eq!(drawn.faces.len(), 1, "one pick");
     assert!(drawn.faces[0].is_ok(), "{:?}", drawn.faces);
     assert_eq!(drawn.highlight.faces.len(), 3 * one, "on every copy");
+    assert_eq!(drawn.tint, None, "the whole part machined");
+
+    // The same face avoided in a group: picked into, it is drawn on every
+    // copy in place of the boundary's picks, and the part is tinted, that
+    // face avoided on every copy and every other machined.
+    use camcraft_core::job::{SurfaceAction, SurfaceGroup};
+    let avoid = SurfaceGroup {
+        action: SurfaceAction::Avoid,
+        radial: 0.0,
+        axial: 0.0,
+        faces: vec![doc.job.setups[0].operations[op].selection.faces[0].clone()],
+    };
+    doc.job.setups[0].operations[op].surfaces.groups = vec![avoid.clone()];
+    let drawn = shown(
+        &doc,
+        (&setup, Some(op), Some(0)),
+        (&prepared, Ok(None)),
+        &scene,
+        Measure::Metric,
+    );
+    assert_eq!(drawn.groups.len(), 1);
+    assert!(drawn.groups[0][0].is_ok(), "{:?}", drawn.groups);
+    assert_eq!(
+        drawn.highlight.faces.len(),
+        3 * one,
+        "the group's, on every copy"
+    );
+    let tint = drawn.tint.unwrap();
+    assert_eq!(tint.avoided.len(), 3 * one);
+    assert_eq!(
+        tint.machined.len() + tint.avoided.len(),
+        prepared.part.len(),
+        "every face of every copy"
+    );
+
+    // In two groups, the second says so, as the run refuses it.
+    doc.job.setups[0].operations[op].surfaces.groups = vec![avoid.clone(), avoid];
+    let drawn = shown(
+        &doc,
+        (&setup, Some(op), None),
+        (&prepared, Ok(None)),
+        &scene,
+        Measure::Metric,
+    );
+    assert!(drawn.groups[0][0].is_ok());
+    assert_eq!(
+        drawn.groups[1][0],
+        Err(format!(
+            "face {} on 'p' is in surface groups 1 and 2: a face can be in one group",
+            faces[0]
+        ))
+    );
 }

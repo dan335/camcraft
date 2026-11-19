@@ -120,6 +120,12 @@ pub const CHANNEL: [u8; 3] = AMBER_7;
 /// What could be picked into a setup but is not in it: its models and stock,
 /// drawn faintly while they are being picked.
 pub const GHOST: [u8; 3] = GRAY_8;
+/// A face an operation machines, tinted over the part on its Geometry tab:
+/// `--path-cut`, as what is cut there.
+pub const MACHINED: [u8; 3] = PATH_CUT;
+/// A face an operation keeps clear of: `--path-lead`, a blue told from the
+/// cut's green by every eye, and from the amber of what is picked.
+pub const AVOIDED: [u8; 3] = PATH_LEAD;
 /// The work zero's X axis. X red, Y green and Z blue, as CAD draws them, taken from
 /// the path palette so they sit in the same family.
 pub const AXIS_X: [u8; 3] = PATH_RAPID;

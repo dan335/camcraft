@@ -1,5 +1,6 @@
 //! An operation's Geometry tab: what it is kept to or cuts round, and what is
-//! picked for it.
+//! picked for it; then, for a 3D finish, the faces it machines and avoids
+//! ([`surfaces`]).
 
 use camcraft_core::job::{
     self, Boundary, Containment, Curves, FeatureRef, Holes, MachiningBoundary, Operation, Outline,
@@ -7,9 +8,10 @@ use camcraft_core::job::{
 };
 use eframe::egui;
 
+use super::surfaces;
 use crate::help::Help;
 use crate::help::topics::geometry as geo;
-use crate::picking::slots::{Kind, Slot};
+use crate::picking::slots::{Kind, PickList, Slot};
 use crate::properties::{PropAction, ViewPicks};
 use crate::ui::defaults::Defaults;
 use crate::ui::measure::Measure;
@@ -33,9 +35,8 @@ pub(super) fn geometry(
     }
     let uses = op.strategy.uses();
     let drilling = uses.holes.is_some();
-    let flat = uses.outline;
     let cut_selection = op.cuts_selection();
-    if flat {
+    if uses.outline {
         outline_form(ui, d, op);
         ui.add_space(theme::SPACE_3);
     }
@@ -87,9 +88,19 @@ pub(super) fn geometry(
             actions,
         );
     }
-    if drilling || (uses.curves.is_some() && !uses.boundary) {
-        return;
+    if !drilling && (uses.curves.is_none() || uses.boundary) {
+        drawn_boundary(ui, op, diameter, picks);
     }
+    if uses.surfaces {
+        surfaces::surfaces(ui, (d, &mut op.surfaces), m, (setup, index), picks, actions);
+    }
+}
+
+/// What the view draws for an operation's boundary or outline, and what that
+/// is, under it; or that it waits for the part's silhouette, or why it cannot
+/// be drawn.
+fn drawn_boundary(ui: &mut egui::Ui, op: &Operation, diameter: Option<f64>, picks: ViewPicks<'_>) {
+    let flat = op.strategy.uses().outline;
     if picks.shown.is_some_and(|s| s.waiting) {
         hint(
             ui,
@@ -211,25 +222,38 @@ fn what_to_pick(strategy: &StrategySpec) -> Option<&'static str> {
     })
 }
 
-/// How a line in the view is drawn, for its legend.
+/// How something in the view is drawn, for its legend.
 #[derive(Debug, Clone, Copy)]
-enum Swatch {
+pub(super) enum Swatch {
     /// A wide line.
     Bold([u8; 3]),
     /// A thin one.
     Thin([u8; 3]),
     /// Hatching.
     Hatch([u8; 3]),
+    /// A tint over the part's faces.
+    Tint([u8; 3]),
 }
 
-/// What the lines in the view are: each one's look, and its name.
-fn legend(ui: &mut egui::Ui, items: &[(Swatch, &str)]) {
+/// What is drawn in the view: each one's look, and its name.
+pub(super) fn legend(ui: &mut egui::Ui, items: &[(Swatch, &str)]) {
     for &(swatch, name) in items {
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(28.0, 14.0), egui::Sense::hover());
             let painter = ui.painter();
             let (y, x0, x1) = (rect.center().y, rect.left() + 2.0, rect.right() - 2.0);
             match swatch {
+                Swatch::Tint(c) => {
+                    let r = rect.shrink2(egui::vec2(2.0, 1.0));
+                    let color = theme::egui_color(c);
+                    painter.rect_filled(r, 0.0, color.gamma_multiply(0.5));
+                    painter.rect_stroke(
+                        r,
+                        0.0,
+                        egui::Stroke::new(1.0, color),
+                        egui::StrokeKind::Inside,
+                    );
+                }
                 Swatch::Bold(c) => {
                     let stroke = egui::Stroke::new(3.0, theme::egui_color(c));
                     painter.line_segment([egui::pos2(x0, y), egui::pos2(x1, y)], stroke);
@@ -502,21 +526,15 @@ fn pick_cards(
             Kind::Face => &mut selection.faces,
             Kind::Edge => &mut selection.edges,
         };
-        // A row for each face, and for each loop of edges; each pick alone, as the
-        // job names it, until the view has found them.
+        // A row for each face, and for each loop of edges.
         let rows: Vec<PickRow> = match (kind, picks.shown) {
-            (Kind::Face, Some(s)) => s
-                .faces
-                .iter()
-                .enumerate()
-                .map(|(i, f)| (vec![i], Some(f.clone())))
-                .collect(),
             (Kind::Edge, Some(s)) => s
                 .edge_loops
                 .iter()
                 .map(|(picks, what)| (picks.clone(), Some(what.clone())))
                 .collect(),
-            (_, None) => (0..list.len()).map(|i| (vec![i], None)).collect(),
+            (Kind::Face, shown) => each_alone(shown.map(|s| s.faces.as_slice()), list.len()),
+            (Kind::Edge, None) => each_alone(None, list.len()),
         };
         let mut clear = false;
         let mut asked = None;
@@ -525,21 +543,7 @@ fn pick_cards(
             ui,
             topic,
             |ui| {
-                if picks.armed == Some(&slot) {
-                    if widgets::button(ui, Variant::Primary, Size::Sm, None, "Done").clicked() {
-                        asked = Some(PropAction::Disarm);
-                    }
-                } else if widgets::button(
-                    ui,
-                    Variant::Ghost,
-                    Size::Sm,
-                    Some(Icon::MousePointerClick),
-                    "Select in view…",
-                )
-                .clicked()
-                {
-                    asked = Some(PropAction::Arm(slot.clone()));
-                }
+                asked = select_button(ui, &slot, picks.armed);
                 if any && widgets::button(ui, Variant::Ghost, Size::Sm, None, "Clear").clicked() {
                     clear = true;
                 }
@@ -548,7 +552,7 @@ fn pick_cards(
                 if list.is_empty() {
                     hint(ui, "None picked.");
                 }
-                pick_list(ui, kind, list, &rows, actions);
+                pick_list(ui, PickList::Selection(kind), list, &rows, actions);
             },
         );
         actions.extend(asked);
@@ -559,16 +563,56 @@ fn pick_cards(
     }
 }
 
+/// The button on a card of picks that picks into `slot` in the view, or, while
+/// `armed` is that slot, says it is done: what it asks for, pressed.
+pub(super) fn select_button(
+    ui: &mut egui::Ui,
+    slot: &Slot,
+    armed: Option<&Slot>,
+) -> Option<PropAction> {
+    if armed == Some(slot) {
+        widgets::button(ui, Variant::Primary, Size::Sm, None, "Done")
+            .clicked()
+            .then_some(PropAction::Disarm)
+    } else {
+        widgets::button(
+            ui,
+            Variant::Ghost,
+            Size::Sm,
+            Some(Icon::MousePointerClick),
+            "Select in view…",
+        )
+        .clicked()
+        .then(|| PropAction::Arm(slot.clone()))
+    }
+}
+
 /// A row of a list of picks: the places in the job's list of the picks it stands
 /// for, and what they are or why they cannot be found, once the view has looked.
-type PickRow = (Vec<usize>, Option<Result<String, String>>);
+pub(super) type PickRow = (Vec<usize>, Option<Result<String, String>>);
 
-/// A list of picks, as the engine finds them, a row for each of `rows`: the picks
-/// it stands for, and what they are or why they cannot be found. Each row can be
-/// taken out, and a row under the pointer shows its picks in the view.
-fn pick_list(
+/// A row for each of `count` picks alone: with what each is, or why it cannot
+/// be found, from `found` once the view has looked; as the job names it until
+/// then.
+pub(super) fn each_alone(found: Option<&[Result<String, String>]>, count: usize) -> Vec<PickRow> {
+    match found {
+        Some(found) => found
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (vec![i], Some(f.clone())))
+            .collect(),
+        None => (0..count).map(|i| (vec![i], None)).collect(),
+    }
+}
+
+/// `list`, the operation's picks it is as `which` says, as the engine finds
+/// them, a row for each of `rows`: the picks it stands for, and what they are
+/// or why they cannot be found, cut short with all of it on hover where it is
+/// too long for the row. Each row can be taken out, and a row under the
+/// pointer shows its picks in the view.
+pub(super) fn pick_list(
     ui: &mut egui::Ui,
-    kind: Kind,
+    which: PickList,
     list: &mut Vec<FeatureRef>,
     rows: &[PickRow],
     actions: &mut Vec<PropAction>,
@@ -585,25 +629,25 @@ fn pick_list(
         let hovered = ui.rect_contains_pointer(rect);
         list_row_background(ui, rect, false, hovered);
         if hovered {
-            actions.push(PropAction::HoverRow(kind, i));
+            actions.push(PropAction::HoverRow(which, i));
         }
         let mut row = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(rect.shrink2(egui::vec2(theme::SPACE_3, 0.0)))
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
         );
-        match found {
-            Some(Ok(what)) => row.label(what),
-            Some(Err(why)) => row.label(widgets::error_text(why)),
-            None => row.label(
-                egui::RichText::new(format!("{} on '{}'", r.index, r.model))
-                    .color(theme::egui_color(theme::text_3())),
-            ),
+        // The button first, so what the row says is cut short beside it.
+        if hovered && widgets::icon_button(&mut row, Icon::X, "take it out").clicked() {
+            remove = Some(picks);
+        }
+        let text = match found {
+            Some(Ok(what)) => egui::RichText::new(what),
+            Some(Err(why)) => widgets::error_text(why),
+            None => egui::RichText::new(format!("{} on '{}'", r.index, r.model))
+                .color(theme::egui_color(theme::text_3())),
         };
-        row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if hovered && widgets::icon_button(ui, Icon::X, "take it out").clicked() {
-                remove = Some(picks);
-            }
+        row.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.add(egui::Label::new(text).truncate());
         });
     }
     if let Some(picks) = remove {

@@ -701,8 +701,8 @@ impl App {
             match a {
                 PropAction::Arm(slot) => self.picking.arm(id, slot),
                 PropAction::Disarm => self.picking.disarm(),
-                PropAction::HoverRow(kind, i) => {
-                    if self.picking.hover_row(kind, i) {
+                PropAction::HoverRow(list, i) => {
+                    if self.picking.hover_row(list, i) {
                         ctx.request_repaint();
                     }
                 }

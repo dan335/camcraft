@@ -258,6 +258,7 @@ pub fn content<'a>(state: &'a SetupState, name: &str, selection: &Selection) -> 
             shown,
             cutter,
         },
+        tint: None,
         selection: None,
         hover: None,
         ghost: None,

@@ -263,6 +263,84 @@ fn models_and_stocks_toggle() {
     assert!(!models.still_valid(&doc));
 }
 
+/// A face clicked into a surface group is added; clicked again, taken out. One
+/// in another group of the operation moves into this one, so none is ever in
+/// two; an edge means nothing to a group.
+#[test]
+fn group_faces_toggle_and_move_between_groups() {
+    use camcraft_core::job::{SurfaceAction, SurfaceGroup};
+    let mut doc = doc_with_op();
+    let setup = doc.job.setups[0].name.clone();
+    let group = |action| SurfaceGroup {
+        action,
+        radial: 0.0,
+        axial: 0.0,
+        faces: Vec::new(),
+    };
+    doc.job.setups[0].operations[0].surfaces.groups =
+        vec![group(SurfaceAction::Machine), group(SurfaceAction::Avoid)];
+    let into = |group| Slot::GroupFaces {
+        setup: setup.clone(),
+        op: 0,
+        group,
+        groups: 2,
+    };
+    assert_eq!(into(0).accept(), Accept::Faces);
+    assert!(!into(0).single());
+    let same = |r: &FeatureRef, _| Some(r.index);
+    let faces = |doc: &Document| -> Vec<Vec<u32>> {
+        doc.job.setups[0].operations[0]
+            .surfaces
+            .groups
+            .iter()
+            .map(|g| g.faces.iter().map(|r| r.index).collect())
+            .collect()
+    };
+    assert!(apply(&mut doc, &into(0), &face(3), same));
+    assert!(apply(&mut doc, &into(0), &face(4), same));
+    assert_eq!(faces(&doc), [vec![3, 4], vec![]]);
+    assert!(apply(&mut doc, &into(1), &face(3), same));
+    assert_eq!(faces(&doc), [vec![4], vec![3]], "moved, not copied");
+    assert!(apply(&mut doc, &into(1), &face(3), same));
+    assert_eq!(faces(&doc), [vec![4], vec![]]);
+    let edge = Target::Edge {
+        model: "p".into(),
+        edge: 1,
+        at: DVec3::ZERO,
+    };
+    assert!(!apply(&mut doc, &into(0), &edge, same));
+}
+
+/// Picking into a group stops once a group is added or taken out, by the panel
+/// or an undo, rather than fill whichever group has its place now; and on an
+/// operation whose strategy takes no groups.
+#[test]
+fn a_group_slot_lasts_while_its_groups_do() {
+    use camcraft_core::job::{StrategySpec, SurfaceAction, SurfaceGroup};
+    let mut doc = doc_with_op();
+    let setup = doc.job.setups[0].name.clone();
+    let avoid = SurfaceGroup {
+        action: SurfaceAction::Avoid,
+        radial: 0.0,
+        axial: 0.0,
+        faces: Vec::new(),
+    };
+    doc.job.setups[0].operations[0].surfaces.groups = vec![avoid.clone(), avoid.clone()];
+    doc.selection = Selection::Operation(setup.clone(), 0);
+    let slot = Slot::GroupFaces {
+        setup: setup.clone(),
+        op: 0,
+        group: 1,
+        groups: 2,
+    };
+    assert!(slot.still_valid(&doc));
+    doc.job.setups[0].operations[0].surfaces.groups.remove(0);
+    assert!(!slot.still_valid(&doc), "a group before it taken out");
+    doc.job.setups[0].operations[0].surfaces.groups = vec![avoid.clone(), avoid];
+    doc.job.setups[0].operations[0].strategy = StrategySpec::named("pocket-clearing").unwrap();
+    assert!(!slot.still_valid(&doc), "no groups to pick into");
+}
+
 /// Picking stops making sense when what it fills is no longer shown.
 #[test]
 fn a_slot_lasts_while_its_owner_is_selected() {

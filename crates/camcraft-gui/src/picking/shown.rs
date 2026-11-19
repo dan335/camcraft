@@ -1,22 +1,28 @@
 //! What the view and the panel show of the picks already made: a setup's work
-//! zero, and an operation's faces, edges and the boundary or outline they make.
+//! zero, and an operation's faces, edges and the boundary or outline they make,
+//! and its surface groups' faces with the part tinted by what it does to each.
 //!
 //! What is shown of a pick is found the same way the engine finds it
 //! ([`camcraft_core::setup::features`]), so a face lit in the view is the face that will be
 //! cut, and a pick that can no longer be found says so here before it stops a run.
 
+use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
+
 use camcraft_core::cutter::allowance::EffectiveTool;
 use camcraft_core::cutter::tool::ToolProfile;
 use camcraft_core::job::{
     self, Boundary, Curves, FeatureRef, MachiningBoundary, Operation, Origin, Outline as Cut,
-    StrategySpec,
+    StrategySpec, SurfaceAction, Surfaces,
 };
 use camcraft_core::run::cutting_tool;
 use camcraft_core::setup::features::{self, FeatureError};
 use camcraft_core::setup::{Bodies, PrepareError, Prepared};
 use camcraft_core::strategy::planar::{centre_offset, picked_pieces};
 use camcraft_geom::contour::Region;
-use glam::{DVec2, DVec3};
+use camcraft_geom::mesh::TriMesh;
+use camcraft_geom::topology::Body;
+use glam::{DVec2, DVec3, Vec3};
 
 use crate::document::Document;
 use crate::picking::describe::{describe_edge, describe_face, describe_point};
@@ -24,7 +30,7 @@ use crate::picking::highlight::{face_triangles, model_edge_lines};
 use crate::picking::ray::{PickModel, PickScene};
 use crate::picking::slots::{Kind, chamfer_run, edge_loop, smooth_chain};
 use crate::ui::measure::Measure;
-use crate::view::viewport::{Highlight, Outline, OutlineKind};
+use crate::view::viewport::{FaceTint, Highlight, Outline, OutlineKind};
 
 /// What the view and the panel show of the picks for what is selected: a setup's
 /// picked work zero, or an operation's faces, edges and the boundary they make.
@@ -42,6 +48,12 @@ pub struct Shown {
     /// The picked edges as the panel lists them: each loop once, as its picks'
     /// places in the job's order and what it is, and each pick not found alone.
     pub edge_loops: Vec<(Vec<usize>, Result<String, String>)>,
+    /// Each surface group's faces, in the job's order: what each is, or why it
+    /// cannot be found or is refused.
+    pub groups: Vec<Vec<Result<String, String>>>,
+    /// The part's faces tinted by what the operation does to them, where it
+    /// does anything but machine them all.
+    pub tint: Option<FaceTint>,
     /// The boundary the picks make, or why they make none.
     pub boundary: Option<Result<(), String>>,
     /// The boundary is drawn from the part's silhouette, which is still being
@@ -51,13 +63,14 @@ pub struct Shown {
 
 /// The picks of `setup`, and of its operation `op` when one is selected, as they
 /// stand on the models laid out in `prepared`, whose part's silhouette is
-/// `silhouette`, or `Ok(None)` while it is cast ([`Layout::silhouette`]).
+/// `silhouette`, or `Ok(None)` while it is cast ([`Layout::silhouette`]). The
+/// faces drawn as picked are those of what is being picked into: surface group
+/// `group` while it is, else the operation's own.
 ///
 /// [`Layout::silhouette`]: crate::document::Layout::silhouette
 pub fn shown(
     doc: &Document,
-    setup: &str,
-    op: Option<usize>,
+    (setup, op, group): (&str, Option<usize>, Option<usize>),
     (prepared, silhouette): (&Prepared, Result<Option<&Region>, String>),
     scene: &PickScene,
     m: Measure,
@@ -121,15 +134,12 @@ pub fn shown(
         let index = kind.find(body, r, tolerance).map_err(|e| e.to_string())?;
         Ok::<_, String>((body, index))
     };
-    let curves = operation.strategy.uses().curves;
+    let uses = operation.strategy.uses();
+    let curves = uses.curves;
     for r in &sel.faces {
         out.faces.push(find(r, Kind::Face).map(|(body, face)| {
-            // Found once on the body, drawn on every copy.
-            for stand in bodies.get(&r.model).map_or(&[][..], |c| c.stands) {
-                let to_setup = |p: DVec3| scene.frame.to_setup_as(stand, p);
-                out.highlight
-                    .faces
-                    .extend(face_triangles(body, face, &to_setup));
+            if group.is_none() {
+                every_copy(&mut out.highlight, scene, &bodies, (&r.model, body, face));
             }
             // A chamfer's face is its edges, each chamfered, and an
             // engraving's its outline, engraved: drawn as picked.
@@ -196,6 +206,44 @@ pub fn shown(
         out.edge_loops.push((picks, what));
     }
 
+    // Each surface group's faces, found as the run finds them, and the group
+    // each face found is in: the first, one in two refused as the run
+    // refuses it. The group being picked into is drawn as picked.
+    if uses.surfaces {
+        let surfaces = &operation.surfaces;
+        let mut grouped: BTreeMap<(&str, u32), usize> = BTreeMap::new();
+        for (k, g) in surfaces.groups.iter().enumerate() {
+            let mut rows = Vec::with_capacity(g.faces.len());
+            for r in &g.faces {
+                rows.push(find(r, Kind::Face).and_then(|(body, face)| {
+                    match grouped.entry((r.model.as_str(), face)) {
+                        Entry::Occupied(first) if *first.get() != k => {
+                            return Err(FeatureError::TwoGroups {
+                                model: r.model.clone(),
+                                face,
+                                first: first.get() + 1,
+                                second: k + 1,
+                            }
+                            .to_string());
+                        }
+                        Entry::Occupied(_) => {}
+                        Entry::Vacant(v) => {
+                            v.insert(k);
+                        }
+                    }
+                    if group == Some(k) {
+                        every_copy(&mut out.highlight, scene, &bodies, (&r.model, body, face));
+                    }
+                    Ok(describe_face(body, &r.model, face, m))
+                }));
+            }
+            out.groups.push(rows);
+        }
+        if !surfaces.is_whole() {
+            out.tint = tint(surfaces, &grouped, prepared, &bodies);
+        }
+    }
+
     // The boundary, drawn at the stock's top so it reads over everything. Worked
     // out as the run will work it out, with the operation's own tool.
     let found = out.faces.iter().chain(&out.edges).all(Result::is_ok);
@@ -218,7 +266,6 @@ pub fn shown(
         });
         return out;
     }
-    let uses = operation.strategy.uses();
     // What is drawn from the part's silhouette waits for it to be cast,
     // elsewhere, rather than casting it while a frame is drawn.
     let tool = cutting_tool(&doc.job, operation).ok();
@@ -268,6 +315,56 @@ pub fn shown(
         );
     }
     out
+}
+
+/// Face `face` of `model`, whose body is `body`, drawn into `h` on every copy
+/// of the model among `bodies`: a pick is found once on the body, and means
+/// the face on every copy.
+fn every_copy(
+    h: &mut Highlight,
+    scene: &PickScene,
+    bodies: &Bodies<'_>,
+    (model, body, face): (&str, &Body, u32),
+) {
+    for stand in bodies.get(model).map_or(&[][..], |c| c.stands) {
+        let to_setup = |p: DVec3| scene.frame.to_setup_as(stand, p);
+        h.faces.extend(face_triangles(body, face, &to_setup));
+    }
+}
+
+/// The part laid out as `prepared` from `bodies`, its faces sorted by what
+/// `surfaces` does to them, as the run sorts them: a face in a group, by its
+/// model and number in `grouped`, as its group does; every other face as the
+/// model does. Each triangle is the part's own, so it lies exactly on it.
+fn tint(
+    surfaces: &Surfaces,
+    grouped: &BTreeMap<(&str, u32), usize>,
+    prepared: &Prepared,
+    bodies: &Bodies<'_>,
+) -> Option<FaceTint> {
+    let action = |k: Option<&usize>| {
+        k.and_then(|&k| surfaces.groups.get(k))
+            .map_or(surfaces.model.action, |g| g.action)
+    };
+    let meshes = prepared
+        .by_face(bodies, 2, |piece, face| {
+            let k = face.and_then(|f| grouped.get(&(piece.model.as_str(), f)));
+            Some(usize::from(action(k) == SurfaceAction::Avoid))
+        })
+        .ok()?;
+    let triangles = |mesh: &TriMesh| -> Vec<[Vec3; 3]> {
+        (0..mesh.len())
+            .filter_map(|t| mesh.triangle(t))
+            .map(|t| t.map(DVec3::as_vec3))
+            .collect()
+    };
+    match meshes.as_slice() {
+        [machined, avoided] => Some(FaceTint {
+            machined: triangles(machined),
+            avoided: triangles(avoided),
+        }),
+        _ => None,
+    }
 }
 
 /// " · 31.80 × 15.80 mm", the size of loop `round` of `pm`'s edges seen from

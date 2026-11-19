@@ -32,7 +32,7 @@ use eframe::egui;
 
 use crate::document::{Document, Level, Selection};
 use crate::help::topics::app;
-use crate::picking::slots::{Kind, Shown, Slot};
+use crate::picking::slots::{PickList, Shown, Slot};
 use crate::tools::drawing::kind_name;
 use crate::ui::defaults::Defaults;
 use crate::ui::measure::Measure;
@@ -55,8 +55,8 @@ pub enum PropAction {
     Arm(Slot),
     /// Stop picking.
     Disarm,
-    /// Row `i` of the list of picked faces or edges is under the pointer.
-    HoverRow(Kind, usize),
+    /// Row `i` of a list of picked faces or edges is under the pointer.
+    HoverRow(PickList, usize),
 }
 
 /// What the panel needs to know of picking in the view.
@@ -683,5 +683,98 @@ mod tests {
         asked.borrow_mut().clear();
         h.run();
         assert!(asked.borrow().is_empty(), "{:?}", asked.borrow());
+    }
+
+    /// Add group adds a group doing the other of what the model does, and
+    /// starts picking its faces at once. A group taken out before the one
+    /// being picked into leaves picking in that one, at its place now; the
+    /// one being picked into taken out stops picking.
+    #[test]
+    fn a_group_is_picked_into_as_it_is_added_and_others_go() {
+        use camcraft_core::job::{StrategySpec, SurfaceAction};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let (mut doc, setup) = crate::document::with_plate();
+        let i = doc
+            .add_operation(&setup, StrategySpec::Parallel { angle: 0.0 })
+            .unwrap();
+        doc.selection = Selection::Operation(setup.clone(), i);
+        let asked: Rc<RefCell<Vec<PropAction>>> = Rc::default();
+        let (said, mut fonts) = (asked.clone(), false);
+        // The job, and the slot being picked into as the app would have it;
+        // tall enough for three groups' cards.
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(600.0, 1600.0))
+            .build_ui_state(
+                move |ui, (doc, armed): &mut (Document, Option<Slot>)| {
+                    if !fonts {
+                        theme::apply(ui.ctx());
+                        fonts = true;
+                        return;
+                    }
+                    let picks = ViewPicks {
+                        armed: armed.as_ref(),
+                        shown: None,
+                    };
+                    let panel = show(ui, doc, Measure::Metric, picks);
+                    for a in panel.actions {
+                        match &a {
+                            PropAction::Arm(slot) => *armed = Some(slot.clone()),
+                            PropAction::Disarm => *armed = None,
+                            _ => continue,
+                        }
+                        said.borrow_mut().push(a);
+                    }
+                },
+                (doc, None),
+            );
+        h.run();
+        h.ctx
+            .data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 1_usize));
+        h.run();
+        let into = |group, groups| Slot::GroupFaces {
+            setup: setup.clone(),
+            op: i,
+            group,
+            groups,
+        };
+        for k in 0..3 {
+            h.get_by_label("Add group").click();
+            h.run();
+            assert_eq!(
+                asked.borrow().last(),
+                Some(&PropAction::Arm(into(k, k + 1)))
+            );
+        }
+        let groups = |h: &Harness<'_, (Document, Option<Slot>)>| {
+            h.state().0.job.setups[0].operations[i]
+                .surfaces
+                .groups
+                .len()
+        };
+        let op = &h.state().0.job.setups[0].operations[i];
+        assert!(
+            op.surfaces
+                .groups
+                .iter()
+                .all(|g| g.action == SurfaceAction::Avoid && g.faces.is_empty())
+        );
+
+        // Picking into the third, the first taken out.
+        h.get_all_by_label("remove the group")
+            .next()
+            .unwrap()
+            .click();
+        h.run();
+        assert_eq!(groups(&h), 2);
+        assert_eq!(h.state().1, Some(into(1, 2)));
+        // The one being picked into taken out.
+        h.get_all_by_label("remove the group")
+            .nth(1)
+            .unwrap()
+            .click();
+        h.run();
+        assert_eq!(groups(&h), 1);
+        assert_eq!(h.state().1, None);
     }
 }

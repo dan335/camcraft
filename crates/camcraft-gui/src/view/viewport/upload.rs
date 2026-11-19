@@ -48,8 +48,17 @@ pub(super) struct HighlightGpu {
     pub(super) lines: Option<(wgpu::Buffer, u32)>,
 }
 
+/// The part's faces tinted by what an operation does to them, on the GPU:
+/// those it machines and those it avoids, either of which may be empty.
+pub(super) struct TintGpu {
+    key: u64,
+    pub(super) machined: Option<(wgpu::Buffer, u32)>,
+    pub(super) avoided: Option<(wgpu::Buffer, u32)>,
+}
+
 pub(super) struct Uploaded {
     pub(super) part: Option<(u64, wgpu::Buffer, u32)>,
+    pub(super) tint: Option<TintGpu>,
     pub(super) selection: Option<HighlightGpu>,
     pub(super) hover: Option<HighlightGpu>,
     pub(super) ghost: Option<HighlightGpu>,
@@ -65,6 +74,7 @@ impl Uploaded {
     pub(super) fn none() -> Self {
         Self {
             part: None,
+            tint: None,
             selection: None,
             hover: None,
             ghost: None,
@@ -148,6 +158,22 @@ impl Gpu {
                 let v = flat_vertices(mesh_triangles(mesh));
                 let (buffer, n) = vertex_buffer(rs, "camcraft part", &v);
                 Some((key, buffer, n))
+            },
+        );
+
+        keep_up(
+            &mut self.up.tint,
+            |t| t.key,
+            content.tint,
+            |key, tint| {
+                let faces = |label, triangles: &[[Vec3; 3]]| {
+                    vertex_buffer_of(rs, label, &flat_vertices(triangles.iter().copied()))
+                };
+                Some(TintGpu {
+                    key,
+                    machined: faces("camcraft machined faces", &tint.machined),
+                    avoided: faces("camcraft avoided faces", &tint.avoided),
+                })
             },
         );
 

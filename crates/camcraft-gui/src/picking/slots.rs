@@ -2,7 +2,8 @@
 //! and what a click does to the job.
 //!
 //! A property that takes picks is a *slot*: a setup's work zero, its models or its
-//! stocks, an operation's faces or its edges. Its Select button arms the view for it, so the view offers
+//! stocks, an operation's faces or its edges, or the faces of one of its surface
+//! groups. Its Select button arms the view for it, so the view offers
 //! only what the slot takes; a click then writes straight into the job, where it is
 //! one step to undo like any other edit. A work zero takes one point and is done; a
 //! list of faces or edges takes any number, a second click on one taking it out, and
@@ -11,7 +12,7 @@
 //! What the view and the panel show of the picks made is worked out in
 //! [`super::shown`].
 
-use camcraft_core::job::{BoxOf, FeatureRef, Origin};
+use camcraft_core::job::{BoxOf, FeatureRef, Operation, Origin};
 use camcraft_core::setup::features::{self, FeatureError};
 use camcraft_geom::topology::Body;
 use glam::DVec3;
@@ -68,6 +69,20 @@ pub enum Slot {
         /// The operation's place in it.
         op: usize,
     },
+    /// The faces of surface group `group` of operation `op` of setup `setup`,
+    /// which had `groups` groups when it was armed: any added or taken out
+    /// since, by an undo as well as the panel, stops picking into it rather
+    /// than leave it filling whichever group has its place now.
+    GroupFaces {
+        /// The setup, by name.
+        setup: String,
+        /// The operation's place in it.
+        op: usize,
+        /// The group's place among the operation's.
+        group: usize,
+        /// How many groups the operation had.
+        groups: usize,
+    },
 }
 
 impl Slot {
@@ -77,7 +92,7 @@ impl Slot {
             Slot::WorkZero { .. } => Accept::Points,
             Slot::Models { .. } => Accept::Models,
             Slot::Stocks { .. } => Accept::Stocks,
-            Slot::Faces { .. } => Accept::Faces,
+            Slot::Faces { .. } | Slot::GroupFaces { .. } => Accept::Faces,
             Slot::Edges { .. } | Slot::Curves { .. } | Slot::Chains { .. } => Accept::Edges,
         }
     }
@@ -109,6 +124,9 @@ impl Slot {
             Slot::Chains { .. } => {
                 "Click an edge to add the loop it goes round, or its chain where it closes none, or take them out · Esc or Done to finish"
             }
+            Slot::GroupFaces { .. } => {
+                "Click faces to add them to the group, moving them out of any other, or take them out · Esc or Done to finish"
+            }
         }
     }
 
@@ -127,6 +145,47 @@ impl Slot {
                 doc.operation(setup, *op).is_some()
                     && doc.selection == Selection::Operation(setup.clone(), *op)
             }
+            Slot::GroupFaces {
+                setup,
+                op,
+                group,
+                groups,
+            } => {
+                doc.operation(setup, *op).is_some_and(|o| {
+                    o.strategy.uses().surfaces
+                        && o.surfaces.groups.len() == *groups
+                        && group < groups
+                }) && doc.selection == Selection::Operation(setup.clone(), *op)
+            }
+        }
+    }
+}
+
+/// One of an operation's lists of picks, as the panel lists it, a row for
+/// each pick: its selection's faces or edges, or a surface group's faces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickList {
+    /// Its faces or its edges.
+    Selection(Kind),
+    /// The faces of the surface group in this place.
+    Group(usize),
+}
+
+impl PickList {
+    /// Whether its picks are faces or edges.
+    pub fn kind(self) -> Kind {
+        match self {
+            PickList::Selection(kind) => kind,
+            PickList::Group(_) => Kind::Face,
+        }
+    }
+
+    /// Its picks in `op`, if `op` has it.
+    pub fn of(self, op: &Operation) -> Option<&[FeatureRef]> {
+        match self {
+            PickList::Selection(Kind::Face) => Some(&op.selection.faces),
+            PickList::Selection(Kind::Edge) => Some(&op.selection.edges),
+            PickList::Group(g) => op.surfaces.groups.get(g).map(|g| g.faces.as_slice()),
         }
     }
 }
@@ -171,6 +230,29 @@ pub fn apply(
                 toggle(&mut o.selection.faces, model, *face, at, |r| {
                     current(r, Kind::Face)
                 })
+            })
+        }
+        (
+            Slot::GroupFaces {
+                setup, op, group, ..
+            },
+            Target::Face { model, face, at },
+        ) => {
+            let at = own(doc, model, *at);
+            doc.operation_mut(setup, *op).is_some_and(|o| {
+                let current = |r: &FeatureRef| current(r, Kind::Face);
+                // A face is in one group: picked into this one, it leaves any
+                // other, as the job file refuses it in two.
+                for (k, g) in o.surfaces.groups.iter_mut().enumerate() {
+                    if k != *group {
+                        g.faces
+                            .retain(|r| !(r.model == *model && current(r) == Some(*face)));
+                    }
+                }
+                o.surfaces
+                    .groups
+                    .get_mut(*group)
+                    .is_some_and(|g| toggle(&mut g.faces, model, *face, at, current))
             })
         }
         (

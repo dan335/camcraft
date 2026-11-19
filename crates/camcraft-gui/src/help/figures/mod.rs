@@ -88,6 +88,8 @@ pub enum Figure {
     BoundaryOffset,
     /// A profile cut outside, inside, or on its contour.
     ProfileSide,
+    /// The tool kept clear of an avoided face, beside it and above it.
+    Clearance(Clearance),
     /// A tool's dimensions.
     ToolDim(ToolDim),
     /// The shapes of cutter.
@@ -118,6 +120,15 @@ pub enum LeaveOn {
     Walls,
     /// Floors.
     Floors,
+}
+
+/// Which way the tool is kept clear of an avoided face.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Clearance {
+    /// Sideways: radially.
+    Beside,
+    /// From above: axially.
+    Above,
 }
 
 /// Which of a tab's settings.
@@ -268,6 +279,7 @@ impl Figure {
             Figure::Containment => geometry::containment(painter, rect),
             Figure::BoundaryOffset => geometry::boundary_offset(painter, rect),
             Figure::ProfileSide => geometry::profile_side(painter, rect),
+            Figure::Clearance(c) => geometry::clearance(painter, rect, c),
             Figure::ToolDim(d) => tool::dimensions(painter, rect, d),
             Figure::ToolKinds => tool::kinds(painter, rect),
             Figure::Margin(m) => geometry::margins(painter, rect, m),
@@ -315,6 +327,7 @@ mod tests {
             Figure::ToolKinds,
         ];
         all.extend([Facing::StockOffset, Facing::PassExtension].map(Figure::Facing));
+        all.extend([Clearance::Beside, Clearance::Above].map(Figure::Clearance));
         all.extend([LeaveOn::Both, LeaveOn::Walls, LeaveOn::Floors].map(Figure::Leave));
         all.extend([Tab::All, Tab::Shape, Tab::Width, Tab::Height, Tab::Spacing].map(Figure::Tab));
         all.extend(

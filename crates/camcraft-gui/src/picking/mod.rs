@@ -8,7 +8,8 @@
 //! Three things are worked out once and kept until what they depend on changes:
 //! the setup made ready for picking (its models' edges and points in the setup's
 //! frame, redone when the layout is), what the selected setup or operation's picks
-//! show (redone when the job's picks, the tool or the layout change), and what the
+//! show (redone when the job's picks, its surface groups, the tool or the layout
+//! change, or another group is picked into), and what the
 //! thing under the pointer shows (redone when the pointer moves onto something
 //! else). Everything else is done as the pointer moves: a ray cast and a look along
 //! the edges on the screen.
@@ -28,7 +29,7 @@ use std::borrow::Cow;
 
 use camcraft_core::job::{
     self, Boundary, FeatureRef, MachiningBoundary, Operation, Origin, Outline, StockToLeave,
-    StrategySpec, ToolSpec,
+    StrategySpec, Surfaces, ToolSpec,
 };
 #[cfg(all(test, feature = "ui-snapshots"))]
 use eframe::egui;
@@ -39,7 +40,7 @@ use crate::view::viewport::{Content, Highlight, PointerEvent};
 use crate::worker::DocId;
 use ray::{PickScene, PickStock, Target};
 use shown::Shown;
-use slots::{Kind, Slot};
+use slots::{Kind, PickList, Slot};
 
 /// What the picks shown were worked out from: when any of it changes, they are
 /// worked out again, and nothing else makes them. Each frame's is borrowed from
@@ -54,6 +55,10 @@ struct ShownFrom<'a> {
     selection: Option<Cow<'a, job::Selection>>,
     /// What the operation's boundary or outline is drawn with, besides its picks.
     drawn: Option<Drawn<'a>>,
+    /// Its surface groups and the model's action, where its strategy takes
+    /// them, and the group being picked into.
+    surfaces: Option<Cow<'a, Surfaces>>,
+    group: Option<usize>,
     tolerance: u64,
     measure: Measure,
     /// How far the part's silhouette has got: what is drawn from it is drawn
@@ -167,6 +172,8 @@ impl ShownFrom<'_> {
             origin: Cow::Owned(self.origin.into_owned()),
             selection: self.selection.map(|s| Cow::Owned(s.into_owned())),
             drawn: self.drawn.map(Drawn::into_owned),
+            surfaces: self.surfaces.map(|s| Cow::Owned(s.into_owned())),
+            group: self.group,
             tolerance: self.tolerance,
             measure: self.measure,
             silhouette: self.silhouette,
@@ -181,10 +188,10 @@ pub struct Picking {
     armed: Option<(DocId, Slot)>,
     /// What is under the pointer.
     hover: Option<Target>,
-    /// A row of the panel's list of picks under the pointer, this frame, and
-    /// the one last shown.
-    row: Option<(Kind, usize)>,
-    shown_row: Option<(Kind, usize)>,
+    /// A row of one of the panel's lists of picks under the pointer, this
+    /// frame, and the one last shown.
+    row: Option<(PickList, usize)>,
+    shown_row: Option<(PickList, usize)>,
     /// A model the panel lights, for which job: a sheet's part under the
     /// pointer there, or chosen.
     lit: Option<(DocId, String)>,
@@ -311,11 +318,11 @@ impl Picking {
             .map(|((rim, centre), view)| (rim, centre, view))
     }
 
-    /// Show the pick in row `i` of the panel's `kind` list as under the pointer.
+    /// Show the pick in row `i` of the panel's `list` as under the pointer.
     /// The panel is drawn after the view is worked out, so this shows from the
     /// next frame: whether that frame is needed, because the row is a new one.
-    pub fn hover_row(&mut self, kind: Kind, i: usize) -> bool {
-        self.row = Some((kind, i));
+    pub fn hover_row(&mut self, list: PickList, i: usize) -> bool {
+        self.row = Some((list, i));
         self.shown_row != self.row
     }
 
@@ -410,6 +417,16 @@ impl Picking {
             Selection::Operation(s, i) if s == setup => Some(Some(*i)),
             _ => None,
         };
+        // The surface group being picked into, of the operation selected.
+        let group = match self.armed(doc.id) {
+            Some(Slot::GroupFaces {
+                setup: s,
+                op: o,
+                group,
+                ..
+            }) if s == setup && op == Some(Some(*o)) => Some(*group),
+            _ => None,
+        };
         let from = op.and_then(|op| {
             let s = doc.setup(setup)?;
             let operation = op.and_then(|i| s.operations.get(i));
@@ -421,6 +438,10 @@ impl Picking {
                 origin: Cow::Borrowed(&s.origin),
                 selection: operation.map(|o| Cow::Borrowed(&o.selection)),
                 drawn: operation.map(|o| Drawn::of(&doc.job, o)),
+                surfaces: operation
+                    .filter(|o| o.strategy.uses().surfaces)
+                    .map(|o| Cow::Borrowed(&o.surfaces)),
+                group,
                 tolerance: doc.job.tolerance.to_bits(),
                 measure: m,
                 silhouette: match &silhouette {
@@ -433,7 +454,13 @@ impl Picking {
         match from {
             None => self.shown = None,
             Some(from) if self.shown.as_ref().is_none_or(|(f, ..)| *f != from) => {
-                let shown = shown::shown(doc, setup, from.op, (prepared, silhouette), scene, m);
+                let shown = shown::shown(
+                    doc,
+                    (setup, from.op, from.group),
+                    (prepared, silhouette),
+                    scene,
+                    m,
+                );
                 self.shown = Some((from.into_owned(), shown, next_key()));
             }
             Some(_) => {}
@@ -441,20 +468,14 @@ impl Picking {
 
         // What is under the pointer, or under it in the panel's list.
         self.shown_row = self.row.take();
-        let row = self.shown_row.and_then(|(kind, i)| {
+        let row = self.shown_row.and_then(|(list, i)| {
             let (from, ..) = self.shown.as_ref()?;
-            let sel = from.selection.as_ref()?;
-            let r = match kind {
-                Kind::Face => sel.faces.get(i),
-                Kind::Edge => sel.edges.get(i),
-            }?;
+            let operation = doc.operation(setup, from.op?)?;
+            let r = list.of(operation)?.get(i)?;
             // A trace's edges as the chain they run on along; a chamfer's
             // as the loop, or the chain where there is none; others' loops.
-            let curves = from
-                .op
-                .and_then(|i| doc.operation(setup, i))
-                .and_then(|o| o.strategy.uses().curves);
-            row_target(scene, doc, r, kind).map(|t| match curves {
+            let curves = operation.strategy.uses().curves;
+            row_target(scene, doc, r, list.kind()).map(|t| match curves {
                 Some(job::Curves::Traced) => slots::whole_chain(scene, t),
                 Some(job::Curves::Chamfered) => slots::whole_run(scene, t),
                 _ => slots::whole_loop(scene, t),
@@ -481,17 +502,19 @@ impl Picking {
     }
 
     /// Add what picking draws, and says, to what the view draws for job `doc`.
-    /// An operation's picks show only while its geometry is being looked at,
-    /// `geometry`; a setup's work zero, whenever the setup is selected.
+    /// An operation's picks, and its faces tinted by what it does to them,
+    /// show only while its geometry is being looked at, `geometry`; a setup's
+    /// work zero, whenever the setup is selected.
     pub fn decorate<'a>(&'a self, doc: DocId, geometry: bool, content: &mut Content<'a>) {
         if self.scene.as_ref().is_none_or(|(d, ..)| *d != doc) {
             return;
         }
-        content.selection = self
+        let shown = self
             .shown
             .as_ref()
-            .filter(|(f, ..)| f.doc == doc && (f.op.is_none() || geometry))
-            .map(|(_, s, key)| (*key, &s.highlight));
+            .filter(|(f, ..)| f.doc == doc && (f.op.is_none() || geometry));
+        content.selection = shown.map(|(_, s, key)| (*key, &s.highlight));
+        content.tint = shown.and_then(|(_, s, key)| Some((*key, s.tint.as_ref()?)));
         content.hover = self.hovered.as_ref().map(|(_, h, key)| (*key, h));
         content.ghost = self
             .ghost

@@ -149,7 +149,20 @@ it.
   starts picking in the view at once: click faces, then **Done** or Esc; their
   cards' **Select in view…** picks more later. New operations start on the
   part's silhouette: parallel with the tool's centre inside it, adaptive and pocket
-  clearing reaching in from outside with a channel a tool wide), *Heights* (clearance, top and bottom,
+  clearing reaching in from outside with a channel a tool wide. Under it, a 3D
+  finish has its *Surfaces*, as Fusion's Surface Manager: *Model*, machine or
+  avoid, for every face in no group, then a card for each group of faces
+  picked in the view, machined or avoided, with its offsets: *Extra on walls*
+  and *Extra on floors* on a group machined, *Clearance beside* and *Clearance
+  above* on one avoided, each on top of the operation's stock to leave. **Add
+  group** starts one doing the other of what the model does, and starts
+  picking its faces at once, as a boundary set to picked faces does: a group
+  with none is refused until it has some. While the tab shows, the view tints
+  every face by what the operation does to it, and the group being picked
+  into as picked; with no group and the model machined, nothing is tinted.
+  Roughing and 2D operations take no groups; flat gives an avoided flat no
+  passes at all; and an operation that avoids anything cannot use a V-bit or
+  chamfer mill), *Heights* (clearance, top and bottom,
   drawn in the view as planes), *Passes* and *Linking* (retract feed, safe
   distance, stay-down distance, and the lead radius or the ramp angle and feed;
   a profile's level lead arcs on and off each ring, their radius, sweep and
@@ -342,6 +355,9 @@ the part, where an offset of 0 would only touch its walls.
   click taking the whole loop as for a boundary, or its floor as a face, whose
   edges are its outline and are drawn so. A loop inside another, an island's
   rim, is part of the shape's outline.
+- A surface group takes faces. A face is in one group of an operation: a
+  click on one in another group moves it into this one, and a click on one in
+  this group takes it out. A row under the pointer lights its face.
 - A 2D profile, pocket or 2D adaptive takes faces and edges as what it cuts
   round or clears.
   The view draws that boundary (wide), each piece of it at the height of what is

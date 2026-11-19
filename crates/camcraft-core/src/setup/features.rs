@@ -151,7 +151,8 @@ pub enum FeatureError {
     /// A face is in two surface groups. Fusion lets the lower one win, which
     /// is a rule nobody reading a job file could see, so it is refused.
     #[error(
-        "face {face} on '{model}' is in surface groups {first} and {second}: a face can be in          one group"
+        "face {face} on '{model}' is in surface groups {first} and {second}: a face can be in \
+         one group"
     )]
     TwoGroups {
         /// The model.
