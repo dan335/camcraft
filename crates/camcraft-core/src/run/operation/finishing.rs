@@ -119,10 +119,7 @@ pub(super) fn finish_area(
     let (sweep_lo, sweep_hi) = work.sweep();
     let mut area = Region::rectangle(sweep_lo, sweep_hi);
     if contact {
-        let shadow = work.prepared.shadow().map_err(in_op(op))?;
-        let touched =
-            contact_region(shadow, work.widest(), work.job.tolerance).map_err(in_op(op))?;
-        area = area.intersection(&touched).map_err(in_op(op))?;
+        area = area.intersection(&work.contact()?).map_err(in_op(op))?;
     }
     if let Some(l) = limit {
         area = area.intersection(l).map_err(in_op(op))?;
@@ -216,8 +213,7 @@ fn steep_walls(
     // as chords inside them, so it is grown by two to be past it all along.
     let radius = work.widest();
     let overlap = band.offset(radius, job.tolerance);
-    let shadow = work.prepared.shadow().map_err(in_op(op))?;
-    let touched = contact_region(shadow, radius, job.tolerance).map_err(in_op(op))?;
+    let touched = work.contact()?;
     let edge = touched
         .offset(2.0 * job.tolerance, 0.1 * job.tolerance)
         .difference(&touched.offset(-2.0 * radius, job.tolerance))

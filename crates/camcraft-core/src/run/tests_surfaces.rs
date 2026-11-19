@@ -291,6 +291,202 @@ fn a_vbit_is_refused_what_it_cannot_keep_to() {
     );
 }
 
+/// A plate 16 across at Z0 with two ridges 2 wide and 1 high standing across
+/// it along Y, about X-3.5 and X3.5, with their faces named: the plate 0, the
+/// first ridge's top 1 and its sides 2, the second's top 3 and its sides 4.
+fn ridges() -> Body {
+    let plate = synthetic::plane(0.0, 8.0);
+    let ridge = |x: f64| {
+        let r = synthetic::cuboid(dvec3(x - 1.0, -9.0, 0.0), dvec3(x + 1.0, 9.0, 1.0));
+        // Its bottom, on the plate, is not part of it.
+        TriMesh::new(r.vertices().to_vec(), r.triangles()[2..].to_vec()).unwrap()
+    };
+    let (first, second) = (ridge(-3.5), ridge(3.5));
+    let mesh = TriMesh::merged(&[&plate, &first, &second]).unwrap();
+    let mut labels = vec![0; plate.len()];
+    for (top, sides) in [(1, 2), (3, 4)] {
+        labels.extend([top, top]);
+        labels.extend(std::iter::repeat_n(sides, first.len() - 2));
+    }
+    Body::with_faces(mesh, labels, 5).unwrap()
+}
+
+/// The plate, and the second ridge's top and sides, by a point on each.
+const PLATE: [f64; 3] = [0.0, 0.0, 0.0];
+const SECOND_TOP: [f64; 3] = [3.5, 0.0, 1.0];
+const SECOND_SIDE: [f64; 3] = [4.5, 0.0, 0.5];
+
+/// `JOB`'s finish as a new operation of `strategy`, its 4 mm ball, the first
+/// ridge machined and the rest of the part avoided half a millimetre each
+/// way; or, not `grouped`, all of it machined. A project runs along the long
+/// edges of both ridges' tops, and a morph between their outer ones.
+fn on_ridges(strategy: &str, grouped: bool) -> Job {
+    let mut job = finishing(&[PLATE, SECOND_TOP, SECOND_SIDE], (0.5, 0.5));
+    let op = &mut job.setups[0].operations[0];
+    op.strategy = StrategySpec::named(strategy).unwrap();
+    let edges: &[[f64; 3]] = match strategy {
+        "project" => &[
+            [-4.5, 0.0, 1.0],
+            [-2.5, 0.0, 1.0],
+            [2.5, 0.0, 1.0],
+            [4.5, 0.0, 1.0],
+        ],
+        "morph" => &[[-4.5, 0.0, 1.0], [4.5, 0.0, 1.0]],
+        _ => &[],
+    };
+    op.selection.edges = edges.iter().map(|&at| face(at)).collect();
+    if !grouped {
+        op.surfaces = crate::job::Surfaces::default();
+    }
+    job
+}
+
+/// `strategy` run on the ridges with the first alone machined, and with all
+/// of it machined. Run grouped, no move that feeds goes into the clearance
+/// of what it avoids, no cut is where the tool would only rub it, and it
+/// cuts nothing over the plate or the second ridge, which it does machining
+/// all of it: everything it cuts is beside the first ridge, the tool
+/// touching it.
+fn kept_to_the_first_ridge(strategy: &str) -> (SetupResult, SetupResult) {
+    let body = ridges();
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let job = on_ridges(strategy, true);
+    let grouped = run_setup(&job, 0, &bodies).unwrap();
+    let whole = run_setup(&on_ridges(strategy, false), 0, &bodies).unwrap();
+    assert_eq!(into_clearance(&job, &bodies, &grouped), 0.0, "{strategy}");
+    assert_eq!(grouped.verify.gouged, 0, "{strategy}");
+    let past = |r: &SetupResult| -> Vec<DVec3> {
+        r.operations[0]
+            .path
+            .moves()
+            .iter()
+            .filter(|m| m.role == MoveRole::Cut && m.to.x > -0.5)
+            .map(|m| m.to)
+            .collect()
+    };
+    assert!(!past(&whole).is_empty(), "{strategy} machining all of it");
+    let cut = past(&grouped);
+    assert!(cut.is_empty(), "{strategy} cuts what it avoids: {cut:?}");
+    (grouped, whole)
+}
+
+/// How far above the first ridge's top what `result` leaves stands, along
+/// its middle.
+fn left_on_the_first_ridge(result: &SetupResult) -> f64 {
+    let stock = result.keyframes.last().unwrap().unpack().unwrap();
+    let field = stock.field();
+    let mut most = f64::NEG_INFINITY;
+    for iy in 0..field.ny() {
+        for ix in 0..field.nx() {
+            let (Some(p), Some(h)) = (field.position(ix, iy), field.get(ix, iy)) else {
+                continue;
+            };
+            if (p.x + 3.5).abs() <= 0.5 && p.y.abs() <= 6.0 {
+                most = most.max(h - 1.0);
+            }
+        }
+    }
+    most
+}
+
+/// A finish over the area, the first ridge machined, finishes its top: no
+/// more is left on it than its stepover's cusps, and the grid the material
+/// is measured on.
+fn finishes_the_first_ridges_top(strategy: &str) {
+    let (grouped, _) = kept_to_the_first_ridge(strategy);
+    let left = left_on_the_first_ridge(&grouped);
+    assert!(left < 0.2, "{strategy} leaves {left} on the ridge's top");
+}
+
+#[test]
+fn a_scallop_keeps_to_the_faces_it_machines() {
+    finishes_the_first_ridges_top("scallop");
+}
+
+#[test]
+fn a_spiral_keeps_to_the_faces_it_machines() {
+    finishes_the_first_ridges_top("spiral");
+}
+
+#[test]
+fn a_radial_keeps_to_the_faces_it_machines() {
+    finishes_the_first_ridges_top("radial");
+}
+
+#[test]
+fn a_morphed_spiral_keeps_to_the_faces_it_machines() {
+    finishes_the_first_ridges_top("morphed-spiral");
+}
+
+/// Its passes between the two ridges' outer edges cross the first's top.
+#[test]
+fn a_morph_keeps_to_the_faces_it_machines() {
+    finishes_the_first_ridges_top("morph");
+}
+
+/// The first ridge's edges are cut as they are with nothing avoided: the
+/// tool rests on it there, the plate's clearance lower.
+#[test]
+fn a_project_keeps_to_the_faces_it_machines() {
+    let (grouped, whole) = kept_to_the_first_ridge("project");
+    let first = |r: &SetupResult| -> Vec<DVec3> {
+        r.operations[0]
+            .path
+            .moves()
+            .iter()
+            .filter(|m| m.role == MoveRole::Cut && m.to.x < 0.0)
+            .map(|m| m.to)
+            .collect()
+    };
+    assert!(!first(&grouped).is_empty());
+    assert_eq!(first(&grouped), first(&whole));
+}
+
+/// The lines at the first ridge's feet, where the tool touches it and the
+/// plate's clearance, are cut, half a millimetre up; those at the second's,
+/// where it touches nothing machined, are not.
+#[test]
+fn a_pencil_keeps_to_the_faces_it_machines() {
+    let (grouped, _) = kept_to_the_first_ridge("pencil");
+    // Where each cut crosses Y0, along the ridge's middle.
+    let moves = grouped.operations[0].path.moves();
+    let mut at = moves[0].to;
+    let mut crossing = Vec::new();
+    for m in moves {
+        if m.role == MoveRole::Cut && (at.y < 0.0) != (m.to.y < 0.0) {
+            crossing.push(at.lerp(m.to, at.y / (at.y - m.to.y)));
+        }
+        at = m.to;
+    }
+    for side in [-1.0, 1.0] {
+        let line: Vec<&DVec3> = crossing
+            .iter()
+            .filter(|p| ((p.x + 3.5) * side - 2.3).abs() < 0.8)
+            .collect();
+        assert_eq!(line.len(), 1, "beside the ridge at {side}: {crossing:?}");
+        assert!((line[0].z - 0.5).abs() < 0.1, "a line at {}", line[0]);
+    }
+}
+
+/// A scallop finish keeping clear of faces gives the same moves on any
+/// number of threads.
+#[test]
+fn grouped_scallops_are_deterministic() {
+    let body = ridges();
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let job = on_ridges("scallop", true);
+    let on = |threads: usize| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| run_setup(&job, 0, &bodies).unwrap())
+    };
+    let (one, eight) = (on(1), on(8));
+    assert!(!one.operations[0].path.is_empty());
+    assert_eq!(one.operations[0].path, eight.operations[0].path);
+}
+
 /// A parallel finish keeping clear of faces gives the same moves on any
 /// number of threads.
 #[test]

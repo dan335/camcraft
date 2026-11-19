@@ -31,6 +31,26 @@ fn step(
     PartSurfaces::grouped(vec![of(0, plateau), of(4, wall), of(2, shelf)])
 }
 
+/// The tool touches the part within its radius of it, and of a group it is
+/// grown wider for, within that: round the step's plateau, avoided 1 mm
+/// sideways, 3 mm out from it; round its shelf, machined, 2 mm, not the
+/// plateau's 3.
+#[test]
+fn the_tool_touches_each_group_as_wide_as_it_is_grown_for_it() {
+    let part = step((false, 1.0, 0.0), (false, 1.0, 0.0), (true, 0.0, 0.0));
+    let shadow = shadow_above(&synthetic::step(5.0, 10.0), -1.0).unwrap();
+    let touched = part.contact(&shadow, &ball(2.0), TOLERANCE).unwrap();
+    let inside = |x: f64, y: f64| touched.contains(glam::dvec2(x, y));
+    assert!(inside(-12.9, 0.0) && !inside(-13.1, 0.0));
+    assert!(inside(-5.0, 12.9) && !inside(-5.0, 13.1));
+    assert!(inside(11.9, 0.0) && !inside(12.1, 0.0));
+    assert!(inside(5.0, 11.9) && !inside(5.0, 12.1));
+    // With nothing grown, as the whole part.
+    let whole = step((false, 0.0, 0.0), (false, 0.0, 0.0), (true, 0.0, 0.0));
+    let touched = whole.contact(&shadow, &ball(2.0), TOLERANCE).unwrap();
+    assert_eq!(touched, contact_region(&shadow, 2.0, TOLERANCE).unwrap());
+}
+
 /// A face avoided with an axial clearance holds the tool that much above it,
 /// and a face machined with stock of its own leaves it: each group is met by
 /// the tool grown by its own offsets.

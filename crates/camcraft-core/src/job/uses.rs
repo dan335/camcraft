@@ -85,6 +85,9 @@ impl StrategySpec {
                 // Trimmed to them as parallel is.
                 top: Some(HeightRef::ModelTop),
                 bottom: Some(HeightRef::ModelBottom),
+                // Laid on the faces as parallel's passes are, and cut out
+                // where they rest only on one avoided.
+                surfaces: true,
                 ..cuts_loops
             },
             // As scallop, its lines in its own order, the nearest next, each
@@ -100,6 +103,10 @@ impl StrategySpec {
                 ramp: false,
                 top: Some(HeightRef::ModelTop),
                 bottom: Some(HeightRef::ModelBottom),
+                // Its lines are where the tool touches twice as each group
+                // of faces meets it, a face avoided by its clearance; cut
+                // out where both are avoided.
+                surfaces: true,
                 ..cuts_loops
             },
             // Its picks are edges, open or closed, as a trace's, but each
@@ -121,6 +128,8 @@ impl StrategySpec {
                 ramp: false,
                 top: Some(HeightRef::ModelTop),
                 bottom: Some(HeightRef::ModelBottom),
+                // Dropped onto the faces as a pattern is.
+                surfaces: true,
                 ..cuts_loops
             },
             // Its picks are two curves, as a project's are edges, and its
@@ -140,6 +149,8 @@ impl StrategySpec {
                 ramp: false,
                 top: Some(HeightRef::ModelTop),
                 bottom: Some(HeightRef::ModelBottom),
+                // Dropped onto the faces as a pattern is.
+                surfaces: true,
                 ..cuts_loops
             },
             // A level each stepdown is what it is, going round, not over: it

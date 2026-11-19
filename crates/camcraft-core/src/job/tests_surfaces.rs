@@ -110,13 +110,13 @@ fn renaming_a_model_carries_its_grouped_faces() {
 /// Each refusal of the job file's own, with its own message.
 #[test]
 fn surface_groups_that_cannot_be_cut_are_refused() {
-    // A strategy that does not take them yet: left unread, an avoided face
-    // would be cut.
+    // A strategy that does not take them: left unread, an avoided face would
+    // be cut.
     let mut j = grouped();
-    op(&mut j).strategy = StrategySpec::named("scallop").unwrap();
+    op(&mut j).strategy = StrategySpec::named("adaptive").unwrap();
     let e = j.validate().unwrap_err();
     assert!(
-        matches!(&e, JobError::NotOffered { field, value: "surface groups", strategy: "scallop" }
+        matches!(&e, JobError::NotOffered { field, value: "surface groups", strategy: "adaptive" }
             if field == "top/finish.surfaces"),
         "{e}"
     );
@@ -178,6 +178,47 @@ fn surface_groups_that_cannot_be_cut_are_refused() {
     // But with the model machined, avoiding is all a group need do.
     op(&mut j).surfaces.model.action = SurfaceAction::Machine;
     j.validate().unwrap();
+}
+
+/// Every finish that drops its tool onto the part takes groups; every other
+/// strategy refuses them, the level finishes for now among them: what
+/// refuses them is that it does not take them
+/// ([`surface_groups_that_cannot_be_cut_are_refused`]).
+#[test]
+fn only_the_finishes_over_the_part_take_surface_groups() {
+    let taking = [
+        "parallel",
+        "scallop",
+        "spiral",
+        "radial",
+        "morphed-spiral",
+        "pencil",
+        "project",
+        "morph",
+    ];
+    let refusing = [
+        "contour",
+        "ramp",
+        "flat",
+        "pocket-clearing",
+        "adaptive",
+        "profile",
+        "pocket",
+        "face",
+        "drill",
+        "bore",
+        "circular",
+        "thread",
+        "slot",
+        "trace",
+        "chamfer-2d",
+        "engrave",
+        "adaptive-2d",
+    ];
+    for name in taking.into_iter().chain(refusing) {
+        let strategy = StrategySpec::named(name).unwrap();
+        assert_eq!(strategy.uses().surfaces, taking.contains(&name), "{name}");
+    }
 }
 
 /// An operation turned off is not checked: its groups may be unfinished.

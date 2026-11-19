@@ -1,8 +1,8 @@
-# Fusion's Ramp, Pencil, Project, Morph and Parallel on the ops_3d part, each as
-# a new operation of Fusion's starts but for what its name says, posted with
-# Fusion's Masso post: fixtures/nc/ops_3d_*.nc. Run through the bridge after
-# part.py (see ../README.md). It finds the document part.py made by its one
-# body, named ops_3d, and works in that document alone.
+# Fusion's Ramp, Pencil, Project, Morph, Parallel, Scallop and Spiral on the
+# ops_3d part, each as a new operation of Fusion's starts but for what its name
+# says, posted with Fusion's Masso post: fixtures/nc/ops_3d_*.nc. Run through
+# the bridge after part.py (see ../README.md). It finds the document part.py
+# made by its one body, named ops_3d, and works in that document alone.
 #
 # The setup's stock is 5 mm round the part and level with its top, its work
 # zero the model's origin. The tools are the sample library's 6 mm ball end
@@ -48,6 +48,13 @@
 #   parallel_floor_leave    the floor machined with stock of its own, 0.5 mm
 #                           radial and axial
 #   parallel_avoid_top      the block's top avoided, axial offset 2 mm
+#
+#   scallop                 a new Scallop with the 6 mm ball, no surface groups
+#   scallop_avoid_dome      the dome avoided, radial and axial offsets 1 mm
+#   scallop_floor_only      the model avoided, the pocket's floor machined
+#
+#   spiral                  a new Spiral with the 6 mm ball, no surface groups
+#   spiral_avoid_dome       the dome avoided, radial and axial offsets 1 mm
 #
 # A surface group is added as the Surface Manager adds one: a direct selection
 # of faces, machined or avoided, with its own radial and axial offsets, which
@@ -244,6 +251,11 @@ for name, strategy, tool, select, settings in (
     ("parallel_floor_only", "parallel", ball6, grouping(AVOID, (MACHINE, FLOOR, 0, 0)), {}),
     ("parallel_floor_leave", "parallel", ball6, grouping(None, (MACHINE, FLOOR, 0.5, 0.5)), {}),
     ("parallel_avoid_top", "parallel", ball6, grouping(None, (AVOID, TOP, 0, 2)), {}),
+    ("scallop", "scallop", ball6, None, {}),
+    ("scallop_avoid_dome", "scallop", ball6, grouping(None, (AVOID, DOME, 1, 1)), {}),
+    ("scallop_floor_only", "scallop", ball6, grouping(AVOID, (MACHINE, FLOOR, 0, 0)), {}),
+    ("spiral", "spiral", ball6, None, {}),
+    ("spiral_avoid_dome", "spiral", ball6, grouping(None, (AVOID, DOME, 1, 1)), {}),
 ):
     try:
         oi = setup.operations.createInput(strategy)

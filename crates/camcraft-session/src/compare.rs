@@ -452,3 +452,9 @@ mod tests_morph;
 
 #[cfg(test)]
 mod tests_parallel;
+
+#[cfg(test)]
+mod tests_scallop;
+
+#[cfg(test)]
+mod tests_spiral;

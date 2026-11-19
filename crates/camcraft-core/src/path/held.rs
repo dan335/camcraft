@@ -200,6 +200,11 @@ pub fn keep_clear(
 /// tolerance; a move kept all the way is kept as it is, and what is made of
 /// one that is not is straight.
 ///
+/// A closed pass, a ring back to where it started, cut out in places, is cut
+/// from where one stretch cut out ends round to where the next begins, each
+/// piece once: the piece it would end with goes on into the one it starts
+/// with, since where a ring starts is only where it was begun.
+///
 /// What is cut out where the rest of the tool would meet the part
 /// ([`keep_clear`]), and where the tool would rest only on faces it avoids
 /// ([`crate::path::avoid::machined_only`]).
@@ -218,7 +223,12 @@ pub(crate) fn cut_out(
         let Some((first, rest)) = pass.split_first() else {
             continue;
         };
-        let mut was = (first.to, out(first.to));
+        let closed = rest
+            .last()
+            .is_some_and(|m| m.to.distance(first.to) < LEAST_CUT);
+        let pieces = made.starts.len();
+        let starts_kept = !out(first.to);
+        let mut was = (first.to, !starts_kept);
         if was.1 {
             kept.first.get_or_insert(first.to);
             kept.stretches += 1;
@@ -258,8 +268,11 @@ pub(crate) fn cut_out(
             }
         }
         made.close();
+        if closed && starts_kept && !was.1 && made.starts.len() > pieces + 1 {
+            made.join_ends(pieces);
+        }
     }
-    kept.after = made.count;
+    kept.after = made.count();
     let mut path = Toolpath::new();
     path.append(&made.kept)?;
     Ok((path, kept))
@@ -314,7 +327,7 @@ fn pull_away(
         }
         out.close();
     }
-    kept.after = out.count;
+    kept.after = out.count();
     let mut path = Toolpath::new();
     path.append(&out.kept)?;
     Ok((path, kept))
@@ -420,13 +433,42 @@ fn edge_between(
 struct Out {
     /// Every pass made so far, each from its link on.
     kept: Vec<Move>,
-    /// How many.
-    count: u64,
+    /// Where each of them starts in it.
+    starts: Vec<usize>,
     /// The pass being made, from its link on.
     piece: Vec<Move>,
 }
 
 impl Out {
+    /// How many passes it has made.
+    fn count(&self) -> u64 {
+        self.starts.len() as u64
+    }
+
+    /// The last pass made goes on into the one made `first` of them, in its
+    /// place, and the first's link goes: the two were one ring's end and its
+    /// start. Not where the last does not end where the first starts, as
+    /// where the ring's first stretch was too short to keep.
+    fn join_ends(&mut self, first: usize) {
+        let (Some(&at), Some(&last)) = (self.starts.get(first), self.starts.last()) else {
+            return;
+        };
+        let meet = match (self.kept.last(), self.kept.get(at)) {
+            (Some(end), Some(start)) => end.to.distance(start.to) < LEAST_CUT,
+            _ => false,
+        };
+        if last <= at || !meet {
+            return;
+        }
+        self.starts.pop();
+        let end: Vec<Move> = self.kept.drain(last..).collect();
+        let shift = end.len() - 1;
+        self.kept.splice(at..=at, end);
+        for s in self.starts.iter_mut().skip(first + 1) {
+            *s += shift;
+        }
+    }
+
     /// A pass starts at `at`, linked to.
     fn start(&mut self, at: DVec3, feed: Option<f64>) {
         self.close();
@@ -465,7 +507,7 @@ impl Out {
             _ => false,
         });
         if cuts {
-            self.count += 1;
+            self.starts.push(self.kept.len());
             self.kept.extend(piece);
         }
     }
@@ -552,6 +594,34 @@ mod tests {
         let (kept, report) = skip_unreached(&holes, &held, 0.01).unwrap();
         assert_eq!((report.before, report.after, report.stretches), (2, 1, 1));
         assert!(kept.moves().iter().all(|m| (m.to.x - 40.0).abs() < 1e-9));
+    }
+
+    /// A ring cut out across one stretch is one pass, from where that ends
+    /// round to where it begins: not two, parted where the ring was begun.
+    #[test]
+    fn a_ring_cut_out_in_one_place_is_one_pass() {
+        let corners = [
+            dvec3(0.0, 0.0, 0.0),
+            dvec3(10.0, 0.0, 0.0),
+            dvec3(10.0, 10.0, 0.0),
+            dvec3(0.0, 10.0, 0.0),
+        ];
+        let mut ring = Toolpath::new();
+        ring.feed_to(corners[0], MoveRole::Link, 1000.0).unwrap();
+        for &c in corners[1..].iter().chain(&corners[..1]) {
+            ring.feed_to(c, MoveRole::Cut, 1000.0).unwrap();
+        }
+        let (path, kept) = cut_out(&ring, |p| p.x > 8.0, 0.5, 0.01).unwrap();
+        assert_eq!((kept.before, kept.after, kept.stretches), (1, 1, 1));
+        let moves = path.moves();
+        let links = moves.iter().filter(|m| m.role == MoveRole::Link).count();
+        assert_eq!(links, 1);
+        assert!(
+            moves[0].to.distance(dvec3(8.0, 10.0, 0.0)) < 0.02,
+            "{moves:?}"
+        );
+        let end = moves.last().unwrap().to;
+        assert!(end.distance(dvec3(8.0, 0.0, 0.0)) < 0.02, "{moves:?}");
     }
 
     #[test]

@@ -27,18 +27,22 @@
 //! drop-cutter the part's every operation shares, exactly as before there were
 //! groups.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use camcraft_geom::bvh::MeshBvh;
+use camcraft_geom::contour::{Region, RegionError};
 use camcraft_geom::mesh::TriMesh;
+use camcraft_geom::shadow::{Shadow, shadow_above};
 use glam::{DVec3, dvec3};
 
 use crate::cutter::allowance::{Allowance, EffectiveTool};
 use crate::cutter::dropcutter::DropCutter;
 use crate::cutter::tool::{ToolError, ToolProfile};
+use crate::strategy::StrategyError;
 use crate::strategy::adaptive::flat_heights;
 use crate::strategy::merged_highest;
 use crate::strategy::reach::{LevelReach, ReachError};
+use crate::strategy::scallop::contact_region;
 
 /// The part as an operation's tool meets it: what the tool comes to rest on,
 /// dropped anywhere, and what keeps it off at a level.
@@ -65,6 +69,8 @@ pub struct Group {
     bvh: Arc<MeshBvh>,
     offset: Allowance,
     machined: bool,
+    /// Its faces' shadow from above, cast the first time it is asked for.
+    shadow: OnceLock<Shadow>,
 }
 
 impl Group {
@@ -77,7 +83,18 @@ impl Group {
             bvh,
             offset,
             machined,
+            shadow: OnceLock::new(),
         }
+    }
+
+    /// The shadow its faces cast from above, from below all of them.
+    fn shadow(&self) -> Result<&Shadow, RegionError> {
+        if let Some(cast) = self.shadow.get() {
+            return Ok(cast);
+        }
+        let below = self.mesh.bounds().map_or(0.0, |b| b.min.z) - 1.0;
+        let cast = shadow_above(&self.mesh, below)?;
+        Ok(self.shadow.get_or_init(|| cast))
     }
 }
 
@@ -150,6 +167,29 @@ impl<'a> PartSurfaces<'a> {
                 .map(|g| tool.max_radius() + g.offset.radial())
                 .fold(tool.max_radius(), f64::max),
         }
+    }
+
+    /// Where `tool` touches the part, seen from above, to `tolerance`
+    /// ([`contact_region`]): within its widest radius of `shadow`, the whole
+    /// part's; and, where a group grows it wider, within that radius of the
+    /// group's own faces. Grown as wide as the widest group all round, the
+    /// part would be touched where the tool meets nothing, and a pattern laid
+    /// from where it stops touching, as scallop's is, would move.
+    pub fn contact(
+        &self,
+        shadow: &Shadow,
+        tool: &EffectiveTool,
+        tolerance: f64,
+    ) -> Result<Region, StrategyError> {
+        let radius = tool.max_radius();
+        let mut touched = contact_region(shadow, radius, tolerance)?;
+        if let Form::Grouped(groups) = &self.form {
+            for g in groups.iter().filter(|g| g.offset.radial() > 0.0) {
+                let wider = contact_region(g.shadow()?, radius + g.offset.radial(), tolerance)?;
+                touched = touched.union(&wider)?;
+            }
+        }
+        Ok(touched)
     }
 
     /// The heights of each group's flat faces that face up, found to

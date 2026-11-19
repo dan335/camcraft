@@ -35,14 +35,18 @@ use super::*;
 use crate::{job_text, parse_job};
 
 /// The faces grouped, each by a point on it: the dome's top, the pocket's
-/// floor and the block's top.
-const DOME: [f64; 3] = [-8.0, 0.0, 15.0];
-const FLOOR: [f64; 3] = [5.0, 5.0, 10.0];
+/// floor and the block's top. Scallop's and Spiral's tests' too.
+pub(super) const DOME: [f64; 3] = [-8.0, 0.0, 15.0];
+pub(super) const FLOOR: [f64; 3] = [5.0, 5.0, 10.0];
 const TOP: [f64; 3] = [-28.0, 18.0, 20.0];
 
 /// A group of the face at `at`, machined or avoided as `action`, with offsets
 /// `(radial, axial)`.
-fn group(action: SurfaceAction, at: [f64; 3], (radial, axial): (f64, f64)) -> SurfaceGroup {
+pub(super) fn group(
+    action: SurfaceAction,
+    at: [f64; 3],
+    (radial, axial): (f64, f64),
+) -> SurfaceGroup {
     SurfaceGroup {
         action,
         radial,
@@ -55,10 +59,11 @@ fn group(action: SurfaceAction, at: [f64; 3], (radial, axial): (f64, f64)) -> Su
     }
 }
 
-/// A job that roughs the part and then finishes it in parallel with the 6 mm
-/// ball, as `name`: a new Parallel but for `change`, read back, so its
-/// expressions are worked out as a job read from disk has them.
-fn job(name: &str, change: impl FnOnce(&mut Operation)) -> Job {
+/// A job that roughs the part and then finishes it with the 6 mm ball by
+/// `strategy`, as `name`: a new one but for `change`, read back, so its
+/// expressions are worked out as a job read from disk has them. Scallop's and
+/// Spiral's tests' too.
+pub(super) fn job(name: &str, strategy: &str, change: impl FnOnce(&mut Operation)) -> Job {
     let mut job = parse_job(&base(), "ops_3d").unwrap();
     let make = |name: &str, strategy: &str, tool: &str| {
         let spec = job.tools.get(tool);
@@ -71,9 +76,9 @@ fn job(name: &str, change: impl FnOnce(&mut Operation)) -> Job {
         op
     };
     let rough = make("rough", "adaptive", "flat6");
-    let mut parallel = make(name, "parallel", "ball6");
-    change(&mut parallel);
-    job.setups[0].operations.extend([rough, parallel]);
+    let mut finish = make(name, strategy, "ball6");
+    change(&mut finish);
+    job.setups[0].operations.extend([rough, finish]);
     parse_job(&job_text(&job).unwrap(), "ops_3d").unwrap()
 }
 
@@ -107,7 +112,7 @@ fn job(name: &str, change: impl FnOnce(&mut Operation)) -> Job {
 ///
 /// Each bound is this run's figure with a little room.
 fn holds(name: &str, change: impl FnOnce(&mut Operation), bounds: &Bounds, contacts: u64) {
-    held_to(&job(name, change), name, bounds, contacts);
+    held_to(&job(name, "parallel", change), name, bounds, contacts);
 }
 
 /// A new Parallel leaves what Fusion's does: 74.7% of the 735,513 columns
@@ -127,8 +132,8 @@ fn a_new_parallel_leaves_what_fusions_does() {
 }
 
 /// The dome avoided, 1 mm sideways and 1 mm down: 70.0% of 642,835 columns
-/// alike, the median 0.0048 mm and the 95th percentile 0.106, 1.9% more
-/// removed and 109% more fed. Neither touches the dome but round its foot.
+/// alike, the median 0.0047 mm and the 95th percentile 0.106, 1.9% more
+/// removed and 110% more fed. Neither touches the dome but round its foot.
 #[test]
 fn a_parallel_avoiding_the_dome_leaves_what_fusions_does() {
     let bounds = Bounds {
@@ -205,7 +210,7 @@ fn a_parallel_machining_the_floor_alone_leaves_what_fusions_does() {
 }
 
 /// The floor machined with 0.5 mm of stock of its own each way: 65.5% of
-/// 643,584 columns alike, the median 0.0054 mm and the 95th percentile 0.13,
+/// 643,587 columns alike, the median 0.0054 mm and the 95th percentile 0.13,
 /// 1.9% more removed and 45% more fed. Both leave the floor at Z10.5, which
 /// the roughing had left it at already; the lowest each goes is where the
 /// ball rests on the fillets beside it, Z10.38 for camcraft's and Z10.337 for

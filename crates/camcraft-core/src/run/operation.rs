@@ -58,7 +58,7 @@ use crate::strategy::projected::{Curve, ProjectParams, ProjectReport, project};
 use crate::strategy::ramp::{RampParams, ramp};
 use crate::strategy::reach::LevelReach;
 use crate::strategy::round::{Round, RoundReport};
-use crate::strategy::scallop::{ScallopParams, contact_region, scallop_finish_banded};
+use crate::strategy::scallop::{ScallopParams, scallop_finish_banded};
 use crate::strategy::slope::steep_ground;
 use crate::strategy::slot::{Slot, SlotReport};
 use crate::strategy::trace::{Beside, TraceReport};
@@ -139,6 +139,15 @@ impl<'a> Work<'a> {
     /// part, seen from above, it touches it.
     fn widest(&self) -> f64 {
         self.surfaces.widest(self.tool)
+    }
+
+    /// Where its tool touches the part, seen from above, as each group of
+    /// it is met ([`PartSurfaces::contact`]).
+    fn contact(&self) -> Result<Region, RunError> {
+        let shadow = self.prepared.shadow().map_err(in_op(self.op))?;
+        self.surfaces
+            .contact(shadow, self.tool, self.job.tolerance)
+            .map_err(in_op(self.op))
     }
 
     /// The rest of its tool, the shank and what holds it, grown by the
