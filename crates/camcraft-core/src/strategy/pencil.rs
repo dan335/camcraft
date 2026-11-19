@@ -85,7 +85,8 @@ use glam::{DVec2, DVec3};
 use rayon::prelude::*;
 
 use crate::control::{Watch, share};
-use crate::cutter::dropcutter::{DropCutter, DropTest};
+use crate::cutter::surfaces::Seat;
+use crate::cutter::tool::ToolProfile;
 use crate::path::toolpath::Toolpath;
 use crate::strategy::adaptive::Direction;
 use crate::strategy::field::{AreaGrid, level_lines};
@@ -200,18 +201,18 @@ impl PencilReport {
     }
 }
 
-/// Pencil passes over `area`, where the tool's centre may go: `tool` cuts them,
-/// along where `finder` touches the part twice. They are the same tool unless
-/// the lines are found for a larger one (Fusion's Overthickness).
+/// Pencil passes over `area`, where the tool's centre may go: the tool held
+/// as `seat` cuts them, along where the one held as `finder` touches the part
+/// twice. They are the same tool unless the lines are found for a larger one
+/// (Fusion's Overthickness).
 ///
 /// The path holds [`MoveRole::Cut`](crate::path::toolpath::MoveRole::Cut)
 /// passes separated by
 /// [`MoveRole::Link`](crate::path::toolpath::MoveRole::Link) moves, in the
 /// order they are cut. The linker resolves them.
-pub fn pencil<T: DropTest + Sync>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
-    finder: &T,
+pub fn pencil(
+    seat: &Seat<'_>,
+    finder: &Seat<'_>,
     area: &Region,
     params: &PencilParams,
 ) -> Result<(Toolpath, PencilReport), StrategyError> {
@@ -233,7 +234,7 @@ pub fn pencil<T: DropTest + Sync>(
     // part at the tool's radius; and no coarser than ten tolerances. Set off
     // from the area's corner by an odd share of a pitch, so a line along a
     // face of the part square to the axes does not run through its nodes.
-    let radius = finder.max_radius();
+    let radius = finder.tool().max_radius();
     let pitch = (radius * theta / 4.0)
         .min(10.0 * params.tolerance)
         .max(params.tolerance);
@@ -244,7 +245,7 @@ pub fn pencil<T: DropTest + Sync>(
         radius / 2.0,
         params.max_nodes,
         &params.watch.part(0.0, 0.2),
-        |x, y, scratch| cutter.drop_at_in(finder, x, y, scratch),
+        |x, y, scratch| finder.drop_at_in(x, y, scratch),
     )?;
     let grid = &on.grid;
     let pitch = grid.pitch();
@@ -256,7 +257,7 @@ pub fn pencil<T: DropTest + Sync>(
     let sheets: Vec<Option<Sheet>> = (0..grid.nodes())
         .into_par_iter()
         .map_init(
-            || Probe::new(cutter, finder),
+            || Probe::new(finder),
             |probe, n| {
                 if !grid.defined(n) {
                     return None;
@@ -274,8 +275,7 @@ pub fn pencil<T: DropTest + Sync>(
 
     // Each point found exactly, across the line.
     let finding = Finding {
-        cutter,
-        tool,
+        seat,
         finder,
         theta,
         eps: params.tolerance / 8.0,
@@ -411,7 +411,7 @@ pub fn pencil<T: DropTest + Sync>(
     let both_ways = params.direction == Direction::BothWays;
     let mut emit = Emit::new(params.feed);
     if params.stepovers > 0 {
-        let beside = beside(cutter, tool, (&on, &kept), &runs, params, &mut report)?;
+        let beside = beside(seat, (&on, &kept), &runs, params, &mut report)?;
         for level in beside.into_iter().rev() {
             emit.nearest_first(level, both_ways)?;
         }
@@ -463,25 +463,22 @@ fn cliff(a: &Sheet, b: &Sheet) -> bool {
 }
 
 /// Drops of one tool, with the scratch space they share.
-struct Probe<'a, 'm, T> {
-    cutter: &'a DropCutter<'m>,
-    tool: &'a T,
+struct Probe<'a, 'm> {
+    seat: &'a Seat<'m>,
     scratch: Vec<u32>,
 }
 
-impl<'a, 'm, T: DropTest> Probe<'a, 'm, T> {
-    fn new(cutter: &'a DropCutter<'m>, tool: &'a T) -> Self {
+impl<'a, 'm> Probe<'a, 'm> {
+    fn new(seat: &'a Seat<'m>) -> Self {
         Self {
-            cutter,
-            tool,
+            seat,
             scratch: Vec::new(),
         }
     }
 
     /// Where the tool's tip rests at `p`, if anything is under it.
     fn z(&mut self, p: DVec2) -> Option<f64> {
-        self.cutter
-            .drop_at_in(self.tool, p.x, p.y, &mut self.scratch)
+        self.seat.drop_at_in(p.x, p.y, &mut self.scratch)
     }
 
     /// The sheet at `p`: which way it faces from drops [`ETA`] either side,
@@ -714,19 +711,18 @@ struct Found {
 }
 
 /// What finding the lines' points takes.
-struct Finding<'a, 'm, T> {
-    cutter: &'a DropCutter<'m>,
-    tool: &'a T,
-    finder: &'a T,
+struct Finding<'a, 'm> {
+    seat: &'a Seat<'m>,
+    finder: &'a Seat<'m>,
     theta: f64,
     eps: f64,
 }
 
-impl<'a, 'm, T: DropTest> Finding<'a, 'm, T> {
-    fn locator(&self) -> Locator<'a, 'm, T> {
+impl<'a, 'm> Finding<'a, 'm> {
+    fn locator(&self) -> Locator<'a, 'm> {
         Locator {
-            finder: Probe::new(self.cutter, self.finder),
-            tool: Probe::new(self.cutter, self.tool),
+            finder: Probe::new(self.finder),
+            tool: Probe::new(self.seat),
             theta: self.theta,
             eps: self.eps,
         }
@@ -734,14 +730,14 @@ impl<'a, 'm, T: DropTest> Finding<'a, 'm, T> {
 }
 
 /// Points of the lines found, one thread's drops.
-struct Locator<'a, 'm, T> {
-    finder: Probe<'a, 'm, T>,
-    tool: Probe<'a, 'm, T>,
+struct Locator<'a, 'm> {
+    finder: Probe<'a, 'm>,
+    tool: Probe<'a, 'm>,
     theta: f64,
     eps: f64,
 }
 
-impl<T: DropTest> Locator<'_, '_, T> {
+impl Locator<'_, '_> {
     /// The line nearest `c`, across `along`, looked for `w` either side of it,
     /// then twice as far: found by halving between two points on different
     /// sheets to [`Finding::eps`], the lower kept.
@@ -928,9 +924,8 @@ type Level = (Vec<Run>, ParallelReport, u64);
 /// to `params.stepovers` of them: lines of equal distance from them over the
 /// grid, kept to the area, cut on the part as scallop's are. Each level's
 /// passes, the nearest the lines first.
-fn beside<T: DropTest + Sync>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
+fn beside(
+    seat: &Seat<'_>,
     (on, kept): (&AreaGrid, &Region),
     runs: &[Run],
     params: &PencilParams,
@@ -1000,9 +995,7 @@ fn beside<T: DropTest + Sync>(
                     continue;
                 }
                 let points = simplify(&points, closed, thin);
-                out.extend(sweep_polyline(
-                    cutter, tool, &points, closed, &sweep, &mut found,
-                ));
+                out.extend(sweep_polyline(seat, &points, closed, &sweep, &mut found));
             }
             Ok((out, found, fragments))
         })

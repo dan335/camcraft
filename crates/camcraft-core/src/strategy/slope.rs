@@ -12,7 +12,8 @@ use glam::DVec2;
 use rayon::prelude::*;
 
 use crate::control::Watch;
-use crate::cutter::dropcutter::{DropCutter, DropTest};
+use crate::cutter::surfaces::Seat;
+use crate::cutter::tool::ToolProfile;
 use crate::path::toolpath::PLUNGE_RATIO;
 use crate::strategy::StrategyError;
 use crate::strategy::field::{self, AreaGrid};
@@ -147,9 +148,8 @@ pub(crate) fn steep_band(
 /// and the patterns' are, to leave to rings round the walls. The grid is as
 /// fine as scallop's for `stepover`, coarsened to stay within `max_nodes`
 /// but no further than half the tool, telling `watch` row by row.
-pub(crate) fn steep_ground<T: DropTest + Sync>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
+pub(crate) fn steep_ground(
+    seat: &Seat<'_>,
     area: &Region,
     stepover: f64,
     max_nodes: u32,
@@ -158,7 +158,7 @@ pub(crate) fn steep_ground<T: DropTest + Sync>(
     let Some(bounds) = area.bounds() else {
         return Ok(Region::default());
     };
-    let radius = tool.max_radius();
+    let radius = seat.tool().max_radius();
     let on = AreaGrid::over(
         area,
         bounds,
@@ -166,7 +166,7 @@ pub(crate) fn steep_ground<T: DropTest + Sync>(
         (stepover / 2.0).max(radius / 2.0),
         max_nodes,
         watch,
-        |x, y, scratch| cutter.drop_at_in(tool, x, y, scratch),
+        |x, y, scratch| seat.drop_at_in(x, y, scratch),
     )?;
     steep_band(&on.grid, radius, area, &on.leaving_part())
 }
@@ -226,14 +226,8 @@ pub(crate) fn ceiling(to: f64) -> f64 {
 /// How steep the surface the tool's tip rides is at `p`, in radians from level:
 /// from the drop-cutter's heights `h` either side, across and along. `None` where
 /// the tool is off the part.
-fn cl_slope<T: DropTest>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
-    p: DVec2,
-    h: f64,
-    scratch: &mut Vec<u32>,
-) -> Option<f64> {
-    let mut z = |q: DVec2| cutter.drop_at_in(tool, q.x, q.y, scratch);
+fn cl_slope(seat: &Seat<'_>, p: DVec2, h: f64, scratch: &mut Vec<u32>) -> Option<f64> {
+    let mut z = |q: DVec2| seat.drop_at_in(q.x, q.y, scratch);
     let dx = z(p + DVec2::X * h)? - z(p - DVec2::X * h)?;
     let dy = z(p + DVec2::Y * h)? - z(p - DVec2::Y * h)?;
     Some((dx.hypot(dy) / (2.0 * h)).atan())
@@ -242,9 +236,8 @@ fn cl_slope<T: DropTest>(
 /// The stretches of `line`, closed back to its start if `closed`, whose slope
 /// under the tool is in `[from, to]` and not past `ceiling`, judged every `pitch`
 /// ([`Sloped::within`]): all of it when the range is every slope.
-pub(crate) fn keep<T: DropTest + Sync>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
+pub(crate) fn keep(
+    seat: &Seat<'_>,
     (line, closed): (Vec<DVec2>, bool),
     pitch: f64,
     (from, ceiling, to): (f64, f64, f64),
@@ -254,7 +247,7 @@ pub(crate) fn keep<T: DropTest + Sync>(
         return vec![(line, closed)];
     }
     Sloped::split(&line, closed, pitch, |m, scratch| {
-        cl_slope(cutter, tool, m, pitch / 2.0, scratch)
+        cl_slope(seat, m, pitch / 2.0, scratch)
     })
     .within(from, ceiling, to, counts)
 }

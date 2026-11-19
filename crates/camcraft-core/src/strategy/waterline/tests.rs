@@ -1,5 +1,7 @@
 use super::*;
 use crate::cutter::allowance::{Allowance, EffectiveTool};
+use crate::cutter::dropcutter::DropCutter;
+use crate::cutter::surfaces::PartSurfaces;
 use crate::cutter::tool::{Ball, Flat};
 use crate::path::toolpath::MoveRole;
 use camcraft_geom::mesh::TriMesh;
@@ -35,10 +37,10 @@ fn run(
     tool: &EffectiveTool,
     params: &WaterlineParams,
 ) -> (Toolpath, WaterlineReport) {
-    let cutter = DropCutter::new(mesh);
+    let part = PartSurfaces::whole(DropCutter::new(mesh));
     let mut reach = LevelReach::new(mesh, tool, params.tolerance).unwrap();
     let area = Region::rectangle(dvec2(-30.0, -30.0), dvec2(30.0, 30.0));
-    waterline(&mut reach, &cutter, tool, &area, params).unwrap()
+    waterline(&mut reach, &part.under(tool).unwrap(), &area, params).unwrap()
 }
 
 /// A 10 mm square boss, 5 mm tall.
@@ -120,11 +122,17 @@ fn a_coarse_region_still_puts_every_point_on_the_part() {
     let mesh = dome();
     let tool = ball(2.0);
     let cutter = DropCutter::new(&mesh);
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
     // Bands and arcs ten times coarser than the tolerance asked for.
     let mut reach = LevelReach::new(&mesh, &tool, 10.0 * TOLERANCE).unwrap();
     let area = Region::rectangle(dvec2(-30.0, -30.0), dvec2(30.0, 30.0));
-    let (path, report) =
-        waterline(&mut reach, &cutter, &tool, &area, &params(9.0, 0.5, 1.0)).unwrap();
+    let (path, report) = waterline(
+        &mut reach,
+        &part.under(&tool).unwrap(),
+        &area,
+        &params(9.0, 0.5, 1.0),
+    )
+    .unwrap();
     assert!(report.passes > 5, "{report:?}");
     for pass in passes(&path) {
         for w in pass.windows(2) {
@@ -167,12 +175,17 @@ fn a_coarse_region_still_puts_every_point_on_the_part() {
 fn a_ring_along_the_areas_edge_is_kept_whole() {
     let mesh = boss();
     let tool = flat(1.5);
-    let cutter = DropCutter::new(&mesh);
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
     let mut reach = LevelReach::new(&mesh, &tool, 10.0 * TOLERANCE).unwrap();
     let outline = Region::rectangle(dvec2(-5.0, -5.0), dvec2(5.0, 5.0));
     let area = outline.offset(1.5, TOLERANCE / 2.0);
-    let (path, report) =
-        waterline(&mut reach, &cutter, &tool, &area, &params(5.0, 0.0, 1.0)).unwrap();
+    let (path, report) = waterline(
+        &mut reach,
+        &part.under(&tool).unwrap(),
+        &area,
+        &params(5.0, 0.0, 1.0),
+    )
+    .unwrap();
     assert_eq!(report.fragments, 0, "{report:?}");
     let passes = passes(&path);
     assert_eq!(
@@ -268,12 +281,17 @@ fn by_area_goes_to_the_piece_whose_pass_starts_nearest() {
 fn a_straight_stretch_of_two_points_is_pulled_onto_the_part() {
     let mesh = boss();
     let tool = flat(1.5);
-    let cutter = DropCutter::new(&mesh);
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
     let mut reach = LevelReach::new(&mesh, &tool, TOLERANCE).unwrap();
     // Across the boss's wall at x = 5 alone.
     let area = Region::rectangle(dvec2(0.0, -3.0), dvec2(30.0, 3.0));
-    let (path, report) =
-        waterline(&mut reach, &cutter, &tool, &area, &params(5.0, 0.0, 1.0)).unwrap();
+    let (path, report) = waterline(
+        &mut reach,
+        &part.under(&tool).unwrap(),
+        &area,
+        &params(5.0, 0.0, 1.0),
+    )
+    .unwrap();
     assert!(report.passes >= 5, "{report:?}");
     assert_eq!(report.unpulled, 0, "{report:?}");
     for pass in passes(&path) {

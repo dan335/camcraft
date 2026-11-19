@@ -38,7 +38,7 @@
 use camcraft_geom::contour::Region;
 use glam::{DVec2, DVec3};
 
-use crate::cutter::dropcutter::{DropCutter, DropTest};
+use crate::cutter::surfaces::Seat;
 use crate::path::toolpath::Toolpath;
 use crate::strategy::curve::Curve as Picked;
 use crate::strategy::morph::Lap;
@@ -108,9 +108,8 @@ pub enum MorphError {
 ///
 /// The path holds [`MoveRole::Cut`](crate::path::toolpath::MoveRole::Cut)
 /// passes separated by links, for the linker.
-pub fn morph_curves<T: DropTest + Sync>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
+pub fn morph_curves(
+    seat: &Seat<'_>,
     area: &Region,
     curves: &[Picked],
     params: &MorphCurvesParams,
@@ -122,7 +121,7 @@ pub fn morph_curves<T: DropTest + Sync>(
     check("stepover", stepover)?;
     check("tolerance", params.drop.tolerance)?;
     let (laid, widest) = between((first, second), params.drop.tolerance, stepover, params.way)?;
-    let (path, cut) = project(cutter, tool, area, &laid, &params.drop)?;
+    let (path, cut) = project(seat, area, &laid, &params.drop)?;
     let report = MorphCurvesReport {
         laid: laid.len() as u64,
         widest,

@@ -1,5 +1,7 @@
 use super::*;
 use crate::cutter::allowance::{Allowance, EffectiveTool};
+use crate::cutter::dropcutter::DropCutter;
+use crate::cutter::surfaces::PartSurfaces;
 use crate::cutter::tool::Ball;
 use crate::path::toolpath::MoveRole;
 use camcraft_geom::mesh::TriMesh;
@@ -25,9 +27,10 @@ fn run(
     half: f64,
     params: &PencilParams,
 ) -> (Toolpath, PencilReport) {
-    let cutter = DropCutter::new(mesh);
+    let part = PartSurfaces::whole(DropCutter::new(mesh));
+    let seat = part.under(tool).unwrap();
     let area = Region::rectangle(dvec2(-half, -half), dvec2(half, half));
-    pencil(&cutter, tool, tool, &area, params).unwrap()
+    pencil(&seat, &seat, &area, params).unwrap()
 }
 
 /// Each pass's points, the link to it first.

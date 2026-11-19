@@ -16,8 +16,7 @@ pub(super) fn pocket_clearing_paths(
     warnings: &mut Vec<String>,
 ) -> Result<Paths, RunError> {
     let (job, op) = (work.job, work.op);
-    let mut reach = work
-        .held(LevelReach::new(&work.prepared.part, work.tool, job.tolerance).map_err(in_op(op))?);
+    let mut reach = work.held(work.reach(job.tolerance)?);
     let (top, bottom) = op.levels_3d(work.heights);
     let params = ClearingParams {
         watch: work.watch.clone(),
@@ -96,8 +95,7 @@ pub(super) fn adaptive_paths(
         stay_down_clearance,
         lift_height,
     } = asked;
-    let mut reach = work
-        .held(LevelReach::new(&work.prepared.part, work.tool, job.tolerance).map_err(in_op(op))?);
+    let mut reach = work.held(work.reach(job.tolerance)?);
     let (top, bottom) = op.levels_3d(work.heights);
     // Flat area detection finds peaks too, each a level as a flat face is.
     let mut flats = work.flat_levels(flat_areas);

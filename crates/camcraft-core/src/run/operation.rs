@@ -13,8 +13,8 @@ use super::{Contact, Made, OperationResult, PLUNGE_RATIO, RunError, StrategyDeta
 use crate::control::Watch;
 use crate::cutter::allowance::{Allowance, EffectiveTool};
 use crate::cutter::assembly::{Assembly, Body};
-use crate::cutter::dropcutter::DropCutter;
-use crate::cutter::tool::ToolProfile;
+use crate::cutter::surfaces::{PartSurfaces, Seat};
+use crate::cutter::tool::{ToolError, ToolProfile};
 use crate::job::{
     Compensation, ContourOrder, CutDirection, Depths, Entry, FaceDirection, HeightContext,
     HolderMode, HolderSegment, Job, Links, Operation, PassOrder, Picks, ProjectDirection,
@@ -98,12 +98,12 @@ pub(super) struct Work<'a> {
     pub(super) spec: &'a ToolSpec,
     /// Its tool as it cuts: grown by the stock to leave.
     pub(super) tool: &'a EffectiveTool,
+    /// The part as its tool meets it.
+    pub(super) surfaces: &'a PartSurfaces<'a>,
     /// What its heights resolve against.
     pub(super) heights: &'a HeightContext,
     /// The setup, laid out: its part, and what is found from it once.
     pub(super) prepared: &'a Prepared,
-    /// The drop-cutter over the part.
-    pub(super) cutter: &'a DropCutter<'a>,
     /// The stock's footprint in XY, lower and upper corner.
     pub(super) bounds: (DVec2, DVec2),
     /// The blocks of material the setup starts from, each its footprint's lower
@@ -120,7 +120,20 @@ pub(super) struct Work<'a> {
     pub(super) nose: Option<&'a [HolderSegment]>,
 }
 
-impl Work<'_> {
+impl<'a> Work<'a> {
+    /// Its tool held over the part as it meets it, to drop onto it.
+    fn seat(&self) -> Result<Seat<'a>, RunError> {
+        Ok(self.surfaces.under(self.tool)?)
+    }
+
+    /// Where at a level its tool may not be, against the part as it meets it,
+    /// to `tolerance`.
+    fn reach(&self, tolerance: f64) -> Result<LevelReach<'a>, RunError> {
+        self.surfaces
+            .reach(self.tool, tolerance)
+            .map_err(in_op(self.op))
+    }
+
     /// The rest of its tool, the shank and what holds it, grown by the
     /// clearances its Shaft and Holder asks for, as what must keep off the
     /// material; `None` where it asks nothing, or there is nothing to it.
@@ -836,7 +849,7 @@ pub(super) fn cut_operation(
 
     // Linked over the material as each pass leaves it, and cut into it as linked.
     let before = stock.volume();
-    let surface = OnPart::new(work.cutter, work.tool, work.job.tolerance);
+    let surface = OnPart::new(work.surfaces, work.tool, work.job.tolerance)?;
     // The whole tool, as it is held: the rest of it, above the flutes, is
     // watched for meeting the material as it cuts.
     let assembly = Assembly::of(work.spec, work.nose);

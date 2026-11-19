@@ -156,8 +156,9 @@ pub(super) fn thread_paths(
     // The floor under each hole's middle, where it has one, against the
     // lowest its leads go.
     let tolerance = work.job.tolerance;
+    let seat = work.seat()?;
     for cut in &report.cuts {
-        let Some(floor) = work.cutter.drop_at(work.tool, cut.at.x, cut.at.y) else {
+        let Some(floor) = seat.drop_at(cut.at.x, cut.at.y) else {
             continue;
         };
         let deep = floor - cut.lowest;

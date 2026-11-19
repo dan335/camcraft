@@ -35,15 +35,9 @@ pub(super) fn parallel_paths(
         max_cut_step: op.max_cut_step(),
         ..Default::default()
     };
-    let (mut path, mut report) = parallel_finish_within(
-        work.cutter,
-        work.tool,
-        sweep_lo,
-        sweep_hi,
-        kept.as_ref(),
-        &params,
-    )
-    .map_err(in_op(op))?;
+    let (mut path, mut report) =
+        parallel_finish_within(&work.seat()?, sweep_lo, sweep_hi, kept.as_ref(), &params)
+            .map_err(in_op(op))?;
     report.walls = with_walls(work, limit, band.as_ref(), slope_to, &mut path)?;
     report.passes += report.walls;
     sampling_warnings(&report, warnings);
@@ -76,8 +70,7 @@ fn steep_band_of(
     }
     let area = finish_area(work, limit, true)?;
     steep_ground(
-        work.cutter,
-        work.tool,
+        &work.seat()?,
         &area,
         work.op.passes.stepover,
         ScallopParams::default().max_nodes,
@@ -163,7 +156,7 @@ pub(super) fn scallop_paths(
         ..Default::default()
     };
     let (mut path, mut report, band) =
-        scallop_finish_banded(work.cutter, work.tool, &area, &params).map_err(in_op(op))?;
+        scallop_finish_banded(&work.seat()?, &area, &params).map_err(in_op(op))?;
     // Its passes are laid on the surface as the drop-cutter sees it, which
     // goes from a wall's top to its foot at once: they leave out what is
     // steeper than a plunge where they cross a wall, and stop at its top where
@@ -215,7 +208,7 @@ fn steep_walls(
     let coarse = (10.0 * job.tolerance)
         .min(work.tool.max_radius() / 4.0)
         .max(job.tolerance);
-    let mut reach = LevelReach::new(&work.prepared.part, work.tool, coarse).map_err(in_op(op))?;
+    let mut reach = work.reach(coarse)?;
     // The band the passes leave, grown to overlap them; and where the part
     // ends below an edge, which the passes stop at: within the tool's width
     // inside where it stops touching the part, and a little past, where the
@@ -252,8 +245,7 @@ fn steep_walls(
         slope_to,
         ramp: None,
     };
-    let (path, report) =
-        waterline(&mut reach, work.cutter, work.tool, &area, &params).map_err(in_op(op))?;
+    let (path, report) = waterline(&mut reach, &work.seat()?, &area, &params).map_err(in_op(op))?;
     Ok((path, report.passes))
 }
 
@@ -273,7 +265,7 @@ pub(super) fn contour_paths(
     let coarse = (10.0 * job.tolerance)
         .min(work.tool.max_radius() / 4.0)
         .max(job.tolerance);
-    let mut reach = LevelReach::new(&work.prepared.part, work.tool, coarse).map_err(in_op(op))?;
+    let mut reach = work.reach(coarse)?;
     let area = finish_area(work, limit, false)?;
     let (top, bottom) = op.levels_3d(work.heights);
     let (slope_from, slope_to) = work.slopes();
@@ -295,8 +287,7 @@ pub(super) fn contour_paths(
         // where it may stay down at all.
         ramp: (op.stay_down(work.spec.diameter) > 0.0).then(|| op.linking.ramp_angle.to_radians()),
     };
-    let (path, report) =
-        waterline(&mut reach, work.cutter, work.tool, &area, &params).map_err(in_op(op))?;
+    let (path, report) = waterline(&mut reach, &work.seat()?, &area, &params).map_err(in_op(op))?;
     if report.passes == 0 {
         warnings.push(
             "found nothing to finish: no wall within the boundary, heights and slopes".into(),
@@ -327,7 +318,7 @@ pub(super) fn ramp_paths(
     let fine = (3.0 * job.tolerance)
         .min(work.tool.max_radius() / 4.0)
         .max(job.tolerance);
-    let mut reach = LevelReach::new(&work.prepared.part, work.tool, fine).map_err(in_op(op))?;
+    let mut reach = work.reach(fine)?;
     let area = finish_area(work, limit, false)?;
     let (top, bottom) = op.levels_3d(work.heights);
     let (slope_from, slope_to) = work.slopes();
@@ -349,8 +340,7 @@ pub(super) fn ramp_paths(
         // steeper.
         ramp: op.linking.ramp_angle.to_radians(),
     };
-    let (path, report) =
-        ramp(&mut reach, work.cutter, work.tool, &area, &params).map_err(in_op(op))?;
+    let (path, report) = ramp(&mut reach, &work.seat()?, &area, &params).map_err(in_op(op))?;
     if report.passes == 0 {
         warnings.push(
             "found nothing to finish: no wall within the boundary, heights and slopes".into(),
@@ -391,6 +381,7 @@ pub(super) fn pencil_paths(
             stock.axial() + asked.overthickness,
         )?,
     )?;
+    let finder = work.surfaces.under(&finder)?;
     let params = PencilParams {
         watch: work.watch.clone(),
         tolerance: job.tolerance,
@@ -403,8 +394,7 @@ pub(super) fn pencil_paths(
         max_cut_step: op.max_cut_step(),
         ..Default::default()
     };
-    let (path, report) =
-        pencil(work.cutter, work.tool, &finder, &area, &params).map_err(in_op(op))?;
+    let (path, report) = pencil(&work.seat()?, &finder, &area, &params).map_err(in_op(op))?;
     if report.passes == 0 {
         warnings.push(
             "found nothing to finish: the tool touches the part in two places nowhere \
@@ -425,8 +415,7 @@ pub(super) fn flat_paths(
     warnings: &mut Vec<String>,
 ) -> Result<Paths, RunError> {
     let (job, op) = (work.job, work.op);
-    let mut reach =
-        LevelReach::new(&work.prepared.part, work.tool, job.tolerance).map_err(in_op(op))?;
+    let mut reach = work.reach(job.tolerance)?;
     let area = finish_area(work, limit, false)?;
     let (top, bottom) = op.levels_3d(work.heights);
     let slack = job.tolerance;
@@ -517,7 +506,7 @@ pub(super) fn project_paths(
         way: direction.engine(),
     };
     let (path, report) =
-        project_curves(work.cutter, work.tool, &area, curves, &params).map_err(in_op(op))?;
+        project_curves(&work.seat()?, &area, curves, &params).map_err(in_op(op))?;
     if report.passes == 0 {
         warnings.push(
             "found nothing to finish: no picked curve passes over the part within the boundary \
@@ -546,8 +535,7 @@ pub(super) fn morph_paths(
         drop: project_params(work),
         way: direction.engine(),
     };
-    let (path, report) =
-        morph_curves(work.cutter, work.tool, &area, curves, &params).map_err(in_op(op))?;
+    let (path, report) = morph_curves(&work.seat()?, &area, curves, &params).map_err(in_op(op))?;
     if report.cut.passes == 0 {
         warnings.push(
             "found nothing to finish: no pass between the picked curves passes over the part \
@@ -580,7 +568,7 @@ pub(super) fn projected(
         ..project_params(work)
     };
     let (mut path, mut report) =
-        project(work.cutter, work.tool, &kept, curves, &params).map_err(in_op(op))?;
+        project(&work.seat()?, &kept, curves, &params).map_err(in_op(op))?;
     report.walls = with_walls(work, limit, band.as_ref(), slope_to, &mut path)?;
     report.passes += report.walls;
     if report.passes == 0 {

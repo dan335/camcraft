@@ -2,9 +2,17 @@ use camcraft_geom::synthetic;
 use glam::{DVec3, dvec2, dvec3};
 
 use super::*;
+use crate::cutter::allowance::{Allowance, EffectiveTool};
+use crate::cutter::dropcutter::DropCutter;
+use crate::cutter::surfaces::PartSurfaces;
 use crate::cutter::tool::Ball;
 use crate::path::toolpath::Move;
 use crate::strategy::curve::Piece;
+
+/// A ball of radius `r`, leaving nothing.
+fn ball(r: f64) -> EffectiveTool {
+    EffectiveTool::new(&Ball::new(r).unwrap(), Allowance::none()).unwrap()
+}
 
 /// A curve through `points`, each joined to the next by a line; closed back
 /// to the first where `closed`.
@@ -56,10 +64,10 @@ fn cut(
     curves: &[Picked],
     p: &ProjectCurvesParams,
 ) -> Vec<Vec<DVec3>> {
-    let cutter = DropCutter::new(mesh);
-    let tool = Ball::new(1.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(mesh));
+    let seat = part.under(&ball(1.0)).unwrap();
     let area = Region::rectangle(dvec2(-9.0, -9.0), dvec2(9.0, 9.0));
-    let (path, report) = project_curves(&cutter, &tool, &area, curves, p).unwrap();
+    let (path, report) = project_curves(&seat, &area, curves, p).unwrap();
     let passes: Vec<Vec<DVec3>> = path
         .passes()
         .map(|pass| pass.iter().map(|m: &Move| m.to).collect())
@@ -82,8 +90,8 @@ fn turn(points: &[DVec3]) -> f64 {
 #[test]
 fn a_curve_is_cut_where_the_tool_rests_on_the_part() {
     let mesh = synthetic::inclined_plane(0.2, 0.1, 3.0, 10.0);
-    let cutter = DropCutter::new(&mesh);
-    let tool = Ball::new(1.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(1.0)).unwrap();
     // Picked well above the part: only where it is seen from above counts.
     let line = through(&[dvec3(-5.0, -3.0, 40.0), dvec3(5.0, 4.0, 40.0)], false);
     for raise in [0.0, 1.5] {
@@ -94,7 +102,7 @@ fn a_curve_is_cut_where_the_tool_rests_on_the_part() {
         );
         assert_eq!(passes.len(), 1);
         for p in &passes[0] {
-            let rest = cutter.drop_at(&tool, p.x, p.y).unwrap();
+            let rest = seat.drop_at(p.x, p.y).unwrap();
             assert!((p.z - raise - rest).abs() < 1e-9, "{p} rests at {rest}");
         }
         let (first, last) = (passes[0][0], *passes[0].last().unwrap());

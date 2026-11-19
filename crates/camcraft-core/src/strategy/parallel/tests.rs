@@ -1,13 +1,26 @@
 use super::*;
+use crate::cutter::allowance::{Allowance, EffectiveTool};
+use crate::cutter::dropcutter::DropCutter;
+use crate::cutter::surfaces::PartSurfaces;
 use crate::cutter::tool::{Ball, Flat};
 use crate::path::toolpath::MoveRole;
 use camcraft_geom::synthetic;
 
+/// A ball of radius `r`, leaving nothing.
+fn ball(r: f64) -> EffectiveTool {
+    EffectiveTool::new(&Ball::new(r).unwrap(), Allowance::none()).unwrap()
+}
+
+/// A flat of radius `r`, leaving nothing.
+fn flat(r: f64) -> EffectiveTool {
+    EffectiveTool::new(&Flat::new(r).unwrap(), Allowance::none()).unwrap()
+}
+
 #[test]
 fn a_long_line_sampled_in_stretches_is_the_line_sampled_whole() {
     let mesh = synthetic::uv_sphere(10.0, 40, 60);
-    let cutter = DropCutter::new(&mesh);
-    let tool = Ball::new(2.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(2.0)).unwrap();
     // A spiral of many short segments, out past the sphere's edge.
     let points: Vec<DVec2> = (0..3000)
         .map(|i| {
@@ -16,8 +29,8 @@ fn a_long_line_sampled_in_stretches_is_the_line_sampled_whole() {
         })
         .collect();
     let (mut whole, mut parts) = (ParallelReport::default(), ParallelReport::default());
-    let one = sweep_polyline(&cutter, &tool, &points, false, &params(), &mut whole);
-    let many = sweep_open_polyline(&cutter, &tool, &points, &params(), &mut parts);
+    let one = sweep_polyline(&seat, &points, false, &params(), &mut whole);
+    let many = sweep_open_polyline(&seat, &points, &params(), &mut parts);
     assert!(!one.is_empty());
     assert_eq!(one.len(), many.len());
     for (a, b) in one.iter().zip(&many) {
@@ -39,8 +52,8 @@ fn params() -> ParallelParams {
 #[test]
 fn rejects_unusable_parameters() {
     let mesh = synthetic::plane(0.0, 10.0);
-    let dc = DropCutter::new(&mesh);
-    let tool = Flat::new(1.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&flat(1.0)).unwrap();
     let (lo, hi) = (dvec2(-5.0, -5.0), dvec2(5.0, 5.0));
 
     for bad in [
@@ -61,10 +74,10 @@ fn rejects_unusable_parameters() {
             ..params()
         },
     ] {
-        assert!(parallel_finish(&dc, &tool, lo, hi, &bad).is_err());
+        assert!(parallel_finish(&seat, lo, hi, &bad).is_err());
     }
     assert!(matches!(
-        parallel_finish(&dc, &tool, hi, lo, &params()),
+        parallel_finish(&seat, hi, lo, &params()),
         Err(StrategyError::EmptyRegion { .. })
     ));
 }
@@ -73,10 +86,10 @@ fn rejects_unusable_parameters() {
 #[test]
 fn a_plane_needs_no_refinement() {
     let mesh = synthetic::plane(2.0, 20.0);
-    let dc = DropCutter::new(&mesh);
-    let tool = Flat::new(2.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&flat(2.0)).unwrap();
     let (path, report) =
-        parallel_finish(&dc, &tool, dvec2(-8.0, -8.0), dvec2(8.0, 8.0), &params()).unwrap();
+        parallel_finish(&seat, dvec2(-8.0, -8.0), dvec2(8.0, 8.0), &params()).unwrap();
 
     assert!(report.is_clean());
     assert!(
@@ -104,13 +117,15 @@ fn curvature_produces_more_points_than_a_plane() {
     };
     let flat_mesh = synthetic::plane(0.0, 20.0);
     let dome_mesh = synthetic::uv_sphere(10.0, 240, 320);
-    let tool = Ball::new(1.5).unwrap();
+    let tool = ball(1.5);
     let (lo, hi) = (dvec2(-6.0, -6.0), dvec2(6.0, 6.0));
 
-    let flat = parallel_finish(&DropCutter::new(&flat_mesh), &tool, lo, hi, &p)
+    let flat_part = PartSurfaces::whole(DropCutter::new(&flat_mesh));
+    let dome_part = PartSurfaces::whole(DropCutter::new(&dome_mesh));
+    let flat = parallel_finish(&flat_part.under(&tool).unwrap(), lo, hi, &p)
         .unwrap()
         .0;
-    let dome = parallel_finish(&DropCutter::new(&dome_mesh), &tool, lo, hi, &p)
+    let dome = parallel_finish(&dome_part.under(&tool).unwrap(), lo, hi, &p)
         .unwrap()
         .0;
 
@@ -126,14 +141,13 @@ fn curvature_produces_more_points_than_a_plane() {
 #[test]
 fn every_point_sits_on_the_exact_surface() {
     let mesh = synthetic::uv_sphere(10.0, 120, 160);
-    let dc = DropCutter::new(&mesh);
-    let tool = Ball::new(2.0).unwrap();
-    let (path, _) =
-        parallel_finish(&dc, &tool, dvec2(-5.0, -5.0), dvec2(5.0, 5.0), &params()).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(2.0)).unwrap();
+    let (path, _) = parallel_finish(&seat, dvec2(-5.0, -5.0), dvec2(5.0, 5.0), &params()).unwrap();
 
     assert!(!path.is_empty());
     for m in path.moves() {
-        let exact = dc.drop_at(&tool, m.to.x, m.to.y).unwrap();
+        let exact = seat.drop_at(m.to.x, m.to.y).unwrap();
         assert!(
             (m.to.z - exact).abs() < 1e-9,
             "point {:?} is not on the exact surface (want {exact})",
@@ -149,15 +163,14 @@ fn every_point_sits_on_the_exact_surface() {
 fn chords_stay_within_tolerance_away_from_the_midpoint() {
     let (sr, lat, lon) = (10.0, 240, 320);
     let mesh = synthetic::uv_sphere(sr, lat, lon);
-    let dc = DropCutter::new(&mesh);
-    let tool = Ball::new(2.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(2.0)).unwrap();
     let p = ParallelParams {
         stepover: 0.8,
         tolerance: 0.005,
         ..Default::default()
     };
-    let (path, report) =
-        parallel_finish(&dc, &tool, dvec2(-6.0, -6.0), dvec2(6.0, 6.0), &p).unwrap();
+    let (path, report) = parallel_finish(&seat, dvec2(-6.0, -6.0), dvec2(6.0, 6.0), &p).unwrap();
     assert!(report.is_clean(), "refinement hit its limit: {report:?}");
 
     let budget = p.tolerance + synthetic::uv_sphere_max_sag(sr, lat, lon) + 1e-9;
@@ -170,7 +183,7 @@ fn chords_stay_within_tolerance_away_from_the_midpoint() {
         let (a, b) = (prev.to, cur.to);
         for frac in [0.2, 0.35, 0.65, 0.8] {
             let q = a + (b - a) * frac;
-            if let Some(exact) = dc.drop_at(&tool, q.x, q.y) {
+            if let Some(exact) = seat.drop_at(q.x, q.y) {
                 let sag = (q.z - exact).abs();
                 worst = worst.max(sag);
                 assert!(
@@ -190,10 +203,10 @@ fn chords_stay_within_tolerance_away_from_the_midpoint() {
 #[test]
 fn passes_begin_with_unresolved_links() {
     let mesh = synthetic::plane(0.0, 20.0);
-    let dc = DropCutter::new(&mesh);
-    let tool = Flat::new(2.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&flat(2.0)).unwrap();
     let (path, report) =
-        parallel_finish(&dc, &tool, dvec2(-6.0, -6.0), dvec2(6.0, 6.0), &params()).unwrap();
+        parallel_finish(&seat, dvec2(-6.0, -6.0), dvec2(6.0, 6.0), &params()).unwrap();
 
     assert!(
         path.has_unplanned_links(),
@@ -219,16 +232,10 @@ fn passes_begin_with_unresolved_links() {
 fn coverage_gaps_split_passes() {
     // A small plane inside a much larger swept region.
     let mesh = synthetic::plane(1.0, 3.0);
-    let dc = DropCutter::new(&mesh);
-    let tool = Flat::new(0.5).unwrap();
-    let (path, report) = parallel_finish(
-        &dc,
-        &tool,
-        dvec2(-10.0, -10.0),
-        dvec2(10.0, 10.0),
-        &params(),
-    )
-    .unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&flat(0.5)).unwrap();
+    let (path, report) =
+        parallel_finish(&seat, dvec2(-10.0, -10.0), dvec2(10.0, 10.0), &params()).unwrap();
 
     assert!(report.passes > 0);
     for m in path.moves() {
@@ -253,8 +260,8 @@ fn coverage_gaps_split_passes() {
 fn a_wall_breaks_the_pass_instead_of_plunging_through_it() {
     let step_height = 20.0;
     let mesh = synthetic::step(step_height, 30.0);
-    let dc = DropCutter::new(&mesh);
-    let tool = Ball::new(3.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(3.0)).unwrap();
     let base = ParallelParams {
         stepover: 1.0,
         tolerance: 0.02,
@@ -267,7 +274,7 @@ fn a_wall_breaks_the_pass_instead_of_plunging_through_it() {
         max_cut_step: 50.0,
         ..base.clone()
     };
-    let (before, before_report) = parallel_finish(&dc, &tool, lo, hi, &through).unwrap();
+    let (before, before_report) = parallel_finish(&seat, lo, hi, &through).unwrap();
     let b_start = before.moves().first().unwrap().to;
     let (_, b_deep) = before.steep_cut_descents(b_start, PLUNGE_RATIO);
     assert_eq!(before_report.wall_breaks, 0);
@@ -277,7 +284,7 @@ fn a_wall_breaks_the_pass_instead_of_plunging_through_it() {
     );
 
     // Default allowance: the step is no longer traversed as a cut.
-    let (after, after_report) = parallel_finish(&dc, &tool, lo, hi, &base).unwrap();
+    let (after, after_report) = parallel_finish(&seat, lo, hi, &base).unwrap();
     let a_start = after.moves().first().unwrap().to;
     let (_, a_deep) = after.steep_cut_descents(a_start, PLUNGE_RATIO);
     assert!(
@@ -317,10 +324,10 @@ fn a_straight_steep_face_breaks_the_pass() {
         })
         .collect();
     let mesh = camcraft_geom::mesh::TriMesh::new(vertices, triangles).unwrap();
-    let dc = DropCutter::new(&mesh);
-    let tool = Ball::new(2.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(2.0)).unwrap();
     let (path, report) =
-        parallel_finish(&dc, &tool, dvec2(-6.0, -2.0), dvec2(6.0, 2.0), &params()).unwrap();
+        parallel_finish(&seat, dvec2(-6.0, -2.0), dvec2(6.0, 2.0), &params()).unwrap();
     assert!(report.wall_breaks > 0, "the ramp must break the passes");
     let cut = |f: fn(f64) -> bool| {
         path.moves()
@@ -345,10 +352,10 @@ fn a_straight_steep_face_breaks_the_pass() {
 #[test]
 fn a_steep_but_cuttable_face_is_ridden() {
     let mesh = synthetic::inclined_plane(-3.0, 0.0, 0.0, 10.0);
-    let dc = DropCutter::new(&mesh);
-    let tool = Ball::new(2.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(2.0)).unwrap();
     let (_, report) =
-        parallel_finish(&dc, &tool, dvec2(-2.0, -2.0), dvec2(2.0, 2.0), &params()).unwrap();
+        parallel_finish(&seat, dvec2(-2.0, -2.0), dvec2(2.0, 2.0), &params()).unwrap();
     assert_eq!(report.wall_breaks, 0);
 }
 
@@ -357,14 +364,14 @@ fn a_steep_but_cuttable_face_is_ridden() {
 #[test]
 fn a_smooth_surface_is_not_broken_up() {
     let mesh = synthetic::uv_sphere(20.0, 200, 300);
-    let dc = DropCutter::new(&mesh);
-    let tool = Ball::new(2.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(2.0)).unwrap();
     let p = ParallelParams {
         stepover: 1.0,
         tolerance: 0.02,
         ..Default::default()
     };
-    let (_, report) = parallel_finish(&dc, &tool, dvec2(-8.0, -8.0), dvec2(8.0, 8.0), &p).unwrap();
+    let (_, report) = parallel_finish(&seat, dvec2(-8.0, -8.0), dvec2(8.0, 8.0), &p).unwrap();
     assert_eq!(report.wall_breaks, 0, "a dome has no walls to break at");
 }
 
@@ -373,8 +380,8 @@ fn a_smooth_surface_is_not_broken_up() {
 #[test]
 fn the_threshold_actually_governs_breaking() {
     let mesh = synthetic::step(20.0, 30.0);
-    let dc = DropCutter::new(&mesh);
-    let tool = Ball::new(3.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(3.0)).unwrap();
     let base = ParallelParams {
         stepover: 1.0,
         tolerance: 0.02,
@@ -382,8 +389,7 @@ fn the_threshold_actually_governs_breaking() {
     };
 
     let tight = parallel_finish(
-        &dc,
-        &tool,
+        &seat,
         dvec2(-10.0, -6.0),
         dvec2(10.0, 6.0),
         &ParallelParams {
@@ -394,8 +400,7 @@ fn the_threshold_actually_governs_breaking() {
     .unwrap()
     .1;
     let loose = parallel_finish(
-        &dc,
-        &tool,
+        &seat,
         dvec2(-10.0, -6.0),
         dvec2(10.0, 6.0),
         &ParallelParams {
@@ -417,15 +422,15 @@ fn the_threshold_actually_governs_breaking() {
 #[test]
 fn refinement_limit_is_reported_not_hidden() {
     let mesh = synthetic::uv_sphere(10.0, 200, 300);
-    let dc = DropCutter::new(&mesh);
-    let tool = Ball::new(2.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(2.0)).unwrap();
     let p = ParallelParams {
         stepover: 4.0,
         tolerance: 1e-9,
         max_depth: 1,
         ..Default::default()
     };
-    let (_, report) = parallel_finish(&dc, &tool, dvec2(-4.0, -4.0), dvec2(4.0, 4.0), &p).unwrap();
+    let (_, report) = parallel_finish(&seat, dvec2(-4.0, -4.0), dvec2(4.0, 4.0), &p).unwrap();
     assert!(
         !report.is_clean(),
         "an impossible tolerance must be reported, not silently ignored"

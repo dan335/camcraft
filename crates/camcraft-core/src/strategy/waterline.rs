@@ -55,7 +55,8 @@ use glam::DVec2;
 use rayon::prelude::*;
 
 use crate::control::{Watch, share};
-use crate::cutter::dropcutter::{DropCutter, DropTest};
+use crate::cutter::surfaces::Seat;
+use crate::cutter::tool::ToolProfile;
 use crate::path::toolpath::Toolpath;
 use crate::strategy::adaptive::Direction;
 use crate::strategy::nesting::nearest;
@@ -164,10 +165,9 @@ pub struct WaterlineReport {
 /// The path holds [`crate::path::toolpath::MoveRole::Cut`] passes separated by
 /// [`crate::path::toolpath::MoveRole::Link`] moves, in the order they are cut. The
 /// linker resolves them.
-pub fn waterline<T: DropTest + Sync>(
+pub fn waterline(
     reach: &mut LevelReach<'_>,
-    cutter: &DropCutter<'_>,
-    tool: &T,
+    seat: &Seat<'_>,
     area: &Region,
     params: &WaterlineParams,
 ) -> Result<(Toolpath, WaterlineReport), StrategyError> {
@@ -193,7 +193,7 @@ pub fn waterline<T: DropTest + Sync>(
     let Found {
         levels,
         passes: worked,
-    } = passes_at_levels(reach, cutter, tool, area, params)?;
+    } = passes_at_levels(reach, seat, area, params)?;
     report.levels = levels.len() as u64;
 
     // Each level's passes, each with the piece of the footprint it is in.
@@ -209,7 +209,9 @@ pub fn waterline<T: DropTest + Sync>(
 
     let mut emit = Emit::new(params.feed);
     // Onto a ring that starts within half the tool of where the last ended.
-    emit.ramp = params.ramp.map(|angle| (angle, 0.5 * tool.max_radius()));
+    emit.ramp = params
+        .ramp
+        .map(|angle| (angle, 0.5 * seat.tool().max_radius()));
     let both_ways = params.direction == Direction::BothWays;
     let runs = |passes: Vec<(usize, Run)>| passes.into_iter().map(|(_, run)| run).collect();
     match params.order {
@@ -246,10 +248,9 @@ pub(crate) struct Found {
 /// ring of where the tool may not be, kept to `area`, pulled onto the part,
 /// kept to the slope range and turned to cut the way asked. What contour
 /// finishing cuts, and what ramp finishing ramps down.
-pub(crate) fn passes_at_levels<T: DropTest + Sync>(
+pub(crate) fn passes_at_levels(
     reach: &mut LevelReach<'_>,
-    cutter: &DropCutter<'_>,
-    tool: &T,
+    seat: &Seat<'_>,
     area: &Region,
     params: &WaterlineParams,
 ) -> Result<Found, StrategyError> {
@@ -271,7 +272,7 @@ pub(crate) fn passes_at_levels<T: DropTest + Sync>(
         Order::ByDepth => Vec::new(),
     };
 
-    let pitch = (tool.max_radius() / 2.0).max(params.tolerance);
+    let pitch = (seat.tool().max_radius() / 2.0).max(params.tolerance);
     // The region overstates by its bands and the arcs it is drawn to: twice
     // both, and at least a tolerance, is well past them.
     let reach_by = params.tolerance.max(2.0 * reach.overstates());
@@ -303,14 +304,7 @@ pub(crate) fn passes_at_levels<T: DropTest + Sync>(
                     // the part's shadow, and each point costs a dozen drops.
                     // Pulling puts back what the part needs between.
                     let points = simplify(&points, closed, thin);
-                    let pulled = pull(
-                        cutter,
-                        tool,
-                        (&points, closed),
-                        z,
-                        reach_by,
-                        params.tolerance,
-                    );
+                    let pulled = pull(seat, (&points, closed), z, reach_by, params.tolerance);
                     level.pulled += pulled.pulled;
                     level.unpulled += pulled.unpulled;
                     let points = simplify(&pulled.points, closed, thin);
@@ -320,14 +314,7 @@ pub(crate) fn passes_at_levels<T: DropTest + Sync>(
                     level.rings += 1;
                 }
                 for (points, closed) in stretches {
-                    let kept = slope::keep(
-                        cutter,
-                        tool,
-                        (points, closed),
-                        pitch,
-                        range,
-                        &mut level.slopes,
-                    );
+                    let kept = slope::keep(seat, (points, closed), pitch, range, &mut level.slopes);
                     for (mut points, closed) in kept {
                         let length = polyline_length(&points)
                             + if closed {
@@ -442,9 +429,8 @@ struct Pulled {
 /// Moves points onto the part at level `z`: towards it until the tool's tip is
 /// within [`PULL_TO`] of the tolerance of first touching it, looking no further
 /// than `reach_by`; and never past.
-pub(crate) struct Puller<'a, 'm, T> {
-    pub(crate) cutter: &'a DropCutter<'m>,
-    pub(crate) tool: &'a T,
+pub(crate) struct Puller<'a, 'm> {
+    pub(crate) seat: &'a Seat<'m>,
     /// The level: where the tool's tip is.
     pub(crate) z: f64,
     /// How far it looks for the part either way.
@@ -453,11 +439,11 @@ pub(crate) struct Puller<'a, 'm, T> {
     pub(crate) scratch: Vec<u32>,
 }
 
-impl<T: DropTest> Puller<'_, '_, T> {
+impl Puller<'_, '_> {
     /// Whether the tool's tip at the level over `p` is in the part.
     pub(crate) fn touches(&mut self, p: DVec2) -> bool {
-        self.cutter
-            .drop_at_in(self.tool, p.x, p.y, &mut self.scratch)
+        self.seat
+            .drop_at_in(p.x, p.y, &mut self.scratch)
             .is_some_and(|h| h > self.z)
     }
 
@@ -522,9 +508,8 @@ impl<T: DropTest> Puller<'_, '_, T> {
 /// The region the ring comes from need only be near the part, and never inside
 /// what the tool may reach: every point of the pass is placed by the part
 /// itself.
-fn pull<T: DropTest + Sync>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
+fn pull(
+    seat: &Seat<'_>,
     (points, closed): (&[DVec2], bool),
     z: f64,
     reach_by: f64,
@@ -532,8 +517,7 @@ fn pull<T: DropTest + Sync>(
 ) -> Pulled {
     let n = points.len();
     let puller = || Puller {
-        cutter,
-        tool,
+        seat,
         z,
         reach_by,
         tolerance,

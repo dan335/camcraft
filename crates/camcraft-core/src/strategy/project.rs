@@ -21,7 +21,7 @@
 use camcraft_geom::contour::Region;
 use glam::DVec2;
 
-use crate::cutter::dropcutter::{DropCutter, DropTest};
+use crate::cutter::surfaces::Seat;
 use crate::path::toolpath::Toolpath;
 use crate::strategy::StrategyError;
 use crate::strategy::curve::Curve as Picked;
@@ -53,16 +53,15 @@ pub struct ProjectCurvesParams {
 ///
 /// The path holds [`MoveRole::Cut`](crate::path::toolpath::MoveRole::Cut)
 /// passes separated by links, for the linker.
-pub fn project_curves<T: DropTest + Sync>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
+pub fn project_curves(
+    seat: &Seat<'_>,
     area: &Region,
     curves: &[Picked],
     params: &ProjectCurvesParams,
 ) -> Result<(Toolpath, ProjectReport), StrategyError> {
     let tol = params.drop.tolerance;
     let laid = directed(curves, tol, params.way);
-    project(cutter, tool, area, &laid, &params.drop)
+    project(seat, area, &laid, &params.drop)
 }
 
 /// `curves` seen from above, each within `tol` of its arcs, run the way `way`

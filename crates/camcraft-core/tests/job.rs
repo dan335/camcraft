@@ -9,6 +9,7 @@
 
 use camcraft_core::cutter::allowance::{Allowance, EffectiveTool};
 use camcraft_core::cutter::dropcutter::DropCutter;
+use camcraft_core::cutter::surfaces::PartSurfaces;
 use camcraft_core::cutter::tool::{Ball, Flat, ToolProfile};
 use camcraft_core::path::linker::{ClearanceField, LinkParams, NoPart, Unchanging, link};
 use camcraft_core::path::ordering::order_passes;
@@ -29,7 +30,7 @@ fn rough_then_finish_threading_stock_between_them() {
     // and finishing has a curved surface to follow.
     let sphere_r = 10.0;
     let mesh = synthetic::uv_sphere(sphere_r, 140, 200);
-    let cutter = DropCutter::new(&mesh);
+    let surfaces = PartSurfaces::whole(DropCutter::new(&mesh));
 
     let (lo, hi) = (dvec2(-11.0, -11.0), dvec2(11.0, 11.0));
     let block_top = sphere_r + 2.0;
@@ -105,8 +106,7 @@ fn rough_then_finish_threading_stock_between_them() {
     // ---- operation 2: finish, reading the stock roughing left ------------------
     let finish_tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
     let (finish_raw, finish_report) = parallel_finish(
-        &cutter,
-        &finish_tool,
+        &surfaces.under(&finish_tool).unwrap(),
         dvec2(-7.0, -7.0),
         dvec2(7.0, 7.0),
         &ParallelParams {

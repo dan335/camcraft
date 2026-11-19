@@ -9,6 +9,7 @@
 
 use camcraft_core::cutter::allowance::{Allowance, EffectiveTool};
 use camcraft_core::cutter::dropcutter::DropCutter;
+use camcraft_core::cutter::surfaces::PartSurfaces;
 use camcraft_core::cutter::tool::{Ball, Flat, ToolProfile};
 use camcraft_core::path::linker::{ClearancePlane, LinkParams, NoPart, Unchanging, link};
 use camcraft_core::path::simadapt::sim_moves;
@@ -36,13 +37,12 @@ const PITCH: f64 = 0.25;
 fn a_finished_dome_matches_the_part() {
     let sphere_r = 12.0;
     let mesh = synthetic::uv_sphere(sphere_r, 160, 220);
-    let cutter = DropCutter::new(&mesh);
+    let surfaces = PartSurfaces::whole(DropCutter::new(&mesh));
     let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
 
     let (lo, hi) = (dvec2(-7.0, -7.0), dvec2(7.0, 7.0));
     let (raw, strategy) = parallel_finish(
-        &cutter,
-        &tool,
+        &surfaces.under(&tool).unwrap(),
         lo,
         hi,
         &ParallelParams {
@@ -102,14 +102,13 @@ fn a_finished_dome_matches_the_part() {
 fn a_scalloped_dome_matches_the_part() {
     let sphere_r = 12.0;
     let mesh = synthetic::uv_sphere(sphere_r, 160, 220);
-    let cutter = DropCutter::new(&mesh);
+    let surfaces = PartSurfaces::whole(DropCutter::new(&mesh));
     let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
 
     let (lo, hi) = (dvec2(-7.0, -7.0), dvec2(7.0, 7.0));
     let area = camcraft_geom::contour::Region::rectangle(lo, hi);
     let (raw, report) = scallop_finish(
-        &cutter,
-        &tool,
+        &surfaces.under(&tool).unwrap(),
         &area,
         &ScallopParams {
             stepover: 0.5,
@@ -217,7 +216,7 @@ fn stock_to_leave_shows_up_in_the_material() {
     let mesh = synthetic::plane(0.0, 14.0);
     let (lo, hi) = (dvec2(-5.0, -5.0), dvec2(5.0, 5.0));
     let part = PartSurface::from_mesh(&mesh, lo, hi, PITCH).unwrap();
-    let cutter = DropCutter::new(&mesh);
+    let surfaces = PartSurfaces::whole(DropCutter::new(&mesh));
 
     let leave = 0.4;
     let tool = EffectiveTool::new(
@@ -226,8 +225,7 @@ fn stock_to_leave_shows_up_in_the_material() {
     )
     .unwrap();
     let (raw, _) = parallel_finish(
-        &cutter,
-        &tool,
+        &surfaces.under(&tool).unwrap(),
         lo,
         hi,
         &ParallelParams {
@@ -303,13 +301,12 @@ fn stock_to_leave_beside_stays_on_the_wall() {
 #[test]
 fn an_unlinked_path_reports_its_unplanned_traverses() {
     let mesh = synthetic::uv_sphere(10.0, 80, 120);
-    let cutter = DropCutter::new(&mesh);
+    let surfaces = PartSurfaces::whole(DropCutter::new(&mesh));
     let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
     let (lo, hi) = (dvec2(-6.0, -6.0), dvec2(6.0, 6.0));
 
     let (raw, _) = parallel_finish(
-        &cutter,
-        &tool,
+        &surfaces.under(&tool).unwrap(),
         lo,
         hi,
         &ParallelParams {
@@ -380,7 +377,7 @@ fn patterns_on_a_dome_match_the_part() {
 
     let sphere_r = 12.0;
     let mesh = synthetic::uv_sphere(sphere_r, 160, 220);
-    let cutter = DropCutter::new(&mesh);
+    let surfaces = PartSurfaces::whole(DropCutter::new(&mesh));
     let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
     let (lo, hi) = (dvec2(-7.0, -7.0), dvec2(7.0, 7.0));
     let area = camcraft_geom::contour::Region::rectangle(lo, hi);
@@ -409,7 +406,8 @@ fn patterns_on_a_dome_match_the_part() {
     ];
     let budget = 0.02 + synthetic::uv_sphere_max_sag(sphere_r, 160, 220) + PITCH;
     for curves in patterns {
-        let (raw, report) = project(&cutter, &tool, &area, &curves, &params).unwrap();
+        let (raw, report) =
+            project(&surfaces.under(&tool).unwrap(), &area, &curves, &params).unwrap();
         assert!(report.is_clean(), "{report:?}");
         assert!(report.passes > 0, "{report:?}");
         machines_clean(
@@ -432,15 +430,14 @@ fn a_contoured_dome_matches_the_part() {
 
     let sphere_r = 12.0;
     let mesh = synthetic::uv_sphere(sphere_r, 160, 220);
-    let cutter = DropCutter::new(&mesh);
+    let surfaces = PartSurfaces::whole(DropCutter::new(&mesh));
     let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
     let (lo, hi) = (dvec2(-16.0, -16.0), dvec2(16.0, 16.0));
     let area = camcraft_geom::contour::Region::rectangle(lo, hi);
     let mut reach = LevelReach::new(&mesh, &tool, 0.02).unwrap();
     let (raw, report) = waterline(
         &mut reach,
-        &cutter,
-        &tool,
+        &surfaces.under(&tool).unwrap(),
         &area,
         &WaterlineParams {
             stepdown: 0.5,

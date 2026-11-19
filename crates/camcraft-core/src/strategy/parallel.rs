@@ -5,9 +5,10 @@
 //!
 //! # Sampled from the exact query, not the grid
 //!
-//! Every emitted point comes from [`DropCutter`], never from an interpolated height
-//! map. Between grid nodes an interpolant passes *below* a convex surface, and below
-//! is a gouge. The grid is for areal questions; this is a path.
+//! Every emitted point is an exact drop of the tool onto the part ([`Seat`]),
+//! never from an interpolated height map. Between grid nodes an interpolant
+//! passes *below* a convex surface, and below is a gouge. The grid is for areal
+//! questions; this is a path.
 //!
 //! # Refinement is adaptive and bounded
 //!
@@ -35,7 +36,7 @@ use glam::{DVec2, DVec3, dvec2, dvec3};
 use rayon::prelude::*;
 
 use crate::control::Watch;
-use crate::cutter::dropcutter::{DropCutter, DropTest};
+use crate::cutter::surfaces::Seat;
 use crate::path::toolpath::{PLUNGE_RATIO, Toolpath};
 use crate::strategy::projected::Emit;
 use crate::strategy::{StrategyError, check};
@@ -144,19 +145,19 @@ impl ParallelReport {
     }
 }
 
-/// Sweep `tool` along parallel lines across `[min, max]`.
+/// Sweep the tool held over the part, `seat`, along parallel lines across
+/// `[min, max]`.
 ///
 /// Returns the path together with a report. The path contains [`MoveRole::Cut`] runs
 /// separated by [`MoveRole::Link`] moves; it is not yet machinable, and the linker
 /// turns those links into real traverses.
-pub fn parallel_finish<T: DropTest + Sync>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
+pub fn parallel_finish(
+    seat: &Seat<'_>,
     min: DVec2,
     max: DVec2,
     params: &ParallelParams,
 ) -> Result<(Toolpath, ParallelReport), StrategyError> {
-    parallel_finish_within(cutter, tool, min, max, None, params)
+    parallel_finish_within(seat, min, max, None, params)
 }
 
 /// As [`parallel_finish`], with the tool's centre kept inside `boundary` as well
@@ -168,9 +169,8 @@ pub fn parallel_finish<T: DropTest + Sync>(
 ///
 /// The lines are sampled in parallel, each with scratch space of its own, and
 /// written into the path in order.
-pub fn parallel_finish_within<T: DropTest + Sync>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
+pub fn parallel_finish_within(
+    seat: &Seat<'_>,
     min: DVec2,
     max: DVec2,
     boundary: Option<&Region>,
@@ -258,8 +258,7 @@ pub fn parallel_finish_within<T: DropTest + Sync>(
                 Line {
                     probe: |u: f64| {
                         let p = along * u + across * v;
-                        cutter
-                            .drop_at_in(tool, p.x, p.y, scratch)
+                        seat.drop_at_in(p.x, p.y, scratch)
                             .map(|z| dvec3(p.x, p.y, z))
                     },
                     params,
@@ -295,17 +294,16 @@ pub fn parallel_finish_within<T: DropTest + Sync>(
 /// the tool; walls are kept, not broken at.
 ///
 /// For the linker, to take a link over the part without reaching into it.
-pub(crate) fn follow<T: DropTest>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
+pub(crate) fn follow(
+    seat: &Seat<'_>,
     from: DVec2,
     to: DVec2,
     tolerance: f64,
     seed: f64,
 ) -> Vec<DVec3> {
     if from.distance(to) < 1e-9 {
-        return cutter
-            .drop_at(tool, from.x, from.y)
+        return seat
+            .drop_at(from.x, from.y)
             .map(|z| vec![dvec3(from.x, from.y, z)])
             .unwrap_or_default();
     }
@@ -316,7 +314,7 @@ pub(crate) fn follow<T: DropTest>(
         ..Default::default()
     };
     let mut report = ParallelReport::default();
-    sample_polyline(cutter, tool, &[from, to], false, &params, &mut report)
+    sample_polyline(seat, &[from, to], false, &params, &mut report)
         .into_iter()
         .flatten()
         .collect()
@@ -352,15 +350,14 @@ impl Run {
 ///
 /// A closed line unbroken comes back closed. One broken is started where it
 /// breaks, so no run crosses the join.
-pub(crate) fn sweep_polyline<T: DropTest>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
+pub(crate) fn sweep_polyline(
+    seat: &Seat<'_>,
     points: &[DVec2],
     closed: bool,
     params: &ParallelParams,
     report: &mut ParallelReport,
 ) -> Vec<Run> {
-    let samples = sample_polyline(cutter, tool, points, closed, params, report);
+    let samples = sample_polyline(seat, points, closed, params, report);
     runs_of(samples, closed, params, report)
 }
 
@@ -372,15 +369,14 @@ const CHUNK: usize = 512;
 /// [`CHUNK`] segments at a time in parallel, each stretch from its first point
 /// afresh, then joined and broken as one. The stretches are the line's own,
 /// whatever the number of cores, so the result is too.
-pub(crate) fn sweep_open_polyline<T: DropTest + Sync>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
+pub(crate) fn sweep_open_polyline(
+    seat: &Seat<'_>,
     points: &[DVec2],
     params: &ParallelParams,
     report: &mut ParallelReport,
 ) -> Vec<Run> {
     if points.len() <= 2 * CHUNK {
-        return sweep_polyline(cutter, tool, points, false, params, report);
+        return sweep_polyline(seat, points, false, params, report);
     }
     let starts: Vec<usize> = (0..points.len() - 1).step_by(CHUNK).collect();
     let stretches: Vec<(Vec<Option<DVec3>>, ParallelReport)> = starts
@@ -389,7 +385,7 @@ pub(crate) fn sweep_open_polyline<T: DropTest + Sync>(
             let b = (a + CHUNK).min(points.len() - 1);
             let mut found = ParallelReport::default();
             let stretch = points.get(a..=b).unwrap_or_default();
-            let samples = sample_polyline(cutter, tool, stretch, false, params, &mut found);
+            let samples = sample_polyline(seat, stretch, false, params, &mut found);
             (samples, found)
         })
         .collect();
@@ -405,9 +401,8 @@ pub(crate) fn sweep_open_polyline<T: DropTest + Sync>(
 /// The tool's tip on the part along `points`, closed back to the first if
 /// `closed`: each segment sampled and refined, `None` where nothing is under
 /// the tool.
-fn sample_polyline<T: DropTest>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
+fn sample_polyline(
+    seat: &Seat<'_>,
     points: &[DVec2],
     closed: bool,
     params: &ParallelParams,
@@ -433,8 +428,7 @@ fn sample_polyline<T: DropTest>(
         let mut line = Line {
             probe: |u: f64| {
                 let p = from + along * u;
-                cutter
-                    .drop_at_in(tool, p.x, p.y, &mut scratch)
+                seat.drop_at_in(p.x, p.y, &mut scratch)
                     .map(|z| dvec3(p.x, p.y, z))
             },
             params,

@@ -8,6 +8,7 @@
 
 use camcraft_core::cutter::allowance::{Allowance, EffectiveTool};
 use camcraft_core::cutter::dropcutter::DropCutter;
+use camcraft_core::cutter::surfaces::PartSurfaces;
 use camcraft_core::cutter::tool::{Ball, ToolProfile};
 use camcraft_core::path::linker::{Air, ClearancePlane, LinkParams, NoPart, link};
 use camcraft_core::path::toolpath::MoveRole;
@@ -24,6 +25,7 @@ const CLEARANCE: f64 = 25.0;
 fn a_sphere_becomes_a_machinable_path() {
     let mesh = synthetic::uv_sphere(SPHERE_R, LAT, LON);
     let cutter = DropCutter::new(&mesh);
+    let surfaces = PartSurfaces::whole(DropCutter::new(&mesh));
 
     // A finishing pass that still leaves a little stock, so the effective-tool seam
     // is exercised rather than bypassed.
@@ -36,8 +38,13 @@ fn a_sphere_becomes_a_machinable_path() {
         feed: 1200.0,
         ..Default::default()
     };
-    let (raw, strategy) =
-        parallel_finish(&cutter, &tool, dvec2(-6.0, -6.0), dvec2(6.0, 6.0), &sweep).unwrap();
+    let (raw, strategy) = parallel_finish(
+        &surfaces.under(&tool).unwrap(),
+        dvec2(-6.0, -6.0),
+        dvec2(6.0, 6.0),
+        &sweep,
+    )
+    .unwrap();
 
     assert!(strategy.is_clean(), "refinement was limited: {strategy:?}");
     assert!(strategy.passes > 5, "expected several passes");
@@ -88,12 +95,11 @@ fn a_sphere_becomes_a_machinable_path() {
 #[test]
 fn no_traverse_passes_below_clearance() {
     let mesh = synthetic::uv_sphere(SPHERE_R, 80, 120);
-    let cutter = DropCutter::new(&mesh);
+    let surfaces = PartSurfaces::whole(DropCutter::new(&mesh));
     let tool = EffectiveTool::new(&Ball::new(2.0).unwrap(), Allowance::none()).unwrap();
 
     let (raw, _) = parallel_finish(
-        &cutter,
-        &tool,
+        &surfaces.under(&tool).unwrap(),
         dvec2(-7.0, -7.0),
         dvec2(7.0, 7.0),
         &ParallelParams {
@@ -146,13 +152,12 @@ fn no_traverse_passes_below_clearance() {
 #[test]
 fn a_flat_plate_gives_a_flat_path() {
     let mesh = synthetic::plane(3.0, 30.0);
-    let cutter = DropCutter::new(&mesh);
+    let surfaces = PartSurfaces::whole(DropCutter::new(&mesh));
     let tool =
         EffectiveTool::new(&Ball::new(3.0).unwrap(), Allowance::new(0.0, 0.5).unwrap()).unwrap();
 
     let (raw, report) = parallel_finish(
-        &cutter,
-        &tool,
+        &surfaces.under(&tool).unwrap(),
         dvec2(-10.0, -10.0),
         dvec2(10.0, 10.0),
         &ParallelParams {

@@ -21,7 +21,8 @@ use glam::{DVec2, DVec3};
 use rayon::prelude::*;
 
 use crate::control::{Watch, share};
-use crate::cutter::dropcutter::{DropCutter, DropTest};
+use crate::cutter::surfaces::Seat;
+use crate::cutter::tool::ToolProfile;
 use crate::path::toolpath::{MoveRole, Toolpath};
 use crate::strategy::field;
 use crate::strategy::nesting::take_nearest;
@@ -129,9 +130,8 @@ impl ProjectReport {
 /// The path holds [`MoveRole::Cut`] passes separated by [`MoveRole::Link`] moves,
 /// in the pattern's order. A closed curve kept whole is started nearest where
 /// the tool is.
-pub fn project<T: DropTest + Sync>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
+pub fn project(
+    seat: &Seat<'_>,
     area: &Region,
     curves: &[Curve],
     params: &ProjectParams,
@@ -151,7 +151,7 @@ pub fn project<T: DropTest + Sync>(
     // Slopes judged as scallop's grid does, and kept to the range asked for and
     // nothing else, as Fusion's: a steep stretch is cut down the part as a
     // parallel pass is, broken only where it falls further than a cut step.
-    let pitch = field::pitch(params.stepover, tool.max_radius());
+    let pitch = field::pitch(params.stepover, seat.tool().max_radius());
     let range = (params.slope_from, params.slope_to, params.slope_to);
     let thin = 0.25 * params.tolerance;
     let sweep = ParallelParams {
@@ -175,14 +175,7 @@ pub fn project<T: DropTest + Sync>(
             }
             params.watch.add(share);
             let points = simplify(&curve.points, curve.closed, thin);
-            let stretches = slope::keep(
-                cutter,
-                tool,
-                (points, curve.closed),
-                pitch,
-                range,
-                &mut counts,
-            );
+            let stretches = slope::keep(seat, (points, curve.closed), pitch, range, &mut counts);
             (stretches, counts)
         })
         .collect();
@@ -211,9 +204,9 @@ pub fn project<T: DropTest + Sync>(
         .map(|(points, closed)| {
             let mut found = ParallelReport::default();
             let runs = if *closed {
-                sweep_polyline(cutter, tool, points, true, &sweep, &mut found)
+                sweep_polyline(seat, points, true, &sweep, &mut found)
             } else {
-                sweep_open_polyline(cutter, tool, points, &sweep, &mut found)
+                sweep_open_polyline(seat, points, &sweep, &mut found)
             };
             if params.watch.showing() {
                 params.watch.show(runs.iter().map(Run::shown));
@@ -523,6 +516,8 @@ mod tests {
 
     use super::*;
     use crate::cutter::allowance::{Allowance, EffectiveTool};
+    use crate::cutter::dropcutter::DropCutter;
+    use crate::cutter::surfaces::PartSurfaces;
     use crate::cutter::tool::Flat;
 
     /// The slope range is the one asked for and nothing else, as Fusion's: a
@@ -531,8 +526,9 @@ mod tests {
     #[test]
     fn a_range_short_of_a_wall_cuts_what_every_slope_does() {
         let mesh = synthetic::step(0.4, 6.0);
-        let cutter = DropCutter::new(&mesh);
+        let part = PartSurfaces::whole(DropCutter::new(&mesh));
         let tool = EffectiveTool::new(&Flat::new(1.0).unwrap(), Allowance::none()).unwrap();
+        let seat = part.under(&tool).unwrap();
         let area = Region::rectangle(dvec2(-5.0, -5.0), dvec2(5.0, 5.0));
         let across = [Curve::open(vec![dvec2(-4.0, 0.0), dvec2(4.0, 0.0)])];
         let cut = |slope_to: f64| {
@@ -542,7 +538,7 @@ mod tests {
                 slope_to,
                 ..Default::default()
             };
-            project(&cutter, &tool, &area, &across, &params).unwrap()
+            project(&seat, &area, &across, &params).unwrap()
         };
         let (all, every) = cut(std::f64::consts::FRAC_PI_2);
         let (short, report) = cut(89.9_f64.to_radians());

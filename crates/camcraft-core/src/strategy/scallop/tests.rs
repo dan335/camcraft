@@ -1,4 +1,7 @@
 use super::*;
+use crate::cutter::allowance::{Allowance, EffectiveTool};
+use crate::cutter::dropcutter::DropCutter;
+use crate::cutter::surfaces::PartSurfaces;
 use crate::cutter::tool::{Ball, Flat};
 use crate::path::toolpath::MoveRole;
 use camcraft_geom::contour::Contour;
@@ -40,6 +43,16 @@ fn square(half: f64) -> Region {
     Region::rectangle(DVec2::splat(-half), DVec2::splat(half))
 }
 
+/// A ball of radius `r`, leaving nothing.
+fn ball(r: f64) -> EffectiveTool {
+    EffectiveTool::new(&Ball::new(r).unwrap(), Allowance::none()).unwrap()
+}
+
+/// A flat of radius `r`, leaving nothing.
+fn flat(r: f64) -> EffectiveTool {
+    EffectiveTool::new(&Flat::new(r).unwrap(), Allowance::none()).unwrap()
+}
+
 fn params(stepover: f64) -> ScallopParams {
     ScallopParams {
         stepover,
@@ -54,10 +67,10 @@ fn params(stepover: f64) -> ScallopParams {
 #[test]
 fn on_a_plate_the_passes_are_offsets_of_the_boundary() {
     let mesh = synthetic::plane(0.0, 20.0);
-    let cutter = DropCutter::new(&mesh);
-    let tool = Flat::new(1.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&flat(1.0)).unwrap();
     let s = 1.0;
-    let (path, report) = scallop_finish(&cutter, &tool, &square(8.0), &params(s)).unwrap();
+    let (path, report) = scallop_finish(&seat, &square(8.0), &params(s)).unwrap();
     assert!(report.is_clean(), "{report:?}");
     let found = passes(&path);
     assert!(found.len() >= 8, "{}", found.len());
@@ -94,12 +107,12 @@ fn on_a_dome_the_passes_are_a_stepover_apart_along_the_surface() {
     let (lat, lon) = (160, 240);
     let mesh = synthetic::uv_sphere(10.0, lat, lon);
     let sag = synthetic::uv_sphere_max_sag(10.0, lat, lon);
-    let cutter = DropCutter::new(&mesh);
-    let tool = Ball::new(2.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(2.0)).unwrap();
     let s = 0.5;
     // A boundary at 7 from the middle, 36° down the dome.
     let edge = 12.0 * (7.0f64 / 12.0).acos();
-    let (path, report) = scallop_finish(&cutter, &tool, &disc(7.0), &params(s)).unwrap();
+    let (path, report) = scallop_finish(&seat, &disc(7.0), &params(s)).unwrap();
     assert!(report.is_clean(), "{report:?}");
     let along = |p: &DVec3| 12.0 * (p.truncate().length().min(12.0) / 12.0).acos() - edge;
     let mut found = passes(&path);
@@ -138,14 +151,14 @@ fn on_a_dome_the_passes_are_a_stepover_apart_along_the_surface() {
 #[test]
 fn slope_limits_are_kept_to() {
     let mesh = synthetic::uv_sphere(10.0, 120, 180);
-    let cutter = DropCutter::new(&mesh);
-    let tool = Ball::new(2.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(2.0)).unwrap();
     let p = ScallopParams {
         slope_from: 20f64.to_radians(),
         slope_to: 50f64.to_radians(),
         ..params(0.5)
     };
-    let (path, report) = scallop_finish(&cutter, &tool, &disc(11.0), &p).unwrap();
+    let (path, report) = scallop_finish(&seat, &disc(11.0), &p).unwrap();
     assert!(report.outside_slope > 0, "{report:?}");
     let (lo, hi) = (
         12.0 * 20f64.to_radians().sin(),
@@ -168,8 +181,8 @@ fn slope_limits_are_kept_to() {
 #[test]
 fn direction_follows_climb_and_order() {
     let mesh = synthetic::plane(0.0, 20.0);
-    let cutter = DropCutter::new(&mesh);
-    let tool = Flat::new(1.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&flat(1.0)).unwrap();
     for (direction, order, clockwise) in [
         (Direction::Climb, Order::OutsideIn, true),
         (Direction::Conventional, Order::OutsideIn, false),
@@ -180,7 +193,7 @@ fn direction_follows_climb_and_order() {
             order,
             ..params(1.0)
         };
-        let (path, _) = scallop_finish(&cutter, &tool, &square(6.0), &p).unwrap();
+        let (path, _) = scallop_finish(&seat, &square(6.0), &p).unwrap();
         let rings: Vec<f64> = passes(&path)
             .iter()
             .map(|pass| signed_area(pass))
@@ -197,13 +210,13 @@ fn direction_follows_climb_and_order() {
 #[test]
 fn inside_out_ends_on_the_boundary() {
     let mesh = synthetic::plane(0.0, 20.0);
-    let cutter = DropCutter::new(&mesh);
-    let tool = Flat::new(1.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&flat(1.0)).unwrap();
     let p = ScallopParams {
         order: Order::InsideOut,
         ..params(1.0)
     };
-    let (path, _) = scallop_finish(&cutter, &tool, &square(6.0), &p).unwrap();
+    let (path, _) = scallop_finish(&seat, &square(6.0), &p).unwrap();
     let depth = |pass: &Vec<DVec3>| {
         pass.iter()
             .map(|q| 6.0 - q.x.abs().max(q.y.abs()))
@@ -221,12 +234,12 @@ fn inside_out_ends_on_the_boundary() {
 #[test]
 fn a_wall_is_left_and_nothing_cuts_below_the_surface() {
     let mesh = synthetic::step(6.0, 20.0);
-    let cutter = DropCutter::new(&mesh);
-    let tool = Ball::new(1.5).unwrap();
-    let (path, report) = scallop_finish(&cutter, &tool, &square(8.0), &params(0.8)).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(1.5)).unwrap();
+    let (path, report) = scallop_finish(&seat, &square(8.0), &params(0.8)).unwrap();
     assert!(report.too_steep > 0, "{report:?}");
     for m in path.moves() {
-        let exact = cutter.drop_at(&tool, m.to.x, m.to.y).unwrap();
+        let exact = seat.drop_at(m.to.x, m.to.y).unwrap();
         assert!(
             (m.to.z - exact).abs() < 1e-9,
             "{:?} is not on the part",
@@ -240,7 +253,7 @@ fn a_wall_is_left_and_nothing_cuts_below_the_surface() {
         {
             for t in [0.25, 0.5, 0.75] {
                 let q = a.lerp(m.to, t);
-                let floor = cutter.drop_at(&tool, q.x, q.y).unwrap();
+                let floor = seat.drop_at(q.x, q.y).unwrap();
                 assert!(q.z >= floor - 0.01 - 1e-9, "{q:?} below {floor}");
             }
         }
@@ -253,10 +266,10 @@ fn a_wall_is_left_and_nothing_cuts_below_the_surface() {
 #[test]
 fn a_crest_gets_a_top_up() {
     let mesh = synthetic::plane(0.0, 60.0);
-    let cutter = DropCutter::new(&mesh);
-    let tool = Flat::new(0.5).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&flat(0.5)).unwrap();
     let strip = Region::rectangle(dvec2(-1.7, -20.0), dvec2(1.7, 20.0));
-    let (path, report) = scallop_finish(&cutter, &tool, &strip, &params(1.0)).unwrap();
+    let (path, report) = scallop_finish(&seat, &strip, &params(1.0)).unwrap();
     assert_eq!(report.top_ups, 1, "{report:?}");
     let nearest = passes(&path)
         .iter()
@@ -273,20 +286,20 @@ fn a_crest_gets_a_top_up() {
 #[test]
 fn a_field_too_large_is_coarsened_then_refused() {
     let mesh = synthetic::plane(0.0, 20.0);
-    let cutter = DropCutter::new(&mesh);
-    let tool = Flat::new(1.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&flat(1.0)).unwrap();
     let coarse = ScallopParams {
         max_nodes: 2_000,
         ..params(1.0)
     };
-    let (_, report) = scallop_finish(&cutter, &tool, &square(8.0), &coarse).unwrap();
+    let (_, report) = scallop_finish(&seat, &square(8.0), &coarse).unwrap();
     assert!(report.coarsened && report.nodes <= 2_000, "{report:?}");
     let tiny = ScallopParams {
         max_nodes: 50,
         ..params(1.0)
     };
     assert!(matches!(
-        scallop_finish(&cutter, &tool, &square(8.0), &tiny),
+        scallop_finish(&seat, &square(8.0), &tiny),
         Err(StrategyError::FieldTooLarge { .. })
     ));
 }
@@ -294,8 +307,8 @@ fn a_field_too_large_is_coarsened_then_refused() {
 #[test]
 fn rejects_unusable_parameters() {
     let mesh = synthetic::plane(0.0, 20.0);
-    let cutter = DropCutter::new(&mesh);
-    let tool = Flat::new(1.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&flat(1.0)).unwrap();
     for bad in [
         params(0.0),
         ScallopParams {
@@ -312,7 +325,7 @@ fn rejects_unusable_parameters() {
             ..params(1.0)
         },
     ] {
-        assert!(scallop_finish(&cutter, &tool, &square(5.0), &bad).is_err());
+        assert!(scallop_finish(&seat, &square(5.0), &bad).is_err());
     }
 }
 
@@ -320,18 +333,14 @@ fn rejects_unusable_parameters() {
 #[test]
 fn is_deterministic() {
     let mesh = synthetic::uv_sphere(10.0, 60, 90);
-    let cutter = DropCutter::new(&mesh);
-    let tool = Ball::new(2.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(2.0)).unwrap();
     let run = |threads: usize| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .build()
             .unwrap()
-            .install(|| {
-                scallop_finish(&cutter, &tool, &disc(9.0), &params(0.8))
-                    .unwrap()
-                    .0
-            })
+            .install(|| scallop_finish(&seat, &disc(9.0), &params(0.8)).unwrap().0)
     };
     assert_eq!(run(1).moves(), run(4).moves());
 }
@@ -345,11 +354,11 @@ fn is_deterministic() {
 #[test]
 fn the_band_runs_out_over_where_the_tool_leaves_the_part() {
     let mesh = synthetic::uv_sphere(10.0, 120, 180);
-    let cutter = DropCutter::new(&mesh);
-    let tool = Ball::new(2.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(2.0)).unwrap();
     let shadow = camcraft_geom::shadow::shadow_above(&mesh, -20.0).unwrap();
     let area = contact_region(&shadow, 2.0, 0.01).unwrap();
-    let (_, report, band) = scallop_finish_banded(&cutter, &tool, &area, &params(0.5)).unwrap();
+    let (_, report, band) = scallop_finish_banded(&seat, &area, &params(0.5)).unwrap();
     let inside = Indexed::of(&band);
     for ring in area.rings() {
         for &p in ring.points() {
@@ -379,15 +388,15 @@ fn contact_is_the_part_grown_by_the_tool() {
 #[test]
 fn a_stopped_scallop_ends_stopped() {
     let mesh = synthetic::uv_sphere(10.0, 60, 90);
-    let cutter = DropCutter::new(&mesh);
-    let tool = Ball::new(2.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(2.0)).unwrap();
     let control = crate::control::Control::new(1);
     control.stop();
     let params = ScallopParams {
         watch: control.watch(0),
         ..params(0.5)
     };
-    let found = scallop_finish(&cutter, &tool, &disc(7.0), &params);
+    let found = scallop_finish(&seat, &disc(7.0), &params);
     assert_eq!(
         found.unwrap_err(),
         StrategyError::Stopped(crate::control::Stopped)

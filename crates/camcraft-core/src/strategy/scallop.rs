@@ -59,7 +59,8 @@ use glam::DVec2;
 use rayon::prelude::*;
 
 use crate::control::{Watch, share};
-use crate::cutter::dropcutter::{DropCutter, DropTest};
+use crate::cutter::surfaces::Seat;
+use crate::cutter::tool::ToolProfile;
 use crate::path::toolpath::Toolpath;
 use crate::strategy::adaptive::Direction;
 use crate::strategy::field::{self, AreaGrid, count, level_lines};
@@ -176,21 +177,19 @@ pub fn contact_region(
 ///
 /// The path holds [`MoveRole::Cut`] passes separated by [`MoveRole::Link`] moves, in
 /// the order they are cut. The linker resolves them.
-pub fn scallop_finish<T: DropTest + Sync>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
+pub fn scallop_finish(
+    seat: &Seat<'_>,
     area: &Region,
     params: &ScallopParams,
 ) -> Result<(Toolpath, ScallopReport), StrategyError> {
-    scallop_finish_banded(cutter, tool, area, params).map(|(path, report, _)| (path, report))
+    scallop_finish_banded(seat, area, params).map(|(path, report, _)| (path, report))
 }
 
 /// As [`scallop_finish`], with the band its passes leave out as steeper than a
 /// plunge, as the tool's centre goes ([`steep_band`]): for rings round the walls
 /// there to finish, so what the passes leave is exactly what they cut.
-pub fn scallop_finish_banded<T: DropTest + Sync>(
-    cutter: &DropCutter<'_>,
-    tool: &T,
+pub fn scallop_finish_banded(
+    seat: &Seat<'_>,
     area: &Region,
     params: &ScallopParams,
 ) -> Result<(Toolpath, ScallopReport, Region), StrategyError> {
@@ -205,10 +204,10 @@ pub fn scallop_finish_banded<T: DropTest + Sync>(
     };
     let s = params.stepover;
 
-    let field = Field::build(cutter, tool, area, lo, hi, params, &mut report)?;
+    let field = Field::build(seat, area, lo, hi, params, &mut report)?;
     let grid = &field.grid;
     let d = &field.d;
-    let band = steep_band(grid, tool.max_radius(), area, &field.leaving)?;
+    let band = steep_band(grid, seat.tool().max_radius(), area, &field.leaving)?;
     let in_band = Indexed::of(&band);
     let on_edge = with_edge(area, params.tolerance);
 
@@ -323,14 +322,8 @@ pub fn scallop_finish_banded<T: DropTest + Sync>(
                     continue;
                 }
                 let points = simplify(&points, closed, thin);
-                w.runs.extend(sweep_polyline(
-                    cutter,
-                    tool,
-                    &points,
-                    closed,
-                    &sweep,
-                    &mut w.sweep,
-                ));
+                w.runs
+                    .extend(sweep_polyline(seat, &points, closed, &sweep, &mut w.sweep));
             }
             if params.watch.showing() {
                 params.watch.show(w.runs.iter().map(Run::shown));
@@ -387,9 +380,8 @@ struct Field {
 }
 
 impl Field {
-    fn build<T: DropTest + Sync>(
-        cutter: &DropCutter<'_>,
-        tool: &T,
+    fn build(
+        seat: &Seat<'_>,
         area: &Region,
         lo: DVec2,
         hi: DVec2,
@@ -403,13 +395,13 @@ impl Field {
         let on = AreaGrid::over(
             area,
             (lo, hi),
-            field::pitch(s, tool.max_radius()),
+            field::pitch(s, seat.tool().max_radius()),
             s / 2.0,
             params.max_nodes,
             // The drops are most of the field's work; the field, a third of
             // the whole.
             &params.watch.part(0.0, 0.3),
-            |x, y, scratch| cutter.drop_at_in(tool, x, y, scratch),
+            |x, y, scratch| seat.drop_at_in(x, y, scratch),
         )?;
         report.pitch = on.grid.pitch();
         report.nodes = u64::from(on.grid.nodes());
@@ -423,10 +415,7 @@ impl Field {
             .boundary_feet(area)
             .par_iter()
             .map_init(Vec::new, |scratch, &(n, flat, foot)| {
-                let distance = match (
-                    grid.point(n),
-                    cutter.drop_at_in(tool, foot.x, foot.y, scratch),
-                ) {
+                let distance = match (grid.point(n), seat.drop_at_in(foot.x, foot.y, scratch)) {
                     (Some(p), Some(zf)) => p.distance(foot.extend(zf)),
                     _ => flat,
                 };

@@ -7,6 +7,7 @@ use camcraft_geom::topology::{Body as Model, EdgeKind};
 
 use super::*;
 use crate::arrange::Stand;
+use crate::cutter::dropcutter::DropCutter;
 use crate::cutter::tool::{Cone, Cutter};
 use crate::job::JobError;
 use crate::setup::Copies;
@@ -607,7 +608,7 @@ pub(super) fn engrave_paths(
     // Where the V would go below what the part lets it: a shape sunk less deep
     // than the V goes, or a face with nothing sunk into it. The run's check
     // finds it as a gouge; here it is said why.
-    if let Some((x, y, deep)) = cuts_into_part(work, &path, tolerance) {
+    if let Some((x, y, deep)) = cuts_into_part(work, &path, tolerance)? {
         report.into_part = Some(([x, y], deep));
         warnings.push(format!(
             "the V cuts up to {deep:.3} mm into the part, at X{x:.3} Y{y:.3}: the shape is \
@@ -621,7 +622,12 @@ pub(super) fn engrave_paths(
 
 /// The deepest `path`'s cutting moves go below where `work`'s tool rests on
 /// the part, by more than `tolerance`: where, and how far.
-fn cuts_into_part(work: &Work<'_>, path: &Toolpath, tolerance: f64) -> Option<(f64, f64, f64)> {
+fn cuts_into_part(
+    work: &Work<'_>,
+    path: &Toolpath,
+    tolerance: f64,
+) -> Result<Option<(f64, f64, f64)>, RunError> {
+    let seat = work.seat()?;
     let step = (0.25 * work.tool.max_radius()).clamp(0.05, 0.5);
     let mut worst: Option<(f64, f64, f64)> = None;
     let mut from: Option<DVec3> = None;
@@ -635,7 +641,7 @@ fn cuts_into_part(work: &Work<'_>, path: &Toolpath, tolerance: f64) -> Option<(f
                     crate::path::toolpath::MoveKind::Arc(arc) => arc.point_at(a, to, t),
                     crate::path::toolpath::MoveKind::Linear => a.lerp(to, t),
                 };
-                let Some(rest) = work.cutter.drop_at(work.tool, p.x, p.y) else {
+                let Some(rest) = seat.drop_at(p.x, p.y) else {
                     continue;
                 };
                 let deep = rest - p.z;
@@ -646,7 +652,7 @@ fn cuts_into_part(work: &Work<'_>, path: &Toolpath, tolerance: f64) -> Option<(f
         }
         from = Some(to);
     }
-    worst
+    Ok(worst)
 }
 
 /// What a 2D chamfer asks of each edge, beyond its operation's passes.

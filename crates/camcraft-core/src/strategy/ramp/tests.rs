@@ -1,5 +1,7 @@
 use super::*;
 use crate::cutter::allowance::{Allowance, EffectiveTool};
+use crate::cutter::dropcutter::DropCutter;
+use crate::cutter::surfaces::PartSurfaces;
 use crate::cutter::tool::{Ball, Flat};
 use camcraft_geom::mesh::TriMesh;
 use camcraft_geom::synthetic;
@@ -24,10 +26,10 @@ fn passes(path: &Toolpath) -> Vec<Vec<DVec3>> {
 }
 
 fn run(mesh: &TriMesh, tool: &EffectiveTool, params: &RampParams) -> (Toolpath, RampReport) {
-    let cutter = DropCutter::new(mesh);
+    let part = PartSurfaces::whole(DropCutter::new(mesh));
     let mut reach = LevelReach::new(mesh, tool, params.tolerance).unwrap();
     let area = Region::rectangle(dvec2(-30.0, -30.0), dvec2(30.0, 30.0));
-    ramp(&mut reach, &cutter, tool, &area, params).unwrap()
+    ramp(&mut reach, &part.under(tool).unwrap(), &area, params).unwrap()
 }
 
 /// A 10 mm square boss, 5 mm tall.

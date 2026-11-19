@@ -75,6 +75,11 @@ impl<'a> DropCutter<'a> {
         Self { mesh, bvh }
     }
 
+    /// The mesh it drops onto.
+    pub fn mesh(&self) -> &'a TriMesh {
+        self.mesh
+    }
+
     /// Tool-tip Z at `(x, y)`, or `None` when no geometry lies under the tool.
     ///
     /// "Nothing underneath" is a normal answer — over open stock there is simply no

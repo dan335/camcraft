@@ -55,7 +55,7 @@ use glam::{DVec2, DVec3};
 use rayon::prelude::*;
 
 use crate::control::Watch;
-use crate::cutter::dropcutter::{DropCutter, DropTest};
+use crate::cutter::surfaces::Seat;
 use crate::path::toolpath::{MoveRole, Toolpath};
 use crate::strategy::adaptive::Direction;
 use crate::strategy::parallel::Run;
@@ -154,10 +154,9 @@ pub struct RampReport {
 ///
 /// The path holds [`MoveRole::Cut`] passes separated by [`MoveRole::Link`]
 /// moves, in the order they are cut. The linker resolves them.
-pub fn ramp<T: DropTest + Sync>(
+pub fn ramp(
     reach: &mut LevelReach<'_>,
-    cutter: &DropCutter<'_>,
-    tool: &T,
+    seat: &Seat<'_>,
     area: &Region,
     params: &RampParams,
 ) -> Result<(Toolpath, RampReport), StrategyError> {
@@ -179,8 +178,7 @@ pub fn ramp<T: DropTest + Sync>(
     }
     let found = passes_at_levels(
         reach,
-        cutter,
-        tool,
+        seat,
         area,
         &WaterlineParams {
             stepdown: params.stepdown,
@@ -234,8 +232,7 @@ pub fn ramp<T: DropTest + Sync>(
     let walls = walls(&rings);
     report.walls = walls.len() as u64;
     let mut down = Down {
-        cutter,
-        tool,
+        seat,
         params,
         reach_by,
         side: if against { -1.0 } else { 1.0 },
@@ -582,9 +579,8 @@ fn next_wall(
 }
 
 /// The walls written into a path, one after another.
-struct Down<'a, 'm, T> {
-    cutter: &'a DropCutter<'m>,
-    tool: &'a T,
+struct Down<'a, 'm> {
+    seat: &'a Seat<'m>,
     params: &'a RampParams,
     reach_by: f64,
     /// Which side of a ring as cut the part is: 1 on its left, -1 on its
@@ -597,11 +593,10 @@ struct Down<'a, 'm, T> {
     unpulled: u64,
 }
 
-impl<T: DropTest + Sync> Down<'_, '_, T> {
-    fn puller(&self) -> Puller<'_, '_, T> {
+impl Down<'_, '_> {
+    fn puller(&self) -> Puller<'_, '_> {
         Puller {
-            cutter: self.cutter,
-            tool: self.tool,
+            seat: self.seat,
             z: 0.0,
             reach_by: self.reach_by,
             tolerance: self.params.tolerance,
@@ -904,13 +899,7 @@ impl<T: DropTest + Sync> Down<'_, '_, T> {
 
 /// `p` moved along `inward`, towards the part, onto it at height `z`, looking
 /// as far as `cap`: `None` if it is not within that.
-fn onto_far<T: DropTest>(
-    on: &mut Puller<'_, '_, T>,
-    p: DVec2,
-    inward: DVec2,
-    z: f64,
-    cap: f64,
-) -> Option<DVec2> {
+fn onto_far(on: &mut Puller<'_, '_>, p: DVec2, inward: DVec2, z: f64, cap: f64) -> Option<DVec2> {
     on.z = z;
     if on.touches(p) {
         return on.onto(p, inward);
@@ -941,8 +930,8 @@ fn onto_far<T: DropTest>(
 
 /// `p` moved along `inward` onto the part at height `z`, or back out of it,
 /// looking as far as `cap` either way: `None` if it is not within that.
-fn onto_either<T: DropTest>(
-    on: &mut Puller<'_, '_, T>,
+fn onto_either(
+    on: &mut Puller<'_, '_>,
     p: DVec2,
     inward: DVec2,
     z: f64,
@@ -981,8 +970,8 @@ fn onto_either<T: DropTest>(
 /// strays more than a quarter of the tolerance into the part or off it: each
 /// chord's middle pulled onto the part at its height, and kept where it is
 /// further, the halves then looked at the same way.
-fn between<T: DropTest>(
-    on: &mut Puller<'_, '_, T>,
+fn between(
+    on: &mut Puller<'_, '_>,
     a: DVec3,
     b: DVec3,
     side: f64,

@@ -176,46 +176,50 @@ impl Material for Cutting<'_> {
 
 /// The part, as the operation's tool meets it.
 pub(super) struct OnPart<'a> {
-    cutter: &'a DropCutter<'a>,
-    tool: &'a EffectiveTool,
+    /// The tool held over it.
+    seat: Seat<'a>,
     /// The tool a tolerance narrower: where one only grazing the part rests.
-    slim: EffectiveTool,
+    slim: Seat<'a>,
     tolerance: f64,
 }
 
 impl<'a> OnPart<'a> {
-    pub(super) fn new(cutter: &'a DropCutter<'a>, tool: &'a EffectiveTool, tolerance: f64) -> Self {
+    /// `tool` held over `surfaces`, and the same a `tolerance` narrower.
+    pub(super) fn new(
+        surfaces: &'a PartSurfaces<'a>,
+        tool: &EffectiveTool,
+        tolerance: f64,
+    ) -> Result<Self, ToolError> {
         let a = tool.allowance();
         let slim = Allowance::new(a.radial() - tolerance, a.axial())
             .ok()
             .and_then(|a| EffectiveTool::of(tool.base(), a).ok())
             .unwrap_or(*tool);
-        Self {
-            cutter,
-            tool,
-            slim,
+        Ok(Self {
+            seat: surfaces.under(tool)?,
+            slim: surfaces.under(&slim)?,
             tolerance,
-        }
+        })
     }
 }
 
 impl Surface for OnPart<'_> {
     fn at(&self, p: DVec2) -> Option<f64> {
-        self.cutter.drop_at(self.tool, p.x, p.y)
+        self.seat.drop_at(p.x, p.y)
     }
 
     fn along(&self, from: DVec2, to: DVec2) -> Vec<DVec3> {
         // Seeded at a quarter of the tool's width: nothing that narrow is passed over.
-        let seed = (self.tool.max_radius() * 0.5).max(self.tolerance);
-        follow(self.cutter, self.tool, from, to, self.tolerance, seed)
+        let seed = (self.seat.tool().max_radius() * 0.5).max(self.tolerance);
+        follow(&self.seat, from, to, self.tolerance, seed)
     }
 
     fn grazing_at(&self, p: DVec2) -> Option<f64> {
-        self.cutter.drop_at(&self.slim, p.x, p.y)
+        self.slim.drop_at(p.x, p.y)
     }
 
     fn grazing_along(&self, from: DVec2, to: DVec2) -> Vec<DVec3> {
-        let seed = (self.slim.max_radius() * 0.5).max(self.tolerance);
-        follow(self.cutter, &self.slim, from, to, self.tolerance, seed)
+        let seed = (self.slim.tool().max_radius() * 0.5).max(self.tolerance);
+        follow(&self.slim, from, to, self.tolerance, seed)
     }
 }

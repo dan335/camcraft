@@ -37,7 +37,7 @@ use glam::DVec2;
 
 use crate::control::{Control, Watch};
 use crate::cutter::allowance::{Allowance, EffectiveTool};
-use crate::cutter::dropcutter::DropCutter;
+use crate::cutter::surfaces::PartSurfaces;
 use crate::job::{
     Curves, HeightContext, HolderSegment, Holes, Job, JobError, Machine, Operation, Setup,
     StrategySpec, ToolSpec,
@@ -146,12 +146,10 @@ pub fn run_prepared_planned(
     // What an operation worked out at once with the ones before it is given:
     // the stock uncut, which none of them reads.
     let uncut = stock.clone();
-    let cutter = prepared.drop_cutter();
     let shared = Shared {
         job,
         prepared,
         bodies,
-        cutter: &cutter,
         bounds: (lo, hi),
         blocks: &blocks,
         heights: &ctx,
@@ -235,11 +233,12 @@ pub fn run_prepared_planned(
 type Planning<'j> = Result<(Tooled<'j>, Planned), RunError>;
 
 /// What an operation is worked out and cut with, found once for it: its tool,
-/// as the job describes it and as it cuts, and what its heights resolve
-/// against.
+/// as the job describes it and as it cuts, the part as its tool meets it, and
+/// what its heights resolve against.
 struct Tooled<'j> {
     spec: &'j ToolSpec,
     tool: EffectiveTool,
+    surfaces: PartSurfaces<'j>,
     heights: HeightContext,
 }
 
@@ -248,7 +247,6 @@ struct Shared<'a> {
     job: &'a Job,
     prepared: &'a Prepared,
     bodies: &'a Bodies<'a>,
-    cutter: &'a DropCutter<'a>,
     bounds: (DVec2, DVec2),
     blocks: &'a [(DVec2, DVec2, f64)],
     heights: &'a HeightContext,
@@ -279,9 +277,9 @@ impl<'a> Shared<'a> {
             op,
             spec: tooled.spec,
             tool: &tooled.tool,
+            surfaces: &tooled.surfaces,
             heights: &tooled.heights,
             prepared: self.prepared,
-            cutter: self.cutter,
             bounds: self.bounds,
             blocks: self.blocks,
             watch,
@@ -319,6 +317,7 @@ impl<'a> Shared<'a> {
         let Tooled {
             spec,
             tool,
+            surfaces,
             heights,
         } = self.tooled(op, &picking)?;
         // A drilling operation's picked edges are its holes, and a 2D one's
@@ -384,6 +383,7 @@ impl<'a> Shared<'a> {
         let tooled = Tooled {
             spec,
             tool,
+            surfaces,
             heights,
         };
         let planned = plan_operation(&self.work(op, &tooled, before, watch), &target, stock)?;
@@ -412,14 +412,18 @@ impl<'a> Shared<'a> {
         )
     }
 
-    /// What `op` is worked out and cut with: its tool, and its heights,
-    /// resolved against its picks.
+    /// What `op` is worked out and cut with: its tool, the part as it meets
+    /// it, and its heights, resolved against its picks.
+    ///
+    /// The part is the whole part to every operation, each dropping onto it
+    /// with the index it shares with them all.
     fn tooled(&self, op: &Operation, picking: &Picking<'_>) -> Result<Tooled<'a>, RunError> {
         let (spec, tool) = tool_of(self.job, op)?;
         let heights = heights_of(op, picking, self.heights)?;
         Ok(Tooled {
             spec,
             tool,
+            surfaces: PartSurfaces::whole(self.prepared.drop_cutter()),
             heights,
         })
     }

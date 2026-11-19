@@ -2,9 +2,17 @@ use camcraft_geom::synthetic;
 use glam::{DVec3, dvec2, dvec3};
 
 use super::*;
+use crate::cutter::allowance::{Allowance, EffectiveTool};
+use crate::cutter::dropcutter::DropCutter;
+use crate::cutter::surfaces::PartSurfaces;
 use crate::cutter::tool::Ball;
 use crate::path::toolpath::Move;
 use crate::strategy::curve::Piece;
+
+/// A ball of radius `r`, leaving nothing.
+fn ball(r: f64) -> EffectiveTool {
+    EffectiveTool::new(&Ball::new(r).unwrap(), Allowance::none()).unwrap()
+}
 
 /// A curve through `points`, each joined to the next by a line; closed back
 /// to the first where `closed`.
@@ -61,10 +69,10 @@ fn cut(
     curves: &[Picked],
     p: &MorphCurvesParams,
 ) -> (Vec<Vec<DVec3>>, MorphCurvesReport) {
-    let cutter = DropCutter::new(mesh);
-    let tool = Ball::new(1.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(mesh));
+    let seat = part.under(&ball(1.0)).unwrap();
     let area = Region::rectangle(dvec2(-18.0, -18.0), dvec2(18.0, 18.0));
-    let (path, report) = morph_curves(&cutter, &tool, &area, curves, p).unwrap();
+    let (path, report) = morph_curves(&seat, &area, curves, p).unwrap();
     let passes: Vec<Vec<DVec3>> = path
         .passes()
         .map(|pass| pass.iter().map(|m: &Move| m.to).collect())
@@ -199,11 +207,11 @@ fn passes_between_two_squares_are_squares() {
 #[test]
 fn it_needs_two_open_curves_or_two_closed() {
     let mesh = synthetic::plane(0.0, 20.0);
-    let cutter = DropCutter::new(&mesh);
-    let tool = Ball::new(1.0).unwrap();
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(1.0)).unwrap();
     let area = Region::rectangle(dvec2(-18.0, -18.0), dvec2(18.0, 18.0));
     let p = params(Way::BothWays, 1.0);
-    let try_with = |curves: &[Picked]| morph_curves(&cutter, &tool, &area, curves, &p).err();
+    let try_with = |curves: &[Picked]| morph_curves(&seat, &area, curves, &p).err();
     assert_eq!(
         try_with(&[line(0.0, -1.0, 1.0)]),
         Some(MorphError::NotTwo(1))
