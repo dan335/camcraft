@@ -193,7 +193,7 @@ pub fn run_setup_watched(
     let checks = checks::check(
         job,
         index,
-        (&prepared, models.arrangement()),
+        (&prepared, &bodies, models.arrangement()),
         &result.operations,
         &result.verify,
         result.verify_budget,

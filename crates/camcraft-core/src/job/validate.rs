@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     Arranged, Boundary, Depths, FixedBox, JOB_VERSION, Job, JobError, MOST_COPIES, Operation,
-    Origin, Retraction, Rotation, StockSpec, StockToLeave, StrategySpec, ToolSpec,
+    Origin, Retraction, Rotation, StockSpec, StockToLeave, StrategySpec, SurfaceAction, ToolSpec,
 };
 use crate::is_positive;
 use crate::must::{AT_LEAST_ZERO, FINITE, POSITIVE};
@@ -245,6 +245,14 @@ impl Job {
                 pick(format!("operation '{name}/{}'", op.name), &r.model, &r.at)?;
             }
         }
+        for op in running() {
+            for (k, g) in op.surfaces.groups.iter().enumerate() {
+                for r in &g.faces {
+                    let owner = format!("operation '{name}/{}' surface group {}", op.name, k + 1);
+                    pick(owner, &r.model, &r.at)?;
+                }
+            }
+        }
         // A Morph lays its passes between two curves, which picked on a part
         // of several copies are two on each.
         for op in running().filter(|op| matches!(op.strategy, StrategySpec::Morph { .. })) {
@@ -461,6 +469,7 @@ impl Operation {
         self.check_heights(&field)?;
         self.check_passes(&field)?;
         self.check_linking(&field)?;
+        self.check_surfaces(&at, &field)?;
         if uses.boundary {
             finite(&field("boundary.margin"), self.boundary.margin)?;
             // Its picks are the curves it runs along, so they cannot be its
@@ -638,6 +647,42 @@ impl Operation {
             && let Some(d) = l.helix_diameter
         {
             positive(&field("linking.helix_diameter"), d)?;
+        }
+        Ok(())
+    }
+
+    /// Check the faces it machines and avoids, if it is given any, `op` naming
+    /// it and `field` each of their settings: its strategy takes them, every
+    /// offset is a distance, every group has faces, and something is
+    /// machined. Whether the faces are there, and in one group each, is for
+    /// the run, which has the models.
+    fn check_surfaces(&self, op: &str, field: &dyn Fn(&str) -> String) -> Result<(), JobError> {
+        let s = &self.surfaces;
+        if s.is_whole() {
+            return Ok(());
+        }
+        // Left unread, an avoided face would be cut.
+        if !self.strategy.uses().surfaces {
+            return Err(JobError::NotOffered {
+                field: field("surfaces"),
+                value: "surface groups",
+                strategy: self.strategy.name(),
+            });
+        }
+        for (k, g) in s.groups.iter().enumerate() {
+            at_least_zero(&field(&format!("surfaces.group.{k}.radial")), g.radial)?;
+            at_least_zero(&field(&format!("surfaces.group.{k}.axial")), g.axial)?;
+            if g.faces.is_empty() {
+                return Err(JobError::EmptyGroup {
+                    op: op.to_string(),
+                    group: k + 1,
+                });
+            }
+        }
+        if s.model.action == SurfaceAction::Avoid
+            && !s.groups.iter().any(|g| g.action == SurfaceAction::Machine)
+        {
+            return Err(JobError::NothingToMachine { op: op.to_string() });
         }
         Ok(())
     }

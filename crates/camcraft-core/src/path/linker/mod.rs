@@ -583,9 +583,11 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         // next pass's start, what it meets is that pass's own cut.
         let clear = way.iter().all(|p| {
             let xy = p.truncate();
-            self.surface
-                .at(xy)
-                .is_none_or(|z| z <= p.z + self.p.tolerance)
+            !self.surface.rests_avoided(*p)
+                && self
+                    .surface
+                    .at(xy)
+                    .is_none_or(|z| z <= p.z + self.p.tolerance)
                 && (xy.distance(b) < 1e-6
                     || self
                         .material
@@ -663,6 +665,11 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                 lifted.sort_by(|x, y| x.0.total_cmp(&y.0));
                 let mut way: Vec<DVec3> = lifted.into_iter().map(|(_, p)| p).collect();
                 way.push(to);
+                // Down on the part over a face it is kept clear of, the tool
+                // would rub what the passes were cut out over: it lifts.
+                if way.iter().any(|&p| self.surface.rests_avoided(p)) {
+                    return Ok(false);
+                }
                 way
             }
             StayDown::Level { max } => {

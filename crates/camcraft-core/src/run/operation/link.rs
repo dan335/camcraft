@@ -180,6 +180,8 @@ pub(super) struct OnPart<'a> {
     seat: Seat<'a>,
     /// The tool a tolerance narrower: where one only grazing the part rests.
     slim: Seat<'a>,
+    /// Whether the operation keeps clear of any of the part.
+    avoids: bool,
     tolerance: f64,
 }
 
@@ -198,6 +200,7 @@ impl<'a> OnPart<'a> {
         Ok(Self {
             seat: surfaces.under(tool)?,
             slim: surfaces.under(&slim)?,
+            avoids: surfaces.avoids_any(),
             tolerance,
         })
     }
@@ -221,5 +224,14 @@ impl Surface for OnPart<'_> {
     fn grazing_along(&self, from: DVec2, to: DVec2) -> Vec<DVec3> {
         let seed = (self.slim.tool().max_radius() * 0.5).max(self.tolerance);
         follow(&self.slim, from, to, self.tolerance, seed)
+    }
+
+    fn rests_avoided(&self, p: DVec3) -> bool {
+        // Resting there, to within the tolerance, and on nothing machined.
+        self.avoids
+            && self
+                .seat
+                .rest_at(p.x, p.y, self.tolerance)
+                .is_some_and(|rest| !rest.machined && rest.z >= p.z - self.tolerance)
     }
 }

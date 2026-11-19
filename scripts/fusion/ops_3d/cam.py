@@ -1,8 +1,8 @@
-# Fusion's Ramp, Pencil, Project and Morph on the ops_3d part, each as a new
-# operation of Fusion's starts but for what its name says, posted with Fusion's
-# Masso post: fixtures/nc/ops_3d_*.nc. Run through the bridge after part.py (see
-# ../README.md). It finds the document part.py made by its one body, named
-# ops_3d, and works in that document alone.
+# Fusion's Ramp, Pencil, Project, Morph and Parallel on the ops_3d part, each as
+# a new operation of Fusion's starts but for what its name says, posted with
+# Fusion's Masso post: fixtures/nc/ops_3d_*.nc. Run through the bridge after
+# part.py (see ../README.md). It finds the document part.py made by its one
+# body, named ops_3d, and works in that document alone.
 #
 # The setup's stock is 5 mm round the part and level with its top, its work
 # zero the model's origin. The tools are the sample library's 6 mm ball end
@@ -40,6 +40,20 @@
 #   morph_one_way       the same, Direction One Way
 #   morph_open          a new Morph between two open curves: the R8 round's
 #                       upper edge, then its lower edge, reverted
+#
+#   parallel                a new Parallel with the 6 mm ball, no surface groups
+#   parallel_avoid_dome     the dome avoided, radial and axial offsets 1 mm
+#   parallel_avoid_dome_0   the dome avoided, no offsets
+#   parallel_floor_only     the model avoided, the pocket's floor machined
+#   parallel_floor_leave    the floor machined with stock of its own, 0.5 mm
+#                           radial and axial
+#   parallel_avoid_top      the block's top avoided, axial offset 2 mm
+#
+# A surface group is added as the Surface Manager adds one: a direct selection
+# of faces, machined or avoided, with its own radial and axial offsets, which
+# the API takes in millimetres (not centimetres, as its lengths elsewhere). The
+# dome is the sphere face, the floor the plane at Z10, the top the plane at
+# Z20.
 import copy, json, os, time, traceback
 
 BRIDGE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -168,6 +182,46 @@ morph_closed = picking((DOME_FOOT, False, False), (FLOOR_EDGE, False, False))
 # upper does: Fusion's Morph gives no passes for two that run opposite ways.
 morph_open = picking((ROUND_TOP, True, False), (ROUND_LOW, True, True))
 
+T = adsk.core.SurfaceTypes
+M = adsk.cam.MachiningMode
+AVOID, MACHINE = M.Avoid_MachiningMode, M.Machine_MachiningMode
+
+def faces(kind, z=None):
+    """The body's faces of surface type `kind`, those level at `z` alone if
+    given."""
+    got = []
+    for f in body.faces:
+        if f.geometry.surfaceType != kind:
+            continue
+        b = f.boundingBox
+        if z is not None and not (abs(b.minPoint.z - z * MM) < 1e-6 and abs(b.maxPoint.z - z * MM) < 1e-6):
+            continue
+        got.append(f)
+    if not got:
+        raise LookupError((kind, z))
+    return got
+
+DOME = faces(T.SphereSurfaceType)
+FLOOR = faces(T.PlaneSurfaceType, 10)
+TOP = faces(T.PlaneSurfaceType, 20)
+
+def grouping(model, *groups):
+    """Surface groups set as the Surface Manager sets them: the model's mode,
+    or as it starts where `model` is None, and groups added, each (mode,
+    faces, radial mm, axial mm)."""
+    def pick(op):
+        v = op.parameters.itemByName("checkSurfaceSelectionSets").value
+        gs = v.getMachineAvoidGroups()
+        if model is not None:
+            gs.defaultGroup(adsk.cam.DefaultGroupType.Model_GroupType).machineMode = model
+        for mode, geometry, radial, axial in groups:
+            g = gs.createNewMachineAvoidDirectSelectionGroup()
+            g.machineMode = mode
+            g.inputGeometry = geometry
+            g.radialOffset, g.axialOffset = radial, axial
+        v.applyMachineAvoidGroups(gs)
+    return pick
+
 made = []
 for name, strategy, tool, select, settings in (
     ("ramp", "ramp", ball6, None, {}),
@@ -184,6 +238,12 @@ for name, strategy, tool, select, settings in (
     ("morph", "morph", ball6, morph_closed, {}),
     ("morph_one_way", "morph", ball6, morph_closed, {"direction": "'one way'"}),
     ("morph_open", "morph", ball6, morph_open, {}),
+    ("parallel", "parallel", ball6, None, {}),
+    ("parallel_avoid_dome", "parallel", ball6, grouping(None, (AVOID, DOME, 1, 1)), {}),
+    ("parallel_avoid_dome_0", "parallel", ball6, grouping(None, (AVOID, DOME, 0, 0)), {}),
+    ("parallel_floor_only", "parallel", ball6, grouping(AVOID, (MACHINE, FLOOR, 0, 0)), {}),
+    ("parallel_floor_leave", "parallel", ball6, grouping(None, (MACHINE, FLOOR, 0.5, 0.5)), {}),
+    ("parallel_avoid_top", "parallel", ball6, grouping(None, (AVOID, TOP, 0, 2)), {}),
 ):
     try:
         oi = setup.operations.createInput(strategy)
@@ -200,7 +260,7 @@ for name, strategy, tool, select, settings in (
 
 fut = cam.generateAllToolpaths(False)
 t0 = time.time()
-while not fut.isGenerationCompleted and time.time() - t0 < 300:
+while not fut.isGenerationCompleted and time.time() - t0 < 900:
     adsk.doEvents()
     time.sleep(0.05)
 

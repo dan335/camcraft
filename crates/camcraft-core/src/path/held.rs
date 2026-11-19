@@ -179,8 +179,6 @@ pub fn keep_clear(
     how: Clear,
     tolerance: f64,
 ) -> Result<(Toolpath, Kept), ToolpathError> {
-    let mut out = Out::default();
-    let mut kept = Kept::default();
     // Looked along no coarser than half the narrowest piece is wide; less
     // than the tolerance is clear.
     let step = (held.narrowest * 0.5).max(tolerance);
@@ -188,6 +186,97 @@ pub fn keep_clear(
         let l = held.lift_at(p);
         if l > tolerance { l } else { 0.0 }
     };
+    match how {
+        Clear::Trim => cut_out(path, |p| lift(p) > 0.0, step, tolerance),
+        Clear::PullAway => pull_away(path, &lift, step, tolerance),
+    }
+}
+
+/// `path`, a strategy's passes each a [`MoveRole::Link`] to its start and then
+/// its cuts, with what `out` holds of cut out, and the pieces either side
+/// passes of their own, for the linker to join round. A move is looked at
+/// along its chords within `tolerance`, no further apart than `step`, and
+/// where it changes from kept to out, or back, that is found to within the
+/// tolerance; a move kept all the way is kept as it is, and what is made of
+/// one that is not is straight.
+///
+/// What is cut out where the rest of the tool would meet the part
+/// ([`keep_clear`]), and where the tool would rest only on faces it avoids
+/// ([`crate::path::avoid::machined_only`]).
+pub(crate) fn cut_out(
+    path: &Toolpath,
+    out: impl Fn(DVec3) -> bool,
+    step: f64,
+    tolerance: f64,
+) -> Result<(Toolpath, Kept), ToolpathError> {
+    let mut made = Out::default();
+    let mut kept = Kept::default();
+    for pass in path.passes() {
+        if pass.iter().any(|m| m.role == MoveRole::Cut) {
+            kept.before += 1;
+        }
+        let Some((first, rest)) = pass.split_first() else {
+            continue;
+        };
+        let mut was = (first.to, out(first.to));
+        if was.1 {
+            kept.first.get_or_insert(first.to);
+            kept.stretches += 1;
+        } else {
+            made.start(first.to, first.feed);
+        }
+        for (at, m) in starting_at(first.to, rest) {
+            let looked: Vec<(DVec3, bool)> = looked_along(at, m, step, tolerance)
+                .into_iter()
+                .map(|p| (p, out(p)))
+                .collect();
+            if !was.1 && looked.iter().all(|l| !l.1) {
+                // Kept all the way: as it is, where there is a pass to go on.
+                made.push(m);
+                was = (m.to, false);
+                continue;
+            }
+            for (p, over) in looked {
+                if over {
+                    kept.first.get_or_insert(p);
+                }
+                if was.1 != over {
+                    // Where it changes, to within the tolerance.
+                    let edge = edge_between(was.0, p, &out, tolerance, was.1);
+                    if was.1 {
+                        made.start(edge, m.feed);
+                    } else {
+                        kept.stretches += 1;
+                        made.cut(edge, m);
+                        made.close();
+                    }
+                }
+                if !over {
+                    made.cut(p, m);
+                }
+                was = (p, over);
+            }
+        }
+        made.close();
+    }
+    kept.after = made.count;
+    let mut path = Toolpath::new();
+    path.append(&made.kept)?;
+    Ok((path, kept))
+}
+
+/// `path`'s passes lifted by `lift` where it is more than nothing, as
+/// [`Clear::PullAway`] keeps them clear: each move looked at as
+/// [`cut_out`] looks at it, and lifted between where it is looked at, bent
+/// where the lift bends by more than `tolerance`.
+fn pull_away(
+    path: &Toolpath,
+    lift: &impl Fn(DVec3) -> f64,
+    step: f64,
+    tolerance: f64,
+) -> Result<(Toolpath, Kept), ToolpathError> {
+    let mut out = Out::default();
+    let mut kept = Kept::default();
     for pass in path.passes() {
         if pass.iter().any(|m| m.role == MoveRole::Cut) {
             kept.before += 1;
@@ -200,26 +289,14 @@ pub fn keep_clear(
             kept.first.get_or_insert(first.to);
             kept.stretches += 1;
         }
-        match how {
-            Clear::PullAway => out.start(first.to + DVec3::Z * was.1, first.feed),
-            Clear::Trim if was.1 > 0.0 => {}
-            Clear::Trim => out.start(first.to, first.feed),
-        }
+        out.start(first.to + DVec3::Z * was.1, first.feed);
         for (at, m) in starting_at(first.to, rest) {
-            // The move looked at along its chords, as finely as the
-            // narrowest piece is wide.
-            let mut looked = Vec::new();
-            let mut from = at;
-            for to in m.chords(from, tolerance) {
-                let n = camcraft_geom::steps::bounded_count((from.distance(to) / step).ceil());
-                for k in 1..=n {
-                    let p = from.lerp(to, f64::from(k) / f64::from(n));
-                    looked.push((p, lift(p)));
-                }
-                from = to;
-            }
+            let looked: Vec<(DVec3, f64)> = looked_along(at, m, step, tolerance)
+                .into_iter()
+                .map(|p| (p, lift(p)))
+                .collect();
             if was.1 <= 0.0 && looked.iter().all(|l| l.1 <= 0.0) {
-                // Clear all the way: as it is, where there is a pass to go on.
+                // Clear all the way: as it is.
                 out.push(m);
                 was = (m.to, 0.0);
                 continue;
@@ -227,32 +304,11 @@ pub fn keep_clear(
             for (p, l) in looked {
                 if l > 0.0 {
                     kept.first.get_or_insert(p);
-                }
-                match how {
-                    Clear::PullAway => {
-                        if l > 0.0 && was.1 <= 0.0 {
-                            kept.stretches += 1;
-                        }
-                        pull_between(was, (p, l), &lift, tolerance, m, &mut out, 0);
-                    }
-                    Clear::Trim => {
-                        let (a_over, over) = (was.1 > 0.0, l > 0.0);
-                        if a_over != over {
-                            // Where it changes, to within the tolerance.
-                            let edge = edge_between(was.0, p, &lift, tolerance, a_over);
-                            if a_over {
-                                out.start(edge, m.feed);
-                            } else {
-                                kept.stretches += 1;
-                                out.cut(edge, m);
-                                out.close();
-                            }
-                        }
-                        if !over {
-                            out.cut(p, m);
-                        }
+                    if was.1 <= 0.0 {
+                        kept.stretches += 1;
                     }
                 }
+                pull_between(was, (p, l), lift, tolerance, m, &mut out, 0);
                 was = (p, l);
             }
         }
@@ -262,6 +318,19 @@ pub fn keep_clear(
     let mut path = Toolpath::new();
     path.append(&out.kept)?;
     Ok((path, kept))
+}
+
+/// Where move `m`, from `at`, is looked at: along its chords within
+/// `tolerance`, no further apart than `step`, its start left out.
+fn looked_along(at: DVec3, m: &Move, step: f64, tolerance: f64) -> Vec<DVec3> {
+    let mut looked = Vec::new();
+    let mut from = at;
+    for to in m.chords(from, tolerance) {
+        let n = camcraft_geom::steps::bounded_count((from.distance(to) / step).ceil());
+        looked.extend((1..=n).map(|k| from.lerp(to, f64::from(k) / f64::from(n))));
+        from = to;
+    }
+    looked
 }
 
 /// `path`, holes each a pass, less those `held` says the rest of the tool
@@ -320,23 +389,24 @@ fn pull_between(
     out.cut(b + DVec3::Z * lb, m);
 }
 
-/// Where between `a` and `b` the pass changes from clear to not, or back,
-/// to within the tolerance: a point that is clear, on the side it is.
+/// Where between `a` and `b` the pass changes from kept to cut out, as `out`
+/// says, or back, to within the tolerance: a point that is kept, on the side
+/// it is.
 fn edge_between(
     a: DVec3,
     b: DVec3,
-    lift: &impl Fn(DVec3) -> f64,
+    out: &impl Fn(DVec3) -> bool,
     tolerance: f64,
     a_over: bool,
 ) -> DVec3 {
-    // `clear` is the clear end, `over` the other, closing in.
+    // `clear` is the kept end, `over` the other, closing in.
     let (mut clear, mut over) = if a_over { (b, a) } else { (a, b) };
     for _ in 0..MOST_HALVINGS {
         if clear.distance(over) <= tolerance {
             break;
         }
         let mid = clear.lerp(over, 0.5);
-        if lift(mid) > 0.0 {
+        if out(mid) {
             over = mid;
         } else {
             clear = mid;

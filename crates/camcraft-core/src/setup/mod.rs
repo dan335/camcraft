@@ -316,6 +316,43 @@ impl Prepared {
             .get_or(tolerance.to_bits(), || flat_heights(&self.part, tolerance))
     }
 
+    /// The part's triangles, sorted into `count` meshes by `into`, which says
+    /// of each, by the copy it is of and its face on that copy's model, which
+    /// mesh it goes in, if any: each a mesh of the part's own points, so a
+    /// triangle is exactly where it is in the part. `bodies` are the models
+    /// the part was laid out from.
+    ///
+    /// The part is its pieces' meshes merged in order, each copy's triangles
+    /// in its model's order ([`TriMesh::merged`]), so a triangle's piece is
+    /// found by counting them, and its face by its place in its model.
+    pub fn by_face(
+        &self,
+        bodies: &Bodies<'_>,
+        count: usize,
+        into: impl Fn(&Piece, Option<u32>) -> Option<usize>,
+    ) -> Result<Vec<TriMesh>, PrepareError> {
+        let mut sorted: Vec<Vec<[u32; 3]>> = vec![Vec::new(); count];
+        let mut triangles = self.part.triangles().iter();
+        for piece in &self.pieces {
+            let body = bodies
+                .body(&piece.model)
+                .ok_or_else(|| PrepareError::NotLoaded(piece.model.clone()))?;
+            for (t, tri) in (0..body.mesh().len()).zip(triangles.by_ref()) {
+                let face = u32::try_from(t)
+                    .ok()
+                    .and_then(|t| body.topology().face_of(t));
+                if let Some(mesh) = into(piece, face).and_then(|k| sorted.get_mut(k)) {
+                    mesh.push(*tri);
+                }
+            }
+        }
+        let points = self.part.vertices();
+        sorted
+            .into_iter()
+            .map(|t| Ok(TriMesh::new(points.to_vec(), t)?))
+            .collect()
+    }
+
     /// The part's shadow, if [`Prepared::shadow`] has cast it already: never
     /// casts it, so a window can ask without waiting while another thread
     /// casts it.

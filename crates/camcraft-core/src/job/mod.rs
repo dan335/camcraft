@@ -16,8 +16,9 @@
 //! Linking**, because that factoring is proven and maps one-to-one onto the
 //! provisions this project was built around. Adopting it means the parameter layer
 //! never needs restructuring as strategies are added. Fusion's Geometry tab is
-//! three settings here, since it means different things to different strategies:
-//! the picks (`selection`), a 3D machining `boundary` and a 2D `outline`.
+//! four settings here, since it means different things to different strategies:
+//! the picks (`selection`), a 3D machining `boundary`, a 2D `outline`, and the
+//! `surfaces` a 3D operation machines and avoids.
 //!
 //! # Heights are symbolic
 //!
@@ -111,6 +112,14 @@ mod tests;
     clippy::indexing_slicing
 )]
 mod tests_sheets;
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+mod tests_surfaces;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -118,7 +127,10 @@ use serde::{Deserialize, Serialize};
 
 pub use error::JobError;
 pub use expressions::{ExpressionFault, NAMES as EXPRESSION_NAMES, Worked};
-pub use geometry::{Boundary, Containment, MachiningBoundary, Outline, Selection};
+pub use geometry::{
+    Boundary, Containment, MachiningBoundary, ModelSurfaces, Outline, Selection, SurfaceAction,
+    SurfaceGroup, Surfaces,
+};
 pub use heights::{Height, HeightContext, HeightRef, Heights, Picks};
 pub use linking::{Entry, LeadSizes, Leads, Linking, Retraction};
 pub use machine::Machine;
@@ -234,7 +246,8 @@ impl Job {
             }
             for op in &mut setup.operations {
                 let s = &mut op.selection;
-                for r in s.faces.iter_mut().chain(&mut s.edges) {
+                let grouped = op.surfaces.groups.iter_mut().flat_map(|g| &mut g.faces);
+                for r in s.faces.iter_mut().chain(&mut s.edges).chain(grouped) {
                     if r.model == from {
                         r.model = to.to_string();
                     }

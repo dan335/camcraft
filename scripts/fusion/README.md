@@ -106,7 +106,7 @@ floor's edges R4; a dome 14 across and 5 tall standing on its floor, its foot
 a sharp concave circle; and the block's top edge at +X rounded R8, ground
 going from level to upright. Steep, drafted and curved walls, shallow and
 curved ground, concave fillets, sharp inside corners and a dome: what Ramp,
-Pencil, Project and Morph each have to follow. Its one body
+Pencil, Project, Morph and Parallel each have to follow. Its one body
 is named `ops_3d`. `ops_3d/cam.py` finds that document by it, so it runs with
 any document active, and posts Fusion's Ramp with the sample library's 6 mm
 ball, as a new one starts, with a stepdown of 2 mm and with a ramp angle of
@@ -120,9 +120,15 @@ foot, the floor's edge where its fillets start and the round's lower edge), as a
 new one starts, the other way, with an axial offset of 1 mm and with the 12 mm
 ball: `fixtures/nc/ops_3d_project*.nc`; and its Morph with the 6 mm ball between
 the dome's foot and the floor's edge, as a new one starts and one way, and
-between the round's two edges: `fixtures/nc/ops_3d_morph*.nc`. A click on an
-edge picks its chain, which Fusion closes round the loop it is in unless it is
-told the chain is open (`isOpen`); a new closed chain runs clockwise seen from
-above, and `isReverted` turns it round. Morph gives no passes between two open
+between the round's two edges: `fixtures/nc/ops_3d_morph*.nc`; and its
+Parallel with the 6 mm ball as a new one starts, then with surface groups set
+as the Surface Manager sets them: the dome avoided with offsets of 1 mm and
+with none, the model avoided with only the pocket's floor machined, the floor
+machined with stock of its own, and the block's top avoided 2 mm down:
+`fixtures/nc/ops_3d_parallel*.nc`. A group's radial and axial offsets are given
+to the API in millimetres, not the centimetres its lengths are elsewhere. A
+click on an edge picks its chain, which Fusion closes round the loop it is in
+unless it is told the chain is open (`isOpen`); a new closed chain runs
+clockwise seen from above, and `isReverted` turns it round. Morph gives no passes between two open
 chains that run opposite ways, so the round's lower edge is reverted. Run
 again, it makes every one of them byte for byte (but for Windows line ends).

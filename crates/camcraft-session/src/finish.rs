@@ -84,6 +84,7 @@ pub fn single_operation(spec: &FinishSpec, model: ModelDef) -> Job {
         tool: Some(TOOL.into()),
         preset: None,
         selection: Default::default(),
+        surfaces: Default::default(),
         boundary: Default::default(),
         outline: Default::default(),
         heights: Heights {

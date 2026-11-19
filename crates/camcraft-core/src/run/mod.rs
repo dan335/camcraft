@@ -28,7 +28,16 @@ mod result;
     clippy::indexing_slicing
 )]
 mod tests;
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+mod tests_surfaces;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, channel};
 
@@ -37,13 +46,13 @@ use glam::DVec2;
 
 use crate::control::{Control, Watch};
 use crate::cutter::allowance::{Allowance, EffectiveTool};
-use crate::cutter::surfaces::PartSurfaces;
+use crate::cutter::surfaces::{Group, PartSurfaces};
 use crate::job::{
     Curves, HeightContext, HolderSegment, Holes, Job, JobError, Machine, Operation, Setup,
-    StrategySpec, ToolSpec,
+    StrategySpec, SurfaceAction, ToolSpec,
 };
 use crate::path::simadapt::sim_moves;
-use crate::setup::features::{FeatureError, Picking};
+use crate::setup::features::{FeatureError, Picking, group_faces};
 use crate::setup::{Bodies, Prepared};
 use crate::strategy::adaptive::rest::Earlier;
 use crate::strategy::morph_curves::MorphError;
@@ -413,17 +422,14 @@ impl<'a> Shared<'a> {
     }
 
     /// What `op` is worked out and cut with: its tool, the part as it meets
-    /// it, and its heights, resolved against its picks.
-    ///
-    /// The part is the whole part to every operation, each dropping onto it
-    /// with the index it shares with them all.
+    /// it ([`part_surfaces`]), and its heights, resolved against its picks.
     fn tooled(&self, op: &Operation, picking: &Picking<'_>) -> Result<Tooled<'a>, RunError> {
         let (spec, tool) = tool_of(self.job, op)?;
         let heights = heights_of(op, picking, self.heights)?;
         Ok(Tooled {
             spec,
             tool,
-            surfaces: PartSurfaces::whole(self.prepared.drop_cutter()),
+            surfaces: part_surfaces(self.job, op, self.prepared, self.bodies)?,
             heights,
         })
     }
@@ -612,6 +618,50 @@ fn cut_past(
 /// tool the run did.
 pub fn cutting_tool(job: &Job, op: &Operation) -> Result<EffectiveTool, RunError> {
     tool_of(job, op).map(|(_, tool)| tool)
+}
+
+/// The part as operation `op` meets it, laid out as `prepared` from `bodies`.
+///
+/// To an operation that puts no faces in groups, it is the whole part,
+/// dropped onto with the index it shares with every other operation. To one
+/// that does ([`Operation::surfaces`]), it is each group's faces, found once on
+/// their model's body and so on every copy of it, and every face in no group
+/// as the model's; a face in two groups is refused.
+pub fn part_surfaces<'p>(
+    job: &Job,
+    op: &Operation,
+    prepared: &'p Prepared,
+    bodies: &Bodies<'_>,
+) -> Result<PartSurfaces<'p>, RunError> {
+    let surfaces = &op.surfaces;
+    if surfaces.is_whole() {
+        return Ok(PartSurfaces::whole(prepared.drop_cutter()));
+    }
+    let found = group_faces(surfaces, bodies, job.tolerance).map_err(in_op(op))?;
+    let group_of: BTreeMap<(&str, u32), usize> = found
+        .iter()
+        .enumerate()
+        .flat_map(|(k, faces)| faces.iter().map(move |(m, f)| ((m.as_str(), *f), k)))
+        .collect();
+    // The groups in order, then the model: every face in none of them.
+    let model = surfaces.groups.len();
+    let meshes = prepared.by_face(bodies, model + 1, |piece, face| {
+        let group = face.and_then(|f| group_of.get(&(piece.model.as_str(), f)));
+        Some(group.copied().unwrap_or(model))
+    })?;
+    let actions = surfaces
+        .groups
+        .iter()
+        .map(|g| (g.action, Allowance::new(g.radial, g.axial)))
+        .chain([(surfaces.model.action, Ok(Allowance::none()))]);
+    let groups = meshes
+        .into_iter()
+        .zip(actions)
+        .map(|(mesh, (action, offset))| {
+            Ok(Group::new(mesh, offset?, action == SurfaceAction::Machine))
+        })
+        .collect::<Result<Vec<Group>, RunError>>()?;
+    Ok(PartSurfaces::grouped(groups))
 }
 
 /// The operations of `setup` made so far (`made`), as cut, each with the real

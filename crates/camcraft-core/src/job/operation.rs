@@ -1,6 +1,6 @@
 //! An operation, shaped the way Fusion shapes one: its strategy, then what it
-//! machines (Fusion's Geometry tab: a selection, a 3D boundary or a 2D outline),
-//! Heights, Passes and Linking.
+//! machines (Fusion's Geometry tab: a selection, a 3D boundary or a 2D outline,
+//! and the faces it machines and avoids), Heights, Passes and Linking.
 
 use std::collections::BTreeMap;
 
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Boundary, Compensation, Depths, Heights, Linking, MachiningBoundary, Outline, Passes, Preset,
-    ProfileSide, Selection, StrategySpec, ToolKind, ToolSpec, is_default, is_yes, yes,
+    ProfileSide, Selection, StrategySpec, Surfaces, ToolKind, ToolSpec, is_default, is_yes, yes,
 };
 
 /// One operation.
@@ -32,6 +32,10 @@ pub struct Operation {
     /// a drill drills.
     #[serde(default, skip_serializing_if = "is_default")]
     pub selection: Selection,
+    /// The faces a 3D operation machines and those it keeps clear of
+    /// ([`Uses::surfaces`](super::Uses::surfaces)).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub surfaces: Surfaces,
     /// Where a 3D operation's tool may go
     /// ([`Uses::boundary`](super::Uses::boundary)).
     #[serde(default, skip_serializing_if = "is_default")]
@@ -78,6 +82,7 @@ impl Operation {
             tool: None,
             preset: None,
             selection: Selection::default(),
+            surfaces: Surfaces::default(),
             boundary: MachiningBoundary::default(),
             outline: Outline::default(),
             heights: Heights::fresh(),
@@ -240,6 +245,15 @@ impl Operation {
         }
         if leaves {
             return Some("a V-bit or chamfer mill cuts to size: set stock to leave to zero");
+        }
+        // Grown by a clearance, or by the tolerance it is kept to, it is no
+        // cone, so how near it comes to a face, beside it as well as above,
+        // cannot be told exactly.
+        if uses.surfaces && self.surfaces.avoids_any() {
+            return Some(
+                "a V-bit or chamfer mill cannot keep clear of faces avoided: grown by a \
+                 clearance it is no longer a cone",
+            );
         }
         None
     }

@@ -57,21 +57,39 @@ pub(crate) fn run_small() -> Ran {
     run_setup(&job, 0, &models).unwrap()
 }
 
-/// Re-check a run after its first operation's path has been tampered with.
-pub(crate) fn recheck(
+/// Re-check a run of `job` after its first operation's path has been
+/// tampered with.
+pub(crate) fn recheck_job(
+    job: &Job,
     ran: &Ran,
     tamper: impl FnOnce(&mut camcraft_core::path::toolpath::Toolpath),
 ) -> Checks {
-    let job = small_job();
+    let model = load_job_model(Path::new("."), &job.models[0], job.tolerance).unwrap();
+    let models: Models<'_> = [(job.models[0].name.as_str(), &model)]
+        .into_iter()
+        .collect();
     let mut ops = ran.result.operations.clone();
     tamper(std::sync::Arc::make_mut(&mut ops[0].path));
     checks::check(
-        &job,
+        job,
         0,
-        (&ran.prepared, camcraft_core::arrange::Arrangement::none()),
+        (
+            &ran.prepared,
+            &models.bodies(),
+            camcraft_core::arrange::Arrangement::none(),
+        ),
         &ops,
         &ran.result.verify,
         ran.result.verify_budget,
         &[],
     )
+}
+
+/// Re-check a run of [`small_job`] after its first operation's path has been
+/// tampered with.
+pub(crate) fn recheck(
+    ran: &Ran,
+    tamper: impl FnOnce(&mut camcraft_core::path::toolpath::Toolpath),
+) -> Checks {
+    recheck_job(&small_job(), ran, tamper)
 }

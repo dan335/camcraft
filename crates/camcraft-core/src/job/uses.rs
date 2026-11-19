@@ -11,6 +11,7 @@ impl StrategySpec {
         // waste.
         let cuts_loops = Uses {
             boundary: true,
+            surfaces: false,
             outline: false,
             holes: None,
             curves: None,
@@ -58,6 +59,9 @@ impl StrategySpec {
                 reorder: true,
                 top: Some(HeightRef::ModelTop),
                 bottom: Some(HeightRef::ModelBottom),
+                // Its passes are laid on the faces as each group of them is
+                // met, and cut out where they rest only on one avoided.
+                surfaces: true,
                 ..cuts_loops
             },
             // As parallel, but in its own order: reordering would shuffle and
@@ -260,6 +264,7 @@ impl StrategySpec {
             // Its picks are the holes: no area to keep to or cut round.
             StrategySpec::Drill { .. } => Uses {
                 boundary: false,
+                surfaces: false,
                 outline: false,
                 holes: Some(Holes::Rims),
                 curves: None,
@@ -507,6 +512,10 @@ pub enum Holes {
 pub struct Uses {
     /// A machining boundary that keeps the tool in: a 3D strategy's.
     pub boundary: bool,
+    /// Faces it machines and faces it keeps clear of
+    /// ([`Surfaces`](super::Surfaces)): a 3D finish's that drops its tool
+    /// onto the part.
+    pub surfaces: bool,
     /// An outline it cuts round or clears: a 2D strategy's.
     pub outline: bool,
     /// Holes: its picks are the holes it cuts, not an area, and no height is

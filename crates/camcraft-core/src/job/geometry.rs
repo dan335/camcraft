@@ -1,5 +1,6 @@
-//! What an operation machines: Fusion's Geometry tab, which is three settings
-//! here: the picks, a 3D machining boundary and a 2D outline.
+//! What an operation machines: Fusion's Geometry tab, which is four settings
+//! here: the picks, a 3D machining boundary, a 2D outline, and the faces a 3D
+//! operation machines and those it keeps clear of.
 
 use serde::{Deserialize, Serialize};
 
@@ -128,6 +129,80 @@ impl Default for MachiningBoundary {
             containment: Containment::Center,
             margin: 0.0,
         }
+    }
+}
+
+/// What a 3D operation does to a face: Fusion's machining mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SurfaceAction {
+    /// It is cut.
+    #[default]
+    Machine,
+    /// It is kept clear of: the tool may rest on it, grown by its clearance,
+    /// but never cuts there.
+    Avoid,
+}
+
+/// The faces a 3D operation machines and those it keeps clear of, as Fusion's
+/// Surface Manager has them: groups of picked faces, each machined or avoided
+/// with its own offsets, and the model, every face in no group.
+///
+/// Each group's faces are met by the tool grown by the operation's stock to
+/// leave and the group's own offsets; the tool rests on whatever is highest,
+/// and a pass is kept where it rests on a face that is machined, and cut out
+/// where it rests only on one that is avoided. Left out, the whole part is
+/// machined, as it always was.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Surfaces {
+    /// Every face in no group.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub model: ModelSurfaces,
+    /// The groups, each of its own faces.
+    #[serde(default, rename = "group", skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<SurfaceGroup>,
+}
+
+/// What an operation does to the faces in no group of its [`Surfaces`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelSurfaces {
+    /// Machined, unless asked.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub action: SurfaceAction,
+}
+
+/// Picked faces an operation machines or avoids, with offsets of their own.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceGroup {
+    /// Machined or avoided.
+    pub action: SurfaceAction,
+    /// Beside, in millimetres, added to the operation's stock to leave: on a
+    /// face machined, more stock left on it; on one avoided, how far the tool
+    /// keeps from it sideways.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub radial: f64,
+    /// Down, as `radial`: how far above a face avoided the tool keeps.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub axial: f64,
+    /// Its faces.
+    #[serde(default)]
+    pub faces: Vec<FeatureRef>,
+}
+
+impl Surfaces {
+    /// Whether it is the whole part, machined: no group, and the model not
+    /// avoided.
+    pub fn is_whole(&self) -> bool {
+        self.groups.is_empty() && self.model.action == SurfaceAction::Machine
+    }
+
+    /// Whether any of the part is avoided: the model, or a group.
+    pub fn avoids_any(&self) -> bool {
+        self.model.action == SurfaceAction::Avoid
+            || self.groups.iter().any(|g| g.action == SurfaceAction::Avoid)
     }
 }
 

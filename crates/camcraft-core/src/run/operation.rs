@@ -20,6 +20,7 @@ use crate::job::{
     HolderMode, HolderSegment, Job, Links, Operation, PassOrder, Picks, ProjectDirection,
     RadialDirection, Retraction, SpindleDirection, StrategySpec, ToolSpec,
 };
+use crate::path::avoid::machined_only;
 use crate::path::corners::{CornerParams, CornerReport, slow_corners};
 use crate::path::fit::{FitReport, fit_arcs};
 use crate::path::held::{Clear, HeldClearance, HeldDrop, keep_clear, skip_unreached};
@@ -134,6 +135,12 @@ impl<'a> Work<'a> {
             .map_err(in_op(self.op))
     }
 
+    /// The widest its tool is grown to meet any of the part: how far from the
+    /// part, seen from above, it touches it.
+    fn widest(&self) -> f64 {
+        self.surfaces.widest(self.tool)
+    }
+
     /// The rest of its tool, the shank and what holds it, grown by the
     /// clearances its Shaft and Holder asks for, as what must keep off the
     /// material; `None` where it asks nothing, or there is nothing to it.
@@ -176,17 +183,23 @@ impl<'a> Work<'a> {
     }
 
     /// The heights of the part's flat faces, raised by the stock to leave down,
-    /// where flat area detection adds a level; none unless `on`.
+    /// and each group's of its own by its axial offset, where flat area
+    /// detection adds a level; none unless `on`.
     fn flat_levels(&self, on: bool) -> Vec<f64> {
         if !on {
             return Vec::new();
         }
         let axial = self.op.stock_to_leave().axial;
-        self.prepared
-            .flat_heights(self.job.tolerance)
-            .iter()
-            .map(|z| z + axial)
-            .collect()
+        let tolerance = self.job.tolerance;
+        match self.surfaces.flat_heights(tolerance) {
+            Some(grouped) => grouped.iter().map(|z| z + axial).collect(),
+            None => self
+                .prepared
+                .flat_heights(tolerance)
+                .iter()
+                .map(|z| z + axial)
+                .collect(),
+        }
     }
 
     /// The range of slopes its strategy keeps to, in radians from level: every
@@ -719,6 +732,19 @@ pub(super) fn plan_operation(
             warnings.push("found nothing to finish between the Top and Bottom".into());
         }
         (trimmed, report.after)
+    } else {
+        (raw, passes)
+    };
+
+    // And to the faces it machines: what rests only on faces it avoids is cut
+    // out, as Fusion's is, and what is left is passes for the linker to join.
+    let (raw, passes) = if work.surfaces.avoids_any() {
+        let (kept, report) =
+            machined_only(&raw, &work.seat()?, work.job.tolerance).map_err(in_op(op))?;
+        if report.after == 0 && report.before > 0 {
+            warnings.push("found nothing to finish on the faces machined".into());
+        }
+        (kept, report.after)
     } else {
         (raw, passes)
     };

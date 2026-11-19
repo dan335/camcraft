@@ -177,6 +177,25 @@ pub enum JobError {
         /// The point.
         at: [f64; 3],
     },
+    /// A surface group with no faces machines or avoids nothing, and is
+    /// surely a group still being made.
+    #[error("operation '{op}': surface group {group} has no faces")]
+    EmptyGroup {
+        /// Which operation, as `setup/operation`.
+        op: String,
+        /// Which group, from one.
+        group: usize,
+    },
+    /// The model is avoided and no group is machined: there is nothing to
+    /// cut. Fusion cuts everything.
+    #[error(
+        "operation '{op}': the model is avoided and no surface group is machined, so there is \
+         nothing to cut"
+    )]
+    NothingToMachine {
+        /// Which operation, as `setup/operation`.
+        op: String,
+    },
     /// A sheet lists one model twice: it is one part, which says how many
     /// copies of it to lay.
     #[error("stock '{stock}' lists model '{model}' twice: give the one part more copies")]

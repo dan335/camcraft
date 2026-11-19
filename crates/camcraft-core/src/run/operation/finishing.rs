@@ -120,8 +120,8 @@ pub(super) fn finish_area(
     let mut area = Region::rectangle(sweep_lo, sweep_hi);
     if contact {
         let shadow = work.prepared.shadow().map_err(in_op(op))?;
-        let touched = contact_region(shadow, work.tool.max_radius(), work.job.tolerance)
-            .map_err(in_op(op))?;
+        let touched =
+            contact_region(shadow, work.widest(), work.job.tolerance).map_err(in_op(op))?;
         area = area.intersection(&touched).map_err(in_op(op))?;
     }
     if let Some(l) = limit {
@@ -214,7 +214,7 @@ fn steep_walls(
     // inside where it stops touching the part, and a little past, where the
     // lowest rings run. `touched` is drawn a tolerance short of that, its arcs
     // as chords inside them, so it is grown by two to be past it all along.
-    let radius = work.tool.max_radius();
+    let radius = work.widest();
     let overlap = band.offset(radius, job.tolerance);
     let shadow = work.prepared.shadow().map_err(in_op(op))?;
     let touched = contact_region(shadow, radius, job.tolerance).map_err(in_op(op))?;

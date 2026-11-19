@@ -45,7 +45,7 @@ use camcraft_geom::shadow::{Shadow, Shadows};
 use rayon::prelude::*;
 
 use crate::cutter::allowance::EffectiveTool;
-use crate::cutter::tool::ToolProfile;
+use crate::cutter::tool::{ToolError, ToolProfile};
 use crate::is_positive;
 
 /// A band limit so that a pathological tool cannot allocate without bound.
@@ -69,6 +69,9 @@ pub enum ReachError {
     /// A polygon operation failed.
     #[error(transparent)]
     Region(#[from] RegionError),
+    /// The tool could not be grown as a group of the part's faces asks.
+    #[error(transparent)]
+    Tool(#[from] ToolError),
 }
 
 /// One height band of the cutter: from `height` above the tip up to the next band,
@@ -93,21 +96,31 @@ impl Band {
     }
 }
 
-/// The forbidden region of one cutter against one mesh, at any level.
+/// The forbidden region of one cutter against one mesh, at any level; or of
+/// one cutter grown differently against each of several, the faces of a part
+/// in their groups ([`LevelReach::grouped`]): where any of them forbids it.
 #[derive(Debug)]
 pub struct LevelReach<'m> {
-    shadows: Shadows<'m>,
-    /// Bands from the tip up.
-    bands: Vec<Band>,
-    /// How far the controlled point sits above the profile's own tip.
-    lift: f64,
+    /// Each mesh, with the tool as it meets it.
+    against: Vec<Against<'m>>,
+    /// The largest radius any of them meets.
     max_radius: f64,
-    /// How much wider than the real tool the profile is: the stock to leave
+    /// How much wider than the real tool that is: the stock to leave
     /// beside, or zero.
     leave: f64,
     tolerance: f64,
     band_step: f64,
     arc_tolerance: f64,
+}
+
+/// One mesh, and the tool's bands as they meet it.
+#[derive(Debug)]
+struct Against<'m> {
+    shadows: Shadows<'m>,
+    /// Bands from the tip up.
+    bands: Vec<Band>,
+    /// How far the controlled point sits above the profile's own tip.
+    lift: f64,
 }
 
 impl<'m> LevelReach<'m> {
@@ -120,23 +133,42 @@ impl<'m> LevelReach<'m> {
         tool: &EffectiveTool,
         tolerance: f64,
     ) -> Result<Self, ReachError> {
+        Self::grouped([(mesh, *tool)], tolerance)
+    }
+
+    /// Prepare for a tool against each of `meshes`, with the tool as it meets
+    /// each: one cutter, grown for each by stock to leave of its own. At a
+    /// level the tool may not be wherever it would overlap any of them.
+    pub fn grouped(
+        meshes: impl IntoIterator<Item = (&'m TriMesh, EffectiveTool)>,
+        tolerance: f64,
+    ) -> Result<Self, ReachError> {
         if !is_positive(tolerance) {
             return Err(ReachError::Tolerance(tolerance));
-        }
-        if !tool.is_monotonic() {
-            return Err(ReachError::Undercutting);
         }
         // Half the tolerance for the bands, a tenth for the arcs: both only ever
         // leave material, and together they stay well inside what was asked.
         let band_step = tolerance * 0.5;
         let arc_tolerance = tolerance * 0.1;
-        let bands = bands(tool, band_step)?;
+        let mut against = Vec::new();
+        let (mut max_radius, mut cutter_radius) = (0.0, 0.0);
+        for (mesh, tool) in meshes {
+            if !tool.is_monotonic() {
+                return Err(ReachError::Undercutting);
+            }
+            if against.is_empty() || tool.max_radius() > max_radius {
+                (max_radius, cutter_radius) = (tool.max_radius(), tool.cutter_radius());
+            }
+            against.push(Against {
+                shadows: Shadows::new(mesh),
+                bands: bands(&tool, band_step)?,
+                lift: tool.tip_offset(),
+            });
+        }
         Ok(Self {
-            shadows: Shadows::new(mesh),
-            bands,
-            lift: tool.tip_offset(),
-            max_radius: tool.max_radius(),
-            leave: tool.max_radius() - tool.cutter_radius(),
+            against,
+            max_radius,
+            leave: max_radius - cutter_radius,
             tolerance,
             band_step,
             arc_tolerance,
@@ -155,19 +187,21 @@ impl<'m> LevelReach<'m> {
     ///
     /// [decision 0021]: ../../../../docs/decisions/0021-shank-and-holder.md
     pub fn with_body(mut self, cylinders: &[(f64, f64)], slack: f64) -> Self {
-        let lift = self.lift;
         let slack = slack.max(self.tolerance);
-        self.bands.extend(
-            cylinders
-                .iter()
-                .filter(|(r, h)| is_positive(*r) && h.is_finite())
-                .map(|&(radius, height)| Band {
-                    height: height + lift,
-                    radius,
-                    slack,
-                }),
-        );
-        self.bands.sort_by(|a, b| a.height.total_cmp(&b.height));
+        for against in &mut self.against {
+            let lift = against.lift;
+            against.bands.extend(
+                cylinders
+                    .iter()
+                    .filter(|(r, h)| is_positive(*r) && h.is_finite())
+                    .map(|&(radius, height)| Band {
+                        height: height + lift,
+                        radius,
+                        slack,
+                    }),
+            );
+            against.bands.sort_by(|a, b| a.height.total_cmp(&b.height));
+        }
         self
     }
 
@@ -175,6 +209,77 @@ impl<'m> LevelReach<'m> {
     ///
     /// Asking for levels from the top down is cheapest; see [`Shadows`].
     pub fn forbidden(&mut self, z: f64) -> Result<Region, ReachError> {
+        let arc = self.arc_tolerance;
+        match self.against.as_mut_slice() {
+            [one] => one.forbidden(z, arc),
+            many => {
+                let each = many
+                    .iter_mut()
+                    .map(|a| a.forbidden(z, arc))
+                    .collect::<Result<Vec<Region>, ReachError>>()?;
+                Ok(Region::union_all(&each)?)
+            }
+        }
+    }
+
+    /// Where the tool tip may not be at each of `levels`, in their order: each
+    /// the same region [`forbidden`](Self::forbidden) gives, if not always the
+    /// same points round it.
+    pub fn forbidden_all(&mut self, levels: &[f64]) -> Result<Vec<Region>, ReachError> {
+        let arc = self.arc_tolerance;
+        match self.against.as_mut_slice() {
+            [one] => one.forbidden_all(levels, arc),
+            many => {
+                let each = many
+                    .iter_mut()
+                    .map(|a| a.forbidden_all(levels, arc))
+                    .collect::<Result<Vec<Vec<Region>>, ReachError>>()?;
+                // Each level's, the meshes' in their order, so the unions are
+                // the same on any number of cores.
+                (0..levels.len())
+                    .into_par_iter()
+                    .map(|i| {
+                        let at: Vec<Region> =
+                            each.iter().filter_map(|r| r.get(i).cloned()).collect();
+                        Ok(Region::union_all(&at)?)
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// The cutter's largest radius.
+    pub fn max_radius(&self) -> f64 {
+        self.max_radius
+    }
+
+    /// The real tool's largest radius, without the stock to leave: how far
+    /// round its centre it cuts.
+    pub fn cutter_radius(&self) -> f64 {
+        self.max_radius - self.leave
+    }
+
+    /// The chordal tolerance this was built to.
+    pub fn tolerance(&self) -> f64 {
+        self.tolerance
+    }
+
+    /// The most the region may overstate the true one by: its bands, and the
+    /// arcs it is drawn to, either side.
+    pub fn overstates(&self) -> f64 {
+        self.band_step + 2.0 * self.arc_tolerance
+    }
+
+    /// The arc tolerance every offset is drawn to, and padded by.
+    pub fn arc_tolerance(&self) -> f64 {
+        self.arc_tolerance
+    }
+}
+
+impl Against<'_> {
+    /// Where the tool tip may not be at level `z`, against this mesh, its
+    /// regions drawn to `arc`.
+    fn forbidden(&mut self, z: f64, arc: f64) -> Result<Region, ReachError> {
         let tip = z - self.lift;
         // Highest band first, so the shadows are asked for in descending order.
         let mut shadows = Vec::with_capacity(self.bands.len());
@@ -188,14 +293,15 @@ impl<'m> LevelReach<'m> {
         // kept, so the union is the same on any number of cores.
         let grown = shadows
             .par_iter()
-            .map(|(shadow, band)| band.grow(shadow, self.arc_tolerance))
+            .map(|(shadow, band)| band.grow(shadow, arc))
             .collect::<Result<Vec<Region>, RegionError>>()?;
         Ok(Region::union_all(&grown)?)
     }
 
-    /// Where the tool tip may not be at each of `levels`, in their order: each
-    /// the same region [`forbidden`](Self::forbidden) gives, if not always the
-    /// same points round it.
+    /// Where the tool tip may not be at each of `levels`, in their order,
+    /// against this mesh, its regions drawn to `arc`: each the same region
+    /// [`forbidden`](Self::forbidden) gives, if not always the same points
+    /// round it.
     ///
     /// A level asks for the shadows above each of its bands, which reach up the
     /// tool's corner. Asked level by level, the next level down starts above
@@ -204,7 +310,7 @@ impl<'m> LevelReach<'m> {
     /// height of every level is asked once, highest first, so the shadows are
     /// built once all the way down; a level's region is put together as soon as
     /// its lowest band is in.
-    pub fn forbidden_all(&mut self, levels: &[f64]) -> Result<Vec<Region>, ReachError> {
+    fn forbidden_all(&mut self, levels: &[f64], arc: f64) -> Result<Vec<Region>, ReachError> {
         // Every band of every level: the height asked, whose it is, and its
         // radius; highest first, and, as `forbidden` has them, each level's
         // bands from the top of the tool down.
@@ -292,45 +398,18 @@ impl<'m> LevelReach<'m> {
             *count -= 1;
             if *count == 0 {
                 // The level is complete: its bands grown, then unioned.
-                flush(&mut batch, &mut grown, self.arc_tolerance)?;
+                flush(&mut batch, &mut grown, arc)?;
                 let mine = grown.get_mut(i).map(std::mem::take).unwrap_or_default();
                 ready.push((i, mine));
                 if ready.len() >= rayon::current_num_threads() {
                     union(&mut ready, &mut out)?;
                 }
             } else if batch.len() >= 64 {
-                flush(&mut batch, &mut grown, self.arc_tolerance)?;
+                flush(&mut batch, &mut grown, arc)?;
             }
         }
         union(&mut ready, &mut out)?;
         Ok(out.into_iter().map(Option::unwrap_or_default).collect())
-    }
-
-    /// The cutter's largest radius.
-    pub fn max_radius(&self) -> f64 {
-        self.max_radius
-    }
-
-    /// The real tool's largest radius, without the stock to leave: how far
-    /// round its centre it cuts.
-    pub fn cutter_radius(&self) -> f64 {
-        self.max_radius - self.leave
-    }
-
-    /// The chordal tolerance this was built to.
-    pub fn tolerance(&self) -> f64 {
-        self.tolerance
-    }
-
-    /// The most the region may overstate the true one by: its bands, and the
-    /// arcs it is drawn to, either side.
-    pub fn overstates(&self) -> f64 {
-        self.band_step + 2.0 * self.arc_tolerance
-    }
-
-    /// The arc tolerance every offset is drawn to, and padded by.
-    pub fn arc_tolerance(&self) -> f64 {
-        self.arc_tolerance
     }
 }
 

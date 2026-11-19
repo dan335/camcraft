@@ -25,10 +25,10 @@ use camcraft_core::cutter::allowance::{Allowance, EffectiveTool};
 use camcraft_core::cutter::assembly::Assembly;
 use camcraft_core::cutter::dropcutter::{DropCutter, DropTest};
 use camcraft_core::cutter::tool::ToolProfile;
-use camcraft_core::job::{Job, Setup, StockSpec};
+use camcraft_core::job::{Job, Operation, Setup, StockSpec};
 use camcraft_core::path::toolpath::{MoveRole, PLUNGE_RATIO, Toolpath};
-use camcraft_core::run::{OperationResult, StrategyDetail};
-use camcraft_core::setup::Prepared;
+use camcraft_core::run::{OperationResult, StrategyDetail, cutting_tool, part_surfaces};
+use camcraft_core::setup::{Bodies, Prepared};
 use camcraft_core::strategy::parallel::ParallelReport;
 use camcraft_sim::stock::VerifyReport;
 use glam::DVec3;
@@ -125,12 +125,13 @@ impl Finding {
 
 /// Check one setup's run.
 ///
-/// `part` is the part as the setup machined it, in the setup's frame; `setup` is
-/// its index in `job`; `model_warnings` are the models' own, reported as they are.
+/// `prepared` is the setup as it was laid out, from `bodies`, its models, and
+/// `arrangement` where its sheets laid their parts; `setup` is its index in
+/// `job`; `model_warnings` are the models' own, reported as they are.
 pub fn check(
     job: &Job,
     setup: usize,
-    (prepared, arrangement): (&Prepared, &Arrangement),
+    (prepared, bodies, arrangement): (&Prepared, &Bodies<'_>, &Arrangement),
     operations: &[OperationResult],
     verify: &VerifyReport,
     verify_budget: f64,
@@ -157,20 +158,20 @@ pub fn check(
         .enumerate()
         .filter(|(_, op)| op.made.has_paths())
         .map(|(i, op)| {
-            let tool = ops
-                .and_then(|o| o.get(i))
+            let spec = ops.and_then(|o| o.get(i));
+            let tool = spec
                 .and_then(|spec| job.tool_for(spec))
                 .and_then(|t| t.build().ok())
                 .and_then(|t| EffectiveTool::of(&t, Allowance::none()).ok());
+            let mut findings = operation_findings(op, tool.as_ref(), &cutter, job.tolerance);
+            // CC111, where it keeps clear of some of the part.
+            if let Some(spec) = spec.filter(|s| s.surfaces.avoids_any()) {
+                findings.push(clearances_kept(job, spec, op, (prepared, bodies)));
+            }
             Group {
                 op: Some(i),
                 title: format!("{}. {}", i + 1, op.name),
-                findings: sorted(operation_findings(
-                    op,
-                    tool.as_ref(),
-                    &cutter,
-                    job.tolerance,
-                )),
+                findings: sorted(findings),
             }
         })
         .collect();
@@ -987,6 +988,94 @@ fn rapid_depth(
         .fold(0.0, f64::max)
 }
 
+/// CC111. The tool, dropped at points along every move that feeds onto the
+/// faces operation `spec` avoids, each grown by its clearance and the
+/// operation's stock to leave, must rest no higher than the move but for
+/// the tolerance: higher, the tool is inside the clearance, rubbing or
+/// cutting what it was to keep clear of.
+///
+/// Re-derived, as CC102 is: the faces found again from the job on the models
+/// `prepared` was laid out from, and the program as it is posted, after
+/// linking, arc fitting and feed changes, every lead, ramp and link along
+/// with the cuts. The tolerance is the job's and smoothing's together, which
+/// the program follows the part within. Points are spaced as CC102 spaces
+/// them, along arcs as they turn.
+fn clearances_kept(
+    job: &Job,
+    spec: &Operation,
+    op: &OperationResult,
+    (prepared, bodies): (&Prepared, &Bodies<'_>),
+) -> Finding {
+    let cannot = |why: String| {
+        finding(
+            Level::Fail,
+            "CC111",
+            "the faces avoided could not be found again, so their clearances cannot be checked"
+                .into(),
+            why,
+        )
+    };
+    let surfaces = match part_surfaces(job, spec, prepared, bodies) {
+        Ok(surfaces) => surfaces,
+        Err(e) => return cannot(e.to_string()),
+    };
+    let seat = match cutting_tool(job, spec).and_then(|t| Ok(surfaces.under(&t)?)) {
+        Ok(seat) => seat,
+        Err(e) => return cannot(e.to_string()),
+    };
+    let slack = job.tolerance + spec.smoothing(job.tolerance).unwrap_or(0.0);
+    let r = seat.tool().max_radius();
+    let spacing = if r > slack {
+        2.0 * (2.0 * r * slack).sqrt()
+    } else {
+        slack
+    }
+    .max(1e-3);
+    let moves = op.path.moves();
+    let mut at = moves.first().map_or(DVec3::ZERO, |m| m.to);
+    let mut hits = 0u64;
+    let mut deepest = 0.0_f64;
+    let mut first = None;
+    for (i, m) in moves.iter().enumerate() {
+        if m.role != MoveRole::Rapid {
+            let steps = (m.length(at) / spacing).ceil().clamp(1.0, 1.0e6);
+            // Clamped, so the narrowing is exact.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let steps = steps as u32;
+            let into = (0..=steps)
+                .map(|k| seat.into_avoided(m.point_at(at, f64::from(k) / f64::from(steps)), slack))
+                .fold(0.0, f64::max);
+            if into > 0.0 {
+                hits += 1;
+                deepest = deepest.max(into);
+                first.get_or_insert(i);
+            }
+        }
+        at = m.to;
+    }
+    if hits == 0 {
+        finding(
+            Level::Pass,
+            "CC111",
+            "the tool keeps every avoided face's clearance".into(),
+            format!(
+                "cutter ⌀{:.2} mm lowered every {spacing:.2} mm along each move",
+                2.0 * r
+            ),
+        )
+    } else {
+        Finding {
+            at_move: first,
+            ..finding(
+                Level::Fail,
+                "CC111",
+                format!("the tool comes within an avoided surface's clearance on {hits} move(s)"),
+                format!("deepest {deepest:.3} mm inside it"),
+            )
+        }
+    }
+}
+
 /// `n` with its thousands grouped by commas: `18,000`.
 pub fn thousands(n: u64) -> String {
     let s = n.to_string();
@@ -1173,6 +1262,68 @@ mod tests {
             }
         });
         assert_eq!(failed(&c), ["CC105"]);
+    }
+
+    /// CC111: camcraft's program keeps the clearance of the face it avoids,
+    /// and passes; one that cuts across it, a little above the face but
+    /// inside its clearance, fails, and only that.
+    #[test]
+    fn a_program_inside_an_avoided_clearance_fails() {
+        use camcraft_core::job::{FeatureRef, SurfaceAction, SurfaceGroup};
+        use camcraft_core::path::toolpath::MoveRole;
+        use glam::dvec3;
+        let mut job = crate::test_support::small_job();
+        let model = crate::load_job_model(std::path::Path::new("."), &job.models[0], job.tolerance)
+            .unwrap();
+        // The hinge's highest face looking straight up, by the middle of its
+        // highest triangle.
+        let mesh = model.body.mesh();
+        let (t, middle) = (0..mesh.len())
+            .filter_map(|t| {
+                let [a, b, c] = mesh.triangle(t)?;
+                let up = (b - a).cross(c - a).normalize().z > 0.999;
+                up.then_some((t, (a + b + c) / 3.0))
+            })
+            .max_by(|x, y| x.1.z.total_cmp(&y.1.z))
+            .unwrap();
+        let face = model
+            .body
+            .topology()
+            .face_of(u32::try_from(t).unwrap())
+            .unwrap();
+        job.setups[0].operations[0]
+            .surfaces
+            .groups
+            .push(SurfaceGroup {
+                action: SurfaceAction::Avoid,
+                radial: 1.0,
+                axial: 1.0,
+                faces: vec![FeatureRef {
+                    model: "hinge".into(),
+                    index: face,
+                    at: middle.to_array(),
+                }],
+            });
+        let models: crate::Models<'_> = [("hinge", &model)].into_iter().collect();
+        let ran = crate::run_setup(&job, 0, &models).unwrap();
+        assert!(ran.checks.passed(), "{:?}", ran.checks.failure_lines());
+        let kept = ran.checks.groups[1]
+            .findings
+            .iter()
+            .find(|f| f.code == "CC111")
+            .unwrap();
+        assert_eq!(kept.level, Level::Pass, "{kept:?}");
+
+        // Across the face, half a millimetre above it: within its clearance.
+        let in_it = middle + dvec3(0.0, 0.0, 0.5);
+        let c = crate::test_support::recheck_job(&job, &ran, |p| {
+            p.rapid_to(in_it).unwrap();
+            p.feed_to(in_it + dvec3(0.5, 0.0, 0.0), MoveRole::Cut, 1000.0)
+                .unwrap();
+        });
+        assert_eq!(failed(&c), ["CC111"]);
+        let (_, f) = c.failures().next().unwrap();
+        assert_eq!(f.at_move, Some(ran.result.operations[0].path.len() + 1));
     }
 
     #[test]

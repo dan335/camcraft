@@ -449,3 +449,6 @@ mod tests_project;
 
 #[cfg(test)]
 mod tests_morph;
+
+#[cfg(test)]
+mod tests_parallel;

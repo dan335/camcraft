@@ -51,7 +51,7 @@ use glam::{DVec2, DVec3};
 
 use crate::job::{
     Boundary, Containment, FeatureRef, MachiningBoundary, Operation, Outline, Picks, PointRef,
-    Selection, Snap,
+    Selection, Snap, Surfaces,
 };
 use crate::setup::{Bodies, Copies, Prepared};
 
@@ -148,6 +148,21 @@ pub enum FeatureError {
     /// A polygon operation failed.
     #[error("the boundary could not be built: {0}")]
     Region(String),
+    /// A face is in two surface groups. Fusion lets the lower one win, which
+    /// is a rule nobody reading a job file could see, so it is refused.
+    #[error(
+        "face {face} on '{model}' is in surface groups {first} and {second}: a face can be in          one group"
+    )]
+    TwoGroups {
+        /// The model.
+        model: String,
+        /// The face's number.
+        face: u32,
+        /// The first group it is in, from one.
+        first: usize,
+        /// The other.
+        second: usize,
+    },
     /// More than one feature passes through the pick's point.
     #[error(
         "the {what} picked on '{model}' near ({:.3}, {:.3}, {:.3}) could now be more than \
@@ -412,6 +427,41 @@ fn picked_faces(
                     .collect(),
             }
         }));
+    }
+    Ok(out)
+}
+
+/// Each of `surfaces`' groups' faces, found on its model's body: each as its
+/// model and its number there, once, in the order picked. A face found once
+/// is a face on every copy of its model. One in two groups is refused
+/// ([`FeatureError::TwoGroups`]).
+pub fn group_faces(
+    surfaces: &Surfaces,
+    bodies: &Bodies<'_>,
+    job_tolerance: f64,
+) -> Result<Vec<Vec<(String, u32)>>, FeatureError> {
+    let mut out: Vec<Vec<(String, u32)>> = Vec::with_capacity(surfaces.groups.len());
+    for (k, group) in surfaces.groups.iter().enumerate() {
+        let mut faces: Vec<(String, u32)> = Vec::with_capacity(group.faces.len());
+        for pick in &group.faces {
+            let body = copies(bodies, &pick.model)?.body;
+            let face = (
+                pick.model.clone(),
+                find_face(body, pick, tolerance(job_tolerance, body))?.index,
+            );
+            if let Some(j) = out.iter().position(|other| other.contains(&face)) {
+                return Err(FeatureError::TwoGroups {
+                    model: face.0,
+                    face: face.1,
+                    first: j + 1,
+                    second: k + 1,
+                });
+            }
+            if !faces.contains(&face) {
+                faces.push(face);
+            }
+        }
+        out.push(faces);
     }
     Ok(out)
 }

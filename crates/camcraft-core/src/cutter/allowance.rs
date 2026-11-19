@@ -131,6 +131,19 @@ impl Allowance {
     }
 }
 
+/// Both left: an operation's stock to leave and a group of faces' own offsets,
+/// say. A sum too large to be a number grows a tool that cannot be built.
+impl std::ops::Add for Allowance {
+    type Output = Allowance;
+
+    fn add(self, other: Allowance) -> Allowance {
+        Allowance {
+            radial: self.radial + other.radial,
+            axial: self.axial + other.axial,
+        }
+    }
+}
+
 /// A cutter dilated by its stock to leave, together with the offset back to the real
 /// tool tip.
 ///

@@ -402,37 +402,14 @@ pub(in crate::run) fn chamfers_picked(
             joined.push((model.clone(), *copy, f));
         }
     }
-    let mut vertices: Vec<DVec3> = Vec::new();
-    let mut triangles: Vec<[u32; 3]> = Vec::new();
-    for piece in &prepared.pieces {
-        let Some(body) = bodies.body(&piece.model) else {
-            continue;
-        };
-        let mesh = body.mesh();
-        let first = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
-        vertices.extend(
-            mesh.vertices()
-                .iter()
-                .map(|&p| prepared.frame.to_setup_as(&piece.stand, p)),
-        );
-        for (t, tri) in mesh.triangles().iter().enumerate() {
-            let face = u32::try_from(t)
-                .ok()
-                .and_then(|t| body.topology().face_of(t));
-            if face.is_some_and(|f| joined.contains(&(piece.model.clone(), piece.copy, f))) {
-                continue;
-            }
-            triangles.push(tri.map(|v| v.saturating_add(first)));
-        }
-    }
-    let others = if triangles.is_empty() {
-        None
-    } else {
-        Some(
-            TriMesh::new(vertices, triangles)
-                .map_err(|e| in_op(op)(crate::strategy::StrategyError::Region(e.to_string())))?,
-        )
-    };
+    let others = prepared
+        .by_face(bodies, 1, |piece, face| {
+            let joins =
+                face.is_some_and(|f| joined.contains(&(piece.model.clone(), piece.copy, f)));
+            (!joins).then_some(0)
+        })?
+        .pop()
+        .filter(|others| !others.is_empty());
     Ok(Chamfers {
         edges: found,
         others,

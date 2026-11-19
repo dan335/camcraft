@@ -64,6 +64,13 @@ pub trait Surface {
     fn grazing_along(&self, from: DVec2, to: DVec2) -> Vec<DVec3> {
         self.along(from, to)
     }
+
+    /// Whether the tool with its tip at `p` rests there on faces of the part
+    /// it is kept clear of alone: a link that stays down there would rub
+    /// them. None, unless the operation avoids some.
+    fn rests_avoided(&self, _p: DVec3) -> bool {
+        false
+    }
 }
 
 /// No part anywhere.

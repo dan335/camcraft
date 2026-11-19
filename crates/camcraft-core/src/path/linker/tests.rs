@@ -331,6 +331,48 @@ fn staying(max: f64) -> LinkParams {
     }
 }
 
+/// A part flat at 0, the tool resting on faces it avoids alone between
+/// x = 2 and 3.
+struct AvoidedStrip;
+
+impl Surface for AvoidedStrip {
+    fn at(&self, _p: DVec2) -> Option<f64> {
+        Some(0.0)
+    }
+
+    fn along(&self, from: DVec2, to: DVec2) -> Vec<DVec3> {
+        (0..=100)
+            .map(|k| from.lerp(to, f64::from(k) / 100.0).extend(0.0))
+            .collect()
+    }
+
+    fn rests_avoided(&self, p: DVec3) -> bool {
+        (2.0..=3.0).contains(&p.x)
+    }
+}
+
+/// Two passes along a line, either side of where the tool would rest on
+/// faces it avoids: the link between does not stay down there, rubbing them,
+/// but lifts; with nothing avoided it stays down.
+#[test]
+fn a_link_over_faces_avoided_lifts() {
+    let mut t = Toolpath::new();
+    t.feed_to(dvec3(0.0, 0.0, 0.0), MoveRole::Link, 1000.0)
+        .unwrap();
+    t.feed_to(dvec3(1.5, 0.0, 0.0), MoveRole::Cut, 1000.0)
+        .unwrap();
+    t.feed_to(dvec3(3.5, 0.0, 0.0), MoveRole::Link, 1000.0)
+        .unwrap();
+    t.feed_to(dvec3(5.0, 0.0, 0.0), MoveRole::Cut, 1000.0)
+        .unwrap();
+    let plane = ClearancePlane::new(10.0).unwrap();
+    let (out, report) = link(&t, &plane, &mut Air, &AvoidedStrip, &staying(50.0)).unwrap();
+    assert_eq!(report.stayed_down, 0);
+    assert!(!roles(&out).contains(&MoveRole::Transition));
+    let (_, report) = link(&t, &plane, &mut Air, &FlatPart(0.0), &staying(50.0)).unwrap();
+    assert_eq!(report.stayed_down, 1);
+}
+
 /// A wall 10 mm tall at y = 1 and beyond, and nothing short of it.
 struct Wall;
 
