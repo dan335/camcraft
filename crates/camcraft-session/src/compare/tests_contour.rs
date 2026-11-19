@@ -37,8 +37,9 @@ use super::tests_pencil::{Bounds, held_to};
 /// new one reaches in from outside the part's silhouette
 /// (`StrategySpec::starting_containment`), so it goes round the block's
 /// outside walls as well, down to Z0, where Fusion's, its tool's centre kept
-/// on the silhouette (decision 0027), stops at the pocket's floor, Z10. That is most of the difference: 18 mm at the 95th percentile, half as
-/// much again removed, three times as far fed and 15 lifts to Fusion's 3.
+/// on the silhouette (decision 0027), stops at the pocket's floor, Z10. That
+/// is most of the difference: 18 mm at the 95th percentile, half as much
+/// again removed, three times as far fed and 15 lifts to Fusion's 3.
 /// Inside the pocket the rings are Fusion's levels, a millimetre apart and at
 /// the floor. With the dome avoided, measured:
 ///

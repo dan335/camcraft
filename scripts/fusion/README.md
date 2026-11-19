@@ -149,6 +149,6 @@ programs came out as the fixtures (`parallel` differed the first time,
 two hundred of its points moved along them, by a few hundredths of a
 millimetre: its point reduction. So a fixture of those three is one of
 Fusion's answers, which Fusion makes again only to within that. Contour's,
-Flat's and `ramp_avoid_dome` were made once, by these same rows in a copy of
-the script that made only them, and not yet again: whether Fusion posts the
-same bytes for them each time is not known.
+Flat's and `ramp_avoid_dome`, made first by these same rows in a copy of the
+script that made only them, came out of the committed script byte for byte
+the once it has been run since, that same day.
