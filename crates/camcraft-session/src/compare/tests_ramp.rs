@@ -28,67 +28,11 @@
     clippy::cast_precision_loss
 )]
 
-use std::path::Path;
-
 use camcraft_core::job::{Operation, StrategySpec};
 
+use super::tests_pencil::{base, held};
 use super::*;
-use crate::test_support::fixture;
-use crate::{job_text, load_models, models_of, parse_job, run_setup};
-
-/// The part, its stock and setup, the roughing flat and the ball, with no
-/// operations.
-fn base() -> String {
-    format!(
-        r#"
-version = 1
-tolerance = 0.01
-
-[tools.flat6]
-kind = "flat"
-diameter = 6.0
-number = 1
-rpm = 18000
-flutes = 3
-flute_length = 20.0
-shoulder_length = 20.0
-shank_diameter = 6.0
-overall_length = 63.0
-stickout = 22.5
-
-[tools.ball6]
-kind = "ball"
-diameter = 6.0
-number = 2
-rpm = 18000
-flutes = 3
-flute_length = 20.0
-shoulder_length = 20.0
-shank_diameter = 6.0
-overall_length = 63.0
-stickout = 22.5
-
-[[model]]
-name = "part"
-path = "{}"
-
-[[stock]]
-name = "block"
-kind = "around-models"
-margin = [5.0, 5.0, 0.0]
-
-[[setup]]
-name = "top"
-models = ["part"]
-stocks = ["block"]
-post = "masso"
-"#,
-        fixture("ops_3d.step")
-            .display()
-            .to_string()
-            .replace('\\', "/")
-    )
-}
+use crate::{job_text, parse_job};
 
 /// A job that roughs the part and then ramps it, as `name`: a new Ramp but for
 /// `change`, read back, so its expressions are worked out as a job read from
@@ -110,38 +54,6 @@ fn job(name: &str, change: impl FnOnce(&mut Operation)) -> Job {
     change(&mut ramp);
     job.setups[0].operations.extend([rough, ramp]);
     parse_job(&job_text(&job).unwrap(), "ops_3d").unwrap()
-}
-
-fn fusion(op: &str) -> String {
-    std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/nc")
-            .join(format!("ops_3d_{op}.nc")),
-    )
-    .unwrap()
-}
-
-/// `job`'s ramp, `name`, run and compared with Fusion's program for it.
-fn held(job: &Job, name: &str) -> Compared {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let loaded = load_models(job, dir, &[0]).unwrap();
-    let ran = run_setup(job, 0, &models_of(&loaded)).unwrap();
-    assert!(
-        ran.checks.failures().count() == 0,
-        "{name}: {:?}",
-        ran.checks
-    );
-    let c = compare(job, 0, dir, &ran, name, &fusion(name), job.tolerance).unwrap();
-    eprintln!(
-        "{name}: {:?}\nours {:?}\ntheirs {:?}\nours cut {:?}\ntheirs cut {:?}\n{}",
-        c.difference,
-        c.ours,
-        c.theirs,
-        c.ours_cut,
-        c.theirs_cut,
-        c.difference.map.join("\n")
-    );
-    c
 }
 
 /// How near a Ramp's material and program are held to Fusion's: the least

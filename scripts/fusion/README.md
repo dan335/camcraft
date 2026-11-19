@@ -131,4 +131,11 @@ click on an edge picks its chain, which Fusion closes round the loop it is in
 unless it is told the chain is open (`isOpen`); a new closed chain runs
 clockwise seen from above, and `isReverted` turns it round. Morph gives no passes between two open
 chains that run opposite ways, so the round's lower edge is reverted. Run
-again, it makes every one of them byte for byte (but for Windows line ends).
+again, it makes every one of them byte for byte (but for Windows line ends),
+but for Parallel's: Fusion's Parallel does not post the same bytes from one
+generation to the next. On 2026-11-19 the committed `ops_3d/cam.py` was run
+twice, and the five grouped programs and the plain one came out as the
+fixtures but for one program each run (`parallel` the first time,
+`parallel_floor_leave` the second), which differed in a few points of its point
+reduction. So a Parallel fixture is one of Fusion's answers, which Fusion
+makes again only to within that.

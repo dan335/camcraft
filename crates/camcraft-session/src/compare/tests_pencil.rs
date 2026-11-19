@@ -34,15 +34,17 @@
 )]
 
 use std::path::Path;
+use std::sync::{Arc, OnceLock};
 
 use camcraft_core::job::{Operation, StrategySpec};
+use camcraft_core::run::{Kept, Plan};
 
 use super::*;
 use crate::test_support::fixture;
-use crate::{job_text, load_models, models_of, parse_job, run_setup};
+use crate::{job_text, load_models, models_of, parse_job, run_setup, run_setup_planned};
 
 /// The part, its stock and setup, the roughing flat and the two balls, with no
-/// operations: Project's and Morph's tests' too.
+/// operations: Ramp's, Project's, Morph's and Parallel's tests' too.
 pub(super) fn base() -> String {
     format!(
         r#"
@@ -138,11 +140,46 @@ fn fusion(op: &str) -> String {
     .unwrap()
 }
 
-/// `job`'s operation `name`, run and compared with Fusion's program for it.
-fn held(job: &Job, name: &str) -> Compared {
+/// The roughing every job here starts with, and the job as far as it: run
+/// once, for them all.
+static ROUGHED: OnceLock<(Job, Kept)> = OnceLock::new();
+
+/// `job`'s roughing, its first operation, as the one run of it made it, with
+/// the material it left, for a run of `job` to keep rather than work out
+/// again ([`Plan::Keep`]). Every job here starts with the same roughing of the
+/// same part, stock and setup, and nothing after an operation changes what it
+/// makes, so it is the same computation.
+fn roughed(job: &Job, dir: &Path) -> Kept {
+    let mut prefix = job.clone();
+    prefix.setups[0].operations.truncate(1);
+    let (first, kept) = ROUGHED.get_or_init(|| {
+        let loaded = load_models(&prefix, dir, &[0]).unwrap();
+        let ran = run_setup(&prefix, 0, &models_of(&loaded)).unwrap();
+        let kept = Kept {
+            result: ran.result.operations[0].clone(),
+            after: ran.result.keyframes.get(1).cloned(),
+        };
+        (prefix.clone(), kept)
+    });
+    assert_eq!(
+        &prefix, first,
+        "every job here starts with the same roughing"
+    );
+    kept.clone()
+}
+
+/// `job`'s operation `name`, after the roughing, run and compared with
+/// Fusion's program for it.
+pub(super) fn held(job: &Job, name: &str) -> Compared {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let loaded = load_models(job, dir, &[0]).unwrap();
-    let ran = run_setup(job, 0, &models_of(&loaded)).unwrap();
+    let kept = roughed(job, dir);
+    let after = kept.after.clone();
+    let plans = [Plan::Keep(Box::new(kept)), Plan::Generate];
+    let ran = run_setup_planned(job, 0, &models_of(&loaded), &plans, &mut |_| {}).unwrap();
+    // The material the roughing left, put back as it was, not cut again.
+    let put_back = after.as_ref().zip(ran.result.keyframes.get(1));
+    assert!(put_back.is_some_and(|(a, b)| Arc::ptr_eq(a, b)), "{name}");
     assert!(
         ran.checks.failures().count() == 0,
         "{name}: {:?}",
