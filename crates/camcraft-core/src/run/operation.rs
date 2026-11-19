@@ -790,7 +790,7 @@ pub(super) fn plan_operation(
     // part, a pocket's middle before its walls.
     let (ordered, order) = if op.linking.reorder && op.strategy.uses().reorder {
         let by_level = op.strategy.uses().depths != Depths::None;
-        order_passes(&raw, op.linking.allow_reverse, by_level).map_err(in_op(op))?
+        order_passes(&raw, op.reverses(), by_level).map_err(in_op(op))?
     } else {
         (raw, Default::default())
     };

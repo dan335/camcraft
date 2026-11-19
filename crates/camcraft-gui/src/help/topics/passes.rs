@@ -35,7 +35,7 @@ topics! {
     CONTOUR_ORDER: "Order",
         "By depth cuts each level all the way round before the next down. By area cuts each piece of the part all the way down first.";
     DIRECTION_SPIRAL: "Direction",
-        "Which way it turns: climb gives the better finish, conventional can suit a flexible machine.",
+        "Climb gives the better finish; conventional can suit a flexible machine. Both ways climbs, cutting each piece the part breaks it into from its nearer end.",
         Figure::Climb;
     SPIRAL_ORDER: "Order",
         "Outside in ends at the centre. Inside out starts at the centre and ends on the outside.";

@@ -468,6 +468,116 @@ fn a_pencil_keeps_to_the_faces_it_machines() {
     }
 }
 
+/// How many times `op` lifted between its passes: the links it did not stay
+/// down for.
+fn lifts(op: &OperationResult) -> u64 {
+    op.links.links_resolved - op.links.stayed_down
+}
+
+/// `strategy`, as a new one starts, run on the ridges with the first alone
+/// machined, on 1 and 8 threads: the same moves either way.
+fn new_on_ridges(strategy: &str) -> SetupResult {
+    let body = ridges();
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let mut job = on_ridges(strategy, true);
+    let op = &mut job.setups[0].operations[0];
+    op.strategy = op.strategy.fresh();
+    let on = |threads: usize| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| run_setup(&job, 0, &bodies).unwrap())
+    };
+    let (one, eight) = (on(1), on(8));
+    assert_eq!(
+        one.operations[0].path, eight.operations[0].path,
+        "{strategy}"
+    );
+    one
+}
+
+/// A radial or a morphed spiral cut into short pieces by the faces it
+/// avoids, across the first ridge's top: no piece is ramped onto, and the
+/// nearest is cut next, so the tool stays down from most to the next rather
+/// than lifting for each.
+fn pieces_are_entered_without_ramps_and_linked_nearest_next(strategy: &str) {
+    let result = new_on_ridges(strategy);
+    let op = &result.operations[0];
+    assert_eq!(op.links.ramps, 0, "{strategy}");
+    assert!(
+        op.path.moves().iter().all(|m| m.role != MoveRole::Ramp),
+        "{strategy}"
+    );
+    assert!(op.passes > 10, "{strategy}: {} passes", op.passes);
+    assert!(
+        2 * lifts(op) < op.passes,
+        "{strategy}: {} lifts for {} passes",
+        lifts(op),
+        op.passes
+    );
+    assert_eq!(result.verify.gouged, 0, "{strategy}");
+    assert_eq!(op.sim.rapid_contacts, 0, "{strategy}");
+}
+
+#[test]
+fn a_radial_is_entered_without_ramps_and_linked_nearest_next() {
+    pieces_are_entered_without_ramps_and_linked_nearest_next("radial");
+}
+
+#[test]
+fn a_morphed_spiral_is_entered_without_ramps_and_linked_nearest_next() {
+    pieces_are_entered_without_ramps_and_linked_nearest_next("morphed-spiral");
+}
+
+/// Which way each cut across the middle of the first ridge's top turns about
+/// the spiral's centre, the part's middle: anticlockwise or clockwise, as
+/// many of each.
+fn turns_across_the_first_ridge(result: &SetupResult) -> (usize, usize) {
+    let moves = result.operations[0].path.moves();
+    let mut at = moves[0].to;
+    let (mut anticlockwise, mut clockwise) = (0, 0);
+    for m in moves {
+        let across = |p: DVec3| (p.x + 3.5).abs() < 0.7 && p.y.abs() < 7.0;
+        if m.role == MoveRole::Cut && across(at) && across(m.to) {
+            let turn = at.truncate().perp_dot(m.to.truncate() - at.truncate());
+            if turn > 1e-9 {
+                anticlockwise += 1;
+            } else if turn < -1e-9 {
+                clockwise += 1;
+            }
+        }
+        at = m.to;
+    }
+    (anticlockwise, clockwise)
+}
+
+/// A spiral cut into pieces across the first ridge, as a new one starts,
+/// both ways: each piece taken from its nearer end, so they turn both ways
+/// round, and the tool goes back and forth across the ridge. Asked to climb,
+/// every piece turns the way the spiral does and the tool goes back to the
+/// start of each, as Fusion's One Way: no fewer lifts.
+#[test]
+fn a_spiral_turns_its_pieces_round_only_where_it_cuts_both_ways() {
+    let both = new_on_ridges("spiral");
+    let (ccw, cw) = turns_across_the_first_ridge(&both);
+    assert!(ccw > 5 && cw > 5, "both ways: {ccw} and {cw}");
+    let body = ridges();
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let mut job = on_ridges("spiral", true);
+    if let StrategySpec::Spiral { direction, .. } = &mut job.setups[0].operations[0].strategy {
+        *direction = crate::job::CutDirection::Climb;
+    }
+    let climbing = run_setup(&job, 0, &bodies).unwrap();
+    let (ccw, cw) = turns_across_the_first_ridge(&climbing);
+    assert!(
+        ccw.min(cw) == 0 && ccw.max(cw) > 10,
+        "one way: {ccw} and {cw}"
+    );
+    assert!(lifts(&both.operations[0]) <= lifts(&climbing.operations[0]));
+    assert_eq!(climbing.operations[0].links.ramps, 0);
+}
+
 /// A scallop finish keeping clear of faces gives the same moves on any
 /// number of threads.
 #[test]
@@ -679,6 +789,56 @@ fn a_ramp_keeps_off_an_avoided_boss_but_round_its_foot() {
 #[test]
 fn a_ramp_keeps_above_an_avoided_floor() {
     keeps_above_the_plate_and_finishes_the_boss("ramp");
+}
+
+/// Flat finishing on the boss and the plate from the whole stock: a new one
+/// goes straight down onto each ring, as Fusion's Flat starts; one whose
+/// entry a job file leaves out ramps along its ring into the material, as it
+/// always has. Both clear the same flats, every check passing.
+#[test]
+fn a_new_flat_plunges_and_one_read_ramps() {
+    let body = boss();
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let mut job = on_boss("flat", &[]);
+    let op = &mut job.setups[0].operations[0];
+    op.linking.entry = StrategySpec::named("flat").unwrap().fresh_entry();
+    let plunged = run_setup(&job, 0, &bodies).unwrap();
+    job.setups[0].operations[0].linking.entry = None;
+    let ramped = run_setup(&job, 0, &bodies).unwrap();
+    let (p, r) = (&plunged.operations[0], &ramped.operations[0]);
+    assert_eq!(p.links.ramps, 0);
+    assert!(r.links.ramps > 0, "{:?}", r.links);
+    assert!(p.links.links_resolved > 0);
+    assert_eq!(cuts(&plunged), cuts(&ramped));
+    for (result, op) in [(&plunged, p), (&ramped, r)] {
+        assert_eq!(result.verify.gouged, 0);
+        assert_eq!(op.sim.rapid_contacts, 0);
+    }
+}
+
+/// A parallel finish whose job file still carries ramp settings, from when
+/// it ramped into material, comes straight down into the stock as one
+/// without: the settings are not read.
+#[test]
+fn a_parallel_with_ramp_settings_is_entered_as_one_without() {
+    let body = step();
+    let bodies: Bodies<'_> = [("dome", &body)].into_iter().collect();
+    let mut plain = finishing(&[], (0.0, 0.0));
+    plain.setups[0].operations[0].surfaces = crate::job::Surfaces::default();
+    let mut ramped = plain.clone();
+    let linking = &mut ramped.setups[0].operations[0].linking;
+    linking.ramp_angle = 5.0;
+    linking.ramp_feed = Some(100.0);
+    linking.ramp_stepdown = Some(0.5);
+    ramped.validate().unwrap();
+    let with = run_setup(&ramped, 0, &bodies).unwrap();
+    let without = run_setup(&plain, 0, &bodies).unwrap();
+    let op = &with.operations[0];
+    assert_eq!(op.links.ramps, 0);
+    assert!(op.path.moves().iter().all(|m| m.role != MoveRole::Ramp));
+    assert_eq!(op.path, without.operations[0].path);
+    assert_eq!(with.verify.gouged, 0);
+    assert_eq!(op.sim.rapid_contacts, 0);
 }
 
 /// The boss's top avoided: flat finishing cuts nothing on it, which it

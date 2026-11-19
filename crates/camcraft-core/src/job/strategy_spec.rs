@@ -164,7 +164,10 @@ pub enum StrategySpec {
         /// boundary if zero.
         #[serde(default, skip_serializing_if = "is_default")]
         outer_radius: f64,
-        /// Which way it turns: to climb, or to cut conventional.
+        /// Which way it turns: to climb, or to cut conventional; or both ways,
+        /// turning to climb and each piece the part cuts it into taken from
+        /// its nearer end. Climbing where a job file leaves it out; a new one
+        /// starts both ways ([`StrategySpec::fresh`]).
         #[serde(default = "climb", skip_serializing_if = "is_climb")]
         direction: CutDirection,
         /// In from the outer radius, or out from the inner.
@@ -213,7 +216,8 @@ pub enum StrategySpec {
         /// the boundary unless given.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         centre: Option<[f64; 2]>,
-        /// Which way it turns: to climb, or to cut conventional.
+        /// Which way it turns, as a spiral's: climbing where a job file leaves
+        /// it out, both ways as a new one starts.
         #[serde(default = "climb", skip_serializing_if = "is_climb")]
         direction: CutDirection,
         /// In from the boundary, or out from the centre.
@@ -808,6 +812,29 @@ impl StrategySpec {
         )
     }
 
+    /// Whether its passes cut both ways, so an open one may be cut from
+    /// whichever end is nearer without going against what it was asked:
+    /// parallel's, which run back and forth already, and those of any
+    /// strategy whose direction is both ways ([`CutDirection::BothWays`],
+    /// [`RadialDirection::BothWays`], [`ProjectDirection::BothWays`],
+    /// [`FaceDirection::BothWays`]). Asked to cut one way, climbing or
+    /// conventional, outward or inward, each pass goes as it was laid.
+    /// Adaptive clearing's both ways is how it steers its passes, cutting
+    /// back conventional beside what is left, not which end it takes them
+    /// from: not this.
+    pub fn cuts_both_ways(&self) -> bool {
+        match *self {
+            StrategySpec::Parallel { .. } => true,
+            StrategySpec::Radial { direction, .. } => direction == RadialDirection::BothWays,
+            StrategySpec::Project { direction, .. } | StrategySpec::Morph { direction, .. } => {
+                direction == ProjectDirection::BothWays
+            }
+            StrategySpec::Face { direction, .. } => direction == FaceDirection::BothWays,
+            StrategySpec::Adaptive { .. } | StrategySpec::Adaptive2d { .. } => false,
+            _ => self.direction() == Some(CutDirection::BothWays),
+        }
+    }
+
     /// The range of slopes it keeps to, in degrees from level, where it has one.
     pub fn slopes(&self) -> Option<(f64, f64)> {
         match *self {
@@ -983,12 +1010,19 @@ impl StrategySpec {
     /// What a new operation of this strategy starts with that is not worked
     /// out from its tool, where it is not what a job file that leaves the
     /// setting out reads: adaptive, 3D and 2D, lifts a fifth of a millimetre
-    /// off the floor between passes, as Fusion's has since 2022.
+    /// off the floor between passes, as Fusion's has since 2022; a spiral and
+    /// a morphed spiral cut both ways, as Fusion's Direction starts, the
+    /// spiral climbing and each piece of it the part cuts it into taken from
+    /// its nearer end ([decision 0034]).
+    ///
+    /// [decision 0034]: ../../../../docs/decisions/0034-entries-and-order-of-the-finishes-over-the-part.md
     pub fn fresh(mut self) -> Self {
-        if let StrategySpec::Adaptive { lift_height, .. }
-        | StrategySpec::Adaptive2d { lift_height, .. } = &mut self
-        {
-            *lift_height = 0.2;
+        match &mut self {
+            StrategySpec::Adaptive { lift_height, .. }
+            | StrategySpec::Adaptive2d { lift_height, .. } => *lift_height = 0.2,
+            StrategySpec::Spiral { direction, .. }
+            | StrategySpec::MorphedSpiral { direction, .. } => *direction = CutDirection::BothWays,
+            _ => {}
         }
         self
     }
@@ -1018,9 +1052,16 @@ impl StrategySpec {
     /// How a new operation of this strategy goes down into the material, where
     /// that is not what a job file that leaves it out reads: a 2D profile
     /// straight down onto its lead, as Fusion's 2D Contour starts with Ramp
-    /// off.
+    /// off, and flat finishing straight down onto each ring, as Fusion's Flat
+    /// does ([decision 0034]).
+    ///
+    /// [decision 0034]: ../../../../docs/decisions/0034-entries-and-order-of-the-finishes-over-the-part.md
     pub fn fresh_entry(&self) -> Option<Entry> {
-        matches!(self, StrategySpec::Profile { .. }).then_some(Entry::Plunge)
+        matches!(
+            self,
+            StrategySpec::Profile { .. } | StrategySpec::Flat { .. }
+        )
+        .then_some(Entry::Plunge)
     }
 
     /// The multiple depths this strategy starts with: roughing 2 mm a level;
@@ -1091,15 +1132,18 @@ pub enum FaceDirection {
 /// Which way a strategy's passes cut, where it has the choice: scallop, contour,
 /// flat, spiral and morphed spiral finishing, and adaptive clearing.
 ///
-/// Each strategy says what its default is: scallop goes both ways, as Fusion's
-/// does, and the rest climb.
+/// Each strategy says what its default is: scallop and pencil go both ways,
+/// as Fusion's do, and the rest climb where a job file leaves it out; a new
+/// spiral or morphed spiral starts both ways, as Fusion's
+/// ([`StrategySpec::fresh`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CutDirection {
     /// Both ways. A finishing pass: closed rings climbing, and an open pass
-    /// started at whichever end is nearer. Adaptive clearing: climbing, and
-    /// cutting back conventional where a pass ends beside what is left, rather
-    /// than going back to climb it.
+    /// started at whichever end is nearer; a spiral turning to climb, and each
+    /// piece the part cuts it into taken from its nearer end. Adaptive
+    /// clearing: climbing, and cutting back conventional where a pass ends
+    /// beside what is left, rather than going back to climb it.
     #[default]
     BothWays,
     /// Every pass climbing.

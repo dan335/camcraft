@@ -15,7 +15,10 @@ use crate::test_support::small_job;
 use crate::{Ran, load_models, models_of, run_setup};
 
 /// Two hinge jigs, 25.4 by 31.8 and 33.3 mm tall, on a sheet `size`, both
-/// machined by the one setup.
+/// machined by the one setup. Its finish keeps to the parts' silhouette, as
+/// a new one starts: over the sheet round them, with no roughing before it,
+/// it would come straight down into the whole sheet, and bury the tool's
+/// shank (CC108).
 fn on_a_sheet(size: [f64; 3]) -> Job {
     let mut job = small_job();
     job.tolerance = 0.1;
@@ -37,6 +40,7 @@ fn on_a_sheet(size: [f64; 3]) -> Job {
     setup.models = vec!["a".into(), "b".into()];
     setup.stocks = vec!["sheet".into()];
     setup.operations[0].passes.stepover = 4.0;
+    setup.operations[0].boundary.kind = Boundary::Silhouette;
     job.validate().unwrap();
     job
 }

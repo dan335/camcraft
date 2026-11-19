@@ -73,8 +73,9 @@ impl Pass {
 
     /// Whether it may be run backwards: an open pass of more than one move.
     /// Running a pass backwards flips its cutting direction, climb for
-    /// conventional, so it is done only when asked; a closed ring ends where it
-    /// starts, so is never reversed, as that would bring it no nearer.
+    /// conventional, so it is done only where its operation cuts both ways or
+    /// it is asked; a closed ring ends where it starts, so is never reversed,
+    /// as that would bring it no nearer and only turn it the other way.
     fn reversible(&self) -> bool {
         !self.closed && self.moves.len() > 1
     }
@@ -100,7 +101,10 @@ impl Pass {
 }
 
 /// Reorder the passes of a path to shorten the travel between them, `by_level`
-/// for an operation cut in levels: those at one depth, in their order.
+/// for an operation cut in levels: those at one depth, in their order. With
+/// `allow_reverse`, an open pass may be taken from its end where that is
+/// nearer: for an operation that cuts both ways, or is asked to
+/// ([`Operation::reverses`](crate::job::Operation::reverses)).
 ///
 /// The input must still be unlinked — passes are identified by their leading
 /// [`MoveRole::Link`]. Reordering after linking would move retracts and plunges
@@ -355,6 +359,55 @@ mod tests {
         assert_eq!(off.reversed, 0, "reversal must not happen unasked");
         assert!(on.reversed > 0, "reversal should help here");
         assert!(on.travel_after_mm < off.travel_after_mm);
+    }
+
+    /// What kept reordering off for scallop and the patterns: rings on a
+    /// flat all start level, so they are one group, and reordering them must
+    /// not shuffle them or turn them round. Laid one inside the next, each
+    /// starting nearest where the last ended, as scallop lays them, they keep
+    /// their order and their way round, reversal allowed or not: the next
+    /// ring in is always the nearest, and a closed ring is never reversed.
+    #[test]
+    fn rings_laid_one_inside_the_next_keep_their_order_and_way() {
+        let mut t = Toolpath::new();
+        for k in 0..6 {
+            let (lo, hi) = (f64::from(k), 20.0 - f64::from(k));
+            t.feed_to(dvec3(lo, lo, 0.0), MoveRole::Link, 900.0)
+                .unwrap();
+            for (x, y) in [(hi, lo), (hi, hi), (lo, hi), (lo, lo)] {
+                t.feed_to(dvec3(x, y, 0.0), MoveRole::Cut, 900.0).unwrap();
+            }
+        }
+        for reverse in [false, true] {
+            let (out, report) = order_passes(&t, reverse, false).unwrap();
+            assert_eq!(out, t, "reversal allowed: {reverse}");
+            assert_eq!(report.reversed, 0);
+        }
+    }
+
+    /// Open pieces of rings, each running the same way round, laid ring by
+    /// ring: allowed to, each is taken from whichever end is nearer, so the
+    /// tool goes back and forth across them rather than back to the start of
+    /// each; not allowed to, each is cut as it was laid.
+    #[test]
+    fn pieces_are_turned_round_only_where_allowed() {
+        let mut t = Toolpath::new();
+        for k in 0..4 {
+            let y = f64::from(k);
+            t.feed_to(dvec3(0.0, y, 0.0), MoveRole::Link, 900.0)
+                .unwrap();
+            t.feed_to(dvec3(10.0, y, 0.0), MoveRole::Cut, 900.0)
+                .unwrap();
+        }
+        let (kept, one_way) = order_passes(&t, false, false).unwrap();
+        assert_eq!(kept, t);
+        assert_eq!(one_way.reversed, 0);
+        let (out, both) = order_passes(&t, true, false).unwrap();
+        assert_eq!(both.reversed, 2, "{out:?}");
+        assert!(both.travel_after_mm < one_way.travel_after_mm);
+        // Every other one turned round, starting where the last ended.
+        let starts: Vec<f64> = out.passes().map(|p| p.first().unwrap().to.x).collect();
+        assert_eq!(starts, [0.0, 10.0, 0.0, 10.0]);
     }
 
     /// Same input, same program. Ties break on the original index precisely so this

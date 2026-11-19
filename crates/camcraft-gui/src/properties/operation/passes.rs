@@ -38,7 +38,7 @@ pub(super) fn passes(
                 slope_from,
                 slope_to,
             } => {
-                both_ways_direction(ui, d, direction);
+                both_ways_direction(ui, d, &pass::DIRECTION_SCALLOP, direction);
                 pass_order(ui, d, &pass::SCALLOP_ORDER, order);
                 slopes(ui, d, slope_from, slope_to);
             }
@@ -48,7 +48,7 @@ pub(super) fn passes(
                 slope_from,
                 slope_to,
             } => {
-                both_ways_direction(ui, d, direction);
+                both_ways_direction(ui, d, &pass::DIRECTION_SCALLOP, direction);
                 d.row(ui, &pass::CONTOUR_ORDER, "order", |ui| {
                     widgets::segmented(
                         ui,
@@ -160,7 +160,7 @@ pub(super) fn passes(
                 slope_to,
             } => {
                 centred(ui, d, m, centre, inner_radius, outer_radius);
-                climb_direction(ui, d, &pass::DIRECTION_SPIRAL, direction);
+                both_ways_direction(ui, d, &pass::DIRECTION_SPIRAL, direction);
                 pass_order(ui, d, &pass::SPIRAL_ORDER, order);
                 slopes(ui, d, slope_from, slope_to);
             }
@@ -221,7 +221,7 @@ pub(super) fn passes(
                 d.row(ui, &pass::MORPH_CENTRE, "centre", |ui| {
                     centre_field(ui, m, centre, "the point furthest inside");
                 });
-                climb_direction(ui, d, &pass::DIRECTION_SPIRAL, direction);
+                both_ways_direction(ui, d, &pass::DIRECTION_SPIRAL, direction);
                 pass_order(ui, d, &pass::SPIRAL_ORDER, order);
                 slopes(ui, d, slope_from, slope_to);
             }
@@ -1261,13 +1261,15 @@ fn tabs(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, tabs: &mut O
     );
 }
 
-/// Which way a finishing pass cuts, both ways among them.
+/// Which way a finishing pass cuts, both ways among them, `topic` saying what
+/// each means for it.
 fn both_ways_direction(
     ui: &mut egui::Ui,
     d: &mut Defaults<Operation>,
+    topic: &Topic,
     direction: &mut CutDirection,
 ) {
-    d.row(ui, &pass::DIRECTION_SCALLOP, "direction", |ui| {
+    d.row(ui, topic, "direction", |ui| {
         widgets::segmented(
             ui,
             direction,

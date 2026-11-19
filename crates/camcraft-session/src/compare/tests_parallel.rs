@@ -100,7 +100,7 @@ pub(super) fn job_with(
 /// alike), for what camcraft's Parallel does with no groups as well: it
 /// leaves the walls to rings round them (decision 0014), which take down the
 /// steps Fusion's passes leave on the walls they run along, up to 6.7 mm, and
-/// feed half as far again; and over the dome Fusion's leaves up to 0.13 mm
+/// feed a third as far again; and over the dome Fusion's leaves up to 0.13 mm
 /// less, in a band a tolerance apart over all of it, which is Parallel's
 /// alone, there with no groups. With groups, three things more, measured:
 ///
@@ -115,18 +115,27 @@ pub(super) fn job_with(
 ///   the wall all the way, where Fusion's passes touch it only where each
 ///   ends: with only the floor machined, up to 3.7 mm lower along the walls
 ///   Fusion's passes run along.
-/// - camcraft lifts over a face avoided and comes back down onto the pass by
-///   its ramp, 2° down along it over what the roughing left; Fusion plunges.
-///   So camcraft feeds about twice as far.
+/// - camcraft lifts over a face avoided and comes straight down onto the
+///   next piece, as Fusion does, each piece taken from its nearer end
+///   (decision 0034). With only the floor machined it lifts 9 times to
+///   Fusion's 2, the rest of its links refused as resting on a face avoided,
+///   and feeds 11% further.
+/// - Its links between pieces are not Fusion's, and staying down over the part
+///   they take a little of what the roughing left where Fusion's do not.
+///   Taken in the nearest order and from either end, rather than each ramped
+///   onto, the pieces leave 0.1 to 0.4% fewer of the columns alike, and with
+///   only the floor machined 0.59% more removed than Fusion's, where it was
+///   0.38%.
 ///
 /// Each bound is this run's figure with a little room.
 fn holds(name: &str, change: impl FnOnce(&mut Operation), bounds: &Bounds, contacts: u64) {
     held_to(&job(name, "parallel", change), name, bounds, contacts);
 }
 
-/// A new Parallel leaves what Fusion's does: 74.7% of the 735,513 columns
+/// A new Parallel leaves what Fusion's does: 74.4% of the 735,504 columns
 /// either cuts alike, the median difference 0.0046 mm and the 95th percentile
-/// 0.060, 1.8% more removed and 45% more fed, the rings round the walls.
+/// 0.061, 1.8% more removed and 35% more fed, the rings round the walls; each
+/// lifts once.
 #[test]
 fn a_new_parallel_leaves_what_fusions_does() {
     let bounds = Bounds {
@@ -134,15 +143,16 @@ fn a_new_parallel_leaves_what_fusions_does() {
         median: 0.006,
         p95: 0.07,
         removed: 0.02,
-        fed: 0.47,
+        fed: 0.37,
         lowest: 1e-3,
     };
     holds("parallel", |_| {}, &bounds, 1);
 }
 
-/// The dome avoided, 1 mm sideways and 1 mm down: 70.0% of 642,835 columns
-/// alike, the median 0.0047 mm and the 95th percentile 0.106, 1.9% more
-/// removed and 110% more fed. Neither touches the dome but round its foot.
+/// The dome avoided, 1 mm sideways and 1 mm down: 69.7% of 642,665 columns
+/// alike, the median 0.0048 mm and the 95th percentile 0.106, 1.9% more
+/// removed and 39% more fed; camcraft lifts 11 times to Fusion's 15. Neither
+/// touches the dome but round its foot.
 #[test]
 fn a_parallel_avoiding_the_dome_leaves_what_fusions_does() {
     let bounds = Bounds {
@@ -150,7 +160,7 @@ fn a_parallel_avoiding_the_dome_leaves_what_fusions_does() {
         median: 0.006,
         p95: 0.12,
         removed: 0.022,
-        fed: 1.12,
+        fed: 0.41,
         lowest: 1e-3,
     };
     holds(
@@ -165,9 +175,9 @@ fn a_parallel_avoiding_the_dome_leaves_what_fusions_does() {
     );
 }
 
-/// The dome avoided with no clearance: 72.3% of 675,708 columns alike, the
-/// median 0.0046 mm and the 95th percentile 0.075, 1.6% more removed and 90%
-/// more fed.
+/// The dome avoided with no clearance: 72.0% of 676,257 columns alike, the
+/// median 0.0047 mm and the 95th percentile 0.077, 1.6% more removed and 37%
+/// more fed; camcraft lifts 9 times to Fusion's 2.
 #[test]
 fn a_parallel_avoiding_the_dome_without_clearance_leaves_what_fusions_does() {
     let bounds = Bounds {
@@ -175,7 +185,7 @@ fn a_parallel_avoiding_the_dome_without_clearance_leaves_what_fusions_does() {
         median: 0.006,
         p95: 0.085,
         removed: 0.02,
-        fed: 0.93,
+        fed: 0.40,
         lowest: 1e-3,
     };
     holds(
@@ -190,11 +200,11 @@ fn a_parallel_avoiding_the_dome_without_clearance_leaves_what_fusions_does() {
     );
 }
 
-/// The model avoided, the floor alone machined: 55.1% of 412,705 columns
-/// alike, the median 0.0078 mm and the 95th percentile 0.51, 0.4% more
-/// removed and four times as far fed: both cut the floor, up to touching the
-/// fillets round it and the dome, and nothing else; camcraft's ring round its
-/// edge, Fusion's passes past it at their ends.
+/// The model avoided, the floor alone machined: 55.2% of 413,366 columns
+/// alike, the median 0.0078 mm and the 95th percentile 0.53, 0.59% more
+/// removed and 11% more fed: both cut the floor, up to touching the fillets
+/// round it and the dome, and nothing else; camcraft's ring round its edge,
+/// Fusion's passes past it at their ends.
 #[test]
 fn a_parallel_machining_the_floor_alone_leaves_what_fusions_does() {
     let bounds = Bounds {
@@ -202,7 +212,7 @@ fn a_parallel_machining_the_floor_alone_leaves_what_fusions_does() {
         median: 0.01,
         p95: 0.56,
         removed: 0.006,
-        fed: 3.05,
+        fed: 0.13,
         lowest: 1e-3,
     };
     holds(
@@ -218,9 +228,9 @@ fn a_parallel_machining_the_floor_alone_leaves_what_fusions_does() {
     );
 }
 
-/// The floor machined with 0.5 mm of stock of its own each way: 65.5% of
-/// 643,587 columns alike, the median 0.0054 mm and the 95th percentile 0.13,
-/// 1.9% more removed and 45% more fed. Both leave the floor at Z10.5, which
+/// The floor machined with 0.5 mm of stock of its own each way: 65.1% of
+/// 643,566 columns alike, the median 0.0055 mm and the 95th percentile 0.13,
+/// 1.9% more removed and 33% more fed. Both leave the floor at Z10.5, which
 /// the roughing had left it at already; the lowest each goes is where the
 /// ball rests on the fillets beside it, Z10.38 for camcraft's and Z10.337 for
 /// Fusion's, which runs on a little past where the two meet.
@@ -231,7 +241,7 @@ fn a_parallel_leaving_stock_on_the_floor_leaves_what_fusions_does() {
         median: 0.007,
         p95: 0.14,
         removed: 0.021,
-        fed: 0.47,
+        fed: 0.36,
         lowest: 0.05,
     };
     holds(
@@ -246,10 +256,12 @@ fn a_parallel_leaving_stock_on_the_floor_leaves_what_fusions_does() {
     );
 }
 
-/// The block's top avoided, 2 mm down: 73.8% of 705,115 columns alike, the
-/// median 0.0047 mm and the 95th percentile 0.062, 1.9% more removed and
-/// 108% more fed. Neither cuts the top, nor rolls over its edges into the
-/// pocket, where the ball would rest on the top raised.
+/// The block's top avoided, 2 mm down: 73.7% of 705,115 columns alike, the
+/// median 0.0047 mm and the 95th percentile 0.062, 1.9% more removed and 89%
+/// more fed. Neither cuts the top, nor rolls over its edges into the pocket,
+/// where the ball would rest on the top raised. camcraft lifts 3 times to
+/// Fusion's 2: in the order it now takes the pieces, two of its links would
+/// rest on the top.
 #[test]
 fn a_parallel_avoiding_the_top_leaves_what_fusions_does() {
     let bounds = Bounds {
@@ -257,7 +269,7 @@ fn a_parallel_avoiding_the_top_leaves_what_fusions_does() {
         median: 0.006,
         p95: 0.07,
         removed: 0.021,
-        fed: 1.11,
+        fed: 0.91,
         lowest: 1e-3,
     };
     holds(

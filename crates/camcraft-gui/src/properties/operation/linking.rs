@@ -194,8 +194,7 @@ pub(super) fn linking(
                 });
             }
         }
-        if !uses.entries.is_empty() {
-            let mut entry = op.entry().unwrap_or_default();
+        if let (Some(mut entry), Some(&first)) = (op.entry(), uses.entries.first()) {
             d.row(ui, &link::ENTRY, "linking.entry", |ui| {
                 // A profile goes down beside its lead; a pocket where its
                 // first ring starts.
@@ -209,8 +208,9 @@ pub(super) fn linking(
                     }
                 });
             });
-            // The default is written only when changed.
-            op.linking.entry = (entry != Entry::default()).then_some(entry);
+            // The strategy's own, the first it offers, is written only when
+            // changed.
+            op.linking.entry = (entry != first).then_some(entry);
             widgets::dependent(ui, entry == Entry::Helix, |ui| {
                 let absent = match (uses.helix, diameter) {
                     (HelixSize::Tool, _) => of_tool(0.9, "0.9 × the tool"),
@@ -325,7 +325,10 @@ pub(super) fn linking(
             d.row(ui, &link::REORDER, "linking.reorder", |ui| {
                 ui.checkbox(&mut op.linking.reorder, "to shorten travel");
             });
-            widgets::dependent(ui, op.linking.reorder, |ui| {
+            // One that cuts both ways turns a pass round wherever that is
+            // nearer, asked or not.
+            let one_way = !op.strategy.cuts_both_ways();
+            widgets::dependent(ui, op.linking.reorder && one_way, |ui| {
                 d.row(ui, &link::REVERSE, "linking.allow_reverse", |ui| {
                     ui.checkbox(&mut op.linking.allow_reverse, "allow (changes climb)");
                 });

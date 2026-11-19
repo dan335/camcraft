@@ -205,11 +205,14 @@ down the part as a parallel pass is, and broken where it falls further than a cu
 step (CC204). A spiral and radial spokes
 turn about `centre = [x, y]` (the boundary's middle unless given) from
 `inner_radius` to `outer_radius` (0, and all of the boundary); a spiral climbs
-unless conventional and runs outside in unless `order = "inside-out"`; spokes
+unless `direction = "conventional"` or `"both-ways"`, which a new one is
+written with, as Fusion's starts: turning to climb, each piece the part or the
+boundary cuts it into taken from its nearer end. It runs outside in unless
+`order = "inside-out"`; spokes
 run from `angle_from` to `angle_to` degrees (0 to 360), `direction =
 "both-ways"` unless `"outward"` or `"inward"`. A morphed spiral turns from the
 boundary's shape into its `centre`, the point furthest inside unless given, its
-laps no more than a stepover apart. Pocket clearing (`"pocket-clearing"`) is Fusion's 3D Pocket Clearing: each
+laps no more than a stepover apart, its `direction` and `order` a spiral's. Pocket clearing (`"pocket-clearing"`) is Fusion's 3D Pocket Clearing: each
 level's rings a stepover apart in from its edges, cut from the middle out so the
 ring along the walls is last, climbing unless `conventional = true`, with a level
 on each flat face unless `flat_areas = false`. What
@@ -967,8 +970,24 @@ depth. Adaptive clearing makes
 its own links at the level, only straight across what it has cleared; it goes
 down its own helix into what it cannot reach
 from the side, and straight down everywhere else, into what it has cleared.
-Parallel enters and leaves each pass along a vertical arc (the *lead radius*, a
-tenth of the tool); pocket clearing and 2D pockets go down a helix into material
+Parallel and the other finishes over the part (scallop, spiral, radial,
+morphed spiral, pencil, project and morph) enter and leave each pass along a
+vertical arc (the *lead radius*, a tenth of the tool), never ramping, as
+Fusion's have no ramp: into each pass they come straight down at the plunge
+feed, onto the arc where it is clear of the part and the material, onto the
+pass itself where it is not; a ramp setting a job file still has for one of
+them is not read
+([decision 0034](decisions/0034-entries-and-order-of-the-finishes-over-the-part.md)).
+Parallel, scallop, spiral, radial and morphed spiral cut the nearest pass next
+(`linking.reorder`, on), Fusion's *Shortest machining distance*; off, in the
+order they are laid out, outside in or inside out as `order` says. Where the
+operation cuts both ways (parallel always; the others with `direction =
+"both-ways"`) an open pass is taken from whichever end is nearer; asked to cut
+one way it is cut as laid, unless `allow_reverse = true`. A closed ring is never
+turned round. Flat finishing ramps along each ring into material
+(`linking.entry = "ramp"`, what a job file that leaves it out has) or comes
+straight down onto it (`"plunge"`, as a new one starts, Fusion's Flat having
+its *Ramp* off). Pocket clearing and 2D pockets go down a helix into material
 (their entry, above), and facing ramps along the pass it is about to cut, in
 the direction it cuts. Helixes and ramps go down at the *ramp angle*, 2°, at the
 *ramp feed*: a new operation's is its plunge feed, a third of the cutting feed,

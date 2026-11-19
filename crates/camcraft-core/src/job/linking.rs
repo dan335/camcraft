@@ -20,10 +20,13 @@ pub struct Linking {
     /// Whether passes may be reordered to shorten travel.
     #[serde(default = "yes")]
     pub reorder: bool,
-    /// Whether an open pass may be reversed while reordering.
+    /// Whether an open pass may be reversed while reordering, where its
+    /// operation is asked to cut one way.
     ///
-    /// Off by default: reversing flips climb for conventional, and that is a cutting
-    /// decision rather than a travel one.
+    /// Off by default: reversing such a pass flips climb for conventional, and
+    /// that is a cutting decision rather than a travel one. An operation that
+    /// cuts both ways reverses one wherever that is nearer, asked or not
+    /// ([`Operation::reverses`]).
     #[serde(default)]
     pub allow_reverse: bool,
     /// How far above the material the tool stops rapiding down and feeds, and up to
@@ -69,7 +72,8 @@ pub struct Linking {
     #[serde(default, skip_serializing_if = "is_default")]
     pub retraction: Retraction,
     /// How a pass is entered where it starts in material, for a strategy that
-    /// offers a choice ([`Operation::entry`]): down a helix when not given.
+    /// offers a choice ([`Operation::entry`]): the first it offers when not
+    /// given, a helix for all but flat finishing's ramp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry: Option<Entry>,
     /// The diameter of a helical entry's circle, as the tool's centre goes, in
@@ -330,10 +334,23 @@ impl Operation {
     }
 
     /// How a pass that starts in material is entered, for a strategy that offers
-    /// a choice ([`Uses::entries`](super::Uses::entries)): as given, or down a helix.
+    /// a choice ([`Uses::entries`](super::Uses::entries)): as given, or the
+    /// first it offers, down a helix for all but flat finishing, which ramps
+    /// along its ring.
     pub fn entry(&self) -> Option<Entry> {
         let offered = self.strategy.uses().entries;
-        (!offered.is_empty()).then_some(self.linking.entry.unwrap_or_default())
+        offered
+            .first()
+            .map(|&first| self.linking.entry.unwrap_or(first))
+    }
+
+    /// Whether reordering may turn an open pass round, where it is nearer
+    /// from its other end: wherever its strategy cuts both ways
+    /// ([`StrategySpec::cuts_both_ways`]), since either way round is what it
+    /// was asked, and otherwise only where reversing is allowed
+    /// ([`Linking::allow_reverse`]). A closed ring is never turned round.
+    pub fn reverses(&self) -> bool {
+        self.linking.allow_reverse || self.strategy.cuts_both_ways()
     }
 
     /// The diameter of a helical entry's circle, as the tool's centre goes, in

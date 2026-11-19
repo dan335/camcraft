@@ -39,8 +39,10 @@ use super::tests_pencil::{Bounds, held_to};
 ///
 /// - It clears the tessellated dome's top, at Z15, as a flat, where Fusion's
 ///   leaves the dome alone.
-/// - It ramps into each ring along it, where Fusion's comes down onto each
-///   piece of flat once and stays down: it feeds about four times as far.
+/// - It comes straight down onto each ring, as Fusion's does, its ramp off as
+///   a new one of Fusion's has it (decision 0034); it lifts 5 times to
+///   Fusion's 4, and still feeds three times as far, which is not yet looked
+///   into.
 /// - Where the floor is narrowest between the dome's foot and the fillets
 ///   at its corners, Fusion's rings reach a little further.
 ///
@@ -64,7 +66,7 @@ fn holds(name: &str, change: impl FnOnce(&mut Operation), bounds: &Bounds, conta
 
 /// A new Flat leaves what Fusion's does: 65.9% of the 235,274 columns either
 /// cuts alike, the median difference nothing and the 95th percentile 0.5 mm,
-/// 4.3% less removed and 357% more fed. Fusion's rapids meet the roughing's
+/// 4.3% less removed and 206% more fed. Fusion's rapids meet the roughing's
 /// stock three times, 3.9 mm deep at most.
 #[test]
 fn a_new_flat_leaves_what_fusions_does() {
@@ -73,7 +75,7 @@ fn a_new_flat_leaves_what_fusions_does() {
         median: 0.001,
         p95: 0.51,
         removed: 0.05,
-        fed: 3.65,
+        fed: 2.1,
         lowest: 1e-3,
     };
     holds("flat", |_| {}, &bounds, 3);
@@ -81,7 +83,7 @@ fn a_new_flat_leaves_what_fusions_does() {
 
 /// The dome avoided, 1 mm sideways and 1 mm down: 70.5% of 126,216 columns
 /// alike, the median nothing and the 95th percentile 5.5 mm, the slivers
-/// beside the dome; 210% more removed and 258% more fed. Fusion's rapids
+/// beside the dome; 210% more removed and 210% more fed. Fusion's rapids
 /// meet the roughing's stock once, 3.68 mm deep.
 #[test]
 fn a_flat_avoiding_the_dome_leaves_what_fusions_does() {
@@ -90,7 +92,7 @@ fn a_flat_avoiding_the_dome_leaves_what_fusions_does() {
         median: 0.001,
         p95: 5.51,
         removed: 2.15,
-        fed: 2.65,
+        fed: 2.15,
         lowest: 1e-3,
     };
     holds(

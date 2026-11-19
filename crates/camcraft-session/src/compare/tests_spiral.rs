@@ -34,21 +34,20 @@ use super::tests_pencil::{Bounds, held_to};
 /// program cuts into the part.
 ///
 /// The spiral is Fusion's: about the part's middle, the origin, 0.345 mm a
-/// lap, out to the part's corners. But a new one of camcraft's is cut from
-/// its outer radius in, and Fusion's from the middle out; and camcraft's
-/// laps out at the part's corners, where the part cuts them into short
-/// arcs, are each lifted between and come down onto 2° along them over what
-/// the roughing left, where Fusion's stay down: camcraft lifts 71 times to
-/// Fusion's 5, and two thirds of all it feeds is down its ramps. Its rings
-/// round the walls (decision 0014) take down the steps the laps leave on the
-/// pocket's walls and the R8 round, up to 6.8 mm. With the dome avoided,
-/// measured:
+/// lap, out to the part's corners, both ways. But a new one of camcraft's is
+/// cut from its outer radius in, and Fusion's from the middle out. Where the
+/// part cuts its laps into short arcs, out at the part's corners and beside
+/// its walls, camcraft cuts the nearest next from its nearer end and comes
+/// straight down onto it, as Fusion does (decision 0034): it lifts twice to
+/// Fusion's 5, and feeds 30% further, its rings round the walls (decision
+/// 0014), which take down the steps the laps leave on the pocket's walls and
+/// the R8 round, up to 6.8 mm. With the dome avoided, measured:
 ///
 /// - Fusion turns each lap back where the ball meets the dome's clearance,
 ///   10.04 mm from its axis, and runs the next lap the other way, staying
 ///   down; camcraft cuts each lap out where it rests on the dome alone and
-///   lifts over to its other side, every lap turning the same way: 121 lifts
-///   to Fusion's 6.
+///   takes the pieces the nearest next, each from its nearer end, lifting
+///   over the dome where the next is across it: 8 lifts to Fusion's 6.
 /// - Round the dome's foot Fusion's laps run on up the dome past where the
 ///   ball rests on floor and dome at once, as its Parallel's passes do,
 ///   cutting what the roughing left on the dome's flank up to 3.0 mm lower.
@@ -58,36 +57,36 @@ fn holds(name: &str, change: impl FnOnce(&mut Operation), bounds: &Bounds, conta
     held_to(&job(name, "spiral", change), name, bounds, contacts);
 }
 
-/// A new Spiral leaves what Fusion's does: 84.9% of the 734,626 columns
-/// either cuts alike, the median difference 0.0036 mm and the 95th
-/// percentile 0.036, 0.6% more removed and four times as far fed: 12,865 mm
-/// at the cutting feed to Fusion's 8,317, and 23,166 down camcraft's ramps.
-/// Fusion's rapids meet the roughing's stock once, 1.27 mm deep.
+/// A new Spiral leaves what Fusion's does: 85.8% of the 734,753 columns
+/// either cuts alike, the median difference 0.0035 mm and the 95th
+/// percentile 0.029, 0.6% more removed and 30% more fed: 10,804 mm to
+/// Fusion's 8,317. Fusion's rapids meet the roughing's stock once, 1.27 mm
+/// deep.
 #[test]
 fn a_new_spiral_leaves_what_fusions_does() {
     let bounds = Bounds {
-        agree: 0.84,
+        agree: 0.85,
         median: 0.005,
-        p95: 0.04,
+        p95: 0.033,
         removed: 0.008,
-        fed: 3.5,
+        fed: 0.32,
         lowest: 1e-3,
     };
     holds("spiral", |_| {}, &bounds, 1);
 }
 
-/// The dome avoided, 1 mm sideways and 1 mm down: 80.6% of 641,428 columns
-/// alike, the median 0.0035 mm and the 95th percentile 0.054, 0.7% more
-/// removed and six times as far fed, 34,766 mm of it down camcraft's ramps.
-/// Fusion's rapids meet the roughing's stock twice, 0.48 mm deep at most.
+/// The dome avoided, 1 mm sideways and 1 mm down: 82.7% of 641,247 columns
+/// alike, the median 0.0034 mm and the 95th percentile 0.042, 0.5% more
+/// removed and 34% more fed. Fusion's rapids meet the roughing's stock
+/// twice, 0.48 mm deep at most.
 #[test]
 fn a_spiral_avoiding_the_dome_leaves_what_fusions_does() {
     let bounds = Bounds {
-        agree: 0.79,
+        agree: 0.82,
         median: 0.005,
-        p95: 0.06,
+        p95: 0.046,
         removed: 0.009,
-        fed: 5.6,
+        fed: 0.36,
         lowest: 1e-3,
     };
     holds(

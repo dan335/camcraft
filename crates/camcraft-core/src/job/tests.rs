@@ -777,8 +777,9 @@ fn roughing_leaves_stock_to_start_and_none_is_not_written() {
 #[test]
 fn each_strategy_says_what_it_uses() {
     let parallel = StrategySpec::Parallel { angle: 0.0 }.uses();
-    // Into material over a pass start, finishing ramps, along the pass.
-    assert!(parallel.lead_radius && !parallel.tabs && parallel.ramp && !parallel.leads);
+    // Into material over a pass start, finishing plunges, as Fusion's: it has
+    // no ramp.
+    assert!(parallel.lead_radius && !parallel.tabs && !parallel.ramp && !parallel.leads);
     let pocket = StrategySpec::Pocket {
         conventional: false,
     }
@@ -2699,7 +2700,8 @@ stepovers = 2
 
 /// Scallop reads with Fusion's defaults, both ways from the boundary in on
 /// every slope, and writes back only what differs; its stepover is parallel's,
-/// its order its own, and a slope range that is no range is refused.
+/// its passes reordered the nearest next, and a slope range that is no range
+/// is refused.
 #[test]
 fn scallop_reads_with_fusions_defaults() {
     let text = SAMPLE.replace(
@@ -2727,7 +2729,8 @@ fn scallop_reads_with_fusions_defaults() {
     assert_eq!(toml::from_str::<Job>(&written).unwrap(), j);
 
     let op = &mut j.setups[0].operations[1];
-    assert!(!op.strategy.uses().reorder);
+    // The nearest pass next, as Fusion's Shortest Machining Distance.
+    assert!(op.strategy.uses().reorder);
     let ball = j.tools["finish-4-ball"].clone();
     let parallel = Operation {
         strategy: StrategySpec::Parallel { angle: 0.0 },
@@ -2926,7 +2929,7 @@ fn more_finishing_strategies_use_what_fusions_do() {
             default_stepover(&o, &ball, 0.01),
             default_stepover(&parallel, &ball, 0.01)
         );
-        assert!(!o.strategy.uses().reorder);
+        assert!(o.strategy.uses().reorder);
         assert!(o.strategy.slopes().is_some());
     }
 }
@@ -3075,12 +3078,12 @@ fn every_value_a_strategy_reads_is_checked_up_front() {
     j.setups[0].operations[1].linking.lead_radius = Some(-0.5);
     assert_eq!(field_of(&j), "top/finish.linking.lead_radius");
 
-    // What a strategy does not read is not checked: a profile has no boundary.
-    // Parallel finishing ramps into material, and is trimmed to a top, so both
-    // of those are.
+    // What a strategy does not read is not checked: a profile has no boundary,
+    // and parallel finishing no ramp, as Fusion's has none. Parallel is
+    // trimmed to a top, so that is.
     let mut j = sample();
     j.setups[0].operations[1].linking.ramp_angle = f64::NAN;
-    assert_eq!(field_of(&j), "top/finish.linking.ramp_angle");
+    j.validate().unwrap();
     j.setups[0].operations[1].linking.ramp_angle = 2.0;
     j.setups[0].operations[1].heights.top = Some(Height {
         reference: HeightRef::StockTop,
@@ -3209,6 +3212,158 @@ fn linking_values_default_as_the_strategy_says() {
     assert_eq!(given.stay_down(6.0), 12.0);
     assert_eq!(given.entry(), Some(Entry::Plunge));
     assert_eq!(given.ramp_stepdown(6.0), 0.5);
+}
+
+/// The finishes laid over the part, as a pattern or as parallel's passes,
+/// enter as Fusion's do, with no ramp, straight down onto the vertical lead,
+/// as pencil, project and morph do; and are reordered the nearest next, as
+/// Fusion's Shortest Machining Distance, where pencil, project and morph keep
+/// their own order.
+#[test]
+fn finishes_over_the_part_enter_and_order_as_fusions() {
+    for name in ["parallel", "scallop", "spiral", "radial", "morphed-spiral"] {
+        let uses = StrategySpec::named(name).unwrap().uses();
+        assert!(!uses.ramp && uses.lead_radius, "{name}");
+        assert!(uses.reorder, "{name}");
+        assert!(uses.entries.is_empty(), "{name}");
+    }
+    for name in ["pencil", "project", "morph"] {
+        let uses = StrategySpec::named(name).unwrap().uses();
+        assert!(!uses.ramp && uses.lead_radius && !uses.reorder, "{name}");
+    }
+}
+
+/// A job file written when these finishes ramped still reads, its ramp
+/// settings left unread as any setting a strategy does not use is: even
+/// ones that would be refused were they read.
+#[test]
+fn ramp_settings_on_a_finish_with_no_ramp_still_read() {
+    for name in ["parallel", "scallop", "spiral", "radial", "morphed-spiral"] {
+        let text = SAMPLE
+            .replacen(
+                "strategy = \"parallel\"\n",
+                &format!(
+                    "strategy = \"{name}\"\nlinking = {{ ramp_angle = 0.0, ramp_feed = -1.0, \
+                     ramp_stepdown = -1.0 }}\n"
+                ),
+                1,
+            )
+            .replace("angle = 90.0\n", "");
+        let j: Job = toml::from_str(&text).unwrap();
+        j.validate().unwrap();
+        let op = &j.setups[0].operations[1];
+        assert_eq!(op.strategy.name(), name);
+        assert_eq!(op.linking.ramp_angle, 0.0);
+        assert_eq!(op.linking.ramp_feed, Some(-1.0));
+        // And it writes them back as it read them.
+        assert_eq!(
+            toml::from_str::<Job>(&toml::to_string(&j).unwrap()).unwrap(),
+            j
+        );
+    }
+}
+
+/// A pass is turned round to start at its nearer end where its operation
+/// cuts both ways, as parallel's always do; asked to cut one way, only where
+/// reversing is allowed.
+#[test]
+fn passes_are_turned_round_where_they_cut_both_ways() {
+    let op = |strategy: StrategySpec| Operation::new("o", strategy);
+    let named = |name: &str| StrategySpec::named(name).unwrap();
+    assert!(op(named("parallel")).reverses());
+    // Fusion's Direction starts both ways for each.
+    for name in ["scallop", "spiral", "radial", "morphed-spiral"] {
+        assert!(op(named(name)).reverses(), "{name}");
+    }
+    // As a job file that leaves the direction out reads them: a spiral climbs.
+    for name in ["spiral", "morphed-spiral"] {
+        let read = Operation {
+            strategy: named(name),
+            ..op(named(name))
+        };
+        assert!(!read.reverses(), "{name}");
+        let mut allowed = read;
+        allowed.linking.allow_reverse = true;
+        assert!(allowed.reverses(), "{name}");
+    }
+    let one_way = op(StrategySpec::Radial {
+        centre: None,
+        inner_radius: 0.0,
+        outer_radius: 0.0,
+        angle_from: 0.0,
+        angle_to: 360.0,
+        direction: RadialDirection::Outward,
+        slope_from: 0.0,
+        slope_to: 90.0,
+    });
+    assert!(!one_way.reverses());
+    let climbing = op(StrategySpec::Scallop {
+        direction: CutDirection::Climb,
+        order: PassOrder::OutsideIn,
+        slope_from: 0.0,
+        slope_to: 90.0,
+    });
+    assert!(!climbing.reverses());
+    // Adaptive clearing's both ways is how it steers, not which end it takes.
+    assert!(!named("adaptive").cuts_both_ways());
+}
+
+/// A new spiral and morphed spiral cut both ways, as Fusion's start, and say
+/// so in the job file; one whose direction is left out, as a job file
+/// written before may, still climbs.
+#[test]
+fn a_new_spiral_cuts_both_ways_and_says_so() {
+    for name in ["spiral", "morphed-spiral"] {
+        let fresh = StrategySpec::named(name).unwrap().fresh();
+        assert_eq!(fresh.direction(), Some(CutDirection::BothWays), "{name}");
+        let mut j = sample();
+        j.setups[0].operations[1].strategy = fresh;
+        let written = toml::to_string(&j).unwrap();
+        assert!(written.contains("direction = \"both-ways\""), "{written}");
+        assert_eq!(toml::from_str::<Job>(&written).unwrap(), j);
+        let read = StrategySpec::named(name).unwrap();
+        assert_eq!(read.direction(), Some(CutDirection::Climb), "{name}");
+    }
+    // Scallop and radial start both ways already, as a file leaving it out.
+    for name in ["scallop", "radial"] {
+        let s = StrategySpec::named(name).unwrap();
+        assert_eq!(s.fresh(), s, "{name}");
+        assert!(s.cuts_both_ways(), "{name}");
+    }
+}
+
+/// A new flat finish goes straight down onto each ring, as Fusion's Flat
+/// starts with Ramp off; one whose entry a job file leaves out ramps along
+/// its ring, as it always has. Its ramp is a setting: ramp or plunge, and
+/// nothing else.
+#[test]
+fn a_new_flat_plunges_and_one_read_ramps() {
+    let new = Operation::new("flat", StrategySpec::named("flat").unwrap());
+    assert_eq!(new.linking.entry, Some(Entry::Plunge));
+    assert_eq!(new.entry(), Some(Entry::Plunge));
+    let mut read = new.clone();
+    read.linking.entry = None;
+    assert_eq!(read.entry(), Some(Entry::Ramp));
+    assert_eq!(
+        StrategySpec::named("flat").unwrap().uses().entries,
+        [Entry::Ramp, Entry::Plunge]
+    );
+    let flat = |entry: &str| {
+        let text = SAMPLE
+            .replacen(
+                "strategy = \"parallel\"\n",
+                &format!("strategy = \"flat\"\nlinking = {{ entry = \"{entry}\" }}\n"),
+                1,
+            )
+            .replace("angle = 90.0\n", "");
+        toml::from_str::<Job>(&text).unwrap().validate()
+    };
+    flat("plunge").unwrap();
+    flat("ramp").unwrap();
+    assert!(matches!(
+        flat("helix"),
+        Err(JobError::NotOffered { field, .. }) if field.ends_with("linking.entry")
+    ));
 }
 
 /// A new operation starts with its strategy's own depths and stock to leave,

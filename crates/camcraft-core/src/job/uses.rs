@@ -32,7 +32,8 @@ impl StrategySpec {
             ramp: true,
             entries: &[],
             leads: false,
-            // Only parallel's passes are in no order of their own.
+            // Only the finishes laid over the part, as a pattern, are in no
+            // order of their own.
             reorder: false,
             top: Some(HeightRef::StockTop),
             bottom: Some(HeightRef::ModelBottom),
@@ -46,16 +47,19 @@ impl StrategySpec {
             // Top or below a Bottom given it, which is trimmed away
             // (`path::trim`). Without them, it is all kept: the part's top and
             // bottom are only where the fields start from.
+            // With no ramp: into each pass it comes straight down at the
+            // plunge feed, onto its vertical lead where the lead's top is
+            // clear of the material, as Fusion's Parallel, which has no ramp
+            // settings, does in every program of its compared; onto the pass
+            // itself where it is not (decision 0034). Its passes are cut the
+            // nearest next, each from whichever end is nearer, as they
+            // alternate already.
             StrategySpec::Parallel { .. } => Uses {
                 depths: Depths::None,
                 links: Links::OverPart,
                 reach: Reach::Mm(50),
                 lead_radius: true,
-                // Into material standing over where a pass starts, such as a
-                // roughing's terraces, down along the pass rather than
-                // straight down, never below the pass itself; in the air, as
-                // before, down its vertical lead.
-                ramp: true,
+                ramp: false,
                 reorder: true,
                 top: Some(HeightRef::ModelTop),
                 bottom: Some(HeightRef::ModelBottom),
@@ -64,9 +68,12 @@ impl StrategySpec {
                 surfaces: true,
                 ..cuts_loops
             },
-            // As parallel, but in its own order: reordering would shuffle and
-            // turn round the rings on any flat, which all start level. A
-            // pattern dropped onto the part is cut in the order it is laid out.
+            // As parallel: entered with no ramp, and its passes the
+            // nearest next, as Fusion's Shortest Machining Distance, each the
+            // way its direction asks. Asked not to reorder, they are cut in
+            // the order laid out, outside in or inside out as Fusion's other
+            // two. On an uncut part the order laid is the nearest next
+            // already: each ring starts nearest where the last ended.
             StrategySpec::Scallop { .. }
             | StrategySpec::Spiral { .. }
             | StrategySpec::Radial { .. }
@@ -80,8 +87,8 @@ impl StrategySpec {
                     Reach::Tools(5)
                 },
                 lead_radius: true,
-                // Ramped into material as parallel is.
-                ramp: true,
+                ramp: false,
+                reorder: true,
                 // Trimmed to them as parallel is.
                 top: Some(HeightRef::ModelTop),
                 bottom: Some(HeightRef::ModelBottom),
@@ -199,10 +206,14 @@ impl StrategySpec {
             },
             // Each flat at its own height, once: rings in from its edges, in
             // their own order, as a pocket clearing level's are. Only the
-            // part's flats, from its top.
+            // part's flats, from its top. Into material along its ring, as a
+            // job file that does not say has it, or straight down, as a new
+            // one starts, Fusion's Flat having its Ramp off
+            // (`StrategySpec::fresh_entry`).
             StrategySpec::Flat { .. } => Uses {
                 depths: Depths::None,
                 reach: Reach::Tools(2),
+                entries: &[Entry::Ramp, Entry::Plunge],
                 top: Some(HeightRef::ModelTop),
                 // Only the flats it machines, each raised by its group's
                 // axial offset, kept clear of the faces it avoids.
@@ -583,12 +594,14 @@ pub struct Uses {
     pub lead_radius: bool,
     /// Ramping into material.
     pub ramp: bool,
-    /// The ways it offers to enter each pass, the default helix first: a helix,
-    /// a plunge or a ramp. None when it has no choice.
+    /// The ways it offers to enter each pass, the one taken when none is given
+    /// first: a helix, a plunge or a ramp. None when it has no choice.
     pub entries: &'static [Entry],
     /// Level arcs into and out of each ring.
     pub leads: bool,
-    /// Passes reordered, and maybe reversed, to shorten travel.
+    /// Passes reordered, the nearest next, to shorten travel; each turned
+    /// round where that is nearer and its operation cuts both ways or is
+    /// asked to ([`Operation::reverses`](super::Operation::reverses)).
     pub reorder: bool,
     /// A Top it cuts down from, and where that is without one. A strategy
     /// linked over the part ([`Links::OverPart`]) has it only when given: its

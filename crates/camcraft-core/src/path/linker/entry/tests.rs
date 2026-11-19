@@ -75,6 +75,77 @@ fn a_lead_is_used_only_where_it_fits() {
     );
 }
 
+/// A pass on a part at -2, under material up to 0, entered with no ramp. With
+/// leads that may go through material, as a profile's, the tool rapids down
+/// to the safe distance above the material, plunges onto the lead's top and
+/// goes down the lead through the rest; with leads kept out of material, as a
+/// finish over the part's, as Fusion's finishes come straight down, it
+/// plunges onto the pass itself.
+#[test]
+fn a_lead_goes_down_through_material_only_where_it_may() {
+    let plane = ClearancePlane::new(10.0).unwrap();
+    let mut t = Toolpath::new();
+    t.feed_to(dvec3(0.0, 0.0, -2.0), MoveRole::Link, 1000.0)
+        .unwrap();
+    t.feed_to(dvec3(5.0, 0.0, -2.0), MoveRole::Cut, 1000.0)
+        .unwrap();
+    let through = LinkParams {
+        lead_radius: 0.5,
+        lead_in_material: true,
+        ..params()
+    };
+    let (out, report) = link(&t, &plane, &mut level_material(), &FlatPart(-2.0), &through).unwrap();
+    assert_eq!(report.ramps, 0);
+    let m = out.moves();
+    assert_eq!(
+        roles(&out)[..4],
+        [
+            MoveRole::Rapid,
+            MoveRole::Rapid,
+            MoveRole::Plunge,
+            MoveRole::Lead
+        ],
+        "{m:?}"
+    );
+    assert!((m[1].to - dvec3(-0.5, 0.0, 2.0)).length() < 1e-9, "{m:?}");
+    assert!((m[2].to - dvec3(-0.5, 0.0, -1.5)).length() < 1e-9, "{m:?}");
+    assert_eq!(m[2].feed, Some(300.0));
+    // Down the lead at the pass's feed, onto its start.
+    let lead: Vec<&Move> = m[3..]
+        .iter()
+        .take_while(|x| x.role == MoveRole::Lead)
+        .collect();
+    assert!(lead.iter().all(|x| x.feed == Some(1000.0)));
+    assert!((lead.last().unwrap().to - dvec3(0.0, 0.0, -2.0)).length() < 1e-9);
+
+    let kept_out = LinkParams {
+        lead_in_material: false,
+        ..through
+    };
+    let (out, _) = link(
+        &t,
+        &plane,
+        &mut level_material(),
+        &FlatPart(-2.0),
+        &kept_out,
+    )
+    .unwrap();
+    assert_eq!(
+        roles(&out)[..4],
+        [
+            MoveRole::Rapid,
+            MoveRole::Rapid,
+            MoveRole::Plunge,
+            MoveRole::Cut
+        ]
+    );
+    assert_eq!(
+        out.moves()[2].to,
+        dvec3(0.0, 0.0, -2.0),
+        "plunged to the pass"
+    );
+}
+
 /// A ring at -2 in material up to 0.
 fn ring() -> Toolpath {
     let mut t = Toolpath::new();

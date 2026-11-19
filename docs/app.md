@@ -165,8 +165,12 @@ it.
   chamfer mill), *Heights* (clearance, top and bottom,
   drawn in the view as planes), *Passes* and *Linking* (retract feed, safe
   distance, stay-down distance, and the lead radius or the ramp angle and feed;
-  a profile's level lead arcs on and off each ring, their radius, sweep and
-  straight run;
+  how a pass is entered, where the strategy offers a choice (flat's ramp along
+  the ring or plunge, a new one plunging as Fusion's Flat starts); a
+  profile's level lead arcs on and off each ring, their radius, sweep and
+  straight run; *Reorder passes*, the nearest next, and *Reverse passes*,
+  greyed where the operation cuts both ways and so takes each pass from its
+  nearer end anyway ([decision 0034](decisions/0034-entries-and-order-of-the-finishes-over-the-part.md));
   one left out says what the strategy's default comes to for the tool). A new
   operation starts with Fusion's defaults, as expressions where they follow
   the tool ([decision 0020](decisions/0020-defaults.md)): its stepover (the
@@ -196,10 +200,11 @@ it.
   flat's climb or conventional and outside in or inside out, with Top and Bottom
   keeping it to the flats between. Spiral's and radial's have a *Centre* (the
   boundary's middle unless given), inner and outer radii and the slopes; a
-  spiral climbs or cuts conventional, outside in or inside out, and spokes have
-  their angles and go both ways, outward or inward. A morphed spiral's has a
-  *Centre* (the point furthest inside unless given), climb or conventional, its
-  order and the slopes. Adaptive's *Passes* has a *Minimum cutting radius*,
+  spiral goes both ways, as a new one starts, climbs or cuts conventional,
+  outside in or inside out, and spokes have their angles and go both ways,
+  outward or inward. A morphed spiral's has a *Centre* (the point furthest
+  inside unless given), both ways, climb or conventional, its order and the
+  slopes. Adaptive's *Passes* has a *Minimum cutting radius*,
   *Machine cavities* and, ticked, *Slot clearing* and its width, climb,
   conventional or both ways, by depth or by area, and *Flat areas* with its
   *Minimum stepdown*, and no *Deepest step cut*; under *Multiple depths*,

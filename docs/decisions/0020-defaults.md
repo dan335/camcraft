@@ -117,3 +117,13 @@ defaults above were Fusion's numbers without Fusion's switches:
 
 Set so, each of the four leaves the same material as Fusion's program, to
 0.01 mm, and `crates/camcraft-session/src/compare/tests.rs` holds them to it.
+
+## Amended 2026-11-19: spirals both ways, flat straight down
+
+A new Spiral and a new Morphed Spiral start both ways, as Fusion's Direction
+does: the spiral turns to climb and each piece the part cuts it into is taken
+from its nearer end, which is what both ways means for one. A new Flat comes
+straight down onto each ring, as Fusion's Flat starts with Ramp off, its ramp
+along the ring a setting. A job file that leaves either out reads as before:
+climbing, and ramping
+([decision 0034](0034-entries-and-order-of-the-finishes-over-the-part.md)).

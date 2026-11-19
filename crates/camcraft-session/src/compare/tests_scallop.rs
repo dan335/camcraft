@@ -37,10 +37,10 @@ use super::tests_pencil::{Bounds, held_to};
 /// With no groups the lines are Fusion's to within a few thousandths over
 /// the floor, the top and the dome; the material differs where camcraft's
 /// rings round the walls take down the steps the lines leave on the pocket's
-/// walls and the R8 round (decision 0014), up to 6.1 mm. camcraft feeds about
-/// twice as far, two fifths of it at the ramp feed: it lifts 44 times to
-/// Fusion's once, and comes back down onto each pass 2° along it over what
-/// the roughing left. With groups, measured:
+/// walls and the R8 round (decision 0014), up to 6.1 mm, and feed a sixth
+/// further. Its passes are cut the nearest next, as Fusion's Shortest
+/// Machining Distance, and it comes straight down onto each (decision 0034):
+/// it lifts twice to Fusion's once. With groups, measured:
 ///
 /// - Fusion lays its lines anew round what it avoids: on the floor round the
 ///   dome avoided its points stand in rings about the dome's axis a stepover
@@ -53,9 +53,13 @@ use super::tests_pencil::{Bounds, held_to};
 ///   the floor machined, up the fillets and walls round it, cutting what the
 ///   roughing left there up to 7.8 mm lower than camcraft, which stops where
 ///   the ball touches both.
-/// - Cut into many pieces, camcraft's lines are each ramped onto: with only
-///   the floor machined it feeds 1,133 mm at the cutting feed to Fusion's
-///   1,173, and 9,517 mm more down its ramps.
+/// - Cut into pieces, camcraft's lines are taken the nearest next and from
+///   their nearer ends, lifting over what is avoided between them: with only
+///   the floor machined it lifts 12 times to Fusion's 3 and feeds 9% less,
+///   with the dome avoided 15 times to Fusion's 8 and 12% more. Its links
+///   are not Fusion's, nor where it lifts: since it took the pieces so, it
+///   removes 0.1 to 0.3% less than it did, and with only the floor machined
+///   its 95th percentile is 0.04 mm higher.
 ///
 /// Each bound is this run's figure with a little room.
 fn holds(name: &str, change: impl FnOnce(&mut Operation), bounds: &Bounds, contacts: u64) {
@@ -64,8 +68,7 @@ fn holds(name: &str, change: impl FnOnce(&mut Operation), bounds: &Bounds, conta
 
 /// A new Scallop leaves what Fusion's does: 89.2% of the 733,638 columns
 /// either cuts alike, the median difference 0.0031 mm and the 95th
-/// percentile 0.015, 0.03% more removed and 99% more fed, 8,065 mm of it
-/// down camcraft's ramps.
+/// percentile 0.015, 0.03% more removed and 16% more fed.
 #[test]
 fn a_new_scallop_leaves_what_fusions_does() {
     let bounds = Bounds {
@@ -73,16 +76,16 @@ fn a_new_scallop_leaves_what_fusions_does() {
         median: 0.004,
         p95: 0.02,
         removed: 0.003,
-        fed: 1.05,
+        fed: 0.18,
         lowest: 1e-3,
     };
     holds("scallop", |_| {}, &bounds, 0);
 }
 
-/// The dome avoided, 1 mm sideways and 1 mm down: 61.7% of 685,840 columns
-/// alike, the median 0.0056 mm and the 95th percentile 0.24, 1.1% less
-/// removed and 221% more fed. Fusion's lines round the dome are its own,
-/// and it lifts 8 times to camcraft's 83.
+/// The dome avoided, 1 mm sideways and 1 mm down: 61.8% of 685,850 columns
+/// alike, the median 0.0056 mm and the 95th percentile 0.24, 1.2% less
+/// removed and 12% more fed. Fusion's lines round the dome are its own,
+/// and it lifts 8 times to camcraft's 15.
 #[test]
 fn a_scallop_avoiding_the_dome_leaves_what_fusions_does() {
     let bounds = Bounds {
@@ -90,7 +93,7 @@ fn a_scallop_avoiding_the_dome_leaves_what_fusions_does() {
         median: 0.007,
         p95: 0.27,
         removed: 0.015,
-        fed: 2.3,
+        fed: 0.14,
         lowest: 1e-3,
     };
     holds(
@@ -105,11 +108,10 @@ fn a_scallop_avoiding_the_dome_leaves_what_fusions_does() {
     );
 }
 
-/// The model avoided, the floor alone machined: 42.9% of 447,140 columns
-/// alike, the median 0.028 mm and the 95th percentile 3.6, 11.3% less
-/// removed, Fusion's passes running on up the fillets and walls, and nine
-/// times as far fed, camcraft's ramps. Fusion's rapids meet the roughing's
-/// stock once, 1.96 mm deep.
+/// The model avoided, the floor alone machined: 42.8% of 447,140 columns
+/// alike, the median 0.028 mm and the 95th percentile 3.6, 11.6% less
+/// removed, Fusion's passes running on up the fillets and walls, and 9% less
+/// fed. Fusion's rapids meet the roughing's stock once, 1.96 mm deep.
 #[test]
 fn a_scallop_machining_the_floor_alone_leaves_what_fusions_does() {
     let bounds = Bounds {
@@ -117,7 +119,7 @@ fn a_scallop_machining_the_floor_alone_leaves_what_fusions_does() {
         median: 0.035,
         p95: 3.9,
         removed: 0.125,
-        fed: 8.5,
+        fed: 0.12,
         lowest: 1e-3,
     };
     holds(
