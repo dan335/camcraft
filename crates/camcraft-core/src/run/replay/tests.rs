@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use super::*;
 use crate::fixture::JOB;
 use crate::run::run_setup;
@@ -5,12 +7,17 @@ use crate::setup::Bodies;
 use camcraft_geom::synthetic;
 use camcraft_geom::topology::Body;
 
+/// [`JOB`] on a dome, run: once, by whichever test asks first, and each given
+/// its own copy, as the run is the same whoever asks.
 fn run() -> (Job, SetupResult) {
-    let job: Job = toml::from_str(JOB).unwrap();
-    let dome = Body::derived(synthetic::uv_sphere(8.0, 60, 84));
-    let bodies: Bodies<'_> = [("dome", &dome)].into_iter().collect();
-    let result = run_setup(&job, 0, &bodies).unwrap();
-    (job, result)
+    static RAN: LazyLock<(Job, SetupResult)> = LazyLock::new(|| {
+        let job: Job = toml::from_str(JOB).unwrap();
+        let dome = Body::derived(synthetic::uv_sphere(8.0, 60, 84));
+        let bodies: Bodies<'_> = [("dome", &dome)].into_iter().collect();
+        let result = run_setup(&job, 0, &bodies).unwrap();
+        (job, result)
+    });
+    RAN.clone()
 }
 
 /// The run's keyframes, unpacked.

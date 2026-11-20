@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use super::pitch::{CELLS_PER_TOOL, FINEST_PITCH, MAX_SIM_CELLS};
 use super::*;
 use crate::fixture::JOB;
@@ -48,10 +50,18 @@ fn run_job(job: &Job, mesh: &camcraft_geom::mesh::TriMesh) -> Result<SetupResult
     run_setup(job, 0, &bodies)
 }
 
+/// [`JOB`] as it stands on the [`dome`], run: once, by whichever test asks
+/// first, and each given its own copy. The tests that read a run of the job
+/// unchanged read this one, which is the same run whoever asks.
+fn dome_run() -> SetupResult {
+    static RAN: LazyLock<SetupResult> =
+        LazyLock::new(|| run_job(&toml::from_str(JOB).unwrap(), &dome()).unwrap());
+    RAN.clone()
+}
+
 #[test]
 fn runs_both_operations_in_order() {
-    let job: Job = toml::from_str(JOB).unwrap();
-    let result = run_job(&job, &dome()).unwrap();
+    let result = dome_run();
 
     assert_eq!(result.operations.len(), 2);
     let names: Vec<&str> = result.operations.iter().map(|o| o.name.as_str()).collect();
@@ -72,8 +82,7 @@ fn runs_both_operations_in_order() {
 /// the backstop, so it is tested directly.
 #[test]
 fn a_descent_past_the_allowance_fails_the_operation() {
-    let job: Job = toml::from_str(JOB).unwrap();
-    let result = run_job(&job, &dome()).unwrap();
+    let result = dome_run();
     let mut finish = result.operations[1].clone();
     assert!(finish.is_clean(), "{:?}", finish.warnings);
     finish.deepest_cut_descent_mm = finish.max_cut_step + 0.01;
@@ -82,8 +91,7 @@ fn a_descent_past_the_allowance_fails_the_operation() {
 
 #[test]
 fn results_carry_what_the_run_reported() {
-    let job: Job = toml::from_str(JOB).unwrap();
-    let result = run_job(&job, &dome()).unwrap();
+    let result = dome_run();
     let [rough, finish] = result.operations.as_slice() else {
         panic!("expected two operations");
     };
@@ -109,8 +117,7 @@ fn results_carry_what_the_run_reported() {
 /// The point of threading: the second operation sees what the first removed.
 #[test]
 fn roughing_removes_material_before_finishing_runs() {
-    let job: Job = toml::from_str(JOB).unwrap();
-    let result = run_job(&job, &dome()).unwrap();
+    let result = dome_run();
     let rough = result.operations.first().unwrap();
     assert!(
         rough.sim.removed_mm3 > 0.0,
@@ -121,8 +128,7 @@ fn roughing_removes_material_before_finishing_runs() {
 /// Every operation is simulated as it runs, and nothing may traverse material.
 #[test]
 fn no_operation_rapids_through_stock() {
-    let job: Job = toml::from_str(JOB).unwrap();
-    let result = run_job(&job, &dome()).unwrap();
+    let result = dome_run();
     for o in &result.operations {
         assert!(
             o.sim.is_clean(),
@@ -137,8 +143,7 @@ fn no_operation_rapids_through_stock() {
 /// The whole job must land on the part.
 #[test]
 fn the_finished_result_is_the_part() {
-    let job: Job = toml::from_str(JOB).unwrap();
-    let result = run_job(&job, &dome()).unwrap();
+    let result = dome_run();
     assert!(result.verify.compared > 500);
     assert!(
         result.is_clean(),
@@ -2333,7 +2338,7 @@ fn the_shank_and_the_spindle_nose_are_checked() {
     let job: Job = toml::from_str(JOB).unwrap();
     let rough = |job: &Job| run_job(job, &dome()).unwrap().operations.remove(0);
 
-    let fine = rough(&job);
+    let fine = dome_run().operations.remove(0);
     assert!(fine.contacts.is_empty(), "{:?}", fine.contacts.first());
     assert!(fine.assembly.is_some());
 

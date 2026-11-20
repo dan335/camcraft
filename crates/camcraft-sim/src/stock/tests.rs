@@ -796,3 +796,74 @@ fn a_column_is_classified_by_the_verifiers_rule() {
     assert_eq!(classify(1.05, Some((1.0, -0.05)), 0.1, 0.5), Class::OnPart);
     assert_eq!(classify(1.6, Some((1.0, -0.6)), 0.1, 0.5), Class::Leftover);
 }
+
+/// The tool at `tips` in turn, lowering every cell of `stock` it reaches,
+/// the plain way: each cell worked out for every tip, nothing left out.
+/// Returns how deep the deepest cut was and the cells it lowered.
+fn stamped_plainly(
+    stock: &mut Stock,
+    tips: &[DVec3],
+    tool: &impl SweptTool,
+) -> (f64, Option<CellRect>) {
+    let (nx, ny) = (stock.field.nx(), stock.field.ny());
+    let mut worst = 0.0f64;
+    let mut touched = None;
+    for tip in tips {
+        for iy in 0..ny {
+            for ix in 0..nx {
+                let p = stock.field.position(ix, iy).unwrap();
+                let Some(h) = tool.height_at((p - tip.truncate()).length()) else {
+                    continue;
+                };
+                let depth = (tip.z + h).max(stock.floor);
+                let Some(cur) = stock.field.get(ix, iy) else {
+                    continue;
+                };
+                if depth < cur {
+                    stock.field.set(ix, iy, depth);
+                    worst = worst.max(cur - depth);
+                    touched = CellRect::join(touched, Some(CellRect::cell(ix, iy)));
+                }
+            }
+        }
+    }
+    (worst, touched)
+}
+
+/// A sloping move is its samples stamped one after another, every cell
+/// worked out for every one: the same material, bit for bit, the same deepest
+/// cut and the same cells said to be lowered. Over material cut unevenly
+/// first, so the order the samples lower a cell in shows; climbing and
+/// descending, steep and shallow, running off the block, and with its start
+/// stamped or not; with a ball and a flat.
+#[test]
+fn a_sloping_move_is_its_samples_stamped_in_turn() {
+    fn check(tool: &impl SweptTool) {
+        let moves = [
+            (dvec3(-6.0, -4.0, 1.0), dvec3(5.0, 3.5, 3.5)),
+            (dvec3(4.0, 6.0, 4.5), dvec3(-3.0, -5.5, 0.2)),
+            (dvec3(-2.0, 1.0, 2.0), dvec3(-1.2, 1.3, 2.4)),
+            (dvec3(7.0, -2.0, 3.0), dvec3(12.0, -2.5, 1.0)),
+        ];
+        let step = 0.05;
+        let bits =
+            |s: &Stock| -> Vec<u32> { s.field().data().iter().map(|v| v.to_bits()).collect() };
+        for (a, b) in moves {
+            for first in [true, false] {
+                let mut along = block();
+                along.sweep(&zigzag(), &Ball(1.3));
+                let mut plain = along.clone();
+                let got = along.stamp_along(a, b, tool, step, first);
+                let steps = camcraft_geom::steps::bounded_count(((b - a).length() / step).ceil());
+                let tips: Vec<DVec3> = (u32::from(!first)..=steps)
+                    .map(|k| a + (b - a) * (f64::from(k) / f64::from(steps)))
+                    .collect();
+                let want = stamped_plainly(&mut plain, &tips, tool);
+                assert_eq!(got, want, "{a} to {b}");
+                assert!(bits(&along) == bits(&plain), "{a} to {b}");
+            }
+        }
+    }
+    check(&Ball(1.7));
+    check(&Flat(1.2));
+}

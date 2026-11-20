@@ -6,6 +6,11 @@ the same notes at more length.
 
 ## Unreleased
 
+- **Simulating 3D finishing is about ten times faster**: a climbing move's
+  samples are swept a row of cells at a time, passing over cells the tool
+  cannot come under, leaving the same material bit for bit. Simulating a
+  Parallel finish over a pocket and dome took 17.6 s and takes 1.6 s.
+
 - **Cut by area, adaptive clearing comes to each area where the tool last was
   in it** ([decision 0036](docs/decisions/0036-adaptive-levels-order-and-entries.md)):
   a level starts each area nearest where that area's last pass below ended,

@@ -69,10 +69,22 @@ struct Underside<'t, T> {
     floor: f64,
 }
 
+/// Units in the last place a tool's height under a cell, as it is worked
+/// out, may come below its height nearer the axis, though the profile only
+/// rises: each operation working it out rounds by half a unit of the numbers
+/// it is made of, the tool's dimensions and the tip's height, and where one
+/// piece of a profile gives way to the next (a bullnose's flat to its corner)
+/// the two may disagree by a unit or two. Sixteen is past all of it.
+const ROUNDING_UNITS: f64 = 16.0;
+
 /// Lower the cells `i0..=i1` of row `iy`, `cells` being the whole row, to the
 /// underside of a tool whose axis is `distance` from each cell's position, on a
 /// grid from `origin` at `pitch`. Returns how deep it cut and the first and last
 /// columns it lowered, or `None` when it lowered none.
+///
+/// `lowest` is as low as the tool comes anywhere on the row: a cell standing
+/// at or under it is left as it is without the tool's height there being
+/// worked out, as the tool could not come under it.
 ///
 /// Every sweep lowers cells this way, so a level move and a stamp at a point
 /// agree cell for cell.
@@ -80,23 +92,26 @@ fn lower_row<T: SweptTool>(
     cells: &mut [f32],
     iy: u32,
     (i0, i1): (u32, u32),
-    origin: DVec2,
-    pitch: f64,
+    (origin, pitch): (DVec2, f64),
     under: &Underside<'_, T>,
+    lowest: f64,
     distance: impl Fn(DVec2) -> f64,
 ) -> Option<(f64, u32, u32)> {
     let mut cut: Option<(f64, u32, u32)> = None;
     for ix in i0..=i1 {
+        let Some(slot) = cells.get_mut(ix as usize) else {
+            continue;
+        };
+        let cur = f64::from(*slot);
+        if !cur.is_finite() || cur <= lowest {
+            continue;
+        }
         let p = origin + dvec2(f64::from(ix) * pitch, f64::from(iy) * pitch);
         let Some(h) = under.tool.height_at(distance(p)) else {
             continue;
         };
         let depth = (under.z + h).max(under.floor);
-        let Some(slot) = cells.get_mut(ix as usize) else {
-            continue;
-        };
-        let cur = f64::from(*slot);
-        if cur.is_finite() && depth < cur {
+        if depth < cur {
             *slot = narrow(depth);
             let (d, lo, _) = cut.unwrap_or((0.0, ix, ix));
             cut = Some((d.max(cur - depth), lo, ix));
@@ -105,25 +120,87 @@ fn lower_row<T: SweptTool>(
     cut
 }
 
+/// What two cuts of one row did together: the deeper of the two, from the
+/// first column either lowered to the last.
+fn either_cut(a: Option<(f64, u32, u32)>, b: Option<(f64, u32, u32)>) -> Option<(f64, u32, u32)> {
+    match (a, b) {
+        (Some((d, lo, hi)), Some((e, l, h))) => Some((d.max(e), lo.min(l), hi.max(h))),
+        (a, b) => a.or(b),
+    }
+}
+
+/// Lower row `iy` of the cells `rect` holds, `cells` being the whole row, to
+/// the underside of the tool stamped at `tip`, whose reach squared is
+/// `reach2`, on a grid from `origin` at `pitch`: only the columns its circle
+/// spans on the row, and one more each side for rounding, as the profile
+/// decides. Returns what [`lower_row`] does.
+fn disc_row<T: SweptTool>(
+    cells: &mut [f32],
+    iy: u32,
+    (tip, rect): (DVec3, CellRect),
+    reach2: f64,
+    (origin, pitch): (DVec2, f64),
+    under: &Underside<'_, T>,
+) -> Option<(f64, u32, u32)> {
+    let py = origin.y + f64::from(iy) * pitch;
+    let dy = py - tip.y;
+    let across = reach2 - dy * dy;
+    if across < 0.0 {
+        return None;
+    }
+    let w = across.sqrt();
+    let first = (((tip.x - w - origin.x) / pitch).floor() - 1.0).max(f64::from(rect.x0));
+    let last = (((tip.x + w - origin.x) / pitch).ceil() + 1.0).min(f64::from(rect.x1));
+    if first.is_nan() || last.is_nan() || first > last {
+        return None;
+    }
+    // Within the footprint, so the narrowing is exact.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let (first, last) = (first as u32, last as u32);
+    // Every cell of the row is at least `dy` from the axis, and a tool's
+    // profile only rises away from its axis, as a level move's sweep takes
+    // it to, so the tool comes no lower on the row than its height there,
+    // but for rounding.
+    let rounding = ROUNDING_UNITS * f64::EPSILON * (under.z.abs() + under.tool.max_radius());
+    let lowest = under
+        .tool
+        .height_at(dy.abs())
+        .map_or(f64::NEG_INFINITY, |h| {
+            (under.z + h).max(under.floor) - rounding
+        });
+    let axis = tip.truncate();
+    lower_row(
+        cells,
+        iy,
+        (first, last),
+        (origin, pitch),
+        under,
+        lowest,
+        |p| (p - axis).length(),
+    )
+}
+
 /// Lower each row of `rect` in `data`, a field `nx` cells across, with `row`,
 /// given the row's index and its cells, which says how deep it cut and the first
 /// and last columns it lowered. Returns how deep the deepest cell was cut and
-/// which cells were lowered.
+/// which cells were lowered. `work` is about how many cells `row` works out
+/// over them all.
 ///
-/// Rows are independent, and each cell is worked out alone, so a sweep over many
-/// cells (a long pass on a sheet, a large tool) is cut in parallel; a small one
-/// is not worth handing out. Either way every cell comes out the same.
+/// Rows are independent, and each cell is worked out alone, so a sweep with
+/// much to work out (a long pass on a sheet, a large tool) is cut in parallel;
+/// a small one is not worth handing out. Either way every cell comes out the
+/// same.
 fn lower_rows(
     data: &mut [f32],
     nx: usize,
     rect: CellRect,
+    work: u64,
     row: impl Fn(u32, &mut [f32]) -> Option<(f64, u32, u32)> + Sync,
 ) -> (f64, Option<CellRect>) {
     let rows = data
         .get_mut(rect.y0 as usize * nx..(rect.y1 as usize + 1) * nx)
         .unwrap_or_default();
-    let cells = u64::from(rect.width()) * u64::from(rect.height());
-    let cuts: Vec<Option<(f64, u32, u32)>> = if cells >= PARALLEL_CELLS {
+    let cuts: Vec<Option<(f64, u32, u32)>> = if work >= PARALLEL_CELLS {
         rows.par_chunks_mut(nx)
             .enumerate()
             .map(|(i, cells)| row(rect.y0 + u32::try_from(i).unwrap_or(0), cells))
@@ -245,6 +322,15 @@ impl Stock {
 
     /// Sweep a move that climbs or descends as it goes, sampled at no more than
     /// `step` along it.
+    ///
+    /// Each sample is the tool stamped as [`Stock::stamp`] stamps it, and each
+    /// cell is lowered by the samples in their order along the move, so the
+    /// material and what is said of the cut are what stamping them one after
+    /// another makes. The cells are taken a row at a time, every sample over a
+    /// row before the next row, rather than a sample at a time: samples half a
+    /// cell apart overlap almost wholly, and a row stays at hand while the
+    /// hundreds of them that cross it pass, where a sample at a time went over
+    /// the whole disc again for each.
     pub(super) fn stamp_along<T: SweptTool>(
         &mut self,
         from: DVec3,
@@ -253,22 +339,52 @@ impl Stock {
         step: f64,
         first: bool,
     ) -> (f64, Option<CellRect>) {
+        let r = tool.max_radius();
+        if !r.is_finite() || r <= 0.0 {
+            return (0.0, None);
+        }
         let span = (to - from).length();
         // Bounded, so a pathological coordinate cannot turn one move into an
         // unbounded loop.
         let steps = bounded_count((span / step).ceil());
-        let mut worst = 0.0f64;
-        let mut touched = None;
         // The start was stamped as the end of the move before, unless this is the
         // first move swept; stamping lowers to a minimum, so doing it again would
-        // change nothing, and leaving it out changes nothing either.
-        for k in u32::from(!first)..=steps {
-            let t = f64::from(k) / f64::from(steps);
-            let (cut, cells) = self.stamp(from + (to - from) * t, tool);
-            worst = worst.max(cut);
-            touched = CellRect::join(touched, cells);
-        }
-        (worst, touched)
+        // change nothing, and leaving it out changes nothing either. Each sample
+        // with the cells it could reach; one at no point reaches none.
+        let samples: Vec<(DVec3, CellRect)> = (u32::from(!first)..=steps)
+            .filter_map(|k| {
+                let t = f64::from(k) / f64::from(steps);
+                let tip = from + (to - from) * t;
+                Some((tip, self.footprint(tip, r)?))
+            })
+            .collect();
+        let Some(rect) = samples.iter().map(|&(_, f)| f).reduce(CellRect::union) else {
+            return (0.0, None);
+        };
+        let work = samples
+            .iter()
+            .map(|(_, f)| u64::from(f.width()) * u64::from(f.height()))
+            .sum();
+        let grid = (self.field.origin(), self.field.pitch());
+        let nx = self.field.nx() as usize;
+        let floor = self.floor;
+        // As `stamp` reaches.
+        let reach2 = r * r * (1.0 + 1.0e-9);
+        // One row: every sample whose footprint holds it, in order.
+        let row = |iy: u32, cells: &mut [f32]| -> Option<(f64, u32, u32)> {
+            samples
+                .iter()
+                .filter(|(_, f)| (f.y0..=f.y1).contains(&iy))
+                .fold(None, |cut, &(tip, f)| {
+                    let under = Underside {
+                        tool,
+                        z: tip.z,
+                        floor,
+                    };
+                    either_cut(cut, disc_row(cells, iy, (tip, f), reach2, grid, &under))
+                })
+        };
+        lower_rows(self.field.data_mut(), nx, rect, work, row)
     }
 
     /// Sweep a level move exactly: every cell within the tool's reach of the
@@ -308,11 +424,14 @@ impl Stock {
             // Clamped into the rectangle, so the narrowing is exact.
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let (i0, i1) = (first.max(x0) as u32, last.min(x1) as u32);
-            lower_row(cells, iy, (i0, i1), origin, pitch, &under, |p| {
+            // A level move is one pass over each cell: nothing to leave out.
+            let lowest = f64::NEG_INFINITY;
+            lower_row(cells, iy, (i0, i1), (origin, pitch), &under, lowest, |p| {
                 distance_to_segment(p, a, b)
             })
         };
-        lower_rows(self.field.data_mut(), nx, rect, row)
+        let work = u64::from(rect.width()) * u64::from(rect.height());
+        lower_rows(self.field.data_mut(), nx, rect, work, row)
     }
 
     /// The cells a tool of `radius` at `tip` could reach, clamped to the grid,
@@ -352,34 +471,14 @@ impl Stock {
             z: tip.z,
             floor: self.floor,
         };
-        let (origin, pitch, nx) = (self.field.origin(), self.field.pitch(), self.field.nx());
-        let axis = tip.truncate();
+        let grid = (self.field.origin(), self.field.pitch());
+        let nx = self.field.nx() as usize;
         // A hair over the radius squared: a cell this rejects, the tool's own
         // profile would have too.
         let reach2 = r * r * (1.0 + 1.0e-9);
-        // One row: how deep it cut, and the first and last columns it lowered.
-        let row = |iy: u32, cells: &mut [f32]| -> Option<(f64, u32, u32)> {
-            let py = origin.y + f64::from(iy) * pitch;
-            let dy = py - tip.y;
-            let across = reach2 - dy * dy;
-            if across < 0.0 {
-                return None;
-            }
-            // Only the columns the tool's circle spans on this row, and one more
-            // each side for rounding; the profile decides.
-            let w = across.sqrt();
-            let first = (((tip.x - w - origin.x) / pitch).floor() - 1.0).max(f64::from(rect.x0));
-            let last = (((tip.x + w - origin.x) / pitch).ceil() + 1.0).min(f64::from(rect.x1));
-            if first.is_nan() || last.is_nan() || first > last {
-                return None;
-            }
-            // Within the footprint, so the narrowing is exact.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let (first, last) = (first as u32, last as u32);
-            lower_row(cells, iy, (first, last), origin, pitch, &under, |p| {
-                (p - axis).length()
-            })
-        };
-        lower_rows(self.field.data_mut(), nx as usize, rect, row)
+        let work = u64::from(rect.width()) * u64::from(rect.height());
+        lower_rows(self.field.data_mut(), nx, rect, work, |iy, cells| {
+            disc_row(cells, iy, (tip, rect), reach2, grid, &under)
+        })
     }
 }

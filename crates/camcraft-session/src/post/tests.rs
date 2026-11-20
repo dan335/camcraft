@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use super::*;
 use crate::test_support::run_small;
 use crate::{load_models, parse_job, run_setup};
@@ -12,16 +14,21 @@ fn program_names_are_numbered_and_file_safe() {
     );
 }
 
-/// The example job on the small fixture, run.
+/// The example job on the small fixture, run: once, by whichever test asks
+/// first, and each given its own copy. The run is the same whoever asks, and
+/// what each test does with it, posting or tampering, it does to its copy.
 fn example() -> (camcraft_core::job::Job, PathBuf, Ran) {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-    let text = std::fs::read_to_string(dir.join("rail-jig.camcraft")).unwrap();
-    // The small fixture, so the test runs quickly.
-    let text = text.replace("sled_base.step", "hinge_jig.step");
-    let job = parse_job(&text, "rail-jig").unwrap();
-    let loaded = load_models(&job, &dir, &[0]).unwrap();
-    let ran = run_setup(&job, 0, &crate::models_of(&loaded)).unwrap();
-    (job, dir, ran)
+    static EXAMPLE: LazyLock<(camcraft_core::job::Job, PathBuf, Ran)> = LazyLock::new(|| {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let text = std::fs::read_to_string(dir.join("rail-jig.camcraft")).unwrap();
+        // The small fixture, so the test runs quickly.
+        let text = text.replace("sled_base.step", "hinge_jig.step");
+        let job = parse_job(&text, "rail-jig").unwrap();
+        let loaded = load_models(&job, &dir, &[0]).unwrap();
+        let ran = run_setup(&job, 0, &crate::models_of(&loaded)).unwrap();
+        (job, dir, ran)
+    });
+    EXAMPLE.clone()
 }
 
 fn scratch(name: &str) -> PathBuf {

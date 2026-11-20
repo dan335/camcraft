@@ -29,8 +29,13 @@ The verifier runs on the same grid, its budget tolerance + pitch.
 Sweeps are exact where they can be. A level move is swept in closed form (every
 cell to the tool's underside at its distance from the move's line, in parallel
 rows for a long pass), a move straight up or down is the tool at its lowest end,
-and only climbing moves are sampled every half cell. The part surface is
-rasterised triangle by triangle, over the part's own footprint only.
+and only climbing moves are sampled every half cell. A climbing move's samples
+are taken a row of cells at a time, each row by every sample over it in order,
+and a cell already at or under the lowest the tool comes on its row is passed
+over, as the tool's profile only rises away from its axis: the same material,
+bit for bit, as stamping each sample in turn over every cell it reaches, about
+ten times faster on a 3D finish. The part surface is rasterised triangle by
+triangle, over the part's own footprint only.
 
 ### Walls
 

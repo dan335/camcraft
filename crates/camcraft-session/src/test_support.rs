@@ -3,6 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use camcraft_core::job::{Job, ModelDef, StrategySpec, ToolKind};
 
@@ -49,12 +50,16 @@ pub(crate) fn small_job() -> Job {
     )
 }
 
-/// [`small_job`], run.
+/// [`small_job`], run: once, by whichever test asks first, and each given its
+/// own copy, as the run is the same whoever asks.
 pub(crate) fn run_small() -> Ran {
-    let job = small_job();
-    let model = load_job_model(Path::new("."), &job.models[0], job.tolerance).unwrap();
-    let models: Models<'_> = [("hinge", &model)].into_iter().collect();
-    run_setup(&job, 0, &models).unwrap()
+    static RAN: LazyLock<Ran> = LazyLock::new(|| {
+        let job = small_job();
+        let model = load_job_model(Path::new("."), &job.models[0], job.tolerance).unwrap();
+        let models: Models<'_> = [("hinge", &model)].into_iter().collect();
+        run_setup(&job, 0, &models).unwrap()
+    });
+    RAN.clone()
 }
 
 /// Re-check a run of `job` after its first operation's path has been
