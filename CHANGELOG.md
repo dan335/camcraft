@@ -6,6 +6,9 @@ the same notes at more length.
 
 ## Unreleased
 
+- **3/8" bits in the System library:** an up-cut and a down-cut spiral and a
+  ball nose, each on a 3/8" shank, as T21 to T23, so the first twenty keep
+  their numbers.
 - **Adaptive clearing cuts by area in an order a machinist would**
   ([decision 0036](docs/decisions/0036-adaptive-levels-order-and-entries.md)).
   By area, each area gets each slab's level and then its fine levels up the

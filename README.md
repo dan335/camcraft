@@ -39,7 +39,7 @@ Autodesk.)
   chamfer, engraving, bore, circular, thread milling and drilling.
 - **Tools:** flat, ball, bullnose, V-bit and chamfer cutters, drills and
   single-profile thread mills, with speed and feed
-  presets. There is a built-in library of twenty common bits, and Fusion tool
+  presets. There is a built-in library of twenty-three common bits, and Fusion tool
   libraries import from CSV.
 - **Setups:** several per job, each with its own orientation, work zero and work
   offset.

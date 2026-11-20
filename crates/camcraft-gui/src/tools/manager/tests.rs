@@ -251,7 +251,7 @@ fn an_unreadable_library_is_not_written_over() {
     assert!(m.library_error.is_some());
     assert_eq!(
         m.library.edited.at(&[SYSTEM.into()]).map(Folder::count),
-        Some(20),
+        Some(23),
         "the System library is there all the same"
     );
     m.library
@@ -275,7 +275,7 @@ fn system(sub: &str) -> FolderPath {
 #[test]
 fn a_new_library_has_the_system_bits() {
     let m = manager("fresh");
-    assert_eq!(m.library.edited.count(), 20);
+    assert_eq!(m.library.edited.count(), 23);
     assert!(!m.dirty());
     assert_eq!(
         m.library.next_number(),

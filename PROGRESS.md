@@ -190,7 +190,7 @@ What Fusion's Geometry, Heights, Passes and Linking tabs hold, across operations
 | Drills                                  | done        | |
 | Shank, neck and holder                  | done        | Built-in ER, BT30 and ISO30 holders; four built-in spindles. |
 | Speed and feed presets                  | done        | Surface speed and chip load shown beside them. |
-| System library                          | done        | Twenty common inch router bits with presets per material. |
+| System library                          | done        | Twenty-three common inch router bits, 1/32" to 2", with presets per material. |
 | Tool library, in folders, with undo     | done        | |
 | Fusion CSV import                       | done        | |
 | Tapered end mills                       | not started | |

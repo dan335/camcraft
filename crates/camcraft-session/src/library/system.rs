@@ -1,5 +1,5 @@
-//! The System library: twenty common router bits that every library has, so a
-//! person can cut something before typing in a tool.
+//! The System library: twenty-three common router bits that every library has,
+//! so a person can cut something before typing in a tool.
 //!
 //! It is built here, not read from a file, and is never saved: the manager puts it
 //! into the library as the folder [`SYSTEM`] when it loads the user's tools, and
@@ -101,7 +101,8 @@ enum Size {
     Tiny,
     /// 1/8", and the V-bits, which cut with little of their width.
     Small,
-    /// 1/4".
+    /// 1/4" and 3/8": the 3/8" bits read the 1/4" row, the more
+    /// conservative.
     Quarter,
     /// 1/2" and the surfacing bits.
     Large,
@@ -183,10 +184,11 @@ const fn flat(
     }
 }
 
-/// A ball-nose bit, on a 1/4" shank.
+/// A ball-nose bit.
 const fn ball(
     name: &'static str,
     diameter: f64,
+    shank: f64,
     flute_length: f64,
     overall: f64,
     size: Size,
@@ -200,10 +202,10 @@ const fn ball(
         angle: None,
         tip: 0.0,
         flutes: 2,
-        shank: 0.25,
+        shank,
         flute_length,
         overall,
-        rpm: 18000,
+        rpm: if shank > 0.25 { 16000 } else { 18000 },
         size,
         passes: Passes::Across(0.1),
         materials: CARVING,
@@ -268,7 +270,7 @@ const fn surfacing(
 
 /// The bits, in tool-number order.
 #[rustfmt::skip]
-const BITS: [Bit; 20] = [
+const BITS: [Bit; 23] = [
     flat("1/16 upcut", 0.0625, 2, 0.25, 0.1875, 1.5, Size::Tiny, UPCUT,
         "1/16\" up-cut spiral, 2 flute, for fine detail"),
     flat("1/8 upcut", 0.125, 2, 0.25, 0.5, 2.0, Size::Small, UPCUT_SMALL,
@@ -290,13 +292,13 @@ const BITS: [Bit; 20] = [
         "1/2\" up-cut spiral, 2 flute, 1/2\" shank"),
     flat("1/2 compression", 0.5, 2, 0.5, 1.125, 3.0, Size::Large, &WOOD,
         "1/2\" compression spiral, 2 flute, 1/2\" shank: clean edges in sheet goods"),
-    ball("1/32 ball", 0.03125, 0.125, 1.5, Size::Tiny,
+    ball("1/32 ball", 0.03125, 0.25, 0.125, 1.5, Size::Tiny,
         "1/32\" ball nose, 2 flute, for the finest 3D detail"),
-    ball("1/16 ball", 0.0625, 0.25, 1.5, Size::Tiny,
+    ball("1/16 ball", 0.0625, 0.25, 0.25, 1.5, Size::Tiny,
         "1/16\" ball nose, 2 flute, for 3D finishing"),
-    ball("1/8 ball", 0.125, 0.5, 2.0, Size::Small,
+    ball("1/8 ball", 0.125, 0.25, 0.5, 2.0, Size::Small,
         "1/8\" ball nose, 2 flute, for 3D finishing"),
-    ball("1/4 ball", 0.25, 0.75, 2.5, Size::Quarter,
+    ball("1/4 ball", 0.25, 0.25, 0.75, 2.5, Size::Quarter,
         "1/4\" ball nose, 2 flute, for 3D roughing and large finishing"),
     v_bit("30° engraving", 30.0, 0.25, 0.005,
         "30° engraving bit, 0.005\" tip, 1/4\" shank: fine lettering"),
@@ -310,9 +312,16 @@ const BITS: [Bit; 20] = [
         "1\" spoilboard surfacing bit, 1/4\" shank"),
     surfacing("2-inch surfacing", 2.0, 0.5, 0.375, 2.5,
         "2\" spoilboard surfacing bit, 1/2\" shank"),
+    // Added after the first twenty, so their numbers stay as they were.
+    flat("3/8 upcut", 0.375, 2, 0.375, 1.0, 3.0, Size::Quarter, UPCUT,
+        "3/8\" up-cut spiral, 2 flute, 3/8\" shank: roughing deeper parts"),
+    flat("3/8 downcut", 0.375, 2, 0.375, 1.0, 3.0, Size::Quarter, &WOOD,
+        "3/8\" down-cut spiral, 2 flute, 3/8\" shank: a clean top edge"),
+    ball("3/8 ball", 0.375, 0.375, 1.0, 3.0, Size::Quarter,
+        "3/8\" ball nose, 2 flute, 3/8\" shank: 3D finishing of larger, deeper parts"),
 ];
 
-/// The System library: its folders of bits, numbered T1 to T20.
+/// The System library: its folders of bits, numbered T1 to T23.
 pub fn system_library() -> Folder {
     let mut library = Folder::default();
     for (number, bit) in (1..).zip(&BITS) {
@@ -417,11 +426,11 @@ mod tests {
     }
 
     #[test]
-    fn twenty_bits_numbered_once_each() {
+    fn twenty_three_bits_numbered_once_each() {
         let lib = system_library();
         let numbers: BTreeSet<u32> = lib.walk().iter().map(|(_, _, t)| t.number).collect();
-        assert_eq!(lib.count(), 20);
-        assert_eq!(numbers, (1..=20).collect());
+        assert_eq!(lib.count(), 23);
+        assert_eq!(numbers, (1..=23).collect());
         assert_eq!(
             lib.folders.keys().collect::<Vec<_>>(),
             ["Ball", "End mills", "Surfacing", "V-bits"]
@@ -492,6 +501,27 @@ mod tests {
         let v = bit(&lib, V_BITS, "90° V-bit");
         assert!(close(v.flute_length.unwrap(), 0.25 * 25.4));
         assert!(v.build().is_ok());
+    }
+
+    /// The 3/8" bits sit on 3/8" shanks, turn at 16,000 rev/min as the other
+    /// bits on shanks over 1/4" do, and come after the first twenty.
+    #[test]
+    fn the_three_eighths_bits() {
+        let lib = system_library();
+        for (folder, name, number) in [
+            (END_MILLS, "3/8 upcut", 21),
+            (END_MILLS, "3/8 downcut", 22),
+            (BALL, "3/8 ball", 23),
+        ] {
+            let tool = bit(&lib, folder, name);
+            assert_eq!(tool.number, number, "{name}");
+            assert!(close(tool.diameter, 9.525), "{name}");
+            assert!(close(tool.shank_diameter.unwrap(), 9.525), "{name}");
+            assert_eq!(tool.rpm, 16000, "{name}");
+            assert!(tool.build().is_ok(), "{name}");
+        }
+        assert_eq!(bit(&lib, BALL, "3/8 ball").kind, ToolKind::Ball);
+        assert_eq!(bit(&lib, BALL, "1/4 ball").rpm, 18000);
     }
 
     #[test]

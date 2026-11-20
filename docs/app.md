@@ -513,9 +513,10 @@ cylinder or a taper (*Ø* to *to Ø*); **Standard…** puts one of the built-in
 holders on the tool, to change there. The drawing is the whole tool as it is
 held, and so is playback's.
 
-The **System library** is always there, above the person's own folders: twenty
-common inch router bits (up-cut, down-cut and compression spirals, O-flutes, ball
-noses, V-bits and surfacing bits, T1 to T20), built into the app
+The **System library** is always there, above the person's own folders:
+twenty-three common inch router bits (up-cut, down-cut and compression spirals,
+O-flutes, ball noses, V-bits and surfacing bits, T1 to T23; the 3/8" up-cut,
+down-cut and ball nose are T21 to T23), built into the app
 (`camcraft_session::library::system`). It is read-only and never written to
 `tools.toml`. **Copy to my library**, or dragging a bit onto a folder, copies it
 into the person's last folder under their next tool number, to change there.
