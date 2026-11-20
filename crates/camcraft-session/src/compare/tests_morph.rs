@@ -110,7 +110,7 @@ fn holds(
 }
 
 /// A new Morph between the dome's foot and the floor's edge leaves what
-/// Fusion's does: 91.9% of the 436,148 columns either cuts alike, the median
+/// Fusion's does: 91.9% of the 436,149 columns either cuts alike, the median
 /// difference 0.0038 mm and the 95th percentile 0.0137, 0.04% more removed
 /// and 13.1% more fed.
 #[test]
@@ -126,7 +126,7 @@ fn a_new_morph_leaves_what_fusions_does() {
     holds(("morph", &closed()), |_| {}, &bounds, 1);
 }
 
-/// One way, every pass clockwise, leaves the same: 91.9% of 436,148 columns
+/// One way, every pass clockwise, leaves the same: 91.9% of 436,149 columns
 /// alike, the median 0.0038 mm and the 95th percentile 0.0137, 0.04% more
 /// removed and 12.1% more fed.
 #[test]

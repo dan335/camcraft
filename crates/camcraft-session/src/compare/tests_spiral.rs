@@ -75,7 +75,7 @@ fn a_new_spiral_leaves_what_fusions_does() {
     holds("spiral", |_| {}, &bounds, 1);
 }
 
-/// The dome avoided, 1 mm sideways and 1 mm down: 82.7% of 641,247 columns
+/// The dome avoided, 1 mm sideways and 1 mm down: 82.7% of 641,239 columns
 /// alike, the median 0.0034 mm and the 95th percentile 0.042, 0.5% more
 /// removed and 34% more fed. Fusion's rapids meet the roughing's stock
 /// twice, 0.48 mm deep at most.

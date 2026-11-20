@@ -171,10 +171,12 @@ fn adaptive_params(
 ) -> AdaptiveParams {
     let op = work.op;
     let diameter = work.spec.diameter;
-    // Into a closed area it goes down a helix, or straight: it offers no ramp.
+    // Into a closed area it goes down a helix, or straight; where no helix
+    // fits, it ramps along the area.
+    let corner = work.spec.corner_radius();
     let helix_radius = match op.entry() {
         Some(Entry::Plunge) => 0.0,
-        _ => op.helix_diameter(diameter, work.spec.corner_radius()) / 2.0,
+        _ => op.helix_diameter(diameter, corner) / 2.0,
     };
     AdaptiveParams {
         optimal_load: op.passes.stepover,
@@ -183,6 +185,7 @@ fn adaptive_params(
         climb_right: work.clockwise(),
         direction: direction.engine(),
         helix_radius,
+        least_helix_radius: op.least_helix_diameter(diameter, corner) / 2.0,
         stay_down: op.stay_down(diameter),
         stay_down_level: stay_down_level / 100.0,
         stay_down_clearance,
@@ -318,6 +321,7 @@ fn add_report(to: &mut AdaptiveReport, more: &AdaptiveReport) {
     to.stayed_down += more.stayed_down;
     to.entries += more.entries;
     to.helixes += more.helixes;
+    to.ramps += more.ramps;
     to.slots += more.slots;
     to.no_room += more.no_room;
     to.cavities += more.cavities;

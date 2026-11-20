@@ -52,7 +52,8 @@
 //!
 //! # Levels, and flat areas
 //!
-//! Levels are a stepdown apart, from the top. Each is cleared on its own: the
+//! Levels are evenly spaced from the top, the fewest no more than a stepdown
+//! apart, so no slab is a sliver. Each is cleared on its own: the
 //! slab above it was untouched when it is cut. Each flat face and peak of the
 //! part adds a level on it (raised by the stock to leave down), cut after the
 //! level below it, so it only removes the terrace that level left over the face.
@@ -74,7 +75,7 @@ use crate::cutter::tool::{Cutter, ToolProfile};
 use crate::path::toolpath::{MoveRole, Toolpath};
 use crate::strategy::reach::LevelReach;
 use crate::strategy::{
-    MATERIAL_THICKNESS, SAME_LEVEL, StrategyError, check, check_levels, merged_highest, slabs,
+    MATERIAL_THICKNESS, SAME_LEVEL, StrategyError, check, check_levels, even_slabs, merged_highest,
     sort_levels, with_fine_levels,
 };
 
@@ -143,6 +144,10 @@ pub struct AdaptiveParams {
     /// The radius of the helix a closed area is entered down, as the tool's
     /// centre goes, in millimetres; zero to plunge.
     pub helix_radius: f64,
+    /// The smallest the helix is made where there is no room for
+    /// `helix_radius`, in millimetres: Fusion's Minimum Ramp Diameter, halved.
+    /// Where not even it fits, the area is ramped into along its middle.
+    pub least_helix_radius: f64,
     /// The longest link made without lifting, in millimetres.
     pub stay_down: f64,
     /// How far round what stands between a link stays down, from none, 0,
@@ -219,6 +224,7 @@ impl Default for AdaptiveParams {
             climb_right: true,
             direction: Direction::Climb,
             helix_radius: 2.7,
+            least_helix_radius: 0.675,
             stay_down: 30.0,
             stay_down_level: 1.0,
             stay_down_clearance: 0.0,
@@ -262,6 +268,8 @@ pub struct AdaptiveReport {
     pub entries: u64,
     /// Of them, entered down a helix.
     pub helixes: u64,
+    /// Of them, too narrow for a helix, ramped into along their middle.
+    pub ramps: u64,
     /// Of them, first cut a slot along their middle.
     pub slots: u64,
     /// Areas with no room to go down into, left uncut.
@@ -323,10 +331,10 @@ pub fn adaptive_rough(
     let radius = reach.cutter_radius();
     check("tool radius", radius)?;
 
-    // Levels from the top down, a stepdown apart, each flat level in the slab of
-    // the one just below it, cut after it from the bottom up: those too near
-    // the level above to be worth one left out.
-    let mut slabs = slabs(params.top, params.bottom, params.stepdown, &params.flats);
+    // Levels from the top down, evenly no more than a stepdown apart, each flat
+    // level in the slab of the one just below it, cut after it from the
+    // bottom up: those too near the level above to be worth one left out.
+    let mut slabs = even_slabs(params.top, params.bottom, params.stepdown, &params.flats);
     levels::without_thin(&mut slabs, params.top, params.min_flat_stepdown, |_| true);
     let mut slabs = match params.fine_stepdown {
         Some(fine) => with_fine_levels(slabs, params.top, fine),
@@ -559,7 +567,13 @@ fn clear_levels(
             report.left_mm2 += cut.left;
         }
         report.no_room += cut.no_room;
-        report.entries += cut.helixes.len() as u64;
+        let ramps = cut
+            .passes
+            .iter()
+            .filter(|(a, _)| matches!(a, Arrive::Ramp { .. }))
+            .count() as u64;
+        report.entries += cut.helixes.len() as u64 + ramps;
+        report.ramps += ramps;
         report.slots += cut.slots;
         report.overloads += cut.overloads;
         if cut.passes.is_empty() {
@@ -657,6 +671,16 @@ fn clear_levels(
                     None => path.feed_to(first, MoveRole::Link, params.feed)?,
                 }
             }
+            Arrive::Ramp { way } => {
+                let top = above.get(place.slab).copied().unwrap_or(params.top);
+                let mut ramp = ramped(way, cut.z, top + params.safe_distance, params).into_iter();
+                if let Some(start) = ramp.next() {
+                    path.feed_to(start, MoveRole::Link, params.feed)?;
+                }
+                for p in ramp {
+                    path.feed_to(p, MoveRole::Ramp, params.ramp_feed)?;
+                }
+            }
         }
         for p in points.iter().skip(1) {
             path.feed_to(dvec3(p.x, p.y, cut.z), MoveRole::Cut, params.feed)?;
@@ -744,45 +768,96 @@ struct Place {
     pass: usize,
 }
 
+/// How many points along a pass say which area it is in.
+const BY_AREA_SAMPLES: usize = 32;
+
 /// `order`, by depth, put in order by area: each area a slab's own level
 /// splits into, its piece of where the tool may be (`bases`), cleared all the
 /// way down before the next, the areas it splits into after it in turn. A
-/// level's passes keep their order, and a slab's flat and fine levels follow
-/// its own in each area, as they must: each cuts what that one left.
+/// pass is in the area most of it is in. A level's passes keep their order,
+/// and a slab's flat and fine levels follow its own in each area, bottom up,
+/// as they must: each cuts what that one left.
 fn by_area(order: &[Place], worked: &[Vec<LevelCut>], bases: &[Option<&Region>]) -> Vec<Place> {
-    let pieces: Vec<Vec<Region>> = bases
+    let regions: Vec<Vec<Region>> = bases
         .iter()
         .map(|r| r.map(Region::pieces).unwrap_or_default())
         .collect();
-    // Which piece of slab `s`'s level `p` is in: the one it is inside, or the
-    // nearest.
+    let pieces: Vec<Vec<Indexed>> = regions
+        .iter()
+        .map(|ps| ps.iter().map(Indexed::of).collect())
+        .collect();
+    // Which piece of slab `s`'s level `p` is in: the one it is deepest in, or
+    // nearest the edge of, outside them all. A flat or fine level of a slab
+    // cuts the terraces round its pieces, outside them; the nearest is the
+    // piece the terrace is round, where the box round a piece, as round a
+    // channel about an island, can hold other pieces whole.
     let piece_of = |s: usize, p: DVec2| -> usize {
-        let Some(ps) = pieces.get(s) else {
+        pieces.get(s).map_or(0, |ps| {
+            ps.iter()
+                .enumerate()
+                .map(|(k, r)| (k, r.depth_at(p)))
+                .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
+                .map_or(0, |(k, _)| k)
+        })
+    };
+    // Which piece of slab `s` a pass is in: where most of it is, by points
+    // spread along it, the first piece where as many are in two.
+    let pass_piece = |s: usize, points: &[DVec2]| -> usize {
+        let n = pieces.get(s).map_or(0, Vec::len);
+        if n < 2 {
             return 0;
-        };
-        if let Some(k) = ps.iter().position(|r| r.contains(p)) {
-            return k;
         }
-        ps.iter()
+        let mut votes = vec![0usize; n];
+        let every = (points.len() / BY_AREA_SAMPLES).max(1);
+        for p in points.iter().step_by(every) {
+            if let Some(v) = votes.get_mut(piece_of(s, *p)) {
+                *v += 1;
+            }
+        }
+        votes
+            .iter()
             .enumerate()
-            .filter_map(|(k, r)| {
-                let (lo, hi) = r.bounds()?;
-                Some((k, p.distance(p.clamp(lo, hi))))
-            })
-            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(&a.0)))
             .map_or(0, |(k, _)| k)
     };
-    // Each pass's area, as the pieces of every slab down to its own that its
-    // start is in: an area's below it are within it, as where the tool may be
+    // The piece of each slab above that each piece is in, by a point well
+    // inside it: an area's below it are within it, as where the tool may be
     // only shrinks going down.
+    let parents: Vec<Vec<usize>> = regions
+        .iter()
+        .enumerate()
+        .map(|(s, ps)| {
+            ps.iter()
+                .map(
+                    |piece| match (s.checked_sub(1), piece.deepest_point(0.01)) {
+                        (Some(up), Some((p, _))) => piece_of(up, p),
+                        _ => 0,
+                    },
+                )
+                .collect()
+        })
+        .collect();
+    // Each pass's area, as the pieces of every slab down to its own that it
+    // is in.
     let path_of = |place: &Place| -> Vec<usize> {
-        let start = worked
+        let points = worked
             .get(place.slab)
             .and_then(|s| s.get(place.level))
             .and_then(|c| c.passes.get(place.pass))
-            .and_then(|(_, pts)| pts.first().copied())
-            .unwrap_or(DVec2::ZERO);
-        (0..=place.slab).map(|s| piece_of(s, start)).collect()
+            .map_or(&[][..], |(_, pts)| pts.as_slice());
+        let mut path = vec![0; place.slab + 1];
+        let mut k = pass_piece(place.slab, points);
+        for s in (0..=place.slab).rev() {
+            if let Some(at) = path.get_mut(s) {
+                *at = k;
+            }
+            k = parents
+                .get(s)
+                .and_then(|ps| ps.get(k))
+                .copied()
+                .unwrap_or(0);
+        }
+        path
     };
     // Areas side by side are cut in the order they are first come to.
     let mut first_seen: std::collections::HashMap<(usize, usize), usize> =
@@ -814,7 +889,8 @@ fn by_area(order: &[Place], worked: &[Vec<LevelCut>], bases: &[Option<&Region>])
 
 /// Clear flat level `f` of a slab over what the levels of the slab `below` it
 /// left of `standing`, the material at it: the real tool, `cutter`, as wide at
-/// each as it is that far above its tip.
+/// each as it is that far above its tip. It starts nearest where the last of
+/// them ended, where the tool is, rather than at a corner of the level.
 fn clear_flat(
     f: f64,
     allowed: &Region,
@@ -839,7 +915,12 @@ fn clear_flat(
             }
         }
     }
-    clear_level(f, allowed, &uncut.whole()?, p)
+    // Where the tool is when it comes to it: where the level below ended.
+    let from = below
+        .iter()
+        .rev()
+        .find_map(|cut| cut.passes.last().and_then(|(_, pts)| pts.last().copied()));
+    clear_level_from(f, allowed, &uncut.whole()?, p, from)
 }
 
 /// A helix down onto `end` about `centre`, from `top`, as adaptive clearing
@@ -898,6 +979,61 @@ fn helix(
     Some((start, turns))
 }
 
+/// A ramp down onto the first point of `way` at level `z` from `top`, back
+/// and forth along `way`, as adaptive clearing goes down into material with
+/// no room for a helix: no steeper than the ramp angle, nor than the ramp's
+/// most in one way along, as it is in one turn of a helix; then once along it
+/// at the level, as a helix ends with a turn level, so all of it is cut to
+/// the level. Where it starts, above, then where it goes; ending at the
+/// first point of `way`, where the pass starts. Straight down onto it where
+/// there is nothing to ramp along.
+fn ramped(way: &[DVec2], z: f64, top: f64, p: &AdaptiveParams) -> Vec<glam::DVec3> {
+    let Some(&first) = way.first() else {
+        return Vec::new();
+    };
+    let length = camcraft_geom::contour::polyline_length(way);
+    if length <= 1e-9 || top <= z + 1e-9 || !(p.ramp_angle > 0.0 && p.ramp_angle < FRAC_PI_2) {
+        return vec![first.extend(z)];
+    }
+    let angle = p
+        .ramp_stepdown
+        .map_or(p.ramp_angle, |d| p.ramp_angle.min((d / length).atan()));
+    let drop = top - z;
+    let n =
+        camcraft_geom::steps::bounded_count((drop / (length * angle.tan()) - 1e-9).ceil().max(1.0));
+    // `n` ways along going down and one at the level, ending at the first
+    // point: starting from it when that is an even number of ways.
+    let back: Vec<DVec2> = way.iter().rev().copied().collect();
+    let starts_at_first = (n + 1).is_multiple_of(2);
+    let mut out = vec![
+        if starts_at_first {
+            first
+        } else {
+            back.first().copied().unwrap_or(first)
+        }
+        .extend(top),
+    ];
+    for t in 0..=n {
+        let along = if (t % 2 == 0) == starts_at_first {
+            way
+        } else {
+            &back
+        };
+        let mut gone = 0.0;
+        for w in along.windows(2) {
+            let [a, b] = w else { continue };
+            gone += a.distance(*b);
+            let h = if t < n {
+                top - drop * (f64::from(t) + gone / length) / f64::from(n)
+            } else {
+                z
+            };
+            out.push(b.extend(h.max(z)));
+        }
+    }
+    out
+}
+
 /// The material at level `z`: every block whose top stands above it.
 fn material(stocks: &[(DVec2, DVec2, f64)], z: f64) -> Result<Region, StrategyError> {
     let rings: Vec<Contour> = stocks
@@ -945,7 +1081,9 @@ fn show_level(watch: &Watch, cut: Option<&LevelCut>) {
 struct LevelParams {
     /// The real tool's radius: what it cuts.
     radius: f64,
-    /// The engagement angle asked for.
+    /// The radial width of cut asked for: the optimal load.
+    load: f64,
+    /// The engagement angle it gives.
     target: f64,
     /// Close enough to it.
     within: f64,
@@ -975,6 +1113,7 @@ struct LevelParams {
     side: Side,
     both_ways: bool,
     helix_radius: f64,
+    least_helix_radius: f64,
     stay_down: f64,
     /// How much of what the stay-down distance leaves past going straight a
     /// way round may take.
@@ -1001,6 +1140,7 @@ impl LevelParams {
         let side = if right { Side::Right } else { Side::Left };
         Self {
             radius,
+            load: p.optimal_load.min(2.0 * radius),
             target,
             within: (target * 0.03).max(2e-3),
             limit: angle(2.0 * p.optimal_load).max(target * 1.25),
@@ -1014,6 +1154,7 @@ impl LevelParams {
             side,
             both_ways: p.direction == Direction::BothWays,
             helix_radius: p.helix_radius,
+            least_helix_radius: p.least_helix_radius,
             stay_down: p.stay_down,
             stay_down_level: p.stay_down_level.clamp(0.0, 1.0),
             stay_down_clearance: p.stay_down_clearance.max(0.0),
@@ -1043,6 +1184,13 @@ enum Arrive {
         /// The helix's axis.
         centre: DVec2,
     },
+    /// Down into material with no way in from the side and no room for a
+    /// helix: back and forth along `way`, then once along it at the level,
+    /// ending where the pass starts, its first point.
+    Ramp {
+        /// What it ramps along.
+        way: Vec<DVec2>,
+    },
 }
 
 /// One level's passes.
@@ -1063,13 +1211,17 @@ struct LevelCut {
 
 impl LevelCut {
     /// Each line the tool's centre ran along at this level, in order, to `each`:
-    /// its passes, and the links between them made at the level.
+    /// its passes, the links between them made at the level, and its ramps
+    /// down, each as it ends, along it at the level.
     fn swept(
         &self,
         mut each: impl FnMut(&[DVec2]) -> Result<(), StrategyError>,
     ) -> Result<(), StrategyError> {
         let mut at: Option<DVec2> = None;
         for (arrive, points) in &self.passes {
+            if let Arrive::Ramp { way } = arrive {
+                each(way)?;
+            }
             if let (Arrive::Stay { via }, Some(a), Some(&b)) = (arrive, at, points.first()) {
                 let way: Vec<DVec2> = std::iter::once(a)
                     .chain(via.iter().copied())
@@ -1125,8 +1277,19 @@ fn clear_level(
     uncut: &Region,
     p: &LevelParams,
 ) -> Result<LevelCut, StrategyError> {
+    clear_level_from(z, allowed, uncut, p, None)
+}
+
+/// Clear one level, starting nearest `from` where it is known.
+fn clear_level_from(
+    z: f64,
+    allowed: &Region,
+    uncut: &Region,
+    p: &LevelParams,
+    from: Option<DVec2>,
+) -> Result<LevelCut, StrategyError> {
     let mut c = Clearing::new(allowed, uncut, p)?;
-    c.run()?;
+    c.run(from)?;
     Ok(LevelCut {
         z,
         passes: c.passes,

@@ -1853,6 +1853,49 @@ fn adaptive_roughing_is_finished_to_the_part() {
         "job did not verify: {:?}",
         result.warnings()
     );
+    // Not even over the dome's top, where the level on its peak leaves
+    // material too narrow to load the tool, does a pass go round on the spot.
+    let radius = 3.0;
+    let mut pass: Vec<glam::DVec2> = Vec::new();
+    let mut tightest: f64 = 0.0;
+    for m in rough.path.moves() {
+        if m.role == crate::path::toolpath::MoveRole::Cut {
+            pass.push(m.to.truncate());
+            continue;
+        }
+        tightest = tightest.max(turned_within(&pass, radius));
+        pass.clear();
+    }
+    tightest = tightest.max(turned_within(&pass, radius));
+    assert!(
+        tightest < std::f64::consts::TAU,
+        "a pass turned {tightest} rad within the tool's radius"
+    );
+}
+
+/// The most the heading along `points` turns within `distance` along it.
+fn turned_within(points: &[glam::DVec2], distance: f64) -> f64 {
+    let mut steps: Vec<(f64, f64)> = Vec::new();
+    let (mut gone, mut turned) = (0.0, 0.0);
+    for w in points.windows(3) {
+        let (u, v) = (w[1] - w[0], w[2] - w[1]);
+        if u.length_squared() < 1e-18 || v.length_squared() < 1e-18 {
+            continue;
+        }
+        turned += u.perp_dot(v).atan2(u.dot(v));
+        gone += v.length();
+        steps.push((gone, turned));
+    }
+    let mut most: f64 = 0.0;
+    for (i, &(g, t)) in steps.iter().enumerate() {
+        for &(h, u) in &steps[i..] {
+            if h - g > distance {
+                break;
+            }
+            most = most.max((u - t).abs());
+        }
+    }
+    most
 }
 
 /// Held to a tenth of the tool, it still takes off what Z-level roughing does,

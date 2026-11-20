@@ -6,6 +6,27 @@ the same notes at more length.
 
 ## Unreleased
 
+- **Adaptive clearing cuts by area in an order a machinist would**
+  ([decision 0036](docs/decisions/0036-adaptive-levels-order-and-entries.md)).
+  By area, each area gets each slab's level and then its fine levels up the
+  wall from the bottom, then the next slab down, and is finished before the
+  next begins: a pass is the area's most of it is in, where a fine level's
+  terrace, outside its slab's area, went to whichever area's box was nearest,
+  a channel round an island taking the island's. Levels are spaced evenly,
+  the fewest no more than the stepdown apart, so the last is never a sliver
+  costing a lap; fine levels up to a flat face are spaced evenly to it, so
+  none falls a hair below the flat's own level and leaves the face standing
+  alone. A pass that would go round on the spot ends, and material narrower
+  than the tool is taken in passes along it, a sliver in one: on a user's part a
+  third of the program's lines had been a pass going round an octagon a
+  quarter of a millimetre across. The helix into a closed area is never made
+  smaller than Fusion's Minimum Ramp Diameter, where it went down to a quarter
+  of its size; where not even that fits, the area is ramped into back and
+  forth along its middle at the ramp angle, rather than left. A fine level
+  starts nearest where the level below it ended. On the user's part the
+  program is 109,213 lines where it was 169,671, removing the same material,
+  with a lift and 185 mm of rapids fewer. Every Fusion comparison of a finish starts
+  from a new adaptive's roughing, so their figures were measured again.
 - **The finishes over the part enter and link as Fusion's**
   ([decision 0034](docs/decisions/0034-entries-and-order-of-the-finishes-over-the-part.md)).
   Parallel, Scallop, Spiral, Radial and Morphed Spiral no longer ramp into a

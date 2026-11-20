@@ -48,6 +48,10 @@ pub(super) struct Clearing<'a> {
     /// How much of the material the window holds every flush has taken out
     /// since it was last asked ([`Clearing::taken`]).
     taken: f64,
+    /// Whether the last pass ended turning round on the spot.
+    orbited: bool,
+    /// Where the passes that ended so started.
+    orbits: Vec<DVec2>,
 }
 
 /// What a part of a level looks like, between passes.
@@ -124,10 +128,14 @@ impl<'a> Clearing<'a> {
             overloads: 0,
             slots: 0,
             taken: 0.0,
+            orbited: false,
+            orbits: Vec::new(),
         })
     }
 
-    pub(super) fn run(&mut self) -> Result<(), StrategyError> {
+    /// Clear the level, its first pass starting nearest `from`, where the
+    /// tool is when it comes to it, if that is known.
+    pub(super) fn run(&mut self, from: Option<DVec2>) -> Result<(), StrategyError> {
         let mut at: Option<DVec2> = None;
         let mut futile = 0;
         for _ in 0..MAX_PASSES {
@@ -154,7 +162,7 @@ impl<'a> Clearing<'a> {
                     if s.remaining.is_empty() {
                         break;
                     }
-                    let found = self.next_start(&s, at)?;
+                    let found = self.next_start(&s, at.or(from))?;
                     (s, found)
                 }
             };
@@ -176,13 +184,31 @@ impl<'a> Clearing<'a> {
                     self.cavities = true;
                     break;
                 }
-                None => match self.enter(&s)? {
-                    Some((start, dir, side, arrive)) => (start, dir, side, arrive, true),
-                    None => {
-                        self.no_room += 1;
-                        break;
+                None => {
+                    // Narrower than the tool, as a crumb left where a pass
+                    // went round on the spot: taken from outside in, not gone
+                    // down into.
+                    let along = match nearest_piece(&s.remaining, at.or(from)) {
+                        Some(near) => self.take_small(near, self.p.side)?,
+                        None => Vec::new(),
+                    };
+                    if !along.is_empty() {
+                        futile = 0;
+                        for (arrive, points) in along {
+                            at = points.last().copied();
+                            self.passes.push((arrive, points));
+                            self.sides.push(self.p.side);
+                        }
+                        continue;
                     }
-                },
+                    match self.enter(&s)? {
+                        Some((start, dir, side, arrive)) => (start, dir, side, arrive, true),
+                        None => {
+                            self.no_room += 1;
+                            break;
+                        }
+                    }
+                }
             };
             // Gone down into a closed area: a slot along its middle first,
             // where it is to cut one and there is room.
@@ -212,6 +238,24 @@ impl<'a> Clearing<'a> {
             at = points.last().copied();
             self.passes.push((arrive, points));
             self.sides.push(side);
+            if self.orbited {
+                // Started here again, a pass may go on from what this one
+                // left; one that goes round on the spot from here a second
+                // time is not started here again. What it turned round on,
+                // if narrower than the tool, is taken from outside in.
+                let near = |p: &DVec2| p.distance(start) < self.p.radius * 0.25;
+                if self.orbits.iter().any(near) {
+                    self.dead.push(start);
+                }
+                self.orbits.push(start);
+                if let Some(end) = at {
+                    for (arrive, points) in self.take_small(end, side)? {
+                        at = points.last().copied();
+                        self.passes.push((arrive, points));
+                        self.sides.push(side);
+                    }
+                }
+            }
         }
         // What is left worth a pass, as a situation would have it.
         self.flush()?;
@@ -549,17 +593,32 @@ impl<'a> Clearing<'a> {
 
     /// Go down into material there is no way into from the side: a helix, or a
     /// plunge, at the widest place there is room for one, cleared as it goes
-    /// down. `None` where there is room nowhere.
+    /// down. A helix is made smaller where there is no room for it, halved
+    /// each time, but never below the least asked for, Fusion's Minimum Ramp
+    /// Diameter: a smaller one goes round so many more times for its depth
+    /// that it is mostly a plunge. Where none fits, a ramp along the area
+    /// ([`Clearing::ramp_way`]). `None` where there is room for nothing.
     pub(super) fn enter(
         &mut self,
         s: &Situation,
     ) -> Result<Option<(DVec2, DVec2, Side, Arrive)>, StrategyError> {
-        let sizes: &[f64] = if self.p.helix_radius > 0.0 {
-            // As the linker tries them.
-            &[1.0, 0.5, 0.25]
+        let mut sizes: Vec<f64> = Vec::new();
+        if self.p.helix_radius > 0.0 {
+            let least = self
+                .p
+                .least_helix_radius
+                .clamp(self.p.sliver, self.p.helix_radius);
+            let mut r = self.p.helix_radius;
+            // Bounded: halving from a finite radius reaches any positive
+            // least in a few dozen steps.
+            while r > least + 1e-9 && sizes.len() < 64 {
+                sizes.push(r);
+                r *= 0.5;
+            }
+            sizes.push(least);
         } else {
-            &[0.0]
-        };
+            sizes.push(0.0);
+        }
         let side = self.p.side;
         let dead: Vec<Contour> = self
             .dead
@@ -567,8 +626,7 @@ impl<'a> Clearing<'a> {
             .filter_map(|&d| disc(d, self.p.radius * 0.25, self.p.arc))
             .collect();
         let dead = Region::union_of(&dead)?;
-        for &k in sizes {
-            let r = self.p.helix_radius * k;
+        for &r in &sizes {
             let room = s
                 .allowed
                 .offset(-r, self.p.arc)
@@ -589,7 +647,74 @@ impl<'a> Clearing<'a> {
             self.helixes.push((centre, r));
             return Ok(Some((start, heading, side, Arrive::Enter { centre })));
         }
-        Ok(None)
+        if self.p.helix_radius <= 0.0 {
+            return Ok(None);
+        }
+        let room = s
+            .allowed
+            .intersection(&s.remaining)
+            .and_then(|room| room.difference(&dead))?;
+        let Some(way) = self.ramp_way(&room) else {
+            return Ok(None);
+        };
+        let (Some(&start), Some(&next)) = (way.first(), way.get(1)) else {
+            return Ok(None);
+        };
+        let heading = (next - start).try_normalize().unwrap_or(DVec2::X);
+        self.cut_material(&Region::around_polylines(
+            std::slice::from_ref(&way),
+            self.p.radius,
+            self.p.swept_arc,
+        ))?;
+        self.window = None;
+        Ok(Some((start, heading, side, Arrive::Ramp { way })))
+    }
+
+    /// Where to ramp down into `room`, the material where the tool may be, too
+    /// narrow anywhere for the least helix: back and forth along a stretch of
+    /// its middle, from a point as deep in it as any, as long as the largest
+    /// helix goes round in one turn, or as long as the middle goes if it is
+    /// shorter, but no shorter than the least helix is across. The middle is
+    /// where the room is half as deep as it is at its deepest, or more: along
+    /// a channel of about even width, a line down it. `None` where there is
+    /// no such stretch.
+    fn ramp_way(&self, room: &Region) -> Option<Vec<DVec2>> {
+        let (deep, depth) = room.deepest_point(self.p.arc)?;
+        if depth <= self.p.sliver {
+            return None;
+        }
+        let middle = room.offset(-0.5 * depth, self.p.arc);
+        let shortest = 2.0 * self.p.least_helix_radius.max(self.p.sliver);
+        let longest = (TAU * self.p.helix_radius).max(shortest);
+        // The ring of the middle nearest the deepest point, from its point
+        // nearest it, round either way as far as the stretch goes.
+        let ring = middle.rings().iter().min_by(|a, b| {
+            let d = |r: &Contour| {
+                r.points()
+                    .iter()
+                    .map(|p| p.distance(deep))
+                    .fold(f64::INFINITY, f64::min)
+            };
+            d(a).total_cmp(&d(b))
+        })?;
+        let pts = ring.points();
+        let n = pts.len();
+        let from = nearest_to(pts, Some(deep));
+        let mut way = vec![*pts.get(from)?];
+        let mut length = 0.0;
+        for i in 1..n {
+            let p = *pts.get((from + i) % n)?;
+            let last = *way.last()?;
+            let leg = last.distance(p);
+            if length + leg >= longest {
+                way.push(last + (p - last) * ((longest - length) / leg.max(1e-12)));
+                length = longest;
+                break;
+            }
+            length += leg;
+            way.push(p);
+        }
+        (length >= shortest - 1e-9).then_some(way)
     }
 
     /// A slot `width` wide along the middle of the closed area gone down into
@@ -656,6 +781,186 @@ impl<'a> Clearing<'a> {
         self.cut_material(&swept)?;
         self.window = None;
         Ok(Some(points))
+    }
+
+    /// Material nowhere as wide as the tool, about `at`, taken from outside
+    /// in, with it on `side`, in passes along it rather than steered for the
+    /// load: a ridge or a sliver narrower than the load, which a pass turns
+    /// hard toward at every step, never taking enough, and so goes round on
+    /// the spot by; or a crumb such a pass left with no way in from the side,
+    /// smaller than the helix that would go down into it. The tool's centre
+    /// goes round what is left as far out as leaves the load to cut, within
+    /// where it may be, until all of it is in reach of where it has been:
+    /// along one side of a strip, round one edge of a ring; again, the load
+    /// further in, until none is left but crumbs. Where the tool may not be
+    /// so far in, it goes round further out, taking less. Each way along is a
+    /// pass, started where the tool just touches the material, as a pass is;
+    /// none that would cut into other material, which is left to the passes
+    /// after, and none where what is there is as wide as the tool somewhere.
+    fn take_small(
+        &mut self,
+        at: DVec2,
+        side: Side,
+    ) -> Result<Vec<(Arrive, Vec<DVec2>)>, StrategyError> {
+        self.flush()?;
+        let (r, load) = (self.p.radius, self.p.load);
+        let remaining = self.uncut.whole()?.offset(-self.p.sliver, self.p.coarse);
+        // The piece about `at`: the one it is in, or nearest, within the
+        // tool's reach.
+        let Some(mut left) = remaining
+            .pieces()
+            .into_iter()
+            .map(|piece| (piece.depth_at(at), piece))
+            .filter(|(d, _)| *d > -2.0 * r)
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, piece)| piece)
+        else {
+            return Ok(Vec::new());
+        };
+        if !left.offset(-r, self.p.coarse).is_empty() {
+            return Ok(Vec::new());
+        }
+        let others = remaining.difference(&left)?;
+        let mut out = Vec::new();
+        let mut from = at;
+        // Bounded: each round takes some of it, or ends.
+        for _ in 0..SMALL_ROUNDS {
+            self.p.watch.check()?;
+            // Crumbs are left, as a level leaves them.
+            if all_in(&left, &Region::default(), self.p)? || crumbs(&left, r * 0.25) {
+                break;
+            }
+            // The load in from where the tool just touches it, or less where
+            // only further out is where the tool may be.
+            let mut into = load.min(r - self.p.sliver);
+            let mut ways = self.ways_round(&left, r - into, side)?;
+            while ways.is_empty() && into > 2.0 * self.p.sliver {
+                into *= 0.5;
+                ways = self.ways_round(&left, r - into, side)?;
+            }
+            let off = r - into;
+            // Nearest where the tool is first, from its nearest point if it
+            // goes all the way round.
+            let mut ways: Vec<(f64, Vec<DVec2>)> = ways
+                .into_iter()
+                .map(|way| {
+                    let closed = way.len() > 2
+                        && way
+                            .first()
+                            .zip(way.last())
+                            .is_some_and(|(a, b)| a.distance(*b) < 1e-9);
+                    let way: Vec<DVec2> = if closed {
+                        let start = nearest_to(&way, Some(from));
+                        let ring = way.get(..way.len() - 1).unwrap_or(&[]);
+                        ring.iter()
+                            .skip(start)
+                            .chain(ring.iter().take(start + 1))
+                            .copied()
+                            .collect()
+                    } else {
+                        way
+                    };
+                    let d = way.first().map_or(f64::INFINITY, |p| p.distance(from));
+                    (d, way)
+                })
+                .collect();
+            ways.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut took = false;
+            for (_, way) in ways {
+                // Along it until everything is in reach of where it has been.
+                let mut taken: Vec<DVec2> = Vec::new();
+                let mut since = 0.0;
+                for p in way {
+                    if let Some(&q) = taken.last() {
+                        since += q.distance(p);
+                    }
+                    taken.push(p);
+                    if since >= r {
+                        since = 0.0;
+                        let so_far = Region::around_polylines(
+                            std::slice::from_ref(&taken),
+                            r,
+                            self.p.swept_arc,
+                        );
+                        if all_in(&left, &so_far, self.p)? {
+                            break;
+                        }
+                    }
+                }
+                // Come at it from where the tool just touches it, square to
+                // the way.
+                if let (Some(&a), Some(&b)) = (taken.first(), taken.get(1))
+                    && let Some(d) = (b - a).try_normalize()
+                {
+                    let touch = a + side.away(d) * (r - off);
+                    if self.allowed.contains_segment(touch, a) {
+                        taken.insert(0, touch);
+                    }
+                }
+                if taken.len() < 2 {
+                    continue;
+                }
+                let swept =
+                    Region::around_polylines(std::slice::from_ref(&taken), r, self.p.swept_arc);
+                let length = camcraft_geom::contour::polyline_length(&taken);
+                if others.intersection(&swept)?.area() > self.p.sliver * length
+                    || left.intersection(&swept)?.area() <= self.p.sliver * length
+                {
+                    continue;
+                }
+                let s = self.situation_near(from, 8.0 * r)?;
+                let arrive = match taken.first().and_then(|&b| self.stay_route(&s, from, b)) {
+                    Some(via) => Arrive::Stay { via },
+                    None => Arrive::Link,
+                };
+                self.cut_material(&swept)?;
+                self.window = None;
+                left = left.difference(&swept)?;
+                from = taken.last().copied().unwrap_or(from);
+                out.push((arrive, taken));
+                took = true;
+                break;
+            }
+            if !took {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// The ways round `material` `off` out from it, within where the tool
+    /// may be, each with the material on `side`.
+    fn ways_round(
+        &self,
+        material: &Region,
+        off: f64,
+        side: Side,
+    ) -> Result<Vec<Vec<DVec2>>, StrategyError> {
+        // The material on the left of each ring round it.
+        let loops: Vec<Vec<DVec2>> = material
+            .offset(off, self.p.arc)
+            .rings()
+            .iter()
+            .map(|ring| {
+                let mut l = ring.points().to_vec();
+                if let Some(&first) = l.first() {
+                    l.push(first);
+                }
+                l
+            })
+            .collect();
+        Ok(self
+            .allowed
+            .clip_polylines(&loops)?
+            .into_iter()
+            .filter(|way| way.len() >= 2)
+            .map(|mut way| {
+                if side == Side::Right {
+                    way.reverse();
+                }
+                way
+            })
+            .collect())
     }
 
     /// Take what the trail has swept out of the material.
@@ -737,6 +1042,21 @@ impl<'a> Clearing<'a> {
         let (mut idle, mut last_taken) = (0.0, 0);
         // How far it has gone engaged since that was last looked at.
         let mut since = 0.0;
+        // How far it has gone, how far its heading has turned and where it
+        // was, at each step within the tool's radius back. A pass that turns
+        // a full circle in less than that without once taking the load, and
+        // comes back to within a step of where the circle began, is going
+        // round on the spot: in material too narrow to load the tool, turning
+        // as hard as it may toward it at every step at the shortest step, it
+        // goes round a polygon a fraction of a millimetre across, again and
+        // again. A loop in a narrow slot turns as tightly, and may take less
+        // than the load all the way round, but moves on.
+        let mut turns: std::collections::VecDeque<(f64, f64, DVec2)> =
+            std::collections::VecDeque::new();
+        let (mut gone, mut turned) = (0.0, 0.0);
+        // How far it had gone when it last took the load.
+        let mut fed = 0.0;
+        self.orbited = false;
         self.taken = 0.0;
         while self.steps < MAX_STEPS {
             self.steps += 1;
@@ -757,10 +1077,32 @@ impl<'a> Clearing<'a> {
                 self.overloads += 1;
                 break;
             };
+            turned += heading
+                .perp_dot(chosen.heading)
+                .atan2(heading.dot(chosen.heading));
+            gone += step;
             at = chosen.at;
             heading = chosen.heading;
             points.push(at);
+            if chosen.engagement >= self.p.target - self.p.within {
+                fed = gone;
+            }
+            while turns
+                .front()
+                .is_some_and(|&(g, ..)| gone - g > self.p.radius)
+            {
+                turns.pop_front();
+            }
+            // The step that closes the circle is neither cut nor kept.
+            if turns.iter().any(|&(g, t, p)| {
+                g >= fed && (turned - t).abs() >= TAU && p.distance(at) < self.p.shortest
+            }) {
+                self.orbited = true;
+                points.pop();
+                break;
+            }
             self.trail.push(at);
+            turns.push_back((gone, turned, at));
             self.trail_length += step;
             lenient -= step;
             if chosen.engagement < self.p.air {
@@ -804,6 +1146,37 @@ impl<'a> Clearing<'a> {
             Vec::new()
         })
     }
+}
+
+/// The most times round material narrower than the tool is gone, each the
+/// load further in: far more than such material needs.
+const SMALL_ROUNDS: usize = 64;
+
+/// Whether all of `material` worth a pass is within `swept`.
+fn all_in(material: &Region, swept: &Region, p: &LevelParams) -> Result<bool, StrategyError> {
+    Ok(material
+        .difference(swept)?
+        .offset(-p.sliver, p.coarse)
+        .is_empty())
+}
+
+/// A point well inside the piece of `region` nearest `from`, or the first
+/// piece without a `from`. `None` for a region with no area.
+fn nearest_piece(region: &Region, from: Option<DVec2>) -> Option<DVec2> {
+    let pieces = region.pieces();
+    let piece = match from {
+        Some(f) => pieces
+            .iter()
+            .max_by(|a, b| a.depth_at(f).total_cmp(&b.depth_at(f)))?,
+        None => pieces.first()?,
+    };
+    piece
+        .deepest_point(
+            piece
+                .bounds()
+                .map_or(1e-3, |(lo, hi)| lo.distance(hi) * 1e-3),
+        )
+        .map(|(p, _)| p)
 }
 
 /// Whether every piece of `remaining` is smaller across than `size`.

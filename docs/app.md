@@ -209,7 +209,9 @@ it.
   conventional or both ways, by depth or by area, and *Flat areas* with its
   *Minimum stepdown*, and no *Deepest step cut*; under *Multiple depths*,
   *Shallow areas*, ticked, with its minimum stepdown and maximum stepover, and
-  *Minimum axial engagement*. Its *Linking* has the *Stay-down level*,
+  *Minimum axial engagement*; its levels are spaced evenly, and by area each
+  area gets each slab's level and then its fine levels up the wall before the
+  next slab down. Its *Linking* has the *Stay-down level*,
   *Stay-down clearance* and *Lift height*; its *Geometry* has *Rest machining*
   and, ticked, *Ignore stock less than*; pocket clearing's climb or conventional, *Flat areas* and the
   shortest ring worth cutting. A 2D operation's *Passes* has climb

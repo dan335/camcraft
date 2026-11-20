@@ -82,7 +82,7 @@ fn a_new_scallop_leaves_what_fusions_does() {
     holds("scallop", |_| {}, &bounds, 0);
 }
 
-/// The dome avoided, 1 mm sideways and 1 mm down: 61.8% of 685,850 columns
+/// The dome avoided, 1 mm sideways and 1 mm down: 61.8% of 685,842 columns
 /// alike, the median 0.0056 mm and the 95th percentile 0.24, 1.2% less
 /// removed and 12% more fed. Fusion's lines round the dome are its own,
 /// and it lifts 8 times to camcraft's 15.

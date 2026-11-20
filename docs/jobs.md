@@ -723,12 +723,23 @@ plunges down off it at the plunge feed, `"triangular"` climbs and ramps off at
 45°. They are put on before linking, so links and ramps plan round them.
 
 **Adaptive clearing** (`strategy = "adaptive"`) is Fusion's 3D Adaptive
-Clearing ([decision 0007](decisions/0007-adaptive-clearing.md)): Z levels a
-stepdown apart, each cleared by passes steered step by step to hold the tool's
+Clearing ([decision 0007](decisions/0007-adaptive-clearing.md)): Z levels
+evenly spaced, the fewest no more than a stepdown apart, so the last is never
+a sliver ([decision 0036](decisions/0036-adaptive-levels-order-and-entries.md)),
+each cleared by passes steered step by step to hold the tool's
 engagement at the *optimal load*, which is its `passes.stepover`
 (`tool_diameter * 0.4` to start, as Fusion's). Passes start beside the block where they can, and go down a helix
 (`linking.helix_diameter`, Fusion's: 0.95 × the tool less its corners, no less
-than a quarter of the tool) where they cannot; `direction` is
+than a quarter of the tool) where they cannot, halved where it has no room but
+never below Fusion's Minimum Ramp Diameter (half the tool less its corners, no
+less than a quarter of the tool); where not even that fits, they ramp back and
+forth along the area's middle at the ramp angle. A fine stepdown
+(`passes.fine_stepdown`) adds levels that far apart up each slab from its
+level, and evenly up to each flat face in it, so none falls a hair below the
+flat's own. A pass that would go round on the spot, on material too narrow to
+take the load from, ends, and material narrower than the tool is taken in
+passes along it, a sliver narrower than the load in one;
+`direction` is
 `"climb"` (the default), `"conventional"` or `"both-ways"`; `flat_areas` (on by
 default) adds a level on each flat face and on each peak, raised by the stock to
 leave down.
@@ -743,7 +754,10 @@ stay-down distance. As Fusion's 3D Adaptive:
   smaller tool, and nothing narrower than the tool and twice this is cut.
 - `order`: `"by-depth"` (the default), each level everywhere before the next
   down, or `"by-area"`, each area a level splits into, such as a pocket, cleared
-  all the way down before the next.
+  all the way down before the next: each slab's level, then its fine and flat
+  levels up the wall from the bottom, then the next slab down. A pass is in
+  the area most of it is in, so a fine level's terrace round an area is that
+  area's.
 - `rest_machining` (off by default): it clears only what the operations before
   it in the setup left, each swept exactly with the tool it was cut with, so it
   waits for them; `ignore_stock_less_than` lets be what they left thinner than
@@ -933,7 +947,10 @@ straight down.
 
 Adaptive clearing, 3D and 2D, has an entry too, into what it cannot reach from
 the side: `"helix"` (the default) or `"plunge"`, as Fusion's Adaptive's ramp
-types. It has no ring to ramp along, so `"ramp"` is refused.
+types. It has no ring to ramp along, so `"ramp"` is refused; but where no helix
+of the least size fits, it ramps back and forth along a stretch of the
+area's middle, as long as the largest helix goes round in a turn, then once
+along it at the level, rather than leave the area.
 
 Neither a helix nor a ramp round a ring goes down more in one lap than the
 *most per lap* (`ramp_stepdown`, Fusion's maximum ramp stepdown): the
@@ -968,7 +985,7 @@ line between them, lifted wherever the part rises above it. Pocket clearing and
 the 2D strategies go straight and level, and a profile down to its ring's next
 depth. Adaptive clearing makes
 its own links at the level, only straight across what it has cleared; it goes
-down its own helix into what it cannot reach
+down its own helix, or ramp, into what it cannot reach
 from the side, and straight down everywhere else, into what it has cleared.
 Parallel and the other finishes over the part (scallop, spiral, radial,
 morphed spiral, pencil, project and morph) enter and leave each pass along a

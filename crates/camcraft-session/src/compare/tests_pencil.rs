@@ -267,7 +267,7 @@ pub(super) fn held_to(job: &Job, name: &str, bounds: &Bounds, contacts: u64) {
 }
 
 /// A new Pencil with the 12 mm ball leaves what Fusion's does: 95.3% of the
-/// 524,965 columns either cuts alike, the median difference 0.0015 mm and the
+/// 524,959 columns either cuts alike, the median difference 0.0015 mm and the
 /// 95th percentile 0.0098, 0.09% less removed and 7.3% less fed.
 #[test]
 fn a_new_pencil_leaves_what_fusions_does() {
@@ -282,7 +282,7 @@ fn a_new_pencil_leaves_what_fusions_does() {
     holds(("pencil", "ball12"), |_| {}, &bounds, 0);
 }
 
-/// With the 6 mm ball, which fits the fillets: 74.5% of the 266,231 columns
+/// With the 6 mm ball, which fits the fillets: 74.5% of the 266,227 columns
 /// alike, the median 0.0021 mm and the 95th percentile 2.35, 4.5% more
 /// removed and 9.6% more fed. The lines are Fusion's; the links between them
 /// are not, and cut through what the roughing left beside the drafted wall,
@@ -301,7 +301,7 @@ fn a_pencil_with_a_ball_that_fits_the_fillets_leaves_what_fusions_does() {
 }
 
 /// With a bitangency angle of 40°, the lines up the corners shorter: 95.3% of
-/// 522,681 columns alike, the median 0.0015 mm and the 95th percentile
+/// 522,675 columns alike, the median 0.0015 mm and the 95th percentile
 /// 0.0098, 0.09% less removed and 0.9% more fed.
 #[test]
 fn a_pencil_at_forty_degrees_leaves_what_fusions_does() {
@@ -329,7 +329,7 @@ fn a_pencil_at_forty_degrees_leaves_what_fusions_does() {
 }
 
 /// With two stepovers either side of the lines, the 6 mm ball: 69.3% of
-/// 522,836 columns alike, the median 0.0024 mm and the 95th percentile 0.73,
+/// 522,840 columns alike, the median 0.0024 mm and the 95th percentile 0.73,
 /// 2.3% more removed and 8.0% more fed. The passes beside the lines run as
 /// Fusion's do, round the dome, over the floor, up the walls and round the
 /// corners past the block's edge; their order is not Fusion's, nor the links

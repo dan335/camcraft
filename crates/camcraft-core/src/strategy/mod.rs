@@ -152,7 +152,7 @@ pub(crate) fn slabs(top: f64, bottom: f64, stepdown: f64, flats: &[f64]) -> Vec<
     // Clamped to a small whole number, so the narrowing is exact.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let count = count as u32;
-    let mut slabs: Vec<(f64, Vec<f64>)> = Vec::new();
+    let mut levels: Vec<f64> = Vec::new();
     for i in 1..=count {
         let mut z = (top - f64::from(i) * stepdown).max(bottom);
         // A rounding error above the bottom is the bottom: a stepdown that
@@ -160,11 +160,38 @@ pub(crate) fn slabs(top: f64, bottom: f64, stepdown: f64, flats: &[f64]) -> Vec<
         if z - bottom < SAME_LEVEL {
             z = bottom;
         }
-        slabs.push((z, Vec::new()));
+        levels.push(z);
         if z <= bottom {
             break;
         }
     }
+    with_flats(levels, top, bottom, flats)
+}
+
+/// Z levels from `top` down to `bottom`, as [`slabs`] has them but evenly
+/// spaced: the fewest no more than `stepdown` apart, each as deep as the
+/// rest, the last at `bottom` ([`planar::levels`]). A depth that is not a
+/// whole number of stepdowns is shared out, rather than left to a last slab
+/// as thin as the remainder: that one costs a whole level of passes for
+/// little material, and is never more levels than [`slabs`] makes.
+pub(crate) fn even_slabs(
+    top: f64,
+    bottom: f64,
+    stepdown: f64,
+    flats: &[f64],
+) -> Vec<(f64, Vec<f64>)> {
+    with_flats(
+        planar::levels(top, bottom, Some(stepdown)),
+        top,
+        bottom,
+        flats,
+    )
+}
+
+/// `levels`, from the top down, each with the flat levels among `flats` that
+/// lie between it and the one above, lowest first.
+fn with_flats(levels: Vec<f64>, top: f64, bottom: f64, flats: &[f64]) -> Vec<(f64, Vec<f64>)> {
+    let mut slabs: Vec<(f64, Vec<f64>)> = levels.into_iter().map(|z| (z, Vec::new())).collect();
     for &f in flats {
         if !(f > bottom && f < top) || slabs.iter().any(|(z, _)| (z - f).abs() < SAME_LEVEL) {
             continue;
@@ -194,11 +221,20 @@ pub(crate) fn stepped_levels(top: f64, bottom: f64, stepdown: Option<f64>, even:
 }
 
 /// `slabs`, as [`slabs`] makes them from the top down to `top`, with Fusion's
-/// fine stepdown in each: levels `fine` apart up from the slab's level and from
-/// each flat in it, to below the level above, or `top`. Each is cut, as a flat
-/// level is, after the slab's level and the ones below it in the slab, over what
-/// they left: on a slope, the terraces they leave cut down to steps `fine`
-/// tall. Bounded, as [`slabs`] is.
+/// fine stepdown in each: levels between the slab's level and each flat in
+/// it, and from the highest of them up to the level above, or `top`, so the
+/// steps between are no taller than `fine`. Each is cut, as a flat level is,
+/// after the slab's level and the ones below it in the slab, over what they
+/// left: on a slope, the terraces they leave cut down to steps `fine` tall.
+///
+/// Up to the level above they are `fine` apart from the level below, as
+/// Fusion's are. Up to a flat they are as many as keep each step within
+/// `fine`, spaced evenly: counted up from below, the last would fall
+/// anywhere short of the flat, as close as a hair, and a level a hair below
+/// one that must be cut takes nothing the flat level would not, while it
+/// leaves the flat face standing alone above it as a ridge, narrower than the
+/// tool, for the flat level to take on its own. None goes past a flat, whose
+/// own come up from it. Bounded, as [`slabs`] is.
 pub(crate) fn with_fine_levels(
     mut slabs: Vec<(f64, Vec<f64>)>,
     top: f64,
@@ -209,14 +245,26 @@ pub(crate) fn with_fine_levels(
     }
     let mut above = top;
     for (z, fills) in &mut slabs {
-        let bases: Vec<f64> = std::iter::once(*z).chain(fills.iter().copied()).collect();
-        for base in bases {
-            for k in 1..=10_000_u32 {
-                let f = base + f64::from(k) * fine;
-                if f >= above - SAME_LEVEL {
-                    break;
+        let mut bases: Vec<f64> = std::iter::once(*z).chain(fills.iter().copied()).collect();
+        sort_levels(&mut bases, false);
+        for (k, &base) in bases.iter().enumerate() {
+            match bases.get(k + 1) {
+                Some(&next) => {
+                    let gap = next - base;
+                    let steps = (gap / fine - 1e-9).ceil().clamp(1.0, 10_000.0);
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let steps = steps as u32;
+                    fills.extend((1..steps).map(|i| base + gap * f64::from(i) / f64::from(steps)));
                 }
-                fills.push(f);
+                None => {
+                    for i in 1..=10_000_u32 {
+                        let f = base + f64::from(i) * fine;
+                        if f >= above - SAME_LEVEL {
+                            break;
+                        }
+                        fills.push(f);
+                    }
+                }
             }
         }
         sort_levels(fills, false);
@@ -303,6 +351,64 @@ mod tests {
         for bad in [0.0, -1.0, f64::NAN] {
             assert_eq!(with_fine_levels(plain.clone(), 10.0, bad), plain);
         }
+    }
+
+    /// A depth that is not a whole number of stepdowns: even slabs share it
+    /// out, as many as a stepdown apart from the top makes and never a
+    /// sliver; one that is, as [`slabs`] has it.
+    #[test]
+    fn even_slabs_share_out_the_depth() {
+        let zs = |s: Vec<(f64, Vec<f64>)>| s.into_iter().map(|s| s.0).collect::<Vec<f64>>();
+        let stepped = zs(slabs(0.0, -39.37, 12.7, &[]));
+        let even = zs(even_slabs(0.0, -39.37, 12.7, &[]));
+        assert_eq!(stepped.len(), even.len());
+        assert!((stepped[3] - stepped[2] + 1.27).abs() < 1e-9, "{stepped:?}");
+        for (z, k) in even.iter().zip([1.0, 2.0, 3.0, 4.0]) {
+            assert!((z + 39.37 * k / 4.0).abs() < 1e-9, "{even:?}");
+        }
+        assert_eq!(even.last(), Some(&-39.37));
+        let (even, stepped) = (
+            zs(even_slabs(19.05, 0.0, 6.35, &[])),
+            zs(slabs(19.05, 0.0, 6.35, &[])),
+        );
+        assert_eq!(even.len(), stepped.len());
+        assert!(
+            even.iter().zip(&stepped).all(|(a, b)| (a - b).abs() < 1e-9),
+            "{even:?}"
+        );
+        // Flats as slabs has them.
+        let s = even_slabs(10.0, 0.0, 4.0, &[5.0, 9.0]);
+        let want = [10.0 - 10.0 / 3.0, 10.0 - 20.0 / 3.0, 0.0];
+        assert!(
+            zs(s.clone())
+                .iter()
+                .zip(want)
+                .all(|(a, b)| (a - b).abs() < 1e-9)
+        );
+        assert_eq!(s[0].1, vec![9.0]);
+        assert_eq!(s[1].1, vec![5.0]);
+    }
+
+    /// Fine levels below a flat in their slab are spaced evenly up to it,
+    /// none a hair below it, and none go past it: those above it come up
+    /// from it.
+    #[test]
+    fn fine_levels_never_crowd_a_flat() {
+        let s = with_fine_levels(slabs(0.0, -10.0, 10.0, &[-2.49]), 0.0, 2.5);
+        assert_eq!(s.len(), 1);
+        let (z, fills) = &s[0];
+        assert_eq!(*z, -10.0);
+        let step = 7.51 / 4.0;
+        let want = [-10.0 + step, -10.0 + 2.0 * step, -10.0 + 3.0 * step, -2.49];
+        assert_eq!(fills.len(), want.len(), "{fills:?}");
+        for (a, b) in fills.iter().zip(want) {
+            assert!((a - b).abs() < 1e-9, "{fills:?}");
+        }
+        // Above it, from it: 2.5 up from -4.9 is -2.4, then none past 0.
+        let s = with_fine_levels(slabs(0.0, -10.0, 10.0, &[-4.9]), 0.0, 2.5);
+        let fills = &s[0].1;
+        assert!(fills.iter().any(|f| (f + 2.4).abs() < 1e-9), "{fills:?}");
+        assert!(fills.iter().all(|f| (f + 2.5).abs() > 1e-6), "{fills:?}");
     }
 
     /// 3/4" stock at 1/8" and at 1/4" a level: the depth is a whole number of

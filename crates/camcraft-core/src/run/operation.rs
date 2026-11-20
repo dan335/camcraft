@@ -947,12 +947,13 @@ pub(super) fn cut_operation(
         watch,
     )
     .map_err(in_op(op))?;
-    // Adaptive clearing makes its own links at the level, and its own helixes:
-    // they are the operation's as much as the linker's are.
+    // Adaptive clearing makes its own links at the level, and its own helixes
+    // and ramps: they are the operation's as much as the linker's are.
     if let StrategyDetail::Adaptive(r) | StrategyDetail::Adaptive2d(r) = &detail {
         links.links_resolved += r.stayed_down;
         links.stayed_down += r.stayed_down;
         links.helixes += r.helixes;
+        links.ramps += r.ramps;
     }
     let sim = SimReport {
         removed_mm3: (before - cutting.stock.volume()).max(0.0),

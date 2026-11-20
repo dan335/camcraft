@@ -149,7 +149,7 @@ fn a_new_parallel_leaves_what_fusions_does() {
     holds("parallel", |_| {}, &bounds, 1);
 }
 
-/// The dome avoided, 1 mm sideways and 1 mm down: 69.7% of 642,665 columns
+/// The dome avoided, 1 mm sideways and 1 mm down: 69.7% of 642,657 columns
 /// alike, the median 0.0048 mm and the 95th percentile 0.106, 1.9% more
 /// removed and 39% more fed; camcraft lifts 11 times to Fusion's 15. Neither
 /// touches the dome but round its foot.
@@ -229,7 +229,7 @@ fn a_parallel_machining_the_floor_alone_leaves_what_fusions_does() {
 }
 
 /// The floor machined with 0.5 mm of stock of its own each way: 65.1% of
-/// 643,566 columns alike, the median 0.0055 mm and the 95th percentile 0.13,
+/// 643,537 columns alike, the median 0.0055 mm and the 95th percentile 0.13,
 /// 1.9% more removed and 33% more fed. Both leave the floor at Z10.5, which
 /// the roughing had left it at already; the lowest each goes is where the
 /// ball rests on the fillets beside it, Z10.38 for camcraft's and Z10.337 for

@@ -13,6 +13,7 @@ fn params() -> AdaptiveParams {
         climb_right: true,
         direction: Direction::Climb,
         helix_radius: 2.7,
+        least_helix_radius: 0.675,
         stay_down: 30.0,
         stay_down_level: 1.0,
         stay_down_clearance: 0.0,
@@ -274,14 +275,54 @@ fn an_island_is_cut_round_and_never_into() {
     }
 }
 
+/// A closed slot too narrow for the least helix is ramped into along its
+/// middle, never a helix smaller than the least; a hole too small even to
+/// ramp along is left, and said.
 #[test]
-fn a_slot_too_narrow_for_a_helix_is_left_and_said() {
+fn a_slot_too_narrow_for_a_helix_is_ramped_into_along_it() {
     let p = params();
     let level = LevelParams::new(&p, R);
     let block = rect(-10.0, -10.0, 60.0, 50.0);
-    // A slot whose centre line is too narrow for even a quarter helix.
+    // A slot whose centre line is too narrow for the least helix, 0.675.
     let allowed = rect(10.0, 10.0, 30.0, 10.4);
     let cut = clear_level(-6.0, &allowed, &block, &level).unwrap();
+    assert!(cut.helixes.is_empty(), "{:?}", cut.helixes);
+    assert_eq!(cut.no_room, 0);
+    let Some((Arrive::Ramp { way }, _)) = cut.passes.first() else {
+        panic!("{:?}", cut.passes.first());
+    };
+    // Along the slot, as long as the largest helix goes round, inside it.
+    let length = camcraft_geom::contour::polyline_length(way);
+    assert!((length - TAU * 2.7).abs() < 1e-6, "{length}");
+    assert!(
+        way.windows(2)
+            .all(|w| allowed.offset(1e-6, 1e-4).contains_segment(w[0], w[1]))
+    );
+    assert!(cut.left < 1.0, "left {}", cut.left);
+
+    // Down it no steeper than the ramp angle, then along it at the level,
+    // ending where it started.
+    let moves = ramped(way, -6.0, 2.0, &p);
+    assert_eq!(moves.last(), Some(&way[0].extend(-6.0)));
+    assert!((moves[0].z - 2.0).abs() < 1e-9);
+    for w in moves.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let run = a.truncate().distance(b.truncate());
+        assert!(b.z <= a.z + 1e-9, "{a} {b}");
+        assert!(
+            a.z - b.z <= run * p.ramp_angle.tan() + 1e-9,
+            "{a} to {b} is steeper than the ramp"
+        );
+    }
+    let level_run: f64 = moves
+        .windows(2)
+        .filter(|w| (w[0].z + 6.0).abs() < 1e-9 && (w[1].z + 6.0).abs() < 1e-9)
+        .map(|w| w[0].distance(w[1]))
+        .sum();
+    assert!((level_run - length).abs() < 1e-6, "{level_run}");
+
+    // Too small for a ramp no shorter than the least helix is across.
+    let cut = clear_level(-6.0, &rect(10.0, 10.0, 10.4, 10.4), &block, &level).unwrap();
     assert!(cut.passes.is_empty());
     assert_eq!(cut.no_room, 1);
 }
@@ -389,7 +430,8 @@ fn a_fine_stepdown_cuts_the_terraces_on_a_slope() {
         let stocks = [(dvec2(-20.0, -20.0), dvec2(20.0, 20.0), 10.0)];
         adaptive_rough(&mut reach, &area, &stocks, tool.base(), &p).unwrap()
     };
-    // Levels at 4, -2, -8 and -10; fine ones 2 mm up from each.
+    // 20 deep at no more than 6 a level: levels at 5, 0, -5 and -10, evenly;
+    // fine ones 2 mm up from each.
     let at = |path: &Toolpath, z: f64| -> Vec<f64> {
         path.moves()
             .iter()
@@ -399,17 +441,19 @@ fn a_fine_stepdown_cuts_the_terraces_on_a_slope() {
     };
     let (plain, report) = rough(None);
     assert_eq!(report.fine_levels, 0);
+    // At -10 the slope leaves nothing to cut.
+    assert_eq!(cut_levels(&plain), [5.0, 0.0, -5.0]);
     assert!(at(&plain, 2.0).is_empty());
 
     let (fine, report) = rough(Some(2.0));
     assert!(report.fine_levels > 0, "{report:?}");
     let xs = at(&fine, 2.0);
-    assert!(!xs.is_empty(), "the terrace between -2 and 2 is cut");
-    // At 2 mm the slope stands at x = 4, and the level at -2 cleared up to
-    // where it stands at -2, x = -4, less the tool: only the terrace between,
+    assert!(!xs.is_empty(), "the terrace between 0 and 2 is cut");
+    // At 2 mm the slope stands at x = 4, and the level at 0 cleared up to
+    // where it stands at 0, x = 0, less the tool: only the terrace between,
     // and the tool beside it, is left to cut.
     assert!(
-        xs.iter().all(|&x| x > -4.0 - 2.0 * R - 0.5 && x < 4.0),
+        xs.iter().all(|&x| x > -2.0 * R - 0.5 && x < 4.0),
         "{:?}",
         xs.iter()
             .fold((f64::MAX, f64::MIN), |(a, b), &x| (a.min(x), b.max(x)))
@@ -463,7 +507,8 @@ fn pockets_in_order(path: &Toolpath) -> Vec<u8> {
 }
 
 /// By depth, each level goes round both pockets before the next down; by
-/// area, one pocket is cleared all the way down before the other.
+/// area, one pocket is cleared all the way down before the other. The 8 mm
+/// is not a whole number of 3 mm stepdowns: the levels share it evenly.
 #[test]
 fn by_area_each_pocket_is_cleared_all_the_way_down_first() {
     let (by_depth, report) = rough_pockets(&params());
@@ -488,6 +533,312 @@ fn by_area_each_pocket_is_cleared_all_the_way_down_first() {
             .map(|m| m.to.z)
             .collect();
         assert!(zs.windows(2).all(|w| w[1] <= w[0] + 1e-9), "pocket {k}");
+    }
+    let third = 8.0 / 3.0;
+    let even = [-third, -2.0 * third, -8.0];
+    let zs = cut_levels(&by_area);
+    assert_eq!(zs.len(), 3, "{zs:?}");
+    assert!(
+        zs.iter().zip(even).all(|(a, b)| (a - b).abs() < 1e-9),
+        "{zs:?}"
+    );
+}
+
+/// A surface over `lo`-`hi`, `n` cells a side, at the height `h` gives.
+fn surface(lo: DVec2, hi: DVec2, n: u32, h: impl Fn(DVec2) -> f64) -> TriMesh {
+    let mut v = Vec::new();
+    for j in 0..=n {
+        for i in 0..=n {
+            let t = dvec2(f64::from(i), f64::from(j)) / f64::from(n);
+            let p = lo + (hi - lo) * t;
+            v.push(p.extend(h(p)));
+        }
+    }
+    let k = |i: u32, j: u32| j * (n + 1) + i;
+    let mut t = Vec::new();
+    for j in 0..n {
+        for i in 0..n {
+            t.push([k(i, j), k(i + 1, j), k(i + 1, j + 1)]);
+            t.push([k(i, j), k(i + 1, j + 1), k(i, j + 1)]);
+        }
+    }
+    TriMesh::new(v, t).unwrap()
+}
+
+/// The height at `r` from a centre, along straight lines between `knots`,
+/// each a distance out and a height, the last's beyond it.
+fn profile(r: f64, knots: &[(f64, f64)]) -> f64 {
+    for w in knots.windows(2) {
+        let ((r0, z0), (r1, z1)) = (w[0], w[1]);
+        if r <= r1 {
+            return z0 + (z1 - z0) * ((r - r0) / (r1 - r0)).clamp(0.0, 1.0);
+        }
+    }
+    knots.last().unwrap().1
+}
+
+/// `mesh` roughed with a 6 mm flat from 0 down to -8, 4 mm a level and
+/// fine levels 1 mm apart, inside the stock `lo`-`hi`, as `p` asks.
+fn rough_fine(
+    mesh: &TriMesh,
+    lo: DVec2,
+    hi: DVec2,
+    p: &AdaptiveParams,
+) -> (Toolpath, AdaptiveReport) {
+    use crate::cutter::allowance::{Allowance, EffectiveTool};
+    use crate::cutter::tool::Flat;
+    let flat = Flat::new(R).unwrap();
+    let tool = EffectiveTool::new(&flat, Allowance::new(0.0, 0.0).unwrap()).unwrap();
+    let mut reach = LevelReach::new(mesh, &tool, 0.01).unwrap();
+    let mut p = p.clone();
+    p.top = 0.0;
+    p.bottom = -8.0;
+    p.stepdown = 4.0;
+    p.fine_stepdown = Some(1.0);
+    let area = Region::rectangle(lo - DVec2::splat(10.0), hi + DVec2::splat(10.0));
+    let stocks = [(lo, hi, 0.0)];
+    adaptive_rough(&mut reach, &area, &stocks, tool.base(), &p).unwrap()
+}
+
+/// Which area each cutting move is in, by `area_of`, each change once, and
+/// the levels each area's moves are at, in the order they are cut, each
+/// change once.
+fn areas_in_order(path: &Toolpath, area_of: impl Fn(DVec2) -> u8) -> (Vec<u8>, Vec<Vec<f64>>) {
+    let mut order: Vec<u8> = Vec::new();
+    let mut levels: Vec<Vec<f64>> = vec![Vec::new(); 2];
+    for m in path.moves().iter().filter(|m| m.role == MoveRole::Cut) {
+        let k = area_of(m.to.truncate());
+        if order.last() != Some(&k) {
+            order.push(k);
+        }
+        let zs = &mut levels[usize::from(k)];
+        if zs.last().is_none_or(|z| (z - m.to.z).abs() > 1e-9) {
+            zs.push(m.to.z);
+        }
+    }
+    (order, levels)
+}
+
+/// Each slab's level and then its fine levels bottom up, the slabs from the
+/// top: -4 and the three above it, then -8 and the three above it.
+const SLAB_THEN_FINE: [f64; 8] = [-4.0, -3.0, -2.0, -1.0, -8.0, -7.0, -6.0, -5.0];
+
+/// Two round pockets with drafted walls side by side, 8 deep, and a fine
+/// stepdown: by area, each pocket is cut whole before the other, each slab's
+/// level and then its fine levels up the wall from the bottom, then the next
+/// slab down. The fine levels cut terraces outside where the tool may be at
+/// their slab's level, and are still the pocket's.
+#[test]
+fn by_area_each_drafted_pocket_is_cut_slab_by_slab_with_its_fine_levels() {
+    let centres = [dvec2(16.0, 16.0), dvec2(44.0, 16.0)];
+    let knots = [(0.0, -8.0), (7.0, -8.0), (11.0, 0.0)];
+    let mesh = surface(dvec2(0.0, 0.0), dvec2(60.0, 32.0), 120, |p| {
+        centres
+            .iter()
+            .map(|c| profile(p.distance(*c), &knots))
+            .fold(f64::INFINITY, f64::min)
+    });
+    let (lo, hi) = (dvec2(0.0, 0.0), dvec2(60.0, 32.0));
+    let pocket = |p: DVec2| u8::from(p.x > 30.0);
+    let (by_depth, report) = rough_fine(&mesh, lo, hi, &params());
+    assert!(report.fine_levels >= 6, "{report:?}");
+    assert!(areas_in_order(&by_depth, pocket).0.len() > 2);
+    let mut p = params();
+    p.by_area = true;
+    let (path, area_report) = rough_fine(&mesh, lo, hi, &p);
+    assert_eq!(area_report.passes, report.passes);
+    let (order, levels) = areas_in_order(&path, pocket);
+    assert_eq!(order.len(), 2, "one, then the other: {order:?}");
+    for zs in &levels {
+        assert_eq!(zs.len(), SLAB_THEN_FINE.len(), "{zs:?}");
+        assert!(
+            zs.iter()
+                .zip(SLAB_THEN_FINE)
+                .all(|(a, b)| (a - b).abs() < 1e-9),
+            "{zs:?}"
+        );
+    }
+}
+
+/// A round pocket 8 deep in an island, and a channel as deep round the
+/// island, their walls drafted: the channel's box holds the pocket whole.
+fn island_in_a_channel() -> TriMesh {
+    let centre = dvec2(32.0, 32.0);
+    let knots = [
+        (0.0, -8.0),
+        (5.0, -8.0),
+        (9.0, 0.0),
+        (11.0, 0.0),
+        (15.0, -8.0),
+        (25.0, -8.0),
+        (29.0, 0.0),
+    ];
+    surface(dvec2(0.0, 0.0), dvec2(64.0, 64.0), 128, |p| {
+        profile(p.distance(centre), &knots)
+    })
+}
+
+/// The pocket's fine levels cut terraces outside where the tool may be at
+/// its slab's level, nearest the pocket but inside the channel's box: they
+/// are the pocket's. By area, one is cut whole, slab by slab with its fine
+/// levels, and then the other. On one core and on eight the program is the
+/// same.
+#[test]
+fn by_area_a_pocket_inside_a_channel_is_cut_whole_apart_from_it() {
+    let mesh = island_in_a_channel();
+    let (lo, hi) = (dvec2(0.0, 0.0), dvec2(64.0, 64.0));
+    let mut p = params();
+    p.by_area = true;
+    let (path, report) = rough_fine(&mesh, lo, hi, &p);
+    assert!(report.fine_levels >= 6, "{report:?}");
+    let area = |q: DVec2| u8::from(q.distance(dvec2(32.0, 32.0)) > 10.0);
+    let (order, levels) = areas_in_order(&path, area);
+    assert_eq!(
+        order.len(),
+        2,
+        "the pocket and the channel, each whole: {order:?} {levels:?}"
+    );
+    for zs in &levels {
+        assert_eq!(zs.len(), SLAB_THEN_FINE.len(), "{zs:?}");
+        assert!(
+            zs.iter()
+                .zip(SLAB_THEN_FINE)
+                .all(|(a, b)| (a - b).abs() < 1e-9),
+            "{zs:?}"
+        );
+    }
+    // The same on any number of cores.
+    let on = |threads: usize| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| rough_fine(&mesh, lo, hi, &p).0)
+    };
+    let (one, eight) = (on(1), on(8));
+    assert_eq!(one.moves(), eight.moves());
+    assert_eq!(one.moves(), path.moves());
+}
+
+/// The most a pass's heading turns within the tool's radius along it, over
+/// every stretch: a full turn or more is going round on the spot.
+fn tightest_turn(points: &[DVec2]) -> f64 {
+    let mut steps: Vec<(f64, f64)> = Vec::new();
+    let (mut gone, mut turned) = (0.0, 0.0);
+    for w in points.windows(3) {
+        let (a, b, c) = (w[0], w[1], w[2]);
+        let (u, v) = (b - a, c - b);
+        turned += u.perp_dot(v).atan2(u.dot(v));
+        gone += b.distance(c);
+        steps.push((gone, turned));
+    }
+    let mut most: f64 = 0.0;
+    for (i, &(g, t)) in steps.iter().enumerate() {
+        for &(h, u) in &steps[i..] {
+            if h - g > R {
+                break;
+            }
+            most = most.max((u - t).abs());
+        }
+    }
+    most
+}
+
+/// A ridge narrower than the optimal load, standing free where the tool may
+/// go either side of it: no heading takes the load from it, so a pass turned
+/// hard toward it at every step would go round on the spot. It is taken in a
+/// bounded number of steps, and no pass turns round on the spot.
+#[test]
+fn a_ridge_narrower_than_the_load_is_taken_along_it_not_orbited() {
+    let p = params();
+    let level = LevelParams::new(&p, R);
+    let ring = |r: f64| disc(DVec2::ZERO, r, 1e-3).unwrap();
+    let ridge = Region::new(vec![ring(10.4), {
+        let mut hole = ring(10.0).points().to_vec();
+        hole.reverse();
+        Contour::new(hole).unwrap()
+    }]);
+    assert!((ridge.area() - PI * (10.4f64.powi(2) - 100.0)).abs() < 0.1);
+    let allowed = rect(-30.0, -30.0, 30.0, 30.0);
+    let cut = clear_level(-6.0, &allowed, &ridge, &level).unwrap();
+    assert!(cut.left < 0.5, "left {} mm2", cut.left);
+    let points: usize = cut.passes.iter().map(|(_, pts)| pts.len()).sum();
+    assert!(points < 20_000, "{points} points");
+    for (_, pts) in &cut.passes {
+        let t = tightest_turn(pts);
+        assert!(t < TAU, "a pass turned {t} rad within the tool's radius");
+    }
+}
+
+/// A rim on a wall, its top nearly level, a hair above where a fine level
+/// counted up from the slab would fall: the rim has one level, its flat
+/// level, and no other near it; the fine levels below it are spaced evenly
+/// up to it. No pass at it goes round on the spot, and it takes a bounded
+/// number of moves.
+#[test]
+fn a_nearly_level_rim_just_above_a_fine_level_is_one_level() {
+    use crate::cutter::allowance::{Allowance, EffectiveTool};
+    use crate::cutter::tool::Flat;
+    let centre = dvec2(24.0, 24.0);
+    // The rim rises a thousandth over its 2 mm: nearly level, one flat face,
+    // whose highest is its level.
+    let knots = [
+        (0.0, -10.0),
+        (6.0, -10.0),
+        (8.0, -2.491),
+        (10.0, -2.49),
+        (12.0, -10.0),
+    ];
+    let mesh = surface(dvec2(0.0, 0.0), dvec2(48.0, 48.0), 96, |p| {
+        profile(p.distance(centre), &knots)
+    });
+    let flat = Flat::new(R).unwrap();
+    let tool = EffectiveTool::new(&flat, Allowance::new(0.0, 0.0).unwrap()).unwrap();
+    let mut reach = LevelReach::new(&mesh, &tool, 0.01).unwrap();
+    let mut p = params();
+    p.top = 0.0;
+    p.bottom = -10.0;
+    p.stepdown = 10.0;
+    p.fine_stepdown = Some(2.5);
+    p.flats = flat_heights(&mesh, 0.01)
+        .into_iter()
+        .filter(|z| *z > -10.0 + 1e-6)
+        .collect();
+    assert_eq!(p.flats.len(), 1, "{:?}", p.flats);
+    assert!((p.flats[0] + 2.49).abs() < 1e-3, "{:?}", p.flats);
+    let area = rect(-10.0, -10.0, 58.0, 58.0);
+    let stocks = [(dvec2(0.0, 0.0), dvec2(48.0, 48.0), 0.0)];
+    let (path, report) = adaptive_rough(&mut reach, &area, &stocks, tool.base(), &p).unwrap();
+    assert_eq!(report.flat_levels, 1, "{report:?}");
+    let zs = cut_levels(&path);
+    let rim = p.flats[0];
+    assert!(
+        zs.iter()
+            .all(|z| (z - rim).abs() < 1e-9 || (z - rim).abs() > 1.0),
+        "{zs:?}"
+    );
+    // Evenly up to the rim from the slab's level: 7.51 in four steps.
+    let step = (rim + 10.0) / 4.0;
+    for k in 1..4 {
+        let z = -10.0 + step * f64::from(k);
+        assert!(zs.iter().any(|l| (l - z).abs() < 1e-9), "{z}: {zs:?}");
+    }
+    let at_rim: Vec<DVec2> = path
+        .moves()
+        .iter()
+        .filter(|m| (m.to.z - rim).abs() < 1e-9)
+        .map(|m| m.to.truncate())
+        .collect();
+    assert!(!at_rim.is_empty());
+    assert!(at_rim.len() < 20_000, "{} moves at the rim", at_rim.len());
+    let mut pass: Vec<DVec2> = Vec::new();
+    for m in path.moves() {
+        if m.role == MoveRole::Cut && (m.to.z - rim).abs() < 1e-9 {
+            pass.push(m.to.truncate());
+        } else if !pass.is_empty() {
+            assert!(tightest_turn(&pass) < TAU, "a pass at the rim orbits");
+            pass.clear();
+        }
     }
 }
 
@@ -725,7 +1076,7 @@ fn shallow_areas_add_levels_where_the_terraces_are_wide() {
     assert!(report.shallow_levels > 0, "{report:?}");
     let zs = cut_levels(&path);
     assert!(zs.len() > cut_levels(&plain).len(), "{zs:?}");
-    // 6 mm halved three times leaves terraces 1.5 mm wide, 0.75 mm apart;
+    // 5 mm halved three times leaves terraces 1.25 mm wide, 0.625 mm apart;
     // once more would leave levels nearer than 0.5.
     let gaps: Vec<f64> = zs.windows(2).map(|w| w[0] - w[1]).collect();
     assert!(
@@ -734,18 +1085,14 @@ fn shallow_areas_add_levels_where_the_terraces_are_wide() {
     );
     // Each level added cuts only on the slope: where the terrace it was
     // added for is, and the tool's width beside it.
-    let own = |z: f64| {
-        [4.0, -2.0, -8.0, -10.0]
-            .iter()
-            .any(|l| (l - z).abs() < 1e-9)
-    };
+    let own = |z: f64| [5.0, 0.0, -5.0, -10.0].iter().any(|l| (l - z).abs() < 1e-9);
     for m in path
         .moves()
         .iter()
         .filter(|m| m.role == MoveRole::Cut && !own(m.to.z))
     {
-        // The slope stands at x = 2z; at a level halfway between two 6 mm
-        // apart, the terrace runs 6 mm either side of it.
+        // The slope stands at x = 2z; at a level halfway between two 5 mm
+        // apart, the terrace runs 5 mm either side of it.
         assert!(
             (m.to.x - 2.0 * m.to.z).abs() < 12.0 + 2.0 * R + 0.5,
             "{m:?}"
@@ -790,15 +1137,13 @@ fn levels_too_thin_are_left_out() {
     p.min_axial_engagement = 3.0;
     let (path, fewer) = rough_slope(&p);
     assert!(fewer.fine_levels < all.fine_levels, "{fewer:?} {all:?}");
-    // Levels at 4, -2, -8 and -10; none between less than 3 below one.
+    // Levels at 5, 0, -5 and -10; none between less than 3 below one.
     for z in cut_levels(&path) {
-        let above = [10.0, 4.0, -2.0, -8.0]
+        let above = [10.0, 5.0, 0.0, -5.0]
             .into_iter()
             .filter(|a| *a > z + 1e-9)
             .fold(f64::INFINITY, f64::min);
-        let own = [4.0, -2.0, -8.0, -10.0]
-            .iter()
-            .any(|l| (l - z).abs() < 1e-9);
+        let own = [5.0, 0.0, -5.0, -10.0].iter().any(|l| (l - z).abs() < 1e-9);
         assert!(own || above - z >= 3.0 - 1e-9, "{z}");
     }
 }

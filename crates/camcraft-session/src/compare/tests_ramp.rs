@@ -161,7 +161,7 @@ fn a_ramp_at_half_a_degree_leaves_what_fusions_does() {
     holds("ramp_angle", |op| op.linking.ramp_angle = 0.5, &bounds, 1);
 }
 
-/// The dome avoided, 1 mm sideways and 1 mm down: 59.7% of 611,524 columns
+/// The dome avoided, 1 mm sideways and 1 mm down: 59.6% of 611,516 columns
 /// alike, the median 0.0054 mm and the 95th percentile 1.57, 5.3% more
 /// removed and 0.6% more fed, both lifting 4 times. Neither goes down the
 /// dome: camcraft's way down it is cut out, and the way down to it, from

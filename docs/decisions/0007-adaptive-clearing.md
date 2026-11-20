@@ -52,6 +52,9 @@ and fine stepdown steps back up each slab over the terraces left on slopes.
 - **Levels** are rough levels a stepdown apart, each worked on its own and in
   parallel, and a level on each up-facing flat face, raised by the axial stock to
   leave, cut after the level below it and starting from what that level swept.
+  (Since [decision 0036](0036-adaptive-levels-order-and-entries.md) the rough
+  levels are even, the fewest no more than the stepdown apart, so the last is
+  never a sliver; and fine levels up to a flat are even too.)
 - **Material and room are kept in tiles**, and every question between passes is
   asked of a window round the tool first: a whole sheet's level is otherwise
   rebuilt for every pass.
@@ -83,7 +86,12 @@ down at rapid to the safe distance (16.6 min of plunging became 4.2).
 ## Taken since
 
 - **Fine stepdown** (0.3), back up each slab over slopes, seeded as the flat
-  levels are.
+  levels are; evenly up to a flat in the slab, so none falls a hair below it
+  ([decision 0036](0036-adaptive-levels-order-and-entries.md)).
+- **A pass that goes round on the spot ends**, and material too narrow to load
+  the tool is taken in a pass along it; a helix is never made smaller than
+  Fusion's Minimum Ramp Diameter, and where none fits the area is ramped into
+  along its middle ([decision 0036](0036-adaptive-levels-order-and-entries.md)).
 - **Rest machining** from the operations before it in the setup, as Fusion's
   from previous operations, with its Ignore Stock Less Than. Each earlier
   operation's moves are swept exactly at every level, with the real tool it
@@ -102,8 +110,11 @@ down at rapid to the safe distance (16.6 min of plunging became 4.2).
 - **Machine cavities**: off, a level ends where what is left has no way in
   from the side, and what it left is counted apart from what it missed.
 - **Order by area**: each pass is placed by the piece of where the tool may be
-  at its slab's own level that its start is in, and at every level above;
-  where the tool may be only shrinks going down, so those pieces nest. Areas
+  at its slab's own level that most of it is in, and the pieces above that
+  one; where the tool may be only shrinks going down, so those pieces nest.
+  (Placed by its start, or by the box of a piece nearest, a fine level's pass
+  went to an area round its own: [decision 0036](0036-adaptive-levels-order-and-entries.md).)
+  Areas
   are cut depth first, each before the areas below it and those before the
   next beside it, side by side in the order they were first come to. A slab's
   flat and fine levels stay after its own in each area, as each cuts what that

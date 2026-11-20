@@ -61,7 +61,10 @@ ring ramp, not to zig-zag; and Fusion now calls the pockets Offset Roughing.
   strategy (`Uses::reach`). The helix is Fusion's 3D size for pocket clearing,
   contour and adaptive (`HelixSize::Flat`), made smaller where there is no room
   down to its minimum; the 2D strategies keep 0.9 × the tool, as no table says
-  otherwise for them.
+  otherwise for them. (Adaptive made its own helixes a half and a quarter of
+  their size regardless, below the minimum, until
+  [decision 0036](0036-adaptive-levels-order-and-entries.md): it now stops at
+  the minimum, and ramps along the area's middle where that does not fit.)
 - **A pocket's entry,** 3D or 2D, is a choice as a profile's is: a helix by
   default, beside where a level's first ring starts; a ramp along the ring; or a
   plunge. A helix with no room ramps along the ring instead. Where neither fits

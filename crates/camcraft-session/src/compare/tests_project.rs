@@ -94,7 +94,7 @@ fn holds((name, tool): (&str, &str), change: impl FnOnce(&mut Operation), bounds
 }
 
 /// A new Project with the 6 mm ball leaves what Fusion's does: 98.8% of the
-/// 432,937 columns either cuts alike, the median difference 0.0038 mm and
+/// 432,925 columns either cuts alike, the median difference 0.0038 mm and
 /// the 95th percentile 0.0045, 0.05% more removed and 7.6% more fed.
 #[test]
 fn a_new_project_leaves_what_fusions_does() {
@@ -109,7 +109,7 @@ fn a_new_project_leaves_what_fusions_does() {
     holds(("project", "ball6"), |_| {}, &bounds);
 }
 
-/// The other way round each curve leaves the same: 98.8% of 432,937 columns
+/// The other way round each curve leaves the same: 98.8% of 432,925 columns
 /// alike, the median 0.0038 mm and the 95th percentile 0.0045, 0.05% more
 /// removed and 7.6% more fed.
 #[test]
@@ -130,7 +130,7 @@ fn a_project_the_other_way_leaves_what_fusions_does() {
     holds(("project_other_way", "ball6"), other, &bounds);
 }
 
-/// A millimetre above where the tool rests: 99.1% of 403,553 columns alike,
+/// A millimetre above where the tool rests: 99.1% of 403,524 columns alike,
 /// the median 0.0038 mm and the 95th percentile 0.0044, 0.06% more removed
 /// and 7.1% more fed.
 #[test]
@@ -152,7 +152,7 @@ fn a_project_with_an_axial_offset_leaves_what_fusions_does() {
 }
 
 /// With the 12 mm ball, which rides up the fillets and the walls along the
-/// floor's edge: 90.1% of 358,704 columns alike, the median 0.0049 mm and the
+/// floor's edge: 90.1% of 358,682 columns alike, the median 0.0049 mm and the
 /// 95th percentile 0.0120, 0.30% less removed and 9.2% more fed. Round the
 /// dome's foot Fusion's points lie 0.008 mm below where the ball rests, a
 /// band all round the dome's flank.
