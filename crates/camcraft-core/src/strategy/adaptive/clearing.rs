@@ -139,14 +139,23 @@ impl<'a> Clearing<'a> {
 
     /// Clear the level, its first pass starting nearest `from`, where the
     /// tool is when it comes to it, if that is known. A pass the tool cannot
-    /// come to staying down from the last may rise to it from one of
-    /// `arrivals`, where passes of the levels below in the slab ended: each
-    /// once, the nearest it can.
+    /// come to staying down from the last may rise to it from one of the
+    /// `approach`'s arrivals, where passes of the levels below in the slab
+    /// ended: each once, the nearest it can. Cut by area, the level's passes
+    /// in an area other than the one the tool is in are cut after it has left
+    /// that area's levels below, so the level comes to the area nearest where
+    /// its own last pass below ended, rather than nearest where the tool is
+    /// in this one.
     pub(super) fn run(
         &mut self,
         from: Option<DVec2>,
-        mut arrivals: Vec<Arrival>,
+        approach: Approach,
     ) -> Result<(), StrategyError> {
+        let Approach {
+            mut arrivals,
+            areas,
+            level,
+        } = approach;
         let mut at: Option<DVec2> = None;
         let mut futile = 0;
         for _ in 0..MAX_PASSES {
@@ -177,16 +186,24 @@ impl<'a> Clearing<'a> {
                     (s, found)
                 }
             };
+            let (s, found) =
+                match self.start_in_area(areas.as_deref(), &arrivals, at.or(from), found)? {
+                    Some(there) => (self.situation_everywhere()?, Some(there)),
+                    None => (s, found),
+                };
             let (start, dir, side, arrive, entered) = match found {
                 Some((start, dir, side)) => {
                     let arrive = match at.and_then(|from| self.stay_route(&s, from, start)) {
                         Some(via) => Arrive::Stay { via },
-                        None if arrivals.is_empty() => Arrive::Link,
-                        // Where they ended may be far from where it is.
-                        None => {
-                            let all = self.situation_everywhere()?;
-                            self.rise(&all, &mut arrivals, start)
-                        }
+                        None => match self.back_in_area(areas.as_deref(), level, at, start)? {
+                            Some(back) => back,
+                            None if arrivals.is_empty() => Arrive::Link,
+                            // Where they ended may be far from where it is.
+                            None => {
+                                let all = self.situation_everywhere()?;
+                                self.rise(&all, &mut arrivals, start)
+                            }
+                        },
                     };
                     (start, dir, side, arrive, false)
                 }
@@ -282,6 +299,70 @@ impl<'a> Clearing<'a> {
             .area();
         self.stand_off();
         Ok(())
+    }
+
+    /// Where to start instead of `found`, the start nearest where the tool
+    /// is, `tool`, where that is in another of `areas` than the tool: nearest
+    /// where the last pass below in that area ended, among `arrivals`, if
+    /// there is a start in it so. `None` to start at `found`.
+    fn start_in_area(
+        &mut self,
+        areas: Option<&[Indexed]>,
+        arrivals: &[Arrival],
+        tool: Option<DVec2>,
+        found: Option<(DVec2, DVec2, Side)>,
+    ) -> Result<Option<(DVec2, DVec2, Side)>, StrategyError> {
+        let (Some(areas), Some(tool), Some((start, ..))) = (areas, tool, found) else {
+            return Ok(None);
+        };
+        let there = piece_at(areas, start);
+        if piece_at(areas, tool) == there {
+            return Ok(None);
+        }
+        let Some(last) = arrivals.iter().find(|a| piece_at(areas, a.at) == there) else {
+            return Ok(None);
+        };
+        let all = self.situation_everywhere()?;
+        Ok(self
+            .next_start(&all, Some(last.at))?
+            .filter(|(p, ..)| piece_at(areas, *p) == there))
+    }
+
+    /// Cut by area, the way to `start` from where the level's last pass in
+    /// `start`'s area ended, where the tool is in another, `at`: by area, the
+    /// passes between, in the other, are cut after, so it comes from that
+    /// one, this level being the slab's `level`th. `None` where there is no
+    /// such pass, or no way from it staying down.
+    fn back_in_area(
+        &mut self,
+        areas: Option<&[Indexed]>,
+        level: usize,
+        at: Option<DVec2>,
+        start: DVec2,
+    ) -> Result<Option<Arrive>, StrategyError> {
+        let (Some(areas), Some(at)) = (areas, at) else {
+            return Ok(None);
+        };
+        let there = piece_at(areas, start);
+        if piece_at(areas, at) == there {
+            return Ok(None);
+        }
+        let last = self
+            .passes
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, (_, pts))| area_of(areas, pts) == there)
+            .and_then(|(k, (_, pts))| Some((k, *pts.last()?)));
+        let Some((pass, end)) = last else {
+            return Ok(None);
+        };
+        let all = self.situation_everywhere()?;
+        Ok(self.stay_route(&all, end, start).map(|via| Arrive::Rise {
+            after: (level, pass),
+            at: end,
+            via,
+        }))
     }
 
     /// How the tool comes to `start` from the nearest of `arrivals` it can

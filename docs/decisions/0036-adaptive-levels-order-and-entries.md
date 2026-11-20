@@ -215,3 +215,51 @@ would; up two drafted pockets and up a pocket and the channel round its
 island, by depth and by area, no step up to a fine level lifts, each rising
 straight up at the feed; given where the tool is, a level starts nearest it,
 and a part roughed slab after slab is the same on one core and on eight.
+
+## Amended 2026-11-20: by area, each area where the tool last was in it
+
+Of the 19 lifts left, those that were avoidable came of cutting by area. A
+level is worked out whole, its passes going from one area to the other as the
+nearest next start leads, and then cut area by area. So a level's first pass in
+an area began nearest wherever the level had just left the other area, not
+nearest where the tool would be: at the end of that area's levels below. And
+a pass whose last pass in the same area, as cut, was some passes back in the
+level's own order, with the other area's between, was lifted to, as the way
+across was only looked for from the pass before it.
+
+- **A level comes to each area where the tool last was in it.** Where the
+  start nearest where the tool is lies in another area, the level starts in
+  that area nearest where its own last pass below ended instead, if that area
+  has a start so.
+- **And comes back to it from there.** A pass the tool cannot come to staying
+  down from the pass before it, in another area, comes from the level's last
+  pass in its own area, staying down where the way keeps to the area, as
+  that is the pass it follows when cut.
+
+A slab going down into a closed area still lifts to its helix or ramp, which
+is where the area is widest, as Fusion's is; from one area to the next lifts.
+In a ring-shaped area, a climb-only pass along one wall ends where the next,
+along the other wall or past where the room narrows to nothing, does not
+begin, and going round to it is longer than lifting: Fusion's Adaptive, its
+Both Ways off, lifts there too, fully (its default retraction), and cutting
+both ways is what removes them. Lifting only the safe distance over the
+material as it stands, where it is lowest, would save about a third of the
+rapid left (1,329 mm to about 970, an estimate over the higher of the two
+levels each lift joins); that is every strategy's linking, and is left.
+
+On the user's job:
+
+| | before | after |
+|---|---:|---:|
+| lifts | 19 | 14 |
+| of them, returns on a level | 7 | 4 |
+| of them, steps up to a fine level | 3 | 1 |
+| of them, down into a slab | 6 | 6 |
+| of them, from one area to the next | 3 | 3 |
+| rapid, mm | 2,119 | 1,395 |
+| fed, mm | 63,405 | 63,115 |
+| time at the feeds | 11.2 min | 11.1 min |
+
+Every lift in one of its two areas is now a helix down into the next slab, or
+the change to the other area; the other's, a ring, are its entries, four
+returns round it and one step up. The same material comes off and every check passes.

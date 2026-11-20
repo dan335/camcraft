@@ -545,7 +545,10 @@ fn clear_levels(
             &standing(*z)?,
             &level,
             seed,
-            Vec::new(),
+            Approach {
+                areas: pieces.clone(),
+                ..Approach::default()
+            },
         )?);
         if told {
             show_level(&params.watch, cuts.last());
@@ -555,8 +558,12 @@ fn clear_levels(
             let Some(region) = allowed_at(f) else {
                 continue;
             };
-            let from = arrivals(&cuts, pieces.as_deref());
-            let cut = clear_flat(f, region, &standing(f)?, &cuts, (cutter, &level), from)?;
+            let approach = Approach {
+                arrivals: arrivals(&cuts, pieces.as_deref()),
+                areas: pieces.clone(),
+                level: cuts.len(),
+            };
+            let cut = clear_flat(f, region, &standing(f)?, &cuts, (cutter, &level), approach)?;
             if told {
                 show_level(&params.watch, Some(&cut));
                 params.watch.add(share);
@@ -707,7 +714,14 @@ fn clear_levels(
                 // Lifted no higher than the material the level stands under.
                 let top = above.get(place.slab).copied().unwrap_or(params.top);
                 let lift = params.lift_height.min(top - cut.z).max(0.0);
+                // From where the way was found from, where the tool stood
+                // off the material after it.
+                let found_from = match arrive {
+                    Arrive::Rise { at, .. } if at.distance(end.truncate()) > 1e-9 => Some(*at),
+                    _ => None,
+                };
                 let way: Vec<DVec2> = std::iter::once(end.truncate())
+                    .chain(found_from)
                     .chain(via.iter().copied())
                     .chain(std::iter::once(first.truncate()))
                     .collect();
@@ -926,15 +940,15 @@ fn by_area(order: &[Place], worked: &[Vec<LevelCut>], bases: &[Option<&Region>])
 /// Clear flat level `f` of a slab over what the levels of the slab `below` it
 /// left of `standing`, the material at it: the real tool, `cutter`, as wide at
 /// each as it is that far above its tip. It starts nearest where the last of
-/// them ended, where the tool is, rather than at a corner of the level, and a
-/// pass of it may rise from `arrivals`, where passes of them ended.
+/// them ended, where the tool is, rather than at a corner of the level, and is
+/// come to as `approach` allows.
 fn clear_flat(
     f: f64,
     allowed: &Region,
     standing: &Region,
     below: &[LevelCut],
     (cutter, p): (&Cutter, &LevelParams),
-    arrivals: Vec<Arrival>,
+    approach: Approach,
 ) -> Result<LevelCut, StrategyError> {
     let mut uncut = Tiles::new(standing, TILE_RADII * p.radius)?;
     for cut in below {
@@ -957,7 +971,7 @@ fn clear_flat(
         .iter()
         .rev()
         .find_map(|cut| cut.passes.last().and_then(|(_, pts)| pts.last().copied()));
-    clear_level_from(f, allowed, &uncut.whole()?, p, from, arrivals)
+    clear_level_from(f, allowed, &uncut.whole()?, p, from, approach)
 }
 
 /// The pieces of `region`, where the tool may be at a slab's own level, each
@@ -1330,6 +1344,17 @@ struct Arrival {
     after: (usize, usize),
 }
 
+/// How the tool may come to a level: where passes of the levels below in
+/// its slab ended, that it may rise from, and, cut by area, the areas of the
+/// slab, each of which it comes to where its own last pass below ended.
+#[derive(Debug, Clone, Default)]
+struct Approach {
+    arrivals: Vec<Arrival>,
+    areas: Option<Vec<Indexed>>,
+    /// Which of its slab's levels the level is, the slab's own the 0th.
+    level: usize,
+}
+
 /// One level's passes.
 #[derive(Debug, Clone)]
 struct LevelCut {
@@ -1414,19 +1439,18 @@ impl Side {
     }
 }
 
-/// Clear one level, starting nearest `from` where it is known; a pass may be
-/// come to from one of `arrivals`, where passes of levels below in the slab
-/// ended, rising from it ([`Arrive::Rise`]).
+/// Clear one level, starting nearest `from` where it is known, and coming to
+/// it as `approach` allows ([`Arrive::Rise`]).
 fn clear_level_from(
     z: f64,
     allowed: &Region,
     uncut: &Region,
     p: &LevelParams,
     from: Option<DVec2>,
-    arrivals: Vec<Arrival>,
+    approach: Approach,
 ) -> Result<LevelCut, StrategyError> {
     let mut c = Clearing::new(z, allowed, uncut, p)?;
-    c.run(from, arrivals)?;
+    c.run(from, approach)?;
     Ok(LevelCut {
         z,
         passes: c.passes,

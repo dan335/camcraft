@@ -771,7 +771,10 @@ Adaptive:
   all the way down before the next: each slab's level, then its fine and flat
   levels up the wall from the bottom, then the next slab down. A pass is in
   the area most of it is in, so a fine level's terrace round an area is that
-  area's.
+  area's; each level comes to an area where the tool last was in it, and
+  stays down from there where it can. Climbing only, a ring-shaped area such
+  as a channel still lifts to get back round it; `"both-ways"` cuts back
+  instead.
 - `rest_machining` (off by default): it clears only what the operations before
   it in the setup left, each swept exactly with the tool it was cut with, so it
   waits for them; `ignore_stock_less_than` lets be what they left thinner than

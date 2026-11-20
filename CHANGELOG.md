@@ -6,6 +6,14 @@ the same notes at more length.
 
 ## Unreleased
 
+- **Cut by area, adaptive clearing comes to each area where the tool last was
+  in it** ([decision 0036](docs/decisions/0036-adaptive-levels-order-and-entries.md)):
+  a level starts each area nearest where that area's last pass below ended,
+  and a pass that follows one of the same area some passes back in the level
+  comes from it staying down, rather than lifting. On a user's part the
+  adaptive lifts 14 times where it lifted 19, with 1,395 mm of rapids where
+  there were 2,119.
+
 - **3/8" bits in the System library:** an up-cut and a down-cut spiral and a
   ball nose, each on a 3/8" shank, as T21 to T23, so the first twenty keep
   their numbers.

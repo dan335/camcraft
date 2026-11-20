@@ -46,7 +46,7 @@ fn clear_level(
     uncut: &Region,
     p: &LevelParams,
 ) -> Result<LevelCut, StrategyError> {
-    clear_level_from(z, allowed, uncut, p, None, Vec::new())
+    clear_level_from(z, allowed, uncut, p, None, Approach::default())
 }
 
 fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Region {
@@ -655,8 +655,11 @@ fn by_area_each_drafted_pocket_is_cut_slab_by_slab_with_its_fine_levels() {
     assert!(areas_in_order(&by_depth, pocket).0.len() > 2);
     let mut p = params();
     p.by_area = true;
+    // By area a level comes to each pocket where the tool last was in it,
+    // so its passes there start elsewhere than by depth, and may be more or
+    // fewer.
     let (path, area_report) = rough_fine(&mesh, lo, hi, &p);
-    assert_eq!(area_report.passes, report.passes);
+    assert!(area_report.passes > 0, "{area_report:?}");
     let (order, levels) = areas_in_order(&path, pocket);
     assert_eq!(order.len(), 2, "one, then the other: {order:?}");
     for zs in &levels {
@@ -831,6 +834,55 @@ fn a_return_over_what_is_cleared_stays_down_however_far() {
     assert!(most <= level.limit + 0.12, "a step took {most} rad");
 }
 
+/// Cut by area, a level comes to each area nearest where that area's own
+/// last pass below ended, as the tool is there when it comes to the area,
+/// not nearest where the level left the area before it.
+#[test]
+fn by_area_a_level_comes_to_each_area_where_it_was_last() {
+    let p = params();
+    let level = LevelParams::new(&p, R);
+    let allowed = rect(-6.0, -6.0, 36.0, 26.0)
+        .union(&rect(39.0, -6.0, 81.0, 26.0))
+        .unwrap();
+    let material = rect(0.0, 0.0, 30.0, 20.0)
+        .union(&rect(45.0, 0.0, 75.0, 20.0))
+        .unwrap();
+    let (a, b) = (dvec2(-5.0, -5.0), dvec2(80.0, 25.0));
+    let approach = || Approach {
+        arrivals: vec![
+            Arrival {
+                at: a,
+                after: (0, 0),
+            },
+            Arrival {
+                at: b,
+                after: (0, 1),
+            },
+        ],
+        areas: Some(super::areas(&allowed)),
+        level: 1,
+    };
+    let cut = clear_level_from(-6.0, &allowed, &material, &level, Some(a), approach()).unwrap();
+    let first_in_b = cut
+        .passes
+        .iter()
+        .map(|(_, pts)| pts[0])
+        .find(|q| q.x > 37.5)
+        .unwrap();
+    assert!(first_in_b.distance(b) < 12.0, "{first_in_b}");
+    // Each comes up from there, rather than lifting.
+    let rises = cut
+        .passes
+        .iter()
+        .filter(|(arrive, _)| matches!(arrive, Arrive::Rise { .. }))
+        .count();
+    assert!(
+        rises >= 2,
+        "{:?}",
+        cut.passes.iter().map(|(a, _)| a).collect::<Vec<_>>()
+    );
+}
+
 /// A level starts nearest where the tool is when it comes to it: given where
 /// the tool is, an open block's first pass begins on the side nearest it, not
 /// at the block's corner.
@@ -841,7 +893,8 @@ fn a_level_starts_nearest_where_the_tool_is() {
     let block = rect(0.0, 0.0, 60.0, 30.0);
     let allowed = rect(-8.0, -8.0, 68.0, 38.0);
     let start = |from: Option<DVec2>| {
-        let cut = clear_level_from(-6.0, &allowed, &block, &level, from, Vec::new()).unwrap();
+        let cut =
+            clear_level_from(-6.0, &allowed, &block, &level, from, Approach::default()).unwrap();
         cut.passes[0].1[0]
     };
     let far = dvec2(70.0, 40.0);
