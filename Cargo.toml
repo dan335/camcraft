@@ -42,12 +42,15 @@ csv                = "1.4"
 directories        = "6"
 glam               = { version = "0.33", features = ["serde"] }
 # STEP backend, see docs/decisions/0001-step-backend.md: ogeom, pure Rust.
-ogeom-core         = "0.11"
-ogeom-io           = "0.11"
-ogeom-geom         = "0.11"
-ogeom-math         = "0.11"
-ogeom-mesh         = "0.11"
-ogeom-topo         = "0.11"
+# Held to 0.11: 0.11.5 is its last release under MIT or Apache-2.0, and from
+# 0.12 it is LGPL-2.1-only, which no camcraft binary may link
+# (scripts/release/about.toml).
+ogeom-core         = "0.11.5"
+ogeom-io           = "0.11.5"
+ogeom-geom         = "0.11.5"
+ogeom-math         = "0.11.5"
+ogeom-mesh         = "0.11.5"
+ogeom-topo         = "0.11.5"
 parry3d-f64        = "0.31"
 proptest           = "1.11"
 rayon              = "1.12"

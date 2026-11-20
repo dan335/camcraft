@@ -6,6 +6,13 @@ the same notes at more length.
 
 ## Unreleased
 
+- **A round whose edge stands a little off it reads at 0.01 mm.** STEP import
+  is ogeom 0.11.5, which draws the seam it adds round a face with no seam edge
+  to the tolerance asked: on 0.11.0 that seam stood 0.09 mm off when the
+  face's edge was a file's slop off its surface, and the part was refused.
+  Every other part meshes exactly as before. ogeom stays on 0.11: from 0.12 it
+  is LGPL-2.1-only, and nothing in a `camcraft` binary is LGPL.
+
 - **Simulating 3D finishing is about ten times faster**: a climbing move's
   samples are swept a row of cells at a time, passing over cells the tool
   cannot come under, leaving the same material bit for bit. Simulating a

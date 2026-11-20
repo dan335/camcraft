@@ -233,8 +233,6 @@ Accepted costs, all of which were actually hit and resolved during the spike:
   `round_edge_loose_fit.step` stands in for it, its top circle raised 0.006 mm off
   the torus. ogeom then draws the seam it adds down the torus in 8 steps,
   0.0915 mm off at any chord, so it is refused at 0.01 too (ogeom-rs#261).
-- **Revisit when** ogeom-rs#261 is fixed in a release: check the loose fit at
-  0.01 mm and drop the test pinning its refusal.
 - **Revisit:** 0.11 also says ogeom meshes ruled faces without the rows
   (ogeom-rs#213) and holds every triangle of a curved face to its chord (#212).
   Measure both, then delete `ruled` and mesh at the tolerance rather than a third
@@ -255,6 +253,18 @@ Accepted costs, all of which were actually hit and resolved during the spike:
   and its weld, split out of the reading of a file. There is no file to
   check such a mesh against, so the checks of `step-check` do not run;
   each face is still measured against its surface.
+- **2026-11-20: ogeom 0.11.5, and no further while it is LGPL.** 0.11.2 draws
+  the seam it adds to a face with no seam edge to the chord (ogeom-rs#261), so
+  `round_edge_loose_fit.step` reads at 0.01 mm, 66,556 triangles as
+  `round_edge.step` has, and the test pinning its refusal is gone. Every other
+  mesh is the same to the bit, on every fixture and step-conformance's corpus
+  at 0.01 and 0.05 mm, and what was refused still is. From 0.12,
+  ogeom is LGPL-2.1-only (its `PROVENANCE.md` says why), and no `camcraft`
+  binary links LGPL code, so the workspace asks for 0.11 and cargo-about's
+  accepted licences do not include it. Copies of 0.11.5 and earlier keep the
+  MIT or Apache-2.0 they were published under.
+- **Revisit** whether to take ogeom 0.12 or later under the LGPL, as a choice
+  about what a `camcraft` binary is licensed under, not as an update.
 
 ## Implemented (0.1-d, 2026-09-22)
 

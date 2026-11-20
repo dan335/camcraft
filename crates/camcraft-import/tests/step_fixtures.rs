@@ -207,15 +207,17 @@ fn ops_3d_centimetre() {
 /// separately, and a private part's band and the round below it disagreed by
 /// 0.0073 mm along their edge.
 ///
-/// It should read within the tolerance, but ogeom 0.11 then draws the seam it adds
-/// down the torus in 8 steps, 0.0915 mm off (gilbertorconde/ogeom-rs#261). When
-/// ogeom meshes it, this fails: [`check`] it at [`TOLERANCE`] instead.
+/// Its edges lie within the tolerance of the torus, so it reads at it. ogeom 0.11.0
+/// drew the seam it adds down the torus in 8 steps whatever the chord, 0.0915 mm
+/// off, and it was refused (gilbertorconde/ogeom-rs#261, fixed in 0.11.2).
 #[test]
-fn a_loose_fit_is_refused_for_ogeoms_seam() {
-    let err = load_step(fixture("round_edge_loose_fit.step"), TOLERANCE).unwrap_err();
-    assert!(
-        matches!(&err, StepError::Kernel { detail, .. } if detail.contains("lies 0.0915 mm off")),
-        "{err}"
+fn a_loose_fit_reads_within_the_tolerance() {
+    check(
+        "round_edge_loose_fit.step",
+        "millimetre",
+        3,
+        [200.0, 200.0, 19.0],
+        0,
     );
 }
 

@@ -158,11 +158,11 @@ What Fusion's Geometry, Heights, Passes and Linking tabs hold, across operations
 
 | Feature                               | Status      | Notes |
 |---------------------------------------|-------------|-------|
-| STEP                                  | done        | Pure Rust (ogeom), in the file's units, each import checked against the file ([0001](docs/decisions/0001-step-backend.md)). |
+| STEP                                  | done        | Pure Rust (ogeom 0.11.5, its last release under MIT or Apache-2.0), in the file's units, each import checked against the file ([0001](docs/decisions/0001-step-backend.md)). |
 | STL                                   | done        | |
 | Position, rotation and scale          | done        | |
 | Arcs from the model's round edges     | partial     | From the topology. Missing: the B-rep's own circles; ellipses and splines are followed by lines. |
-| Fine tolerances on large curved parts | partial     | Held to 0.01 mm since ogeom 0.11 ([ogeom-rs#216](https://github.com/gilbertorconde/ogeom-rs/issues/216)). Missing: a private part with a thin B-spline strip is refused at 0.005 mm and finer ([0001](docs/decisions/0001-step-backend.md)). |
+| Fine tolerances on large curved parts | partial     | Held to 0.01 mm since ogeom 0.11 ([ogeom-rs#216](https://github.com/gilbertorconde/ogeom-rs/issues/216)), and a round whose edge stands a file's slop off it since 0.11.2 ([ogeom-rs#261](https://github.com/gilbertorconde/ogeom-rs/issues/261)). Missing: a private part with a thin B-spline strip is refused at 0.005 mm and finer ([0001](docs/decisions/0001-step-backend.md)). |
 | IGES, 3MF, OBJ                        | not started | |
 
 ## Setups and stock
