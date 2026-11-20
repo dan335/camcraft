@@ -91,7 +91,7 @@ fn a_new_scallop_leaves_what_fusions_does() {
     holds("scallop", |_| {}, &bounds, 0);
 }
 
-/// The dome avoided, 1 mm sideways and 1 mm down: 58.9% of 685,908 columns
+/// The dome avoided, 1 mm sideways and 1 mm down: 58.9% of 685,892 columns
 /// alike, the median 0.0065 mm and the 95th percentile 0.25, 1.2% less
 /// removed and 2.6% less fed; it lifts 10 times to Fusion's 8. It was 61.8%,
 /// 0.0056, 0.24, 1.2% less and 12% more, lifting 15 times: its rings now go

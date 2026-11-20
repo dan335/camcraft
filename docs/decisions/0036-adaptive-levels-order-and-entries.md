@@ -98,7 +98,8 @@ What made it otherwise?
 - **A fine or flat level starts nearest where the level below it in its slab
   ended**, where the tool is. A slab's own level is worked out at the same time
   as the others, before the one above it has ended, so it still starts where
-  its helix has most room, or at the corner of its box.
+  its helix has most room, or at the corner of its box. (Since amended, below:
+  one that starts from the side is worked again, where the one above ended.)
 
 ## Measured
 
@@ -133,6 +134,84 @@ cutting both ways removes, and the steps from a level up to its fine levels.
 
 - Every Fusion comparison of a finish starts from a new adaptive's roughing,
   whose levels moved; their figures were measured again.
-- A slab's own level does not know where the tool will be when it starts.
 - A ridge wider than the load, standing free, is still cut down by passes
   steered for the load, the last of it along it.
+
+## Amended 2026-11-20: the lifts
+
+The program above still lifted 57 times, each out to the safe distance over
+the stock as the operation found it, two millimetres over its top, however deep
+the level: from above, a criss-cross of rapids over the part. Classed:
+
+| class | lifts |
+|---|---:|
+| a pass's return on its level, longer than the stay-down distance | 28 |
+| a step up from a level to the next above it in its slab | 20 |
+| going down into the next slab, a helix or a ramp | 6 |
+| from one area to the next | 3 |
+
+- **The returns.** The stay-down distance is Fusion's Maximum Stay-Down
+  Distance for its Adaptive, `5 * tool_diameter`, read from a new operation
+  through Fusion's API ([decision 0012](0012-transitions-and-entries-from-fusions-defaults.md)).
+  The same reading says a new Adaptive of Fusion's retracts *fully*, to the
+  retract height 5 mm over the stock, beyond it, and stays down only going
+  straight (Stay-Down Level *least*): Fusion lifts there too, higher. A probe
+  of Fusion's own program on a wide pocket was written but Fusion, its bridge
+  running, did not take it up; the answer is from its settings. Whether lifting
+  is quicker than staying down depends on how much faster the machine rapids
+  than it cuts, which camcraft is not told. By distance, a way back across what
+  the level cleared is never longer than going up to where a lifted link
+  crosses, across and down: a link now stays down where its way is no longer
+  than the stay-down distance, *or than lifting would go*. Deep in a part that
+  is shorter by twice the depth; near the top, about even. The stay-down
+  distance is kept as the least that always stays down, and 0 still always
+  lifts.
+- **The steps up.** Above where a level of a slab has cut, everything in its
+  slab is cut, so the column the tool rises in is clear. A level's pass may
+  now be come to from where a pass of a level below in the slab ended, the one
+  just before it as the passes are cut (by area, the last in its area): up at
+  the feed beside it, then across at the new level as a link at the level is,
+  through what is cleared and kept the clearance off what stands
+  (`Arrive::Rise`). By area, the way must keep to the one area, as the
+  area's level is cut before the same level's passes in the next area, which
+  the way across, found with them cut, might otherwise run through. Starting
+  a level's passes in each area nearest where the area's last pass below ended
+  was tried: it took the level back and forth between the areas, lifting
+  more, and was left.
+- **Between slabs and areas.** Going down into a slab is a helix or a ramp
+  from above the level over it, and from one area to the next is a lift: each
+  needed. The job asks for minimum retraction, which is over the material as
+  the operation found it (decision 0004), so the lift is to two millimetres over
+  the stock's top. Over the material as it stands when the link is made it
+  would be lower, deep in a part much lower; that is every strategy's linking,
+  with the holder kept clear over the stock as it stood too, and is left for a
+  decision of its own.
+- **A slab's own level starts nearest where the tool is**, where the one above
+  it ended: worked out side by side first, a slab whose level starts from the
+  side, rather than going down into material, is worked again in turn,
+  starting there, so the program is the same on any number of cores.
+
+On the user's job, before and after:
+
+| | before | after |
+|---|---:|---:|
+| lifts | 57 | 19 |
+| of them, returns on a level | 28 | 7 |
+| of them, steps up to a fine level | 20 | 3 |
+| of them, down into a slab | 6 | 6 |
+| of them, from one area to the next | 3 | 3 |
+| rapid, mm | 5,051 | 2,119 |
+| fed, mm | 61,839 | 63,405 |
+| time at the feeds | 11.0 min | 11.2 min |
+
+The same material comes off and every check passes. The returns left would go
+round so far that lifting is shorter, or cross where the room the tool has is
+cut in two; the steps up left start their level far from where the area below
+ended. Rapids at 5 m/min, the whole is 11.6 minutes where it was 12.0.
+
+Tests (`strategy/adaptive/tests.rs`): across a pocket far wider than the
+stay-down distance every way back stays down, none taking more than a pass
+would; up two drafted pockets and up a pocket and the channel round its
+island, by depth and by area, no step up to a fine level lifts, each rising
+straight up at the feed; given where the tool is, a level starts nearest it,
+and a part roughed slab after slab is the same on one core and on eight.

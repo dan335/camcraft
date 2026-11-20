@@ -39,6 +39,16 @@ fn params() -> AdaptiveParams {
 
 const R: f64 = 3.0;
 
+/// One level cleared on its own, from nowhere in particular.
+fn clear_level(
+    z: f64,
+    allowed: &Region,
+    uncut: &Region,
+    p: &LevelParams,
+) -> Result<LevelCut, StrategyError> {
+    clear_level_from(z, allowed, uncut, p, None, Vec::new())
+}
+
 fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Region {
     Region::rectangle(dvec2(x0, y0), dvec2(x1, y1))
 }
@@ -718,6 +728,139 @@ fn by_area_a_pocket_inside_a_channel_is_cut_whole_apart_from_it() {
     let (one, eight) = (on(1), on(8));
     assert_eq!(one.moves(), eight.moves());
     assert_eq!(one.moves(), path.moves());
+    // Each of them steps up to its fine levels without lifting.
+    assert_eq!(steps_up_lifted(&path, area), 0);
+}
+
+/// How many times `path` lifts, by a link, between a level and one above it
+/// in the same area, by `area_of`.
+fn steps_up_lifted(path: &Toolpath, area_of: impl Fn(DVec2) -> u8) -> usize {
+    let mut last: Option<(f64, u8)> = None;
+    let mut linked = false;
+    let mut lifted = 0;
+    for m in path.moves() {
+        match m.role {
+            MoveRole::Link => linked = true,
+            MoveRole::Cut => {
+                let here = (m.to.z, area_of(m.to.truncate()));
+                if linked && last.is_some_and(|(z, a)| a == here.1 && here.0 > z + 1e-9) {
+                    lifted += 1;
+                }
+                last = Some(here);
+                linked = false;
+            }
+            _ => {}
+        }
+    }
+    lifted
+}
+
+/// Up from each level to the next above it in the slab, a fine level up the
+/// pockets' drafted walls, the tool rises beside where the level ended and
+/// crosses at the new one through what is cleared, by depth or by area: it
+/// never lifts out to step up.
+#[test]
+fn each_fine_level_is_risen_to_without_lifting() {
+    let centres = [dvec2(16.0, 16.0), dvec2(44.0, 16.0)];
+    let knots = [(0.0, -8.0), (7.0, -8.0), (11.0, 0.0)];
+    let mesh = surface(dvec2(0.0, 0.0), dvec2(60.0, 32.0), 120, |p| {
+        centres
+            .iter()
+            .map(|c| profile(p.distance(*c), &knots))
+            .fold(f64::INFINITY, f64::min)
+    });
+    let (lo, hi) = (dvec2(0.0, 0.0), dvec2(60.0, 32.0));
+    let pocket = |p: DVec2| u8::from(p.x > 30.0);
+    for by_area in [false, true] {
+        let mut p = params();
+        p.by_area = by_area;
+        let (path, report) = rough_fine(&mesh, lo, hi, &p);
+        assert!(report.fine_levels >= 6, "{report:?}");
+        assert_eq!(steps_up_lifted(&path, pocket), 0, "by area: {by_area}");
+        // Rising, the tool goes straight up at the feed.
+        let rises = path
+            .moves()
+            .windows(2)
+            .filter(|w| {
+                w[1].role == MoveRole::Transition
+                    && w[1].to.z > w[0].to.z + 0.5
+                    && w[1].to.truncate().distance(w[0].to.truncate()) < 1e-9
+            })
+            .count();
+        assert!(rises >= 6, "by area: {by_area}: {rises} rises");
+    }
+}
+
+/// Across a pocket far wider than the stay-down distance, climbing only, each
+/// pass ends on the far side from where the next starts. The way back over
+/// what the pass before cleared is no longer than lifting out of the pocket,
+/// across and down again would be, so it is made staying down, however far:
+/// once in, the tool never lifts. Nowhere along the way back does it take more
+/// than a pass would.
+#[test]
+fn a_return_over_what_is_cleared_stays_down_however_far() {
+    let p = params();
+    let level = LevelParams::new(&p, R);
+    let block = rect(-10.0, -10.0, 110.0, 50.0);
+    let allowed = rect(3.0, 3.0, 97.0, 37.0);
+    let cut = clear_level(-6.0, &allowed, &block, &level).unwrap();
+    assert_eq!(cut.helixes.len(), 1);
+    let lifts = cut
+        .passes
+        .iter()
+        .skip(1)
+        .filter(|(a, _)| *a == Arrive::Link)
+        .count();
+    assert_eq!(lifts, 0, "{} passes", cut.passes.len());
+    // Some of the way back is longer than the stay-down distance.
+    let mut at: Option<DVec2> = None;
+    let mut longest: f64 = 0.0;
+    for (arrive, points) in &cut.passes {
+        if let (Arrive::Stay { via }, Some(a), Some(&b)) = (arrive, at, points.first()) {
+            let way: Vec<DVec2> = std::iter::once(a)
+                .chain(via.iter().copied())
+                .chain(std::iter::once(b))
+                .collect();
+            longest = longest.max(camcraft_geom::contour::polyline_length(&way));
+        }
+        at = points.last().copied();
+    }
+    assert!(longest > p.stay_down, "{longest}");
+    let reachable = block.intersection(&allowed.offset(R, 1e-3)).unwrap();
+    let (most, _, _) = measured(&cut, &reachable, level.target);
+    assert!(most <= level.limit + 0.12, "a step took {most} rad");
+}
+
+/// A level starts nearest where the tool is when it comes to it: given where
+/// the tool is, an open block's first pass begins on the side nearest it, not
+/// at the block's corner.
+#[test]
+fn a_level_starts_nearest_where_the_tool_is() {
+    let p = params();
+    let level = LevelParams::new(&p, R);
+    let block = rect(0.0, 0.0, 60.0, 30.0);
+    let allowed = rect(-8.0, -8.0, 68.0, 38.0);
+    let start = |from: Option<DVec2>| {
+        let cut = clear_level_from(-6.0, &allowed, &block, &level, from, Vec::new()).unwrap();
+        cut.passes[0].1[0]
+    };
+    let far = dvec2(70.0, 40.0);
+    assert!(start(None).distance(dvec2(0.0, 0.0)) < start(None).distance(far));
+    assert!(
+        start(Some(far)).distance(far) < 15.0,
+        "{}",
+        start(Some(far))
+    );
+    // Slab after slab, each where the one above ended, the same on any
+    // number of cores.
+    let on = |threads: usize| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| rough_slope(&params()).0)
+    };
+    assert_eq!(on(1).moves(), on(8).moves());
 }
 
 /// The most a pass's heading turns within the tool's radius along it, over

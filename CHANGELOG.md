@@ -9,6 +9,15 @@ the same notes at more length.
 - **3/8" bits in the System library:** an up-cut and a down-cut spiral and a
   ball nose, each on a 3/8" shank, as T21 to T23, so the first twenty keep
   their numbers.
+- **Adaptive clearing lifts only where it must**
+  ([decision 0036](docs/decisions/0036-adaptive-levels-order-and-entries.md)).
+  A way back across what a level has cleared stays down wherever it is no
+  longer than lifting out, across and down again would be, not only within the
+  stay-down distance; from a level up to the next in its slab, the tool rises
+  at the feed beside where it is and crosses at the new level, rather than
+  lifting out; and a slab's own level starts nearest where the tool is. On a
+  user's part the adaptive lifts 19 times where it lifted 57, with 2,119 mm of
+  rapids where there were 5,051, removing the same material.
 - **Adaptive clearing cuts by area in an order a machinist would**
   ([decision 0036](docs/decisions/0036-adaptive-levels-order-and-entries.md)).
   By area, each area gets each slab's level and then its fine levels up the

@@ -753,9 +753,13 @@ passes along it, a sliver narrower than the load in one;
 `"climb"` (the default), `"conventional"` or `"both-ways"`; `flat_areas` (on by
 default) adds a level on each flat face and on each peak, raised by the stock to
 leave down.
-Where the straight way between two passes runs through what is still standing, it
-stays down round it, through what is cleared, if that is no longer than the
-stay-down distance. As Fusion's 3D Adaptive:
+Between two passes it stays down, straight across what is cleared or round
+what still stands, where that way is no longer than the stay-down distance,
+or than lifting would go: up to the safe distance over the stock, across and
+down again ([decision 0036](decisions/0036-adaptive-levels-order-and-entries.md)).
+From a level up to the next above it in a slab, it rises at the feed beside
+where the level ended and crosses at the new one the same way. As Fusion's 3D
+Adaptive:
 
 - `machine_cavities` (on by default): off, it only cuts from the outside in, and
   leaves the areas it could only go down into, saying how much it left.
@@ -789,7 +793,7 @@ stay-down distance. As Fusion's 3D Adaptive:
   when 0, and never narrower), then cleared out from it.
 - `stay_down_level` (100 by default), in percent: how far round what stands
   between a link stays down. 0 stays down only going straight; 100 goes round
-  as far as the stay-down distance allows.
+  as far as the stay-down distance, or lifting's way, allows.
 - `stay_down_clearance` (0 by default): how far a link staying down keeps off the
   material, but where it leaves one pass and comes to the next.
 - `lift_height` (0 by default): how far a link staying down lifts off the level,
@@ -994,7 +998,8 @@ passes are no further apart than the tool is wide; otherwise by the straight
 line between them, lifted wherever the part rises above it. Pocket clearing and
 the 2D strategies go straight and level, and a profile down to its ring's next
 depth. Adaptive clearing makes
-its own links at the level, only straight across what it has cleared; it goes
+its own links at the level, across what it has cleared, and up from a level to
+the next above it in a slab; it goes
 down its own helix, or ramp, into what it cannot reach
 from the side, and straight down everywhere else, into what it has cleared.
 Parallel and the other finishes over the part (scallop, spiral, radial,

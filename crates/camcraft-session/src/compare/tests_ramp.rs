@@ -107,7 +107,7 @@ fn holds(name: &str, change: impl FnOnce(&mut Operation), bounds: &Bounds, conta
     );
 }
 
-/// A new Ramp leaves what Fusion's does: 61.7% of the 690,830 columns either
+/// A new Ramp leaves what Fusion's does: 61.7% of the 690,819 columns either
 /// cuts alike, the median difference 0.005 mm and the 95th percentile 0.31,
 /// 0.6% more removed and 1.5% less fed.
 #[test]
@@ -122,7 +122,7 @@ fn a_new_ramp_leaves_what_fusions_does() {
     holds("ramp", |_| {}, &bounds, 0);
 }
 
-/// With a stepdown of 2 mm: 46.2% of 663,776 alike, the median 0.012 mm and
+/// With a stepdown of 2 mm: 46.2% of 663,765 alike, the median 0.012 mm and
 /// the 95th percentile 0.82, 1.8% more removed and 5.8% more fed. Fusion's
 /// pocket wall ends at Z12 here, two levels above the floor, so camcraft's
 /// helix down the floor's fillets has the more to differ from.
@@ -144,7 +144,7 @@ fn a_ramp_two_millimetres_a_lap_leaves_what_fusions_does() {
 }
 
 /// With a ramp angle of 0.5°, gentler than a stepdown a lap round every wall
-/// but the outside: 60.6% of 691,354 alike, the median 0.006 mm and the 95th
+/// but the outside: 60.6% of 691,343 alike, the median 0.006 mm and the 95th
 /// percentile 0.32, 0.7% more removed and 1.4% less fed. Fusion's rapid down
 /// to Z12 at (-15.36, 7.83), onto the wall it starts from Z11.6 above the
 /// pocket's floor, meets the stock the roughing here leaves round the dome's
@@ -161,7 +161,7 @@ fn a_ramp_at_half_a_degree_leaves_what_fusions_does() {
     holds("ramp_angle", |op| op.linking.ramp_angle = 0.5, &bounds, 1);
 }
 
-/// The dome avoided, 1 mm sideways and 1 mm down: 59.6% of 611,516 columns
+/// The dome avoided, 1 mm sideways and 1 mm down: 59.6% of 611,505 columns
 /// alike, the median 0.0054 mm and the 95th percentile 1.57, 5.3% more
 /// removed and 0.6% more fed, both lifting 4 times. Neither goes down the
 /// dome: camcraft's way down it is cut out, and the way down to it, from

@@ -13,10 +13,10 @@ topics! {
         "How far above the material the tool changes from rapid to feed on the way down, and back on the way out.",
         Figure::SafeDistance;
     STAY_DOWN: "Stay down",
-        "Links this long or shorter are made without lifting. 0 always lifts. Left empty, the strategy's own.",
+        "Links this long or shorter stay down; adaptive also stays down where lifting would go further. 0 always lifts. Left empty, the strategy's own.",
         Figure::StayDown;
     STAY_DOWN_LEVEL: "Stay-down level",
-        "How far round what stands between a link stays down. None goes only straight; most, as far as stay down allows.";
+        "How far round what stands between a link stays down. None goes only straight; most, as far as staying down is allowed.";
     STAY_DOWN_CLEARANCE: "Stay-down clearance",
         "How far a link that stays down keeps off the material, but where it leaves one pass and comes to the next.",
         Figure::StayDownClearance;

@@ -8,6 +8,8 @@ use super::*;
 /// A level being cleared.
 pub(super) struct Clearing<'a> {
     pub(super) p: &'a LevelParams,
+    /// The level's height.
+    z: f64,
     pub(super) allowed: &'a Region,
     /// Where the tool may be, in tiles.
     pub(super) room: Tiles,
@@ -81,6 +83,7 @@ impl Situation {
 
 impl<'a> Clearing<'a> {
     pub(super) fn new(
+        z: f64,
         allowed: &'a Region,
         uncut: &Region,
         p: &'a LevelParams,
@@ -107,6 +110,7 @@ impl<'a> Clearing<'a> {
         let uncut = uncut?;
         Ok(Self {
             p,
+            z,
             allowed,
             room: room?,
             inner,
@@ -134,8 +138,15 @@ impl<'a> Clearing<'a> {
     }
 
     /// Clear the level, its first pass starting nearest `from`, where the
-    /// tool is when it comes to it, if that is known.
-    pub(super) fn run(&mut self, from: Option<DVec2>) -> Result<(), StrategyError> {
+    /// tool is when it comes to it, if that is known. A pass the tool cannot
+    /// come to staying down from the last may rise to it from one of
+    /// `arrivals`, where passes of the levels below in the slab ended: each
+    /// once, the nearest it can.
+    pub(super) fn run(
+        &mut self,
+        from: Option<DVec2>,
+        mut arrivals: Vec<Arrival>,
+    ) -> Result<(), StrategyError> {
         let mut at: Option<DVec2> = None;
         let mut futile = 0;
         for _ in 0..MAX_PASSES {
@@ -170,7 +181,12 @@ impl<'a> Clearing<'a> {
                 Some((start, dir, side)) => {
                     let arrive = match at.and_then(|from| self.stay_route(&s, from, start)) {
                         Some(via) => Arrive::Stay { via },
-                        None => Arrive::Link,
+                        None if arrivals.is_empty() => Arrive::Link,
+                        // Where they ended may be far from where it is.
+                        None => {
+                            let all = self.situation_everywhere()?;
+                            self.rise(&all, &mut arrivals, start)
+                        }
                     };
                     (start, dir, side, arrive, false)
                 }
@@ -268,6 +284,32 @@ impl<'a> Clearing<'a> {
         Ok(())
     }
 
+    /// How the tool comes to `start` from the nearest of `arrivals` it can
+    /// rise from and cross to staying down, that one taken out of them; or
+    /// however the linker sees fit.
+    fn rise(&self, s: &Situation, arrivals: &mut Vec<Arrival>, start: DVec2) -> Arrive {
+        let mut near: Vec<(usize, f64)> = arrivals
+            .iter()
+            .enumerate()
+            .map(|(k, a)| (k, a.at.distance(start)))
+            .collect();
+        near.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+        for (k, _) in near {
+            let Some(&a) = arrivals.get(k) else {
+                continue;
+            };
+            if let Some(via) = self.stay_route(s, a.at, start) {
+                arrivals.remove(k);
+                return Arrive::Rise {
+                    after: a.after,
+                    at: a.at,
+                    via,
+                };
+            }
+        }
+        Arrive::Link
+    }
+
     /// Where the tool lifts to link to a pass, start it a little off the
     /// material, and where it lifts after one, end it so: the linker comes down
     /// at rapid, and goes up, only where the tool is clear of material, and a
@@ -285,7 +327,9 @@ impl<'a> Clearing<'a> {
             let Some((arrive, points)) = self.passes.get_mut(k) else {
                 continue;
             };
-            if *arrive == Arrive::Link
+            // A pass risen to may be lifted to instead, where it does not
+            // follow the pass it rises from.
+            if matches!(arrive, Arrive::Link | Arrive::Rise { .. })
                 && let (Some(&a), Some(&b)) = (points.first(), points.get(1))
                 && let Some(d) = (b - a).try_normalize()
             {
@@ -562,10 +606,23 @@ impl<'a> Clearing<'a> {
     /// is cleared, as the corners it turns at between: straight where it can
     /// be, and otherwise round what stands between, the shortest way by the
     /// corners of where the tool stands clear of the material. `None` where
-    /// there is none within the stay-down distance, clear of the part.
+    /// there is none so short, clear of the part.
+    ///
+    /// So short is the stay-down distance, or, where that is shorter, no
+    /// longer than lifting would go: up to where a lifted link crosses,
+    /// across and down again. Staying down through what is cleared is then
+    /// no further than lifting, and nothing about it is odd; how much faster a
+    /// rapid is than the feed is the machine's, not known here.
     pub(super) fn stay_route(&self, s: &Situation, from: DVec2, to: DVec2) -> Option<Vec<DVec2>> {
-        let most = self.p.stay_down;
+        // None asked for, it always lifts.
+        if self.p.stay_down <= 0.0 {
+            return None;
+        }
         let straight = from.distance(to);
+        let most = self
+            .p
+            .stay_down
+            .max(straight + 2.0 * (self.p.lift_to - self.z).max(0.0));
         if straight > most || !s.knows(from) || !s.knows(to) {
             return None;
         }

@@ -530,33 +530,72 @@ fn clear_levels(
     let level = LevelParams::new(params, radius);
     // Each level an equal share of the work, told as it is done.
     let share = share(1, all.len());
+    // A slab, its own level starting nearest `seed` where that is known: its
+    // own level, then each flat and fine level over what the levels of the
+    // slab below it left, each rising from where they ended where it can.
+    let work = |(z, flats): &(f64, Vec<f64>), seed: Option<DVec2>, told: bool| {
+        let mut cuts = Vec::with_capacity(1 + flats.len());
+        let Some(region) = allowed_at(*z) else {
+            return Ok(cuts);
+        };
+        let pieces = params.by_area.then(|| areas(region));
+        cuts.push(clear_level_from(
+            *z,
+            region,
+            &standing(*z)?,
+            &level,
+            seed,
+            Vec::new(),
+        )?);
+        if told {
+            show_level(&params.watch, cuts.last());
+            params.watch.add(share);
+        }
+        for &f in flats {
+            let Some(region) = allowed_at(f) else {
+                continue;
+            };
+            let from = arrivals(&cuts, pieces.as_deref());
+            let cut = clear_flat(f, region, &standing(f)?, &cuts, (cutter, &level), from)?;
+            if told {
+                show_level(&params.watch, Some(&cut));
+                params.watch.add(share);
+            }
+            cuts.push(cut);
+        }
+        Ok::<_, StrategyError>(cuts)
+    };
     // Slabs depend on nothing but their own regions, so they are worked in
     // parallel and emitted in order: the result is the same on any number of
     // cores.
     let worked: Vec<Result<Vec<LevelCut>, StrategyError>> = slabs
         .par_iter()
-        .map(|(z, flats)| {
-            let mut cuts = Vec::with_capacity(1 + flats.len());
-            let Some(region) = allowed_at(*z) else {
-                return Ok(cuts);
-            };
-            cuts.push(clear_level(*z, region, &standing(*z)?, &level)?);
-            show_level(&params.watch, cuts.last());
-            params.watch.add(share);
-            // Each flat level over what the levels of the slab below it left.
-            for &f in flats {
-                let Some(region) = allowed_at(f) else {
-                    continue;
-                };
-                let cut = clear_flat(f, region, &standing(f)?, &cuts, cutter, &level)?;
-                show_level(&params.watch, Some(&cut));
-                cuts.push(cut);
-                params.watch.add(share);
-            }
-            Ok(cuts)
-        })
+        .map(|slab| work(slab, None, true))
         .collect();
-    let worked: Vec<Vec<LevelCut>> = worked.into_iter().collect::<Result<_, _>>()?;
+    let mut worked: Vec<Vec<LevelCut>> = worked.into_iter().collect::<Result<_, _>>()?;
+    // Where the tool is when it comes to a slab is where the one above ended,
+    // which is not known while they are worked side by side. A slab whose own
+    // level starts from the side, rather than going down into material, is
+    // worked again, in turn, starting nearest there: one going down starts
+    // where its helix has most room wherever the tool is.
+    for s in 1..worked.len() {
+        let from_side = worked
+            .get(s)
+            .and_then(|cuts| cuts.first())
+            .and_then(|cut| cut.passes.first())
+            .is_some_and(|(a, _)| !matches!(a, Arrive::Enter { .. } | Arrive::Ramp { .. }));
+        let seed = worked.get(s - 1).and_then(|cuts| {
+            cuts.iter()
+                .rev()
+                .find_map(|cut| cut.passes.last().and_then(|(_, pts)| pts.last().copied()))
+        });
+        if let (true, Some(seed), Some(slab)) = (from_side, seed, slabs.get(s)) {
+            let again = work(slab, Some(seed), false)?;
+            if let Some(cuts) = worked.get_mut(s) {
+                *cuts = again;
+            }
+        }
+    }
 
     let mut report = AdaptiveReport::default();
     for (k, cut) in worked.iter().flat_map(|slab| slab.iter().enumerate()) {
@@ -607,9 +646,17 @@ fn clear_levels(
             })
         })
         .collect();
+    // By area, a level's passes in one area are cut before its passes in the
+    // next, so a way up to one of them that its level found across what its
+    // passes in another had cleared is not taken.
+    let mut slab_areas: Vec<Vec<Indexed>> = Vec::new();
     if params.by_area {
         let bases: Vec<Option<&Region>> = slabs.iter().map(|(z, _)| allowed_at(*z)).collect();
         order = by_area(&order, &worked, &bases);
+        slab_areas = bases
+            .iter()
+            .map(|r| r.map(areas).unwrap_or_default())
+            .collect();
     }
 
     // The material stands up to the level above, or the top.
@@ -629,18 +676,38 @@ fn clear_levels(
             continue;
         };
         let first = dvec3(first.x, first.y, cut.z);
-        // Staying down only from the pass it was found after.
-        let follows = last.is_some_and(|l| {
-            l.slab == place.slab && l.level == place.level && l.pass + 1 == place.pass
+        // Staying down only from the pass it was found after: the one before
+        // it in its level, or the one of a level below it rises from.
+        let follows = last.is_some_and(|l| match arrive {
+            Arrive::Rise {
+                after: (level, pass),
+                at,
+                via,
+            } => {
+                l.slab == place.slab
+                    && l.level == *level
+                    && l.pass == *pass
+                    && within_area(slab_areas.get(place.slab), *at, via, first.truncate())
+            }
+            _ => l.slab == place.slab && l.level == place.level && l.pass + 1 == place.pass,
         });
         match arrive {
-            Arrive::Stay { via } if follows => {
+            Arrive::Stay { via } | Arrive::Rise { via, .. } if follows => {
                 report.stayed_down += 1;
+                // Up at the level's feed beside where the last pass ended,
+                // where it ended below.
+                let end = path.end().unwrap_or(first);
+                if end.z < cut.z - 1e-9 {
+                    path.feed_to(
+                        end.truncate().extend(cut.z),
+                        MoveRole::Transition,
+                        params.feed,
+                    )?;
+                }
                 // Lifted no higher than the material the level stands under.
                 let top = above.get(place.slab).copied().unwrap_or(params.top);
                 let lift = params.lift_height.min(top - cut.z).max(0.0);
-                let from = path.end().map_or(first.truncate(), |e| e.truncate());
-                let way: Vec<DVec2> = std::iter::once(from)
+                let way: Vec<DVec2> = std::iter::once(end.truncate())
                     .chain(via.iter().copied())
                     .chain(std::iter::once(first.truncate()))
                     .collect();
@@ -648,7 +715,7 @@ fn clear_levels(
                     path.feed_to(p, MoveRole::Transition, params.feed)?;
                 }
             }
-            Arrive::Link | Arrive::Stay { .. } => {
+            Arrive::Link | Arrive::Stay { .. } | Arrive::Rise { .. } => {
                 path.feed_to(first, MoveRole::Link, params.feed)?;
             }
             Arrive::Enter { centre } => {
@@ -786,40 +853,9 @@ fn by_area(order: &[Place], worked: &[Vec<LevelCut>], bases: &[Option<&Region>])
         .iter()
         .map(|ps| ps.iter().map(Indexed::of).collect())
         .collect();
-    // Which piece of slab `s`'s level `p` is in: the one it is deepest in, or
-    // nearest the edge of, outside them all. A flat or fine level of a slab
-    // cuts the terraces round its pieces, outside them; the nearest is the
-    // piece the terrace is round, where the box round a piece, as round a
-    // channel about an island, can hold other pieces whole.
-    let piece_of = |s: usize, p: DVec2| -> usize {
-        pieces.get(s).map_or(0, |ps| {
-            ps.iter()
-                .enumerate()
-                .map(|(k, r)| (k, r.depth_at(p)))
-                .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
-                .map_or(0, |(k, _)| k)
-        })
-    };
-    // Which piece of slab `s` a pass is in: where most of it is, by points
-    // spread along it, the first piece where as many are in two.
-    let pass_piece = |s: usize, points: &[DVec2]| -> usize {
-        let n = pieces.get(s).map_or(0, Vec::len);
-        if n < 2 {
-            return 0;
-        }
-        let mut votes = vec![0usize; n];
-        let every = (points.len() / BY_AREA_SAMPLES).max(1);
-        for p in points.iter().step_by(every) {
-            if let Some(v) = votes.get_mut(piece_of(s, *p)) {
-                *v += 1;
-            }
-        }
-        votes
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(&a.0)))
-            .map_or(0, |(k, _)| k)
-    };
+    let piece_of = |s: usize, p: DVec2| -> usize { pieces.get(s).map_or(0, |ps| piece_at(ps, p)) };
+    let pass_piece =
+        |s: usize, points: &[DVec2]| -> usize { pieces.get(s).map_or(0, |ps| area_of(ps, points)) };
     // The piece of each slab above that each piece is in, by a point well
     // inside it: an area's below it are within it, as where the tool may be
     // only shrinks going down.
@@ -890,14 +926,15 @@ fn by_area(order: &[Place], worked: &[Vec<LevelCut>], bases: &[Option<&Region>])
 /// Clear flat level `f` of a slab over what the levels of the slab `below` it
 /// left of `standing`, the material at it: the real tool, `cutter`, as wide at
 /// each as it is that far above its tip. It starts nearest where the last of
-/// them ended, where the tool is, rather than at a corner of the level.
+/// them ended, where the tool is, rather than at a corner of the level, and a
+/// pass of it may rise from `arrivals`, where passes of them ended.
 fn clear_flat(
     f: f64,
     allowed: &Region,
     standing: &Region,
     below: &[LevelCut],
-    cutter: &Cutter,
-    p: &LevelParams,
+    (cutter, p): (&Cutter, &LevelParams),
+    arrivals: Vec<Arrival>,
 ) -> Result<LevelCut, StrategyError> {
     let mut uncut = Tiles::new(standing, TILE_RADII * p.radius)?;
     for cut in below {
@@ -920,7 +957,81 @@ fn clear_flat(
         .iter()
         .rev()
         .find_map(|cut| cut.passes.last().and_then(|(_, pts)| pts.last().copied()));
-    clear_level_from(f, allowed, &uncut.whole()?, p, from)
+    clear_level_from(f, allowed, &uncut.whole()?, p, from, arrivals)
+}
+
+/// The pieces of `region`, where the tool may be at a slab's own level, each
+/// indexed for asking how far inside it a point is: the areas the slab's
+/// passes are in.
+fn areas(region: &Region) -> Vec<Indexed> {
+    region.pieces().iter().map(Indexed::of).collect()
+}
+
+/// Which of `pieces` the pass along `points` is in: where most of it is, by
+/// points spread along it, each in the piece it is deepest in, or nearest the
+/// edge of, outside them all; the first where as many are in two. A flat or
+/// fine level of a slab cuts the terraces round its pieces, outside them,
+/// and the nearest is the piece the terrace is round, where the box round a
+/// piece, as round a channel about an island, can hold other pieces whole.
+fn area_of(pieces: &[Indexed], points: &[DVec2]) -> usize {
+    if pieces.len() < 2 {
+        return 0;
+    }
+    let mut votes = vec![0usize; pieces.len()];
+    let every = (points.len() / BY_AREA_SAMPLES).max(1);
+    for p in points.iter().step_by(every) {
+        if let Some(v) = votes.get_mut(piece_at(pieces, *p)) {
+            *v += 1;
+        }
+    }
+    votes
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(&a.0)))
+        .map_or(0, |(k, _)| k)
+}
+
+/// Which of `pieces` `p` is deepest in, or nearest the edge of.
+fn piece_at(pieces: &[Indexed], p: DVec2) -> usize {
+    pieces
+        .iter()
+        .enumerate()
+        .map(|(k, r)| (k, r.depth_at(p)))
+        .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
+        .map_or(0, |(k, _)| k)
+}
+
+/// Whether the way from `at` by `via` to `to` keeps to the one area of
+/// `areas`, where there are any to keep to.
+fn within_area(areas: Option<&Vec<Indexed>>, at: DVec2, via: &[DVec2], to: DVec2) -> bool {
+    let Some(areas) = areas.filter(|a| a.len() > 1) else {
+        return true;
+    };
+    let home = piece_at(areas, at);
+    via.iter()
+        .chain(std::iter::once(&to))
+        .all(|p| piece_at(areas, *p) == home)
+}
+
+/// Where the passes of a slab's levels so far, `cuts`, leave the tool for the
+/// next level up to come from: by area, the end of the last pass in each of
+/// `areas`, as each area's levels are cut in turn; otherwise the end of the
+/// last pass of all.
+fn arrivals(cuts: &[LevelCut], areas: Option<&[Indexed]>) -> Vec<Arrival> {
+    let passes = cuts.iter().enumerate().flat_map(|(k, cut)| {
+        cut.passes
+            .iter()
+            .enumerate()
+            .filter_map(move |(i, (_, pts))| Some((k, i, pts, *pts.last()?)))
+    });
+    let mut last: Vec<Option<Arrival>> = vec![None; areas.map_or(1, |a| a.len().max(1))];
+    for (k, i, pts, at) in passes {
+        let area = areas.map_or(0, |a| area_of(a, pts));
+        if let Some(slot) = last.get_mut(area) {
+            *slot = Some(Arrival { at, after: (k, i) });
+        }
+    }
+    last.into_iter().flatten().collect()
 }
 
 /// A helix down onto `end` about `centre`, from `top`, as adaptive clearing
@@ -1115,6 +1226,9 @@ struct LevelParams {
     helix_radius: f64,
     least_helix_radius: f64,
     stay_down: f64,
+    /// How high a lifted link crosses, near enough: the safe distance over
+    /// the top the material stands to as the operation finds it.
+    lift_to: f64,
     /// How much of what the stay-down distance leaves past going straight a
     /// way round may take.
     stay_down_level: f64,
@@ -1156,6 +1270,7 @@ impl LevelParams {
             helix_radius: p.helix_radius,
             least_helix_radius: p.least_helix_radius,
             stay_down: p.stay_down,
+            lift_to: p.top + p.safe_distance,
             stay_down_level: p.stay_down_level.clamp(0.0, 1.0),
             stay_down_clearance: p.stay_down_clearance.max(0.0),
             slot_width: p.slot_width.map(|w| w.max(2.0 * radius)),
@@ -1177,6 +1292,19 @@ enum Arrive {
         /// Where it turns between where it was and where the pass starts.
         via: Vec<DVec2>,
     },
+    /// Up from where a pass of a level below in the slab ended, `after`, by
+    /// its level and its place among that level's passes, to this level, and
+    /// across at it through what is cleared, from `at`, where it ended, by
+    /// `via`. Above where a level has cut, everything is cut, up to the slab's
+    /// top: the column the tool rises in is clear.
+    Rise {
+        /// The level and the pass it comes up from.
+        after: (usize, usize),
+        /// Where that pass ended.
+        at: DVec2,
+        /// Where it turns on the way across.
+        via: Vec<DVec2>,
+    },
     /// Down into material with no way in from the side: a helix about
     /// `centre`, as the tool's centre goes, ending where the pass starts;
     /// straight down for one with no radius.
@@ -1191,6 +1319,15 @@ enum Arrive {
         /// What it ramps along.
         way: Vec<DVec2>,
     },
+}
+
+/// Where a pass of a level below in the slab ended, which a pass of a level
+/// above may rise from: the point, and the level and pass, as
+/// [`Arrive::Rise`] has them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Arrival {
+    at: DVec2,
+    after: (usize, usize),
 }
 
 /// One level's passes.
@@ -1222,7 +1359,14 @@ impl LevelCut {
             if let Arrive::Ramp { way } = arrive {
                 each(way)?;
             }
-            if let (Arrive::Stay { via }, Some(a), Some(&b)) = (arrive, at, points.first()) {
+            let from = match arrive {
+                Arrive::Stay { .. } => at,
+                Arrive::Rise { at, .. } => Some(*at),
+                _ => None,
+            };
+            if let (Arrive::Stay { via } | Arrive::Rise { via, .. }, Some(a), Some(&b)) =
+                (arrive, from, points.first())
+            {
                 let way: Vec<DVec2> = std::iter::once(a)
                     .chain(via.iter().copied())
                     .chain(std::iter::once(b))
@@ -1270,26 +1414,19 @@ impl Side {
     }
 }
 
-/// Clear one level.
-fn clear_level(
-    z: f64,
-    allowed: &Region,
-    uncut: &Region,
-    p: &LevelParams,
-) -> Result<LevelCut, StrategyError> {
-    clear_level_from(z, allowed, uncut, p, None)
-}
-
-/// Clear one level, starting nearest `from` where it is known.
+/// Clear one level, starting nearest `from` where it is known; a pass may be
+/// come to from one of `arrivals`, where passes of levels below in the slab
+/// ended, rising from it ([`Arrive::Rise`]).
 fn clear_level_from(
     z: f64,
     allowed: &Region,
     uncut: &Region,
     p: &LevelParams,
     from: Option<DVec2>,
+    arrivals: Vec<Arrival>,
 ) -> Result<LevelCut, StrategyError> {
-    let mut c = Clearing::new(allowed, uncut, p)?;
-    c.run(from)?;
+    let mut c = Clearing::new(z, allowed, uncut, p)?;
+    c.run(from, arrivals)?;
     Ok(LevelCut {
         z,
         passes: c.passes,

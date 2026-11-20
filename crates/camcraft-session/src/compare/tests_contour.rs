@@ -57,7 +57,7 @@ fn holds(name: &str, change: impl FnOnce(&mut Operation), bounds: &Bounds, conta
 }
 
 /// A new Contour leaves what Fusion's does in the pocket: 55.4% of the
-/// 701,863 columns either cuts alike, the median difference 0.0073 mm and the
+/// 701,852 columns either cuts alike, the median difference 0.0073 mm and the
 /// 95th percentile 17.75, the block's outside walls, which only camcraft's
 /// goes down; 45% more removed and 197% more fed.
 #[test]
@@ -73,7 +73,7 @@ fn a_new_contour_leaves_what_fusions_does() {
     holds("contour", |_| {}, &bounds, 0);
 }
 
-/// The dome avoided, 1 mm sideways and 1 mm down: 43.8% of 621,653 columns
+/// The dome avoided, 1 mm sideways and 1 mm down: 43.8% of 621,642 columns
 /// alike, the median 0.0174 mm and the 95th percentile 17.93, 64% more
 /// removed and 238% more fed: the outside walls, and the floor round the
 /// dome, which only camcraft's ring there finishes.
