@@ -33,6 +33,16 @@ mod tests;
     clippy::unwrap_used,
     clippy::float_cmp,
     clippy::panic,
+    clippy::indexing_slicing,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation
+)]
+mod tests_bowl;
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    clippy::panic,
     clippy::indexing_slicing
 )]
 mod tests_surfaces;

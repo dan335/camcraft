@@ -254,8 +254,9 @@ pub struct Region {
 }
 
 /// How the regions `{d ≥ k·step}` nest, for `k` from the highest level with lines
-/// down to 0. `lines[k]` are level `k`'s lines (`lines[0]` is not read: level 0 is
-/// everywhere the field is not negative).
+/// down to 0. `lines[k]` are level `k`'s lines. Level 0 is everywhere the field is
+/// not negative, so it has lines only where the caller gives some: an edge it
+/// measured the field from that is a line of it, not a ring of its own.
 ///
 /// Regions come out top level first; every region of level `k > 0` has a parent at
 /// `k − 1`.
@@ -296,21 +297,19 @@ pub fn nest(grid: &TriGrid, d: &[f64], step: f64, lines: &[Vec<IsoLine>]) -> Vec
             by_root: HashMap::new(),
             found: Vec::new(),
         };
-        if k > 0 {
-            for (i, line) in lines
-                .get(usize::try_from(k).unwrap_or(usize::MAX))
-                .into_iter()
-                .flatten()
-                .enumerate()
-            {
-                if !sets.has(line.high) {
-                    continue;
-                }
-                let root = sets.find(line.high);
-                let r = here.region(root, sets.top(root), &mut regions);
-                if let Some(region) = regions.get_mut(r) {
-                    region.lines.push(i);
-                }
+        for (i, line) in lines
+            .get(usize::try_from(k).unwrap_or(usize::MAX))
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            if !sets.has(line.high) {
+                continue;
+            }
+            let root = sets.find(line.high);
+            let r = here.region(root, sets.top(root), &mut regions);
+            if let Some(region) = regions.get_mut(r) {
+                region.lines.push(i);
             }
         }
         // Each region of the level above lies in one of this level's, which has a

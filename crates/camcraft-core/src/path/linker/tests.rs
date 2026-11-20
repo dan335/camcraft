@@ -409,6 +409,56 @@ fn passes_beside_a_wall_are_not_joined_over_the_part() {
     assert!(!out.moves().iter().any(|m| m.role == MoveRole::Transition));
 }
 
+/// A block 10 tall at y = 1 and beyond, and nothing short of it: off it, the
+/// tool falls past its side.
+struct Block;
+
+impl Surface for Block {
+    fn at(&self, p: DVec2) -> Option<f64> {
+        (p.y >= 1.0).then_some(10.0)
+    }
+
+    fn along(&self, from: DVec2, to: DVec2) -> Vec<DVec3> {
+        (0..=100)
+            .map(|k| from.lerp(to, f64::from(k) / 100.0))
+            .filter_map(|p| Some(p.extend(self.at(p)?)))
+            .collect()
+    }
+}
+
+/// Rings down the side of a part, below where the tool would rest from
+/// above, with nothing under it: the way from one to the next, a little
+/// lower, beside the side and never into it, stays down, as a link at a level
+/// does; one that would go into the part lifts.
+#[test]
+fn rings_down_a_side_are_joined_beside_it() {
+    let side = |to: DVec3| {
+        let mut t = Toolpath::new();
+        t.feed_to(dvec3(0.0, 0.5, 4.0), MoveRole::Link, 1000.0)
+            .unwrap();
+        t.feed_to(dvec3(5.0, 0.5, 4.0), MoveRole::Cut, 1000.0)
+            .unwrap();
+        t.feed_to(to, MoveRole::Link, 1000.0).unwrap();
+        t.feed_to(to + DVec3::X, MoveRole::Cut, 1000.0).unwrap();
+        t
+    };
+    let plane = ClearancePlane::new(20.0).unwrap();
+    let beside = side(dvec3(6.0, 0.5, 3.8));
+    let (out, report) = link(&beside, &plane, &mut Air, &Block, &staying(50.0)).unwrap();
+    assert_eq!(report.stayed_down, 1);
+    let way: Vec<DVec3> = out
+        .moves()
+        .iter()
+        .filter(|m| m.role == MoveRole::Transition)
+        .map(|m| m.to)
+        .collect();
+    assert_eq!(way, vec![dvec3(6.0, 0.5, 3.8)]);
+    // Across into the block, it lifts.
+    let into = side(dvec3(6.0, 1.5, 3.8));
+    let (_, report) = link(&into, &plane, &mut Air, &Block, &staying(50.0)).unwrap();
+    assert_eq!(report.stayed_down, 0);
+}
+
 /// Zigzag passes a stepover apart are joined without lifting, at the cutting
 /// feed, as Fusion's are, by its default smooth transition: a half turn out
 /// past their ends, tangent to both. Further apart than the stay-down

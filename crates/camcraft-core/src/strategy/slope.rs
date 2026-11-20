@@ -5,7 +5,7 @@
 //! is, in radians from level, as scallop's grid measures it (decision 0009).
 //! Under a ball that is the part's own slope where the tool touches it.
 
-use camcraft_geom::contour::{Contour, Indexed, Region};
+use camcraft_geom::contour::{Contour, Region};
 use camcraft_geom::steps::bounded_count;
 use camcraft_geom::trigrid::TriGrid;
 use glam::DVec2;
@@ -174,54 +174,6 @@ pub(crate) fn steep_ground(
 /// How steep, as a rise over a run, ground next to a wall may be and still be
 /// part of it: half a plunge's, about 79°.
 const SPREAD_RATIO: f64 = PLUNGE_RATIO / 2.0;
-
-/// `line` with each segment in `band` judged steeper than a plunge, and every
-/// other judged by its own slope as before: so it leaves the band out in one
-/// stretch where it crosses it.
-///
-/// The band's edge is only known to `pitch`, the grid it was found on, so a
-/// line running along it, as the first lines in from a boundary do, is not
-/// taken to cross it each time its segments fall either side: it is in the
-/// band once more than `pitch` inside it, out once more than `pitch` outside,
-/// and between, as it was. Where it starts between, it is as the first
-/// segment that is clearly one or the other has it.
-pub(crate) fn banded(mut line: Sloped, band: &Indexed, pitch: f64) -> Sloped {
-    let n = line.points.len();
-    let middles: Vec<Option<f64>> = (0..line.slopes.len())
-        .map(|i| {
-            let (a, b) = (line.points.get(i)?, line.points.get((i + 1) % n.max(1))?);
-            Some(band.depth_at((*a + *b) / 2.0))
-        })
-        .collect();
-    let clearly = |depth: f64| {
-        if depth > pitch {
-            Some(true)
-        } else if depth < -pitch {
-            Some(false)
-        } else {
-            None
-        }
-    };
-    let mut inside = middles
-        .iter()
-        .flatten()
-        .find_map(|&d| clearly(d))
-        .unwrap_or(false);
-    for (slope, depth) in line.slopes.iter_mut().zip(middles) {
-        if let Some(now) = depth.and_then(clearly) {
-            inside = now;
-        }
-        if inside {
-            *slope = Some(std::f64::consts::FRAC_PI_2);
-        }
-    }
-    line
-}
-
-/// The steepest a stretch may be and still be cut along, up to `to`: a plunge's.
-pub(crate) fn ceiling(to: f64) -> f64 {
-    PLUNGE_RATIO.atan().min(to)
-}
 
 /// How steep the surface the tool's tip rides is at `p`, in radians from level:
 /// from the drop-cutter's heights `h` either side, across and along. `None` where

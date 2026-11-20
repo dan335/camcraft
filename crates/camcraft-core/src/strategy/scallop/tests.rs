@@ -229,23 +229,32 @@ fn inside_out_ends_on_the_boundary() {
     assert!(depths.last().unwrap().abs() < 1e-6);
 }
 
-/// A step's wall is left for a waterline pass, and every point is on the
-/// part and every cut between points within tolerance of it.
+/// A step's wall is cut by the passes themselves, round it at heights down
+/// it; every point touches the part, resting on it or beside the wall, and is
+/// never below where the tool rests there, and every cut between points is
+/// within tolerance of it, seen in any direction: where the area's edge goes
+/// over the wall's rounded top, nearly upright, a chord within the tolerance
+/// of it sideways is further from it straight down.
 #[test]
-fn a_wall_is_left_and_nothing_cuts_below_the_surface() {
+fn a_wall_is_cut_down_and_nothing_cuts_below_the_surface() {
     let mesh = synthetic::step(6.0, 20.0);
     let part = PartSurfaces::whole(DropCutter::new(&mesh));
     let seat = part.under(&ball(1.5)).unwrap();
     let (path, report) = scallop_finish(&seat, &square(8.0), &params(0.8)).unwrap();
-    assert!(report.too_steep > 0, "{report:?}");
+    assert!(report.is_clean(), "{report:?}");
     for m in path.moves() {
-        let exact = seat.drop_at(m.to.x, m.to.y).unwrap();
-        assert!(
-            (m.to.z - exact).abs() < 1e-9,
-            "{:?} is not on the part",
-            m.to
-        );
+        let rest = seat.drop_at(m.to.x, m.to.y).unwrap();
+        assert!(m.to.z >= rest - 1e-9, "{:?} is below {rest}", m.to);
+        assert!(seat.machines(m.to, 0.01), "{:?} touches nothing", m.to);
     }
+    // Down the upright face, beside it, the tool's radius out from it.
+    let down: Vec<f64> = path
+        .moves()
+        .iter()
+        .filter(|m| (m.to.x - 1.5).abs() < 0.01 && m.to.z > 0.2 && m.to.z < 4.3)
+        .map(|m| m.to.z)
+        .collect();
+    assert!(down.len() > 10, "{} points down the wall", down.len());
     let mut prev: Option<DVec3> = None;
     for m in path.moves() {
         if m.role == MoveRole::Cut
@@ -253,7 +262,15 @@ fn a_wall_is_left_and_nothing_cuts_below_the_surface() {
         {
             for t in [0.25, 0.5, 0.75] {
                 let q = a.lerp(m.to, t);
-                let floor = seat.drop_at(q.x, q.y).unwrap();
+                // Where the tool rests anywhere within the tolerance of it,
+                // seen from above.
+                let floor = [DVec2::ZERO, DVec2::X, -DVec2::X, DVec2::Y, -DVec2::Y]
+                    .iter()
+                    .filter_map(|&d| {
+                        let p = q.truncate() + d * 0.01;
+                        seat.drop_at(p.x, p.y)
+                    })
+                    .fold(f64::MAX, f64::min);
                 assert!(q.z >= floor - 0.01 - 1e-9, "{q:?} below {floor}");
             }
         }
@@ -345,32 +362,6 @@ fn is_deterministic() {
     assert_eq!(run(1).moves(), run(4).moves());
 }
 
-/// Only where the tool touches the part.
-/// Round a ball, below its equator turning in under itself as a roundover on
-/// a part's underside does, the tool rides off the part at the edge of where
-/// it touches it, steeper there than any pass may go. The band the passes
-/// leave runs out over that edge, all the way round and well past it, so the
-/// first pass, the edge itself, is in it, not cut into bits along it.
-#[test]
-fn the_band_runs_out_over_where_the_tool_leaves_the_part() {
-    let mesh = synthetic::uv_sphere(10.0, 120, 180);
-    let part = PartSurfaces::whole(DropCutter::new(&mesh));
-    let seat = part.under(&ball(2.0)).unwrap();
-    let shadow = camcraft_geom::shadow::shadow_above(&mesh, -20.0).unwrap();
-    let area = contact_region(&shadow, 2.0, 0.01).unwrap();
-    let (_, report, band) = scallop_finish_banded(&seat, &area, &params(0.5)).unwrap();
-    let inside = Indexed::of(&band);
-    for ring in area.rings() {
-        for &p in ring.points() {
-            let depth = inside.depth_at(p);
-            assert!(depth > report.pitch, "{p} is {depth} into the band");
-        }
-    }
-    // And no further in than the steep ground: a dome's top is passes'.
-    assert!(!inside.contains(DVec2::ZERO));
-    assert!(!inside.contains(dvec2(8.0, 0.0)));
-}
-
 #[test]
 fn contact_is_the_part_grown_by_the_tool() {
     let mesh = synthetic::plane(0.0, 5.0);
@@ -401,4 +392,105 @@ fn a_stopped_scallop_ends_stopped() {
         found.unwrap_err(),
         StrategyError::Stopped(crate::control::Stopped)
     );
+}
+
+/// A plateau 6 high falling to a floor down a face at `degrees` from level,
+/// along Y, its top edge at X0, the whole `half` across.
+fn wall(degrees: f64, half: f64) -> camcraft_geom::mesh::TriMesh {
+    let h = 6.0;
+    let foot = if degrees >= 90.0 {
+        0.0
+    } else {
+        h / degrees.to_radians().tan()
+    };
+    let v = vec![
+        DVec3::new(-half, -half, h),
+        DVec3::new(0.0, -half, h),
+        DVec3::new(0.0, half, h),
+        DVec3::new(-half, half, h),
+        DVec3::new(foot, -half, 0.0),
+        DVec3::new(half, -half, 0.0),
+        DVec3::new(half, half, 0.0),
+        DVec3::new(foot, half, 0.0),
+    ];
+    let t = vec![
+        [0, 1, 2],
+        [0, 2, 3],
+        [4, 5, 6],
+        [4, 6, 7],
+        [1, 4, 7],
+        [1, 7, 2],
+    ];
+    camcraft_geom::mesh::TriMesh::new(v, t).unwrap()
+}
+
+/// Down a wall, however steep, upright included, the passes are a stepover
+/// apart along the surface the tool rides, over the edge, down the face and
+/// round its foot onto the floor, and each is level along the wall. Measured
+/// on that surface as the exact drop traces it across the wall, far from the
+/// area's ends.
+#[test]
+fn down_a_wall_the_passes_are_a_stepover_apart_along_the_surface() {
+    let (r, s) = (2.0, 0.5);
+    for degrees in [90.0, 87.0, 84.0, 70.0, 50.0] {
+        let mesh = wall(degrees, 40.0);
+        let part = PartSurfaces::whole(DropCutter::new(&mesh));
+        let seat = part.under(&ball(r)).unwrap();
+        let area = Region::rectangle(dvec2(-3.0, -38.0), dvec2(36.0, 38.0));
+        let (path, report) = scallop_finish(&seat, &area, &params(s)).unwrap();
+        assert!(report.is_clean(), "{degrees}°: {report:?}");
+        // The surface across the wall at Y0, and how far along it each point
+        // of it is from the area's edge.
+        let mut profile: Vec<(DVec2, f64)> = Vec::new();
+        let mut x = -3.0;
+        while x < 6.0 {
+            let at = dvec2(x, seat.drop_at(x, 0.0).unwrap());
+            let along = profile.last().map_or(0.0, |&(p, a)| a + p.distance(at));
+            profile.push((at, along));
+            x += 0.002;
+        }
+        let along = |q: DVec3| {
+            let q = dvec2(q.x, q.z);
+            profile
+                .windows(2)
+                .map(|w| {
+                    let ((a, sa), (b, sb)) = (w[0], w[1]);
+                    let t =
+                        ((q - a).dot(b - a) / (b - a).length_squared().max(1e-18)).clamp(0.0, 1.0);
+                    (q.distance(a.lerp(b, t)), sa + t * (sb - sa))
+                })
+                .min_by(|x, y| x.0.total_cmp(&y.0))
+                .unwrap()
+        };
+        let mut rings = Vec::new();
+        for pass in passes(&path) {
+            let near: Vec<(f64, f64)> = pass
+                .iter()
+                .filter(|q| q.y.abs() < 3.0 && q.x > -2.5 && q.x < 4.0)
+                .map(|&q| along(q))
+                .collect();
+            if near.len() < 3 {
+                continue;
+            }
+            for &(off, _) in &near {
+                assert!(off < 0.01, "{degrees}°: a point {off} off the surface");
+            }
+            let mean = near.iter().map(|a| a.1).sum::<f64>() / near.len() as f64;
+            let spread = near.iter().map(|a| (a.1 - mean).abs()).fold(0.0, f64::max);
+            // Level to the field's placing down a cliff, from its edges'
+            // profiles, some across the grid and some aslant it: 0.021 at
+            // 90°, measured.
+            assert!(spread < 0.03, "{degrees}°: a pass {spread} from level");
+            rings.push(mean);
+        }
+        rings.sort_by(f64::total_cmp);
+        assert!(rings.len() >= 15, "{degrees}°: {} passes", rings.len());
+        for w in rings.windows(2) {
+            let gap = w[1] - w[0];
+            assert!(
+                (gap - s).abs() < 0.05 * s,
+                "{degrees}°: passes {gap} apart along the surface: {rings:?}"
+            );
+        }
+    }
 }

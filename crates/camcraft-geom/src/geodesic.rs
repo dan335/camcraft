@@ -52,6 +52,20 @@ impl Distances {
 /// else the surface is measured at. A seed may be lowered by the march, if a
 /// shorter way to it is found.
 pub fn march(grid: &TriGrid, seeds: &[Seed], position: impl Fn(u32) -> Option<DVec3>) -> Distances {
+    march_along(grid, seeds, position, |_, _| None)
+}
+
+/// As [`march`], with `along(a, b)` the length of the edge between nodes `a`
+/// and `b` where the surface between them is not the straight line from one
+/// to the other: down a cliff that turns onto the floor inside the cell, the
+/// way down and along. A triangle with such an edge is unfolded flat by its
+/// three lengths, and the front carried across it as across any other.
+pub fn march_along(
+    grid: &TriGrid,
+    seeds: &[Seed],
+    position: impl Fn(u32) -> Option<DVec3>,
+    along: impl Fn(u32, u32) -> Option<f64>,
+) -> Distances {
     let count = usize::try_from(grid.nodes()).unwrap_or(0);
     let mut d = vec![f64::INFINITY; count];
     let mut known = vec![false; count];
@@ -101,12 +115,24 @@ pub fn march(grid: &TriGrid, seeds: &[Seed], position: impl Fn(u32) -> Option<DV
                 }
                 let Some(pc) = position(c) else { continue };
                 let other = nodes.iter().copied().find(|&m| m != node && m != c);
+                let to_c = along(node, c);
+                let edge = t_node + to_c.unwrap_or_else(|| p.distance(pc));
                 let candidate = match other {
                     Some(o) if is_known(&known, o) => match position(o) {
-                        Some(po) => update((p, t_node), (po, value(&d, o)), pc),
-                        None => t_node + p.distance(pc),
+                        Some(po) => {
+                            let t_o = value(&d, o);
+                            match (to_c, along(o, c), along(node, o)) {
+                                (None, None, None) => update((p, t_node), (po, t_o), pc),
+                                (nc, oc, no) => update_lengths(
+                                    (t_node, nc.unwrap_or_else(|| p.distance(pc))),
+                                    (t_o, oc.unwrap_or_else(|| po.distance(pc))),
+                                    no.unwrap_or_else(|| p.distance(po)),
+                                ),
+                            }
+                        }
+                        None => edge,
                     },
-                    _ => t_node + p.distance(pc),
+                    _ => edge,
                 };
                 if let Some(slot) = usize::try_from(c).ok().and_then(|i| d.get_mut(i))
                     && candidate < *slot
@@ -127,14 +153,33 @@ pub fn march(grid: &TriGrid, seeds: &[Seed], position: impl Fn(u32) -> Option<DV
 fn update(a: (DVec3, f64), b: (DVec3, f64), c: DVec3) -> f64 {
     // A the nearer to the front.
     let ((pa, ta), (pb, tb)) = if a.1 <= b.1 { (a, b) } else { (b, a) };
-    let along_edges = (ta + pa.distance(c)).min(tb + pb.distance(c));
-    let u = tb - ta;
     let (ca, cb) = (pa - c, pb - c);
     let (edge_b, edge_a) = (ca.length(), cb.length());
     if edge_a <= 0.0 || edge_b <= 0.0 {
-        return along_edges;
+        return (ta + edge_b).min(tb + edge_a);
     }
     let cos = (ca.dot(cb) / (edge_a * edge_b)).clamp(-1.0, 1.0);
+    across((ta, edge_b), (tb, edge_a), cos)
+}
+
+/// As [`update`], for a triangle given by the lengths of its sides: from A,
+/// known at `a.0` and `a.1` from C, and B likewise, the two `ab` apart.
+fn update_lengths(a: (f64, f64), b: (f64, f64), ab: f64) -> f64 {
+    let ((ta, edge_b), (tb, edge_a)) = if a.0 <= b.0 { (a, b) } else { (b, a) };
+    if edge_a <= 0.0 || edge_b <= 0.0 {
+        return (ta + edge_b).min(tb + edge_a);
+    }
+    // The angle at C, by the law of cosines: the triangle unfolded flat.
+    let cos =
+        ((edge_a * edge_a + edge_b * edge_b - ab * ab) / (2.0 * edge_a * edge_b)).clamp(-1.0, 1.0);
+    across((ta, edge_b), (tb, edge_a), cos)
+}
+
+/// The distance at C from a front known at A, `ta`, `edge_b` from C, and at
+/// B, `tb` no sooner, `edge_a` from C, the angle at C having cosine `cos`.
+fn across((ta, edge_b): (f64, f64), (tb, edge_a): (f64, f64), cos: f64) -> f64 {
+    let along_edges = (ta + edge_b).min(tb + edge_a);
+    let u = tb - ta;
     let sin2 = 1.0 - cos * cos;
     // Kimmel and Sethian's quadratic in t, the time past A the front reaches C.
     let qa = edge_a * edge_a + edge_b * edge_b - 2.0 * edge_a * edge_b * cos;

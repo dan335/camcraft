@@ -2,6 +2,14 @@
 
 **Status:** decided, 2026-09-28 · **Milestone:** before the first cut
 
+> **Amended by [decision 0035](0035-scallop-over-every-slope.md).** Steep faces
+> are no longer left: on ground steeper than 45° each point is found round the
+> wall at the height the field puts it at, a cliff's grid edge is measured
+> along the surface, and only what the tool cannot reach from above gets level
+> rings. Inside out, the field is measured from the ground's inner edges where
+> it has some, and the passes are cut in its order, each closed ring started
+> on one straight seam.
+
 ## Question
 
 Parallel finishing lays its passes a stepover apart seen from above. On a slope

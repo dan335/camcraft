@@ -2,6 +2,13 @@
 
 **Status:** decided, 2026-11-03 · **Milestone:** 0.4
 
+> **Amended by [decision 0035](0035-scallop-over-every-slope.md).** Scallop no
+> longer leaves its steep ground to rings round the walls: its passes cut every
+> slope, and level rings finish only what the tool cannot reach from above,
+> below where it last rests on the part. Parallel, Spiral, Radial and Morphed
+> Spiral keep their rings, as here. A link from a ring beside a wall to the
+> next now stays down where the way between is clear of the part.
+
 ## Question
 
 Scallop leaves the ground steeper than a plunge to rings round the walls

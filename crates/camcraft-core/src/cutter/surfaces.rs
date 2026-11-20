@@ -276,6 +276,14 @@ impl Seat<'_> {
         &self.tool
     }
 
+    /// Whether any of the part is avoided: never, on the whole part.
+    pub fn avoids_any(&self) -> bool {
+        match &self.on {
+            On::Whole(_) => false,
+            On::Grouped(held) => held.iter().any(|h| !h.machined),
+        }
+    }
+
     /// Where the tool's tip comes to rest dropped at `(x, y)`, or `None` where
     /// nothing is under it ([`DropCutter::drop_at`]): over a part in groups,
     /// the highest any of them holds it.

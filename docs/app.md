@@ -170,7 +170,9 @@ it.
   profile's level lead arcs on and off each ring, their radius, sweep and
   straight run; *Reorder passes*, the nearest next, and *Reverse passes*,
   greyed where the operation cuts both ways and so takes each pass from its
-  nearer end anyway ([decision 0034](decisions/0034-entries-and-order-of-the-finishes-over-the-part.md));
+  nearer end anyway ([decision 0034](decisions/0034-entries-and-order-of-the-finishes-over-the-part.md)),
+  neither on scallop, which keeps its field's order
+  ([decision 0035](decisions/0035-scallop-over-every-slope.md));
   one left out says what the strategy's default comes to for the tool). A new
   operation starts with Fusion's defaults, as expressions where they follow
   the tool ([decision 0020](decisions/0020-defaults.md)): its stepover (the
@@ -183,8 +185,9 @@ it.
   ramp feed the plunge feed; a tool with no flute length is taken to have two
   diameters of flutes. A number typed over one, or
   a preset's, takes the expression's place; ↺ brings it back. Scallop's stepover starts as parallel's, and its *Passes* has both
-  ways, climb or conventional, outside in or inside out, and the slopes it
-  finishes between. Contour's has the same directions, by depth or by area, and
+  ways, climb or conventional, outside in or inside out (from the edge of a
+  hole or a face avoided, where there is one), and the slopes it finishes
+  between, walls included. Contour's has the same directions, by depth or by area, and
   the slopes, and it has *Multiple depths*, Top and Bottom but no stepover;
   ramp's climb or conventional, *Flat areas* and the slopes, with *Multiple
   depths* (how far down each time round) and the ramp angle on *Linking*;

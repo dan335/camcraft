@@ -23,7 +23,7 @@ use rayon::prelude::*;
 use crate::control::{Watch, share};
 use crate::cutter::surfaces::Seat;
 use crate::cutter::tool::ToolProfile;
-use crate::path::toolpath::{MoveRole, Toolpath};
+use crate::path::toolpath::{MoveRole, PLUNGE_RATIO, Toolpath};
 use crate::strategy::field;
 use crate::strategy::nesting::take_nearest;
 use crate::strategy::parallel::{
@@ -306,8 +306,18 @@ pub(crate) struct Emit {
     /// contour finishing goes from level to level: the ramp's angle from level,
     /// in radians, and how near where the last ended the ring must start.
     pub(crate) ramp: Option<(f64, f64)>,
+    /// Only where the way straight down onto the ring falls steeper than a
+    /// plunge, and further than this, the fall at the cutting feed the gate
+    /// refuses, which the linker would lift for; and only onto a ring level to
+    /// within it. `None`: onto every ring lower than the last.
+    pub(crate) ramp_past: Option<f64>,
     /// Where the last pass left the tool, and whether it was closed.
     end: Option<(DVec3, bool)>,
+    /// Whether closed rings start on one seam, and which side of the first it
+    /// goes out to: its left as it runs, or its right ([`Seam`]).
+    pub(crate) seam_left: Option<bool>,
+    /// That seam, once the first closed ring is cut.
+    seam: Option<Seam>,
 }
 
 impl Emit {
@@ -318,7 +328,10 @@ impl Emit {
             feed,
             passes: 0,
             ramp: None,
+            ramp_past: None,
             end: None,
+            seam_left: None,
+            seam: None,
         }
     }
 
@@ -391,6 +404,17 @@ impl Emit {
         if n < 3 || drop <= 1e-9 || lap <= 1e-9 || gap > near {
             return Ok(false);
         }
+        // A ring that is not level, as a field's need not be, may fall away
+        // from where the ramp reaches it: only one level to within that.
+        let (low, high) = points.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
+            (lo.min(p.z), hi.max(p.z))
+        });
+        if self
+            .ramp_past
+            .is_some_and(|least| drop <= least || drop <= PLUNGE_RATIO * gap || high - low > least)
+        {
+            return Ok(false);
+        }
         // A ramp too shallow to reach the ring within so many laps of it is
         // not one: the tool goes down another way.
         let length = drop / angle.tan();
@@ -449,6 +473,12 @@ impl Emit {
         Ok(true)
     }
 
+    /// The seam closed rings start on, once the first is cut, where one is
+    /// laid ([`Emit::seam_left`]).
+    pub(crate) fn seam(&self) -> Option<Seam> {
+        self.seam
+    }
+
     /// `runs`, the nearest next from where the tool is: a closed one started at
     /// its point nearest, and, `both_ways`, an open one from its nearer end.
     pub(crate) fn nearest_first(
@@ -465,7 +495,9 @@ impl Emit {
             };
             if let Some(at) = at {
                 if run.closed {
-                    start_near(&mut run, at);
+                    if !self.seam.is_some_and(|seam| seam.start(&mut run, at)) {
+                        start_near(&mut run, at);
+                    }
                 } else if both_ways
                     && let (Some(first), Some(last)) = (run.points.first(), run.points.last())
                     && last.truncate().distance(at) < first.truncate().distance(at)
@@ -473,9 +505,77 @@ impl Emit {
                     run.points.reverse();
                 }
             }
+            if run.closed
+                && self.seam.is_none()
+                && let Some(left) = self.seam_left
+            {
+                self.seam = Seam::from_start(&run, left);
+            }
             self.emit(&run)?;
         }
         Ok(())
+    }
+}
+
+/// Where closed rings cut one after another start, so the seam where each
+/// steps to the next is one straight line seen from above: the half of an
+/// upright plane through where the first started, square to it, on the side
+/// the rings go on to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Seam {
+    from: DVec2,
+    way: DVec2,
+}
+
+impl Seam {
+    /// The seam from where closed `ring` starts, out to its `left` as it runs,
+    /// or its right. `None` where it has no length there.
+    fn from_start(ring: &Run, left: bool) -> Option<Self> {
+        let (a, b) = (
+            ring.points.first()?.truncate(),
+            ring.points.get(1)?.truncate(),
+        );
+        let along = (b - a).try_normalize()?;
+        let way = if left { along.perp() } else { -along.perp() };
+        Some(Self { from: a, way })
+    }
+
+    /// Where closed `ring` crosses the seam, the crossing nearest `at` where
+    /// it crosses more than once: the segment from its point `i` to the next,
+    /// and how far along it, `0..=1`. `None` where it does not cross it.
+    pub(crate) fn crossing(self, ring: &Run, at: DVec2) -> Option<(usize, f64)> {
+        let n = ring.points.len();
+        let across = |p: DVec3| (p.truncate() - self.from).perp_dot(self.way);
+        (0..n)
+            .filter_map(|i| {
+                let (a, b) = (*ring.points.get(i)?, *ring.points.get((i + 1) % n)?);
+                let (sa, sb) = (across(a), across(b));
+                if (sa > 0.0) == (sb > 0.0) {
+                    return None;
+                }
+                let t = sa / (sa - sb);
+                let p = a.lerp(b, t).truncate();
+                // On the half of the plane the rings go on to.
+                ((p - self.from).dot(self.way) >= 0.0).then_some((i, t, p.distance(at)))
+            })
+            .min_by(|x, y| x.2.total_cmp(&y.2))
+            .map(|(i, t, _)| (i, t))
+    }
+
+    /// `ring`, closed, started at its point nearest where it crosses the
+    /// seam ([`crossing`](Self::crossing)), going the same way; `false`,
+    /// leaving it as it was, where it does not cross it. A point of its own,
+    /// not one put on a chord between two: every point a pass has is where the
+    /// tool rests on the part, and a strategy that wants one on the seam puts
+    /// it there itself.
+    fn start(self, ring: &mut Run, at: DVec2) -> bool {
+        let Some((i, t)) = self.crossing(ring, at) else {
+            return false;
+        };
+        let n = ring.points.len();
+        ring.points
+            .rotate_left(if t <= 0.5 { i } else { (i + 1) % n });
+        true
     }
 }
 

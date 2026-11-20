@@ -2700,8 +2700,8 @@ stepovers = 2
 
 /// Scallop reads with Fusion's defaults, both ways from the boundary in on
 /// every slope, and writes back only what differs; its stepover is parallel's,
-/// its passes reordered the nearest next, and a slope range that is no range
-/// is refused.
+/// its passes kept in its field's order, each piece from its nearer end, and a
+/// slope range that is no range is refused.
 #[test]
 fn scallop_reads_with_fusions_defaults() {
     let text = SAMPLE.replace(
@@ -2729,8 +2729,8 @@ fn scallop_reads_with_fusions_defaults() {
     assert_eq!(toml::from_str::<Job>(&written).unwrap(), j);
 
     let op = &mut j.setups[0].operations[1];
-    // The nearest pass next, as Fusion's Shortest Machining Distance.
-    assert!(op.strategy.uses().reorder);
+    // In its field's order, each piece from its nearer end (decision 0035).
+    assert!(!op.strategy.uses().reorder && op.strategy.uses().nearer_ends);
     let ball = j.tools["finish-4-ball"].clone();
     let parallel = Operation {
         strategy: StrategySpec::Parallel { angle: 0.0 },
@@ -3218,13 +3218,15 @@ fn linking_values_default_as_the_strategy_says() {
 /// enter as Fusion's do, with no ramp, straight down onto the vertical lead,
 /// as pencil, project and morph do; and are reordered the nearest next, as
 /// Fusion's Shortest Machining Distance, where pencil, project and morph keep
-/// their own order.
+/// their own order, and scallop its field's, each piece from its nearer end
+/// (decision 0035).
 #[test]
 fn finishes_over_the_part_enter_and_order_as_fusions() {
     for name in ["parallel", "scallop", "spiral", "radial", "morphed-spiral"] {
         let uses = StrategySpec::named(name).unwrap().uses();
         assert!(!uses.ramp && uses.lead_radius, "{name}");
-        assert!(uses.reorder, "{name}");
+        assert_eq!(uses.reorder, name != "scallop", "{name}");
+        assert_eq!(uses.nearer_ends, name == "scallop", "{name}");
         assert!(uses.entries.is_empty(), "{name}");
     }
     for name in ["pencil", "project", "morph"] {

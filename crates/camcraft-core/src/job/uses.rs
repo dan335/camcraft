@@ -35,6 +35,7 @@ impl StrategySpec {
             // Only the finishes laid over the part, as a pattern, are in no
             // order of their own.
             reorder: false,
+            nearer_ends: false,
             top: Some(HeightRef::StockTop),
             bottom: Some(HeightRef::ModelBottom),
             rest: false,
@@ -68,24 +69,38 @@ impl StrategySpec {
                 surfaces: true,
                 ..cuts_loops
             },
+            // As parallel, entered with no ramp; but in the field's own
+            // order, ring by ring from the edge it is measured from, each
+            // piece a height or a face avoided cuts a ring into taken from
+            // its nearer end where it cuts both ways (decision 0035). The
+            // nearest next would take a later ring's piece before an earlier
+            // one's wherever it starts nearer.
+            StrategySpec::Scallop { .. } => Uses {
+                depths: Depths::None,
+                links: Links::OverPart,
+                // Fusion's: scallop's rings are closer than a pattern's laps.
+                reach: Reach::Tools(2),
+                lead_radius: true,
+                ramp: false,
+                nearer_ends: true,
+                top: Some(HeightRef::ModelTop),
+                bottom: Some(HeightRef::ModelBottom),
+                // Laid on the faces as parallel's passes are, and cut out
+                // where they rest only on one avoided.
+                surfaces: true,
+                ..cuts_loops
+            },
             // As parallel: entered with no ramp, and its passes the
             // nearest next, as Fusion's Shortest Machining Distance, each the
             // way its direction asks. Asked not to reorder, they are cut in
             // the order laid out, outside in or inside out as Fusion's other
-            // two. On an uncut part the order laid is the nearest next
-            // already: each ring starts nearest where the last ended.
-            StrategySpec::Scallop { .. }
-            | StrategySpec::Spiral { .. }
+            // two.
+            StrategySpec::Spiral { .. }
             | StrategySpec::Radial { .. }
             | StrategySpec::MorphedSpiral { .. } => Uses {
                 depths: Depths::None,
                 links: Links::OverPart,
-                // Fusion's: scallop's rings are closer than a pattern's laps.
-                reach: if matches!(self, StrategySpec::Scallop { .. }) {
-                    Reach::Tools(2)
-                } else {
-                    Reach::Tools(5)
-                },
+                reach: Reach::Tools(5),
                 lead_radius: true,
                 ramp: false,
                 reorder: true,
@@ -322,6 +337,7 @@ impl StrategySpec {
                 leads: false,
                 // Holes are drilled in the order found, nearest first.
                 reorder: false,
+                nearer_ends: false,
                 // Each from its rim to its own bottom, its bottom edge, or the
                 // Bottom where one is set; the part's bottom where no wall is found.
                 top: None,
@@ -603,6 +619,11 @@ pub struct Uses {
     /// round where that is nearer and its operation cuts both ways or is
     /// asked to ([`Operation::reverses`](super::Operation::reverses)).
     pub reorder: bool,
+    /// Its passes kept in the order it lays them, each open one taken from
+    /// its nearer end where its operation cuts both ways: its order is its
+    /// own, and the pieces a height or a face avoided cuts a pass into go
+    /// back and forth as cut pieces should.
+    pub nearer_ends: bool,
     /// A Top it cuts down from, and where that is without one. A strategy
     /// linked over the part ([`Links::OverPart`]) has it only when given: its
     /// passes are trimmed to it, and without one nothing is.

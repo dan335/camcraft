@@ -23,12 +23,12 @@ use crate::job::{
 use crate::path::avoid::machined_only;
 use crate::path::corners::{CornerParams, CornerReport, slow_corners};
 use crate::path::fit::{FitReport, fit_arcs};
-use crate::path::held::{Clear, HeldClearance, HeldDrop, keep_clear, skip_unreached};
+use crate::path::held::{Clear, HeldClearance, HeldDrop, cut_out, keep_clear, skip_unreached};
 use crate::path::linker::{
     ClearanceField, EntryKind, LinkParams, LinkReport, Material, Ramp, StayDown, Surface,
     highest_under, link_watched,
 };
-use crate::path::ordering::order_passes;
+use crate::path::ordering::{nearer_ends, order_passes};
 use crate::path::simadapt::sim_moves_of;
 use crate::path::tabs::{TabParams, add_tabs};
 use crate::path::toolpath::{Move, Toolpath};
@@ -58,7 +58,7 @@ use crate::strategy::projected::{Curve, ProjectParams, ProjectReport, project};
 use crate::strategy::ramp::{RampParams, ramp};
 use crate::strategy::reach::LevelReach;
 use crate::strategy::round::{Round, RoundReport};
-use crate::strategy::scallop::{ScallopParams, scallop_finish_banded};
+use crate::strategy::scallop::{ScallopParams, scallop_finish};
 use crate::strategy::slope::steep_ground;
 use crate::strategy::slot::{Slot, SlotReport};
 use crate::strategy::trace::{Beside, TraceReport};
@@ -788,9 +788,14 @@ pub(super) fn plan_operation(
     // already in order, and a hole reversed would be drilled from the bottom up.
     // A 2D operation's order is its own: holes before the outline that frees a
     // part, a pocket's middle before its walls.
-    let (ordered, order) = if op.linking.reorder && op.strategy.uses().reorder {
-        let by_level = op.strategy.uses().depths != Depths::None;
+    // One that keeps its own order, and cuts both ways, still takes each
+    // piece from its nearer end, as cut pieces go back and forth.
+    let uses = op.strategy.uses();
+    let (ordered, order) = if op.linking.reorder && uses.reorder {
+        let by_level = uses.depths != Depths::None;
         order_passes(&raw, op.reverses(), by_level).map_err(in_op(op))?
+    } else if uses.nearer_ends && op.reverses() {
+        nearer_ends(&raw).map_err(in_op(op))?
     } else {
         (raw, Default::default())
     };

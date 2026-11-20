@@ -445,7 +445,7 @@ fn sample_polyline(
 }
 
 /// A line's samples as runs, broken where it is as a parallel pass is.
-fn runs_of(
+pub(crate) fn runs_of(
     mut samples: Vec<Option<DVec3>>,
     closed: bool,
     params: &ParallelParams,
@@ -588,18 +588,19 @@ const GEOMETRIC_LIMIT: f64 = 0.5;
 
 /// One line of a sweep being sampled: how a point along it is probed, the limits
 /// it is refined to, and where its samples and counts go.
-struct Line<'s, F> {
+pub(crate) struct Line<'s, F> {
     /// The tool's tip on the surface at a distance along the line, if anything is
-    /// under it there.
-    probe: F,
-    params: &'s ParallelParams,
-    out: &'s mut Vec<Option<DVec3>>,
-    report: &'s mut ParallelReport,
+    /// under it there: dropped there, or, for scallop's passes round a wall,
+    /// found beside it at a height ([`crate::strategy::scallop`]).
+    pub(crate) probe: F,
+    pub(crate) params: &'s ParallelParams,
+    pub(crate) out: &'s mut Vec<Option<DVec3>>,
+    pub(crate) report: &'s mut ParallelReport,
 }
 
 impl<F: FnMut(f64) -> Option<DVec3>> Line<'_, F> {
     /// Sample the line from `a` to `b`.
-    fn sweep(&mut self, a: f64, b: f64) {
+    pub(crate) fn sweep(&mut self, a: f64, b: f64) {
         let first = (self.probe)(a);
         self.out.push(first);
         self.sweep_on(first, a, b);
@@ -607,7 +608,7 @@ impl<F: FnMut(f64) -> Option<DVec3>> Line<'_, F> {
 
     /// Sample the line from `a` to `b`, whose sample at `a`, `first`, is already
     /// out.
-    fn sweep_on(&mut self, first: Option<DVec3>, a: f64, b: f64) {
+    pub(crate) fn sweep_on(&mut self, first: Option<DVec3>, a: f64, b: f64) {
         // Coarse seeding at the stepover, then adaptive refinement between seeds. The
         // seed spacing bounds how small a feature can be missed entirely.
         let steps = bounded_count(((b - a).abs() / self.params.stepover).ceil());
@@ -642,8 +643,11 @@ impl<F: FnMut(f64) -> Option<DVec3>> Line<'_, F> {
             self.out.push(None);
             return;
         };
-        let chord = (p0 + p1) * 0.5;
-        if (pm.z - chord.z).abs() <= params.tolerance {
+        // A drop is straight below the chord's middle, so only its height can be
+        // off; a point found round a wall at a height ([`Line::probe`]) is off
+        // sideways too.
+        let off = pm - (p0 + p1) * 0.5;
+        if off.z.abs() <= params.tolerance && off.truncate().length() <= params.tolerance {
             return;
         }
         // A span narrower than this cannot be meaningfully split further; continuing

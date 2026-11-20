@@ -106,11 +106,21 @@ pocket, 2D adaptive clearing, facing, slot, trace, a 2D chamfer, bore, circular,
 thread or drilling), a tool, heights, passes and linking. Scallop (`"scallop"`) is Fusion's: passes a stepover apart
 along the surface, offset in from the boundary and from where the tool stops
 touching the part, so the cusp is the same on a slope as on the flat
-([decision 0009](decisions/0009-scallop-distance-field.md)). It cuts `direction =
-"both-ways"` (closed rings climbing, open passes from their nearer end) unless
-`"climb"` or `"conventional"`, `order = "outside-in"` unless `"inside-out"`, and
-only where the surface is between `slope_from` and `slope_to` degrees from level
-(0 and 90), never steeper than a plunge. Its stepover starts as parallel's.
+([decision 0009](decisions/0009-scallop-distance-field.md)). Its passes cut every
+slope, walls included, a stepover apart along the surface down them; below
+where the tool last rests on the part from above, as down a part's upright
+outside, level rings a stepover apart finish it to the Bottom
+([decision 0035](decisions/0035-scallop-over-every-slope.md)). It cuts
+`direction = "both-ways"` (closed rings climbing, open passes from their nearer
+end) unless `"climb"` or `"conventional"`, `order = "outside-in"` unless
+`"inside-out"`, and only where the surface is between `slope_from` and
+`slope_to` degrees from level (0 and 90). The edge of a face avoided is an edge
+of its rings, as the boundary is: they are laid round what is avoided, a pass
+along its edge. Inside out, where the ground has inner edges (a hole in the
+area, or the edge of a face avoided), the rings are measured out from them,
+the first along the edge. Each closed ring starts on
+one straight seam out from where the first started. Its stepover starts as
+parallel's.
 Contour (`"contour"`) is Fusion's: passes round the part at levels a stepdown
 apart (`passes.stepdown`, 1 mm to start), each where the tool touches the walls
 at its height, and one at the foot of every wall standing on a flat, from the
@@ -995,13 +1005,18 @@ feed, onto the arc where it is clear of the part and the material, onto the
 pass itself where it is not; a ramp setting a job file still has for one of
 them is not read
 ([decision 0034](decisions/0034-entries-and-order-of-the-finishes-over-the-part.md)).
-Parallel, scallop, spiral, radial and morphed spiral cut the nearest pass next
+Parallel, spiral, radial and morphed spiral cut the nearest pass next
 (`linking.reorder`, on), Fusion's *Shortest machining distance*; off, in the
-order they are laid out, outside in or inside out as `order` says. Where the
+order they are laid out, outside in or inside out as `order` says. Scallop
+keeps the order its field lays its rings in, and `linking.reorder` is not read
+for it ([decision 0035](decisions/0035-scallop-over-every-slope.md)). Where the
 operation cuts both ways (parallel always; the others with `direction =
 "both-ways"`) an open pass is taken from whichever end is nearer; asked to cut
 one way it is cut as laid, unless `allow_reverse = true`. A closed ring is never
-turned round. Flat finishing ramps along each ring into material
+turned round. A link from a pass beside a wall, below where the tool would
+rest on the part from above, to the next stays down where the tool all along
+the straight way between them, at the lower of the two heights, is clear of
+the part. Flat finishing ramps along each ring into material
 (`linking.entry = "ramp"`, what a job file that leaves it out has) or comes
 straight down onto it (`"plunge"`, as a new one starts, Fusion's Flat having
 its *Ramp* off). Pocket clearing and 2D pockets go down a helix into material
@@ -1183,7 +1198,7 @@ with.
 | CC208 | warn    | adaptive clearing left an area it had no room to go down into    |
 | CC209 | warn    | a finishing strategy found nothing to finish                     |
 | CC210 | warn    | a scallop's or morphed spiral's grid coarsened to its budget     |
-| CC211 | note    | stretches too steep for a finishing pass left, for a contour pass |
+| CC211 | note    | no longer raised: scallop cuts every slope (decision 0035)       |
 | CC212 | warn    | points of a scallop's area not reached from its boundary         |
 | CC213 | warn    | a morphed spiral's laps further apart than the stepover          |
 | CC214 | note    | pieces of a morphed spiral cut in rings, too concave for one spiral |

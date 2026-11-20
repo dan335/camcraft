@@ -620,59 +620,75 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                 if span > max {
                     return Ok(false);
                 }
-                // Only between points on the part. A pass beside a wall, below
-                // where the tool would come to rest from above, is not on it:
-                // the way from it to another is through the wall, however
-                // short, and the part sampled between them may not show it.
-                // Nor is one with nothing under the tool, as a ring round a
-                // wall's foot beyond the part: the way up from it is up the
-                // wall.
+                // A pass beside a wall, below where the tool would come to
+                // rest from above, is not on the part, nor is one with nothing
+                // under the tool, as a ring round a wall's foot beyond the
+                // part: the part sampled between two such points says nothing
+                // of the way between them, which may be through the wall.
+                // That way is straight, and safe where the tool all along it,
+                // at the lower of its two ends' heights, would come to rest no
+                // higher, as a link at a level is: the tool is clear at any
+                // height above where it would rest. It may graze the wall it
+                // runs beside.
                 let off = |p: DVec3| {
                     self.surface
                         .at(p.truncate())
                         .is_none_or(|z| z > p.z + self.p.tolerance)
                 };
                 if off(from) || off(to) {
-                    return Ok(false);
-                }
-                // Fusion's default transition, smooth: a half turn tangent to
-                // both passes, where it fits.
-                if let Some(pieces) = self.turn_around(from, to, pass) {
-                    for (p, arc) in pieces {
-                        match arc {
-                            Some(arc) => self.out.arc_to(p, arc, MoveRole::Transition, feed)?,
-                            None => self.out.feed_to(p, MoveRole::Transition, feed)?,
-                        }
+                    let low = from.z.min(to.z);
+                    let reached = self
+                        .surface
+                        .grazing_along(a, b)
+                        .iter()
+                        .any(|p| p.z > low + 1e-6);
+                    if reached || self.surface.rubs_avoided(from, to) {
+                        return Ok(false);
                     }
-                    return Ok(true);
-                }
-                // The straight line between the cuts, lifted onto the part wherever
-                // the part is above it.
-                let mut lifted: Vec<(f64, DVec3)> = self
-                    .surface
-                    .along(a, b)
-                    .into_iter()
-                    .filter_map(|p| {
-                        let t = if span > 1e-9 {
-                            (p.truncate() - a).dot(b - a) / (span * span)
-                        } else {
-                            return None;
-                        };
-                        (t > 1e-9 && t < 1.0 - 1e-9).then(|| {
-                            let chord = from.z + (to.z - from.z) * t;
-                            (t, dvec3(p.x, p.y, p.z.max(chord)))
+                    vec![to]
+                } else {
+                    // Fusion's default transition, smooth: a half turn tangent
+                    // to both passes, where it fits.
+                    if let Some(pieces) = self.turn_around(from, to, pass) {
+                        for (p, arc) in pieces {
+                            match arc {
+                                Some(arc) => {
+                                    self.out.arc_to(p, arc, MoveRole::Transition, feed)?;
+                                }
+                                None => self.out.feed_to(p, MoveRole::Transition, feed)?,
+                            }
+                        }
+                        return Ok(true);
+                    }
+                    // The straight line between the cuts, lifted onto the part
+                    // wherever the part is above it.
+                    let mut lifted: Vec<(f64, DVec3)> = self
+                        .surface
+                        .along(a, b)
+                        .into_iter()
+                        .filter_map(|p| {
+                            let t = if span > 1e-9 {
+                                (p.truncate() - a).dot(b - a) / (span * span)
+                            } else {
+                                return None;
+                            };
+                            (t > 1e-9 && t < 1.0 - 1e-9).then(|| {
+                                let chord = from.z + (to.z - from.z) * t;
+                                (t, dvec3(p.x, p.y, p.z.max(chord)))
+                            })
                         })
-                    })
-                    .collect();
-                lifted.sort_by(|x, y| x.0.total_cmp(&y.0));
-                let mut way: Vec<DVec3> = lifted.into_iter().map(|(_, p)| p).collect();
-                way.push(to);
-                // Down on the part over a face it is kept clear of, the tool
-                // would rub what the passes were cut out over: it lifts.
-                if way.iter().any(|&p| self.surface.rests_avoided(p)) {
-                    return Ok(false);
+                        .collect();
+                    lifted.sort_by(|x, y| x.0.total_cmp(&y.0));
+                    let mut way: Vec<DVec3> = lifted.into_iter().map(|(_, p)| p).collect();
+                    way.push(to);
+                    // Down on the part over a face it is kept clear of, the
+                    // tool would rub what the passes were cut out over: it
+                    // lifts.
+                    if way.iter().any(|&p| self.surface.rests_avoided(p)) {
+                        return Ok(false);
+                    }
+                    way
                 }
-                way
             }
             StayDown::Level { max } => {
                 if span > max || (from.z - to.z).abs() > 1e-6 {

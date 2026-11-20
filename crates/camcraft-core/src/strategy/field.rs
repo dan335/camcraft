@@ -263,17 +263,6 @@ impl AreaGrid {
         });
         near
     }
-
-    /// Nodes inside the area, with a height, that `d` leaves unknown.
-    pub(crate) fn unreached(&self, d: &[f64]) -> u64 {
-        d.iter()
-            .zip(&self.inside)
-            .enumerate()
-            .filter(|&(n, (d, &inside))| {
-                inside && !d.is_finite() && u32::try_from(n).is_ok_and(|n| self.grid.defined(n))
-            })
-            .count() as u64
-    }
 }
 
 /// A whole, non-negative count that fits a `u32`.

@@ -27,6 +27,30 @@ the same notes at more length.
   program is 109,213 lines where it was 169,671, removing the same material,
   with a lift and 185 mm of rapids fewer. Every Fusion comparison of a finish starts
   from a new adaptive's roughing, so their figures were measured again.
+- **Scallop cuts every slope, as one family of rings**
+  ([decision 0035](docs/decisions/0035-scallop-over-every-slope.md)). Its
+  passes no longer leave ground steeper than a plunge to rings round the
+  walls: on steep ground each point is found round the wall at the height the
+  field puts it at, so the rings stay a stepover apart along the surface up
+  and down walls, upright ones included. Below where the tool last rests on
+  the part from above, as down a part's upright outside, level rings a
+  stepover apart finish it to the Bottom. The edge of a face avoided is an
+  edge of the rings, as Fusion's lay them anew round what is avoided, instead
+  of being laid across it and cut out of it; inside out, where the ground has
+  a hole or a face avoided in it, the rings start along that edge and grow
+  outward.
+  Each closed ring starts on one straight seam, and the rings are cut in the
+  field's order, not reordered for travel, each piece a height or a face
+  avoided cuts one into taken from its nearer end. A link from a pass beside
+  a wall, below where the tool would rest from above, to the next now stays
+  down where the way between is clear of the part, which joins the rings round
+  the walls of Parallel, Spiral, Radial and Morphed Spiral too: on `ops_3d`,
+  unroughed, they lift 4, 47, 3 and 111 times where they lifted 40, 83, 40 and
+  147. Held to Fusion's programs, Scallop's columns alike go from 89.2% to
+  94.6% and it feeds 2% further than Fusion's where it fed 16% further, but
+  lifts 12 times to Fusion's once, taking the field's regions in its own
+  order; with only the floor machined it lifts 3 times, as Fusion's does,
+  where it lifted 12. CC211 is no longer raised.
 - **The finishes over the part enter and link as Fusion's**
   ([decision 0034](docs/decisions/0034-entries-and-order-of-the-finishes-over-the-part.md)).
   Parallel, Scallop, Spiral, Radial and Morphed Spiral no longer ramp into a

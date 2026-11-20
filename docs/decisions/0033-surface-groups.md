@@ -232,10 +232,12 @@ The tests hold each to a little worse than that. Where the figures come from:
 - **`camcraft post` cannot pick faces**: groups are set in job files and the
   app.
 - **Not built:** linking cut pieces as Fusion does (plunging onto a pass,
-  turning back at a clearance and staying down), Scallop's lines laid anew
-  round what is avoided, and Fusion's runs past the tie. Since
+  turning back at a clearance and staying down), and Fusion's runs past the
+  tie. Since
   [decision 0034](0034-entries-and-order-of-the-finishes-over-the-part.md) the
   pieces are taken the nearest next, from either end, and plunged onto.
+  Scallop's lines are laid anew round what is avoided since
+  [decision 0035](0035-scallop-over-every-slope.md).
 - **Not compared with Fusion's programs:** Radial, Morphed Spiral, Pencil,
   Project and Morph with groups, which are tested on synthetic parts only, and
   bull nose tools.

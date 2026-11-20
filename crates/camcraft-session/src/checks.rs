@@ -645,9 +645,6 @@ fn operation_findings(
                     "and not finished".into(),
                 ));
             }
-            if r.walls == 0 {
-                too_steep(op, r.too_steep, &mut out);
-            }
         }
         StrategyDetail::Contour(r) => {
             finished(
@@ -1134,18 +1131,6 @@ fn coarsened(op: &OperationResult, coarsened: bool, pitch: f64, out: &mut Vec<Fi
             "to stay within its budget: the passes are placed less exactly; keep it to \
              a boundary"
                 .into(),
-        ));
-    }
-}
-
-/// Stretches left out as steeper than a plunge, for a contour pass.
-fn too_steep(op: &OperationResult, stretches: u64, out: &mut Vec<Finding>) {
-    if stretches > 0 {
-        out.push(finding(
-            Level::Note,
-            "CC211",
-            format!("{stretches} stretch(es) too steep for {} left", said(op)),
-            "walls and faces steeper than a plunge: for a contour pass".into(),
         ));
     }
 }

@@ -190,6 +190,43 @@ pub fn order_passes(
     Ok((out, report))
 }
 
+/// The passes of a path in the order they were laid, each open one taken from
+/// whichever end is nearer where the last left the tool: for an operation that
+/// cuts both ways and keeps its own order, as a field's rings are, so the
+/// pieces a ring is cut into after it is laid, by a height or a face avoided,
+/// go back and forth as cut pieces should, and none is moved. As
+/// [`order_passes`], the input must still be unlinked.
+pub fn nearer_ends(path: &Toolpath) -> Result<(Toolpath, OrderReport), ToolpathError> {
+    let passes = split_passes(path);
+    let mut report = OrderReport {
+        passes: passes.len() as u64,
+        travel_before_mm: travel(&passes),
+        ..Default::default()
+    };
+    let mut at: Option<DVec3> = None;
+    let mut ordered = Vec::with_capacity(passes.len());
+    for p in passes {
+        let nearer_end = match (at, p.start(), p.end()) {
+            (Some(a), Some(s), Some(e)) => p.reversible() && (e - a).length() < (s - a).length(),
+            _ => false,
+        };
+        let chosen = if nearer_end {
+            report.reversed += 1;
+            p.reversed()
+        } else {
+            p
+        };
+        at = chosen.end().or(at);
+        ordered.push(chosen);
+    }
+    let mut out = Toolpath::new();
+    for p in &ordered {
+        out.append(&p.moves)?;
+    }
+    report.travel_after_mm = travel(&ordered);
+    Ok((out, report))
+}
+
 /// Split a path into passes at each unresolved link, what comes before the
 /// first link its own.
 fn split_passes(path: &Toolpath) -> Vec<Pass> {
@@ -419,6 +456,26 @@ mod tests {
         for _ in 0..5 {
             assert_eq!(order_passes(&input, true, true).unwrap().0, first);
         }
+    }
+
+    /// Kept in the order laid, each open pass is taken from its nearer end:
+    /// the pieces go back and forth, and none moves, though the nearest next
+    /// would take another first.
+    #[test]
+    fn nearer_ends_keep_the_order_laid() {
+        let input = scattered();
+        let (out, report) = nearer_ends(&input).unwrap();
+        let starts: Vec<DVec3> = split_passes(&out).iter().filter_map(Pass::start).collect();
+        assert_eq!(
+            starts,
+            vec![
+                dvec3(0.0, 0.0, -1.0),
+                dvec3(50.0, 5.0, -1.0),
+                dvec3(1.0, 0.0, -1.0),
+                dvec3(51.0, 5.0, -1.0),
+            ]
+        );
+        assert_eq!(report.reversed, 2);
     }
 
     #[test]

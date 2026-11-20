@@ -53,7 +53,7 @@ const BAND_SHARE: f64 = 0.15;
 const PASSES_SHARE: f64 = 0.75;
 
 /// The ground passes laid over the part leave to rings round the walls
-/// ([`steep_walls`]), as scallop's do: where the surface the tool's centre
+/// ([`steep_walls`]): where the surface the tool's centre
 /// rides is steeper than a plunge, over where it touches the part
 /// ([`steep_ground`]). A pass cut down such ground touches a wall only where
 /// it crosses it, so a wall along the passes is left in steps a stepover deep;
@@ -139,8 +139,11 @@ pub(super) fn scallop_paths(
     let area = finish_area(work, limit, true)?;
     let (slope_from, slope_to) = work.slopes();
     let params = ScallopParams {
-        // The passes most of the work, the rings round the walls the rest.
+        // The field most of the work, the rings below it the rest.
         watch: work.watch.part(0.0, PASSES_SHARE),
+        // The linking's default, as the rings below it ramp: a scallop
+        // takes no ramp setting (decision 0034).
+        ramp: crate::job::Linking::default().ramp_angle.to_radians(),
         stepover: op.passes.stepover,
         tolerance: job.tolerance,
         feed: op.passes.feed,
@@ -152,19 +155,28 @@ pub(super) fn scallop_paths(
         slope_to,
         ..Default::default()
     };
-    let (mut path, mut report, band) =
-        scallop_finish_banded(&work.seat()?, &area, &params).map_err(in_op(op))?;
-    // Its passes are laid on the surface as the drop-cutter sees it, which
-    // goes from a wall's top to its foot at once: they leave out what is
-    // steeper than a plunge where they cross a wall, and stop at its top where
-    // the part ends below it. There, a stepover apart along the surface is a
-    // stepover apart in height: rings round every such wall, a stepover apart
-    // down it, each going no deeper than the last by more than that, as
-    // Fusion's scallop finishes them.
-    let (walls, rings) = steep_walls(work, limit, &band, (direction, slope_to))?;
-    path.append(walls.moves()).map_err(in_op(op))?;
-    report.passes += rings;
+    // Its passes go up and down walls as they go over the rest: on steep
+    // ground each point is found round the wall at the height the field puts
+    // it at. What the field cannot cover is where the tool is below where it
+    // would rest from above: down the part's outside below where it last
+    // touches it from above, which has no width seen from above, and under
+    // what overhangs. There height is the only measure, and level rings a
+    // stepover apart in it finish it.
+    let (field, mut report) = scallop_finish(&work.seat()?, &area, &params).map_err(in_op(op))?;
+    let (below, rings) = below_reach(work, limit, direction, (slope_from, slope_to))?;
     report.walls = rings;
+    report.passes += rings;
+    // The field's rings, from its first edge on, and then on down the wall
+    // below them; from the boundary in, from the top of the wall down to it
+    // and then in.
+    let mut path = Toolpath::new();
+    let parts = match order {
+        PassOrder::InsideOut => [&field, &below],
+        PassOrder::OutsideIn => [&below, &field],
+    };
+    for part in parts {
+        path.append(part.moves()).map_err(in_op(op))?;
+    }
     if report.passes == 0 {
         warnings.push("found nothing to finish: nothing within the boundary and slopes".into());
     }
@@ -179,7 +191,69 @@ pub(super) fn scallop_paths(
     Ok((path, report.passes, StrategyDetail::Scallop(report)))
 }
 
-/// Rings round the walls a scallop's passes leave out, up to `slope_to`: a
+/// Level rings a stepover apart down the walls a scallop's field cannot cover,
+/// from the top to the Bottom, within the sweep and `limit`, as contour
+/// finishing finds them, each way as `direction` asks, within the slopes asked:
+/// kept only where the tool on them is more than half a stepover below where
+/// it would rest dropped from above, or has nothing under it. Above that, the
+/// field's passes are within half a stepover: so nothing is cut twice, and a
+/// wall's rings take over where the field stops, a stepover on down. Each level's
+/// last ring goes down along the wall onto the next, at the linking's default
+/// ramp angle, as contour finishing's do. The rings, and how many.
+fn below_reach(
+    work: &Work<'_>,
+    limit: Option<&Region>,
+    direction: CutDirection,
+    (slope_from, slope_to): (f64, f64),
+) -> Result<(Toolpath, u64), RunError> {
+    let (job, op) = (work.job, work.op);
+    let (top, bottom) = op.levels_3d(work.heights);
+    if top <= bottom {
+        return Ok((Toolpath::new(), 0));
+    }
+    // As contour finishing finds its walls: coarser bands are enough to find
+    // them, since every point of a ring is pulled onto the part exactly.
+    let coarse = (10.0 * job.tolerance)
+        .min(work.tool.max_radius() / 4.0)
+        .max(job.tolerance);
+    let mut reach = work.reach(coarse)?;
+    let seat = work.seat()?;
+    let area = finish_area(work, limit, false)?;
+    let params = WaterlineParams {
+        watch: work.watch.part(PASSES_SHARE, 1.0),
+        stepdown: op.passes.stepover,
+        top,
+        bottom,
+        flats: Vec::new(),
+        tolerance: job.tolerance,
+        feed: op.passes.feed,
+        direction: direction.engine(),
+        climb_right: work.clockwise(),
+        order: ContourOrder::ByDepth.engine(),
+        slope_from,
+        slope_to,
+        ramp: Some(crate::job::Linking::default().ramp_angle.to_radians()),
+    };
+    let (rings, _) = waterline(&mut reach, &seat, &area, &params).map_err(in_op(op))?;
+    let tolerance = job.tolerance;
+    // Where the tool would rest from above no more than half a stepover over
+    // the ring, the field's passes, which run on that, are within half a
+    // stepover of it: it is theirs, and a ring there would be a sliver of
+    // one, kept and dropped as the part's facets put the rest a hair either
+    // side of it.
+    let half = 0.5 * op.passes.stepover;
+    let covered = |p: DVec3| seat.drop_at(p.x, p.y).is_some_and(|z| z <= p.z + half);
+    // Looked along as finely as a pass is sampled where it is flat.
+    let step = (seat.tool().max_radius() * 0.5).max(tolerance);
+    // Where the wall's top is not level, its upper rings are arcs, each
+    // level's in as many pieces as the wall has stretches below the field.
+    // They stay level by level, from the top down, so no ring is cut under
+    // material a ring above it has yet to take.
+    let (kept, report) = cut_out(&rings, covered, step, tolerance).map_err(in_op(op))?;
+    Ok((kept, report.after))
+}
+
+/// Rings round the walls passes laid over the part leave out, up to `slope_to`: a
 /// level each stepover down them, times the sine of that slope, so the rings
 /// are no further apart along the surface than the passes, from the top to the
 /// bottom. Over `band`, where the surface the tool's centre rides is steeper
