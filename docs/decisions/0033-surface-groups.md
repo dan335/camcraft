@@ -2,6 +2,13 @@
 
 **Status:** decided, 2026-11-19 · **Milestone:** 0.10
 
+> **Amended by decisions [0034](0034-entries-and-order-of-the-finishes-over-the-part.md)
+> and [0035](0035-scallop-over-every-slope.md).** The finishes over the part no
+> longer ramp back onto a cut piece, and Scallop lays its rings anew round
+> what is avoided and has no rings round the walls. The figures and the
+> linking below are as they were measured here; those decisions and the tests
+> have today's.
+
 ## Question
 
 A finish over the part cut all of it. Often only some of it is to be cut: a

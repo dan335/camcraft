@@ -35,6 +35,8 @@ Autodesk.)
 - **Roughing:** adaptive clearing and pocket clearing.
 - **Finishing:** parallel, scallop, contour, ramp, flat, pencil, project, morph,
   spiral, radial and morphed spiral.
+- **Faces:** a 3D finish machines the faces picked for it and keeps clear of
+  others, each group with its own offsets, as Fusion's Surface Manager does.
 - **2D:** profiles, pockets, 2D adaptive clearing, facing, slot, trace, 2D
   chamfer, engraving, bore, circular, thread milling and drilling.
 - **Tools:** flat, ball, bullnose, V-bit and chamfer cutters, drills and
@@ -68,8 +70,9 @@ You need:
   version it needs, and rustup fetches it on the first build.
 
 That is all: STEP import is [ogeom](https://github.com/gilbertorconde/ogeom-rs),
-pure Rust. It is developed on macOS and builds on Windows. Other platforms have
-not been tried.
+pure Rust. It is developed on Windows and macOS, and releases are built for
+Windows and Linux. On Linux the app's file dialogs need a file chooser portal
+(`xdg-desktop-portal` with a backend) or `zenity`.
 
 Open the example job in the app:
 

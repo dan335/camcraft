@@ -2,6 +2,11 @@
 
 **Status:** decided, 2026-11-19 · **Milestone:** 0.10
 
+> **Amended by [decision 0035](0035-scallop-over-every-slope.md).** Scallop is
+> not reordered: it keeps its field's order, each piece taken from its nearer
+> end, and it has no rings round the walls, so what is said of Scallop's order
+> and of its rings below is as it was decided here, not as it is.
+
 ## Question
 
 Held to Fusion's programs for `ops_3d` with faces avoided

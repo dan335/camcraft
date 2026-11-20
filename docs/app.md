@@ -2,7 +2,7 @@
 
 `camcraft-gui`, on eframe/egui 0.36 with wgpu. Run it with
 `bash scripts/run.sh [JOB]...` (`scripts\run.bat` on Windows). Built and looked
-at on macOS; it builds on Windows.
+at on Windows and macOS; releases carry builds for Windows and Linux.
 
 It goes through `camcraft-session` for everything that is not drawing: loading,
 running, checking and posting are the command line's code, so the two cannot
@@ -542,7 +542,7 @@ operation chooses one of its presets too and copies its values in; the operation
 then says what has changed since, can be reset to the preset, and can save its
 values as a new preset of the job's copy. Beside each speed and feed the editor
 shows surface speed and chip load, and typing either sets the spindle speed or
-feed. Nothing uses the ramp feed until entries ramp.
+feed. Helixes and ramps go down at the ramp feed.
 
 A tool says which way its spindle turns (M3, or M4 for a left-hand cutter) and its
 coolant (off, flood M8 or mist M7), and the program says so.
@@ -596,9 +596,9 @@ cargo test --release -p camcraft-gui --features ui-snapshots -- --ignored
 ```
 
 writes PNGs of the real UI to `target/ui-snapshots/`: the main window after a run,
-setups in tabs, the setup panel, the tool manager, and the lego brick and a full
-sheet playing. `docs/images/playback.png`, the README's picture, is its
-`lego_half_roughed.png`.
+setups in tabs, the setup panel, the tool manager, an operation's surface groups,
+and the lego brick and a full sheet playing. `docs/images/playback.png`, the
+README's picture, is its `lego_half_roughed.png`.
 
 The harness draws with a software renderer where there is one, as Windows has,
 so that pictures come out the same on any machine. That is slow: on a busy

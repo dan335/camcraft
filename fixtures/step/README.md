@@ -17,7 +17,7 @@ Chosen to span what the importer actually has to survive, not what's convenient.
 | `ops_block.step` | cm | 21 | plane, cylinder | 100.0×70.0×20.0 | made in Fusion to hold camcraft's basic operations to Fusion's: a block with a pocket with R6 corners, a round pocket and two blind holes. Fusion's own programs for its Face, 2D Contour, 2D Pocket and Drill are `fixtures/nc/ops_block_*.nc`, and `crates/camcraft-session/src/compare/tests.rs` says how they were set. In centimetres, as Fusion writes a design's STEP |
 | `ops_2d.step` | cm | 51 | plane, cylinder, cone | 140.0×100.0×20.0 | made in Fusion to hold camcraft's 2D operations to Fusion's: a block centred on the origin with a through hole 16 across, a blind hole 14 across, a round pocket 30 across, two slots, two V grooves, a pocket with an island, an open notch and a chamfered rim. Fusion's own programs for its Bore, Circular, Slot, Trace, 2D Adaptive and 2D Chamfer are `fixtures/nc/ops_2d_*.nc`; `scripts/fusion/ops_2d/` made both, and `crates/camcraft-session/src/compare/tests/ops_2d.rs` holds camcraft's to them. ogeom gives it four triangles whose corners coincide, one at the point of each V groove's end (gilbertorconde/ogeom-rs#982), which the weld drops |
 | `ops_engrave.step` | cm | 22 | plane | 80.0×50.0×10.0 | made in Fusion to hold camcraft's Engrave to Fusion's (`scripts/fusion/ops_engrave/part.py`): a plate with a triangle, an L 4 mm wide and a rectangle sunk 3 mm into its top, deeper than the V goes. Fusion's own programs for its Engrave of all three and of each alone are `fixtures/nc/ops_engrave_*.nc`, and `crates/camcraft-session/src/compare/tests_engrave.rs` says how they were set. In centimetres |
-| `ops_3d.step` | cm | 19 | plane, cylinder, sphere, torus | 60.0×40.0×20.0 | made in Fusion for camcraft's 3D finishing (`scripts/fusion/ops_3d/part.py`): a block with a pocket whose -X wall is drafted 15°, one corner R5 and three sharp, its floor's edges R4, a dome on its floor and its top edge at +X rounded R8. Fusion's own programs for its Ramp are `fixtures/nc/ops_3d_ramp*.nc`, and `crates/camcraft-session/src/compare/tests_ramp.rs` says how they were set; for its Pencil, with a 12 mm and a 6 mm ball, `fixtures/nc/ops_3d_pencil*.nc`, and `tests_pencil.rs` beside it says how; for its Project, along the dome's foot, the floor's edge and the round's lower edge, `fixtures/nc/ops_3d_project*.nc`, and `tests_project.rs`; for its Morph, between the dome's foot and the floor's edge and between the round's two edges, `fixtures/nc/ops_3d_morph*.nc`, and `tests_morph.rs`. ogeom gives it one triangle whose corners coincide, which the weld drops. In centimetres |
+| `ops_3d.step` | cm | 19 | plane, cylinder, sphere, torus | 60.0×40.0×20.0 | made in Fusion for camcraft's 3D finishing (`scripts/fusion/ops_3d/part.py`): a block with a pocket whose -X wall is drafted 15°, one corner R5 and three sharp, its floor's edges R4, a dome on its floor and its top edge at +X rounded R8. Fusion's own programs for its Parallel, Scallop, Spiral, Contour and Flat, as new ones start and with surface groups, are `fixtures/nc/ops_3d_{parallel,scallop,spiral,contour,flat}*.nc`, held to by `tests_parallel.rs`, `tests_scallop.rs`, `tests_spiral.rs`, `tests_contour.rs` and `tests_flat.rs` in `crates/camcraft-session/src/compare/`; for its Ramp, `fixtures/nc/ops_3d_ramp*.nc`, and `crates/camcraft-session/src/compare/tests_ramp.rs` says how they were set; for its Pencil, with a 12 mm and a 6 mm ball, `fixtures/nc/ops_3d_pencil*.nc`, and `tests_pencil.rs` beside it says how; for its Project, along the dome's foot, the floor's edge and the round's lower edge, `fixtures/nc/ops_3d_project*.nc`, and `tests_project.rs`; for its Morph, between the dome's foot and the floor's edge and between the round's two edges, `fixtures/nc/ops_3d_morph*.nc`, and `tests_morph.rs`. ogeom gives it one triangle whose corners coincide, which the weld drops. In centimetres |
 
 Sizes are the extent of each file's own B-rep vertices, read straight from the text,
 and `crates/camcraft-import/tests/step_fixtures.rs` holds the importer to them. An
@@ -27,7 +27,7 @@ read 242 mm deep instead of 40.6.
 
 ## Two things this set is designed to catch
 
-**Units.** Five of six are in inches (`CONVERSION_BASED_UNIT('inch')`). An importer
+**Units.** Of the six shop parts, five are in inches (`CONVERSION_BASED_UNIT('inch')`). An importer
 that ignores the STEP unit context produces geometry 25.4x too small and a program
 that will happily drive a cutter through the spoilboard. `bowl_01` is in mm
 specifically so a hardcoded inch conversion fails just as loudly as a missing one.
@@ -99,9 +99,9 @@ So the public set can no longer reproduce that specific corruption class on its 
 Closing this properly means generating a synthetic sculpted-surface part with a
 comparable control-point count and committing that instead.
 
-## Before this repo goes public
+## Published by choice
 
-`sled_base.step`, `door_handle_guide.step` and `rail_guide.step` are shop jigs. Far
-less sensitive than a customer part, but still not public work. Decide on them before
-flipping visibility — deleting them later doesn't help, because they stay in the git
-history.
+`sled_base.step`, `door_handle_guide.step` and `rail_guide.step` are shop jigs,
+published with the repository by choice. A part that cannot be published belongs in
+`CAMCRAFT_FIXTURES`, never in a commit: deleting it later doesn't help, because it
+stays in the git history.

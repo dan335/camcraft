@@ -837,8 +837,7 @@ and comes at the pocket from outside. A closed pocket is gone down into by a
 helix, or straight with `linking.entry = "plunge"`.
 
 Without multiple depths (off to start, as Fusion's), each pocket is one level,
-at its floor; with them (Fusion's Maximum Roughing Stepdown when ticked, as 3D
-adaptive's), each level a whole stepdown from the top and the last what is left,
+at its floor; with them (Fusion's Maximum Roughing Stepdown when ticked), each level a whole stepdown from the top and the last what is left,
 or evenly with `even_stepdowns = true`. `order = "by-depth"` (the default)
 clears the pockets with the same levels together, level by level; `"by-area"`
 each pocket all the way down before the next. Its optimal load, `direction`,
@@ -1283,9 +1282,9 @@ The app's Post goes through the same code (`camcraft_session::plan_posting`), so
 the two write the same files under the same names.
 
 `post` writes a single finishing operation described with flags (`camcraft post --help`):
-any 3D finishing strategy, `--strategy parallel` unless another is named as a job
-names it (`scallop`, `contour`, `ramp`, `flat`, `spiral`, `radial`,
-`morphed-spiral`), each with its own defaults, and a ball, flat or bullnose cutter
+any 3D finishing strategy that needs no picks, `--strategy parallel` unless another
+is named as a job names it (`scallop`, `contour`, `ramp`, `flat`, `pencil`,
+`spiral`, `radial`, `morphed-spiral`), each with its own defaults, and a ball, flat or bullnose cutter
 (`--tool bullnose --corner 0.5`); `--stepdown` sets contour's and ramp's levels,
 1 mm apart unless given.
 It builds a one-operation job and goes through the same `run_setup` as `job` and

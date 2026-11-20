@@ -102,8 +102,10 @@ the next along one straight seam, lifts only where the part forces them?
   upright plane through where the first started, square to it, on the side
   still to finish; one that does not cross it starts nearest the tool
   (`strategy::projected::Seam`).
-- **The field's order, not the nearest next.** Scallop keeps the order it
-  lays its passes in (`Uses::nearer_ends`): each piece that a height or a
+- **The field's order, not the nearest next**, as
+  [decision 0034](0034-entries-and-order-of-the-finishes-over-the-part.md)
+  had it. Scallop keeps the order it lays its passes in
+  (`Uses::nearer_ends`): each piece that a height or a
   face avoided cuts a ring into is taken from its nearer end, where it cuts
   both ways, and none is moved (`path::ordering::nearer_ends`).
 

@@ -177,7 +177,7 @@ the level: from above, a criss-cross of rapids over the part. Classed:
   the way across, found with them cut, might otherwise run through. Starting
   a level's passes in each area nearest where the area's last pass below ended
   was tried: it took the level back and forth between the areas, lifting
-  more, and was left.
+  more, and was left (and taken up again, by area, in the next amendment).
 - **Between slabs and areas.** Going down into a slab is a helix or a ramp
   from above the level over it, and from one area to the next is a lift: each
   needed. The job asks for minimum retraction, which is over the material as

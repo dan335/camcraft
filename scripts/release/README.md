@@ -5,7 +5,7 @@ Windows machine with WSL's Ubuntu (glibc 2.39). macOS builds from source.
 
 1. **Version.** Set `version` in the workspace `Cargo.toml`, and each internal
    crate's `version` under `[workspace.dependencies]`, and the README's
-   "Version" line, and add the release to `CHANGELOG.md`. Bring
+   "Version" line and the tags in its *Using the engine* example, and add the release to `CHANGELOG.md`. Bring
    `PROGRESS.md` up to date: its version and date, each row the release
    changed, and the summary's counts. Commit as "Release X.Y.Z".
 2. **Gates.** `scripts/check.sh` (or `.\scripts\check.ps1`), all green.
@@ -36,7 +36,8 @@ Windows machine with WSL's Ubuntu (glibc 2.39). macOS builds from source.
    scripts/release/package.sh X.Y.Z "$OUT" target "$OUT/THIRD-PARTY-x86_64-unknown-linux-gnu.txt"
    ```
 
-   Its `camcraft-gui` needs no newer glibc than the README says:
+   Its `camcraft-gui` needs no newer glibc than the release notes' downloads
+   table says:
    `objdump -T camcraft-gui | grep -o "GLIBC_[0-9.]*" | sort -V | tail -1`.
 
 6. **Checksums,** in `$OUT`: `sha256sum camcraft-X.Y.Z-*.zip camcraft-X.Y.Z-*.tar.gz > SHA256SUMS`.

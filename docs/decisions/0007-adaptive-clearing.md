@@ -123,7 +123,9 @@ down at rapid to the safe distance (16.6 min of plunging became 4.2).
 - **Stay-down links round what stands between**, through what is cleared: the
   shortest way by the corners of where the tool stands clear of the material,
   where it turns away from itself, one each quarter-radian round a curve,
-  within the stay-down distance, every leg held to what a straight link is.
+  within the stay-down distance (or, since
+  [decision 0036](0036-adaptive-levels-order-and-entries.md), no longer than
+  lifting would go), every leg held to what a straight link is.
 
 - **Machine shallow areas**: between every two levels of a slab, and its
   highest and the level above, where the terrace between them is wider than

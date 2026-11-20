@@ -81,19 +81,18 @@ the same notes at more length.
   Parallel, Scallop, Spiral, Radial and Morphed Spiral no longer ramp into a
   pass: the tool comes straight down at the plunge feed, onto the vertical
   lead where it is clear of the material, as Fusion's, which have no ramp
-  settings, and as Pencil, Project and Morph already did. Scallop, Spiral,
-  Radial and Morphed Spiral cut the nearest pass next, Fusion's *Shortest
-  machining distance*, as Parallel does; unticking *Reorder passes* cuts them
-  in the order laid out. Where an operation cuts both ways (Parallel always,
+  settings, and as Pencil, Project and Morph already did. Spiral, Radial and
+  Morphed Spiral cut the nearest pass next, Fusion's *Shortest machining
+  distance*, as Parallel does; unticking *Reorder passes* cuts them in the
+  order laid out. Where an operation cuts both ways (Parallel always,
   the others with direction both ways), a pass is taken from its nearer end;
   asked to cut one way it is cut as laid. A new Spiral and Morphed Spiral cut
   both ways, as Fusion's start, and a new Flat comes straight down onto each
   ring, as Fusion's Flat starts with its Ramp off; its ramp along the ring is
-  a choice on its *Linking* tab. Held to Fusion's programs for `ops_3d`:
-  Scallop lifts twice to Fusion's once where it lifted 44 times and feeds 16%
-  further where it fed twice as far; Spiral lifts twice to Fusion's 5 where it
-  lifted 71 times and feeds 30% further where it fed four times as far; with
-  the dome avoided, Spiral lifts 8 times to Fusion's 6 where it lifted 121.
+  a choice on its *Linking* tab. Held to Fusion's programs for `ops_3d`,
+  Spiral lifts twice to Fusion's 5 where it lifted 71 times and feeds 30%
+  further where it fed four times as far; with the dome avoided, it lifts 8
+  times to Fusion's 6 where it lifted 121.
   A job file reads as before: ramp settings on these finishes are not read, a
   Spiral or Morphed Spiral that leaves its direction out climbs, and a Flat
   that leaves its entry out ramps.
@@ -115,14 +114,13 @@ the same notes at more length.
   for `ops_3d`, eleven of them with groups. camcraft stops where the tool
   touches a face machined and one avoided at once, where Fusion's Parallel,
   Scallop and Spiral run on up the face avoided, and keeps the ring there that
-  Fusion's Contour and Ramp cut out; it lifts and ramps back onto each piece
-  where Fusion plunges or stays down, so it feeds further: about twice as far
-  as Fusion's Parallel with the dome avoided, nine times as far as its Scallop
-  with only the floor machined. Refused: groups on roughing, 2D operations and
-  drilling, a face in two groups, the model avoided with nothing machined, and
-  a V-bit or chamfer mill where anything is avoided. A roughing before such a
-  finish still cuts beside the faces avoided. `camcraft post` cannot pick
-  faces. An operation with no groups is cut as before.
+  Fusion's Contour and Ramp cut out; and it lifts where Fusion's Scallop and
+  Spiral turn back at the clearance and stay down. Refused: groups on
+  roughing, 2D operations and drilling, a face in two groups, the model
+  avoided with nothing machined, and a V-bit or chamfer mill where anything is
+  avoided. A roughing before such a finish still cuts beside the faces
+  avoided. `camcraft post` cannot pick faces. An operation with no groups is
+  cut as before.
 - **The operating system's own file dialogs** in the app, in place of one drawn
   inside it ([decision 0032](docs/decisions/0032-native-file-dialogs.md)):
   Explorer's on Windows, the desktop's file chooser through the XDG portal on

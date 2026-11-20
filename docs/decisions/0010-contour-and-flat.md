@@ -2,6 +2,10 @@
 
 **Status:** decided, 2026-09-28 · **Milestone:** before the first cut
 
+> **Amended by [decision 0034](0034-entries-and-order-of-the-finishes-over-the-part.md).**
+> A new Flat comes straight down onto each ring; its ramp is a choice, and a
+> job file that leaves the entry out still ramps.
+
 ## Question
 
 Scallop and parallel finishing leave anything steeper than a plunge "for a

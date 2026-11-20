@@ -54,10 +54,11 @@ Worth knowing, because each was found by looking rather than by a test passing.
   count in its header says.
 - **opencascade 0.3.0 did not build with MSVC.** It assumes OpenCascade's
   `Handle_X` is an alias of `opencascade::handle<X>`, which Visual Studio makes a
-  derived class instead. `vendor/` holds the crates.io sources with upstream PR #234
-  applied; see the root `Cargo.toml`.
+  derived class instead. `vendor/` held the crates.io sources with upstream PR #234
+  applied, until STEP import moved to ogeom (decision 0001).
 - **An operation turned off was written at a version an older build would cut.**
-  `enabled = false` is now version 4.
+  `enabled = false` was given a version of its own, 4. (Since then there is one
+  job file format, version 1, and a file of any other is refused.)
 - **Posting could leave half a job.** The command line loaded each setup's profile
   inside its write loop, so a bad profile left earlier setups' programs on disk,
   and programs were not written atomically. Posting now renders everything, then

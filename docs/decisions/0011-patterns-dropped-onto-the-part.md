@@ -2,6 +2,11 @@
 
 **Status:** decided, 2026-09-28 · **Milestone:** before the first cut
 
+> **Amended by [decision 0034](0034-entries-and-order-of-the-finishes-over-the-part.md).**
+> Spiral, Radial and Morphed Spiral are cut the nearest pass next, Fusion's
+> Shortest Machining Distance; `linking.reorder = false` keeps the order laid
+> out.
+
 ## Question
 
 Fusion finishes round shapes with a Spiral about a centre, Radial spokes out
