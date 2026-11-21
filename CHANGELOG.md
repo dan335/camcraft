@@ -6,6 +6,19 @@ the same notes at more length.
 
 ## Unreleased
 
+- **From the boundary in, Scallop cuts a region's rings round its holes after
+  what is inside it** ([decision 0041](docs/decisions/0041-scallop-hole-rings-after-what-is-inside.md)).
+  A region with a hole, measured from both its edges, has a ring toward its
+  outside and a ring toward its hole at every level, and each level's two
+  were cut together, the nearest next: on a user's bowl, cut outside in, the
+  tool went back and forth between the two families, lifting 36 times. Now
+  the rings round a region's outside are cut before what is inside them and
+  its rings round its holes after, from the middle out the other way: it
+  lifts 7 times, feeding 39.82 m where it fed 40.52. Held to Fusion's
+  programs, Scallop with the dome avoided lifts 4 times where 3, feeding
+  2.9% less, and with only the floor machined 3 times where twice. Pocket
+  clearing, flat finishing and inside out are as they were.
+
 - **Scallop's innermost rings go out from a spine, where they came to
   points** ([decision 0040](docs/decisions/0040-scallop-spine-inside-the-last-smooth-ring.md)).
   Inside out with nothing avoided, the rings in a user's bowl were offsets in

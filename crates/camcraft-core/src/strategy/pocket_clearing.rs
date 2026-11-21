@@ -405,7 +405,7 @@ impl Concentric {
         z: f64,
         too_short: &mut u64,
     ) -> Result<Nested<Run>, StrategyError> {
-        let mut tree = Nested::new(self.children_first);
+        let mut tree = Nested::new();
         // The regions a stepover nearer the edges than the ones being found,
         // each with its node and bounds.
         let mut last: Vec<(usize, Region, Bounds)> = Vec::new();
@@ -426,7 +426,11 @@ impl Concentric {
                     !self.children_first,
                     too_short,
                 )?;
-                let id = tree.push(rings);
+                let id = tree.push(if self.children_first {
+                    (Vec::new(), rings)
+                } else {
+                    (rings, Vec::new())
+                });
                 if let Some(parent) = parent_of(&region, &last) {
                     tree.nest(parent, id);
                 }

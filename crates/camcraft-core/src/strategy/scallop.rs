@@ -276,9 +276,11 @@ pub fn scallop_finish(
             .par_iter_mut()
             .map(|plan| {
                 params.watch.check()?;
-                let w = layer.lay(plan)?;
+                let w = layer.lay(plan, zone.outward)?;
                 if params.watch.showing() {
-                    params.watch.show(w.runs.iter().map(Run::shown));
+                    params
+                        .watch
+                        .show(w.outer.iter().chain(&w.holes).map(Run::shown));
                 }
                 each.add(share);
                 Ok(w)

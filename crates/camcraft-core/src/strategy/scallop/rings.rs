@@ -60,6 +60,10 @@ pub(super) struct Plan {
     pub(super) children: Vec<usize>,
     /// Whether it is a root, cut from where the tool is.
     pub(super) root: bool,
+    /// Whether it is nested one in the next with others by [`chain`], not a
+    /// region: its rings are cut in the chain's order, whichever way they
+    /// turn.
+    pub(super) chained: bool,
 }
 
 /// The tree's nodes; those cut before every root, each a root of its own;
@@ -437,7 +441,10 @@ fn chain(
     let ids: Vec<usize> = nodes
         .into_iter()
         .map(|plan| {
-            plans.push(plan);
+            plans.push(Plan {
+                chained: true,
+                ..plan
+            });
             plans.len() - 1
         })
         .collect();

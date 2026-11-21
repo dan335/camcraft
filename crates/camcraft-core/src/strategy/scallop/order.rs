@@ -2,9 +2,13 @@
 //!
 //! The regions each ring bounds nest, and are cut region by region, the
 //! nearest next ([`Nested`]): from the boundary in (outside in), or each
-//! region's inner ones first (inside out). Measured out from the inner edges,
-//! inside out is the field's own order, as outside in is from the boundary;
-//! the far end's nodes are cut last. Climbing with a clockwise spindle has the
+//! region's inner ones first (inside out). A region's rings round its
+//! outside are cut before what is inside them and its rings round its holes
+//! after, from the boundary in, and the other way from the middle out, so
+//! the two families are not cut by turns (decision 0041). Measured out from
+//! the inner edges every ring is a hole's, and inside out is the field's own
+//! order, as outside in is from the boundary; the far end's nodes are cut
+//! last. Climbing with a clockwise spindle has the
 //! side not yet finished on the tool's right. Both ways keeps closed rings
 //! climbing, and starts an open pass at whichever end is nearer. Each closed
 //! ring starts where it crosses the line out from where the first started, so
@@ -25,11 +29,17 @@ use super::ScallopParams;
 use super::lay::Worked;
 use super::rings::Planned;
 
-/// Whether a region's children are cut before its own rings: inside out,
-/// but where the field is measured out from the inner edges (`outward`), its
-/// own order then.
+/// Whether a region's rings round its outside are cut after what is inside
+/// them: inside out. Its rings round its holes the other way.
+fn outer_after(order: Order) -> bool {
+    order == Order::InsideOut
+}
+
+/// Whether nodes chained one in the next are cut child first: inside out,
+/// where the rings in them go after their children, but where the field is
+/// measured out from the inner edges (`outward`), every ring being a hole's.
 pub(super) fn children_first(order: Order, outward: bool) -> bool {
-    order == Order::InsideOut && !outward
+    outer_after(order) && !outward
 }
 
 /// The rings of each zone's tree, laid on the part as `worked`, cut into a
@@ -58,12 +68,15 @@ pub(super) fn cut(
         tolerance: params.tolerance,
     };
     for (planned, worked) in zones {
-        let inner_first = children_first(params.order, planned.outward);
-        let toward_higher = !inner_first;
-        let mut tree = Nested::new(inner_first);
+        let toward_higher = !children_first(params.order, planned.outward);
+        let mut tree = Nested::new();
         let mut roots = Vec::new();
         for (plan, w) in planned.plans.into_iter().zip(worked) {
-            let i = tree.push(w.runs);
+            let i = tree.push(if outer_after(params.order) {
+                (w.holes, w.outer)
+            } else {
+                (w.outer, w.holes)
+            });
             // A child nested before it is pushed: only the parent must be there.
             for c in plan.children {
                 tree.nest(i, c);

@@ -17,13 +17,16 @@ use crate::strategy::slope::{SlopeCounts, Sloped};
 use super::distance::at;
 use super::ground::Ground;
 use super::guided;
-use super::length;
 use super::rings::Plan;
+use super::{length, turns_left};
 
 /// A node's lines, laid on the part, and what was left out.
 #[derive(Default)]
 pub(super) struct Worked {
-    pub(super) runs: Vec<Run>,
+    /// Its rings round its region's outside, and every other pass.
+    pub(super) outer: Vec<Run>,
+    /// Its rings round a hole of its region.
+    pub(super) holes: Vec<Run>,
     pub(super) sweep: ParallelReport,
     pub(super) slopes: SlopeCounts,
     pub(super) fragments: u64,
@@ -49,9 +52,47 @@ pub(super) struct Layer<'a> {
 }
 
 impl Layer<'_> {
-    /// `plan`'s lines, its own taken, laid on the part.
-    pub(super) fn lay(&self, plan: &mut Plan) -> Result<Worked, StrategyError> {
+    /// `plan`'s lines, its own taken, laid on the part: those round a hole of
+    /// its region apart from the rest. A line has its region's side on its
+    /// left, so a closed one turning right goes round a hole of it. Measured
+    /// out from the inner edges (`outward`), every line is a hole's, as every
+    /// ring grows out from one, and so are its pieces where the boundary cuts
+    /// it. Nodes chained one in the next are no region, and their rings go
+    /// with the rest.
+    pub(super) fn lay(&self, plan: &mut Plan, outward: bool) -> Result<Worked, StrategyError> {
         let mut w = Worked::default();
+        let chained = plan.chained;
+        let hole =
+            |line: &Sloped| outward || (!chained && line.closed && !turns_left(&line.points));
+        let families = |lines: Vec<Sloped>| -> (Vec<Sloped>, Vec<Sloped>) {
+            lines.into_iter().partition(|l| !hole(l))
+        };
+        let (lines, hole_lines) = families(std::mem::take(&mut plan.lines));
+        let (edges, hole_edges) = families(std::mem::take(&mut plan.edges));
+        let (found, hole_found) = families(std::mem::take(&mut plan.found));
+        let mut outer = Vec::new();
+        self.lay_into((lines, found, edges), &mut outer, &mut w)?;
+        let mut holes = Vec::new();
+        self.lay_into((hole_lines, hole_found, hole_edges), &mut holes, &mut w)?;
+        // The rings below where the tool leaves the part go as the field's.
+        if outward {
+            holes.append(&mut plan.placed);
+        } else {
+            outer.append(&mut plan.placed);
+        }
+        w.outer = outer;
+        w.holes = holes;
+        Ok(w)
+    }
+
+    /// The field's `lines`, and the ground's edges `found` on its grid, placed
+    /// by it; the area's `edges`, seen from above: laid into `runs`.
+    fn lay_into(
+        &self,
+        (lines, found, edges): (Vec<Sloped>, Vec<Sloped>, Vec<Sloped>),
+        runs: &mut Vec<Run>,
+        w: &mut Worked,
+    ) -> Result<(), StrategyError> {
         let (from, to) = self.slopes;
         let kept = |lines: Vec<Sloped>, w: &mut Worked| {
             lines
@@ -59,9 +100,9 @@ impl Layer<'_> {
                 .flat_map(|line| line.within(from, to, to, &mut w.slopes))
                 .collect::<Vec<_>>()
         };
-        let lines = kept(std::mem::take(&mut plan.lines), &mut w);
-        let edges = kept(std::mem::take(&mut plan.edges), &mut w);
-        let found = kept(std::mem::take(&mut plan.found), &mut w);
+        let lines = kept(lines, w);
+        let edges = kept(edges, w);
+        let found = kept(found, w);
         let lines = lines
             .into_iter()
             .filter(|(p, _)| self.clear_of_the_boundary(p))
@@ -75,11 +116,11 @@ impl Layer<'_> {
                     continue;
                 }
                 if by_field {
-                    self.by_field((points.as_slice(), closed), &mut w);
+                    self.by_field((points.as_slice(), closed), runs, w);
                 } else {
                     // Placed seen from above: the tool dropped along it.
                     let points = simplify(&points, closed, self.thin);
-                    w.runs.extend(sweep_polyline(
+                    runs.extend(sweep_polyline(
                         self.seat,
                         &points,
                         closed,
@@ -89,17 +130,16 @@ impl Layer<'_> {
                 }
             }
         }
-        w.runs.append(&mut plan.placed);
-        Ok(w)
+        Ok(())
     }
 
-    /// `line`, placed by the field, height and all: round a wall at its
-    /// height where the ground is steep. Broken where the part ends under the
-    /// tool, along the area's edge, a line may leave bits shorter than the
-    /// tool's radius: dimples between the passes either side, each lifted to
-    /// and from, so left out.
-    fn by_field(&self, line: (&[DVec2], bool), w: &mut Worked) {
-        let runs = guided::sweep(
+    /// `line`, placed by the field, height and all, into `runs`: round a wall
+    /// at its height where the ground is steep. Broken where the part ends
+    /// under the tool, along the area's edge, a line may leave bits shorter
+    /// than the tool's radius: dimples between the passes either side, each
+    /// lifted to and from, so left out.
+    fn by_field(&self, line: (&[DVec2], bool), runs: &mut Vec<Run>, w: &mut Worked) {
+        let laid = guided::sweep(
             self.seat,
             self.ground,
             line,
@@ -107,15 +147,14 @@ impl Layer<'_> {
             &self.sweep,
             &mut w.sweep,
         );
-        for run in runs {
+        for run in laid {
             if run.closed || length(&run.points) >= self.seat.tool().max_radius() {
-                w.runs.push(run);
+                runs.push(run);
             } else {
                 w.fragments += 1;
             }
         }
     }
-
     /// Whether a line of the field with `points` is clear of the outer
     /// boundary, measured out from the inner edges. There the field runs on
     /// to the boundary at any distance, so some of its lines near it are

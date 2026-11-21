@@ -3,9 +3,11 @@
 //!
 //! Each region holds its own passes and the regions a step further in, inside it.
 //! A region's subtree is cut before the tool moves to the next, so it finishes one
-//! arm of an area before the next and never goes back to a pass it has left: its
-//! own passes before its children's, or after them, and of its children the
-//! nearest next. The walk keeps a stack of its own, as a tree is as deep as the
+//! arm of an area before the next and never goes back to a pass it has left: the
+//! passes it cuts before its children, then its children, the nearest next, then
+//! the passes it cuts after them. Seen as rings nesting in one another, from the
+//! boundary in a region's rings round its outside come before what is inside them
+//! and its rings round its holes after; from the middle out, the other way. The walk keeps a stack of its own, as a tree is as deep as the
 //! area is wide over the step.
 
 use glam::DVec2;
@@ -24,13 +26,14 @@ pub enum Order {
 #[derive(Debug)]
 pub(crate) struct Nested<P> {
     nodes: Vec<Node<P>>,
-    /// Whether a region's children are cut before its own passes.
-    children_first: bool,
 }
 
 #[derive(Debug)]
 struct Node<P> {
-    passes: Vec<P>,
+    /// Cut before its children.
+    before: Vec<P>,
+    /// Cut after them.
+    after: Vec<P>,
     children: Vec<usize>,
     /// Where the region's subtree starts cutting, to go to the nearest by.
     anchor: Option<DVec2>,
@@ -47,17 +50,16 @@ pub(crate) trait Cuts<P> {
 }
 
 impl<P> Nested<P> {
-    pub(crate) fn new(children_first: bool) -> Self {
-        Self {
-            nodes: Vec::new(),
-            children_first,
-        }
+    pub(crate) fn new() -> Self {
+        Self { nodes: Vec::new() }
     }
 
-    /// A region with `passes`, and no children yet.
-    pub(crate) fn push(&mut self, passes: Vec<P>) -> usize {
+    /// A region with passes cut `before` its children and `after` them, and
+    /// no children yet.
+    pub(crate) fn push(&mut self, (before, after): (Vec<P>, Vec<P>)) -> usize {
         self.nodes.push(Node {
-            passes,
+            before,
+            after,
             children: Vec::new(),
             anchor: None,
         });
@@ -71,8 +73,9 @@ impl<P> Nested<P> {
         }
     }
 
-    /// Where each region's subtree starts: its first pass's `start`, or its first
-    /// child's that has one. Every child is settled before its parent.
+    /// Where each region's subtree starts: its first pass's `start`, of those
+    /// before its children or else after them, or its first child's that has
+    /// one. Every child is settled before its parent.
     pub(crate) fn settle(&mut self, start: impl Fn(&P) -> Option<DVec2>) {
         let mut done = vec![false; self.nodes.len()];
         for root in 0..self.nodes.len() {
@@ -89,7 +92,8 @@ impl<P> Nested<P> {
                     stack.extend(node.children.iter().map(|&c| (c, false)));
                     continue;
                 }
-                let anchor = node.passes.first().and_then(&start).or_else(|| {
+                let first = node.before.first().or(node.after.first());
+                let anchor = first.and_then(&start).or_else(|| {
                     node.children
                         .iter()
                         .find_map(|&c| self.nodes.get(c).and_then(|c| c.anchor))
@@ -111,37 +115,39 @@ impl<P> Nested<P> {
 
     /// Cut the subtree at `root` with `cutter`.
     pub(crate) fn cut<C: Cuts<P>>(&mut self, root: usize, cutter: &mut C) -> Result<(), C::Error> {
-        let take = |nodes: &mut Vec<Node<P>>, n: usize| {
+        /// A region on the way down: its passes before its children while
+        /// still to cut, the children left, and its passes after them.
+        type Open<P> = (Vec<P>, Vec<usize>, Vec<P>);
+        let take = |nodes: &mut Vec<Node<P>>, n: usize| -> Open<P> {
             nodes
                 .get_mut(n)
                 .map(|node| {
                     (
-                        std::mem::take(&mut node.passes),
+                        std::mem::take(&mut node.before),
                         std::mem::take(&mut node.children),
+                        std::mem::take(&mut node.after),
                     )
                 })
                 .unwrap_or_default()
         };
-        // Each region on the way down: its passes while still to cut, and the
-        // children left.
-        let (passes, children) = take(&mut self.nodes, root);
-        let mut stack: Vec<(Option<Vec<P>>, Vec<usize>)> = vec![(Some(passes), children)];
-        while let Some((passes, left)) = stack.last_mut() {
-            if passes.is_some() && (!self.children_first || left.is_empty()) {
-                if let Some(passes) = passes.take() {
-                    cutter.cut(passes)?;
-                }
+        let mut stack: Vec<Open<P>> = vec![take(&mut self.nodes, root)];
+        while let Some((before, left, after)) = stack.last_mut() {
+            if !before.is_empty() {
+                cutter.cut(std::mem::take(before))?;
                 continue;
             }
             if left.is_empty() {
+                let after = std::mem::take(after);
                 stack.pop();
+                if !after.is_empty() {
+                    cutter.cut(after)?;
+                }
                 continue;
             }
             let at = cutter.at();
             let k = nearest(left, |&c| distance(self.anchor(c), at));
             let child = left.remove(k);
-            let (passes, children) = take(&mut self.nodes, child);
-            stack.push((Some(passes), children));
+            stack.push(take(&mut self.nodes, child));
         }
         Ok(())
     }
@@ -222,11 +228,18 @@ mod tests {
     /// A root with a near child and a far one, the far one with a child of its
     /// own: the root's pass, then the nearer child's subtree, then the other's.
     fn tree(children_first: bool) -> Nested<(i32, DVec2)> {
-        let mut t = Nested::new(children_first);
-        let root = t.push(vec![(0, dvec2(0.0, 0.0))]);
-        let far = t.push(vec![(1, dvec2(10.0, 0.0))]);
-        let near = t.push(vec![(2, dvec2(1.0, 0.0))]);
-        let deep = t.push(vec![(3, dvec2(11.0, 0.0))]);
+        let mut t = Nested::new();
+        let passes = |p: (i32, DVec2)| {
+            if children_first {
+                (Vec::new(), vec![p])
+            } else {
+                (vec![p], Vec::new())
+            }
+        };
+        let root = t.push(passes((0, dvec2(0.0, 0.0))));
+        let far = t.push(passes((1, dvec2(10.0, 0.0))));
+        let near = t.push(passes((2, dvec2(1.0, 0.0))));
+        let deep = t.push(passes((3, dvec2(11.0, 0.0))));
         t.nest(root, far);
         t.nest(root, near);
         t.nest(far, deep);
@@ -249,11 +262,25 @@ mod tests {
         assert_eq!(log.0, vec![3, 1, 2, 0]);
     }
 
+    /// Rings round a region's outside before its children and round its hole
+    /// after them: the outer, the child, the hole's.
+    #[test]
+    fn a_region_cuts_some_passes_before_its_children_and_some_after() {
+        let mut t: Nested<(i32, DVec2)> = Nested::new();
+        let root = t.push((vec![(0, dvec2(0.0, 0.0))], vec![(2, dvec2(3.0, 0.0))]));
+        let child = t.push((vec![(1, dvec2(1.0, 0.0))], Vec::new()));
+        t.nest(root, child);
+        t.settle(|p| Some(p.1));
+        let mut log = Log(Vec::new(), None);
+        t.cut(root, &mut log).unwrap();
+        assert_eq!(log.0, vec![0, 1, 2]);
+    }
+
     #[test]
     fn a_region_with_no_passes_starts_where_its_first_child_does() {
-        let mut t: Nested<(i32, DVec2)> = Nested::new(false);
-        let root = t.push(Vec::new());
-        let child = t.push(vec![(1, dvec2(5.0, 5.0))]);
+        let mut t: Nested<(i32, DVec2)> = Nested::new();
+        let root = t.push((Vec::new(), Vec::new()));
+        let child = t.push((vec![(1, dvec2(5.0, 5.0))], Vec::new()));
         t.nest(root, child);
         t.settle(|p| Some(p.1));
         assert_eq!(t.anchor(root), Some(dvec2(5.0, 5.0)));

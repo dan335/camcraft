@@ -101,9 +101,14 @@ fn a_new_scallop_leaves_what_fusions_does() {
     holds("scallop", |_| {}, &bounds, 0);
 }
 
-/// The dome avoided, 1 mm sideways and 1 mm down: 58.7% of 685,934 columns
+/// The dome avoided, 1 mm sideways and 1 mm down: 58.7% of 685,893 columns
 /// alike, the median 0.0065 mm and the 95th percentile 0.25, 1.1% less
-/// removed and 1.9% less fed; it lifts 3 times to Fusion's 8. It was 61.8%,
+/// removed and 4.8% less fed; it lifts 4 times to Fusion's 8. Before each
+/// region's rings round the dome were cut after what is inside it, and its
+/// rings round its outside before (decision 0041), it fed 1.9% less and
+/// lifted 3 times: the new lift is onto a ring round the dome broken at the
+/// pocket's left wall, both its ends at the wall's far end from where the
+/// ring before it ended. It was 61.8%,
 /// 0.0056, 0.24, 1.2% less and 12% more, lifting 15 times: its rings now go
 /// round the dome, as Fusion's do, but from a ring of their own, found
 /// exactly where the ball goes from the floor to the dome (decision 0037),
@@ -119,7 +124,7 @@ fn a_scallop_avoiding_the_dome_leaves_what_fusions_does() {
         median: 0.007,
         p95: 0.27,
         removed: 0.015,
-        fed: 0.04,
+        fed: 0.05,
         lowest: 1e-3,
     };
     holds(
@@ -137,7 +142,10 @@ fn a_scallop_avoiding_the_dome_leaves_what_fusions_does() {
 /// The model avoided, the floor alone machined: 42.4% of 447,140 columns
 /// alike, the median 0.034 mm and the 95th percentile 3.7, 12.1% less
 /// removed, Fusion's passes running on up the fillets and walls, and 24% less
-/// fed; it lifts twice to Fusion's 3 times. It was 42.8%, 0.028, 3.6, 11.6%
+/// fed; it lifts 3 times to Fusion's 3 times, where it lifted twice before
+/// the floor's edge round the dome was cut after the floor's two lobes
+/// (decision 0041), going from its outer edge to the nearer lobe 28 mm away.
+/// It was 42.8%, 0.028, 3.6, 11.6%
 /// less and 9% less, lifting 12 times; then, the floor's edge found to
 /// within half the tolerance, 42.0%, 0.020, 3.4, 10.1% and 22%; then lifting
 /// 3 times, before a ring under the last was ramped onto (decision 0038). Fusion's
