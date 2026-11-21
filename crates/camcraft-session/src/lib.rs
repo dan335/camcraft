@@ -28,6 +28,8 @@ pub mod library;
 mod machines;
 mod model;
 mod post;
+#[cfg(test)]
+mod regression;
 mod run;
 #[cfg(test)]
 mod test_support;
