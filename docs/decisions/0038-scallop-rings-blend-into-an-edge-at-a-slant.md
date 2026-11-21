@@ -85,6 +85,19 @@ floor avoided:
 - **The count is the band's measured spacing over the stepover**, rounded up:
   the most `1 / |∇t|` on any whole triangle of the lattice inside the band,
   the slivers a cut cell is fanned into being too thin to say.
+  *Amended 2026-11-21:* `1 / |∇t|` is `(a + b)² / |b ∇a − a ∇b|`, and `∇a`
+  and `∇b` are now taken as unit, as a distance's are. A triangle across a
+  ridge of either field, where its rings turn a corner, has three nodes on
+  two fronts, and its plane is their mean, shorter than either: `cos 45°`
+  where they meet square. Taken at its length, that shortness read as width.
+  On a user's bowl cut outside in, one such triangle on the band into the
+  floor's edge, its `|∇a|` 0.703 where the triangles round it have unit
+  gradients turning through about 74°, measured 11.88 mm where the band is
+  8.48 wide at its widest, and gave 13 intervals, as little as 0.09 mm apart
+  where the band is narrow; with unit gradients it measures 8.44, 9
+  intervals. Their directions are kept, so where the two do not point
+  opposite ways, at a band's corners, the lines of `t` still spread past
+  `a + b` as they do.
 - **Below the edge, rings a fraction of the way down.** Where the edge is the
   one line the tool leaves the part along, closed, the slope range reaches
   upright and the Bottom is under it, the level rings start half a stepover

@@ -202,6 +202,17 @@ as 0.09 mm apart. The outside's band into the outer strip's border has 10
 rings over 0.78 to 10.32 mm; the rim's into the inner border, 1 over 0.76
 to 1.87 mm.
 
+The 11.88 was no width. The triangle lies across a ridge of `a`, where its
+rings turn a corner toward the line the lens's points run along: the
+triangles round it have unit gradients turning through about 74°, and a
+plane through three nodes either side is the mean of the two fronts, 0.703
+long. Since the count takes the two gradients as unit (decision 0038,
+amended 2026-11-21), that band measures 8.44 and has 8 rings, and the bowl
+outside in feeds 40.13 m where 40.73, lifting once. On three sections, 180°
+to 200° round the bowl's middle, the band's rings are 0.59 to 1.00 mm apart
+where the tool touches, where 0.40 to 0.85. Every other band of the bowl's
+four programs counts as it did.
+
 Inside out leaves less under the inner edge, 0.194 mm and 120 columns over
 0.1, because its band into the rim's border packs its rings there 0.47 to
 0.49 mm apart, half a stepover. Outside in that band is at the floor's edge,
@@ -254,14 +265,9 @@ pocket's rim do not all close, and the ground is cut as one.
   innermost rings still come to points at the ends of the lens-shaped floor:
   16 rings turn more than 45° over a millimetre, where 21 did. The spine is
   laid inside out only (decision 0040).
-- A band's rings are counted by its widest spacing measured on a triangle,
-  `1 / |∇t|`, and on the inside's band into the floor's edge outside in one
-  triangle sets it at 11.88 mm where the band is 8.48 wide at its widest:
-  there `a` grows 0.70 a millimetre, not 1, and `1 / |∇t|` takes that for
-  width. So its 12 rings are as little as 0.09 mm apart where it is narrow.
-  With the two gradients' directions kept and their sizes not, the count
-  would be 8 there and 6 in the band into the no-group spine's ring, every
-  other band as it is, feeding 0.60 m and 0.21 m less.
+- A band's rings still crowd where it is narrow, as a blend between two
+  lines at a slant does: the inside's band into the floor's edge outside in
+  has its 8 rings across 1.15 mm where it is narrowest, 0.13 mm apart.
 - Up the user's inside wall each ring still rises and falls 2 to 6 mm a lap,
   turning four times: the wall's height round the bowl, the rings a fixed
   distance from the floor's edge.

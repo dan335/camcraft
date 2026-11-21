@@ -18,10 +18,13 @@
 //! a unit apart are that far apart; elsewhere further or nearer, as the
 //! gradient of `t` says. So the count is measured, not guessed: on each whole
 //! triangle of the band, how far apart along the surface lines of `t` a unit
-//! apart are, `1 / |∇t|`, the most of it over the stepover, rounded up. A
-//! band with no whole triangle in it, thin down a wall so steep every cell
-//! there is cut, has `a + b`, its width, at its widest instead (decision
-//! 0039).
+//! apart are, `1 / |∇t|`, the most of it over the stepover, rounded up. That
+//! is `(a + b)² / |b ∇a − a ∇b|`, and `∇a` and `∇b` are taken as unit, as a
+//! distance's are: across a ridge of either field, where its rings turn a
+//! corner, a triangle's plane averages the fronts either side, shorter than
+//! either, and that shortness is no width (decision 0038, amended). A band
+//! with no whole triangle in it, thin down a wall so steep every cell there
+//! is cut, has `a + b`, its width, at its widest instead (decision 0039).
 //!
 //! The band starts from the last ring at least half a stepover from the edge
 //! all round ([`THIN_END`]): nearer, where the ring comes close to the edge,
@@ -50,6 +53,7 @@ use camcraft_geom::cut::View;
 use camcraft_geom::geodesic::Seed;
 use camcraft_geom::isoline::IsoLine;
 use camcraft_geom::trigrid::TriSurface;
+use glam::DVec3;
 
 use crate::cutter::surfaces::Seat;
 use crate::cutter::tool::ToolProfile;
@@ -178,10 +182,12 @@ pub(super) fn between(
     }
     triangles.sort_unstable();
     triangles.dedup();
+    let from_ring = |n: u32| at(d, n).map(|v| v - base);
+    let from_edge = |n: u32| at(from_far, n);
     let measured = triangles
         .iter()
         .filter(|&&id| id < lattice)
-        .filter_map(|&id| apart(grid, &t, id))
+        .filter_map(|&id| apart(grid, (&from_ring, &from_edge), &t, id))
         .fold(0.0, f64::max);
     // A band with no whole triangle of the lattice in it, thin down a wall
     // nearly upright where every cell is cut, has its width at its widest.
@@ -237,25 +243,47 @@ fn reaching(grid: &View<'_>, d: &[f64], far: &Edge, base: f64) -> Vec<bool> {
     on
 }
 
+/// A node's distance from a line, where it has one.
+type Distance<'a> = &'a dyn Fn(u32) -> Option<f64>;
+
 /// How far apart along the surface lines of `t` a unit apart are across
-/// triangle `id` of `grid`, lifted: `1 / |∇t|`. `None` where `t` is not
-/// between 0 and 1 at every corner. Asked only of whole triangles of the
-/// lattice: the slivers a cut cell is fanned into are too thin to say.
-fn apart(grid: &View<'_>, t: &[f64], id: u32) -> Option<f64> {
+/// triangle `id` of `grid`, lifted, `a` each node's distance from the last
+/// whole ring and `b` from the far edge: `1 / |∇t|`, which is
+/// `(a + b)² / |b ∇a − a ∇b|`, with `∇a` and `∇b` taken as unit, as a
+/// distance's are, at the triangle's middle. Across a ridge of a field, where
+/// its rings turn a corner, a plane through three nodes either side is the
+/// mean of the two fronts, shorter than either (`cos 45°` long where they
+/// meet square): the rings of `t` either side are spaced by their own front,
+/// so that shortness is no width, and only the gradients' directions are
+/// kept. `None` where `t` is not between 0 and 1 at every corner. Asked only
+/// of whole triangles of the lattice: the slivers a cut cell is fanned into
+/// are too thin to say.
+fn apart(grid: &View<'_>, (a, b): (Distance<'_>, Distance<'_>), t: &[f64], id: u32) -> Option<f64> {
     let corners = grid.triangle(id)?;
-    let value = |n: u32| at(t, n).filter(|v| (0.0..=1.0).contains(v));
+    if corners
+        .iter()
+        .any(|&n| at(t, n).is_none_or(|v| !(0.0..=1.0).contains(&v)))
+    {
+        return None;
+    }
     let [p, q, r] = corners.map(|n| grid.point(n));
-    let [a, b, c] = corners.map(value);
     let (e1, e2) = (q? - p?, r? - p?);
-    let (dt1, dt2) = (b? - a?, c? - a?);
-    // The gradient in the triangle's plane, from its two edges.
+    // The gradient in the triangle's plane of what `f` is at its corners,
+    // from its two edges, as unit.
     let (g11, g12, g22) = (e1.dot(e1), e1.dot(e2), e2.dot(e2));
     let det = g11 * g22 - g12 * g12;
     if det <= f64::MIN_POSITIVE {
         return None;
     }
-    let along = ((dt1 * g22 - dt2 * g12) * dt1 + (dt2 * g11 - dt1 * g12) * dt2) / det;
-    (along > 0.0).then(|| along.sqrt().recip())
+    let unit = |f: Distance<'_>| -> Option<(DVec3, f64)> {
+        let [f0, f1, f2] = corners.map(f);
+        let (d1, d2) = (f1? - f0?, f2? - f0?);
+        let g = e1 * ((d1 * g22 - d2 * g12) / det) + e2 * ((d2 * g11 - d1 * g12) / det);
+        Some((g.try_normalize()?, (f0? + f1? + f2?) / 3.0))
+    };
+    let ((ga, a), (gb, b)) = (unit(a)?, unit(b)?);
+    let across = (ga * b - gb * a).length();
+    (across > 0.0).then(|| (a + b) * (a + b) / across)
 }
 
 /// The rings below the far edge `far`, `step` apart at their widest, down to

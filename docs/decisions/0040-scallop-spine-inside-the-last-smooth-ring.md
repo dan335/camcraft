@@ -110,15 +110,23 @@ bowl and a square pocket make the rings they made; and on a flat egg the
 spine is its long axis to within the grid's pitch (`run::tests_bowl`,
 `strategy::scallop::tests`).
 
+Since the band's count takes its two distances' gradients as unit
+(decision 0038, amended 2026-11-21), the band into `R*` has 6 rings where
+7: one triangle just inside `R*`, where the depth's ridge begins, measured
+7.21 mm across, its `|∇b|` 0.886, where the band is 6.49 wide at its widest.
+The bowl feeds 41.44 m where 41.65; on three sections its band's rings are
+0.37 to 1.00 mm apart where the tool touches, where 0.32 to 0.89.
+
 ## Still not done
 
 - The band's rings bunch where `R*` is nearest the spine, on the user's bowl
-  its south-west side: 7 rings across a band 0.6 mm wide there and 6.5 at its widest.
+  its south-west side: 6 rings across a band 0.6 mm wide there and 6.5 at its
+  widest.
 - Where `R*` runs along a crease, as where a floor meets its wall at an
   angle, `R*` and the band's rings next to it turn there by the crease,
   31° to 47° over a millimetre on a bowl in the tests with a 63° wall
   straight off its floor; the test bowl's wall rises off its floor with no
   crease.
-- Outside in is unchanged: the rings in from an edge keep their points.
+- Outside in, the rings in from an edge keep their points (decision 0039).
 - The first two rings round the spine turn as sharply as their ends are
   round.

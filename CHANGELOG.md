@@ -6,6 +6,19 @@ the same notes at more length.
 
 ## Unreleased
 
+- **Scallop's blended rings are counted by their real spacing**
+  ([decision 0038, amended](docs/decisions/0038-scallop-rings-blend-into-an-edge-at-a-slant.md)).
+  A band's count is how far apart its rings would lie at their widest,
+  measured on each triangle of the band, and a triangle lying across a
+  ridge of the field, where its rings turn a corner, measured the two
+  fronts' mean, shorter than either, as width: on a user's bowl cut outside
+  in, the band into the floor's edge was counted 11.88 mm wide where it is
+  8.48 at most, 12 rings where 8 do. Now each distance's gradient is taken
+  as unit, as a distance's is: it feeds 40.13 m where 40.73, and with nothing
+  avoided, inside out, 41.44 m where 41.65, the rings no further apart where
+  the tool touches than a stepover. Every other band, Fusion's `ops_3d` and
+  Scallop's comparisons with Fusion are as they were.
+
 - **From the boundary in, Scallop's rings start where the level rings below
   them end** ([decision 0041](docs/decisions/0041-scallop-hole-rings-after-what-is-inside.md)).
   Cut outside in, the level rings down the wall below where the tool leaves
