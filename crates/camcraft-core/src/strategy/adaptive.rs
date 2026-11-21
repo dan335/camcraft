@@ -670,6 +670,8 @@ fn clear_levels(
     let above: Vec<f64> = std::iter::once(params.top)
         .chain(slabs.iter().map(|(z, _)| *z))
         .collect();
+    let ccw = level.side == Side::Right;
+    let lifted_to = Arrive::Link;
     let mut path = Toolpath::new();
     let mut last: Option<Place> = None;
     for place in order {
@@ -683,86 +685,24 @@ fn clear_levels(
             continue;
         };
         let first = dvec3(first.x, first.y, cut.z);
-        // Staying down only from the pass it was found after: the one before
-        // it in its level, or the one of a level below it rises from.
-        let follows = last.is_some_and(|l| match arrive {
-            Arrive::Rise {
-                after: (level, pass),
-                at,
-                via,
-            } => {
-                l.slab == place.slab
-                    && l.level == *level
-                    && l.pass == *pass
-                    && within_area(slab_areas.get(place.slab), *at, via, first.truncate())
+        // Staying down only from the pass it was found after; from any other,
+        // it is lifted to.
+        let arrive = match arrive {
+            Arrive::Stay { .. } | Arrive::Rise { .. }
+                if !follows(
+                    last,
+                    place,
+                    arrive,
+                    slab_areas.get(place.slab),
+                    first.truncate(),
+                ) =>
+            {
+                &lifted_to
             }
-            _ => l.slab == place.slab && l.level == place.level && l.pass + 1 == place.pass,
-        });
-        match arrive {
-            Arrive::Stay { via } | Arrive::Rise { via, .. } if follows => {
-                report.stayed_down += 1;
-                // Up at the level's feed beside where the last pass ended,
-                // where it ended below.
-                let end = path.end().unwrap_or(first);
-                if end.z < cut.z - 1e-9 {
-                    path.feed_to(
-                        end.truncate().extend(cut.z),
-                        MoveRole::Transition,
-                        params.feed,
-                    )?;
-                }
-                // Lifted no higher than the material the level stands under.
-                let top = above.get(place.slab).copied().unwrap_or(params.top);
-                let lift = params.lift_height.min(top - cut.z).max(0.0);
-                // From where the way was found from, where the tool stood
-                // off the material after it.
-                let found_from = match arrive {
-                    Arrive::Rise { at, .. } if at.distance(end.truncate()) > 1e-9 => Some(*at),
-                    _ => None,
-                };
-                let way: Vec<DVec2> = std::iter::once(end.truncate())
-                    .chain(found_from)
-                    .chain(via.iter().copied())
-                    .chain(std::iter::once(first.truncate()))
-                    .collect();
-                for p in lifted(&way, cut.z, lift) {
-                    path.feed_to(p, MoveRole::Transition, params.feed)?;
-                }
-            }
-            Arrive::Link | Arrive::Stay { .. } | Arrive::Rise { .. } => {
-                path.feed_to(first, MoveRole::Link, params.feed)?;
-            }
-            Arrive::Enter { centre } => {
-                let top = above.get(place.slab).copied().unwrap_or(params.top);
-                match helix(
-                    *centre,
-                    first,
-                    top + params.safe_distance,
-                    params,
-                    level.side == Side::Right,
-                ) {
-                    Some((start, turns)) => {
-                        report.helixes += 1;
-                        path.feed_to(start, MoveRole::Link, params.feed)?;
-                        for (to, arc) in turns {
-                            path.arc_to(to, arc, MoveRole::Ramp, params.ramp_feed)?;
-                        }
-                    }
-                    // No helix: the linker goes straight down.
-                    None => path.feed_to(first, MoveRole::Link, params.feed)?,
-                }
-            }
-            Arrive::Ramp { way } => {
-                let top = above.get(place.slab).copied().unwrap_or(params.top);
-                let mut ramp = ramped(way, cut.z, top + params.safe_distance, params).into_iter();
-                if let Some(start) = ramp.next() {
-                    path.feed_to(start, MoveRole::Link, params.feed)?;
-                }
-                for p in ramp {
-                    path.feed_to(p, MoveRole::Ramp, params.ramp_feed)?;
-                }
-            }
-        }
+            _ => arrive,
+        };
+        let top = above.get(place.slab).copied().unwrap_or(params.top);
+        arrive_at(&mut path, &mut report, arrive, first, top, params, ccw)?;
         for p in points.iter().skip(1) {
             path.feed_to(dvec3(p.x, p.y, cut.z), MoveRole::Cut, params.feed)?;
         }
@@ -770,6 +710,105 @@ fn clear_levels(
         last = Some(place);
     }
     Ok((path, report))
+}
+
+/// Whether `last`, the pass cut before the one at `place`, starting at
+/// `first`, is the one it was found after as `arrive` comes to it, so the
+/// tool may stay down from it: the one before it in its level, or the one of
+/// a level below it rises from, by a way that keeps to one of `areas`, where
+/// it is cut by area.
+fn follows(
+    last: Option<Place>,
+    place: Place,
+    arrive: &Arrive,
+    areas: Option<&Vec<Indexed>>,
+    first: DVec2,
+) -> bool {
+    last.is_some_and(|l| match arrive {
+        Arrive::Rise {
+            after: (level, pass),
+            at,
+            via,
+        } => {
+            l.slab == place.slab
+                && l.level == *level
+                && l.pass == *pass
+                && within_area(areas, *at, via, first)
+        }
+        _ => l.slab == place.slab && l.level == place.level && l.pass + 1 == place.pass,
+    })
+}
+
+/// From where `path` ends to `first`, where a pass starts, as `arrive` says:
+/// up at the feed and across at the level, through what is cleared, staying
+/// down; down its helix, turning counter-clockwise where `ccw`, or back and
+/// forth along its ramp, from the safe distance over `top`, the material the
+/// level stands under; otherwise a link, for the linker. What stays down and
+/// what goes down a helix is counted in `report`.
+fn arrive_at(
+    path: &mut Toolpath,
+    report: &mut AdaptiveReport,
+    arrive: &Arrive,
+    first: glam::DVec3,
+    top: f64,
+    params: &AdaptiveParams,
+    ccw: bool,
+) -> Result<(), StrategyError> {
+    match arrive {
+        Arrive::Stay { via } | Arrive::Rise { via, .. } => {
+            report.stayed_down += 1;
+            // Up at the level's feed beside where the last pass ended, where
+            // it ended below.
+            let end = path.end().unwrap_or(first);
+            if end.z < first.z - 1e-9 {
+                path.feed_to(
+                    end.truncate().extend(first.z),
+                    MoveRole::Transition,
+                    params.feed,
+                )?;
+            }
+            // Lifted no higher than the material the level stands under.
+            let lift = params.lift_height.min(top - first.z).max(0.0);
+            // From where the way was found from, where the tool stood off the
+            // material after it.
+            let found_from = match arrive {
+                Arrive::Rise { at, .. } if at.distance(end.truncate()) > 1e-9 => Some(*at),
+                _ => None,
+            };
+            let way: Vec<DVec2> = std::iter::once(end.truncate())
+                .chain(found_from)
+                .chain(via.iter().copied())
+                .chain(std::iter::once(first.truncate()))
+                .collect();
+            for p in lifted(&way, first.z, lift) {
+                path.feed_to(p, MoveRole::Transition, params.feed)?;
+            }
+        }
+        Arrive::Link => path.feed_to(first, MoveRole::Link, params.feed)?,
+        Arrive::Enter { centre } => {
+            match helix(*centre, first, top + params.safe_distance, params, ccw) {
+                Some((start, turns)) => {
+                    report.helixes += 1;
+                    path.feed_to(start, MoveRole::Link, params.feed)?;
+                    for (to, arc) in turns {
+                        path.arc_to(to, arc, MoveRole::Ramp, params.ramp_feed)?;
+                    }
+                }
+                // No helix: the linker goes straight down.
+                None => path.feed_to(first, MoveRole::Link, params.feed)?,
+            }
+        }
+        Arrive::Ramp { way } => {
+            let mut ramp = ramped(way, first.z, top + params.safe_distance, params).into_iter();
+            if let Some(start) = ramp.next() {
+                path.feed_to(start, MoveRole::Link, params.feed)?;
+            }
+            for p in ramp {
+                path.feed_to(p, MoveRole::Ramp, params.ramp_feed)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The way along `way`, from its first point, at level `z`, lifted `lift` off

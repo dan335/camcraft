@@ -46,11 +46,6 @@ impl ClearancePlane {
                 value: z,
             })
     }
-
-    /// The plane height.
-    pub fn z(&self) -> f64 {
-        self.z
-    }
 }
 
 impl Clearance for ClearancePlane {
@@ -141,11 +136,11 @@ impl Clearance for ClearanceField {
 
 /// What a height field has under a disc swept along a line.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Under {
+pub(crate) struct Under {
     /// The highest height anywhere under it, if it is over any cell with one.
-    pub top: Option<f64>,
+    pub(crate) top: Option<f64>,
     /// Whether any of it is off the field, or over a cell with no height.
-    pub unknown: bool,
+    pub(crate) unknown: bool,
 }
 
 /// The highest cell of `field` whose centre is within `reach` of the line from
@@ -153,7 +148,7 @@ pub struct Under {
 ///
 /// Within the tool's radius is the cells the simulator cuts and checks a rapid
 /// against; a traverse that must clear every cell it could touch asks for more.
-pub fn highest_under(field: &HeightMap, from: DVec2, to: DVec2, reach: f64) -> Under {
+pub(crate) fn highest_under(field: &HeightMap, from: DVec2, to: DVec2, reach: f64) -> Under {
     let reach = if reach.is_finite() && reach > 0.0 {
         reach
     } else {

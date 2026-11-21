@@ -8,6 +8,16 @@
 //!
 //! What it does is Fusion's, and why is in `docs/decisions/0004-linking-and-entries.md`.
 //!
+//! # The order a link is made in
+//!
+//! Each link is made the first way that fits: without lifting, as [`StayDown`]
+//! allows (round onto the next pass, straight over the part, straight beside
+//! it, straight at a level); otherwise off the last cut along its lead-out,
+//! and, clearing at a level, across at that height and down onto the next;
+//! otherwise up to the safe distance above the material, across at the safe
+//! height, down at rapid to the safe distance above where the way in starts,
+//! and down the way in: straight, a vertical lead, a helix or a ramp.
+//!
 //! # Clearance is a field, not a plane
 //!
 //! [`Clearance`] asks for the safe height *over a given traverse*, not for a single
@@ -39,21 +49,19 @@
 mod clearance;
 mod entry;
 mod params;
+mod stay;
 mod world;
-
-use std::f64::consts::{FRAC_PI_2, PI};
 
 use glam::{DVec2, DVec3, dvec3};
 
-pub use clearance::{Clearance, ClearanceField, ClearancePlane, Under, highest_under};
+pub(crate) use clearance::highest_under;
+pub use clearance::{Clearance, ClearanceField, ClearancePlane};
 use entry::{Way, lead_out};
 pub use params::{EntryKind, LinkError, LinkParams, LinkReport, Ramp, StayDown};
 pub use world::{Air, Material, NoPart, Surface, Unchanging};
 
 use crate::control::{Watch, share};
-use crate::is_positive;
-use crate::must::{AT_LEAST_ZERO, POSITIVE};
-use crate::path::toolpath::{ARC_END, Arc, Move, MoveRole, PLUNGE_RATIO, Toolpath, steep};
+use crate::path::toolpath::{Move, MoveRole, Toolpath};
 
 /// Resolve every [`MoveRole::Link`], cutting what is linked into `material` as it
 /// goes.
@@ -87,44 +95,7 @@ pub fn link_watched<C: Clearance, M: Material, S: Surface>(
     params: &LinkParams,
     watch: &Watch,
 ) -> Result<(Toolpath, LinkReport), LinkError> {
-    check("retract_feed", params.retract_feed)?;
-    check("plunge_feed", params.plunge_feed)?;
-    check("tool_radius", params.tool_radius)?;
-    check("tolerance", params.tolerance)?;
-    check("max_cut_step", params.max_cut_step)?;
-    if !params.safe_distance.is_finite() || params.safe_distance < 0.0 {
-        return Err(LinkError::BadParameter {
-            name: "safe_distance",
-            must: AT_LEAST_ZERO,
-            value: params.safe_distance,
-        });
-    }
-    for (name, r) in [
-        ("lead_radius", params.lead_radius),
-        (
-            "lead_out_radius",
-            params.lead_out_radius.unwrap_or(params.lead_radius),
-        ),
-    ] {
-        if !r.is_finite() || r < 0.0 {
-            return Err(LinkError::BadParameter {
-                name,
-                must: AT_LEAST_ZERO,
-                value: r,
-            });
-        }
-    }
-    if let Some(r) = params.ramp {
-        check("ramp feed", r.feed)?;
-        if !(r.angle > 0.0 && r.angle < FRAC_PI_2) {
-            return Err(LinkError::BadParameter {
-                name: "ramp angle",
-                must: "greater than zero and less than a right angle, in radians",
-                value: r.angle,
-            });
-        }
-    }
-
+    params.validate()?;
     let mut l = Linker {
         clearance,
         material,
@@ -147,7 +118,7 @@ pub fn link_watched<C: Clearance, M: Material, S: Surface>(
                 for n in pass.get(skip..).unwrap_or(&[]) {
                     l.out.push(*n)?;
                 }
-                at = pass.last().map_or(Some(m.to), |n| Some(n.to));
+                at = Some(pass.last().map_or(m.to, |n| n.to));
             }
             // What comes before the first link, as it is.
             _ => {
@@ -160,15 +131,7 @@ pub fn link_watched<C: Clearance, M: Material, S: Surface>(
     }
     if let (Some(from), Some(z)) = (at, params.end_z) {
         l.settle();
-        let feed = last_feed(l.out.moves()).unwrap_or(params.retract_feed);
-        let top = l.leave(from, feed)?;
-        let over = l
-            .clearance
-            .safe_z(top.truncate(), top.truncate(), params.tool_radius);
-        let up = z.max(over);
-        if up > top.z {
-            l.out.rapid_to(dvec3(top.x, top.y, up))?;
-        }
+        l.end(from, z)?;
     }
     l.settle();
     Ok((l.out, l.report))
@@ -192,6 +155,41 @@ struct Linker<'a, C, M, S> {
 }
 
 impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
+    /// Resolve the link from `at`, where the last pass ended, if any, to `to`,
+    /// the start of `pass`, the first way that fits: without lifting
+    /// ([`Linker::stay_down`]); otherwise off the last cut and across and down
+    /// onto the next ([`Linker::across_and_down`]); otherwise up clear of the
+    /// material, or from the clearance height for the first, across and down
+    /// the way in ([`Linker::across_and_in`]). Returns how many of the pass's
+    /// first moves the way in replaced, which are left out.
+    fn link(&mut self, at: Option<DVec3>, to: DVec3, pass: &[Move]) -> Result<usize, LinkError> {
+        self.report.links_resolved += 1;
+        let feed = pass
+            .first()
+            .and_then(|m| m.feed)
+            .unwrap_or(self.p.plunge_feed);
+        if let Some(from) = at
+            && self.stay_down(from, to, pass, feed)?
+        {
+            self.report.stayed_down += 1;
+            return Ok(0);
+        }
+        let way = self.entry(to, pass);
+        let top = match at {
+            Some(from) => {
+                let off = self.lead_off(from, last_feed(self.out.moves()).unwrap_or(feed))?;
+                if self.across_and_down(off, &way, to, feed)? {
+                    self.report.stayed_down += 1;
+                    return Ok(way.skip());
+                }
+                Some(self.rise(off)?)
+            }
+            None => None,
+        };
+        self.across_and_in(top, &way, to, feed)?;
+        Ok(way.skip())
+    }
+
     /// Cut everything emitted since last time into the material, from the move
     /// before it, so the pieces sweep exactly what the whole would.
     fn settle(&mut self) {
@@ -221,42 +219,74 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         self.top_at(p).map_or(z, |t| t.max(z)).max(part) + self.p.safe_distance
     }
 
-    /// Resolve the link from `at` (where the last pass ended, if any) to `to`,
-    /// the start of `pass`. Returns how many of the pass's first moves the way in
-    /// replaced, which are left out.
-    fn link(&mut self, at: Option<DVec3>, to: DVec3, pass: &[Move]) -> Result<usize, LinkError> {
-        let feed = pass
-            .first()
-            .and_then(|m| m.feed)
-            .unwrap_or(self.p.plunge_feed);
-        if let Some(from) = at
-            && self.stay_down(from, to, pass, feed)?
-        {
-            self.report.stayed_down += 1;
-            self.report.links_resolved += 1;
-            return Ok(0);
-        }
+    /// Whether `from` and every point of `way` are at or above the part under
+    /// them, for a tool that may graze it.
+    fn clear_of_part(&self, from: DVec3, way: &[DVec3]) -> bool {
+        std::iter::once(&from).chain(way).all(|p| {
+            self.surface
+                .grazing_at(p.truncate())
+                .is_none_or(|z| z <= p.z + 1e-9)
+        })
+    }
 
-        let way = self.entry(to, pass);
-        let skip = way.skip();
-
-        let top = match at {
-            Some(from) => {
-                let out_feed = last_feed(self.out.moves()).unwrap_or(feed);
-                let off = self.lead_off(from, out_feed)?;
-                // Down to the next level of the same ring without lifting clear,
-                // where the way there is short and clear.
-                if self.down_into(off, &way, to, feed)? {
-                    self.report.stayed_down += 1;
-                    self.report.links_resolved += 1;
-                    return Ok(skip);
-                }
-                Some(self.rise(off)?)
-            }
-            None => None,
+    /// The way the tool is heading at the end of the last move made: along the
+    /// last pass, as it ends.
+    fn heading(&self) -> Option<DVec3> {
+        let moves = self.out.moves();
+        let [before, last] = moves.get(moves.len().checked_sub(2)?..)? else {
+            return None;
         };
-        // Where the way in starts, seen from above.
-        let start = way.start(to, self.helix_down(&way, None).as_ref());
+        last.tangent_at(before.to, 1.0)
+    }
+
+    /// Off the cut at `from` along the vertical lead-out, where it fits the
+    /// part. Returns where the tool is.
+    fn lead_off(&mut self, from: DVec3, feed: f64) -> Result<DVec3, LinkError> {
+        if let Some(t) = self.heading()
+            && let Some((end, arc)) = lead_out(from, t, self.p.lead_out())
+            && self.clear_of_part(from, &arc.chords(from, end, self.p.tolerance))
+        {
+            self.out
+                .arc_or_chords_to(end, arc, MoveRole::Lead, feed, self.p.tolerance)?;
+            self.settle();
+            return Ok(end);
+        }
+        Ok(from)
+    }
+
+    /// Up from `at` at the retract feed until the safe distance above the
+    /// material. Returns where the tool is.
+    fn rise(&mut self, at: DVec3) -> Result<DVec3, LinkError> {
+        let up = self.feed_height(at.truncate(), at.z);
+        if up > at.z {
+            let top = dvec3(at.x, at.y, up);
+            self.out
+                .feed_to(top, MoveRole::Retract, self.p.retract_feed)?;
+            return Ok(top);
+        }
+        Ok(at)
+    }
+
+    /// From `top`, where the tool rose to off the last cut, or from the
+    /// clearance height for the first pass: across to above where `way`
+    /// starts, down at rapid to where it starts feeding, and down it onto
+    /// `to`.
+    fn across_and_in(
+        &mut self,
+        top: Option<DVec3>,
+        way: &Way,
+        to: DVec3,
+        feed: f64,
+    ) -> Result<(), LinkError> {
+        let start = self.start_of(way, to, None);
+        let safe = self.across(top, start)?;
+        self.down_to_feed(way, to, start, safe)?;
+        self.descend(way, to, feed)
+    }
+
+    /// Across at the safe height from `top`, or from the clearance height
+    /// for the first pass, to above `start`. Returns the safe height.
+    fn across(&mut self, top: Option<DVec3>, start: DVec3) -> Result<f64, LinkError> {
         let from_xy = top.map_or(start.truncate(), |t| t.truncate());
         let safe = self
             .clearance
@@ -280,9 +310,21 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
             self.out.rapid_to(dvec3(start.x, start.y, z))?;
         }
         self.out.rapid_to(dvec3(start.x, start.y, safe))?;
+        Ok(safe)
+    }
 
-        // Down at rapid to where the way in starts feeding.
-        match &way {
+    /// From `safe` above `start`, where `way` onto `to` starts, down at rapid
+    /// to where it starts feeding: the safe distance above the material, or
+    /// for a helix or a ramp above the part, then at the plunge feed to where
+    /// it starts.
+    fn down_to_feed(
+        &mut self,
+        way: &Way,
+        to: DVec3,
+        start: DVec3,
+        safe: f64,
+    ) -> Result<(), LinkError> {
+        match way {
             Way::Plunge => {
                 let stop = self.feed_height(to.truncate(), to.z).min(safe);
                 // Arriving at `to` itself is no plunge where it is already the
@@ -301,8 +343,6 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                 }
             }
             Way::Helix { .. } | Way::Ramp { .. } => {
-                // Down at rapid no nearer the part than the safe distance, then
-                // at the plunge feed to where it starts.
                 let stop = self
                     .surface
                     .at(start.truncate())
@@ -317,9 +357,7 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                 }
             }
         }
-        self.descend(&way, to, feed)?;
-        self.report.links_resolved += 1;
-        Ok(skip)
+        Ok(())
     }
 
     /// From where the tool is, above where `way` starts, down it onto `to`.
@@ -376,408 +414,23 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         Ok(())
     }
 
-    /// Whether the pass starting at `to` starts in material, so is ramped into.
-    fn ramped(&self, to: DVec3) -> bool {
-        self.top_at(to.truncate()).is_some_and(|t| t > to.z + 1e-6)
-    }
-
-    /// Off the cut at `from` along the vertical lead-out, where it fits. Returns
-    /// where the tool is.
-    fn lead_off(&mut self, from: DVec3, feed: f64) -> Result<DVec3, LinkError> {
-        let radius = self.p.lead_out_radius.unwrap_or(self.p.lead_radius);
-        if radius > 0.0 {
-            let moves = self.out.moves();
-            let last = moves.len().checked_sub(2).and_then(|k| moves.get(k..));
-            if let Some([before, m]) = last
-                && let Some(t) = m.tangent_at(before.to, 1.0)
-                && let Some((end, arc)) = lead_out(from, t, radius)
-                && self.clear_of_part(from, &arc.chords(from, end, self.p.tolerance))
-            {
-                self.out
-                    .arc_or_chords_to(end, arc, MoveRole::Lead, feed, self.p.tolerance)?;
-                self.settle();
-                return Ok(end);
-            }
-        }
-        Ok(from)
-    }
-
-    /// Up from `at` at the retract feed until the safe distance above the
-    /// material. Returns where the tool is.
-    fn rise(&mut self, at: DVec3) -> Result<DVec3, LinkError> {
-        let up = self.feed_height(at.truncate(), at.z);
-        if up > at.z {
-            let top = dvec3(at.x, at.y, up);
-            self.out
-                .feed_to(top, MoveRole::Retract, self.p.retract_feed)?;
-            return Ok(top);
-        }
-        Ok(at)
-    }
-
-    /// Leave the cut at `from`: the lead-out, where it fits, then up at the
-    /// retract feed until the safe distance above the material. Returns where
-    /// the tool is.
-    fn leave(&mut self, from: DVec3, feed: f64) -> Result<DVec3, LinkError> {
+    /// After the last cut, at `from`: off it along the lead-out, up clear of
+    /// the material, and up to `z`, or as high as the clearance asks over
+    /// where it rose to, so the program never ends with the cutter on the
+    /// part.
+    fn end(&mut self, from: DVec3, z: f64) -> Result<(), LinkError> {
+        let feed = last_feed(self.out.moves()).unwrap_or(self.p.retract_feed);
         let off = self.lead_off(from, feed)?;
-        self.rise(off)
+        let top = self.rise(off)?;
+        let over = self
+            .clearance
+            .safe_z(top.truncate(), top.truncate(), self.p.tool_radius);
+        let up = z.max(over);
+        if up > top.z {
+            self.out.rapid_to(dvec3(top.x, top.y, up))?;
+        }
+        Ok(())
     }
-
-    /// From `off`, where the tool came off the last cut, across without lifting
-    /// and down `way` onto `to` at a lower level, if the link is short and its
-    /// way clear: as Fusion goes down to a ring's next depth. Across level at
-    /// the height it came off, clear of the part, rubbing no face it is kept
-    /// clear of, and cutting little more than a descent at cutting feed may;
-    /// then down.
-    fn down_into(
-        &mut self,
-        off: DVec3,
-        way: &Way,
-        to: DVec3,
-        feed: f64,
-    ) -> Result<bool, LinkError> {
-        let StayDown::Level { max } = self.p.stay_down else {
-            return Ok(false);
-        };
-        if let Way::Ramp { .. } = way {
-            return Ok(false);
-        }
-        // Where the way down starts, seen from above, and how low it goes before
-        // any lead.
-        let helix = self.helix_down(way, Some(off.z));
-        let xy = way.start(to, helix.as_ref()).truncate();
-        let lowest = way.bottom(to).z;
-        if off.z <= lowest + 1e-6 || off.truncate().distance(xy) > max {
-            return Ok(false);
-        }
-        let reached = self
-            .surface
-            .grazing_along(off.truncate(), xy)
-            .iter()
-            .any(|p| p.z > off.z + 1e-6);
-        let cuts = self
-            .material
-            .highest(off.truncate(), xy, self.p.tool_radius)
-            .is_some_and(|h| h > off.z + self.p.max_cut_step);
-        // Across beside a face it is kept clear of, the tool would rub it.
-        let across = xy.extend(off.z);
-        if reached || cuts || self.surface.rubs_avoided(off, across) {
-            return Ok(false);
-        }
-        self.out.feed_to(across, MoveRole::Transition, feed)?;
-        self.descend(way, to, feed)?;
-        Ok(true)
-    }
-
-    /// Whether a link at level `z` from `a` to `b` would plough through material
-    /// the cuts either end of it leave standing: as Fusion's, a link stays down
-    /// only where it does not violate the work. Its first and last tool's radius
-    /// are the cuts' own, coming off one and into the next as they engage; between,
-    /// the tool may brush what stands beside its way, half its radius in at
-    /// most, and no more.
-    fn ploughs(&self, a: DVec2, b: DVec2, z: f64) -> bool {
-        let r = self.p.tool_radius;
-        let span = a.distance(b);
-        if span <= 2.0 * r {
-            return false;
-        }
-        let d = (b - a) / span;
-        self.material
-            .highest(a + d * r, b - d * r, 0.5 * r)
-            .is_some_and(|top| top > z + self.p.tolerance)
-    }
-
-    /// The turn from the end of the last pass, at `from`, round onto the next
-    /// at `to`, where they run opposite ways side by side, as zigzag passes
-    /// do: Fusion's default transition, smooth ("smooth tangential movements
-    /// using true arcs where appropriate"). A half turn as wide as the passes
-    /// are apart, out past their ends the way the last was heading, tangent to
-    /// both; where one pass ends short of the other, straight on along it
-    /// first, or after, so the turn is at the further end. Level as seen from
-    /// above, it goes from one pass's height to the other's as it goes.
-    ///
-    /// `None` where the passes do not run so: in line, no further apart than
-    /// the tolerance, as a spoke that stops short of the middle and the next
-    /// one out from it are. Or where they are further apart than the
-    /// tool is wide, as a turn that size would swing far off the work; or
-    /// where the part rises into the turn, the turn would cut more than a cut
-    /// step into the material, or would fall steeply further than a descent at
-    /// cutting feed may. The lifted straight line is made instead.
-    fn turn_around(
-        &self,
-        from: DVec3,
-        to: DVec3,
-        pass: &[Move],
-    ) -> Option<Vec<(DVec3, Option<Arc>)>> {
-        let moves = self.out.moves();
-        let [before, last] = moves.get(moves.len().checked_sub(2)?..)? else {
-            return None;
-        };
-        let out = last
-            .tangent_at(before.to, 1.0)?
-            .truncate()
-            .try_normalize()?;
-        let into = pass
-            .first()?
-            .tangent_at(to, 0.0)?
-            .truncate()
-            .try_normalize()?;
-        if out.dot(into) > -0.99 {
-            return None;
-        }
-        let (a, b) = (from.truncate(), to.truncate());
-        // How far the next pass starts along the way the last was heading,
-        // and the turn's width: the gap square to the passes.
-        let along = (b - a).dot(out);
-        let width = (b - a - out * along).length();
-        // In line, one behind the other, they are not side by side: a turn
-        // of less radius than the tolerance is the straight line, and one of
-        // less than an arc may have is no arc.
-        let least = 2.0 * self.p.tolerance.max(ARC_END);
-        if width <= least || width > 2.0 * self.p.tool_radius {
-            return None;
-        }
-        // The straight on, before the turn or after it, and the turn's ends.
-        let (turn_from, turn_to) = if along >= 0.0 {
-            (a + out * along, b)
-        } else {
-            (a, b + out * -along)
-        };
-        let straight = along.abs();
-        let length = straight + std::f64::consts::FRAC_PI_2 * width;
-        let z_at = |run: f64| from.z + (to.z - from.z) * (run / length);
-        let (p, q) = if along >= 0.0 {
-            (turn_from.extend(z_at(straight)), to)
-        } else {
-            (from, turn_to.extend(z_at(length - straight)))
-        };
-        let centre = (turn_from + turn_to) / 2.0;
-        // Counter-clockwise starts off along Z × the radius: the way the pass
-        // was heading, or it turns the other way.
-        let ccw = (turn_from - centre).perp().dot(out) > 0.0;
-        let arc = Arc {
-            centre: centre.extend(p.z),
-            axis: DVec3::Z,
-            sweep: if ccw { PI } else { -PI },
-        };
-        let mut pieces = Vec::new();
-        if along >= 0.0 && straight > 1e-9 {
-            pieces.push((p, None));
-        }
-        pieces.push((q, Some(arc)));
-        if along < 0.0 && straight > 1e-9 {
-            pieces.push((to, None));
-        }
-        // What it passes through, close enough that the tool's own width
-        // covers what lies between.
-        let mut way: Vec<DVec3> = Vec::new();
-        let mut at = from;
-        for &(end, arc) in &pieces {
-            let n = 32;
-            way.extend((1..=n).map(|k| {
-                let t = f64::from(k) / f64::from(n);
-                arc.map_or_else(|| at.lerp(end, t), |c| c.point_at(at, end, t))
-            }));
-            at = end;
-        }
-        // Clear of the part; and of the material, brushing what stands beside
-        // it half the tool's radius in at most, as a level link may: at the
-        // next pass's start, what it meets is that pass's own cut.
-        let clear = way.iter().all(|p| {
-            let xy = p.truncate();
-            !self.surface.rests_avoided(*p)
-                && self
-                    .surface
-                    .at(xy)
-                    .is_none_or(|z| z <= p.z + self.p.tolerance)
-                && (xy.distance(b) < 1e-6
-                    || self
-                        .material
-                        .highest(xy, xy, 0.5 * self.p.tool_radius)
-                        .is_none_or(|top| top <= p.z + self.p.max_cut_step))
-        });
-        let fallen = trailing_fall(moves);
-        (clear
-            && !falls_steeply(fallen, from, &way, pass, self.p.max_cut_step)
-            && self.clearance.keeps_clear(from, &way))
-        .then_some(pieces)
-    }
-
-    /// Make the link from `from` to `to`, where `pass` starts, without lifting
-    /// clear, if it may be.
-    fn stay_down(
-        &mut self,
-        from: DVec3,
-        to: DVec3,
-        pass: &[Move],
-        feed: f64,
-    ) -> Result<bool, LinkError> {
-        let (a, b) = (from.truncate(), to.truncate());
-        let span = a.distance(b);
-        let way: Vec<DVec3> = match self.p.stay_down {
-            StayDown::Never => return Ok(false),
-            StayDown::OverPart { max } => {
-                if span > max {
-                    return Ok(false);
-                }
-                // A pass beside a wall, below where the tool would come to
-                // rest from above, is not on the part, nor is one with nothing
-                // under the tool, as a ring round a wall's foot beyond the
-                // part: the part sampled between two such points says nothing
-                // of the way between them, which may be through the wall.
-                // That way is straight, and safe where the tool all along it,
-                // at the lower of its two ends' heights, would come to rest no
-                // higher, as a link at a level is: the tool is clear at any
-                // height above where it would rest. It may graze the wall it
-                // runs beside.
-                let off = |p: DVec3| {
-                    self.surface
-                        .at(p.truncate())
-                        .is_none_or(|z| z > p.z + self.p.tolerance)
-                };
-                if off(from) || off(to) {
-                    let low = from.z.min(to.z);
-                    let reached = self
-                        .surface
-                        .grazing_along(a, b)
-                        .iter()
-                        .any(|p| p.z > low + 1e-6);
-                    if reached || self.surface.rubs_avoided(from, to) {
-                        return Ok(false);
-                    }
-                    vec![to]
-                } else {
-                    // Fusion's default transition, smooth: a half turn tangent
-                    // to both passes, where it fits.
-                    if let Some(pieces) = self.turn_around(from, to, pass) {
-                        for (p, arc) in pieces {
-                            match arc {
-                                Some(arc) => {
-                                    self.out.arc_to(p, arc, MoveRole::Transition, feed)?;
-                                }
-                                None => self.out.feed_to(p, MoveRole::Transition, feed)?,
-                            }
-                        }
-                        return Ok(true);
-                    }
-                    // The straight line between the cuts, lifted onto the part
-                    // wherever the part is above it.
-                    let mut lifted: Vec<(f64, DVec3)> = self
-                        .surface
-                        .along(a, b)
-                        .into_iter()
-                        .filter_map(|p| {
-                            let t = if span > 1e-9 {
-                                (p.truncate() - a).dot(b - a) / (span * span)
-                            } else {
-                                return None;
-                            };
-                            (t > 1e-9 && t < 1.0 - 1e-9).then(|| {
-                                let chord = from.z + (to.z - from.z) * t;
-                                (t, dvec3(p.x, p.y, p.z.max(chord)))
-                            })
-                        })
-                        .collect();
-                    lifted.sort_by(|x, y| x.0.total_cmp(&y.0));
-                    let mut way: Vec<DVec3> = lifted.into_iter().map(|(_, p)| p).collect();
-                    way.push(to);
-                    // Down on the part over a face it is kept clear of, the
-                    // tool would rub what the passes were cut out over: it
-                    // lifts.
-                    if way.iter().any(|&p| self.surface.rests_avoided(p)) {
-                        return Ok(false);
-                    }
-                    way
-                }
-            }
-            StayDown::Level { max } => {
-                if span > max || (from.z - to.z).abs() > 1e-6 {
-                    return Ok(false);
-                }
-                let reached = self
-                    .surface
-                    .grazing_along(a, b)
-                    .iter()
-                    .any(|p| p.z > to.z + 1e-6);
-                // Beside or over a face it is kept clear of, the tool would
-                // rub what the rings were cut out along: it lifts.
-                if reached || self.ploughs(a, b, to.z) || self.surface.rubs_avoided(from, to) {
-                    return Ok(false);
-                }
-                vec![to]
-            }
-        };
-        let fallen = trailing_fall(self.out.moves());
-        if falls_steeply(fallen, from, &way, pass, self.p.max_cut_step)
-            || !self.clearance.keeps_clear(from, &way)
-        {
-            return Ok(false);
-        }
-        for p in way {
-            self.out.feed_to(p, MoveRole::Transition, feed)?;
-        }
-        Ok(true)
-    }
-}
-
-/// How far `moves` have been falling steeply at the cutting feed at their end:
-/// a cut coming down a wall, which a link going on down would add to.
-fn trailing_fall(moves: &[Move]) -> f64 {
-    moves
-        .windows(2)
-        .rev()
-        .map_while(|w| match w {
-            [a, m] if m.falls_steeply(a.to, PLUNGE_RATIO) => Some(a.to.z - m.to.z),
-            _ => None,
-        })
-        .sum()
-}
-
-/// Whether a way from `from` through `way` into `pass` falls further than `max`
-/// in one continuous descent steeper than [`PLUNGE_RATIO`], counting the `fallen`
-/// it carries on from: the plunge at cutting feed the gate refuses. The gate
-/// judges the whole program, so a descent the way joins, before or after it, is
-/// as much the way's as its own.
-fn falls_steeply(fallen: f64, from: DVec3, way: &[DVec3], pass: &[Move], max: f64) -> bool {
-    let mut depth = fallen;
-    let mut at = from;
-    for &p in way {
-        let drop = at.z - p.z;
-        let flat = p.truncate().distance(at.truncate());
-        depth = if steep(drop, flat, PLUNGE_RATIO) {
-            depth + drop
-        } else {
-            0.0
-        };
-        if depth > max {
-            return true;
-        }
-        at = p;
-    }
-    // And on into the pass, while it keeps falling.
-    for m in pass {
-        if depth <= 0.0 || !m.falls_steeply(at, PLUNGE_RATIO) {
-            break;
-        }
-        depth += at.z - m.to.z;
-        if depth > max {
-            return true;
-        }
-        at = m.to;
-    }
-    false
-}
-
-/// `value`, for the parameter called `name`, if it is usable: finite and
-/// greater than zero.
-fn check(name: &'static str, value: f64) -> Result<(), LinkError> {
-    is_positive(value)
-        .then_some(())
-        .ok_or(LinkError::BadParameter {
-            name,
-            must: POSITIVE,
-            value,
-        })
 }
 
 #[cfg(test)]

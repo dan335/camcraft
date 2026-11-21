@@ -1,7 +1,11 @@
 //! What linking is asked to do, and what it reports.
 
+use std::f64::consts::FRAC_PI_2;
+
 use glam::DVec2;
 
+use crate::is_positive;
+use crate::must::{AT_LEAST_ZERO, POSITIVE};
 use crate::path::toolpath::ToolpathError;
 
 /// When a link is made without lifting clear.
@@ -9,15 +13,19 @@ use crate::path::toolpath::ToolpathError;
 pub enum StayDown {
     /// Never: every link lifts clear.
     Never,
-    /// A link up to `max` long, riding over the part: the straight line between
-    /// the two cuts, lifted wherever the part rises above it. For finishing, which
-    /// runs on the part.
+    /// A link up to `max` long, riding over the part: a half turn onto the next
+    /// pass where they run opposite ways side by side, otherwise the straight
+    /// line between the two cuts, lifted wherever the part rises above it, or
+    /// beside the part where an end is off it. For finishing, which runs on the
+    /// part.
     OverPart {
         /// The longest link made this way, in millimetres.
         max: f64,
     },
     /// A link up to `max` long between two cuts at the same height, straight and
-    /// level, where the part does not reach up into it. For clearing at a level.
+    /// level, where the part does not reach up into it; or into a lower cut,
+    /// across at the height the tool came off the last and then down. For
+    /// clearing at a level.
     Level {
         /// The longest link made this way, in millimetres.
         max: f64,
@@ -128,6 +136,58 @@ impl LinkParams {
             start_z: None,
         }
     }
+
+    /// The radius of the vertical arc a pass is left along, in millimetres;
+    /// zero for none.
+    pub(super) fn lead_out(&self) -> f64 {
+        self.lead_out_radius.unwrap_or(self.lead_radius)
+    }
+
+    /// Refused where a parameter is outside its usable range, the first that
+    /// is.
+    pub(super) fn validate(&self) -> Result<(), LinkError> {
+        positive("retract_feed", self.retract_feed)?;
+        positive("plunge_feed", self.plunge_feed)?;
+        positive("tool_radius", self.tool_radius)?;
+        positive("tolerance", self.tolerance)?;
+        positive("max_cut_step", self.max_cut_step)?;
+        for (name, value) in [
+            ("safe_distance", self.safe_distance),
+            ("lead_radius", self.lead_radius),
+            ("lead_out_radius", self.lead_out()),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(LinkError::BadParameter {
+                    name,
+                    must: AT_LEAST_ZERO,
+                    value,
+                });
+            }
+        }
+        if let Some(r) = self.ramp {
+            positive("ramp feed", r.feed)?;
+            if !(r.angle > 0.0 && r.angle < FRAC_PI_2) {
+                return Err(LinkError::BadParameter {
+                    name: "ramp angle",
+                    must: "greater than zero and less than a right angle, in radians",
+                    value: r.angle,
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `value`, for the parameter called `name`, if it is usable: finite and
+/// greater than zero.
+fn positive(name: &'static str, value: f64) -> Result<(), LinkError> {
+    is_positive(value)
+        .then_some(())
+        .ok_or(LinkError::BadParameter {
+            name,
+            must: POSITIVE,
+            value,
+        })
 }
 
 /// Linking could not proceed.

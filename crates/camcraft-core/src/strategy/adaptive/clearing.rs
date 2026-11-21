@@ -193,18 +193,8 @@ impl<'a> Clearing<'a> {
                 };
             let (start, dir, side, arrive, entered) = match found {
                 Some((start, dir, side)) => {
-                    let arrive = match at.and_then(|from| self.stay_route(&s, from, start)) {
-                        Some(via) => Arrive::Stay { via },
-                        None => match self.back_in_area(areas.as_deref(), level, at, start)? {
-                            Some(back) => back,
-                            None if arrivals.is_empty() => Arrive::Link,
-                            // Where they ended may be far from where it is.
-                            None => {
-                                let all = self.situation_everywhere()?;
-                                self.rise(&all, &mut arrivals, start)
-                            }
-                        },
-                    };
+                    let arrive =
+                        self.arrival(&s, at, start, &mut arrivals, areas.as_deref(), level)?;
                     (start, dir, side, arrive, false)
                 }
                 // Nothing left but crumbs, where an edge of where the tool
@@ -299,6 +289,36 @@ impl<'a> Clearing<'a> {
             .area();
         self.stand_off();
         Ok(())
+    }
+
+    /// How the tool comes to `start`, the first way it can: staying down from
+    /// where it is, `at`, through what `s` shows cleared; cut by area, back
+    /// from where the level's last pass in `start`'s area ended
+    /// ([`Clearing::back_in_area`]), this level being the slab's `level`th;
+    /// rising from where a pass of a level below in the slab ended, the
+    /// nearest of `arrivals` it can ([`Clearing::rise`]); otherwise however
+    /// the linker sees fit.
+    fn arrival(
+        &mut self,
+        s: &Situation,
+        at: Option<DVec2>,
+        start: DVec2,
+        arrivals: &mut Vec<Arrival>,
+        areas: Option<&[Indexed]>,
+        level: usize,
+    ) -> Result<Arrive, StrategyError> {
+        if let Some(via) = at.and_then(|from| self.stay_route(s, from, start)) {
+            return Ok(Arrive::Stay { via });
+        }
+        if let Some(back) = self.back_in_area(areas, level, at, start)? {
+            return Ok(back);
+        }
+        if arrivals.is_empty() {
+            return Ok(Arrive::Link);
+        }
+        // Where they ended may be far from where it is.
+        let all = self.situation_everywhere()?;
+        Ok(self.rise(&all, arrivals, start))
     }
 
     /// Where to start instead of `found`, the start nearest where the tool
@@ -1047,10 +1067,10 @@ impl<'a> Clearing<'a> {
                     continue;
                 }
                 let s = self.situation_near(from, 8.0 * r)?;
-                let arrive = match taken.first().and_then(|&b| self.stay_route(&s, from, b)) {
-                    Some(via) => Arrive::Stay { via },
-                    None => Arrive::Link,
-                };
+                let arrive = taken
+                    .first()
+                    .and_then(|&b| self.stay_route(&s, from, b))
+                    .map_or(Arrive::Link, |via| Arrive::Stay { via });
                 self.cut_material(&swept)?;
                 self.window = None;
                 left = left.difference(&swept)?;

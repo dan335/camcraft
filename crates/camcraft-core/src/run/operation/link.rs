@@ -2,68 +2,15 @@
 //! and the material and part the linker measures its links against.
 
 use super::*;
+use crate::job::Uses;
 
 /// How `work`'s operation links: its own settings, with the strategy's defaults
 /// where it gives none, as Fusion's.
 pub(super) fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
     let (op, linking) = (work.op, &work.op.linking);
     let diameter = work.spec.diameter;
-    // A profile's vertical lead is part of its leads; a finishing pass's is its
-    // own setting. A thread has none: it comes straight down its hole's
-    // centre onto its own leads, and goes straight up from it, as Fusion's
-    // Thread's programs do.
-    let leads = op.leads(diameter);
     let uses = op.strategy.uses();
-    let vertical = if uses.lead_radius {
-        op.lead_radius(diameter)
-    } else if matches!(op.strategy, StrategySpec::Thread { .. }) {
-        0.0
-    } else {
-        leads.map_or(0.0, |l| l.vertical)
-    };
-    let (stay_down, lead_radius, ramp) = match uses.links {
-        // Adaptive clearing stays down itself, at the level, only where it has
-        // cleared the way, and goes down its own helixes: a link it leaves is
-        // one to lift for, into what it has cleared, straight down.
-        Links::Own => (StayDown::Never, 0.0, None),
-        // Into material over where a pass starts, down along the pass, never
-        // below it: the pass is on the part, so the ramp cannot reach it.
-        Links::OverPart => (
-            StayDown::OverPart {
-                max: op.stay_down(diameter),
-            },
-            vertical,
-            uses.ramp.then(|| Ramp {
-                angle: linking.ramp_angle.to_radians(),
-                feed: op.ramp_feed(),
-            }),
-        ),
-        Links::Level => (
-            StayDown::Level {
-                max: op.stay_down(diameter),
-            },
-            vertical,
-            // Contour's ramp is its own, down the wall between levels: its
-            // leads come down beside the wall, where the linker's test for
-            // material, under the tool's whole width, would see the wall's
-            // stock and go down a helix for nothing.
-            // A ramp's is its own, down each wall; a slot's too, back and
-            // forth along it.
-            (uses.ramp
-                && !matches!(
-                    op.strategy,
-                    StrategySpec::Contour { .. }
-                        | StrategySpec::Ramp { .. }
-                        | StrategySpec::Slot { .. }
-                ))
-            .then(|| Ramp {
-                angle: linking.ramp_angle.to_radians(),
-                // A ramp moves mostly sideways, so it goes nearer the cutting
-                // feed than a straight plunge's.
-                feed: op.ramp_feed(),
-            }),
-        ),
-    };
+    let (lead_radius, lead_out_radius) = vertical_leads(op, uses, diameter);
     // A profile's ramp is its own path, a spiral down each ring
     // (`planar_paths`): the linker only brings the tool onto its lead.
     let profile = matches!(op.strategy, StrategySpec::Profile { .. });
@@ -74,26 +21,15 @@ pub(super) fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         Some(Entry::Ramp) | None => EntryKind::Ramp,
     };
     let corner = work.spec.corner_radius();
-    // A trace's vertical leads are each on or off, as Fusion's Lead-In and
-    // Lead-Out, the radius the same.
-    let (lead_radius, lead_out_radius) = match op.strategy {
-        StrategySpec::Trace {
-            lead_in, lead_out, ..
-        } => (
-            if lead_in { lead_radius } else { 0.0 },
-            Some(if lead_out { lead_radius } else { 0.0 }),
-        ),
-        _ => (lead_radius, None),
-    };
     LinkParams {
         retract_feed: linking.retract_feed,
         plunge_feed: linking.plunge_feed,
         tool_radius: work.tool.cutter_radius(),
         safe_distance: linking.safe_distance,
-        stay_down,
+        stay_down: stay_down(op, uses.links, diameter),
         lead_radius,
         lead_out_radius,
-        ramp,
+        ramp: ramp(op, uses),
         entry,
         helix_radius: op.helix_diameter(diameter, corner) / 2.0,
         helix_min_radius: op.least_helix_diameter(diameter, corner) / 2.0,
@@ -103,11 +39,81 @@ pub(super) fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         // A helix climbs as the cut does.
         helix_ccw: work.kept_on_right(),
         ramp_stepdown: Some(op.ramp_stepdown(diameter)),
-        lead_in_material: leads.is_some(),
+        lead_in_material: op.leads(diameter).is_some(),
         max_cut_step: op.max_cut_step(),
         tolerance: work.job.tolerance,
         end_z: Some(clearance_z),
         start_z: Some(clearance_z),
+    }
+}
+
+/// When `op`'s links stay down, as its strategy's passes are linked
+/// (`links`), with a tool `diameter` across.
+fn stay_down(op: &Operation, links: Links, diameter: f64) -> StayDown {
+    match links {
+        // Adaptive clearing stays down itself, at the level, only where it has
+        // cleared the way: a link it leaves is one to lift for.
+        Links::Own => StayDown::Never,
+        Links::OverPart => StayDown::OverPart {
+            max: op.stay_down(diameter),
+        },
+        Links::Level => StayDown::Level {
+            max: op.stay_down(diameter),
+        },
+    }
+}
+
+/// The ramp the linker goes down into a pass that starts in material along,
+/// where `op`'s strategy has one, as it `uses` its settings, and does not make
+/// it itself.
+fn ramp(op: &Operation, uses: Uses) -> Option<Ramp> {
+    // Adaptive clearing goes down its own helixes: a link it leaves is into
+    // what it has cleared, straight down. Contour's ramp is its own, down the
+    // wall between levels: its leads come down beside the wall, where the
+    // linker's test for material, under the tool's whole width, would see the
+    // wall's stock and go down a helix for nothing. A ramp's is its own, down
+    // each wall; a slot's too, back and forth along it.
+    let own = uses.links == Links::Own
+        || matches!(
+            op.strategy,
+            StrategySpec::Contour { .. } | StrategySpec::Ramp { .. } | StrategySpec::Slot { .. }
+        );
+    (uses.ramp && !own).then(|| Ramp {
+        angle: op.linking.ramp_angle.to_radians(),
+        // A ramp moves mostly sideways, so it goes nearer the cutting feed
+        // than a straight plunge's.
+        feed: op.ramp_feed(),
+    })
+}
+
+/// The radii of the vertical arcs `op`'s passes are entered and left along,
+/// as its strategy `uses` its settings, with a tool `diameter` across: the
+/// lead-in's, and the lead-out's where it is not the same.
+fn vertical_leads(op: &Operation, uses: Uses, diameter: f64) -> (f64, Option<f64>) {
+    // Adaptive clearing's links go straight down into what it has cleared. A
+    // profile's vertical lead is part of its leads; a finishing pass's is its
+    // own setting. A thread has none: it comes straight down its hole's centre
+    // onto its own leads, and goes straight up from it, as Fusion's Thread's
+    // programs do.
+    let radius = if uses.links == Links::Own {
+        0.0
+    } else if uses.lead_radius {
+        op.lead_radius(diameter)
+    } else if matches!(op.strategy, StrategySpec::Thread { .. }) {
+        0.0
+    } else {
+        op.leads(diameter).map_or(0.0, |l| l.vertical)
+    };
+    match op.strategy {
+        // A trace's vertical leads are each on or off, as Fusion's Lead-In and
+        // Lead-Out, the radius the same.
+        StrategySpec::Trace {
+            lead_in, lead_out, ..
+        } => (
+            if lead_in { radius } else { 0.0 },
+            Some(if lead_out { radius } else { 0.0 }),
+        ),
+        _ => (radius, None),
     }
 }
 
