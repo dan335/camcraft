@@ -30,6 +30,25 @@ function Invoke-Gate {
     if ($LASTEXITCODE -eq 0) { $script:pass += $Name } else { $script:fail += $Name }
 }
 
+# camcraft names no other CAM product: no tracked file may hold either name as
+# a word, in any case, comments, strings, file contents and fixtures alike
+# (binary files are searched as text, so a STEP header is too). The brackets
+# keep the pattern from matching this line.
+Invoke-Gate 'names' {
+    $hits = git grep --text -c -i -w -E 'fusio[n]|autodes[k]'
+    $code = $LASTEXITCODE
+    if ($code -eq 0) {
+        $hits | ForEach-Object { Write-Host "  $_" }
+        Write-Host "$(@($hits).Count) file(s) name another CAM product" -ForegroundColor Red
+        $global:LASTEXITCODE = 1
+    } elseif ($code -eq 1) {
+        # git grep found nothing.
+        $global:LASTEXITCODE = 0
+    } else {
+        Write-Host "git grep could not search the files" -ForegroundColor Red
+        $global:LASTEXITCODE = 1
+    }
+}
 Invoke-Gate 'fmt'    { cargo fmt --all --check }
 Invoke-Gate 'clippy' { cargo clippy --workspace --all-targets -- -D warnings }
 Invoke-Gate 'test'   { cargo test --workspace --all-targets }

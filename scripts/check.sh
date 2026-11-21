@@ -130,6 +130,27 @@ if [ "$DRY" = 1 ]; then
   exit 0
 fi
 
+# camcraft names no other CAM product: no tracked file may hold either name as
+# a word, in any case, comments, strings, file contents and fixtures alike
+# (binary files are searched as text, so a STEP header is too). Checked
+# everywhere, whatever changed. The brackets keep the pattern from matching
+# this line.
+names() {
+  local hits code
+  hits="$(git grep --text -c -i -w -E 'fusio[n]|autodes[k]')"
+  code=$?
+  case "$code" in
+    0)
+      printf '%s\n' "$hits" | sed 's/^/  /'
+      printf '%d file(s) name another CAM product\n' "$(printf '%s\n' "$hits" | wc -l)" >&2
+      return 1
+      ;;
+    1) return 0 ;;  # git grep found nothing
+    *) echo "git grep could not search the files" >&2; return 1 ;;
+  esac
+}
+run "names" names
+
 # Formatting is checked everywhere: it takes a second.
 run "fmt" cargo fmt --all --check
 
