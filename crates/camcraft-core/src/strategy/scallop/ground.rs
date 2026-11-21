@@ -78,6 +78,8 @@ pub(super) struct Ground {
     /// The length along the surface of each grid edge bent down a cliff
     /// ([`cliff_edges`]), by its key, lower node first.
     cliffs: HashMap<(u32, u32), f64>,
+    /// Each lattice node's class as sampled, the strips' [`ROLLING`].
+    classes: Vec<u32>,
 }
 
 /// A piece of an edge of the ground: a line through cuts of its grid, the
@@ -136,11 +138,47 @@ impl Ground {
         report.coarsened = on.coarsened;
         params.watch.check()?;
         keep_ring_shaped(&on.grid, &mut classes);
-        let mut cut = cut_where_it_ends(seat, &on, classes, params.tolerance);
+        Self::cut(seat, on, classes, params)
+    }
+
+    /// `on`, its nodes of `classes`, cut where the ground ends.
+    fn cut(
+        seat: &Seat<'_>,
+        on: AreaGrid,
+        classes: Vec<u32>,
+        params: &ScallopParams,
+    ) -> Result<Self, StrategyError> {
+        let mut cut = cut_where_it_ends(seat, &on, classes.clone(), params.tolerance);
         level_where_it_leaves(&mut cut, params.ramp.tan());
         let cliffs = cliff_edges(seat, &cut, params.tolerance);
         params.watch.check()?;
-        Ok(Self { on, cut, cliffs })
+        Ok(Self {
+            on,
+            cut,
+            cliffs,
+            classes,
+        })
+    }
+
+    /// Whether strips break it ([`ROLLING`]).
+    pub(super) fn has_strips(&self) -> bool {
+        self.classes.contains(&ROLLING)
+    }
+
+    /// The same ground with its strips ground again, every rolling node
+    /// machined, as it was before strips broke it: the drops kept, the grid
+    /// cut again.
+    pub(super) fn without_strips(
+        &self,
+        seat: &Seat<'_>,
+        params: &ScallopParams,
+    ) -> Result<Self, StrategyError> {
+        let classes = self
+            .classes
+            .iter()
+            .map(|&c| if c == ROLLING { MACHINED } else { c })
+            .collect();
+        Self::cut(seat, self.on.clone(), classes, params)
     }
 
     /// Whether node `n` of the grid cut is where the ground ends against a

@@ -81,6 +81,16 @@ floor avoided:
   cut one after another, rather than one field with each zone's levels
   offset: each zone's far edge, band and order are its own, and the ground,
   its grid and the lengths down its cliffs are shared.
+- **Zones only where they do their job** (`scallop_finish`). Strips break
+  the ground into zones so that every ring closes and none climbs over a
+  sharp edge. Where a zone has a far edge and the band into it is refused
+  (`blend::band`, asked as the plan asks it), its rings cannot close: they
+  would end in arcs on that edge. There the zones are not doing their job,
+  and the ground is cut as one, as before strips broke it: every rolling node
+  ground again, the grid cut a second time from the same drops, and the
+  field measured over it. It is all or nothing for the operation; choosing
+  strip by strip, keeping those whose zones close and grinding the rest
+  again, was not tried.
 - **Between zones the tool rolls over the edge once**: the link from the
   near border's ring to the far border's, on the seam, stays down over the
   part, a few millimetres. The seam carries on into the next zone.
@@ -136,12 +146,19 @@ the rim and the outside's top as above. Outside in, both programs are byte
 for byte as they were: zones are built inside out only.
 
 On Fusion's `ops_3d` cut inside out with its 6 mm ball at a stepover of
-0.6, the pocket's rim is a strip: the pocket is better than before, no ring
-rolling over its rim, but the rest of the part is a zone measured out from
-the rim, the band from it to where the tool leaves the part is too wide to
-blend, and its rings end in arcs there, four families of them. It feeds
-14.42 m where it fed 14.89, and lifts 6 times where 3, 0.49 m at rapid where
-0.11. Outside in it is byte for byte as it was.
+0.6, the pocket's rim is a strip, and the rest of the part is a zone
+measured out from the rim. The band from it to where the tool leaves the
+part is too wide to blend, and with the zones its rings ended in arcs
+there, four families of them: 14.42 m fed where 14.89, 6 lifts where 3, and
+0.49 m at rapid where 0.11. So the ground is cut as one, and its program is
+byte for byte the one before zones: 14.89 m, 3 lifts, 0.11 m at rapid. On
+a block in the tests with a round pocket off centre (`run::tests_bowl`),
+the zones gave 20 arcs from the block's top down its sides, 33 open passes
+over the part and 12 lifts; cut as one, no arc, one open pass, a sliver on
+the pocket's wall, and 4 lifts. On the user's bowl, with its floor's group and
+without, every zone closes, and its programs are byte for byte as they
+were. Outside in
+`ops_3d` is byte for byte as it was.
 
 On a bowl in the tests with a sharp flat rim and a wall from 48° to 71°,
 longer on some sides than others (`run::tests_bowl`): with the strips no
@@ -153,9 +170,9 @@ they were.
 
 ## Still not done
 
-- A zone measured out from its inner edge whose rings do not blend into its
-  outer edge ends them in arcs there, as `ops_3d`'s outside of its pocket
-  does inside out: 6 lifts where 3, and 0.49 m of rapids where 0.11.
+- Where a zone measured out from its inner edge cannot blend into its outer
+  edge, as `ops_3d`'s outside of its pocket inside out, the ground is cut as
+  one, and its rings climb the pocket's rim and drop back as before.
   Measuring such a zone from every edge of it instead, so its rings close and
   the two families meet in the middle, was tried (2026-11-21) and closes the
   rings on the block's top, but breaks those down its upright sides: 18
@@ -178,7 +195,8 @@ they were.
   pocket's upright walls, which the tool's side cuts at any height; on its
   left wall the stock left is 0.183 mm at most to Fusion's 0.234. Until
   the field keeps where two fronts meet inside a cliff's edge, as a node of
-  its own there, a zone is not measured from every edge to close its rings.
+  its own there, a zone is not measured from every edge to close its rings,
+  and such a pocket's rim is climbed.
 - Outside in there are no zones: the rings still cross a sharp rim at a
   slant and come out in pieces there, 5 lifts between them on the user's bowl
   (decision 0041, which took the other 29 away).

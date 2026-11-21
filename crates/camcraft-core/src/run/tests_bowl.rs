@@ -704,6 +704,82 @@ fn a_round_bowl_and_a_square_pocket_keep_their_rings() {
     }
 }
 
+/// How far a block's outline is from the origin at `theta` from +X: its
+/// sides at X -16 and 34 and Y ±18, the pocket in it off centre.
+fn block(theta: f64) -> f64 {
+    let (c, s) = (theta.cos(), theta.sin());
+    let x = if c > 0.0 { 34.0 / c } else { -16.0 / c };
+    let y = 18.0 / s.abs();
+    x.min(y)
+}
+
+/// A block 50 by 36, [`RIM`] high, with a round pocket of radius [`CUP`] round
+/// the origin down to [`FLOOR`], its wall upright to a sharp rim: 6 mm of the
+/// block's top beside it at -X, and 24 at +X. The floor 0, the pocket's wall
+/// 1, the top 2, the block's sides 3, its base 4.
+fn pocketed_block() -> Body {
+    let (pocket, outline) = (|_: f64| CUP, block);
+    ringed(
+        &[
+            (&pocket, FLOOR),
+            (&pocket, RIM),
+            (&outline, RIM),
+            (&outline, 0.0),
+        ],
+        &[1, 2, 3],
+        4,
+    )
+}
+
+/// Inside out over a block with a pocket off centre in it, nothing avoided:
+/// the pocket's rim is a strip, but the block's top round it, measured out
+/// from it, is too much wider on one side than the other for its rings to
+/// blend into where the tool leaves the block. So the ground is cut as one,
+/// its strips ground again, as before zones (decision 0039): no ring ends in
+/// an arc on the block's edge, where with the zones 20 ran from its top down
+/// its sides; one pass over the part is open, a sliver on the pocket's wall,
+/// where 33 were; and it lifts 4 times, where 12.
+#[test]
+fn a_block_with_a_pocket_off_centre_is_cut_as_one() {
+    let body = pocketed_block();
+    let bodies: Bodies<'_> = [("bowl", &body)].into_iter().collect();
+    let result = run_setup(&no_group(), 0, &bodies).unwrap();
+    let op = &result.operations[0];
+    assert_eq!(result.verify.gouged, 0);
+    // The passes over the part that do not end where they start: the level
+    // rings at the Bottom beside the block's sides, cut in pieces, aside.
+    let (mut start, mut at, mut open) = (None, op.path.moves()[0].to, Vec::new());
+    for m in op.path.moves() {
+        if m.role == MoveRole::Cut {
+            start.get_or_insert(at);
+        } else if let Some(s) = start.take()
+            && s.distance(at) > 1e-6
+            && s.z.max(at.z) > BOTTOM + 1e-3
+        {
+            open.push((s, at));
+        }
+        at = m.to;
+    }
+    // Inside the pocket: within its radius and a half of the tool's of its
+    // middle, seen from above.
+    let pocket = |p: DVec3| p.truncate().length() < CUP + 2.5;
+    let outside: Vec<_> = open
+        .iter()
+        .filter(|(a, b)| !pocket(*a) || !pocket(*b))
+        .collect();
+    assert!(outside.is_empty(), "arcs ending on the block: {outside:?}");
+    assert!(open.len() <= 1, "open passes: {open:?}");
+    let mut lifts = 0;
+    let mut at = op.path.moves()[0].to;
+    for m in op.path.moves() {
+        if m.role == MoveRole::Rapid && m.to.z > at.z + 1e-9 && m.to.truncate() == at.truncate() {
+            lifts += 1;
+        }
+        at = m.to;
+    }
+    assert!(lifts <= 4, "{lifts} lifts");
+}
+
 /// A ring's radius at an angle from +X.
 type Radius = Box<dyn Fn(f64) -> f64>;
 

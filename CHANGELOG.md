@@ -50,9 +50,10 @@ the same notes at more length.
   end as before; the simulated stock is left no higher on the wall's top,
   the rim or the outside's top. An edge that runs off the area, or along a
   wall too narrow seen from above, is crossed as before, and outside in is
-  as it was. It costs elsewhere: on a block with an off-centre pocket cut
-  inside out, the rings outside the pocket now start from its rim and end in
-  arcs on the block's edge, lifting 6 times where 3.
+  as it was. Where the rim breaks the ground into zones whose rings cannot
+  all close, as on a block with an off-centre pocket, whose rings from the
+  rim out would end in arcs on the block's edge, the ground is cut as one,
+  as it was: the program is byte for byte the one before, lifting 3 times.
 
 - **A finish over the part goes across and down to a ring just under the
   last** ([decision 0004, amended](docs/decisions/0004-linking-and-entries.md)).

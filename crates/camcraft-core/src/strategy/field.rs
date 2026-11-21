@@ -53,6 +53,7 @@ pub(crate) fn level_lines(
 
 /// A grid over an area: which of its nodes are inside, and whether it was
 /// coarsened.
+#[derive(Clone)]
 pub(crate) struct AreaGrid {
     /// The grid, a node's height given only inside the area and beside it.
     pub(crate) grid: TriGrid,
