@@ -477,11 +477,16 @@ fn no_ring_rolls_over_the_rim(order: &str) {
 
 /// [`JOB`] with nothing avoided: the floor machined as the rest.
 fn no_group() -> Job {
+    no_group_cut("inside-out")
+}
+
+/// [`no_group`], cut `order`.
+fn no_group_cut(order: &str) -> Job {
     let text = JOB
         .split("[[setup.operation.surfaces.group]]")
         .next()
         .unwrap();
-    toml::from_str(text).unwrap()
+    toml::from_str(&text.replace("inside-out", order)).unwrap()
 }
 
 /// How high the egg bowl's floor is: 4 under its rim.
@@ -583,9 +588,22 @@ fn sharpest(ring: &[DVec3]) -> f64 {
 /// gouged.
 #[test]
 fn an_egg_bowl_is_ringed_out_from_a_spine() {
+    an_egg_bowl_ringed("inside-out");
+}
+
+/// [`an_egg_bowl_is_ringed_out_from_a_spine`], from the boundary in: the
+/// same rings round the spine, cut in to it, the spine last (decision 0040).
+#[test]
+fn outside_in_an_egg_bowl_is_ringed_in_to_a_spine() {
+    an_egg_bowl_ringed("outside-in");
+}
+
+/// [`an_egg_bowl_is_ringed_out_from_a_spine`], cut `order`.
+fn an_egg_bowl_ringed(order: &str) {
+    let inside_out = order == "inside-out";
     let body = egg_bowl(40.0);
     let bodies: Bodies<'_> = [("bowl", &body)].into_iter().collect();
-    let job = no_group();
+    let job = no_group_cut(order);
     let result = run_setup(&job, 0, &bodies).unwrap();
     let op = &result.operations[0];
     assert_eq!(result.verify.gouged, 0);
@@ -598,29 +616,47 @@ fn an_egg_bowl_is_ringed_out_from_a_spine() {
         .filter(|r| r.iter().all(|p| p.z < EGG_FLOOR + 1.0))
         .collect();
     assert!(inside.len() > 10, "{} rings inside", inside.len());
+    // The two round the spine: the first cut inside out, the last outside in.
+    let n = inside.len();
     let sharp: Vec<(usize, f64)> = inside
         .iter()
         .map(|r| sharpest(r))
         .enumerate()
-        .skip(2)
-        .filter(|&(_, turn)| turn > 30.0)
+        .filter(|&(i, turn)| turn > 30.0 && if inside_out { i >= 2 } else { i + 2 < n })
         .collect();
-    assert!(sharp.is_empty(), "rings turning sharply: {sharp:?}");
+    assert!(
+        sharp.is_empty(),
+        "{order}: rings turning sharply: {sharp:?}"
+    );
     // On the floor, where the tool's tip is where it touches, the rings are
     // a stepover apart: across the spine's middle, and on along its line
-    // past each of its ends. It is the first pass, open.
-    let spine: Vec<DVec3> = op
-        .path
-        .moves()
-        .iter()
-        .skip_while(|m| m.role != MoveRole::Cut)
-        .take_while(|m| m.role == MoveRole::Cut)
-        .map(|m| m.to)
-        .collect();
+    // past each of its ends. It is an open pass, the first inside out and
+    // the last outside in.
+    let mut runs: Vec<Vec<DVec3>> = vec![Vec::new()];
+    for m in op.path.moves() {
+        if m.role == MoveRole::Cut {
+            if let Some(run) = runs.last_mut() {
+                run.push(m.to);
+            }
+        } else if runs.last().is_some_and(|r| !r.is_empty()) {
+            runs.push(Vec::new());
+        }
+    }
+    runs.retain(|r| !r.is_empty());
+    let spine = if inside_out {
+        runs.first()
+    } else {
+        runs.last()
+    }
+    .cloned()
+    .unwrap_or_default();
     let (west, east) = spine.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
         (lo.min(p.x), hi.max(p.x))
     });
-    assert!(east - west > 5.0, "the first pass is no spine: {spine:?}");
+    assert!(
+        east - west > 5.0,
+        "{order}: that pass is no spine: {spine:?}"
+    );
     let middle = 0.5 * (west + east);
     for (theta, from) in [
         (std::f64::consts::FRAC_PI_2, 0.0),
@@ -645,7 +681,7 @@ fn an_egg_bowl_is_ringed_out_from_a_spine() {
             let gap = w[0].distance(w[1]);
             assert!(
                 gap < 1.05 * STEPOVER,
-                "{theta}: rings {gap} apart on the floor at {:?}",
+                "{order} {theta}: rings {gap} apart on the floor at {:?}",
                 w[0]
             );
         }
@@ -682,16 +718,19 @@ fn section_from(
 /// inside the rim are as they were. The round bowl's innermost rings come
 /// to a point but its spine is nought long; the square's outermost ring has
 /// corners already, so it has no last smooth ring. No spine, so no open
-/// pass, and nothing blended inside.
+/// pass, and nothing blended inside. The same in either order.
 #[test]
 fn a_round_bowl_and_a_square_pocket_keep_their_rings() {
     let round = |p: DVec3| p.truncate().length() < CUP + 1.5;
     let square = |p: DVec3| p.x.abs().max(p.y.abs()) < 15.0;
     let bodies_and_rims: [(Body, &dyn Fn(DVec3) -> bool); 2] =
         [(cup(80.0), &round), (square_cup(12.0), &square)];
-    for (body, within) in &bodies_and_rims {
+    for ((body, within), order) in bodies_and_rims
+        .iter()
+        .flat_map(|b| ["inside-out", "outside-in"].map(|o| (b, o)))
+    {
         let bodies: Bodies<'_> = [("bowl", body)].into_iter().collect();
-        let result = run_setup(&no_group(), 0, &bodies).unwrap();
+        let result = run_setup(&no_group_cut(order), 0, &bodies).unwrap();
         let op = &result.operations[0];
         assert_eq!(result.verify.gouged, 0);
         let StrategyDetail::Scallop(report) = &op.detail else {
@@ -717,7 +756,7 @@ fn a_round_bowl_and_a_square_pocket_keep_their_rings() {
         };
         assert!(
             opened.is_empty(),
-            "open passes inside: {opened:?} ({report:?})"
+            "{order}: open passes inside: {opened:?} ({report:?})"
         );
     }
 }

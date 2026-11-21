@@ -39,7 +39,7 @@ group removed:
 ## What was decided
 
 - **The rings in from an edge are kept as long as they are smooth**
-  (`rings::last_smooth`). Inside out, going in down each chain of the
+  (`rings::last_smooth`). In either order, going in down each chain of the
   field's regions, `R*` is the parent of the first ring with a corner, where
   that parent's lines are one closed ring with its region inside it: no
   hole, no arc, no edge of the ground or the area inside it. A chain whose
@@ -54,11 +54,17 @@ group removed:
   the nodes beside it, and `b` the distance from `R*`, the field's own less
   its level, as a band blends into a far edge (`blend::between`, shared with
   `blend::band`); then `R*` and the field's rings out from it, as before.
+- **Outside in, the same rings, the mirror order** (amended 2026-11-21): the
+  rings a spine makes do not depend on the order they are cut in. Chained
+  under `R*`, the spine deepest, they are cut `R*` first, then the blended
+  rings in, the whole rings round the spine in, and the spine last: the tool
+  steps from the innermost ring onto the spine's end, staying down, and
+  lifts once, at the end.
 - **Otherwise the rings are as they were**: no `R*`; a spine shorter than a
   stepover, as in a round bowl, whose innermost circles turn more sharply
   than the crease angle but whose spine is nought long; a spine leaving
   `R*`; a middle line in pieces; or the band refused (`blend::start`,
-  `BAND_LIMIT`). Outside in is unchanged.
+  `BAND_LIMIT`).
 
 ## Considered and not chosen
 
@@ -117,6 +123,27 @@ Since the band's count takes its two distances' gradients as unit
 The bowl feeds 41.44 m where 41.65; on three sections its band's rings are
 0.37 to 1.00 mm apart where the tool touches, where 0.32 to 0.89.
 
+The bowl with the floor's group removed, outside in, before the spine was
+laid in that order (bff711a) and with it:
+
+| | before | now |
+|---|---|---|
+| Fed | 40.43 m | 41.03 m |
+| of it, inside the rim | 17.01 m | 17.61 m |
+| Lifts | 1, the last retract | 1, the last retract |
+| Closed rings turning over 30° over 1 mm | 24 of 121 | 2 of 121, the two round the spine, 48.1° and 30.8° |
+
+The innermost ring round the spine ends 0.87 mm from the spine's east end,
+and the tool goes onto it staying down; the spine runs to its west end, and
+the tool lifts there, once. Across the spine, on sections square to it
+through its middle, the rings are as far apart where the tool touches as
+inside out's, gap for gap; along its line past its east end, 0.91 to 1.05
+mm, as inside out's. On `ops_3d`, the chain round the block's outside has
+an `R*`, at level 15, whose spine is refused, in either order; Scallop's
+three comparisons with Fusion have none. Those programs, the bowl with its
+floor avoided either way, and every program inside out are byte for byte as
+they were.
+
 ## Still not done
 
 - The band's rings bunch where `R*` is nearest the spine, on the user's bowl
@@ -127,6 +154,5 @@ The bowl feeds 41.44 m where 41.65; on three sections its band's rings are
   31° to 47° over a millimetre on a bowl in the tests with a 63° wall
   straight off its floor; the test bowl's wall rises off its floor with no
   crease.
-- Outside in, the rings in from an edge keep their points (decision 0039).
 - The first two rings round the spine turn as sharply as their ends are
   round.

@@ -260,11 +260,6 @@ pocket's rim do not all close, and the ground is cut as one.
   the field keeps where two fronts meet inside a cliff's edge, as a node of
   its own there, a zone is not measured from every edge to close its rings,
   and such a pocket's rim is climbed.
-- With the floor's group removed, outside in still measures the inside in
-  from the rim's inner border, the zone having no inner edge, so its
-  innermost rings still come to points at the ends of the lens-shaped floor:
-  16 rings turn more than 45° over a millimetre, where 21 did. The spine is
-  laid inside out only (decision 0040).
 - A band's rings still crowd where it is narrow, as a blend between two
   lines at a slant does: the inside's band into the floor's edge outside in
   has its 8 rings across 1.15 mm where it is narrowest, 0.13 mm apart.
@@ -275,5 +270,6 @@ pocket's rim do not all close, and the ground is cut as one.
   in height by 0.06 to 0.09 mm every few millimetres, about the job's
   tolerance of 0.05 (decision 0038).
 
-With the floor's group removed, inside out, the innermost rings turned to a
-point at the ends of the lens-shaped floor; decision 0040 took those away.
+With the floor's group removed, the innermost rings turned to a point at
+the ends of the lens-shaped floor, in either order; decision 0040 took
+those away.

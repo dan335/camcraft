@@ -147,10 +147,11 @@ the rings of the ground either side cannot all close so, a band into an edge
 being too wide to blend, as round a pocket off centre in a block, the edges
 are crossed as before; so is an edge that runs off the area, or one beside a
 wall too narrow seen from above.
-Inside out, where rings in from an edge would come to points, as at the ends
-of an oval floor with nothing avoided, the last ring going in with no corner
-is kept and inside it the rings go out from a spine, a line midway between
-its two sides, and blend into it
+Where rings in from an edge would come to points, as at the ends of an oval
+floor with nothing avoided, the last ring going in with no corner is kept
+and inside it the rings go round a spine, a line midway between its two
+sides, and blend into it: inside out from the spine out, outside in in to
+it, the spine last
 ([decision 0040](decisions/0040-scallop-spine-inside-the-last-smooth-ring.md)).
 Up an
 upright wall above a face avoided, as a pocket's above its floor, the rings

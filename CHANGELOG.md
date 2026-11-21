@@ -6,6 +6,17 @@ the same notes at more length.
 
 ## Unreleased
 
+- **Outside in too, Scallop's innermost rings go round a spine**
+  ([decision 0040](docs/decisions/0040-scallop-spine-inside-the-last-smooth-ring.md)).
+  A new Scallop starts outside in, and there, with nothing avoided, a user's
+  bowl's innermost rings still came to sharp points at both ends of its
+  floor: 24 of its rings turned more than 30° over a millimetre. Now the
+  rings inside the last smooth ring are the ones inside out lays round a
+  spine along its middle, cut in to it, the spine last: only the two
+  smallest round the spine turn so sharply. It feeds 41.03 m where 40.43,
+  lifting once as before. Fusion's `ops_3d`, Scallop's comparisons with
+  Fusion, and inside out are as they were.
+
 - **Scallop's blended rings are counted by their real spacing**
   ([decision 0038, amended](docs/decisions/0038-scallop-rings-blend-into-an-edge-at-a-slant.md)).
   A band's count is how far apart its rings would lie at their widest,

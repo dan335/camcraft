@@ -12,8 +12,8 @@
 //! inner edges, the outer boundary's rings and where the tool leaves the part
 //! are the field's far end, each piece's a node of its own, cut last.
 //!
-//! Inside out, inside the last ring with no corner going in, the field's
-//! rings further in give way to rings laid out from a spine ([`spine`]).
+//! Inside the last ring with no corner going in, the field's rings further
+//! in give way to rings laid out from a spine ([`spine`]), in either order.
 //!
 //! Where the rings blend into the far edge ([`blend`]), the field's lines past
 //! the last whole ring give way to the blended rings, each nested in the one
@@ -141,17 +141,16 @@ pub(super) fn plan(
     report.top_ups += regions.iter().filter(|r| !r.top_up.is_empty()).count() as u64;
     let mut plans = by_region(grid, lines, &mut regions);
     let diameter = 2.0 * seat.tool().max_radius();
-    // Inside out, inside the last smooth ring of each chain, rings out from
-    // its spine.
-    if params.order == Order::InsideOut {
-        for star in spine::last_smooth(&regions, &plans, step) {
-            let ring = spine::ring_of(&plans, star).map(|l| l.points.clone());
-            if let (Some(region), Some(ring)) = (regions.get(star), ring)
-                && let Some(inside) = spine::inside(grid, field, (region, &ring), (step, diameter))
-            {
-                report.blended += inside.blended as u64;
-                give_way(grid, &mut plans, star, inside);
-            }
+    // Inside the last smooth ring of each chain, rings out from its spine,
+    // in either order: chained under it, the spine deepest, they are cut
+    // from the spine out inside out and in to it outside in.
+    for star in spine::last_smooth(&regions, &plans, step) {
+        let ring = spine::ring_of(&plans, star).map(|l| l.points.clone());
+        if let (Some(region), Some(ring)) = (regions.get(star), ring)
+            && let Some(inside) = spine::inside(grid, field, (region, &ring), (step, diameter))
+        {
+            report.blended += inside.blended as u64;
+            give_way(grid, &mut plans, star, inside);
         }
     }
     // The far edge the rings blend into, and the region of the last whole
@@ -199,8 +198,10 @@ pub(super) fn plan(
 }
 
 /// Inside `R*`, region `star`, the field's rings further in give way to
-/// those laid out from its spine (`inside`): the spine, an open pass, cut
-/// first, then the rings out from it, nested one in the next under `star`.
+/// those laid out from its spine (`inside`): the spine, an open pass, and the
+/// rings out from it, nested one in the next under `star`, the spine
+/// deepest. Inside out the spine is cut first and the rings out from it;
+/// outside in, the rings in to it and the spine last.
 fn give_way(grid: &View<'_>, plans: &mut Vec<Plan>, star: usize, inside: spine::Inside) {
     let mut stack: Vec<usize> = plans
         .get(star)
