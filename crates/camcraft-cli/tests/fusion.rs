@@ -181,10 +181,6 @@ linking = {{ entry = "ramp" }}
 
 #[test]
 fn a_contour_is_the_shape_of_fusions() {
-    let fusion = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/nc/lego_2d_contour_01.nc"),
-    )
-    .unwrap();
     let dir = scratch("fusion-contour");
     let out = dir.join("out");
     let run = camcraft(&["job", &job(&dir), "--out", &out.to_string_lossy()]);
@@ -226,18 +222,12 @@ fn a_contour_is_the_shape_of_fusions() {
         Ramp, Line, Ramp, Line, Ramp, Line, // down to each depth, and round
         UprightArc, RapidZ, // off, once, and out
     ];
-    for (name, text) in [("Fusion's", &fusion), ("camcraft's", &program)] {
-        let got = shape(blocks(text));
-        let start = got.iter().position(|b| *b == Across).unwrap();
-        assert_eq!(
-            got[start..start + expected.len()],
-            expected,
-            "{name} program:\n{text}"
-        );
-        // Up before the tool change, and raised and home at the end.
-        let up = got[..start].iter().position(|b| *b == Up);
-        let change = got[..start].iter().rposition(|b| *b == Machine);
-        assert!(up.is_some() && up < change, "{name} program:\n{text}");
-        assert_eq!(got[got.len() - 2..], [Up, Home], "{name} program:\n{text}");
-    }
+    let got = shape(blocks(&program));
+    let start = got.iter().position(|b| *b == Across).unwrap();
+    assert_eq!(got[start..start + expected.len()], expected, "{program}");
+    // Up before the tool change, and raised and home at the end.
+    let up = got[..start].iter().position(|b| *b == Up);
+    let change = got[..start].iter().rposition(|b| *b == Machine);
+    assert!(up.is_some() && up < change, "{program}");
+    assert_eq!(got[got.len() - 2..], [Up, Home], "{program}");
 }

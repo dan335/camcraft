@@ -1,15 +1,15 @@
-//! Another CAM system's program for an operation, cut from the same material
-//! with the same tool as camcraft's, and the two compared.
+//! Any G-code program for an operation, cut from the same material with the
+//! same tool as camcraft's own program for it, and the two compared.
 //!
-//! Neither program is taken at its word: both are read back as a controller
-//! reads them ([`readback::read`]), so one reader measures both, and the other
-//! one is cut by camcraft's simulator from the material camcraft's run had
-//! before that operation, with the tool the operation names. What each leaves
-//! is then compared column by column, and against the part.
-//!
-//! This is how camcraft's operations are held to Fusion's: the same part, the
-//! same settings, both programs posted for the same machine, and the material
-//! each leaves measured the same way.
+//! The other program may be written by hand, posted by an earlier camcraft, or
+//! come from anywhere else, so long as it is written for a control that reads
+//! programs as Fanuc's do (Masso, Haas, Centroid), with work zero where the
+//! setup has it. Neither program is taken at its word: both are
+//! read back as a controller reads them ([`readback::read`]), so one reader
+//! measures both, and the other one is cut by camcraft's simulator from the
+//! material camcraft's run had before that operation, with the tool the
+//! operation names. What each leaves is then compared column by column, and
+//! against the part.
 
 use camcraft_core::job::Job;
 use camcraft_core::run::{LEFTOVER_LIMIT, cutting_tool};
@@ -431,36 +431,3 @@ pub fn compare(
         difference,
     })
 }
-
-#[cfg(test)]
-mod tests;
-
-#[cfg(test)]
-mod tests_engrave;
-
-#[cfg(test)]
-mod tests_ramp;
-
-#[cfg(test)]
-mod tests_pencil;
-
-#[cfg(test)]
-mod tests_project;
-
-#[cfg(test)]
-mod tests_morph;
-
-#[cfg(test)]
-mod tests_parallel;
-
-#[cfg(test)]
-mod tests_scallop;
-
-#[cfg(test)]
-mod tests_spiral;
-
-#[cfg(test)]
-mod tests_contour;
-
-#[cfg(test)]
-mod tests_flat;

@@ -51,14 +51,15 @@ enum Command {
     /// printed. With `--out`, writes one program per operation, named after its
     /// setup, and refuses to write any unless every setup passed its checks.
     Job(JobArgs),
-    /// Compare another CAM system's programs with camcraft's, operation by
-    /// operation.
+    /// Cut any G-code program from the same stock as one of a job's operations
+    /// and compare it with camcraft's own program for it.
     ///
-    /// Runs one setup of a job, then cuts each other program from the material
+    /// Runs one setup of a job, then cuts each program given from the material
     /// camcraft had before that operation, with the operation's tool, and
     /// compares the two: what each program does, read back as a controller reads
     /// it, and the material each leaves, column by column and against the part.
-    /// Writes nothing.
+    /// A program is read as a Fanuc-style control (Masso, Haas, Centroid) reads
+    /// it, with work zero where the setup has it. Writes nothing.
     Compare(CompareArgs),
 }
 
@@ -71,8 +72,8 @@ struct CompareArgs {
     #[arg(long)]
     setup: Option<String>,
 
-    /// An operation and the other program for it, as `OPERATION=PROGRAM`. Give
-    /// it once for each operation to compare.
+    /// An operation and a G-code program to compare with it, as
+    /// `OPERATION=PROGRAM`. Give it once for each operation to compare.
     #[arg(required = true, value_name = "OPERATION=PROGRAM")]
     programs: Vec<String>,
 

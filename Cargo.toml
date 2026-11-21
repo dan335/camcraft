@@ -95,8 +95,8 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.camcraft-core]
 opt-level = 2
-# The Fusion comparisons in camcraft-session spend theirs running whole jobs:
-# importing the STEP, posting, checking and comparing what each program leaves.
+# The regression tests in camcraft-session spend theirs running whole jobs:
+# importing the STEP, posting, checking and measuring what each operation leaves.
 [profile.dev.package.camcraft-session]
 opt-level = 2
 [profile.dev.package.camcraft-import]

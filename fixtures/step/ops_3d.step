@@ -13,8 +13,8 @@ FILE_NAME(
 /* time_stamp */ '2026-11-13T22:30:35-05:00',
 /* author */ (''),
 /* organization */ (''),
-/* preprocessor_version */ 'ST-DEVELOPER v20.2',
-/* originating_system */ 'Autodesk Translation Framework v15.17.0.0',
+/* preprocessor_version */ '',
+/* originating_system */ '',
 /* authorisation */ '');
 
 FILE_SCHEMA (('AUTOMOTIVE_DESIGN { 1 0 10303 214 3 1 1 }'));
