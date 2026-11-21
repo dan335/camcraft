@@ -42,7 +42,7 @@ use crate::strategy::StrategyError;
 use crate::strategy::field::{self, AreaGrid, OFF_PART};
 use crate::strategy::nesting::Order;
 
-use super::{MAX_HALVINGS, ScallopParams, ScallopReport, guided};
+use super::{MAX_HALVINGS, ScallopParams, ScallopReport, guided, length};
 
 /// The class of a node the tool rests on a face it machines at.
 pub(super) const MACHINED: u32 = 0;
@@ -245,38 +245,50 @@ fn cut_where_it_ends(
 /// Euler number, pieces less holes, is `(q1 - q3 - 2 qd) / 4` (Gray's). Nought
 /// is one piece round one hole.
 fn keep_ring_shaped(grid: &TriGrid, classes: &mut [u32]) {
+    let (piece, pieces) = strips(grid, classes);
+    let between = ground_round(grid, classes, (&piece, pieces));
+    let euler = euler_numbers(grid, (&piece, pieces));
+    for (class, p) in classes.iter_mut().zip(&piece) {
+        if *class == ROLLING && (euler.get(*p) != Some(&0) || between.get(*p) != Some(&true)) {
+            *class = MACHINED;
+        }
+    }
+}
+
+/// Lattice node `(x, y)` of `grid`, by its index, where it is on the grid.
+fn node_at(grid: &TriGrid, x: i64, y: i64) -> Option<usize> {
     let (nx, ny) = (i64::from(grid.nx()), i64::from(grid.ny()));
-    let at = |x: i64, y: i64| {
-        (x >= 0 && y >= 0 && x < nx && y < ny)
-            .then(|| usize::try_from(y * nx + x).ok())
-            .flatten()
-    };
-    let rolls = |classes: &[u32], i: usize| classes.get(i) == Some(&ROLLING);
-    // Each node's piece, joined across cells, corners included.
+    (x >= 0 && y >= 0 && x < nx && y < ny)
+        .then(|| usize::try_from(y * nx + x).ok())
+        .flatten()
+}
+
+/// Where lattice node `i` of `grid` is, as `(x, y)`.
+fn xy_of(grid: &TriGrid, i: usize) -> (i64, i64) {
+    let nx = i64::from(grid.nx());
+    (i as i64 % nx, i as i64 / nx)
+}
+
+/// Each node's piece of the strips of `classes` over `grid`, its nodes joined
+/// across cells, corners included, or `usize::MAX`; and how many there are.
+fn strips(grid: &TriGrid, classes: &[u32]) -> (Vec<usize>, usize) {
+    let rolls = |i: usize| classes.get(i) == Some(&ROLLING);
     let mut piece = vec![usize::MAX; classes.len()];
     let mut pieces = 0;
-    let mut between = Vec::new();
     for start in 0..classes.len() {
-        if !rolls(classes, start) || piece.get(start) != Some(&usize::MAX) {
+        if !rolls(start) || piece.get(start) != Some(&usize::MAX) {
             continue;
         }
         let mut stack = vec![start];
         if let Some(p) = piece.get_mut(start) {
             *p = pieces;
         }
-        let mut ground_round = true;
         while let Some(i) = stack.pop() {
-            let (x, y) = (i as i64 % nx, i as i64 / nx);
-            for dy in -BESIDE..=BESIDE {
-                for dx in -BESIDE..=BESIDE {
-                    let Some(j) = at(x + dx, y + dy) else {
-                        ground_round = false;
-                        continue;
-                    };
-                    if !rolls(classes, j) {
-                        ground_round &= classes.get(j) == Some(&MACHINED);
-                    } else if dx.abs() <= 1
-                        && dy.abs() <= 1
+            let (x, y) = xy_of(grid, i);
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    if let Some(j) = node_at(grid, x + dx, y + dy)
+                        && rolls(j)
                         && let Some(p) = piece.get_mut(j)
                         && *p == usize::MAX
                     {
@@ -286,16 +298,44 @@ fn keep_ring_shaped(grid: &TriGrid, classes: &mut [u32]) {
                 }
             }
         }
-        between.push(ground_round);
         pieces += 1;
     }
-    // Four times each piece's Euler number. Two pieces never share a square:
-    // they would be joined across its corner.
+    (piece, pieces)
+}
+
+/// For each of the `pieces` of the strips, `piece` each node's, whether the
+/// ground lies all round it, [`BESIDE`] nodes deep, on `grid`.
+fn ground_round(grid: &TriGrid, classes: &[u32], (piece, pieces): (&[usize], usize)) -> Vec<bool> {
+    let mut round = vec![true; pieces];
+    for (i, &p) in piece.iter().enumerate() {
+        let Some(ok) = round.get_mut(p) else {
+            continue;
+        };
+        let (x, y) = xy_of(grid, i);
+        for dy in -BESIDE..=BESIDE {
+            for dx in -BESIDE..=BESIDE {
+                *ok &= node_at(grid, x + dx, y + dy).is_some_and(|j| {
+                    let class = classes.get(j);
+                    class == Some(&ROLLING) || class == Some(&MACHINED)
+                });
+            }
+        }
+    }
+    round
+}
+
+/// Four times each of the `pieces`' Euler number, `piece` each node's, from
+/// the squares of four nodes round each cell of `grid`, the grid's own edge a
+/// cell wide of nodes of none. Two pieces never share a square: they would be
+/// joined across its corner.
+fn euler_numbers(grid: &TriGrid, (piece, pieces): (&[usize], usize)) -> Vec<i64> {
+    let (nx, ny) = (i64::from(grid.nx()), i64::from(grid.ny()));
     let mut euler = vec![0i64; pieces];
     for y in -1..ny {
         for x in -1..nx {
-            let corners = [at(x, y), at(x + 1, y), at(x + 1, y + 1), at(x, y + 1)].map(|i| {
-                i.and_then(|i| piece.get(i).copied())
+            let corners = [(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)].map(|(x, y)| {
+                node_at(grid, x, y)
+                    .and_then(|i| piece.get(i).copied())
                     .filter(|&p| p != usize::MAX)
             });
             let Some(p) = corners.iter().flatten().next().copied() else {
@@ -314,11 +354,7 @@ fn keep_ring_shaped(grid: &TriGrid, classes: &mut [u32]) {
             }
         }
     }
-    for (class, p) in classes.iter_mut().zip(&piece) {
-        if *class == ROLLING && (euler.get(*p) != Some(&0) || between.get(*p) != Some(&true)) {
-            *class = MACHINED;
-        }
-    }
+    euler
 }
 /// Where the tool leaves the part, each run of its cuts given the highest
 /// heights no higher than its own and rising or falling along it no more
@@ -558,8 +594,8 @@ fn cliff_edges(seat: &Seat<'_>, cut: &CutGrid, tolerance: f64) -> HashMap<(u32, 
                     };
                     seen.push(b);
                     let strip = against_a_strip(cut, a) || against_a_strip(cut, b);
-                    if let Some(line) = guided::bent(seat, (pa, pb), (tolerance, strip), scratch) {
-                        out.push(((a, b), guided::length(&line)));
+                    if let Some(line) = guided::bent(seat, (pa, pb), tolerance, strip, scratch) {
+                        out.push(((a, b), length(&line)));
                     }
                 }
             }

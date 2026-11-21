@@ -5,7 +5,6 @@
 //! already, as they are.
 
 use camcraft_geom::contour::{Region, polyline_length, simplify};
-use camcraft_geom::cut::View;
 use camcraft_geom::trigrid::TriSurface;
 use glam::DVec2;
 
@@ -15,8 +14,10 @@ use crate::strategy::StrategyError;
 use crate::strategy::parallel::{ParallelParams, ParallelReport, Run, sweep_polyline};
 use crate::strategy::slope::{SlopeCounts, Sloped};
 
+use super::distance::at;
 use super::ground::Ground;
 use super::guided;
+use super::length;
 use super::rings::Plan;
 
 /// A node's lines, laid on the part, and what was left out.
@@ -31,10 +32,7 @@ pub(super) struct Worked {
 /// What laying lines on the part needs.
 pub(super) struct Layer<'a> {
     pub(super) seat: &'a Seat<'a>,
-    /// The field's grid, cut where the ground ends.
-    pub(super) grid: &'a View<'a>,
-    /// The ground it is cut to, to say which of its nodes are where it ends
-    /// against a strip.
+    /// The ground the field runs over: its grid, cut where it ends.
     pub(super) ground: &'a Ground,
     /// The area, its own edge counted in: a point on it is in, or clipping
     /// to the area would cut it into bits ([`with_edge`](crate::strategy::with_edge)).
@@ -72,7 +70,7 @@ impl Layer<'_> {
         // placed by it; the area's edge, seen from above.
         for (stretches, by_field) in [(lines, true), (found, true), (edges, false)] {
             for (points, closed) in self.within.clip_lines(&stretches)? {
-                if !closed && polyline_length(&points) < 2.0 * self.grid.pitch() {
+                if !closed && polyline_length(&points) < 2.0 * self.ground.cut.grid().pitch() {
                     w.fragments += 1;
                     continue;
                 }
@@ -103,14 +101,14 @@ impl Layer<'_> {
     fn by_field(&self, line: (&[DVec2], bool), w: &mut Worked) {
         let runs = guided::sweep(
             self.seat,
-            (self.grid, &|n| self.ground.against_a_strip(n)),
+            self.ground,
             line,
             self.thin,
             &self.sweep,
             &mut w.sweep,
         );
         for run in runs {
-            if run.closed || guided::length(&run.points) >= self.seat.tool().max_radius() {
+            if run.closed || length(&run.points) >= self.seat.tool().max_radius() {
                 w.runs.push(run);
             } else {
                 w.fragments += 1;
@@ -130,14 +128,8 @@ impl Layer<'_> {
         let Some(beyond) = &self.beyond else {
             return true;
         };
-        let grid = self.grid;
-        let value = |n: u32| {
-            usize::try_from(n)
-                .ok()
-                .and_then(|i| beyond.get(i))
-                .copied()
-                .filter(|v| v.is_finite())
-        };
+        let grid = &self.ground.cut.view(None);
+        let value = |n: u32| at(beyond, n);
         points.iter().any(|&p| {
             // A line's point is on a grid edge: as far as the field says
             // along it, whichever of the triangles beside it is whole.

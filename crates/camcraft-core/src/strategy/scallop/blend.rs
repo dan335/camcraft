@@ -48,7 +48,7 @@
 use camcraft_geom::contour::Region;
 use camcraft_geom::cut::View;
 use camcraft_geom::geodesic::Seed;
-use camcraft_geom::isoline::{IsoLine, lines};
+use camcraft_geom::isoline::IsoLine;
 use camcraft_geom::trigrid::TriSurface;
 
 use crate::cutter::surfaces::Seat;
@@ -57,7 +57,7 @@ use crate::strategy::field::count;
 use crate::strategy::parallel::Run;
 use crate::strategy::waterline::Puller;
 
-use super::distance::Field;
+use super::distance::{Field, at, only_line};
 use super::ground::Edge;
 
 /// The widest band blended, in tool diameters: twice, as far as the tool
@@ -105,15 +105,8 @@ pub(super) fn band(
     if !far.closed {
         return None;
     }
-    let value = |d: &[f64], n: u32| {
-        usize::try_from(n)
-            .ok()
-            .and_then(|i| d.get(i))
-            .copied()
-            .filter(|v| v.is_finite())
-    };
     let d = &field.d;
-    let along: Vec<f64> = far.nodes.iter().filter_map(|&n| value(d, n)).collect();
+    let along: Vec<f64> = far.nodes.iter().filter_map(|&n| at(d, n)).collect();
     let nearest = along.iter().copied().reduce(f64::min)?;
     let furthest = along.iter().copied().reduce(f64::max)?;
     // The last ring half a stepover or more from the edge all round: the
@@ -163,13 +156,6 @@ pub(super) fn between(
     step: f64,
     (diameter, lattice): (f64, u32),
 ) -> Option<Band> {
-    let value = |d: &[f64], n: u32| {
-        usize::try_from(n)
-            .ok()
-            .and_then(|i| d.get(i))
-            .copied()
-            .filter(|v| v.is_finite())
-    };
     let base = f64::from(level) * step;
     // `t` on the band and the nodes beside it, so the last whole ring's
     // triangles have it at every corner.
@@ -179,7 +165,7 @@ pub(super) fn between(
         for (id, corners) in grid.triangles_at(n) {
             triangles.push(id);
             for m in corners {
-                let (Some(a), Some(b)) = (value(d, m), value(from_far, m)) else {
+                let (Some(a), Some(b)) = (at(d, m), at(from_far, m)) else {
                     continue;
                 };
                 if let Some(slot) = usize::try_from(m).ok().and_then(|i| t.get_mut(i))
@@ -205,7 +191,7 @@ pub(super) fn between(
         (0u32..)
             .zip(&on)
             .filter(|&(_, &on)| on)
-            .filter_map(|(n, _)| Some(value(d, n)? - base + value(from_far, n)?))
+            .filter_map(|(n, _)| Some(at(d, n)? - base + at(from_far, n)?))
             .fold(0.0, f64::max)
     };
     if widest > BAND_LIMIT * diameter {
@@ -214,16 +200,8 @@ pub(super) fn between(
     let rings = count((widest / step).ceil()).filter(|&n| n > 0)?;
     let mut out = Vec::new();
     for k in 1..rings {
-        let mut found = lines(
-            grid,
-            &t,
-            f64::from(k) / f64::from(rings),
-            triangles.iter().copied(),
-        );
-        match (found.pop(), found.is_empty()) {
-            (Some(ring), true) if ring.closed => out.push(ring),
-            _ => return None,
-        }
+        let level = f64::from(k) / f64::from(rings);
+        out.push(only_line(grid, &t, level, triangles.iter().copied()).filter(|r| r.closed)?);
     }
     Some(Band {
         level,
@@ -235,12 +213,7 @@ pub(super) fn between(
 /// Whether each node of `grid` is where the field `d` is at least `base` and
 /// reaches the edge `far` that way.
 fn reaching(grid: &View<'_>, d: &[f64], far: &Edge, base: f64) -> Vec<bool> {
-    let at_least = |n: u32| {
-        usize::try_from(n)
-            .ok()
-            .and_then(|i| d.get(i))
-            .is_some_and(|&v| v.is_finite() && v >= base)
-    };
+    let at_least = |n: u32| at(d, n).is_some_and(|v| v >= base);
     let mut on = vec![false; usize::try_from(grid.nodes()).unwrap_or(0)];
     let mut stack: Vec<u32> = far.nodes.iter().copied().filter(|&n| at_least(n)).collect();
     for &n in &stack {
@@ -270,13 +243,7 @@ fn reaching(grid: &View<'_>, d: &[f64], far: &Edge, base: f64) -> Vec<bool> {
 /// lattice: the slivers a cut cell is fanned into are too thin to say.
 fn apart(grid: &View<'_>, t: &[f64], id: u32) -> Option<f64> {
     let corners = grid.triangle(id)?;
-    let value = |n: u32| {
-        usize::try_from(n)
-            .ok()
-            .and_then(|i| t.get(i))
-            .copied()
-            .filter(|v| (0.0..=1.0).contains(v))
-    };
+    let value = |n: u32| at(t, n).filter(|v| (0.0..=1.0).contains(v));
     let [p, q, r] = corners.map(|n| grid.point(n));
     let [a, b, c] = corners.map(value);
     let (e1, e2) = (q? - p?, r? - p?);

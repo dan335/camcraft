@@ -12,6 +12,9 @@
 //! inner edges, the outer boundary's rings and where the tool leaves the part
 //! are the field's far end, each piece's a node of its own, cut last.
 //!
+//! Inside out, inside the last ring with no corner going in, the field's
+//! rings further in give way to rings laid out from a spine ([`spine`]).
+//!
 //! Where the rings blend into the far edge ([`blend`]), the field's lines past
 //! the last whole ring give way to the blended rings, each nested in the one
 //! before under that ring's region, the far edge last. The rings below where
@@ -82,22 +85,22 @@ pub(super) fn plan(
     let step = params.stepover;
     let (lines, mut regions) = levels(grid, &field.d, step, report);
     let mut plans = by_region(grid, lines, &mut regions);
+    let diameter = 2.0 * seat.tool().max_radius();
+    // Inside out, inside the last smooth ring of each chain, rings out from
+    // its spine.
     if params.order == Order::InsideOut {
-        let diameter = 2.0 * seat.tool().max_radius();
-        for star in last_smooth(&regions, &plans, step) {
-            out_from_a_spine(
-                grid,
-                field,
-                (&regions, star),
-                &mut plans,
-                (step, diameter),
-                report,
-            );
+        for star in spine::last_smooth(&regions, &plans, step) {
+            let ring = spine::ring_of(&plans, star).map(|l| l.points.clone());
+            if let (Some(region), Some(ring)) = (regions.get(star), ring)
+                && let Some(inside) = spine::inside(grid, field, (region, &ring), (step, diameter))
+            {
+                report.blended += inside.blended as u64;
+                give_way(grid, &mut plans, star, inside);
+            }
         }
     }
     // Measured out from the inner edges, the far edge the rings blend into,
     // and the region of the last whole ring before it.
-    let diameter = 2.0 * seat.tool().max_radius();
     let blended = field
         .outward
         .then(|| {
@@ -146,150 +149,10 @@ pub(super) fn plan(
     }
 }
 
-/// The line of `plans`' region `i`, where it is one closed ring with the
-/// region inside it: no hole, no arc, no edge.
-fn ring_of(plans: &[Plan], i: usize) -> Option<&Sloped> {
-    match plans.get(i)?.lines.as_slice() {
-        [line] if line.closed && turns_left(&line.points) => Some(line),
-        _ => None,
-    }
-}
-
-/// Going in down each chain of `regions`, `plans` holding their lines, the
-/// region of the last ring with no corner where the next in has one
-/// ([`spine::smooth`]), rings `step` apart: `R*`, where its ring is one
-/// closed ring with nothing inside it but the regions further in. None where
-/// the outermost ring of a chain already has a corner.
-fn last_smooth(regions: &[isoline::Region], plans: &[Plan], step: f64) -> Vec<usize> {
-    let smooth = |i: usize| ring_of(plans, i).filter(|l| spine::smooth(&l.points, step));
-    let mut stars = Vec::new();
-    let mut stack: Vec<usize> = (0..regions.len())
-        .filter(|&i| regions.get(i).is_some_and(|r| r.level == 1))
-        .collect();
-    while let Some(i) = stack.pop() {
-        let Some(region) = regions.get(i) else {
-            continue;
-        };
-        if smooth(i).is_some() {
-            stack.extend(region.children.iter().copied());
-            continue;
-        }
-        if ring_of(plans, i).is_some()
-            && let Some(parent) = region.parent
-            && regions.get(parent).is_some_and(|p| p.level >= 1)
-            && smooth(parent).is_some()
-            && !stars.contains(&parent)
-        {
-            stars.push(parent);
-        }
-    }
-    stars.sort_unstable();
-    stars
-}
-
-/// Inside `R*`, region `star` of `regions`, its lines laid out from its
-/// spine ([`spine`]): the spine, rings a stepover apart out from it, and the
-/// rings blending from the last of them into `R*`'s own ring, in place of the
-/// field's rings further in, rings `step` apart for a tool `diameter`
-/// across. Left as they are where there is no spine a stepover long inside
-/// it, or the band into it is refused.
-fn out_from_a_spine(
-    grid: &View<'_>,
-    field: &Field<'_>,
-    (regions, star): (&[isoline::Region], usize),
-    plans: &mut Vec<Plan>,
-    (step, diameter): (f64, f64),
-    report: &mut ScallopReport,
-) {
-    let (Some(region), Some(ring)) = (regions.get(star), ring_of(plans, star)) else {
-        return;
-    };
-    let ring = ring.points.clone();
-    let base = f64::from(region.level) * step;
-    let value = |d: &[f64], n: u32| {
-        usize::try_from(n)
-            .ok()
-            .and_then(|i| d.get(i))
-            .copied()
-            .filter(|v| v.is_finite())
-    };
-    // Each node's distance from `R*` inside it, the field's own less its
-    // level: the nodes joined to the region's own at or past that level, and
-    // those beside them outside it, less than nought.
-    let mut inside = vec![f64::INFINITY; field.d.len()];
-    let mut stack = vec![region.rep];
-    while let Some(n) = stack.pop() {
-        let Some(v) = value(&field.d, n) else {
-            continue;
-        };
-        match usize::try_from(n).ok().and_then(|i| inside.get_mut(i)) {
-            Some(slot) if !slot.is_finite() => *slot = v - base,
-            _ => continue,
-        }
-        if v >= base {
-            for (_, corners) in grid.triangles_at(n) {
-                stack.extend(corners);
-            }
-        }
-    }
-    let within = |n: u32| value(&inside, n).is_some_and(|v| v >= 0.0);
-    let Some(line) = spine::spine(field, (&ring, &inside), step) else {
-        return;
-    };
-    let seeds = spine::seeds(field, &line, within);
-    if seeds.is_empty() {
-        return;
-    }
-    let from_spine = field.measure(&seeds);
-    let at_ring: Vec<f64> = ring
-        .iter()
-        .filter_map(|&p| grid.interpolate(p, |n| value(&from_spine, n)))
-        .collect();
-    let (Some(nearest), Some(furthest)) = (
-        at_ring.iter().copied().reduce(f64::min),
-        at_ring.iter().copied().reduce(f64::max),
-    ) else {
-        return;
-    };
-    let Some(level) = blend::start(nearest, furthest, step, diameter) else {
-        return;
-    };
-    let level_base = f64::from(level) * step;
-    let on: Vec<bool> = (0u32..)
-        .zip(&from_spine)
-        .map(|(n, &v)| within(n) && v >= level_base)
-        .collect();
-    let lattice = field.ground.cut.grid().triangle_slots();
-    let Some(band) = blend::between(
-        grid,
-        (&from_spine, &inside),
-        (level, on),
-        step,
-        (diameter, lattice),
-    ) else {
-        return;
-    };
-    // The whole rings out from the spine, each one closed line inside `R*`.
-    let mut triangles: Vec<u32> = (0..grid.nodes())
-        .filter(|&n| within(n))
-        .flat_map(|n| grid.triangles_at(n).map(|(t, _)| t).collect::<Vec<_>>())
-        .collect();
-    triangles.sort_unstable();
-    triangles.dedup();
-    let mut rings = Vec::new();
-    for k in 1..=level {
-        let mut found = isoline::lines(
-            grid,
-            &from_spine,
-            f64::from(k) * step,
-            triangles.iter().copied(),
-        );
-        match (found.pop(), found.is_empty()) {
-            (Some(ring), true) if ring.closed => rings.push(ring),
-            _ => return,
-        }
-    }
-    // The field's rings further in give way.
+/// Inside `R*`, region `star`, the field's rings further in give way to
+/// those laid out from its spine (`inside`): the spine, an open pass, cut
+/// first, then the rings out from it, nested one in the next under `star`.
+fn give_way(grid: &View<'_>, plans: &mut Vec<Plan>, star: usize, inside: spine::Inside) {
     let mut stack: Vec<usize> = plans
         .get(star)
         .map(|p| p.children.clone())
@@ -300,13 +163,12 @@ fn out_from_a_spine(
             stack.extend(std::mem::take(&mut plan.children));
         }
     }
-    report.blended += band.rings.len() as u64;
-    let flat: Vec<DVec2> = line.iter().map(|p| p.truncate()).collect();
+    let flat: Vec<DVec2> = inside.spine.iter().map(|p| p.truncate()).collect();
     let spine = Plan {
         found: vec![boundary(grid, &flat, false)],
         ..Plan::default()
     };
-    let out = rings.into_iter().chain(band.rings).map(|mut ring| Plan {
+    let out = inside.rings.into_iter().map(|mut ring| Plan {
         lines: vec![sloped(grid, &mut ring)],
         ..Plan::default()
     });
@@ -314,15 +176,6 @@ fn out_from_a_spine(
     if let Some(plan) = plans.get_mut(star) {
         plan.children = root.into_iter().collect();
     }
-}
-
-/// Whether closed `points` turn left round what they bound, seen from above.
-fn turns_left(points: &[DVec2]) -> bool {
-    let n = points.len();
-    let twice: f64 = (0..n)
-        .filter_map(|i| Some(points.get(i)?.perp_dot(*points.get((i + 1) % n)?)))
-        .sum();
-    twice > 0.0
 }
 /// The rings below where the tool leaves the part ([`rings_below`]), each a
 /// node nested in the one cut before it, in order down from that line, or,

@@ -17,7 +17,13 @@
 //! avoided, and the far border of the strip inside it; its outer edge, the
 //! near border of the strip round it or where the tool leaves the part, is
 //! its far end. A zone with no inner edge is measured from every edge of it,
-//! as the whole ground with none is.
+//! as the whole ground with none is; inside the last smooth ring going in,
+//! its rings are laid out from a spine instead ([`spine`]).
+//!
+//! The whole ground is one field, measured out from every inner edge of it or
+//! from every edge, where a zone's is measured from its own: the same seeds
+//! in another order, and the march breaks ties by seed, so the two are kept
+//! apart.
 //!
 //! Down a cliff, where a grid edge falls steeper than 45° and bends inside
 //! its cell, the edge is measured along the surface the tool rides, from
@@ -25,14 +31,17 @@
 //! corner (decision 0035).
 //!
 //! [`guided::bent`]: super::guided::bent
+//! [`spine::seeds`]: super::spine::seeds
+//! [`spine`]: super::spine
 
 use std::collections::HashSet;
 
 use camcraft_geom::contour::{Contour, Region};
 use camcraft_geom::cut::{CutGrid, NO_BAND};
 use camcraft_geom::geodesic::Seed;
+use camcraft_geom::isoline::{self, IsoLine};
 use camcraft_geom::trigrid::TriSurface;
-use glam::{DVec2, DVec3};
+use glam::DVec2;
 use rayon::prelude::*;
 
 use crate::cutter::surfaces::Seat;
@@ -176,10 +185,7 @@ fn whole<'g>(
         seeds.extend(seeds_along(&ground.cut, |_, class| class == OFF_PART));
         seeds
     };
-    let mut d = ground.measure(&seeds);
-    if !outward {
-        negate_outside(ground, area, &mut d);
-    }
+    let d = measured(ground, area, &seeds, outward);
     let (far_edges, edges) = edges
         .into_iter()
         .partition(|e| outward && e.past == OFF_PART);
@@ -251,10 +257,7 @@ fn zoned<'g>(
         if seeds.is_empty() {
             continue;
         }
-        let mut d = ground.measure(&seeds);
-        if !outward {
-            negate_outside(ground, area, &mut d);
-        }
+        let d = measured(ground, area, &seeds, outward);
         let (edges, far_edges) = edges.into_iter().partition(|e| !outward || inner(e));
         let extent = extents
             .get(usize::try_from(b).unwrap_or(usize::MAX))
@@ -288,12 +291,8 @@ fn zoned<'g>(
 /// Whether closed `edge` turns left round what it bounds, seen from above:
 /// the ground inside it.
 fn turns_left(edge: &Edge) -> bool {
-    let flat: Vec<DVec2> = edge.points.iter().map(|p: &DVec3| p.truncate()).collect();
-    let n = flat.len();
-    let twice: f64 = (0..n)
-        .filter_map(|i| Some(flat.get(i)?.perp_dot(*flat.get((i + 1) % n)?)))
-        .sum();
-    twice > 0.0
+    let flat: Vec<DVec2> = edge.points.iter().map(|p| p.truncate()).collect();
+    super::turns_left(&flat)
 }
 
 /// The area seen from above of the box round each band of `ground`'s grid
@@ -317,21 +316,52 @@ fn extents(ground: &Ground) -> Vec<f64> {
         .collect()
 }
 
-/// `d` negative outside `area`, so only the lines inside it are passes.
-/// Measured out from the inner edges, the field runs on past the area's outer
-/// edge from inside it, and its lines are cut there: it does not fall to 0
-/// there.
-fn negate_outside(ground: &Ground, area: &Region, d: &mut [f64]) {
-    for (n, v) in (0u32..).zip(d.iter_mut()) {
-        if !inside(ground, area, n) {
-            *v = -*v;
+/// Each node's distance along the surface of `ground` from `seeds`, measured
+/// `outward` from inner edges or not. Measured in, it is negative outside
+/// `area`, so only the lines inside it are passes; measured out, the field
+/// runs on past the area's outer edge from inside it, and its lines are cut
+/// there: it does not fall to 0 there.
+fn measured(ground: &Ground, area: &Region, seeds: &[Seed], outward: bool) -> Vec<f64> {
+    let mut d = ground.measure(seeds);
+    if !outward {
+        for (n, v) in (0u32..).zip(d.iter_mut()) {
+            if !inside(ground, area, n) {
+                *v = -*v;
+            }
         }
+    }
+    d
+}
+
+/// Node `n`'s value in the field `d`, where it has one.
+pub(super) fn at(d: &[f64], n: u32) -> Option<f64> {
+    usize::try_from(n)
+        .ok()
+        .and_then(|i| d.get(i))
+        .copied()
+        .filter(|v| v.is_finite())
+}
+
+/// The line of `d` over `grid` at `level`, across `triangles`, where it is
+/// the only one.
+pub(super) fn only_line(
+    grid: &impl TriSurface,
+    d: &[f64],
+    level: f64,
+    triangles: impl IntoIterator<Item = u32>,
+) -> Option<IsoLine> {
+    let mut found = isoline::lines(grid, d, level, triangles);
+    match (found.pop(), found.is_empty()) {
+        (Some(line), true) => Some(line),
+        _ => None,
     }
 }
 
 /// Seeds at each node within a cell's diagonal of `rings` where they cross the
 /// part, at its exact distance to the nearest point of them, over the part,
-/// one drop a node. Off the part the area's edge is no edge of the ground: it
+/// one drop a node: the area's rings are seen from above, so each node is
+/// measured to its foot on them, dropped onto the part, where a spine's seeds
+/// ([`spine::seeds`]) are measured to a line already on it. Off the part the area's edge is no edge of the ground: it
 /// ends where the tool leaves the part, found exactly, and a node up the steep
 /// way down to there measured to the area's edge seen from above would be a
 /// fraction of its way along the surface from it.
@@ -384,12 +414,7 @@ fn unreached(ground: &Ground, area: &Region, zones: &[Field<'_>]) -> u64 {
             inside(ground, area, n)
                 && cut.class(n) == MACHINED
                 && view.triangles_at(n).next().is_some()
-                && !zones.iter().any(|z| {
-                    usize::try_from(n)
-                        .ok()
-                        .and_then(|i| z.d.get(i))
-                        .is_some_and(|v| v.is_finite())
-                })
+                && !zones.iter().any(|z| at(&z.d, n).is_some())
         })
         .count() as u64
 }

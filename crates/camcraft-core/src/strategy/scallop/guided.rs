@@ -22,7 +22,8 @@ use glam::{DVec2, DVec3};
 use crate::cutter::surfaces::Seat;
 use crate::strategy::parallel::{Line, ParallelParams, ParallelReport, Run, runs_of};
 
-use super::MAX_HALVINGS;
+use super::ground::Ground;
+use super::{MAX_HALVINGS, length};
 
 /// Steeper than this, as a rise over a run, a point is found at its height
 /// round the wall, not dropped: 45°, where a millimetre sideways is more than
@@ -42,7 +43,7 @@ const PROFILE_PIECES: u32 = 8;
 /// straight line between its ends, as at a wall's foot or top inside the cell,
 /// or down a cliff, the straight line between the nodes cuts the corner and is
 /// no measure of the way along it. Then the tool dropped at [`PROFILE_PIECES`]
-/// even steps, the nodes at the ends. With `strip`, an end where the ground
+/// even steps, the nodes at the ends. Where `strip`, an end where the ground
 /// ends against a strip the tool rolls over a sharp edge along (decision
 /// 0039), each no higher than the higher end and no lower than the lower: the
 /// way from one to the other climbs or falls, and where the straight line
@@ -58,7 +59,8 @@ const PROFILE_PIECES: u32 = 8;
 pub(super) fn bent(
     seat: &Seat<'_>,
     (a, b): (DVec3, DVec3),
-    (tolerance, strip): (f64, bool),
+    tolerance: f64,
+    strip: bool,
     scratch: &mut Vec<u32>,
 ) -> Option<Vec<DVec3>> {
     if (a.z - b.z).abs() <= STEEP * a.truncate().distance(b.truncate()) {
@@ -86,15 +88,6 @@ pub(super) fn bent(
     Some(out)
 }
 
-/// The length of a polyline.
-pub(super) fn length(points: &[DVec3]) -> f64 {
-    points
-        .iter()
-        .zip(points.iter().skip(1))
-        .map(|(a, b)| a.distance(*b))
-        .sum()
-}
-
 /// The point `along` the polyline `points` from its first.
 fn at_length(points: &[DVec3], mut along: f64) -> Option<DVec3> {
     for (&a, &b) in points.iter().zip(points.iter().skip(1)) {
@@ -114,23 +107,25 @@ fn at_length(points: &[DVec3], mut along: f64) -> Option<DVec3> {
 /// Where the grid's line point `p` is on the part, by the grid: on a bent
 /// edge ([`bent`]), as far along the surface down it as `p` is along the
 /// edge, the way the field measured it; elsewhere, `p` at the grid's height
-/// there. `strip` says which nodes are where the ground ends against a strip.
+/// there.
 fn lifted(
     seat: &Seat<'_>,
-    (grid, strip): (&impl TriSurface, &impl Fn(u32) -> bool),
+    ground: &Ground,
     p: DVec2,
     tolerance: f64,
     scratch: &mut Vec<u32>,
 ) -> DVec3 {
+    let grid = ground.cut.view(None);
     let flat = p.extend(grid.height_at(p).unwrap_or(f64::NAN));
-    let Some(((a, b), against)) = edge_at(grid, p)
-        .and_then(|(a, b)| Some(((grid.point(a)?, grid.point(b)?), strip(a) || strip(b))))
-    else {
+    let Some(((a, b), strip)) = edge_at(&grid, p).and_then(|(a, b)| {
+        let strip = ground.against_a_strip(a) || ground.against_a_strip(b);
+        Some(((grid.point(a)?, grid.point(b)?), strip))
+    }) else {
         return flat;
     };
     let span = a.truncate().distance(b.truncate());
     let f = (p.distance(a.truncate()) / span).clamp(0.0, 1.0);
-    bent(seat, (a, b), (tolerance, against), scratch)
+    bent(seat, (a, b), tolerance, strip, scratch)
         .and_then(|line| at_length(&line, f * length(&line)))
         .unwrap_or(flat)
 }
@@ -162,15 +157,14 @@ struct Guide {
 }
 
 /// The tool's tip on the part along `points`, a line of the field over
-/// `grid`, closed back to its first if `closed`: thinned to `thin` of the
-/// line through its neighbours, then sampled and refined to the tolerance as
-/// a parallel pass is, and broken where one is. On ground steeper than
-/// [`STEEP`] each point is found at the grid's height there, round the wall
-/// across the slope ([`beside`]). `strip` says which nodes of `grid` are where
-/// the ground ends against a strip.
+/// `ground`'s grid cut, closed back to its first if `closed`: thinned to
+/// `thin` of the line through its neighbours, then sampled and refined to the
+/// tolerance as a parallel pass is, and broken where one is. On ground
+/// steeper than [`STEEP`] each point is found at the grid's height there,
+/// round the wall across the slope ([`beside`]).
 pub(super) fn sweep(
     seat: &Seat<'_>,
-    (grid, strip): (&impl TriSurface, &impl Fn(u32) -> bool),
+    ground: &Ground,
     (points, closed): (&[DVec2], bool),
     thin: f64,
     params: &ParallelParams,
@@ -179,8 +173,9 @@ pub(super) fn sweep(
     let mut scratch = Vec::new();
     let lifted: Vec<DVec3> = points
         .iter()
-        .map(|&p| lifted(seat, (grid, strip), p, params.tolerance, &mut scratch))
+        .map(|&p| lifted(seat, ground, p, params.tolerance, &mut scratch))
         .collect();
+    let grid = &ground.cut.view(None);
     let guides: Vec<Guide> = thinned(&lifted, closed, thin)
         .into_iter()
         .map(|at| Guide {

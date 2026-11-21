@@ -17,20 +17,178 @@
 //! `R*`: the field's own value less `R*`'s level. A stadium grown from the
 //! spine by `D*` reaches the ends of `R*` and its widest place together.
 //!
+//! Where there is no `R*`, the spine would be shorter than a stepover or leave
+//! `R*`, its middle comes out in pieces, or the band into `R*` is refused, the
+//! field's rings are left as they are.
+//!
 //! [`blend::between`]: super::blend::between
 
+use camcraft_geom::cut::View;
 use camcraft_geom::geodesic::Seed;
-use camcraft_geom::isoline;
+use camcraft_geom::isoline::{self, IsoLine};
 use camcraft_geom::mesh::closest_point_on_segment;
 use camcraft_geom::topology::CREASE_DEGREES;
 use camcraft_geom::trigrid::TriSurface;
 use glam::{DVec2, DVec3};
 
-use super::distance::Field;
+use crate::strategy::slope::Sloped;
 
+use super::blend;
+use super::distance::{Field, at, only_line};
+use super::rings::Plan;
+use super::{length, turns_left};
+
+/// What `R*` holds laid out from its spine: the spine, the rings out from it
+/// in the order they are cut, and how many of those blend into `R*`.
+pub(super) struct Inside {
+    pub(super) spine: Vec<DVec3>,
+    pub(super) rings: Vec<IsoLine>,
+    pub(super) blended: usize,
+}
+
+/// Going in down each chain of `regions`, `plans` holding their lines, the
+/// region of the last ring with no corner where the next in has one
+/// ([`smooth`]), rings `step` apart: `R*`, where its ring is one closed ring
+/// with nothing inside it but the regions further in. None where the
+/// outermost ring of a chain already has a corner.
+pub(super) fn last_smooth(regions: &[isoline::Region], plans: &[Plan], step: f64) -> Vec<usize> {
+    let smooth = |i: usize| ring_of(plans, i).filter(|l| smooth(&l.points, step));
+    let mut stars = Vec::new();
+    let mut stack: Vec<usize> = (0..regions.len())
+        .filter(|&i| regions.get(i).is_some_and(|r| r.level == 1))
+        .collect();
+    while let Some(i) = stack.pop() {
+        let Some(region) = regions.get(i) else {
+            continue;
+        };
+        if smooth(i).is_some() {
+            stack.extend(region.children.iter().copied());
+            continue;
+        }
+        if ring_of(plans, i).is_some()
+            && let Some(parent) = region.parent
+            && regions.get(parent).is_some_and(|p| p.level >= 1)
+            && smooth(parent).is_some()
+            && !stars.contains(&parent)
+        {
+            stars.push(parent);
+        }
+    }
+    stars.sort_unstable();
+    stars
+}
+
+/// The line of `plans`' region `i`, where it is one closed ring with the
+/// region inside it: no hole, no arc, no edge.
+pub(super) fn ring_of(plans: &[Plan], i: usize) -> Option<&Sloped> {
+    match plans.get(i)?.lines.as_slice() {
+        [line] if line.closed && turns_left(&line.points) => Some(line),
+        _ => None,
+    }
+}
+
+/// Inside `ring`, the ring of `R*`, the field's `region` of it over `grid`,
+/// what it holds laid out from its spine, rings `step` apart for a tool
+/// `diameter` across. `None` where there is no spine a stepover long inside
+/// it, or the band into it is refused.
+pub(super) fn inside(
+    grid: &View<'_>,
+    field: &Field<'_>,
+    (region, ring): (&isoline::Region, &[DVec2]),
+    (step, diameter): (f64, f64),
+) -> Option<Inside> {
+    let depth = depth_inside(grid, &field.d, region.rep, f64::from(region.level) * step);
+    let within = |n: u32| at(&depth, n).is_some_and(|v| v >= 0.0);
+    let line = spine(field, (ring, &depth), step)?;
+    let seeds = seeds(field, &line, within);
+    if seeds.is_empty() {
+        return None;
+    }
+    let from_spine = field.measure(&seeds);
+    let (level, band) = band(grid, field, ring, (&from_spine, &depth), (step, diameter))?;
+    // The whole rings out from the spine, each one closed line inside `R*`.
+    let mut triangles: Vec<u32> = (0..grid.nodes())
+        .filter(|&n| within(n))
+        .flat_map(|n| grid.triangles_at(n).map(|(t, _)| t).collect::<Vec<_>>())
+        .collect();
+    triangles.sort_unstable();
+    triangles.dedup();
+    let mut rings = Vec::new();
+    for k in 1..=level {
+        let level = f64::from(k) * step;
+        rings.push(
+            only_line(grid, &from_spine, level, triangles.iter().copied()).filter(|r| r.closed)?,
+        );
+    }
+    let blended = band.rings.len();
+    rings.extend(band.rings);
+    Some(Inside {
+        spine: line,
+        rings,
+        blended,
+    })
+}
+
+/// Each node's distance from the line of `d` at `base`, inside it, round the
+/// node `rep`: `d` less `base` on the nodes joined to `rep` at or past that
+/// level, and on those beside them outside it, less than nought; nothing
+/// elsewhere.
+fn depth_inside(grid: &View<'_>, d: &[f64], rep: u32, base: f64) -> Vec<f64> {
+    let mut depth = vec![f64::INFINITY; d.len()];
+    let mut stack = vec![rep];
+    while let Some(n) = stack.pop() {
+        let Some(v) = at(d, n) else {
+            continue;
+        };
+        match usize::try_from(n).ok().and_then(|i| depth.get_mut(i)) {
+            Some(slot) if !slot.is_finite() => *slot = v - base,
+            _ => continue,
+        }
+        if v >= base {
+            for (_, corners) in grid.triangles_at(n) {
+                stack.extend(corners);
+            }
+        }
+    }
+    depth
+}
+
+/// The level of the last whole ring out from the spine, `from_spine` each
+/// node's distance from it, and the rings blending from it into `ring`,
+/// `depth` each node's distance from that inside it, rings `step` apart for a
+/// tool `diameter` across ([`blend::start`], [`blend::between`]).
+fn band(
+    grid: &View<'_>,
+    field: &Field<'_>,
+    ring: &[DVec2],
+    (from_spine, depth): (&[f64], &[f64]),
+    (step, diameter): (f64, f64),
+) -> Option<(u32, blend::Band)> {
+    let at_ring: Vec<f64> = ring
+        .iter()
+        .filter_map(|&p| grid.interpolate(p, |n| at(from_spine, n)))
+        .collect();
+    let nearest = at_ring.iter().copied().reduce(f64::min)?;
+    let furthest = at_ring.iter().copied().reduce(f64::max)?;
+    let level = blend::start(nearest, furthest, step, diameter)?;
+    let base = f64::from(level) * step;
+    let on: Vec<bool> = (0u32..)
+        .zip(from_spine)
+        .map(|(n, &v)| at(depth, n).is_some_and(|v| v >= 0.0) && v >= base)
+        .collect();
+    let lattice = field.ground.cut.grid().triangle_slots();
+    let band = blend::between(
+        grid,
+        (from_spine, depth),
+        (level, on),
+        step,
+        (diameter, lattice),
+    )?;
+    Some((level, band))
+}
 /// Whether closed `ring` turns nowhere sharper than the crease angle, seen
 /// from above, between chords `step` long either side of each of its points.
-pub(super) fn smooth(ring: &[DVec2], step: f64) -> bool {
+fn smooth(ring: &[DVec2], step: f64) -> bool {
     let n = ring.len();
     let crease = CREASE_DEGREES.to_radians().cos();
     // The point `step` or more along the ring from point `i`, either way.
@@ -66,22 +224,12 @@ pub(super) fn smooth(ring: &[DVec2], step: f64) -> bool {
 }
 
 /// The spine inside closed `ring`, a line of `field`, `inside` each node's
-/// distance from it inside it, less than nought just outside it, for rings `step` apart:
-/// lifted onto the ground. `None` where it would be shorter than a stepover
-/// or leave the ring.
-pub(super) fn spine(
-    field: &Field<'_>,
-    (ring, inside): (&[DVec2], &[f64]),
-    step: f64,
-) -> Option<Vec<DVec3>> {
+/// distance from it inside it, less than nought just outside it, for rings
+/// `step` apart: lifted onto the ground. `None` where it would be shorter than
+/// a stepover or leave the ring, or the middle of the ring comes out in
+/// pieces.
+fn spine(field: &Field<'_>, (ring, inside): (&[DVec2], &[f64]), step: f64) -> Option<Vec<DVec3>> {
     let view = field.ground.cut.view(None);
-    let value = |d: &[f64], n: u32| {
-        usize::try_from(n)
-            .ok()
-            .and_then(|i| d.get(i))
-            .copied()
-            .filter(|v| v.is_finite())
-    };
     let depth = inside
         .iter()
         .copied()
@@ -105,7 +253,7 @@ pub(super) fn spine(
     // The point of the ring furthest from `field` along the surface.
     let furthest = |d: &[f64]| {
         (0..ring.len())
-            .filter_map(|i| Some((view.interpolate(*ring.get(i)?, |n| value(d, n))?, i)))
+            .filter_map(|i| Some((view.interpolate(*ring.get(i)?, |n| at(d, n))?, i)))
             .max_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, i)| i)
     };
@@ -130,14 +278,11 @@ pub(super) fn spine(
         .filter(|(_, corners)| {
             corners
                 .iter()
-                .all(|&n| value(inside, n).is_some_and(|v| v >= 0.0))
+                .all(|&n| at(inside, n).is_some_and(|v| v >= 0.0))
         })
         .map(|(t, _)| t)
         .collect();
-    let mut middle = isoline::lines(&view, &apart, 0.0, triangles);
-    let (Some(line), true) = (middle.pop(), middle.is_empty()) else {
-        return None;
-    };
+    let line = only_line(&view, &apart, 0.0, triangles)?;
     let lifted: Vec<DVec3> = line
         .points
         .iter()
@@ -145,7 +290,7 @@ pub(super) fn spine(
         .collect::<Option<_>>()?;
     let spine = trimmed(&lifted, depth)?;
     let within = spine.iter().all(|p| {
-        view.interpolate(p.truncate(), |n| value(inside, n))
+        view.interpolate(p.truncate(), |n| at(inside, n))
             .is_some_and(|v| v > 0.0)
     });
     (within && length(&spine) >= step).then_some(spine)
@@ -153,7 +298,10 @@ pub(super) fn spine(
 
 /// The nodes of `field`'s grid beside `spine`, within a cell's diagonal of it
 /// seen from above, of those `keep` says, each at its distance from it: where
-/// the field measured out from it starts.
+/// the field measured out from it starts. The spine is on the part already,
+/// so each node is measured to it in space, where the area's rings, seen from
+/// above, have each node's foot on them dropped onto the part first
+/// (`distance::feet`).
 pub(super) fn seeds(field: &Field<'_>, spine: &[DVec3], keep: impl Fn(u32) -> bool) -> Vec<Seed> {
     let grid = field.ground.cut.grid();
     let pitch = grid.pitch();
@@ -229,15 +377,4 @@ fn trimmed(way: &[DVec3], trim: f64) -> Option<Vec<DVec3>> {
         along = end;
     }
     (out.len() >= 2).then_some(out)
-}
-
-/// The length of a polyline.
-pub(super) fn length(points: &[DVec3]) -> f64 {
-    points
-        .windows(2)
-        .map(|w| match w {
-            [a, b] => a.distance(*b),
-            _ => 0.0,
-        })
-        .sum()
 }

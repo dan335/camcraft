@@ -6,39 +6,42 @@
 //! taller, the steeper it is. Scallop's are a stepover apart along the surface
 //! everywhere, so the cusp is the same everywhere.
 //!
-//! # How the pieces fit
+//! # How the pieces fit, in the order they happen
 //!
-//! - **The ground and its edges** ([`ground`]). Where the tool sits over the
+//! - **The ground and its strips** ([`ground`]). Where the tool sits over the
 //!   part (its cutter location) is sampled on a grid by exact drops, each node
 //!   classed by whether a face it machines holds the tool there. The ground is
 //!   where one does; the grid's cells are cut where it ends, found exactly, so
 //!   it runs right to its edges: where a face avoided begins, and where the
-//!   tool leaves the part (decision 0037). The grid decides where a pass runs,
-//!   seen from above, and nothing else: decision 0009, a narrow exception to
-//!   0003.
-//! - **The field** ([`distance`]). The distance along that surface from the
-//!   edges the rings start from, by fast marching: outside in, the boundary
-//!   and every edge of the ground; inside out, its inner edges alone, where it
-//!   has any, the rest its far end.
-//! - **The rings** ([`rings`]). The lines where the field is a whole number of
+//!   tool leaves the part (decision 0037). Inside out, where the tool rolls
+//!   over a sharp convex edge along a strip that runs right round a hole with
+//!   ground either side, as over a bowl's rim, the strip is a break in the
+//!   ground too, its two borders edges of it (decision 0039). The grid decides
+//!   where a pass runs, seen from above, and nothing else: decision 0009, a
+//!   narrow exception to 0003.
+//! - **Zones and their fields** ([`distance`]). The distance along that
+//!   surface from the edges the rings start from, by fast marching: outside
+//!   in, the boundary and every edge of the ground; inside out, its inner
+//!   edges alone, where it has any, the rest its far end. Where strips break
+//!   the ground, each piece of it is a zone with a field of its own, cut one
+//!   after the next from the innermost.
+//! - **The rings** ([`rings`]). The lines where a field is a whole number of
 //!   stepovers, and the edges, in a tree of the regions they bound. A region
 //!   rising more than half a stepover past its last ring gets one more,
 //!   halfway up to its crest: Fusion's run on until they collapse, and this is
 //!   where they do.
+//! - **The spine** ([`spine`]). Inside out, going in down a chain of the
+//!   regions, inside the last ring with no corner the rings go out from a
+//!   line midway between its sides and blend into it, where offsets in to the
+//!   middle of an oval came to points at its ends (decision 0040).
 //! - **The blend** ([`blend`]). Where another closed edge of the ground lies
 //!   at a slant to the rings, as where the tool leaves a bulging bowl's
-//!   outside, lower on some sides than others, the ground between the last
-//!   ring that goes all the way round and that edge is filled with closed
-//!   rings that turn gradually from the one into the other, and below it
-//!   rings go down beside the wall to the first level ring, rather than both
-//!   being cut into arcs by it (decision 0038).
-//! - **Zones** ([`ground`], [`distance`]). Inside out, where the tool rolls
-//!   over a sharp convex edge along a strip that runs right round a hole with
-//!   ground either side, as over a bowl's rim, the strip is a break in the
-//!   ground: the ground either side is a zone, measured from its own inner
-//!   edge and blended into its outer one, the strip's two borders a ring
-//!   each, and the zones cut one after the next from the innermost (decision
-//!   0039). The rings no longer climb over the edge and back.
+//!   outside, lower on some sides than others, or the near border of a strip,
+//!   the ground between the last ring that goes all the way round and that
+//!   edge is filled with closed rings that turn gradually from the one into
+//!   the other, and below where the tool leaves the part rings go down beside
+//!   the wall to the first level ring, rather than both being cut into arcs by
+//!   it (decision 0038).
 //! - **Laid on the part** ([`lay`], [`guided`]). Every point of every pass is
 //!   an exact cutter location, refined along the pass until it is within
 //!   tolerance of the part, as a parallel pass is. Where a line crosses a grid
@@ -50,8 +53,9 @@
 //!   tolerance, and a twentieth of the grid's pitch, of the line through its
 //!   neighbours. The slope limits leave out what is outside the range asked
 //!   for.
-//! - **Cut in order** ([`order`]): region by region, from the boundary in or
-//!   from the inner edges out, along one straight seam.
+//! - **Cut in order** ([`order`]): zone by zone, and in each region by region,
+//!   from the boundary in or from the inner edges out, along one straight
+//!   seam.
 //!
 //! What the tool cannot reach from above, down a part's outside below where it
 //! leaves it, the operation finishes with level rings, which has the part and
@@ -60,6 +64,7 @@
 use camcraft_geom::contour::Region;
 use camcraft_geom::shadow::Shadow;
 use camcraft_geom::trigrid::TriSurface;
+use glam::{DVec2, DVec3};
 use rayon::prelude::*;
 
 use crate::control::{Watch, share};
@@ -249,7 +254,6 @@ pub fn scallop_finish(
     params.watch.report(0.4);
     let layer = Layer {
         seat,
-        grid: &view,
         ground: &ground,
         within: with_edge(area, params.tolerance),
         beyond,
@@ -291,6 +295,24 @@ pub fn scallop_finish(
     let (path, passes) = order::cut(seat, planned.into_iter().zip(worked).collect(), params)?;
     report.passes = passes;
     Ok((path, report))
+}
+
+/// The length of a polyline.
+fn length(points: &[DVec3]) -> f64 {
+    points
+        .iter()
+        .zip(points.iter().skip(1))
+        .map(|(a, b)| a.distance(*b))
+        .sum()
+}
+
+/// Whether closed `points` turn left round what they bound, seen from above.
+fn turns_left(points: &[DVec2]) -> bool {
+    let n = points.len();
+    let twice: f64 = (0..n)
+        .filter_map(|i| Some(points.get(i)?.perp_dot(*points.get((i + 1) % n)?)))
+        .sum();
+    twice > 0.0
 }
 
 mod blend;
