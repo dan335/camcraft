@@ -138,6 +138,11 @@ ringed out from its far side. So no ring climbs over the edge and back
 ([decision 0039](decisions/0039-scallop-zones-at-a-sharp-rim.md)). An edge
 that runs off the area, or one beside a wall too narrow seen from above, is
 crossed as before.
+Inside out, where rings in from an edge would come to points, as at the ends
+of an oval floor with nothing avoided, the last ring going in with no corner
+is kept and inside it the rings go out from a spine, a line midway between
+its two sides, and blend into it
+([decision 0040](decisions/0040-scallop-spine-inside-the-last-smooth-ring.md)).
 Up an
 upright wall above a face avoided, as a pocket's above its floor, the rings
 run up the wall from its foot. It cuts

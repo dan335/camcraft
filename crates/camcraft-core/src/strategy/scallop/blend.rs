@@ -118,11 +118,8 @@ pub(super) fn band(
     let furthest = along.iter().copied().reduce(f64::max)?;
     // The last ring half a stepover or more from the edge all round: the
     // field is a distance, so it is that far from every point of the edge.
-    let level = count(((nearest - THIN_END * step) / step).floor()).filter(|&k| k > 0)?;
+    let level = start(nearest, furthest, step, diameter)?;
     let base = f64::from(level) * step;
-    if furthest - base > BAND_LIMIT * diameter {
-        return None;
-    }
     let on = reaching(grid, d, far, base);
     // Ring-shaped between the two, not running out of the area.
     if (0u32..)
@@ -140,6 +137,40 @@ pub(super) fn band(
         })
         .collect();
     let from_far = field.measure(&seeds);
+    let lattice = field.ground.cut.grid().triangle_slots();
+    between(grid, (d, &from_far), (level, on), step, (diameter, lattice))
+}
+
+/// The level of the last whole ring before a far line whose distance, along
+/// it, runs from `nearest` to `furthest`, rings `step` apart, for a tool
+/// `diameter` across: the last half a stepover or more from it all round,
+/// the field being a distance. `None` where there is none, or the band past it
+/// is wider than [`BAND_LIMIT`] tools.
+pub(super) fn start(nearest: f64, furthest: f64, step: f64, diameter: f64) -> Option<u32> {
+    let level = count(((nearest - THIN_END * step) / step).floor()).filter(|&k| k > 0)?;
+    (furthest - f64::from(level) * step <= BAND_LIMIT * diameter).then_some(level)
+}
+
+/// The rings that blend from the line of `d` at `level` stepovers, `step`
+/// apart, into a far line, `far` each node's distance from it, over the nodes
+/// `on`, for a tool `diameter` across; the triangles of the lattice those
+/// below `lattice`. `None` where the band is too wide, or a ring between does
+/// not come out one closed line.
+pub(super) fn between(
+    grid: &View<'_>,
+    (d, from_far): (&[f64], &[f64]),
+    (level, on): (u32, Vec<bool>),
+    step: f64,
+    (diameter, lattice): (f64, u32),
+) -> Option<Band> {
+    let value = |d: &[f64], n: u32| {
+        usize::try_from(n)
+            .ok()
+            .and_then(|i| d.get(i))
+            .copied()
+            .filter(|v| v.is_finite())
+    };
+    let base = f64::from(level) * step;
     // `t` on the band and the nodes beside it, so the last whole ring's
     // triangles have it at every corner.
     let mut t = vec![f64::NAN; on.len()];
@@ -148,7 +179,7 @@ pub(super) fn band(
         for (id, corners) in grid.triangles_at(n) {
             triangles.push(id);
             for m in corners {
-                let (Some(a), Some(b)) = (value(d, m), value(&from_far, m)) else {
+                let (Some(a), Some(b)) = (value(d, m), value(from_far, m)) else {
                     continue;
                 };
                 if let Some(slot) = usize::try_from(m).ok().and_then(|i| t.get_mut(i))
@@ -161,7 +192,6 @@ pub(super) fn band(
     }
     triangles.sort_unstable();
     triangles.dedup();
-    let lattice = field.ground.cut.grid().triangle_slots();
     let measured = triangles
         .iter()
         .filter(|&&id| id < lattice)
@@ -175,7 +205,7 @@ pub(super) fn band(
         (0u32..)
             .zip(&on)
             .filter(|&(_, &on)| on)
-            .filter_map(|(n, _)| Some(value(d, n)? - base + value(&from_far, n)?))
+            .filter_map(|(n, _)| Some(value(d, n)? - base + value(from_far, n)?))
             .fold(0.0, f64::max)
     };
     if widest > BAND_LIMIT * diameter {

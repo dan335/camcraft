@@ -6,6 +6,20 @@ the same notes at more length.
 
 ## Unreleased
 
+- **Scallop's innermost rings go out from a spine, where they came to
+  points** ([decision 0040](docs/decisions/0040-scallop-spine-inside-the-last-smooth-ring.md)).
+  Inside out with nothing avoided, the rings in a user's bowl were offsets in
+  from the rim, and deeper in than the bowl's ends are round they came to
+  sharp points at both ends and kept them to the middle: 24 of its rings
+  turned more than 30° over a millimetre, the sharpest 162°. Now, going in,
+  the last ring with no corner is kept, and inside it the rings go out from
+  a spine, a line midway between its two sides, and blend into it: only the
+  two smallest rings round the spine turn so sharply, their ends a stepover
+  round. It feeds 41.65 m where it fed 40.86, lifting once as before, and
+  the simulated stock is left no higher. A round bowl, a pocket with
+  corners, outside in, and anything whose band into the last smooth ring is
+  refused are as they were.
+
 - **Scallop stops at a sharp rim and starts again past it**
   ([decision 0039](docs/decisions/0039-scallop-zones-at-a-sharp-rim.md)).
   Round a user's bowl, whose flat rim lies between two sharp edges, the
@@ -23,7 +37,9 @@ the same notes at more length.
   end as before; the simulated stock is left no higher on the wall's top,
   the rim or the outside's top. An edge that runs off the area, or along a
   wall too narrow seen from above, is crossed as before, and outside in is
-  as it was.
+  as it was. It costs elsewhere: on a block with an off-centre pocket cut
+  inside out, the rings outside the pocket now start from its rim and end in
+  arcs on the block's edge, lifting 6 times where 3.
 
 - **A finish over the part goes across and down to a ring just under the
   last** ([decision 0004, amended](docs/decisions/0004-linking-and-entries.md)).

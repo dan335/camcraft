@@ -532,3 +532,50 @@ fn an_open_sharp_edge_is_no_break() {
     let fields = distance::Field::zones(&seat, &ground, &area, &params, &mut report);
     assert_eq!(fields.zones.len(), 1);
 }
+
+/// An egg, `half` long and half as wide, its blunt end at +X.
+fn egg(half: f64) -> Contour {
+    let points = (0..360)
+        .map(|i| {
+            let a = f64::from(i).to_radians();
+            dvec2(
+                half * a.cos(),
+                0.5 * half * a.sin() * (1.0 + 0.15 * a.cos()),
+            )
+        })
+        .collect();
+    Contour::new(points).unwrap()
+}
+
+/// Inside out on a flat egg, the rings in from its edge stay smooth only so
+/// far before they come to points at its ends; inside the last smooth one
+/// the rings go out from a spine, the first pass, an open line midway
+/// between the egg's two sides, its long axis, to within the grid's pitch
+/// (decision 0040).
+#[test]
+fn a_flat_egg_is_ringed_out_from_its_spine() {
+    let mesh = synthetic::plane(0.0, 30.0);
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(1.0)).unwrap();
+    let edge = egg(20.0);
+    let area = Region::new(vec![edge.clone()]);
+    let params = ScallopParams {
+        order: Order::InsideOut,
+        ..params(0.5)
+    };
+    let (path, report) = scallop_finish(&seat, &area, &params).unwrap();
+    assert!(report.is_clean(), "{report:?}");
+    let found = passes(&path);
+    let spine = &found[0];
+    let (first, last) = (spine[0], spine[spine.len() - 1]);
+    assert!(
+        first.distance(last) > 5.0,
+        "the first pass is no spine: {spine:?}"
+    );
+    for p in spine {
+        assert!(
+            p.y.abs() <= report.pitch,
+            "the spine at {p} is off the egg's middle"
+        );
+    }
+}

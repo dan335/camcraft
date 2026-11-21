@@ -300,6 +300,7 @@ mod guided;
 mod lay;
 mod order;
 mod rings;
+mod spine;
 
 #[cfg(test)]
 #[allow(

@@ -457,6 +457,253 @@ fn inside_out_no_ring_rolls_over_the_rim() {
     );
 }
 
+/// [`JOB`] with nothing avoided: the floor machined as the rest.
+fn no_group() -> Job {
+    let text = JOB
+        .split("[[setup.operation.surfaces.group]]")
+        .next()
+        .unwrap();
+    toml::from_str(text).unwrap()
+}
+
+/// How high the egg bowl's floor is: 4 under its rim.
+const EGG_FLOOR: f64 = RIM - 4.0;
+
+/// A shallow bowl, its floor an egg `long` from end to end and half as wide,
+/// its blunt end at +X, rising from it with no crease, as a parabola 3 out
+/// and 4 up, to a sharp flat rim, then down to its skirt as [`bowl`]'s.
+fn egg_bowl(long: f64) -> Body {
+    const STEPS: u32 = 8;
+    let floor = move |t: f64| {
+        let (a, b) = (0.5 * long, 0.25 * long);
+        let r = 1.0 / ((t.cos() / a).powi(2) + (t.sin() / b).powi(2)).sqrt();
+        r * (1.0 + 0.1 * t.cos())
+    };
+    let wall: Vec<(Radius, f64)> = (0..=STEPS)
+        .map(|i| {
+            let s = 3.0 * f64::from(i) / f64::from(STEPS);
+            let radius: Radius = Box::new(move |t| floor(t) + s);
+            (radius, EGG_FLOOR + 4.0 * (s / 3.0).powi(2))
+        })
+        .collect();
+    let rim = move |t: f64| floor(t) + 6.0;
+    let skirt = move |t: f64| floor(t) + 10.0;
+    let mut rings: Vec<(&dyn Fn(f64) -> f64, f64)> =
+        wall.iter().map(|(r, z)| (r.as_ref(), *z)).collect();
+    rings.extend([
+        (&rim as &dyn Fn(f64) -> f64, RIM),
+        (&skirt, SKIRT),
+        (&skirt, 0.0),
+    ]);
+    let mut faces: Vec<u32> = (0..STEPS).map(|_| 1).collect();
+    faces.extend([2, 3, 3]);
+    ringed(&rings, &faces, 4)
+}
+/// A cup as [`cup`]'s, but square seen from above, `half` across, its wall
+/// leaning 3 out over its height to a sharp flat rim.
+fn square_cup(half: f64) -> Body {
+    let square = |h: f64| move |t: f64| h / t.cos().abs().max(t.sin().abs());
+    let (floor, top, rim) = (square(half), square(half + 3.0), square(half + 6.0));
+    ringed(
+        &[(&floor, FLOOR), (&top, RIM), (&rim, RIM), (&rim, 0.0)],
+        &[1, 2, 3],
+        4,
+    )
+}
+
+/// Each closed pass of `path` over the part, in the order cut: its points.
+fn closed_passes(path: &crate::path::toolpath::Toolpath) -> Vec<Vec<DVec3>> {
+    let mut out = Vec::new();
+    let mut pass: Vec<DVec3> = Vec::new();
+    let mut at = path.moves()[0].to;
+    for m in path.moves() {
+        if m.role == MoveRole::Cut {
+            if pass.is_empty() {
+                pass.push(at);
+            }
+            pass.push(m.to);
+        } else if !pass.is_empty() {
+            if pass[0].distance(pass[pass.len() - 1]) < 1e-6 && pass.len() > 3 {
+                out.push(std::mem::take(&mut pass));
+            }
+            pass.clear();
+        }
+        at = m.to;
+    }
+    out
+}
+
+/// The sharpest turn of closed `ring`, seen from above, between the way in
+/// over the half millimetre before a point and the way out over the half
+/// after, in degrees.
+fn sharpest(ring: &[DVec3]) -> f64 {
+    // Resampled a tenth of a millimetre apart.
+    let mut flat: Vec<DVec2> = Vec::new();
+    for w in ring.windows(2) {
+        let (a, b) = (w[0].truncate(), w[1].truncate());
+        let n = (a.distance(b) / 0.1).ceil().max(1.0) as usize;
+        for k in 0..n {
+            flat.push(a.lerp(b, k as f64 / n as f64));
+        }
+    }
+    let n = flat.len();
+    (0..n)
+        .filter_map(|i| {
+            let (a, b, c) = (flat[(i + n - 5) % n], flat[i], flat[(i + 5) % n]);
+            let (u, v) = ((b - a).try_normalize()?, (c - b).try_normalize()?);
+            Some(u.dot(v).clamp(-1.0, 1.0).acos().to_degrees())
+        })
+        .fold(0.0, f64::max)
+}
+
+/// Inside out round an egg-shaped bowl with nothing avoided, the rings in
+/// from the rim are offsets of it, and deeper than its ends are round they
+/// came to points there and kept them to the middle. Inside the last ring
+/// with no corner they go out from a spine instead (decision 0040): no ring
+/// but the first two round it turns more than 30° over a millimetre, the
+/// rings on the floor are no further apart than a stepover, and nothing is
+/// gouged.
+#[test]
+fn an_egg_bowl_is_ringed_out_from_a_spine() {
+    let body = egg_bowl(40.0);
+    let bodies: Bodies<'_> = [("bowl", &body)].into_iter().collect();
+    let job = no_group();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let op = &result.operations[0];
+    assert_eq!(result.verify.gouged, 0);
+    let StrategyDetail::Scallop(report) = &op.detail else {
+        panic!("{:?}", op.detail);
+    };
+    assert!(report.blended > 0, "no spine: {report:?}");
+    let inside: Vec<Vec<DVec3>> = closed_passes(&op.path)
+        .into_iter()
+        .filter(|r| r.iter().all(|p| p.z < EGG_FLOOR + 1.0))
+        .collect();
+    assert!(inside.len() > 10, "{} rings inside", inside.len());
+    let sharp: Vec<(usize, f64)> = inside
+        .iter()
+        .map(|r| sharpest(r))
+        .enumerate()
+        .skip(2)
+        .filter(|&(_, turn)| turn > 30.0)
+        .collect();
+    assert!(sharp.is_empty(), "rings turning sharply: {sharp:?}");
+    // On the floor, where the tool's tip is where it touches, the rings are
+    // a stepover apart: across the spine's middle, and on along its line
+    // past each of its ends. It is the first pass, open.
+    let spine: Vec<DVec3> = op
+        .path
+        .moves()
+        .iter()
+        .skip_while(|m| m.role != MoveRole::Cut)
+        .take_while(|m| m.role == MoveRole::Cut)
+        .map(|m| m.to)
+        .collect();
+    let (west, east) = spine.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
+        (lo.min(p.x), hi.max(p.x))
+    });
+    assert!(east - west > 5.0, "the first pass is no spine: {spine:?}");
+    let middle = 0.5 * (west + east);
+    for (theta, from) in [
+        (std::f64::consts::FRAC_PI_2, 0.0),
+        (-std::f64::consts::FRAC_PI_2, 0.0),
+        (0.0, east),
+        (std::f64::consts::PI, -west),
+    ] {
+        let mut cut: Vec<DVec3> = section_from(
+            &op.path,
+            dvec2(middle, 0.0),
+            theta,
+            from - middle * theta.cos(),
+        )
+        .into_iter()
+        .filter(|p| (p.z - EGG_FLOOR).abs() < 0.01)
+        .collect();
+        cut.sort_by(|a, b| {
+            a.x.mul_add(theta.cos(), a.y * theta.sin())
+                .total_cmp(&b.x.mul_add(theta.cos(), b.y * theta.sin()))
+        });
+        for w in cut.windows(2) {
+            let gap = w[0].distance(w[1]);
+            assert!(
+                gap < 1.05 * STEPOVER,
+                "{theta}: rings {gap} apart on the floor at {:?}",
+                w[0]
+            );
+        }
+    }
+}
+
+/// The cuts of `path` crossing the upright half-plane out from `centre` at
+/// `theta`, beyond `from` from it: where the tool's tip is.
+fn section_from(
+    path: &crate::path::toolpath::Toolpath,
+    centre: DVec2,
+    theta: f64,
+    from: f64,
+) -> Vec<DVec3> {
+    let dir = dvec2(theta.cos(), theta.sin());
+    let side = |p: DVec3| dir.perp_dot(p.truncate() - centre);
+    let mut out = Vec::new();
+    let mut at = path.moves()[0].to;
+    for m in path.moves() {
+        if m.role == MoveRole::Cut {
+            let (a, b) = (side(at), side(m.to));
+            if a * b < 0.0 {
+                let p = at.lerp(m.to, a / (a - b));
+                if (p.truncate() - centre).dot(dir) > from {
+                    out.push(p);
+                }
+            }
+        }
+        at = m.to;
+    }
+    out
+}
+/// A round bowl and a square pocket, nothing avoided, inside out: the rings
+/// inside the rim are as they were. The round bowl's innermost rings come
+/// to a point but its spine is nought long; the square's outermost ring has
+/// corners already, so it has no last smooth ring. No spine, so no open
+/// pass, and nothing blended inside.
+#[test]
+fn a_round_bowl_and_a_square_pocket_keep_their_rings() {
+    let round = |p: DVec3| p.truncate().length() < CUP + 1.5;
+    let square = |p: DVec3| p.x.abs().max(p.y.abs()) < 15.0;
+    let bodies_and_rims: [(Body, &dyn Fn(DVec3) -> bool); 2] =
+        [(cup(80.0), &round), (square_cup(12.0), &square)];
+    for (body, within) in &bodies_and_rims {
+        let bodies: Bodies<'_> = [("bowl", body)].into_iter().collect();
+        let result = run_setup(&no_group(), 0, &bodies).unwrap();
+        let op = &result.operations[0];
+        assert_eq!(result.verify.gouged, 0);
+        let StrategyDetail::Scallop(report) = &op.detail else {
+            panic!("{:?}", op.detail);
+        };
+        // The cup's inside is its own zone, its rim a strip; outside the
+        // rim only where the tool leaves the part is blended into.
+        let opened: Vec<DVec3> = {
+            let mut out = Vec::new();
+            let (mut start, mut at) = (None, op.path.moves()[0].to);
+            for m in op.path.moves() {
+                if m.role == MoveRole::Cut {
+                    start.get_or_insert(at);
+                } else if let Some(s) = start.take()
+                    && s.distance(at) > 1e-6
+                    && within(s)
+                {
+                    out.push(s);
+                }
+                at = m.to;
+            }
+            out
+        };
+        assert!(
+            opened.is_empty(),
+            "open passes inside: {opened:?} ({report:?})"
+        );
+    }
+}
+
 /// A ring's radius at an angle from +X.
 type Radius = Box<dyn Fn(f64) -> f64>;
 
