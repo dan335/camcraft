@@ -99,16 +99,17 @@ came (decision 0011), as patterns cut in the order laid out.
   said for a finishing pass. Asked to cut one
   way, a piece is cut as laid and the tool goes back to its start. A closed
   ring is never turned round.
-- **A new Spiral and Morphed Spiral cut both ways** (`StrategySpec::fresh`),
-  and write it out; a job file that leaves the direction out still climbs. Scallop and Radial start both ways already.
+- **A new Spiral and Morphed Spiral cut both ways** (`StrategySpec::fresh`), and
+  write it out; a job file that leaves the direction out still climbs. Scallop
+  and Radial start both ways already.
 
 ## Considered and not chosen
 
-- **Keeping the ramp.** It is gentler than a plunge into deep material, but
-  over a roughing's half millimetre it came down along the pass from as high
-  as the material anywhere under the tool, several millimetres beside a wall
-  or an avoided face: more than half of all Spiral fed. The tool plunges into no more than what is left
-  over the pass's start, at the plunge feed.
+- **Keeping the ramp.** It is gentler than a plunge into deep material, but over
+  a roughing's half millimetre it came down along the pass from as high as the
+  material anywhere under the tool, several millimetres beside a wall or an
+  avoided face: more than half of all Spiral fed. The tool plunges into no more
+  than what is left over the pass's start, at the plunge feed.
 - **A ramp only over deep material.** How deep is deep would be a rule of its
   own, with nothing to choose it by. A roughing that leaves terraces deep
   enough to want one is a roughing to fix.

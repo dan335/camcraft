@@ -75,14 +75,14 @@ as a parallel pass's is.
 **Settings.** `direction` (both ways, which cuts each line whichever way is
 nearer; one way as `climb`, every line with the higher side, wall or dome, on
 the tool's right, climbing with a clockwise spindle; the other way as
-`conventional`), `bitangency_angle`, `overthickness` (the lines found
-for the tool grown all round by it, on top of the stock to leave, and cut by
-the tool itself) and `stepovers`, `passes.stepover` apart. The passes beside the lines are lines of equal
-distance from them along the tool's height over the part, worked out on the
-grid as scallop's are ([decision 0009](0009-scallop-distance-field.md)), and
-cut from the outermost in before the lines. It links over the part, staying
-down within five tools, and comes straight down onto each line, with no
-ramp.
+`conventional`), `bitangency_angle`, `overthickness` (the lines found for the
+tool grown all round by it, on top of the stock to leave, and cut by the tool
+itself) and `stepovers`, `passes.stepover` apart. The passes beside the lines
+are lines of equal distance from them along the tool's height over the part,
+worked out on the grid as scallop's are
+([decision 0009](0009-scallop-distance-field.md)), and cut from the outermost in
+before the lines. It links over the part, staying down within five tools, and comes
+straight down onto each line, with no ramp.
 
 ## Measured
 

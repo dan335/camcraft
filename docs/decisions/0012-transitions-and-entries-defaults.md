@@ -17,8 +17,8 @@ finishing passes. What should each do, and what should each start with?
   adaptive. The helix for pocket clearing, contour and adaptive
   (`HelixSize::Flat`) is max(0.95 × (D − 2 × corner radius), 0.25 × D)
   across, made smaller where there is no room, down to its minimum,
-  max(0.5 × (D − 2 × corner radius), 0.25 × D). It descends at 2° and no more
-  than the stepdown a lap. The 2D strategies keep 0.9 × the tool. (Adaptive
+  max(0.5 × (D − 2 × corner radius), 0.25 × D). The 2D strategies keep 0.9 ×
+  the tool. (Adaptive
   made its own helixes a half and a quarter of their size regardless, below
   the minimum, until
   [decision 0036](0036-adaptive-levels-order-and-entries.md): it now stops at

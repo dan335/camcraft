@@ -84,20 +84,19 @@ What made it otherwise?
   fits. The material of a closed area not yet gone into is as wide as
   the tool, as it reaches the tool's radius past where the tool may be in it,
   so this never takes the place of a helix.
-- **The helix is never smaller than the least.** A smaller one takes dozens
-  of turns to go down at the ramp angle. Halved from the helix diameter where
-  there is no room, then the least itself
-  (`AdaptiveParams::least_helix_radius`, the operation's
-  `least_helix_diameter`). Where not even that fits, it ramps along the area:
-  back and forth along a stretch of its middle, near its deepest point, as long
-  as the largest helix goes round in one turn or as long as the middle is, and
-  no shorter than the least helix is across; at the ramp angle and no more than
-  the ramp stepdown in one way along, then once along it at the level, as a
-  helix ends with a turn at the level. Pocket clearing ramps along its rings
-  where its helix does not fit
-  ([decision 0012](0012-transitions-and-entries-defaults.md)); adaptive has
-  no rings, so it ramps along the area's middle. Only where there is no such stretch is the
-  area left, and said.
+- **The helix is never smaller than the least.** A smaller one takes dozens of
+  turns to go down at the ramp angle. Halved from the helix diameter where there
+  is no room, then the least itself (`AdaptiveParams::least_helix_radius`, the
+  operation's `least_helix_diameter`). Where not even that fits, it ramps along
+  the area: back and forth along a stretch of its middle, near its deepest
+  point, as long as the largest helix goes round in one turn or as long as the
+  middle is, and no shorter than the least helix is across; at the ramp angle
+  and no more than the ramp stepdown in one way along, then once along it at the
+  level, as a helix ends with a turn at the level. Pocket clearing ramps along
+  its rings where its helix does not fit
+  ([decision 0012](0012-transitions-and-entries-defaults.md)); adaptive has no
+  rings, so it ramps along the area's middle. Only where there is no such stretch is the area
+  left, and said.
 - **A fine or flat level starts nearest where the level below it in its slab
   ended**, where the tool is. A slab's own level is worked out at the same time
   as the others, before the one above it has ended, so it still starts where

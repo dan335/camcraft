@@ -25,14 +25,14 @@ edges are curves to morph between.
 
 **`strategy::morph_curves`, a pattern laid between the curves and dropped onto
 the part.** The two curves picked are joined end to end, as a project's are,
-seen from above and measured along: a point a fraction of the way along the
-one is matched with the point as far along the other. Every corner of either
-is a corner of every pass, which is the same step of the way from each point of the first curve to
-its match on the second. There are as many steps as keep every point of a pass
-within a stepover of its match on the next: matched points move straight
-towards each other, so they are furthest apart at a corner of one or the
-other, and that is measured exactly. The passes are then dropped onto the part
-as a project's curves are ([decision 0029](0029-project.md)):
+seen from above and measured along: a point a fraction of the way along the one
+is matched with the point as far along the other. Every corner of either is a
+corner of every pass, which is the same step of the way from each point of the
+first curve to its match on the second. There are as many steps as keep every
+point of a pass within a stepover of its match on the next: matched points move
+straight towards each other, so they are furthest apart at a corner of one or
+the other, and that is measured exactly. The passes are then dropped onto the
+part as a project's curves are ([decision 0029](0029-project.md)):
 `strategy::projected::project`, kept to the boundary, where the tool touches the
 part and the slopes, sampled on the part exactly. The measuring along a line is
 morphed spiral's (`strategy::morph::Lap`), now shared.
@@ -54,9 +54,10 @@ stepover of the next: between the round's edges, 8 mm apart, 24 steps of
 two closed curves, whose matched points can be far apart at a corner, as many
 as that takes there.
 
-**Order and direction.** The passes start at the curve nearer the work zero;
-one way runs each as the first curve picked runs, other way the reverse, both ways each the other way from the one before, the first
-from its end nearer the work zero when open and anticlockwise when closed.
+**Order and direction.** The passes start at the curve nearer the work zero; one
+way runs each as the first curve picked runs, other way the reverse, both ways
+each the other way from the one before, the first from its end nearer the work
+zero when open and anticlockwise when closed.
 
 **Linking as parallel's.** It stays down within 50 mm and has no ramp: into a
 pass it comes straight down at the plunge feed onto its vertical lead. Its

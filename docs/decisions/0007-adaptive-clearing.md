@@ -14,16 +14,17 @@ camcraft do it?
 
 Adaptive clearing is Freesteel's Adaptive Clearing (Julian Todd and Martin
 Dunschen, 2004); it was never patented, and the idea is Stori and Wright's
-constant-engagement paths (2000). Each Z level is a 2D problem in two regions: where the tool's centre may
-be, and what is still standing. The tool is stepped forward a little at a time,
-each step turned toward or away from the material until the arc of its edge in
-material is what the *optimal load* gives; what it sweeps is taken out of what is
-standing. A pass ends when it runs out of material or would overload the tool,
-and the next starts at the nearest edge of what is left, reached without lifting
-where the way is clear. Open sides are entered from outside the stock; a closed
-area goes down a helix in its widest place, and is left if none fits. Rough
-levels are a stepdown apart; flat area detection adds a level on each flat face,
-and fine stepdown steps back up each slab over the terraces left on slopes.
+constant-engagement paths (2000). Each Z level is a 2D problem in two regions:
+where the tool's centre may be, and what is still standing. The tool is stepped
+forward a little at a time, each step turned toward or away from the material
+until the arc of its edge in material is what the *optimal load* gives; what it
+sweeps is taken out of what is standing. A pass ends when it runs out of
+material or would overload the tool, and the next starts at the nearest edge of
+what is left, reached without lifting where the way is clear. Open sides are
+entered from outside the stock; a closed area goes down a helix in its widest
+place, and is left if none fits. Rough levels are a stepdown apart; flat area
+detection adds a level on each flat face, and fine stepdown steps back up each
+slab over the terraces left on slopes.
 
 ## Decision
 

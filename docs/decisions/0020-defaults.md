@@ -13,11 +13,10 @@ operation start with?
 
 A new operation starts with the defaults below. Where a default follows the
 tool, it is an expression of the tool's sizes and feeds, saved with the
-operation (`StrategySpec::default_expressions`), so it suits whichever tool
-the operation has. A number typed over one, or a preset's, takes its place.
-A job file still reads as it always did: what it leaves out
-means what it meant, so a saved job does not change under it; only new
-operations start differently.
+operation (`StrategySpec::default_expressions`), so it suits whichever tool the
+operation has. A number typed over one, or a preset's, takes its place. A job
+file still reads as it always did: what it leaves out means what it meant, so a
+saved job does not change under it; only new operations start differently.
 
 | Setting | Strategies | Default | Was |
 | --- | --- | --- | --- |

@@ -34,11 +34,11 @@ so the panel offers only faces for these, and the run finds them once, before
 the strategy runs (`round_walls` in `run::operation::round`).
 
 **Passes laid out by the strategy, linked by the linker.** Each pass is the
-strategy's own: a lead onto its circle, the helix or the circle, a lead off,
-all level or about Z, so every move is an arc posted as one. A pass that would
-be past a hole's middle is put half the tool's radius from it, once: this cuts
-the middle rather than leaving a pin. A hole the passes do not reach the
-middle of is left with its core, and said (CC218). The linker brings the tool onto each
+strategy's own: a lead onto its circle, the helix or the circle, a lead off, all
+level or about Z, so every move is an arc posted as one. A pass that would be
+past a hole's middle is put half the tool's radius from it, once: this cuts the
+middle rather than leaving a pin. A hole the passes do not reach the middle of
+is left with its core, and said (CC218). The linker brings the tool onto each
 pass: a bore's starts at the top, out of the material, so it comes down the
 vertical arc onto it and lifts out after; a circular's first pass at a level
 ramps down along its circle, and the passes after it stay down.

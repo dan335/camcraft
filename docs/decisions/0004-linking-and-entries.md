@@ -44,13 +44,13 @@ measured from the model would.
   retracts instead, as a descent at cutting feed is exactly what the gate refuses.
 - **Leads** for parallel: a vertical lead-in and lead-out, each 0.1 × the tool's
   diameter. The arc lies in the vertical plane of the pass, from straight down
-  to the pass's own tangent at its start, slope included: for a pass starting
-  at P in horizontal direction u, climbing at θ, radius R, the centre is
+  to the pass's own tangent at its start, slope included: for a pass starting at
+  P in horizontal direction u, climbing at θ, radius R, the centre is
   P + R(−sin θ·u + cos θ·ẑ) and the arc sweeps 90° + θ. The lead-out mirrors
-  it. They are drawn as short straight moves within the tolerance, and left
-  out where they would reach the part, or where the material at the lead's
-  start is above it (the lead would enter material); the tool then plunges
-  straight to the pass.
+  it. They are
+  drawn as short straight moves within the tolerance, and left out where they
+  would reach the part, or where the material at the lead's start is above it
+  (the lead would enter material); the tool then plunges straight to the pass.
 - **Ramps** for Z-level: where the tool would plunge into material, it ramps down
   along the pass it is about to cut, at the ramp angle (default 2°), from the
   safe distance above the material; the pass's own path stays inside what may
@@ -84,8 +84,8 @@ the radius) mattered: the traverse's padded disc also sees the material standing
 beside the cutter, so a ring along a tall wall seemed to start in material as high
 as the wall, and ramped from its top.
 
-Not taken yet: smooth arc transitions between passes (a straight lifted line stands in),
-helical ramps for Z-level and pockets (a 2D profile has them since
+Not taken yet: smooth arc transitions between passes (a straight lifted line
+stands in), helical ramps for Z-level and pockets (a 2D profile has them since
 [decision 0006](0006-2d-linking-and-arcs.md)), and high feedrate mode.
 
 ## Amended 2026-11-21: across and down, for the finishes over the part too
@@ -114,10 +114,9 @@ tool, and now hold for both:
   link no longer crosses beside stock taller than the stickout.
 
 Measured on `ops_3d`: Scallop with no groups lifts once where it lifted 12
-times; with the dome avoided 5 times where 7; Spiral once where twice;
-Parallel with the dome avoided 9 times where 11; Contour, with the dome
-avoided and its 6 mm ball, 13 where 15. Material removed is unchanged in
-each; what is fed moved most in Pencil, whose links that fed up and went
-across at rapid now cross at the feed. On a user's part Scallop lifts 26 times where it lifted
-28, and 9 where 12 without its face avoided; the example rail jig's finish 77
-where 113.
+times; with the dome avoided 5 times where 7; Spiral once where twice; Parallel
+with the dome avoided 9 times where 11; Contour, with the dome avoided and its 6
+mm ball, 13 where 15. Material removed is unchanged in each; what is fed moved
+most in Pencil, whose links that fed up and went across at rapid now cross at
+the feed. On a user's part Scallop lifts 26 times where it lifted 28, and 9
+where 12 without its face avoided; the example rail jig's finish 77 where 113.

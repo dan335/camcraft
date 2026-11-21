@@ -75,20 +75,20 @@ stepover further in than the next, the last at the thread; one past the hole's
 middle is left out and said, as a bore's is.
 
 **The thread mill** (`kind = "thread-mill"`) has a `pitch`, needed, and a
-profile `angle`, 60° unless given, beside the fields every tool has. Its tooth is
-a V of the profile angle one pitch tall, its root at the tip. The simulator's
+profile `angle`, 60° unless given, beside the fields every tool has. Its tooth
+is a V of the profile angle one pitch tall, its root at the tip. The simulator's
 material is a height field: it cannot hold the undercut a thread is, and takes
-every tool as reaching up from its lowest point. So the thread mill cuts, as
-the simulator and the drop-cutter take it, as its tooth's lower flank: a flat at
-the root's radius, rising at half the profile angle from level to the point half
-a pitch up, as wide as the point above it. That is a chamfer mill's shape, so it
+every tool as reaching up from its lowest point. So the thread mill cuts, as the
+simulator and the drop-cutter take it, as its tooth's lower flank: a flat at the
+root's radius, rising at half the profile angle from level to the point half a
+pitch up, as wide as the point above it. That is a chamfer mill's shape, so it
 is built as one (`Cutter::Cone`). Seen from above it is honest about its widest
 point: everything within the tooth's reach, above the lowest the tooth went
 there, is cut. A thread cut into a wall shows as the wall moved out to the
-tooth's reach, down to where the tooth first went. The shank check sweeps the neck at the
-root's radius, its widest, which keeps off the thread the tooth cuts, as a
-thread mill's neck must; at the cutting diameter it would meet, at every move,
-the wall the tooth was cutting into.
+tooth's reach, down to where the tooth first went. The shank check sweeps the
+neck at the root's radius, its widest, which keeps off the thread the tooth
+cuts, as a thread mill's neck must; at the cutting diameter it would meet, at
+every move, the wall the tooth was cutting into.
 
 **What it cuts on purpose.** The model has a plain hole, so with an offset the
 part check called the thread a gouge, the whole height of the wall. A thread
@@ -136,13 +136,13 @@ distance before it rapids.
 
 ## Not yet
 
-Not yet measured on a job: left hand and conventional, which way each goes
-and where a falling helix starts; Multiple Passes on, whether the stepover is radial, which way the
-passes are ordered, whether each goes back to the centre and lifts, and where
-one past the middle is left out; Use Helical Leads off, where its level leads
-are; Lead To Center off, where it comes down and how the linear lead lies, and
-whether the vertical lead radius is used then; the lead arc in a hole too small
-for it. Not offered: outside threads, multi-tooth thread mills, Start Angle,
-multiple threads, Repeat Passes, Stock to Leave, compensation in control,
-threads from a standard or the model, diameter range and same-diameter
-selection, hole order choices.
+Not yet measured on a job: left hand and conventional, which way each goes and
+where a falling helix starts; Multiple Passes on, whether the stepover is
+radial, which way the passes are ordered, whether each goes back to the centre
+and lifts, and where one past the middle is left out; Use Helical Leads off,
+where its level leads are; Lead To Center off, where it comes down and how the
+linear lead lies, and whether the vertical lead radius is used then; the lead
+arc in a hole too small for it. Not offered: outside threads, multi-tooth thread
+mills, Start Angle, multiple threads, Repeat Passes, Stock to Leave,
+compensation in control, threads from a standard or the model, diameter range
+and same-diameter selection, hole order choices.

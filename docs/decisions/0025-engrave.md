@@ -24,39 +24,39 @@ as deep as makes the flank touch the outline: `(r - tip) / tan(half angle)`,
 clamped to the depth. The circle at `p`, its centre `p + r n` along the inward
 normal, is limited by each other piece of the outline: a corner `q` to
 `|q - p|^2 / 2 n.(q - p)`, a line or an arc to the radius it touches at, where
-it touches inside the piece's ends. So along a wall the centre runs parallel
-to it; into a convex corner it runs up the
-bisector; at a reflex corner the point stays put while its normal turns, and the
-centre runs round a parabola, or round an arc at the depth; in a narrow stroke
-it runs along the middle once for each wall; in a shape wider than the V
-reaches at the depth, it runs round the outline at the depth and does not clear
-the middle. It needs no medial axis, is exact
-on the outline, and is bounded: each piece is sampled at a quarter of the reach
-apart, at most 4096 times, each change of what limits the circle found by
+it touches inside the piece's ends. So along a wall the centre runs parallel to it;
+into a convex corner it runs up the bisector; at a reflex corner the point stays
+put while its normal turns, and the centre runs round a parabola, or round an
+arc at the depth; in a narrow stroke it runs along the middle once for each
+wall; in a shape wider than the V reaches at the depth, it runs round the
+outline at the depth and does not clear the middle. It needs no medial axis, is
+exact on the outline, and is bounded: each piece is sampled at a quarter of the
+reach apart, at most 4096 times, each change of what limits the circle found by
 halving, at most 48 times, and each curved stretch halved at most 12 times.
 
 Each stretch limited by one thing is one curve, emitted as such: straight where
 a line limits it or the cap does along a line, as one move; an arc where the cap
 does along an arc or round a reflex corner, posted as `G2` or `G3`; anything
-else halved until each move is within half the tolerance. A convex corner at least the sharp corner angle
-between its edges is gone round: the stretches of the walk up its bisector are
-left out. With a flat tip, what is narrower than the tip, where the tip only
-rides the surface, is left out, and the walk breaks there.
+else halved until each move is within half the tolerance. A convex corner at
+least the sharp corner angle between its edges is gone round: the stretches of
+the walk up its bisector are left out. With a flat tip, what is narrower than
+the tip, where the tip only rides the surface, is left out, and the walk breaks
+there.
 
 **Where it starts and stops.** Each loop's walk starts at its lowest, then
-leftmost, corner it runs into, at the surface. It ends with what it would go back over, cut already, left off: each move from the
-end whose ends and quarter points lie within the tolerance of what was cut
-before it. The outline runs anticlockwise, its islands clockwise, the shape on
-the left. An island's walk that
-meets the outline's, at the end of a move of each within the tolerance, as it
-does along the middle of a channel narrower than twice the reach, is spliced
+leftmost, corner it runs into, at the surface. It ends with what it would go
+back over, cut already, left off: each move from the end whose ends and quarter
+points lie within the tolerance of what was cut before it. The outline runs
+anticlockwise, its islands clockwise, the shape on the left. An island's walk
+that meets the outline's, at the end of a move of each within the tolerance, as
+it does along the middle of a channel narrower than twice the reach, is spliced
 in there and gone round whole, so the shape is one pass; one that meets it
 nowhere is a pass of its own.
 
 **Lifting between shapes.** Keep Tool Down is not offered. camcraft's level
-stay-down, tried first, linked the L to the rectangle at Z10 with the point on the plate,
-which on a machine scribes the part. Between passes it lifts, to the retract
-height in a new operation, as a 2D chamfer does.
+stay-down, tried first, linked the L to the rectangle at Z10 with the point on
+the plate, which on a machine scribes the part. Between passes it lifts, to the
+retract height in a new operation, as a 2D chamfer does.
 
 **Picking.** A shape is picked as a 2D pocket's outline is: the edges round its
 rim, a click taking the whole loop, or its floor as a face. A loop is engraved
@@ -67,11 +67,11 @@ face with nothing standing round it is engraved at its own height. Loops are
 read even-odd, a loop inside another an island of it. Shapes are cut in the
 order picked.
 
-**Depth.** The Bottom, from the Top by an offset, is the operation's
-`depth`, left out for the default: 0.95 of how deep the flank reaches, a
-little short of it. A depth past the flank is refused: the cone would no
-longer touch the outline at the surface. camcraft has no height "from top"; its Top and Bottom settings are not
-offered for an engraving.
+**Depth.** The Bottom, from the Top by an offset, is the operation's `depth`,
+left out for the default: 0.95 of how deep the flank reaches, a little short of
+it. A depth past the flank is refused: the cone would no longer touch the
+outline at the surface. camcraft has no height "from top"; its Top and Bottom
+settings are not offered for an engraving.
 
 **A shape the V goes deeper than.** The model is the part: the V cuts into
 whatever the shape is not sunk deep enough to clear. The run drops the tool on

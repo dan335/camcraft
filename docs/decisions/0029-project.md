@@ -59,8 +59,8 @@ retraction) and comes straight down onto each curve along its vertical lead,
 never ramping.
 
 **Settings.** `direction` (`"both-ways"`, `"one-way"`, `"other-way"`),
-`axial_offset` and the slopes. The CLI's `--strategy` does not offer it: `camcraft post` has no way to pick an
-edge.
+`axial_offset` and the slopes. The CLI's `--strategy` does not offer it:
+`camcraft post` has no way to pick an edge.
 
 ## Measured
 

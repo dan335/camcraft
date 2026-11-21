@@ -51,34 +51,33 @@ operation-level `stepdown` the format had moved to `passes` was silently ignored
   turn down in the upright plane, a straight, and a quarter turn level onto the
   ring, tangent to it, so the tool meets the wall along it rather than into it.
   The lead-out is the lead-in mirrored, rising at the end. The strategy makes
-  the level arc and the straight; the
-  linker makes the vertical arc, because only it knows how the tool arrives.
+  the level arc and the straight; the linker makes the vertical arc, because
+  only it knows how the tool arrives.
 - **Entry is a choice for a profile:** a helix in the waste beside the lead,
   ending with one level turn that clears its circle to the depth (the default,
-  since a router plunging an end mill 38 mm into birch is not what anyone wants),
-  a plunge straight down in the waste beside the ring, or a ramp: then the ring
-  is one spiral: the lead-in once, down along
-  the ring the way it cuts, once round at each depth from where the ramp reached
-  it, straight on down to the next, and the lead-out once, from where the last
-  lap ends. That is the profile's own path, not the linker's.
+  since a router plunging an end mill 38 mm into birch is not what anyone
+  wants), a plunge straight down in the waste beside the ring, or a ramp: then
+  the ring is one spiral: the lead-in once, down along the ring the way it cuts,
+  once round at each depth from where the ramp reached it, straight on down to
+  the next, and the lead-out once, from where the last lap ends. That is the
+  profile's own path, not the linker's.
 - **Leads are on unless turned off** (`leads = false`).
 - **Most per lap.** No helix, or ramp round a closed ring, descends more in one
   lap than the stepdown.
 - **Three heights.** The tool arrives at the clearance height and leaves at it,
   coming down at rapid to the retract height and then at the plunge feed;
-  between cuts it goes across at the safe distance over the material (a
-  minimum retraction) or at the retract height (a full one).
-  The traverse used to fly at the clearance offset, 10 mm, over the material.
+  between cuts it goes across at the safe distance over the material (a minimum
+  retraction) or at the retract height (a full one). The traverse used to fly at
+  the clearance offset, 10 mm, over the material.
 - **Down to the next depth without lifting.** Off the ring along the lead, across
   at that height to where the next depth's way in starts, and down it, when that
   is within the stay-down distance, clear of the part, and cuts little on the way.
 
 ## Result
 
-The lego profile with `entry = "plunge"`, one depth and leads posts 39 lines:
-up before the tool change, across then down, a plunge beside the ring, a
-vertical arc, a straight and a level arc onto it, four straight sides and four
-`G2` corners of the model's own radius, the lead off mirrored, and home. With
-the default helix and a 6.35 mm stepdown it posts 7
-depths in 272 lines, staying down between all of them, with no gouges and no
-rapid contacts; it was 1,600.
+The lego profile with `entry = "plunge"`, one depth and leads posts 39 lines: up
+before the tool change, across then down, a plunge beside the ring, a vertical
+arc, a straight and a level arc onto it, four straight sides and four `G2`
+corners of the model's own radius, the lead off mirrored, and home. With the
+default helix and a 6.35 mm stepdown it posts 7 depths in 272 lines, staying
+down between all of them, with no gouges and no rapid contacts; it was 1,600.
