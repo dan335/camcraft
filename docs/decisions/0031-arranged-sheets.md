@@ -8,8 +8,8 @@ A router job is often many parts cut from one sheet of board. Each model had
 one position, set by hand; a fixed box followed the models rather than held
 them, and nothing checked that two parts did not overlap or that they fitted
 on the board at all. How should camcraft lay several models, and several of
-each, on a sheet of a given size by itself (what Fusion calls Arrange, and
-others nesting), and how does what is laid reach the toolpaths and the checks?
+each, on a sheet of a given size by itself (arranging, or nesting), and how
+does what is laid reach the toolpaths and the checks?
 
 ## What was decided
 
@@ -64,8 +64,7 @@ body and its geometry taken into the setup's frame through each copy's stand
 round, so a hole is still a hole and an arc still an arc on every copy. No stand
 at all does no arithmetic, and a quarter turn swaps and negates coordinates
 rather than multiplying, so a job without sheets is laid out and cut bit for
-bit as before, which every existing test and Fusion comparison held when the
-stands went in.
+bit as before, which every existing test held when the stands went in.
 
 **The setup machines only the parts it lists.** The sheet lays every part it
 has; a setup that uses it machines the models it lists, and the others stand on

@@ -154,7 +154,7 @@ the rim and the outside's top as above. Outside in, both programs were then
 byte for byte as before: zones were built inside out only, until the mirror
 below.
 
-On Fusion's `ops_3d` cut inside out with its 6 mm ball at a stepover of
+On `ops_3d` cut inside out with its 6 mm ball at a stepover of
 0.6, the pocket's rim is a strip, and the rest of the part is a zone
 measured out from the rim. The band from it to where the tool leaves the
 part is too wide to blend, and with the zones its rings ended in arcs
@@ -174,8 +174,7 @@ longer on some sides than others (`run::tests_bowl`): with the strips no
 break, 1 to 3 crossings at each of 36 sections rolled over the inner edge
 and 2 or 3 over the outer; now none, and either side of each edge the rings
 are no further apart than a stepover where the tool touches the part. On
-Fusion's `ops_3d`, cut outside in, Scallop's programs and Contour's are as
-they were.
+`ops_3d`, cut outside in, Scallop's programs and Contour's are as they were.
 
 ### Outside in
 
@@ -227,9 +226,9 @@ to 0.66 mm past it, where before 7 or 8 rings rolled on that edge; across
 the rim and the outer edge the largest gap is 1.11 mm, as before (1.10).
 
 With the floor's group removed: 40.39 m where 40.90, 2 lifts as before, one
-ring on each edge where 12. `ops_3d` outside in, and Scallop's three
-comparisons with Fusion, are byte for byte as they were: the zones round the
-pocket's rim do not all close, and the ground is cut as one.
+ring on each edge where 12. Scallop's three programs on `ops_3d` outside in
+are byte for byte as they were: the zones round the pocket's rim do not all
+close, and the ground is cut as one.
 
 ## Still not done
 
@@ -256,7 +255,7 @@ pocket's rim do not all close, and the ground is cut as one.
   lose more than 0.56 of a stepover's ring, and on `ops_3d` with the dome
   avoided the 428 edges that can lose a whole one, up to 4.9, are all on the
   pocket's upright walls, which the tool's side cuts at any height; on its
-  left wall the stock left is 0.183 mm at most to Fusion's 0.234. Until
+  left wall the stock left is 0.183 mm at most. Until
   the field keeps where two fronts meet inside a cliff's edge, as a node of
   its own there, a zone is not measured from every edge to close its rings,
   and such a pocket's rim is climbed.

@@ -7,7 +7,7 @@
 The app chose files in `egui-file-dialog` 0.15, a dialog drawn inside egui.
 It followed the theme and never held up the window, but it listed a folder by
 name only and could not sort. In a Downloads folder of a few hundred files, a
-STEP file just downloaded from Fusion could not be found. Sorting has been
+STEP file just downloaded could not be found. Sorting has been
 asked of it upstream since 2024. Explorer's dialog, the desktop's file chooser
 on Linux and the panels on macOS sort by date, search, and list recent files.
 Which dialog should the app use?
@@ -37,8 +37,8 @@ Which dialog should the app use?
   last folder it remembers. The old dialog's key, `file_dialog`, is no longer
   read or written.
 - **Filters by extension, in both cases**: jobs, models (STEP, STP, STL),
-  machine profiles (TOML) and Fusion tool libraries (CSV), then *All files*.
-  Fusion writes `.STEP`. Windows and macOS match an extension in any case; a
+  machine profiles (TOML) and tool libraries (CSV), then *All files*. Some
+  CAD programs write `.STEP`. Windows and macOS match an extension in any case; a
   portal's chooser matches a pattern as written, so each extension is listed in
   lower and upper case. Save As offers jobs only: with *All files* chosen,
   macOS would add `.*` to the name.

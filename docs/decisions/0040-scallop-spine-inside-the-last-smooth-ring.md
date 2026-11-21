@@ -108,8 +108,9 @@ on is where the first closed ring starts, now the first round the spine, so
 it runs a different way.
 
 The bowl with its floor avoided, inside out, and both bowls outside in, are
-byte for byte as they were, as are `ops_3d` cut either way and Scallop's
-three comparisons with Fusion's programs. In the tests, a shallow
+byte for byte as they were, as are `ops_3d` cut either way and a new
+Scallop on it, with the dome avoided and with only the floor machined. In
+the tests, a shallow
 egg-shaped bowl with nothing avoided keeps no ring but the first two round
 its spine over the bound, its rings a stepover apart on its floor; a round
 bowl and a square pocket make the rings they made; and on a flat egg the
@@ -139,8 +140,9 @@ the tool lifts there, once. Across the spine, on sections square to it
 through its middle, the rings are as far apart where the tool touches as
 inside out's, gap for gap; along its line past its east end, 0.91 to 1.05
 mm, as inside out's. On `ops_3d`, the chain round the block's outside has
-an `R*`, at level 15, whose spine is refused, in either order; Scallop's
-three comparisons with Fusion have none. Those programs, the bowl with its
+an `R*`, at level 15, whose spine is refused, in either order; a new
+Scallop on it, with the dome avoided and with only the floor machined, has
+none. Those programs, the bowl with its
 floor avoided either way, and every program inside out are byte for byte as
 they were.
 

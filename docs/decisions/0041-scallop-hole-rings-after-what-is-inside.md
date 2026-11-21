@@ -44,9 +44,8 @@ In what order should a region's two families be cut?
   lifted to it: on the user's bowl from (137.5, 139.4, Z-39.2) to
   (115.6, 12.3, Z-34.6), 129 mm across. Now it lifts once, at the end, and
   goes 0.08 m at rapid where 0.28, feeding 40.73 m where 40.70; the same with
-  the floor's group removed, once where twice. Inside out, `ops_3d` either
-  way, and Scallop's comparisons with Fusion are byte for byte and figure
-  for figure as they were.
+  the floor's group removed, once where twice. Inside out, and `ops_3d`
+  either way, are byte for byte and figure for figure as they were.
 
 ## What was measured
 
@@ -57,13 +56,13 @@ In what order should a region's two families be cut?
 | The same with the floor's group removed, outside in | 40.90 m, 2 lifts | the same, byte for byte |
 | Both, inside out | | byte for byte |
 | `ops_3d` cut either way | | byte for byte |
-| Fusion's `ops_3d`, Scallop new: alike / fed / lifts | 94.58% / 9960 mm / 1 | the same |
-| with the dome avoided | 58.70% / 9084 mm / 3 | 58.72% / 8817 mm / 4 |
-| with only the floor machined | 42.42% / 887 mm / 2 | 42.44% / 889 mm / 3 |
+| `ops_3d`, Scallop new: fed / lifts | 9960 mm / 1 | the same |
+| with the dome avoided | 9084 mm / 3 | 8817 mm / 4 |
+| with only the floor machined | 887 mm / 2 | 889 mm / 3 |
 
-Every other comparison with Fusion's programs, Contour's, Flat's, Parallel's,
-Pencil's, Project's, Ramp's, Spiral's and Morphed Spiral's, is the same to
-the figure; pocket clearing's and flat finishing's programs are unchanged.
+Contour, Flat, Parallel, Pencil, Project, Ramp, Spiral and Morphed Spiral
+feed and lift the same on their jobs to the figure; pocket clearing's and
+flat finishing's programs are unchanged.
 
 **The two lifts gained.** Each is one link the rule's own order makes long,
 not an order wrong within a family:
@@ -85,11 +84,10 @@ not an order wrong within a family:
 
 Cutting the holes' rings the other way within their family, from the hole
 out (`I0, I1 .. Im` after the middle), was measured too: the same lifts on
-both comparisons, and on the bowl 8 where 7. From the middle out to the hole
-the family starts beside where the middle ended, and each ring is a step from
-the last; from the hole out it starts at the hole, wherever the middle
-ended. So the order stays as the rings nest, and the comparison with the
-dome avoided, now feeding 4.8% less than Fusion's, keeps a bound of 5%.
+both `ops_3d` variants, and on the bowl 8 where 7. From the middle out to the
+hole the family starts beside where the middle ended, and each ring is a step
+from the last; from the hole out it starts at the hole, wherever the middle
+ended. So the order stays as the rings nest.
 
 ## Considered and not chosen
 

@@ -11,9 +11,10 @@ and the first area's fine levels from its deeper slabs after the second's
 first. A third of its lines were steps a tenth of a millimetre long, each
 turned 45°, round the same octagon a quarter of a millimetre across, cutting
 nothing. Its last slab was the sliver of depth the stepdown did not divide,
-and cost a whole lap; its helixes were a quarter of their size, below
-Fusion's least, dozens of turns each. A program a machinist reads as logical goes into each area once a
-slab, clears it, steps up its wall, goes down to the next slab, and leaves.
+and cost a whole lap; its helixes were a quarter of their size, below the
+least, dozens of turns each. A program a machinist reads as logical goes into
+each area once a slab, clears it, steps up its wall, goes down to the next
+slab, and leaves.
 What made it otherwise?
 
 ## What was found
@@ -32,9 +33,9 @@ What made it otherwise?
   shortest steps, exactly back where it began, until its steps ran out.
 - **The last slab took what was left of the depth**, however thin.
 - **The helix was halved and halved again where it had no room**, to a
-  quarter, below Fusion's own Minimum Ramp Diameter,
+  quarter, below the minimum ramp diameter,
   max(0.5 × (D − 2 × corner radius), 0.25 × D)
-  ([decision 0012](0012-transitions-and-entries-from-fusions-defaults.md)).
+  ([decision 0012](0012-transitions-and-entries-defaults.md)).
 - **Every level started nearest the lower left corner of its box**, wherever
   the tool was.
 
@@ -76,24 +77,26 @@ What made it otherwise?
   after, which may start where the one that went round started, going on from
   what it left; from where two have gone round on the spot, none starts
   again. (Never started there again, a 2D pocket's corners were left to
-  plunges and lifts, and it fed a third further than Fusion's.) What is left
+  plunges and lifts.) What is left
   with no way in from the side, if narrower than the tool, is taken the same
   way rather than gone down into: a pass ended going round on the spot where
   the room narrows to nothing can leave such a crumb, which no helix or ramp
   fits. The material of a closed area not yet gone into is as wide as
   the tool, as it reaches the tool's radius past where the tool may be in it,
   so this never takes the place of a helix.
-- **The helix is never smaller than Fusion's least.** Halved from Fusion's
-  Helical Ramp Diameter where there is no room, then the least itself
+- **The helix is never smaller than the least.** A smaller one takes dozens
+  of turns to go down at the ramp angle. Halved from the helix diameter where
+  there is no room, then the least itself
   (`AdaptiveParams::least_helix_radius`, the operation's
   `least_helix_diameter`). Where not even that fits, it ramps along the area:
   back and forth along a stretch of its middle, near its deepest point, as long
   as the largest helix goes round in one turn or as long as the middle is, and
   no shorter than the least helix is across; at the ramp angle and no more than
   the ramp stepdown in one way along, then once along it at the level, as a
-  helix ends with a turn at the level. Fusion's helix ramp type ramps along a
-  pocket's rings where its helix does not fit; adaptive has no rings, so it
-  ramps along the area's middle. Only where there is no such stretch is the
+  helix ends with a turn at the level. Pocket clearing ramps along its rings
+  where its helix does not fit
+  ([decision 0012](0012-transitions-and-entries-defaults.md)); adaptive has
+  no rings, so it ramps along the area's middle. Only where there is no such stretch is the
   area left, and said.
 - **A fine or flat level starts nearest where the level below it in its slab
   ended**, where the tool is. A slab's own level is worked out at the same time
@@ -132,7 +135,7 @@ cutting both ways removes, and the steps from a level up to its fine levels.
 
 ## Consequences
 
-- Every Fusion comparison of a finish starts from a new adaptive's roughing,
+- Every test of a finish on `ops_3d` starts from a new adaptive's roughing,
   whose levels moved; their figures were measured again.
 - A ridge wider than the load, standing free, is still cut down by passes
   steered for the load, the last of it along it.
@@ -150,14 +153,8 @@ the level: from above, a criss-cross of rapids over the part. Classed:
 | going down into the next slab, a helix or a ramp | 6 |
 | from one area to the next | 3 |
 
-- **The returns.** The stay-down distance is Fusion's Maximum Stay-Down
-  Distance for its Adaptive, `5 * tool_diameter`, read from a new operation
-  through Fusion's API ([decision 0012](0012-transitions-and-entries-from-fusions-defaults.md)).
-  The same reading says a new Adaptive of Fusion's retracts *fully*, to the
-  retract height 5 mm over the stock, beyond it, and stays down only going
-  straight (Stay-Down Level *least*): Fusion lifts there too, higher. A probe
-  of Fusion's own program on a wide pocket was written but Fusion, its bridge
-  running, did not take it up; the answer is from its settings. Whether lifting
+- **The returns.** Adaptive's stay-down distance is `5 * tool_diameter`
+  ([decision 0012](0012-transitions-and-entries-defaults.md)). Whether lifting
   is quicker than staying down depends on how much faster the machine rapids
   than it cuts, which camcraft is not told. By distance, a way back across what
   the level cleared is never longer than going up to where a lifted link
@@ -237,12 +234,11 @@ across was only looked for from the pass before it.
   that is the pass it follows when cut.
 
 A slab going down into a closed area still lifts to its helix or ramp, which
-is where the area is widest, as Fusion's is; from one area to the next lifts.
+is where the area is widest; from one area to the next lifts.
 In a ring-shaped area, a climb-only pass along one wall ends where the next,
 along the other wall or past where the room narrows to nothing, does not
-begin, and going round to it is longer than lifting: Fusion's Adaptive, its
-Both Ways off, lifts there too, fully (its default retraction), and cutting
-both ways is what removes them. Lifting only the safe distance over the
+begin, and going round to it is longer than lifting: cutting both ways is
+what removes them. Lifting only the safe distance over the
 material as it stands, where it is lowest, would save about a third of the
 rapid left (1,329 mm to about 970, an estimate over the higher of the two
 levels each lift joins); that is every strategy's linking, and is left.
@@ -262,4 +258,5 @@ On the user's job:
 
 Every lift in one of its two areas is now a helix down into the next slab, or
 the change to the other area; the other's, a ring, are its entries, four
-returns round it and one step up. The same material comes off and every check passes.
+returns round it and one step up. The same material comes off and every
+check passes.

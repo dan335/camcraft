@@ -14,8 +14,8 @@ operation start with?
 A new operation starts with the defaults below. Where a default follows the
 tool, it is an expression of the tool's sizes and feeds, saved with the
 operation (`StrategySpec::default_expressions`), so it suits whichever tool
-the operation has. A number typed over one, or a preset's,
-takes its place. A job file still reads as it always did: what it leaves out
+the operation has. A number typed over one, or a preset's, takes its place.
+A job file still reads as it always did: what it leaves out
 means what it meant, so a saved job does not change under it; only new
 operations start differently.
 
@@ -92,6 +92,5 @@ A new Spiral and a new Morphed Spiral start both ways: the spiral turns to
 climb and each piece the part cuts it into is taken from its nearer end,
 which is what both ways means for one. A new Flat comes straight down onto
 each ring, its ramp along the ring a setting. A job file that leaves either
-out reads as before:
-climbing, and ramping
+out reads as before: climbing, and ramping
 ([decision 0034](0034-entries-and-order-of-the-finishes-over-the-part.md)).

@@ -193,12 +193,12 @@ a stepover of 0.8 (`run::tests_bowl`): the band's measured spacing within 1%
 of its width, every pass off the floor's edge a closed ring, none further
 apart along the outside than 1.03 of a stepover inside out.
 
-On Fusion's `ops_3d`, cut outside in as a new one starts, no band is blended
-and no ring laid below where the tool leaves the part; the columns alike are
-as they were, 94.6%, 58.7% and 42.4%, and with rings ramped onto along
-themselves it lifts once, 3 times and twice where it lifted once, 5 and 3
-times, with 1.0% more fed, 1.9% less and 24% less. Contour's programs, whose
-rings are level, are as they were.
+On `ops_3d`, cut outside in as a new one starts, no band is blended and no
+ring laid below where the tool leaves the part; with rings ramped onto along
+themselves, a new Scallop, the same with the dome avoided and the same with
+only the pocket's floor machined lift once, 3 times and twice where they
+lifted once, 5 and 3 times. Contour's programs, whose rings are level, are as
+they were.
 
 ## Still not done
 

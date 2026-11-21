@@ -113,8 +113,7 @@ the tool leaves the part?
   links it lifts for are no longer than twice the tool; they are refused
   because each falls 5 to 8 mm onto the next arc's start, steeper than a
   plunge and further than a cut step. So every finish over the part, Scallop
-  among them, still stays down no further than twice the tool, and the
-  others' comparisons with Fusion are not measured again here.
+  among them, still stays down no further than twice the tool.
 - **A finer grid near where the tool leaves the part.** The fall there is
   vertical; each halving of the cell shortens the band missed by only √2.
 - **Bands between the part's edges, a morph across each, on a field measured
@@ -165,12 +164,10 @@ where the next starts, lower down the bulge, and the link there would
 plunge. The one gap of 1.20 is where a ring crosses only as a piece
 shorter than the tool's radius, left out as the field leaves its own.
 
-On Fusion's `ops_3d`: a new Scallop as before, 94.6% of the columns alike;
-with the dome avoided 58.7% where 58.9% were, lifting 7 times where it
-lifted 10; with only the pocket's floor machined 42.4% where 42.0% were,
-the median 0.034 mm where it was 0.020 and 24% less fed than Fusion's where
-22% less was, the floor's edge now found exactly where the group holding
-the ball changes, where it was found to within half the tolerance.
+On `ops_3d`: a new Scallop as before; with the dome avoided it lifts 7 times
+where it lifted 10; with only the pocket's floor machined, the floor's edge
+is now found exactly where the group holding the ball changes, where it was
+found to within half the tolerance.
 
 On a cup with its floor avoided and its wall to a sharp rim at 90°, 89°,
 87° and 85°, the rings run up the wall a stepover apart from its foot to its

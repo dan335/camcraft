@@ -77,9 +77,9 @@ the next along one straight seam, lifts only where the part forces them?
   along the grid's edges to half the tolerance, the ground machined ends, as
   it does at a hole in the area: the field is not measured across what is
   avoided, and a pass runs along the edge, placed seen from above where it
-  was found. So the rings are laid anew round what is avoided, as Fusion's
-  are ([decision 0033](0033-surface-groups.md)), rather than laid across it
-  and cut out of it.
+  was found. So the rings are laid anew round what is avoided
+  ([decision 0033](0033-surface-groups.md)), rather than laid across it and
+  cut out of it.
 - **Inside out measures from the inner edges.** Where the ground has inner
   edges, the area's holes or the edges of faces avoided, the field is
   measured from them alone, the first pass along them. The rings grow
@@ -151,27 +151,24 @@ the outer boundary, where the last ring and the boundary's are up to a
 stepover and a half apart); seven lifts; no gouge, no rapid into the
 material, and the same on one thread or eight.
 
-**Held to Fusion's programs** (`compare/tests_scallop.rs`), before and after:
+**Scallop on `ops_3d`**, before and after:
 
-| Program              | Alike         | 95th percentile | Removed          | Fed            | Lifts, camcraft / Fusion |
-|----------------------|---------------|-----------------|------------------|----------------|--------------------------|
-| `scallop`            | 89.2% / 94.6% | 0.015 / 0.010   | +0.03% / -0.01%  | +16% / +2.0%   | 2 / 1 to 12 / 1          |
-| `scallop_avoid_dome` | 61.8% / 58.9% | 0.24 / 0.25     | -1.2% / -1.2%    | +12% / -2.6%   | 15 / 8 to 10 / 8         |
-| `scallop_floor_only` | 42.8% / 42.0% | 3.6 / 3.4       | -11.6% / -10.1%  | -9% / -22%     | 12 / 3 to 3 / 3          |
+| Program              | Lifts, before / after |
+|----------------------|-----------------------|
+| `scallop`            | 2 / 12                |
+| `scallop_avoid_dome` | 15 / 10               |
+| `scallop_floor_only` | 12 / 3                |
 
-With no groups the passes now cut the pocket's walls and the R8 round as
-Fusion's do, where rings round the walls took the steps down. They lift more:
-taken in the field's order, not the nearest next, the ways between some of
-its regions are longer than the tool stays down. With the floor alone
-machined they lift as often as Fusion's. With the dome avoided the rings go
-round it from a ring of camcraft's own, so fewer columns agree.
+With no groups the passes now cut the pocket's walls and the R8 round, where
+rings round the walls took the steps down. They lift more: taken in the
+field's order, not the nearest next, the ways between some of its regions are
+longer than the tool stays down.
 
 **The other finishes.** On `ops_3d` with no roughing, Pencil's, Contour's and
 Ramp's programs are byte for byte as they were; Parallel's, Spiral's,
 Radial's and Morphed Spiral's cut the same points, and their rings round the
 walls, joined beside the walls where they lifted, lift 4, 47, 3 and 111 times
-where they lifted 40, 83, 40 and 147. Held to Fusion's programs, Parallel,
-Spiral, Contour and Ramp are within their bounds as they were.
+where they lifted 40, 83, 40 and 147.
 
 ## Still not done
 
