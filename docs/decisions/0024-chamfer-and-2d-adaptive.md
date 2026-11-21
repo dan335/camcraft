@@ -4,41 +4,30 @@
 
 ## Question
 
-Fusion's 2D Chamfer cuts into the part on purpose, which the gouge check
-refuses; its 2D Adaptive Clearing is its 3D Adaptive's way of clearing applied
-to a 2D pocket. How is a chamfer told from a gouge, and how is 2D adaptive made
-without a second copy of the adaptive engine?
+2D Chamfer cuts into the part on purpose, which the gouge check refuses; 2D
+Adaptive Clearing is adaptive clearing applied to a 2D pocket. How is a
+chamfer told from a gouge, and how is 2D adaptive made without a second copy
+of the adaptive engine?
 
-## What was found
+## What a new one starts with
 
-Autodesk's references ("2D Chamfer reference", "2D Adaptive Clearing
-reference", now "2D Adaptive Roughing", and their "Generate a ... toolpath"
-pages) list the settings and give no defaults. Every parameter of a fresh
-operation of each, read from Dan's Fusion (2706.1.14) through its API, gives
-them. The public dump of
-[decision 0020](0020-defaults.md) has neither strategy.
-
-- **2D Chamfer** (`chamfer2d`): Chamfer Width 0 mm, Chamfer Tip Offset 1 mm,
+- **2D Chamfer** (`chamfer-2d`): Chamfer Width 0 mm, Chamfer Tip Offset 1 mm,
   Chamfer Clearance `tool_diameter * 0.1`, Finishing Overlap 0, Outer Corner
   Mode *roll around corner*, Preserve Order off. No stock to leave, multiple
   depths, retraction policy or stay-down. Lead-in on, its linear distance
   `tool_diameter * 0.1`, perpendicular, no arc; lead-out the same. Shaft and
-  Holder offered. "A tapered tool is required"; a sharp edge is picked
-  itself, a chamfer the model has by its lower edge, and Autodesk says to set
-  the width and clearance to zero for one. The tip offset "is added to the
-  toolpath depth, while keeping the tool in contact with the selected edge by
-  adjusting the toolpath radial offset".
-- **2D Adaptive** (`adaptive2d`): 3D Adaptive's optimal load
+  Holder offered. It needs a tapered tool. A sharp edge is picked itself, a
+  chamfer the model has by its lower edge, with the width and clearance zero.
+  The tip offset goes on the depth, and the pass moves sideways by as much as
+  keeps the flank on the picked edge.
+- **2D Adaptive** (`adaptive-2d`): 3D Adaptive's optimal load
   (`tool_diameter * 0.4`), minimum cutting radius, slot clearing and its width,
   stay-down clearance, lift height (0.2 mm) and helix sizes; Multiple Depths
-  off, its stepdown 3D's Maximum Roughing Stepdown, even stepdowns off; Stock
-  to Leave on at 0.5 mm; Stay-Down Level *least*; its Bottom from the selected
-  contours; Detect Open Pockets on. No flat area detection, fine stepdown,
-  shallow areas, machine cavities, Shaft and Holder or rest machining from
-  operations; its rest machining is from a previous tool's size.
-
-Where Autodesk's Generate page says 2D Adaptive's Bottom is the model's bottom,
-the API's selected contours is taken, as the 2D pocket's is.
+  off, its stepdown 3D Adaptive's, even stepdowns off; Stock to Leave on at
+  0.5 mm; Stay-Down Level *least*; its Bottom from the selected contours, as
+  the 2D pocket's is; Detect Open Pockets on. No flat area detection, fine
+  stepdown, shallow areas, machine cavities, Shaft and Holder or rest
+  machining from operations.
 
 ## What was decided
 
@@ -68,7 +57,8 @@ none of it: its bevel is the model's face, and lowers nothing.
 part's faces other than those the chamfered edges join; where it would rest
 higher than the chamfer, the pass is lifted to it, the chamfer narrower there,
 and said (CC221). A chamfer the model has is picked by its lower edge, so its
-top face is another face: with a clearance it lifts, as Fusion says to set none.
+top face is another face: with a clearance it lifts, so for one the clearance
+is set to none.
 
 **2D adaptive is the engine's, given its levels.** The engine (`adaptive_rough`)
 found its levels and where the tool may be at each by slicing the part, then
@@ -84,48 +74,37 @@ the part's shadow, what lies beyond is taken into it, out past the stock far
 enough for the tool to stand clear: the engine then comes at it from outside,
 as it does beside a block. Only what joins a pocket is taken in.
 
-**Names.** The job file calls them `chamfer-2d` and `adaptive-2d`: Fusion's
-`chamfer` is its 3D Chamfer, and a 2D one beside 3D Adaptive's `adaptive` is
-plainer named so.
+**Names.** The job file calls them `chamfer-2d` and `adaptive-2d`: beside 3D
+Adaptive's `adaptive`, a 2D one is plainer named so, and `chamfer` alone
+would not say which it is.
 
 ## What it leaves open
 
-Neither is yet held to a Fusion program. To check against Fusion: whether its
-chamfer clearance lifts the tool, trims the pass or narrows the chamfer, and
-against which faces; its outer corner modes other than roll; how its open
-pockets are extended (Tangent, Closest Boundary, Parallel) and where it enters
-them; how it orders pockets of different depths by depth; and 2D Adaptive's
-Stay-Down Level, *least* in a fresh operation, where camcraft's 3D Adaptive
-starts at the most.
+Whether a chamfer's clearance should lift the tool, trim the pass or narrow
+the chamfer, and against which faces; outer corner modes other than roll; how
+open pockets are extended (tangent, to the closest boundary, parallel) and
+where they are entered; how pockets of different depths are ordered by depth;
+and 2D Adaptive's Stay-Down Level, *least* in a new operation, where 3D
+Adaptive starts at the most.
 
-## What Fusion's programs showed (2026-11-13)
+## Amended 2026-11-13
 
-Fusion's own programs for `ops_2d` (`fixtures/nc/ops_2d_adaptive.nc`,
-`ops_2d_adaptive_open.nc`, `ops_2d_chamfer_lower.nc`,
-`ops_2d_chamfer_upper.nc`, `ops_2d_chamfer_width.nc`) now hold both, each a new
-operation (`compare::tests::ops_2d`):
+Measured on `ops_2d`, each a new operation:
 
-- **2D Adaptive** of the pocket with the island, the 6 mm flat: 250,599 of
-  250,923 columns agree, 12,035 mm³ removed to Fusion's 12,038, fed 1,544 mm
-  to its 1,442. The 324 that differ are on the walls each leaves its half
-  millimetre on, cut whole or not as a column's centre falls within the
-  tolerance of either wall: camcraft's lower in the pocket's round corners,
-  Fusion's round the island. They are held to two in a thousand.
-- **2D Adaptive** of the notch open to two sides: Fusion takes an open edge as
-  open to air, and its program rapids down beside the part there, into
-  whatever stock stands beside it, where camcraft clears that stock too. With
-  the stock flush with the part, 98,832 of 98,840 columns agree, 3,478.9 mm³
-  to 3,479.2, fed 362 mm to 360. How Fusion's open pockets meet stock beyond
-  the part is still open.
+- **2D Adaptive** of the pocket with the island, the 6 mm flat: 12,035 mm³
+  removed, fed 1,544 mm, its half millimetre left on the walls.
+- **2D Adaptive** of the notch open to two sides. An open edge is not taken
+  as open to air: a program that rapids down beside the part there goes into
+  whatever stock stands beside it, so camcraft clears that stock too. With
+  the stock flush with the part, 3,478.9 mm³ removed, fed 362 mm. How an open
+  pocket should meet stock beyond the part is still open.
 - **2D Chamfer** of the pocket's chamfered rim by its lower loop, with no
-  clearance, and of the island's sharp rim, one edge a millimetre wide: every
-  one of 25,143 and 4,425 columns agree, fed 166 to 165 mm and 47 to 46. By its
-  upper loop, as a new one starts: all 25,135 agree, fed 171 to 171. Each is
-  held on the pocket cleared first, by a 2D Adaptive leaving nothing on its
-  walls: on uncut stock, each program's V ploughs through the pocket's stock
-  where it leads onto the rim, which is a different place in each, and about
-  1.4% of the columns differ there by up to 0.6 mm.
+  clearance, feeds 166 mm, and of the island's sharp rim, one edge a
+  millimetre wide, 47 mm. By its upper loop, as a new one starts, 171 mm.
+  Each is measured on the pocket cleared first, by a 2D Adaptive leaving
+  nothing on its walls: on uncut stock the V ploughs through the pocket's
+  stock where it leads onto the rim.
 
 Clearance that lifts the tool, the outer corner modes, open pockets'
 extension and entry, and pockets of different depths ordered by depth are
-still not compared.
+still not measured on a job.

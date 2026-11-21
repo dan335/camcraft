@@ -15,26 +15,9 @@ does a holder belong in the tool library?
 
 ## How others do it
 
-- **Fusion** keeps the holder on the tool: a stack of segments from the nose
-  up, each a height and a lower and upper diameter, so a taper is one
-  segment; an optional *shaft* between tool and holder the same way; and the
-  tool's *body length* (`LB`, length below the holder) placing the holder.
-  Its library has holder folders, and a holder is chosen onto a tool, not
-  onto an operation or a machine. Each 3D operation has *Shaft and Holder*:
-  off, **pull away** (lift, leaving material), **trimmed** (cut out the
-  passes that would collide), **detect tool length** (the least body length
-  that clears, written back to the tool), or **fail**; drilling skips the
-  holes that would collide. Shaft clearance 1 mm, holder clearance 5 mm;
-  adaptive can check against the stock as well as the part. In 3-axis it is
-  off by default, and **simulation reports collisions anyway**, on the
-  timeline and in its issues. A machine's spindle can be checked too
-  (6 mm clearance), off by default. Nothing found ties holders to a machine's
-  taper.
-- **PowerMill** keeps a tool assembly (tip, shank, holder) and checks every
-  toolpath against the model, or the model and the stock, splitting or
-  lifting what collides, and works out the least overhang that clears.
-  **Mastercam** has holder libraries and the same modes as Fusion (ignore,
-  trim, pull away, detect length, fail).
+- **Mastercam** has holder libraries and five ways for an operation to meet
+  a collision: ignore it, trim the passes, pull away, detect the length that
+  clears, or fail.
 - **Kiri:Moto** adds a wider shaft to the tool's drop profile, so its 3D
   passes keep it clear; **FreeCAD**, **Carbide Create** and, as far as found,
   **Vectric** do nothing for the shank or holder.
@@ -44,9 +27,9 @@ does a holder belong in the tool library?
 
 ## Answers
 
-- **The holder belongs to the tool**, as in Fusion, PowerMill and Mastercam:
-  how far the tool sticks out of it is a property of that tool as it is set
-  up, and an ATC machine keeps each tool in its own holder. Holders get their
+- **The holder belongs to the tool**: how far the tool sticks out of it is a
+  property of that tool as it is set up, and an ATC machine keeps each tool
+  in its own holder. Holders get their
   own **library**, beside the tools' (a *Holders* folder, the System library's
   built in), and choosing one onto a tool copies it in, as a tool is copied
   into a job, so a job still checks what it was verified with.
@@ -60,22 +43,22 @@ does a holder belong in the tool library?
   its machine; the job keeps a copy, as it does tools. The machine is where
   more will go later (travel, rapid rate for the time estimate, the post),
   but it starts with the spindle.
-- **Checking is always on; avoiding is chosen per operation.** As in Fusion,
-  every program is checked against the material in simulation, and a
-  collision fails the setup's checks as a gouge does, so a program that would
-  drive a holder into the work is never posted unawares. How generation keeps
-  clear is each operation's choice, Fusion's modes, off by default as
-  Fusion's are in 3-axis.
+- **Checking is always on; avoiding is chosen per operation.** Every program
+  is checked against the material in simulation, and a collision fails the
+  setup's checks as a gouge does, so a program that would drive a holder into
+  the work is never posted unawares. How generation keeps clear is each
+  operation's choice of mode, off by default: the check still finds every
+  collision.
 
 ## The tool assembly
 
 One profile for the whole tool, from the tip up, each piece a frustum (a
-height, a lower and an upper diameter), as Fusion and OpenCAMLib describe it:
+height, a lower and an upper diameter), as OpenCAMLib describes it:
 
 1. **The cutter**, as now: what cuts.
 2. **The shoulder or neck**, from the flutes to the shoulder length.
-3. **The shank**, at its diameter up to the stickout (Fusion's body length).
-   An optional **shaft** (an extension) sits here, as Fusion's.
+3. **The shank**, at its diameter up to the stickout, its length below the
+   holder. An optional **shaft** (an extension) sits here.
 4. **The holder**, from the stickout up, or where the tool has none, the
    machine's **nose**.
 
@@ -90,8 +73,8 @@ quietly.
 
 The simulator already sweeps each move's cutter through the material height
 field. It sweeps the rest of the assembly too, cutting nothing, and a segment
-that meets material is a **collision**. Contact is actual: Fusion's
-clearances (1 mm on the shank, 5 mm on the holder) are for keeping clear, and a
+that meets material is a **collision**. Contact is actual: the clearances
+(by default 1 mm on the shank, 5 mm on the holder) are for keeping clear, and a
 check against them would fail programs that touch nothing. The body is taken
 twice the operation's tolerance narrower (the job's, and smoothing's where it
 smooths): a shank as wide as its cutter rides against the wall another pass
@@ -112,8 +95,7 @@ a shank: it is not counted. A wall or a post always has a neighbour in too.
   are), marked on the playback timeline and listed in the checks window, the
   playhead able to go to it with the assembly drawn in red there.
 - **The least stickout** that would clear is worked out from the same sweep
-  (Fusion's *Detect tool length*, Cimatron's *minimum clear length*) and
-  reported per tool: "needs 38 mm out of the holder; it is set to 30".
+  and reported per tool: "needs 38 mm out of the holder; it is set to 30".
 
 A disk's maximum over the height field is what each segment asks at each
 step; a holder 50 mm across covers many cells, so the field keeps a maximum
@@ -141,7 +123,7 @@ defect of a strategy, each now fixed:
   below, with material in front of the wall, ran it exactly, and the shank
   rubbed what the level above had left. The sliver is half the tolerance now.
 
-## Avoiding: Fusion's modes, per operation
+## Avoiding: modes, per operation
 
 `passes.holder = { mode, shank_clearance, holder_clearance }`, modes
 `off` (the default), `pull-away`, `trim`, `fail`, and for drilling,
@@ -178,8 +160,7 @@ As planned; what was built is marked.
 3. **Holders.** Built-in holders (the ER11 to ER32 nuts, BT30 ER25 and ER32,
    from makers' tables; ISO30 ER16 to ER32, 70 long, their 50 mm flange from
    Kemmler's drawing of its SK30 ER16), put onto a tool from its Holder tab.
-   *Built.* A library of the person's own holders, and Fusion's JSON
-   libraries imported with their holders and shafts, are not yet.
+   *Built.* A library of the person's own holders is not yet.
 4. **The check.** Sweeping the assembly in simulation, collisions as a
    failing check, CC108, at its first move on the timeline and in the checks
    window, the whole tool drawn in playback; the stickout that would clear in
@@ -200,5 +181,4 @@ As planned; what was built is marked.
   narrower than the 46 mm flange), and the noses of trim routers (Makita
   RT0701C, DeWalt 611) and 65 mm ER11 spindles: measured, or left out of the
   built-ins until they are.
-- Fusion's JSON key for a segment above the gauge line.
 - Whether a fixture should be modelled, as stock the tool must not cut.
