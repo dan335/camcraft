@@ -358,10 +358,24 @@ fn staying_down_rides_over_the_part() {
     }
 }
 
+/// The moves a link that stays down made between the cuts it joins, by
+/// role and where they go, in `out`, a cut, a link and a cut linked.
+fn joined(out: &Toolpath) -> Vec<(MoveRole, DVec3)> {
+    let moves = out.moves();
+    let first = moves.iter().position(|m| m.role == MoveRole::Cut).unwrap();
+    let last = moves.iter().rposition(|m| m.role == MoveRole::Cut).unwrap();
+    moves[first..last]
+        .iter()
+        .filter(|m| m.role != MoveRole::Cut)
+        .map(|m| (m.role, m.to))
+        .collect()
+}
+
 /// Descending further than `max_cut_step` in one steep fall at the cutting feed
-/// is the plunge the gate refuses, so such a link lifts clear instead.
+/// is the plunge the gate refuses, so such a link is not fed down the wall: it
+/// goes across at the height it came off and down at the plunge feed.
 #[test]
-fn a_link_down_a_wall_lifts_clear() {
+fn a_link_down_a_wall_comes_down_at_the_plunge_feed() {
     let mut t = Toolpath::new();
     t.feed_to(dvec3(0.0, 0.0, 5.0), MoveRole::Link, 1000.0)
         .unwrap();
@@ -373,15 +387,24 @@ fn a_link_down_a_wall_lifts_clear() {
         .unwrap();
     let plane = ClearancePlane::new(10.0).unwrap();
     let (out, report) = link(&t, &plane, &mut Air, &FlatPart(-10.0), &staying(50.0)).unwrap();
-    assert_eq!(report.stayed_down, 0);
-    assert!(!roles(&out).contains(&MoveRole::Transition));
+    assert_eq!(report.stayed_down, 1);
+    assert_eq!(
+        joined(&out),
+        [
+            (MoveRole::Transition, dvec3(1.1, 0.0, 5.0)),
+            (MoveRole::Plunge, dvec3(1.1, 0.0, 0.0)),
+        ]
+    );
+    let (_, deepest) = out.steep_cut_descents(DVec3::ZERO, PLUNGE_RATIO);
+    assert!(deepest <= staying(50.0).max_cut_step, "{deepest}");
 }
 
 /// A link that carries on a fall the cut before it was making, or that the cut
 /// after it carries on, is judged with it: each alone is within `max_cut_step`,
-/// together they are the plunge the gate refuses, so the link lifts clear.
+/// together they are the plunge the gate refuses, so the link is not fed down
+/// but goes across and down at the plunge feed.
 #[test]
-fn a_link_joining_a_steep_fall_lifts_clear() {
+fn a_link_joining_a_steep_fall_comes_down_at_the_plunge_feed() {
     // A cut down a wall, 0.3 mm, then a link 0.3 mm further down.
     let mut before = Toolpath::new();
     before
@@ -418,9 +441,19 @@ fn a_link_joining_a_steep_fall_lifts_clear() {
         .unwrap();
     let t_max = || staying(50.0).max_cut_step;
     let plane = ClearancePlane::new(10.0).unwrap();
-    for t in [before, after] {
+    for (t, from_z, to) in [
+        (before, 4.7, dvec3(1.01, 0.0, 4.4)),
+        (after, 5.0, dvec3(1.01, 0.0, 4.7)),
+    ] {
         let (out, report) = link(&t, &plane, &mut Air, &FlatPart(-10.0), &staying(50.0)).unwrap();
-        assert_eq!(report.stayed_down, 0, "{:?}", out.moves());
+        assert_eq!(report.stayed_down, 1, "{:?}", out.moves());
+        assert_eq!(
+            joined(&out),
+            [
+                (MoveRole::Transition, to.truncate().extend(from_z)),
+                (MoveRole::Plunge, to),
+            ]
+        );
         let (_, deepest) = out.steep_cut_descents(DVec3::ZERO, PLUNGE_RATIO);
         assert!(deepest <= t_max(), "{deepest}");
     }
@@ -672,4 +705,181 @@ fn a_steep_fall_is_counted_across_the_way_and_into_the_pass() {
     on.feed_to(dvec3(0.02, 0.0, 0.4), MoveRole::Cut, 1000.0)
         .unwrap();
     assert!(falls_steeply(0.0, from, &down, &on.moves()[1..], 0.5));
+}
+
+/// A part with an upright wall across y = 0.5: 6 high short of it, 4
+/// beyond; with a `ridge` 7 high across y = 0.2 to 0.3, and the tool beside
+/// faces it avoids wherever it goes over the wall where they are `avoided`.
+struct DownAWall {
+    ridge: bool,
+    avoided: bool,
+}
+
+impl Surface for DownAWall {
+    fn at(&self, p: DVec2) -> Option<f64> {
+        Some(if self.ridge && (0.2..=0.3).contains(&p.y) {
+            7.0
+        } else if p.y < 0.5 {
+            6.0
+        } else {
+            4.0
+        })
+    }
+
+    fn along(&self, from: DVec2, to: DVec2) -> Vec<DVec3> {
+        (0..=100)
+            .map(|k| {
+                let p = from.lerp(to, f64::from(k) / 100.0);
+                p.extend(self.at(p).unwrap_or(0.0))
+            })
+            .collect()
+    }
+
+    fn rubs_avoided(&self, from: DVec3, to: DVec3) -> bool {
+        self.avoided && from.y.min(to.y) <= 0.5 && from.y.max(to.y) >= 0.5
+    }
+}
+
+/// A pass along the top of the wall, and the next along its foot 1 mm on,
+/// 2 mm lower: the straight line over the part between them falls down the
+/// wall at the cutting feed further than a cut step.
+fn ring_under_a_ring() -> Toolpath {
+    let mut t = Toolpath::new();
+    t.feed_to(dvec3(0.0, 0.0, 6.0), MoveRole::Link, 1000.0)
+        .unwrap();
+    t.feed_to(dvec3(5.0, 0.0, 6.0), MoveRole::Cut, 1000.0)
+        .unwrap();
+    t.feed_to(dvec3(5.0, 1.0, 4.0), MoveRole::Link, 1000.0)
+        .unwrap();
+    t.feed_to(dvec3(10.0, 1.0, 4.0), MoveRole::Cut, 1000.0)
+        .unwrap();
+    t
+}
+
+/// A finish over the part comes to a ring nearly under the last, down a wall
+/// steeper than a plunge, without lifting: across at the height it came off
+/// and straight down onto it, at the plunge feed, as a level strategy goes
+/// down to a ring's next depth.
+#[test]
+fn a_ring_under_a_ring_is_come_to_across_and_down() {
+    let plane = ClearancePlane::new(20.0).unwrap();
+    let part = DownAWall {
+        ridge: false,
+        avoided: false,
+    };
+    let (out, report) = link(
+        &ring_under_a_ring(),
+        &plane,
+        &mut Air,
+        &part,
+        &staying(50.0),
+    )
+    .unwrap();
+    assert_eq!(report.stayed_down, 1, "{:?}", out.moves());
+    let moves = &out.moves()[out.len() - 3..];
+    assert_eq!(
+        moves.iter().map(|m| (m.role, m.to)).collect::<Vec<_>>(),
+        [
+            (MoveRole::Transition, dvec3(5.0, 1.0, 6.0)),
+            (MoveRole::Plunge, dvec3(5.0, 1.0, 4.0)),
+            (MoveRole::Cut, dvec3(10.0, 1.0, 4.0)),
+        ]
+    );
+    assert_eq!(moves[1].feed, Some(params().plunge_feed));
+}
+
+/// A finish that never stays down lifts, even to a pass that starts right
+/// under where the last ended.
+#[test]
+fn a_finish_that_never_stays_down_lifts_to_a_ring_under_it() {
+    let mut under = Toolpath::new();
+    under
+        .feed_to(dvec3(0.0, 0.0, 6.0), MoveRole::Link, 1000.0)
+        .unwrap();
+    under
+        .feed_to(dvec3(5.0, 0.0, 6.0), MoveRole::Cut, 1000.0)
+        .unwrap();
+    under
+        .feed_to(dvec3(5.0, 0.0, 4.0), MoveRole::Link, 1000.0)
+        .unwrap();
+    under
+        .feed_to(dvec3(10.0, 0.0, 4.0), MoveRole::Cut, 1000.0)
+        .unwrap();
+    let plane = ClearancePlane::new(20.0).unwrap();
+    let (out, never) = link(&under, &plane, &mut Air, &FlatPart(-10.0), &staying(0.0)).unwrap();
+    assert_eq!(never.stayed_down, 0, "{:?}", out.moves());
+}
+
+/// Where the part stands higher than the tool came off the last ring
+/// between it and the next, or the way across would rub a face avoided, the
+/// tool lifts.
+#[test]
+fn a_ring_under_a_ring_past_the_part_or_a_face_avoided_is_lifted_to() {
+    let plane = ClearancePlane::new(20.0).unwrap();
+    for (ridge, avoided) in [(true, false), (false, true)] {
+        let part = DownAWall { ridge, avoided };
+        let (out, report) = link(
+            &ring_under_a_ring(),
+            &plane,
+            &mut Air,
+            &part,
+            &staying(50.0),
+        )
+        .unwrap();
+        assert_eq!(report.stayed_down, 0, "{ridge} {avoided}");
+        assert!(!roles(&out).contains(&MoveRole::Transition));
+    }
+}
+
+/// A clearance that the rest of the tool keeps clear nowhere: every way
+/// that stays down asks it.
+struct HeldNowhere;
+
+impl Clearance for HeldNowhere {
+    fn safe_z(&self, _from: DVec2, _to: DVec2, _tool_radius: f64) -> f64 {
+        10.0
+    }
+
+    fn keeps_clear(&self, _from: DVec3, _way: &[DVec3]) -> bool {
+        false
+    }
+}
+
+/// Across and down onto a ring's next depth, the rest of the tool is kept
+/// clear of the material as on any link that stays down: where it would not
+/// be, the tool lifts.
+#[test]
+fn across_and_down_keeps_the_rest_of_the_tool_clear() {
+    let level = LinkParams {
+        stay_down: StayDown::Level { max: 50.0 },
+        ..params()
+    };
+    let mut deeper = Toolpath::new();
+    deeper
+        .feed_to(dvec3(0.0, 0.0, 0.0), MoveRole::Link, 1000.0)
+        .unwrap();
+    deeper
+        .feed_to(dvec3(5.0, 0.0, 0.0), MoveRole::Cut, 1000.0)
+        .unwrap();
+    deeper
+        .feed_to(dvec3(5.0, 1.0, -1.0), MoveRole::Link, 1000.0)
+        .unwrap();
+    deeper
+        .feed_to(dvec3(0.0, 1.0, -1.0), MoveRole::Cut, 1000.0)
+        .unwrap();
+    let plane = ClearancePlane::new(10.0).unwrap();
+    let (_, kept) = link(&deeper, &plane, &mut Air, &FlatPart(-5.0), &level).unwrap();
+    assert_eq!(kept.stayed_down, 1);
+    let (out, held) = link(&deeper, &HeldNowhere, &mut Air, &FlatPart(-5.0), &level).unwrap();
+    assert_eq!(held.stayed_down, 0, "{:?}", out.moves());
+    let finish = LinkParams {
+        stay_down: StayDown::OverPart { max: 50.0 },
+        ..params()
+    };
+    let part = DownAWall {
+        ridge: false,
+        avoided: false,
+    };
+    let (_, held) = link(&ring_under_a_ring(), &HeldNowhere, &mut Air, &part, &finish).unwrap();
+    assert_eq!(held.stayed_down, 0);
 }

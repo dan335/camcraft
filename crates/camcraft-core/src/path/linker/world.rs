@@ -13,6 +13,17 @@ pub trait Material {
     /// simulator counts them, not the material standing beside it.
     fn highest(&self, from: DVec2, to: DVec2, radius: f64) -> Option<f64>;
 
+    /// Whether the tool, of `radius`, going level from `from` to `to` with its
+    /// tip at `z`, would cut more than `depth` into the material anywhere: the
+    /// material standing that far into the tool's own shape, as it is above
+    /// its tip, so a ball going across beside a steep wall cuts only what its
+    /// rising side reaches. As a flat tool's, unless the material knows the
+    /// tool: [`highest`](Self::highest) more than `depth` above the tip.
+    fn cuts_deeper(&self, from: DVec2, to: DVec2, radius: f64, z: f64, depth: f64) -> bool {
+        self.highest(from, to, radius)
+            .is_some_and(|h| h > z + depth)
+    }
+
     /// Cut `moves` into the material. The first is where the tool already is:
     /// the last move of the previous call, or the program's start.
     fn cut(&mut self, moves: &[Move]);

@@ -140,3 +140,38 @@ as the wall, and ramped from its top.
 Not taken yet: Fusion's smooth arc transitions (a straight lifted line stands in),
 helical ramps for Z-level and pockets (a 2D profile has them since
 [decision 0006](0006-2d-linking-and-arcs.md)), and high feedrate mode.
+
+## Amended 2026-11-21: across and down, for the finishes over the part too
+
+Where a finish's next ring starts nearly under the last, down a wall steeper
+than a plunge, the straight line over the part between them falls at the cutting feed further
+than `max_cut_step`, so the link lifted to the clearance and plunged back onto
+nearly the same spot. A finish over the part now takes the link a level
+strategy takes to a ring's next depth: off the cut along its lead-out, across
+at that height, and straight down at the plunge feed onto the next pass's
+vertical lead, or the pass, as a lifted link would come down, wherever the
+next pass starts lower, no further off than the stay-down distance, and the
+way across is clear of the part, rubs no face avoided, keeps the rest of the
+tool clear of the material and cuts no more than `max_cut_step` into it. A
+finish that never stays down (a stay-down distance of 0) still lifts.
+
+Two things that way assumed held only for clearing at a level with a flat
+tool, and now hold for both:
+
+- **What it cuts going across** was the material anywhere under the tool's
+  flat disc. A ball across beside a steep wall has that wall under its disc
+  and never reaches it with its rising side; it is now measured against the
+  tool's own shape, which for a flat tool is the same test, figure for figure.
+- **The rest of the tool** was never asked about going across, where every
+  other link that stays down asks; now it is, so with the holder kept clear a
+  link no longer crosses beside stock taller than the stickout.
+
+Measured: Scallop with no groups lifts once, as Fusion's, where it lifted 12
+times; with the dome avoided 5 times where 7; Spiral once where twice;
+Parallel with the dome avoided 9 times where 11; Contour, with the dome
+avoided and its 6 mm ball, 13 where 15. Material removed and columns alike
+are unchanged in every comparison; what is fed moved by no more than 4% of
+Fusion's, most in Pencil, whose links that fed up and went across at rapid
+now cross at the feed. On a user's part Scallop lifts 26 times where it lifted
+28, and 9 where 12 without its face avoided; the example rail jig's finish 77
+where 113.

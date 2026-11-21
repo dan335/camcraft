@@ -35,8 +35,12 @@ impl Ways {
     fn of(stay_down: StayDown) -> Self {
         match stay_down {
             StayDown::Never => Self::default(),
+            // Across and down too, as a ring under a ring down a wall too steep
+            // to feed down is come to; not for a finish that never stays down,
+            // whose next pass may start right under the last.
             StayDown::OverPart { max } => Self {
                 over_part: Some(max),
+                across_and_down: (max > 0.0).then_some(max),
                 ..Self::default()
             },
             StayDown::Level { max } => Self {
@@ -207,17 +211,23 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
     /// From `off`, where the tool came off the last cut, across without
     /// lifting and down `way` onto `to` at a lower level, as Fusion goes down
     /// to a ring's next depth: across level at the height it came off, then
-    /// down, where the ways allow it ([`Ways::of`]).
+    /// down `way` as it would be come down after a lift, straight down onto
+    /// its vertical lead or the pass, where the ways allow it ([`Ways::of`]).
+    /// So a finish comes to a ring that starts nearly under the last, down a
+    /// wall steeper than a plunge, where the straight line over the part would
+    /// fall at the cutting feed further than a cut step.
     ///
     /// Not where `way` is a ramp; nor where `to` is no lower than `off`, or
     /// further off than the ways allow; nor where the part reaches above
     /// `off` along the way across, the tool would rub a face it is kept clear
-    /// of, or it would cut more across than a descent at cutting feed may.
+    /// of, it would cut more across than a descent at cutting feed may, or it
+    /// may not be fed across ([`Linker::may_feed`]).
     pub(super) fn across_and_down(
         &mut self,
         off: DVec3,
         way: &Way,
         to: DVec3,
+        pass: &[Move],
         feed: f64,
     ) -> Result<bool, LinkError> {
         let Some(max) = Ways::of(self.p.stay_down).across_and_down else {
@@ -233,14 +243,18 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         if off.z <= lowest + 1e-6 || off.truncate().distance(xy) > max {
             return Ok(false);
         }
-        let cuts = self
-            .material
-            .highest(off.truncate(), xy, self.p.tool_radius)
-            .is_some_and(|h| h > off.z + self.p.max_cut_step);
+        let cuts = self.material.cuts_deeper(
+            off.truncate(),
+            xy,
+            self.p.tool_radius,
+            off.z,
+            self.p.max_cut_step,
+        );
         let across = xy.extend(off.z);
         if self.part_above(off.truncate(), xy, off.z)
             || cuts
             || self.surface.rubs_avoided(off, across)
+            || !self.may_feed(off, &[across], pass)
         {
             return Ok(false);
         }

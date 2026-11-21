@@ -6,6 +6,25 @@ the same notes at more length.
 
 ## Unreleased
 
+- **A finish over the part goes across and down to a ring just under the
+  last** ([decision 0004, amended](docs/decisions/0004-linking-and-entries.md)).
+  Where the next ring starts nearly under the last, down a wall steeper than
+  a plunge, the way over the part between them fell at the cutting feed
+  further than the cut step, and the tool lifted to the clearance height and
+  plunged back onto nearly the same place. It now goes off the ring along
+  its lead, across at that height, and straight down at the plunge feed onto
+  the next ring's lead, as a profile goes to its ring's next depth. On a
+  user's part its scallop lifts 26 times where it lifted 28, and 9 where 12
+  without its face avoided, feeding a little less; held to Fusion's programs,
+  Scallop lifts once, as Fusion's does, where it lifted 12 times, and 5 times
+  where 7 with the dome avoided, Spiral once where twice, and Parallel with
+  the dome avoided 9 times where 11; the example rail jig's finish lifts 77
+  times where 113. The same material comes off. Going across, what the tool
+  would cut is measured against its own shape, so a ball beside a steep wall
+  is not held off by a wall its side never reaches (a Contour with a ball,
+  the dome avoided, lifts 13 times where 15), and the shank and holder are
+  kept clear of the material, as on every other link that stays down: a
+  ring's next depth was gone down to without asking.
 - Linking is less code: each way a link is made without lifting (round onto the next pass, over the part, beside it, at a level, across and down) is one function, tried in one order, and what they ask of the part and the material is asked in one place each; every program it writes is unchanged.
 
 ## 0.10.0 — 2026-11-20

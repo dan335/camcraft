@@ -163,6 +163,25 @@ impl Material for Cutting<'_> {
         highest_under(self.stock.field(), from, to, radius * (1.0 + 1e-9)).top
     }
 
+    fn cuts_deeper(&self, from: DVec2, to: DVec2, radius: f64, z: f64, depth: f64) -> bool {
+        // The cells `highest` looks at, each against the tool's surface at
+        // its distance from the line: the operation's tool, as the simulator
+        // cuts with it. Out at its edge it is as high as at its edge.
+        let edge = self.tool.max_radius();
+        let mut deeper = false;
+        cells_under(
+            self.stock.field(),
+            from,
+            to,
+            radius * (1.0 + 1e-9),
+            |height, d| {
+                let surface = self.tool.height_at(d.min(edge)).unwrap_or(0.0);
+                deeper |= height.is_some_and(|h| h > z + surface + depth);
+            },
+        );
+        deeper
+    }
+
     fn cut(&mut self, moves: &[Move]) {
         let sim = sim_moves_of(moves);
         let swept = match &mut self.guard {

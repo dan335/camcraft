@@ -151,8 +151,10 @@ fn a_new_parallel_leaves_what_fusions_does() {
 
 /// The dome avoided, 1 mm sideways and 1 mm down: 69.7% of 642,657 columns
 /// alike, the median 0.0048 mm and the 95th percentile 0.106, 1.9% more
-/// removed and 39% more fed; camcraft lifts 11 times to Fusion's 15. Neither
-/// touches the dome but round its foot.
+/// removed and 39% more fed; camcraft lifts 9 times to Fusion's 15, where it
+/// lifted 11: two of its links go across and down onto the next pass, lower
+/// (decision 0004, amended).
+/// Neither touches the dome but round its foot.
 #[test]
 fn a_parallel_avoiding_the_dome_leaves_what_fusions_does() {
     let bounds = Bounds {

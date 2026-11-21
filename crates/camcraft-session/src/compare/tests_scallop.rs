@@ -41,11 +41,12 @@ use super::tests_pencil::{Bounds, held_to};
 /// left there (decision 0014). 94.6% of the columns alike where it was 89.2%,
 /// the 95th percentile 0.010 mm where it was 0.015, and 2% further fed where
 /// it was 16%. Its passes are cut in the field's order, not the nearest next
-/// (decision 0035), and it lifts 12 times to Fusion's once where, reordered,
-/// it lifted twice: where the rings close in on the block's top, the pocket's
-/// floor and the dome, the field's regions are cut one after another, and
-/// some of the ways between them are further than it stays down. With
-/// groups, measured:
+/// (decision 0035), and it lifts once, as Fusion's does: where the rings
+/// close in on the block's top, the pocket's floor and the dome, the field's
+/// regions are cut one after another, and the way from one down to the next
+/// goes across at the height the tool came off the last ring and down onto
+/// the next, where it lifted 12 times (decision 0004, amended). With groups,
+/// measured:
 ///
 /// - camcraft lays its lines anew round what it avoids, as Fusion does
 ///   (decision 0035): the edge of the ground machined is an edge of the field,
@@ -65,7 +66,7 @@ use super::tests_pencil::{Bounds, held_to};
 ///   pieces by it: with only the floor machined it lifts 3 times, as Fusion's
 ///   does, where it lifted 12, and feeds 24% less than Fusion's, its passes
 ///   stopping at the tie where Fusion's run on up the walls; with the dome
-///   avoided 7 times to Fusion's 8, where it lifted 15, and 3% less. With
+///   avoided 5 times to Fusion's 8, where it lifted 15, and 2% less. With
 ///   only the floor machined 42.4% of the columns alike where 42.8% were, and
 ///   the bounds on that and on what it feeds are loosened for it: its passes
 ///   stopping at the tie are camcraft's own (decision 0033). Since decision
@@ -81,8 +82,9 @@ fn holds(name: &str, change: impl FnOnce(&mut Operation), bounds: &Bounds, conta
 
 /// A new Scallop leaves what Fusion's does: 94.6% of the 733,643 columns
 /// either cuts alike, the median difference 0.0029 mm and the 95th
-/// percentile 0.010, 0.01% less removed and 2.0% more fed. It was 89.2%,
-/// 0.0031, 0.015, 0.03% more and 16% more.
+/// percentile 0.010, 0.01% less removed and 0.9% more fed, lifting once, as
+/// Fusion's does. It was 89.2%, 0.0031, 0.015, 0.03% more and 16% more; then
+/// 2.0% more fed, lifting 12 times.
 #[test]
 fn a_new_scallop_leaves_what_fusions_does() {
     let bounds = Bounds {
@@ -98,11 +100,13 @@ fn a_new_scallop_leaves_what_fusions_does() {
 
 /// The dome avoided, 1 mm sideways and 1 mm down: 58.7% of 685,934 columns
 /// alike, the median 0.0065 mm and the 95th percentile 0.25, 1.1% less
-/// removed and 2.6% less fed; it lifts 7 times to Fusion's 8. It was 61.8%,
+/// removed and 1.7% less fed; it lifts 5 times to Fusion's 8. It was 61.8%,
 /// 0.0056, 0.24, 1.2% less and 12% more, lifting 15 times: its rings now go
 /// round the dome, as Fusion's do, but from a ring of their own, found
 /// exactly where the ball goes from the floor to the dome (decision 0037),
-/// where it lifted 10 times.
+/// where it lifted 10 times; then 2.6% less fed, lifting 7 times, before two
+/// of its links went across and down onto the next ring (decision 0004,
+/// amended).
 #[test]
 fn a_scallop_avoiding_the_dome_leaves_what_fusions_does() {
     let bounds = Bounds {

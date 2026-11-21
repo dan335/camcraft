@@ -219,3 +219,14 @@ on Spiral.
 - **Flat** still feeds three times as far as Fusion's, which is not yet looked
   into.
 - **Radial and Morphed Spiral** are held to no programs of Fusion's.
+
+## Amended 2026-11-21: a lower pass near the last is not lifted to
+
+A pass that starts lower than the tool came off the last, within the
+stay-down distance, is no longer lifted to and rapided down onto: the tool
+goes across at the height it came off and straight down at the plunge feed
+onto the pass's vertical lead, where the lead is clear, or onto the pass, the
+same way in as after a lift
+([decision 0004, amended](0004-linking-and-entries.md#amended-2026-11-21-across-and-down-for-the-finishes-over-the-part-too)).
+The figures above are as they were measured; since then Scallop lifts once
+with no groups and 5 times with the dome avoided, and Spiral once.

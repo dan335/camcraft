@@ -38,8 +38,10 @@ use super::tests_pencil::{Bounds, held_to};
 /// cut from its outer radius in, and Fusion's from the middle out. Where the
 /// part cuts its laps into short arcs, out at the part's corners and beside
 /// its walls, camcraft cuts the nearest next from its nearer end and comes
-/// straight down onto it, as Fusion does (decision 0034): it lifts twice to
-/// Fusion's 5, and feeds 30% further, its rings round the walls (decision
+/// straight down onto it, as Fusion does (decision 0034): it lifts once to
+/// Fusion's 5, where it lifted twice, the other link going across and down
+/// onto the next arc, lower (decision 0004, amended), and feeds 30% further,
+/// its rings round the walls (decision
 /// 0014), which take down the steps the laps leave on the pocket's walls and
 /// the R8 round, up to 6.8 mm. With the dome avoided, measured:
 ///

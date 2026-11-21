@@ -16,8 +16,10 @@ pub enum StayDown {
     /// A link up to `max` long, riding over the part: a half turn onto the next
     /// pass where they run opposite ways side by side, otherwise the straight
     /// line between the two cuts, lifted wherever the part rises above it, or
-    /// beside the part where an end is off it. For finishing, which runs on the
-    /// part.
+    /// beside the part where an end is off it; or into a lower cut, across at
+    /// the height the tool came off the last and then down, as a ring under a
+    /// ring down a steep wall is come to. For finishing, which runs on the
+    /// part. With a `max` of 0, never across and down.
     OverPart {
         /// The longest link made this way, in millimetres.
         max: f64,

@@ -268,7 +268,9 @@ pub(super) fn held_to(job: &Job, name: &str, bounds: &Bounds, contacts: u64) {
 
 /// A new Pencil with the 12 mm ball leaves what Fusion's does: 95.3% of the
 /// 524,959 columns either cuts alike, the median difference 0.0015 mm and the
-/// 95th percentile 0.0098, 0.09% less removed and 7.3% less fed.
+/// 95th percentile 0.0098, 0.09% less removed and 3.2% less fed. It was 7.3%
+/// less: links that fed up out of a cut and went across at rapid go across at
+/// the feed and down onto the next line, lower (decision 0004, amended).
 #[test]
 fn a_new_pencil_leaves_what_fusions_does() {
     let bounds = Bounds {
@@ -302,7 +304,9 @@ fn a_pencil_with_a_ball_that_fits_the_fillets_leaves_what_fusions_does() {
 
 /// With a bitangency angle of 40°, the lines up the corners shorter: 95.3% of
 /// 522,675 columns alike, the median 0.0015 mm and the 95th percentile
-/// 0.0098, 0.09% less removed and 0.9% more fed.
+/// 0.0098, 0.09% less removed and 4.1% more fed. It was 0.9% more: links that
+/// fed up out of a cut and went across at rapid go across at the feed and
+/// down onto the next line, lower (decision 0004, amended).
 #[test]
 fn a_pencil_at_forty_degrees_leaves_what_fusions_does() {
     let bounds = Bounds {
@@ -310,7 +314,7 @@ fn a_pencil_at_forty_degrees_leaves_what_fusions_does() {
         median: 0.003,
         p95: 0.015,
         removed: 0.005,
-        fed: 0.03,
+        fed: 0.045,
         lowest: 1e-3,
     };
     holds(
@@ -330,7 +334,7 @@ fn a_pencil_at_forty_degrees_leaves_what_fusions_does() {
 
 /// With two stepovers either side of the lines, the 6 mm ball: 69.3% of
 /// 522,840 columns alike, the median 0.0024 mm and the 95th percentile 0.73,
-/// 2.3% more removed and 8.0% more fed. The passes beside the lines run as
+/// 2.3% more removed and 4.4% more fed, where it was 8.0%. The passes beside the lines run as
 /// Fusion's do, round the dome, over the floor, up the walls and round the
 /// corners past the block's edge; their order is not Fusion's, nor the links
 /// between them. Fusion's rapid down onto one meets the roughing's stock,

@@ -26,7 +26,7 @@ use crate::path::fit::{FitReport, fit_arcs};
 use crate::path::held::{Clear, HeldClearance, HeldDrop, cut_out, keep_clear, skip_unreached};
 use crate::path::linker::{
     ClearanceField, EntryKind, LinkParams, LinkReport, Material, Ramp, StayDown, Surface,
-    highest_under, link_watched,
+    cells_under, highest_under, link_watched,
 };
 use crate::path::ordering::{nearer_ends, order_passes};
 use crate::path::simadapt::sim_moves_of;

@@ -13,7 +13,7 @@
 //! Each link is made the first way that fits: without lifting, as [`StayDown`]
 //! allows (round onto the next pass, straight over the part, straight beside
 //! it, straight at a level); otherwise off the last cut along its lead-out,
-//! and, clearing at a level, across at that height and down onto the next;
+//! and, where the next is lower, across at that height and down onto it;
 //! otherwise up to the safe distance above the material, across at the safe
 //! height, down at rapid to the safe distance above where the way in starts,
 //! and down the way in: straight, a vertical lead, a helix or a ramp.
@@ -54,8 +54,8 @@ mod world;
 
 use glam::{DVec2, DVec3, dvec3};
 
-pub(crate) use clearance::highest_under;
 pub use clearance::{Clearance, ClearanceField, ClearancePlane};
+pub(crate) use clearance::{cells_under, highest_under};
 use entry::{Way, lead_out};
 pub use params::{EntryKind, LinkError, LinkParams, LinkReport, Ramp, StayDown};
 pub use world::{Air, Material, NoPart, Surface, Unchanging};
@@ -178,7 +178,7 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
         let top = match at {
             Some(from) => {
                 let off = self.lead_off(from, last_feed(self.out.moves()).unwrap_or(feed))?;
-                if self.across_and_down(off, &way, to, feed)? {
+                if self.across_and_down(off, &way, to, pass, feed)? {
                     self.report.stayed_down += 1;
                     return Ok(way.skip());
                 }

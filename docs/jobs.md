@@ -1002,9 +1002,14 @@ side by side that run opposite ways, as zigzag passes do, by Fusion's default
 tangent to both (straight on along the shorter first, or after, where one ends
 short of the other), wherever the part and the material leave it room and the
 passes are no further apart than the tool is wide; otherwise by the straight
-line between them, lifted wherever the part rises above it. Pocket clearing and
-the 2D strategies go straight and level, and a profile down to its ring's next
-depth. Adaptive clearing makes
+line between them, lifted wherever the part rises above it. Where that line
+would fall at the cutting feed further than the cut step, as from one ring to
+the next under it down a steep wall, they go off the pass along its lead,
+across at that height, and straight down onto the next pass's lead at the
+plunge feed, wherever the way across is clear of the part, of the faces
+avoided and of the material. Pocket clearing and the 2D strategies go straight
+and level, and a profile down to its ring's next depth, across and down the
+same way. Adaptive clearing makes
 its own links at the level, across what it has cleared, and up from a level to
 the next above it in a slab; it goes
 down its own helix, or ramp, into what it cannot reach

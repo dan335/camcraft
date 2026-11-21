@@ -149,6 +149,29 @@ pub(crate) struct Under {
 /// Within the tool's radius is the cells the simulator cuts and checks a rapid
 /// against; a traverse that must clear every cell it could touch asks for more.
 pub(crate) fn highest_under(field: &HeightMap, from: DVec2, to: DVec2, reach: f64) -> Under {
+    let mut top: Option<f64> = None;
+    let mut unknown = false;
+    let off = cells_under(field, from, to, reach, |height, _| match height {
+        Some(h) => top = Some(top.map_or(h, |t: f64| t.max(h))),
+        None => unknown = true,
+    });
+    Under {
+        top,
+        unknown: unknown || off,
+    }
+}
+
+/// Each cell of `field` whose centre is within `reach` of the line from
+/// `from` to `to`, to `each`: its height, `None` where it has none, and how
+/// far its centre is from the line. Returns whether any of the box round the
+/// line, out to `reach`, is off the field.
+pub(crate) fn cells_under(
+    field: &HeightMap,
+    from: DVec2,
+    to: DVec2,
+    reach: f64,
+    mut each: impl FnMut(Option<f64>, f64),
+) -> bool {
     let reach = if reach.is_finite() && reach > 0.0 {
         reach
     } else {
@@ -164,9 +187,7 @@ pub(crate) fn highest_under(field: &HeightMap, from: DVec2, to: DVec2, reach: f6
     let last = ((hi - origin) / pitch).ceil();
     let (nx, ny) = (f64::from(f.nx()), f64::from(f.ny()));
     let finite = first.is_finite() && last.is_finite();
-    let mut unknown = !finite || first.x < 0.0 || first.y < 0.0 || last.x >= nx || last.y >= ny;
-
-    let mut top: Option<f64> = None;
+    let off = !finite || first.x < 0.0 || first.y < 0.0 || last.x >= nx || last.y >= ny;
     if finite {
         let (x0, y0, x1, y1) = (
             cell_index(first.x, f.nx()),
@@ -179,17 +200,15 @@ pub(crate) fn highest_under(field: &HeightMap, from: DVec2, to: DVec2, reach: f6
                 let Some(c) = f.position(ix, iy) else {
                     continue;
                 };
-                if distance_to_segment(c, from, to) > reach {
+                let d = distance_to_segment(c, from, to);
+                if d > reach {
                     continue;
                 }
-                match f.get(ix, iy) {
-                    Some(h) => top = Some(top.map_or(h, |t: f64| t.max(h))),
-                    None => unknown = true,
-                }
+                each(f.get(ix, iy), d);
             }
         }
     }
-    Under { top, unknown }
+    off
 }
 
 #[cfg(test)]

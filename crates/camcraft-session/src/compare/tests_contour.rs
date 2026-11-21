@@ -49,7 +49,10 @@ use super::tests_pencil::{Bounds, held_to};
 ///   dome's axis, and goes round the dome's foot nowhere; camcraft keeps that
 ///   ring, as it keeps every such tie, and so takes the roughing's half
 ///   millimetre off the floor all round the dome, where Fusion leaves it.
-/// - camcraft lifts 15 times, as it does with nothing avoided; Fusion 4.
+/// - camcraft lifts 13 times, where with nothing avoided it lifts 15; Fusion
+///   4. Two of its links go across and down onto the next level, the
+///   material beside the way measured against the ball's own shape, where a
+///   flat disc's width of it had them lift (decision 0004, amended).
 ///
 /// Each bound is this run's figure with a little room.
 fn holds(name: &str, change: impl FnOnce(&mut Operation), bounds: &Bounds, contacts: u64) {
@@ -75,8 +78,9 @@ fn a_new_contour_leaves_what_fusions_does() {
 
 /// The dome avoided, 1 mm sideways and 1 mm down: 43.8% of 621,642 columns
 /// alike, the median 0.0174 mm and the 95th percentile 17.93, 64% more
-/// removed and 238% more fed: the outside walls, and the floor round the
-/// dome, which only camcraft's ring there finishes.
+/// removed and 237% more fed: the outside walls, and the floor round the
+/// dome, which only camcraft's ring there finishes. It was 238%, lifting 15
+/// times.
 #[test]
 fn a_contour_avoiding_the_dome_leaves_what_fusions_does() {
     let bounds = Bounds {
