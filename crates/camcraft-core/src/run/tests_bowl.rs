@@ -482,6 +482,103 @@ fn down_a_bulge(order: &str) {
     );
 }
 
+/// How far the widest of a tilted bulge stands above half the bowl's height
+/// at +X, and below it at -X.
+const TILT: f64 = 1.5;
+
+/// A bowl as the bulging one, but widest [`TILT`] higher at +X than half its
+/// height and as much lower at -X: the line where the tool leaves the part
+/// runs round it at a slant to the rings, which are a fixed distance from
+/// the floor's edge.
+fn tilted() -> Body {
+    const STEPS: u32 = 48;
+    let ring = |i: usize| move |theta: f64| radii(theta)[i];
+    let (floor, wall, rim) = (ring(0), ring(1), ring(2));
+    let outside: Vec<(Radius, f64)> = (1..=STEPS)
+        .map(|i| {
+            let z = RIM * (1.0 - f64::from(i) / f64::from(STEPS));
+            let radius: Radius = Box::new(move |t| {
+                let widest = 0.5 * RIM + TILT * t.cos();
+                let up = if z >= widest {
+                    (RIM - z) / (RIM - widest)
+                } else {
+                    z / widest
+                };
+                radii(t)[2] + BULGE * (std::f64::consts::FRAC_PI_2 * up).sin()
+            });
+            (radius, z)
+        })
+        .collect();
+    let mut rings: Vec<(&dyn Fn(f64) -> f64, f64)> =
+        vec![(&floor, FLOOR), (&wall, RIM), (&rim, RIM)];
+    rings.extend(outside.iter().map(|(r, z)| (r.as_ref(), *z)));
+    let mut faces = vec![1, 2];
+    faces.extend((1..=STEPS).map(|_| 3));
+    ringed(&rings, &faces, 4)
+}
+
+/// Down a bowl widest higher on one side than the other, the rings meet the
+/// line the tool leaves the part along at a slant: they blend into it, and
+/// rings below it go down to the first level ring (decision 0038). Every pass
+/// off the floor's edge is a closed ring, no gouge, no rapid into the
+/// material. Inside out, from the floor's edge, the rings along the outside
+/// are no further apart than a stepover and a twentieth where the tool's tip
+/// is (1.03, measured), and it lifts no more than 3 times, where it lifted at
+/// every arc's end and every piece of a level ring.
+#[test]
+fn rings_blend_into_where_the_tool_leaves_a_tilted_bulge() {
+    for order in ["inside-out", "outside-in"] {
+        let body = tilted();
+        let bodies: Bodies<'_> = [("bowl", &body)].into_iter().collect();
+        let job: Job = toml::from_str(&JOB.replace("inside-out", order)).unwrap();
+        let result = run_setup(&job, 0, &bodies).unwrap();
+        let op = &result.operations[0];
+        assert_eq!(result.verify.gouged, 0, "{order}");
+        assert_eq!(op.sim.rapid_contacts, 0, "{order}");
+        let StrategyDetail::Scallop(report) = &op.detail else {
+            panic!("{:?}", op.detail);
+        };
+        assert!(report.blended > 0, "{order}: {report:?}");
+        // Each run of cuts off the floor's edge ends where it started; the
+        // floor's edge, where the floor avoided meets the wall, is cut out
+        // in places where the tool touches only the floor.
+        let (mut start, mut at, mut open) = (None, op.path.moves()[0].to, Vec::new());
+        for m in op.path.moves() {
+            if m.role == MoveRole::Cut {
+                start.get_or_insert(at);
+            } else if let Some(s) = start.take()
+                && s.distance(at) > 1e-6
+                && s.z.min(at.z) > FLOOR + 0.1
+            {
+                open.push((s, at));
+            }
+            at = m.to;
+        }
+        assert!(open.is_empty(), "{order}: passes not closed {open:?}");
+        if order == "outside-in" {
+            continue;
+        }
+        let mut worst = 0.0f64;
+        for k in 0..24 {
+            let theta = std::f64::consts::TAU * f64::from(k) / 24.0;
+            let cut = section(&op.path, theta, radii(theta)[2] + 0.5);
+            for w in cut.windows(2) {
+                worst = worst.max(w[0].distance(w[1]));
+            }
+        }
+        assert!(worst < 1.05 * STEPOVER, "rings {worst} apart");
+        let mut lifts = 0;
+        let mut at = op.path.moves()[0].to;
+        for m in op.path.moves() {
+            if m.role == MoveRole::Rapid && m.to.z > at.z + 1e-9 && m.to.truncate() == at.truncate()
+            {
+                lifts += 1;
+            }
+            at = m.to;
+        }
+        assert!(lifts <= 3, "{lifts} lifts");
+    }
+}
 /// A cup, its floor avoided, its wall straight up from it at `degrees` to a
 /// sharp rim: upright at 90°.
 fn cup(degrees: f64) -> Body {

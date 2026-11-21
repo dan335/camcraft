@@ -25,6 +25,28 @@ the same notes at more length.
   the dome avoided, lifts 13 times where 15), and the shank and holder are
   kept clear of the material, as on every other link that stays down: a
   ring's next depth was gone down to without asking.
+- **Scallop's rings blend into where the tool leaves the part, where they meet
+  it at a slant** ([decision 0038](docs/decisions/0038-scallop-rings-blend-into-an-edge-at-a-slant.md)).
+  Down a user's bulging bowl that line runs from Z-32.3 to Z-35.7 round the
+  bowl, and the rings, a fixed distance from the floor's edge, met it at a
+  slant: for thirteen stepovers before it each was cut into arcs, and below
+  it the level rings into pieces, each lifted to and from. Now, inside out,
+  the ground between the last ring that goes all the way round and that line
+  is filled with closed rings that turn gradually from the one into the
+  other, as many as the band's spacing, measured, needs, and below the line
+  closed rings go down beside the wall to the first level ring, which starts
+  half a stepover under the line's lowest point. Every pass from the floor's
+  edge to the Bottom is a closed ring and no gap at the six sections is over
+  1.1 mm; it lifts 9 times where it lifted 28, and feeds 44.1 m where it fed
+  39.4, a closed ring being as long however thin the band is there. Where
+  the band is wider than twice the tool's diameter, or not a ring, the rings
+  are cut by the line as before.
+- Inside out from an inner edge, the line where the tool leaves the part and
+  the outer boundary's ring are cut the way the rings before them are; they
+  were cut the other way.
+- A ring ramped down onto the ring below it is never run backwards: every
+  other pair of Scallop's level rings was, climbing the ramp and cutting both
+  rings conventional.
 - Linking is less code: each way a link is made without lifting (round onto the next pass, over the part, beside it, at a level, across and down) is one function, tried in one order, and what they ask of the part and the material is asked in one place each; every program it writes is unchanged.
 
 ## 0.10.0 — 2026-11-20

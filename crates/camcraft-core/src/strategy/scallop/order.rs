@@ -23,19 +23,27 @@ use super::ScallopParams;
 use super::lay::Worked;
 use super::rings::Plan;
 
+/// Whether a region's children are cut before its own rings: inside out,
+/// but where the field is measured out from the inner edges (`outward`), its
+/// own order then.
+pub(super) fn children_first(order: Order, outward: bool) -> bool {
+    order == Order::InsideOut && !outward
+}
+
 /// The rings of `plans`, laid on the part as `worked`, cut into a path from
-/// the tree's roots, then from `last`, each the nearest next; with how many
-/// passes it has. `outward` where the field is measured out from the inner
-/// edges.
+/// `first`, then the tree's roots, then `last`, each the nearest next; with
+/// how many passes it has. `outward` where the field is measured out from the
+/// inner edges.
 pub(super) fn cut(
     seat: &Seat<'_>,
     (plans, worked): (Vec<Plan>, Vec<Worked>),
-    last: Vec<usize>,
+    (first, last): (Vec<usize>, Vec<usize>),
     outward: bool,
     params: &ScallopParams,
 ) -> Result<(Toolpath, u64), StrategyError> {
-    let toward_higher = params.order == Order::OutsideIn || outward;
-    let mut tree = Nested::new(!toward_higher);
+    let inner_first = children_first(params.order, outward);
+    let toward_higher = !inner_first;
+    let mut tree = Nested::new(inner_first);
     let mut roots = Vec::new();
     for (plan, w) in plans.into_iter().zip(worked) {
         let i = tree.push(w.runs);
@@ -72,7 +80,7 @@ pub(super) fn cut(
         seat,
         tolerance: params.tolerance,
     };
-    for mut roots in [roots, last] {
+    for mut roots in [first, roots, last] {
         loop {
             let at = cut.emit.at;
             let Some(root) = take_nearest(&mut roots, |&r| distance(tree.anchor(r), at)) else {

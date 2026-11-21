@@ -26,7 +26,7 @@
 
 use glam::DVec3;
 
-use crate::path::toolpath::{Move, Toolpath, ToolpathError};
+use crate::path::toolpath::{Move, MoveRole, Toolpath, ToolpathError};
 
 /// What reordering achieved.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -71,13 +71,18 @@ impl Pass {
         self.moves.first().map_or(0.0, |m| m.to.z)
     }
 
-    /// Whether it may be run backwards: an open pass of more than one move.
-    /// Running a pass backwards flips its cutting direction, climb for
-    /// conventional, so it is done only where its operation cuts both ways or
-    /// it is asked; a closed ring ends where it starts, so is never reversed,
-    /// as that would bring it no nearer and only turn it the other way.
+    /// Whether it may be run backwards: an open pass of more than one move
+    /// that does not ramp. Running a pass backwards flips its cutting
+    /// direction, climb for conventional, so it is done only where its
+    /// operation cuts both ways or it is asked; a closed ring ends where it
+    /// starts, so is never reversed, as that would bring it no nearer and only
+    /// turn it the other way. Nor is a ring ramped down onto the ring below
+    /// it, open only for ending a level lower: backwards it would climb the
+    /// ramp and cut both rings the other way.
     fn reversible(&self) -> bool {
-        !self.closed && self.moves.len() > 1
+        !self.closed
+            && self.moves.len() > 1
+            && !self.moves.iter().any(|m| m.role == MoveRole::Transition)
     }
 
     fn reversed(&self) -> Self {
@@ -478,6 +483,39 @@ mod tests {
         assert_eq!(report.reversed, 2);
     }
 
+    /// A ring ramped down onto the ring below it ends a level lower, not
+    /// where it started, but is no piece to take from either end: run
+    /// backwards it would climb the ramp, and cut both rings the other way.
+    #[test]
+    fn a_ring_ramped_onto_the_next_is_not_turned_round() {
+        let mut t = Toolpath::new();
+        t.feed_to(dvec3(0.0, 0.0, -1.0), MoveRole::Link, 900.0)
+            .unwrap();
+        t.feed_to(dvec3(5.0, 0.0, -1.0), MoveRole::Cut, 900.0)
+            .unwrap();
+        t.feed_to(dvec3(5.0, 5.0, -1.0), MoveRole::Cut, 900.0)
+            .unwrap();
+        t.feed_to(dvec3(0.0, 0.0, -1.0), MoveRole::Cut, 900.0)
+            .unwrap();
+        t.feed_to(dvec3(5.0, 0.0, -2.0), MoveRole::Transition, 900.0)
+            .unwrap();
+        t.feed_to(dvec3(5.0, 5.0, -2.0), MoveRole::Cut, 900.0)
+            .unwrap();
+        t.feed_to(dvec3(0.0, 0.0, -2.0), MoveRole::Cut, 900.0)
+            .unwrap();
+        t.feed_to(dvec3(5.0, 0.0, -2.0), MoveRole::Cut, 900.0)
+            .unwrap();
+        // Started from beside where it ends.
+        let mut from = Toolpath::new();
+        from.feed_to(dvec3(6.0, 0.0, -2.0), MoveRole::Link, 900.0)
+            .unwrap();
+        from.feed_to(dvec3(6.0, 1.0, -2.0), MoveRole::Cut, 900.0)
+            .unwrap();
+        from.append(t.moves()).unwrap();
+        let (out, report) = nearer_ends(&from).unwrap();
+        assert_eq!(report.reversed, 0);
+        assert_eq!(out, from);
+    }
     #[test]
     fn an_empty_path_is_handled() {
         let (out, report) = order_passes(&Toolpath::new(), true, true).unwrap();

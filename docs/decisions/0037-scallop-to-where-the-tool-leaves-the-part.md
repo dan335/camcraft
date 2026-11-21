@@ -2,6 +2,15 @@
 
 **Status:** decided, 2026-11-20 · **Milestone:** 0.10
 
+> **Amended by [decision 0038](0038-scallop-rings-blend-into-an-edge-at-a-slant.md).**
+> Where the rings meet the line where the tool leaves the part at a slant,
+> the ground between the last ring that goes all the way round and that line
+> is filled with closed rings that blend from the one into the other, and
+> below it closed rings go down beside the wall to the first level ring, which
+> starts half a stepover under the line's lowest point: no ring there ends in
+> arcs. Measured out from the inner edges, that line is cut the way the rings
+> before it are.
+
 ## Question
 
 Down the bulging outside of a user's bowl, Scallop left a band round its

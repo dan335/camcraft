@@ -1,6 +1,8 @@
 //! Each node's lines laid on the part: kept to the slope range and the area,
 //! the field's lines and the ground's edges placed by the field, height and
-//! all ([`guided`]), the area's edge dropped onto the part seen from above.
+//! all ([`guided`]), the area's edge dropped onto the part seen from above;
+//! and the rings below where the tool leaves the part, found beside the wall
+//! already, as they are.
 
 use camcraft_geom::contour::{Region, polyline_length, simplify};
 use camcraft_geom::cut::View;
@@ -85,6 +87,7 @@ impl Layer<'_> {
                 }
             }
         }
+        w.runs.append(&mut plan.placed);
         Ok(w)
     }
 

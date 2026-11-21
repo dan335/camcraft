@@ -25,6 +25,13 @@
 //!   rising more than half a stepover past its last ring gets one more,
 //!   halfway up to its crest: Fusion's run on until they collapse, and this is
 //!   where they do.
+//! - **The blend** ([`blend`]). Where another closed edge of the ground lies
+//!   at a slant to the rings, as where the tool leaves a bulging bowl's
+//!   outside, lower on some sides than others, the ground between the last
+//!   ring that goes all the way round and that edge is filled with closed
+//!   rings that turn gradually from the one into the other, and below it
+//!   rings go down beside the wall to the first level ring, rather than both
+//!   being cut into arcs by it (decision 0038).
 //! - **Laid on the part** ([`lay`], [`guided`]). Every point of every pass is
 //!   an exact cutter location, refined along the pass until it is within
 //!   tolerance of the part, as a parallel pass is. Where a line crosses a grid
@@ -92,6 +99,9 @@ pub struct ScallopParams {
     /// onto it where going straight down onto it from the ring above would
     /// plunge further than `max_cut_step`, as down a wall.
     pub ramp: f64,
+    /// The lowest the rings below where the tool leaves the part go: the
+    /// operation's Bottom, where the level rings below them end.
+    pub bottom: f64,
     /// What it tells how far it has got, and asks whether to stop.
     pub watch: Watch,
 }
@@ -110,6 +120,7 @@ impl Default for ScallopParams {
             slope_to: std::f64::consts::FRAC_PI_2,
             max_nodes: 1 << 23,
             ramp: 2f64.to_radians(),
+            bottom: f64::NEG_INFINITY,
             watch: Watch::default(),
         }
     }
@@ -143,8 +154,16 @@ pub struct ScallopReport {
     /// Nodes inside the boundary the field never reached.
     pub unreached: u64,
     /// The highest point of where the tool leaves the part from above, if it
-    /// does inside the area: the level rings below start a stepover under it.
+    /// does inside the area.
     pub leaves_at: Option<f64>,
+    /// Where the level rings down the walls below the field start, a stepover
+    /// under: where the tool leaves the part, its highest point; where rings
+    /// blend down from that line to the level rings, half a stepover under
+    /// its lowest (decision 0038).
+    pub walls_from: Option<f64>,
+    /// Rings blended into an edge the field's rings meet at a slant, above it
+    /// and below it (decision 0038).
+    pub blended: u64,
     /// What sampling the passes on the part found, as for parallel finishing.
     pub sweep: ParallelReport,
 }
@@ -209,8 +228,11 @@ pub fn scallop_finish(
     let mut field = Field::build(seat, area, bounds, params, &mut report)?;
     report.leaves_at = field.leaves_at;
     let view = field.ground.cut.view(None);
-    let Planned { mut plans, last } =
-        rings::plan(&view, &field, area, params.stepover, &mut report);
+    let Planned {
+        mut plans,
+        first,
+        last,
+    } = rings::plan(seat, &view, (&field, area), params, &mut report);
 
     // The field and its lines are done: what is left is laying each node's
     // lines on the part, an equal share of the rest each.
@@ -251,11 +273,12 @@ pub fn scallop_finish(
         report.fragments += w.fragments;
         report.sweep += w.sweep;
     }
-    let (path, passes) = order::cut(seat, (plans, worked), last, field.outward, params)?;
+    let (path, passes) = order::cut(seat, (plans, worked), (first, last), field.outward, params)?;
     report.passes = passes;
     Ok((path, report))
 }
 
+mod blend;
 mod distance;
 mod ground;
 mod guided;

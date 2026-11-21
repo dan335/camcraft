@@ -50,7 +50,9 @@ pub(super) struct Ground {
 /// A piece of an edge of the ground: a line through cuts of its grid, the
 /// ground on its left.
 pub(super) struct Edge {
-    /// The cuts' places, at their heights.
+    /// The cuts, as nodes of the grid cut.
+    pub(super) nodes: Vec<u32>,
+    /// Their places, at their heights.
     pub(super) points: Vec<DVec3>,
     /// Whether it closes on itself.
     pub(super) closed: bool,
@@ -245,6 +247,7 @@ fn pieces(cut: &CutGrid, chain: &[u32], closed: bool) -> Vec<Edge> {
     };
     if chain.iter().all(|&c| past(c) == past(first)) {
         return vec![Edge {
+            nodes: chain.to_vec(),
             points: chain.iter().filter_map(|&c| at(c)).collect(),
             closed,
             past: past(first),
@@ -268,12 +271,18 @@ fn pieces(cut: &CutGrid, chain: &[u32], closed: bool) -> Vec<Edge> {
         let class = past(c);
         let Some(p) = at(c) else { continue };
         match out.last_mut() {
-            Some(piece) if last == Some(class) => piece.points.push(p),
+            Some(piece) if last == Some(class) => {
+                piece.nodes.push(c);
+                piece.points.push(p);
+            }
             _ => {
-                let before = i.checked_sub(1).and_then(|j| order.get(j));
-                let mut points: Vec<DVec3> = before.and_then(|&q| at(q)).into_iter().collect();
+                let before = i.checked_sub(1).and_then(|j| order.get(j)).copied();
+                let mut nodes: Vec<u32> = before.filter(|&q| at(q).is_some()).into_iter().collect();
+                let mut points: Vec<DVec3> = before.and_then(at).into_iter().collect();
+                nodes.push(c);
                 points.push(p);
                 out.push(Edge {
+                    nodes,
                     points,
                     closed: false,
                     past: class,

@@ -113,7 +113,17 @@ their last along it; below that, as down a part's upright or tucked-in
 outside, level rings a stepover apart from a stepover under its highest
 point finish it to the Bottom
 ([decision 0035](decisions/0035-scallop-over-every-slope.md),
-[0037](decisions/0037-scallop-to-where-the-tool-leaves-the-part.md)). Up an
+[0037](decisions/0037-scallop-to-where-the-tool-leaves-the-part.md)). Where
+the rings meet that line at a slant, as round a bowl that bulges lower on
+some sides than others, the ground between the last ring that goes all the
+way round and the line is filled with closed rings that turn gradually from
+the one into the other, and below it closed rings go down beside the wall to
+the first level ring, which then starts half a stepover under the line's
+lowest point, rather than either being cut into arcs: above it, inside out
+from an inner edge where the line is closed and the band between a ring no wider than twice the tool's
+diameter, and below it where it is the one such line and the Bottom is under
+it ([decision 0038](decisions/0038-scallop-rings-blend-into-an-edge-at-a-slant.md)).
+Up an
 upright wall above a face avoided, as a pocket's above its floor, the rings
 run up the wall from its foot. It cuts
 `direction = "both-ways"` (closed rings climbing, open passes from their nearer

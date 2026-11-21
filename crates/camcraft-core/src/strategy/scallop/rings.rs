@@ -11,6 +11,13 @@
 //! level-0 region of the piece of the area they bound; measured out from the
 //! inner edges, the outer boundary's rings and where the tool leaves the part
 //! are the field's far end, each piece's a node of its own, cut last.
+//!
+//! Where the rings blend into the far edge ([`blend`]), the field's lines past
+//! the last whole ring give way to the blended rings, each nested in the one
+//! before under that ring's region, the far edge last. The rings below where
+//! the tool leaves the part are nested one in the next too, a root of their
+//! own: cut first from the boundary in, up to that line, and last from the
+//! inner edges out, down from it.
 
 use camcraft_geom::contour::Region;
 use camcraft_geom::cut::View;
@@ -18,12 +25,17 @@ use camcraft_geom::isoline::{self, IsoLine, nest};
 use camcraft_geom::trigrid::TriSurface;
 use glam::DVec2;
 
-use crate::strategy::field::{count, level_lines};
+use crate::cutter::surfaces::Seat;
+use crate::cutter::tool::ToolProfile;
+use crate::strategy::field::{OFF_PART, count, level_lines};
+use crate::strategy::nesting::Order;
+use crate::strategy::parallel::Run;
 use crate::strategy::slope::Sloped;
 
-use super::ScallopReport;
+use super::blend::{self, Band};
 use super::distance::Field;
 use super::ground::Edge;
+use super::{ScallopParams, ScallopReport, order};
 
 /// The most levels of rings: far past any real part.
 const MAX_LEVELS: u32 = 100_000;
@@ -38,32 +50,108 @@ pub(super) struct Plan {
     /// The ground's edges, where faces avoided begin and where the tool
     /// leaves the part, placed by the field as its lines are.
     pub(super) found: Vec<Sloped>,
+    /// Rings already on the part: below where the tool leaves it.
+    pub(super) placed: Vec<Run>,
     /// The nodes nested in it.
     pub(super) children: Vec<usize>,
     /// Whether it is a root, cut from where the tool is.
     pub(super) root: bool,
 }
 
-/// The tree's nodes, and those cut last, each a root of its own: the field's
-/// far end.
+/// The tree's nodes; those cut before every root, each a root of its own;
+/// and those cut after them.
 pub(super) struct Planned {
     pub(super) plans: Vec<Plan>,
+    pub(super) first: Vec<usize>,
     pub(super) last: Vec<usize>,
 }
 
-/// The rings of `field` over `grid`, its cut grid, `step` apart, in their tree,
-/// with the edges of `area` it is measured from.
+/// The rings of `field` over `grid`, its cut grid, in their tree, with the
+/// edges of `area` it is measured from, as `params` ask, for the tool `seat`
+/// holds.
 pub(super) fn plan(
+    seat: &Seat<'_>,
     grid: &View<'_>,
-    field: &Field,
-    area: &Region,
-    step: f64,
+    (field, area): (&Field, &Region),
+    params: &ScallopParams,
     report: &mut ScallopReport,
 ) -> Planned {
+    let step = params.stepover;
     let (lines, mut regions) = levels(grid, &field.d, step, report);
     let mut plans = by_region(grid, lines, &mut regions);
-    let last = with_edges(grid, field, area, &regions, &mut plans, report);
-    Planned { plans, last }
+    // Measured out from the inner edges, the far edge the rings blend into,
+    // and the region of the last whole ring before it.
+    let diameter = 2.0 * seat.tool().max_radius();
+    let blended = field
+        .outward
+        .then(|| {
+            field.far_edges.iter().enumerate().find_map(|(i, far)| {
+                let band = blend::band(grid, (field, area), far, step, diameter)?;
+                let home = regions
+                    .iter()
+                    .position(|r| r.level == band.level && band.holds(r.rep))?;
+                Some((i, band, home))
+            })
+        })
+        .flatten();
+    let far_edges: Vec<&Edge> = field
+        .far_edges
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| blended.as_ref().is_none_or(|(b, ..)| b != i))
+        .map(|(_, e)| e)
+        .collect();
+    let mut last = with_edges(
+        grid,
+        field,
+        (area, &far_edges),
+        &regions,
+        &mut plans,
+        report,
+    );
+    if let Some((i, band, home)) = blended
+        && let Some(far) = field.far_edges.get(i)
+    {
+        report.blended += band.rings.len() as u64;
+        into_band(grid, &regions, &mut plans, (band, home), far);
+    }
+    let mut first = Vec::new();
+    if let Some(root) = below(seat, field, params, &mut plans, report) {
+        match params.order {
+            Order::OutsideIn => first.push(root),
+            Order::InsideOut => last.push(root),
+        }
+    }
+    Planned { plans, first, last }
+}
+
+/// The rings below where the tool leaves the part ([`rings_below`]), each a
+/// node nested in the one cut before it, in order down from that line, or,
+/// from the boundary in, up to it; the root of them. And the height the
+/// level rings start under, theirs or where the tool leaves the part.
+fn below(
+    seat: &Seat<'_>,
+    field: &Field,
+    params: &ScallopParams,
+    plans: &mut Vec<Plan>,
+    report: &mut ScallopReport,
+) -> Option<usize> {
+    report.walls_from = field.leaves_at;
+    let (mut rings, to) = rings_below(seat, field, params)?;
+    report.blended += rings.len() as u64;
+    report.walls_from = Some(to + params.stepover);
+    if params.order == Order::OutsideIn {
+        rings.reverse();
+    }
+    let nodes = rings.into_iter().map(|ring| Plan {
+        placed: vec![ring],
+        ..Plan::default()
+    });
+    chain(
+        plans,
+        nodes,
+        order::children_first(params.order, field.outward),
+    )
 }
 
 /// The lines of `d` over `grid` at each whole `step`, level by level in
@@ -134,18 +222,19 @@ fn by_region(
 
 /// The area's rings and the field's edges, each to the level-0 region of the
 /// piece of `area` it is in, or a root of its own where the piece has none;
-/// measured out from the inner edges, the outer rings and the far edges to a
+/// measured out from the inner edges, the outer rings and `far_edges` to a
 /// node of their own a piece, cut last: those nodes.
 fn with_edges(
     grid: &View<'_>,
     field: &Field,
-    area: &Region,
+    (area, far_edges): (&Region, &[&Edge]),
     regions: &[isoline::Region],
     plans: &mut Vec<Plan>,
     report: &mut ScallopReport,
 ) -> Vec<usize> {
     let mut last = Vec::new();
-    let found = |edges: &[Edge], piece: &Region| -> Vec<Sloped> {
+    let home_edges: Vec<&Edge> = field.edges.iter().collect();
+    let found = |edges: &[&Edge], piece: &Region, far: bool| -> Vec<Sloped> {
         edges
             .iter()
             .filter(|e| {
@@ -153,10 +242,7 @@ fn with_edges(
                     .first()
                     .is_some_and(|p| piece.contains(p.truncate()))
             })
-            .map(|e| {
-                let flat: Vec<DVec2> = e.points.iter().map(|p| p.truncate()).collect();
-                boundary(grid, &flat, e.closed)
-            })
+            .map(|e| line_along(grid, e, far))
             .collect()
     };
     for piece in area.pieces() {
@@ -165,7 +251,15 @@ fn with_edges(
                 .rings()
                 .iter()
                 .filter(|c| (!field.outward || c.signed_area() > 0.0) == outer)
-                .map(|c| boundary(grid, c.points(), true))
+                .map(|c| {
+                    // The field rises toward an outer ring it is measured out to:
+                    // turned round, it has the higher side on its left.
+                    let mut points = c.points().to_vec();
+                    if field.outward {
+                        points.reverse();
+                    }
+                    boundary(grid, &points, true)
+                })
                 .collect()
         };
         let (home_rings, far_rings) = if field.outward {
@@ -173,8 +267,8 @@ fn with_edges(
         } else {
             (ring(true), Vec::new())
         };
-        let (home_found, far_found) =
-            (found(&field.edges, &piece), found(&field.far_edges, &piece));
+        let home_found = found(&home_edges, &piece, false);
+        let far_found = found(far_edges, &piece, true);
         report.lines +=
             (home_rings.len() + far_rings.len() + home_found.len() + far_found.len()) as u64;
         if !far_rings.is_empty() || !far_found.is_empty() {
@@ -205,6 +299,116 @@ fn with_edges(
         }
     }
     last
+}
+
+/// `band`'s rings in place of the field's lines past its last whole ring:
+/// each region past that level on the band, and its top-up, emptied, and the
+/// band's rings nested one in the next under the region of that ring,
+/// `home`, the far edge `far` last.
+fn into_band(
+    grid: &View<'_>,
+    regions: &[isoline::Region],
+    plans: &mut Vec<Plan>,
+    (band, home): (Band, usize),
+    far: &Edge,
+) {
+    for (i, r) in regions.iter().enumerate() {
+        if r.level <= band.level || !band.holds(r.rep) {
+            continue;
+        }
+        let Some(plan) = plans.get_mut(i) else {
+            continue;
+        };
+        plan.lines.clear();
+        // The region's children past the regions are its top-up's node.
+        for c in std::mem::take(&mut plan.children) {
+            if let Some(top_up) = plans.get_mut(c).filter(|_| c >= regions.len()) {
+                top_up.lines.clear();
+            }
+        }
+    }
+    let rings = band.rings.into_iter().map(|mut ring| Plan {
+        lines: vec![sloped(grid, &mut ring)],
+        ..Plan::default()
+    });
+    let far = Plan {
+        found: vec![line_along(grid, far, true)],
+        ..Plan::default()
+    };
+    let root = chain(plans, rings.chain(std::iter::once(far)), false);
+    if let Some(plan) = plans.get_mut(home) {
+        plan.children = root.into_iter().collect();
+    }
+}
+
+/// The rings below where the tool leaves the part, blended from that line
+/// down to the first level ring ([`blend::below`]), each the way that line is
+/// cut, and the height the level rings start at: where it is the one line
+/// the tool leaves the part along and closed, the slope range reaches
+/// upright, and the field reaches it.
+fn rings_below(seat: &Seat<'_>, field: &Field, params: &ScallopParams) -> Option<(Vec<Run>, f64)> {
+    if params.slope_to < std::f64::consts::FRAC_PI_2 {
+        return None;
+    }
+    let mut leaving = field
+        .edges
+        .iter()
+        .chain(&field.far_edges)
+        .filter(|e| e.past == OFF_PART);
+    let edge = leaving.next().filter(|e| e.closed)?;
+    if leaving.next().is_some() {
+        return None;
+    }
+    let (mut rings, to) =
+        blend::below(seat, edge, params.stepover, params.bottom, params.tolerance)?;
+    // A far edge is turned round to be cut as the field's lines are.
+    if field.outward {
+        for ring in &mut rings {
+            ring.points.reverse();
+        }
+    }
+    Some((rings, to))
+}
+
+/// `nodes` pushed onto `plans`, each nested in the one before, or, where
+/// children are cut first, in the one after, so they are cut in the order
+/// given: the root of them, if there are any.
+fn chain(
+    plans: &mut Vec<Plan>,
+    nodes: impl IntoIterator<Item = Plan>,
+    children_first: bool,
+) -> Option<usize> {
+    let ids: Vec<usize> = nodes
+        .into_iter()
+        .map(|plan| {
+            plans.push(plan);
+            plans.len() - 1
+        })
+        .collect();
+    for pair in ids.windows(2) {
+        let &[a, b] = pair else { continue };
+        let (parent, child) = if children_first { (b, a) } else { (a, b) };
+        if let Some(plan) = plans.get_mut(parent) {
+            plan.children.push(child);
+        }
+    }
+    if children_first {
+        ids.last()
+    } else {
+        ids.first()
+    }
+    .copied()
+}
+
+/// The ground's edge `edge` as a line placed by the field: as it runs, the
+/// ground on its left, or, a far edge, turned round, the field's higher side
+/// on its left as its lines have, so it is cut the way they are.
+fn line_along(grid: &View<'_>, edge: &Edge, far: bool) -> Sloped {
+    let mut flat: Vec<DVec2> = edge.points.iter().map(|p| p.truncate()).collect();
+    if far {
+        flat.reverse();
+    }
+    boundary(grid, &flat, edge.closed)
 }
 
 /// A line of the field, its points taken, with its triangles' slopes.

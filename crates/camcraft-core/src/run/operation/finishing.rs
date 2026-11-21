@@ -147,6 +147,7 @@ pub(super) fn scallop_paths(
         .intersection(&past)
         .map_err(in_op(op))?;
     let (slope_from, slope_to) = work.slopes();
+    let (_, bottom) = op.levels_3d(work.heights);
     let params = ScallopParams {
         // The field most of the work, the rings below it the rest.
         watch: work.watch.part(0.0, PASSES_SHARE),
@@ -162,6 +163,7 @@ pub(super) fn scallop_paths(
         climb_right: work.clockwise(),
         slope_from,
         slope_to,
+        bottom,
         ..Default::default()
     };
     // Its passes go up and down walls as they go over the rest: on steep
@@ -175,7 +177,7 @@ pub(super) fn scallop_paths(
     let (below, rings) = below_reach(
         work,
         limit,
-        report.leaves_at,
+        report.walls_from,
         direction,
         (slope_from, slope_to),
     )?;
@@ -207,8 +209,11 @@ pub(super) fn scallop_paths(
 }
 
 /// Level rings a stepover apart down the walls a scallop's field cannot cover,
-/// from a stepover below `leaves_at`, the highest point of where the tool
-/// leaves the part from above, the field's last ring, to the Bottom, within
+/// from a stepover below `from`, the scallop's
+/// [`walls_from`](crate::strategy::scallop::ScallopReport::walls_from): the highest
+/// point of where the tool leaves the part from above, the field's last ring,
+/// or, where rings blend down from that line, half a stepover under its
+/// lowest, so each goes all the way round; to the Bottom, within
 /// the sweep and `limit`, as contour finishing finds them, each way as
 /// `direction` asks, within the slopes asked: kept only where the tool on
 /// them is more than the tolerance below where it would rest dropped from
@@ -221,7 +226,7 @@ pub(super) fn scallop_paths(
 fn below_reach(
     work: &Work<'_>,
     limit: Option<&Region>,
-    leaves_at: Option<f64>,
+    from: Option<f64>,
     direction: CutDirection,
     (slope_from, slope_to): (f64, f64),
 ) -> Result<(Toolpath, u64), RunError> {
@@ -229,7 +234,7 @@ fn below_reach(
     let (top, bottom) = op.levels_3d(work.heights);
     // Where the tool never leaves the part from above, it rests on it
     // everywhere, and the field covers it all.
-    let Some(top) = leaves_at.map(|z| z.min(top)) else {
+    let Some(top) = from.map(|z| z.min(top)) else {
         return Ok((Toolpath::new(), 0));
     };
     if top <= bottom {

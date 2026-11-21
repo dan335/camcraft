@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 
 use camcraft_geom::contour::{Contour, Region};
-use camcraft_geom::cut::{CutGrid, NO_BAND};
+use camcraft_geom::cut::{CutGrid, NO_BAND, View};
 use camcraft_geom::geodesic::{Seed, march_along};
 use camcraft_geom::trigrid::TriSurface;
 use rayon::prelude::*;
@@ -50,6 +50,9 @@ pub(super) struct Field {
     pub(super) far_edges: Vec<Edge>,
     /// The highest point of where the tool leaves the part from above.
     pub(super) leaves_at: Option<f64>,
+    /// The length along the surface of each grid edge bent down a cliff
+    /// ([`cliff_edges`]), by its key, lower node first.
+    cliffs: HashMap<(u32, u32), f64>,
 }
 
 impl Field {
@@ -65,14 +68,7 @@ impl Field {
         let view = ground.cut.view(None);
         let cliffs = cliff_edges(seat, &view, params.tolerance);
         params.watch.check()?;
-        let measure = |seeds: &[Seed]| {
-            march_along(
-                &view,
-                seeds,
-                |n| view.point(n),
-                |a, b| cliffs.get(&(a.min(b), a.max(b))).copied(),
-            )
-        };
+        let measure = |seeds: &[Seed]| march(&view, &cliffs, seeds);
         let (outer, holes): (Vec<Contour>, Vec<Contour>) = area
             .rings()
             .iter()
@@ -125,8 +121,31 @@ impl Field {
             edges,
             far_edges,
             leaves_at,
+            cliffs,
         })
     }
+
+    /// Each node's distance along the surface from `seeds`, measured as the
+    /// field is.
+    pub(super) fn measure(&self, seeds: &[Seed]) -> Vec<f64> {
+        march(&self.ground.cut.view(None), &self.cliffs, seeds)
+    }
+
+    /// Whether node `n` of its grid is inside `area`.
+    pub(super) fn inside(&self, area: &Region, n: u32) -> bool {
+        inside(&self.ground, area, n)
+    }
+}
+
+/// Each node of `view`'s distance along the surface from `seeds`, down each
+/// of `cliffs` along the surface the tool rides.
+fn march(view: &View<'_>, cliffs: &HashMap<(u32, u32), f64>, seeds: &[Seed]) -> Vec<f64> {
+    march_along(
+        view,
+        seeds,
+        |n| view.point(n),
+        |a, b| cliffs.get(&(a.min(b), a.max(b))).copied(),
+    )
 }
 
 /// Seeds at each node within a cell's diagonal of `rings` where they cross the
