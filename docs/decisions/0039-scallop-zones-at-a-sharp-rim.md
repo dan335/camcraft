@@ -155,15 +155,33 @@ they were.
 
 - A zone measured out from its inner edge whose rings do not blend into its
   outer edge ends them in arcs there, as `ops_3d`'s outside of its pocket
-  does inside out: 6 lifts where 3.
-
-- Outside in, a zone with an inner and an outer edge is still measured from
-  both, and the rings from each meet in the middle: on the user's bowl 36
-  lifts between them.
+  does inside out: 6 lifts where 3, and 0.49 m of rapids where 0.11.
+  Measuring such a zone from every edge of it instead, so its rings close and
+  the two families meet in the middle, was tried (2026-11-21) and closes the
+  rings on the block's top, but breaks those down its upright sides: 18
+  lifts, and 214 passes broken at a wall where 1. The cause is in the field,
+  not the rule. An upright side is one grid edge 19.9 mm long along the
+  surface, and the field is a straight line along an edge between its two
+  nodes. Measured from the foot alone, as before zones, that is exact, and
+  the rings down the side are level and a stepover apart. Measured from the
+  pocket's rim too, 7.84 mm from the top of the side, the two fronts meet
+  inside that one edge, about Z11.8, which a straight line from 7.84 at the
+  top to 0 at the foot cannot say: its 13 rings are spread over the whole
+  side, 1.52 mm apart and at a slant, a different one on each side of the
+  block. A field measured from one edge, and the blend between two, are
+  straight lines along such an edge and are right as they are; one measured
+  from two edges that meet on an upright wall is not, in either order. Until
+  the field keeps where two fronts meet inside a cliff's edge, as a node of
+  its own there, a zone is not measured from every edge to close its rings.
+- Outside in there are no zones: the rings still cross a sharp rim at a
+  slant and come out in pieces there, 5 lifts between them on the user's bowl
+  (decision 0041, which took the other 29 away).
 - Up the user's inside wall each ring still rises and falls 2 to 6 mm a lap,
   turning four times: the wall's height round the bowl, the rings a fixed
   distance from the floor's edge.
-- With the floor's group removed, the innermost rings still turn to a point
-  at the ends of the lens-shaped floor.
 - The three blended rings nearest where the tool leaves the part still turn
-  in height a tenth of a millimetre every few millimetres (decision 0038).
+  in height by 0.06 to 0.09 mm every few millimetres, about the job's
+  tolerance of 0.05 (decision 0038).
+
+With the floor's group removed, the innermost rings turned to a point at the
+ends of the lens-shaped floor; decision 0040 took those away.
