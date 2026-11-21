@@ -18,7 +18,10 @@
 //! a unit apart are that far apart; elsewhere further or nearer, as the
 //! gradient of `t` says. So the count is measured, not guessed: on each whole
 //! triangle of the band, how far apart along the surface lines of `t` a unit
-//! apart are, `1 / |∇t|`, the most of it over the stepover, rounded up.
+//! apart are, `1 / |∇t|`, the most of it over the stepover, rounded up. A
+//! band with no whole triangle in it, thin down a wall so steep every cell
+//! there is cut, has `a + b`, its width, at its widest instead (decision
+//! 0039).
 //!
 //! The band starts from the last ring at least half a stepover from the edge
 //! all round ([`THIN_END`]): nearer, where the ring comes close to the edge,
@@ -94,7 +97,7 @@ impl Band {
 /// `None` where it is not to be blended.
 pub(super) fn band(
     grid: &View<'_>,
-    (field, area): (&Field, &Region),
+    (field, area): (&Field<'_>, &Region),
     far: &Edge,
     step: f64,
     diameter: f64,
@@ -159,11 +162,22 @@ pub(super) fn band(
     triangles.sort_unstable();
     triangles.dedup();
     let lattice = field.ground.cut.grid().triangle_slots();
-    let widest = triangles
+    let measured = triangles
         .iter()
         .filter(|&&id| id < lattice)
         .filter_map(|&id| apart(grid, &t, id))
         .fold(0.0, f64::max);
+    // A band with no whole triangle of the lattice in it, thin down a wall
+    // nearly upright where every cell is cut, has its width at its widest.
+    let widest = if measured > 0.0 {
+        measured
+    } else {
+        (0u32..)
+            .zip(&on)
+            .filter(|&(_, &on)| on)
+            .filter_map(|(n, _)| Some(value(d, n)? - base + value(&from_far, n)?))
+            .fold(0.0, f64::max)
+    };
     if widest > BAND_LIMIT * diameter {
         return None;
     }

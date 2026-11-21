@@ -181,8 +181,10 @@ How main lays them there was not measured.
 
 - The lifts between the arcs where the tool leaves the part: rings that
   follow that line, or links that follow it between arcs, would take them.
-- Up the inside wall each ring still rises onto the flat rim and drops back
-  onto the wall two or three times a lap, as before.
+- Up the inside wall each ring still rose onto the flat rim and dropped back
+  onto the wall two or three times a lap, as before. Inside out it no longer
+  does: the rings stop where the tool starts rolling over the rim's edge and
+  start again past it ([decision 0039](0039-scallop-zones-at-a-sharp-rim.md)).
 - With the floor's group removed, the innermost rings still turn to a point
   at the ends of the lens-shaped floor, as before.
 - The rest of these are to be designed again on their own; the bands tried

@@ -41,6 +41,11 @@
 //! point, vertices by position, chains start at their smallest point. No hashing
 //! decides anything, so the same triangles give the same topology everywhere.
 
+/// A fold sharper than this, in degrees, is an edge between faces: where a
+/// mesh's faces are found again from its triangles, and where a tool resting on
+/// two triangles at once rests on a sharp edge between them.
+pub const CREASE_DEGREES: f64 = 30.0;
+
 mod build;
 mod derive;
 mod fit;

@@ -8,7 +8,9 @@
 //! side not yet finished on the tool's right. Both ways keeps closed rings
 //! climbing, and starts an open pass at whichever end is nearer. Each closed
 //! ring starts where it crosses the line out from where the first started, so
-//! the seam where each steps to the next is straight seen from above.
+//! the seam where each steps to the next is straight seen from above. Where
+//! strips break the ground into zones (decision 0039), each zone's tree is
+//! cut whole before the next's, on the one seam.
 
 use crate::cutter::surfaces::Seat;
 use crate::cutter::tool::ToolProfile;
@@ -21,7 +23,7 @@ use crate::strategy::projected::Emit;
 
 use super::ScallopParams;
 use super::lay::Worked;
-use super::rings::Plan;
+use super::rings::Planned;
 
 /// Whether a region's children are cut before its own rings: inside out,
 /// but where the field is measured out from the inner edges (`outward`), its
@@ -30,42 +32,17 @@ pub(super) fn children_first(order: Order, outward: bool) -> bool {
     order == Order::InsideOut && !outward
 }
 
-/// The rings of `plans`, laid on the part as `worked`, cut into a path from
-/// `first`, then the tree's roots, then `last`, each the nearest next; with
-/// how many passes it has. `outward` where the field is measured out from the
-/// inner edges.
+/// The rings of each zone's tree, laid on the part as `worked`, cut into a
+/// path zone by zone, each from its `first`, then its roots, then its
+/// `last`, each the nearest next; with how many passes it has. One seam runs
+/// through them all.
 pub(super) fn cut(
     seat: &Seat<'_>,
-    (plans, worked): (Vec<Plan>, Vec<Worked>),
-    (first, last): (Vec<usize>, Vec<usize>),
-    outward: bool,
+    zones: Vec<(Planned, Vec<Worked>)>,
     params: &ScallopParams,
 ) -> Result<(Toolpath, u64), StrategyError> {
-    let inner_first = children_first(params.order, outward);
-    let toward_higher = !inner_first;
-    let mut tree = Nested::new(inner_first);
-    let mut roots = Vec::new();
-    for (plan, w) in plans.into_iter().zip(worked) {
-        let i = tree.push(w.runs);
-        // A child nested before it is pushed: only the parent must be there.
-        for c in plan.children {
-            tree.nest(i, c);
-        }
-        if plan.root {
-            roots.push(i);
-        }
-    }
-    tree.settle(|r| r.points.first().map(|p| p.truncate()));
-
     let conventional = params.direction == Direction::Conventional;
-    // The higher side of a line as found is on its left: the side still to
-    // finish, cutting toward the higher.
-    let reverse = toward_higher == (params.climb_right != conventional);
     let mut emit = Emit::new(params.feed);
-    // Each ring started where it crosses the line out from where the first
-    // started to the side still to finish, so the seam where each steps to
-    // the next is straight seen from above.
-    emit.seam_left = Some(toward_higher != reverse);
     // Where the seam runs straight down a wall, the way from one ring onto
     // the next below is a plunge further than a cut step: down along the ring
     // instead, at the linking's default ramp angle, as contour finishing goes
@@ -75,18 +52,42 @@ pub(super) fn cut(
     emit.ramp_past = Some(params.max_cut_step);
     let mut cut = Cut {
         emit,
-        reverse,
+        reverse: false,
         both_ways: params.direction == Direction::BothWays,
         seat,
         tolerance: params.tolerance,
     };
-    for mut roots in [first, roots, last] {
-        loop {
-            let at = cut.emit.at;
-            let Some(root) = take_nearest(&mut roots, |&r| distance(tree.anchor(r), at)) else {
-                break;
-            };
-            tree.cut(root, &mut cut)?;
+    for (planned, worked) in zones {
+        let inner_first = children_first(params.order, planned.outward);
+        let toward_higher = !inner_first;
+        let mut tree = Nested::new(inner_first);
+        let mut roots = Vec::new();
+        for (plan, w) in planned.plans.into_iter().zip(worked) {
+            let i = tree.push(w.runs);
+            // A child nested before it is pushed: only the parent must be there.
+            for c in plan.children {
+                tree.nest(i, c);
+            }
+            if plan.root {
+                roots.push(i);
+            }
+        }
+        tree.settle(|r| r.points.first().map(|p| p.truncate()));
+        // The higher side of a line as found is on its left: the side still
+        // to finish, cutting toward the higher.
+        cut.reverse = toward_higher == (params.climb_right != conventional);
+        // Each ring started where it crosses the line out from where the
+        // first started to the side still to finish, so the seam where each
+        // steps to the next is straight seen from above.
+        cut.emit.seam_left = Some(toward_higher != cut.reverse);
+        for mut roots in [planned.first, roots, planned.last] {
+            loop {
+                let at = cut.emit.at;
+                let Some(root) = take_nearest(&mut roots, |&r| distance(tree.anchor(r), at)) else {
+                    break;
+                };
+                tree.cut(root, &mut cut)?;
+            }
         }
     }
     Ok((cut.emit.path, cut.emit.passes))

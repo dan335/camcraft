@@ -15,6 +15,7 @@ use crate::strategy::StrategyError;
 use crate::strategy::parallel::{ParallelParams, ParallelReport, Run, sweep_polyline};
 use crate::strategy::slope::{SlopeCounts, Sloped};
 
+use super::ground::Ground;
 use super::guided;
 use super::rings::Plan;
 
@@ -32,6 +33,9 @@ pub(super) struct Layer<'a> {
     pub(super) seat: &'a Seat<'a>,
     /// The field's grid, cut where the ground ends.
     pub(super) grid: &'a View<'a>,
+    /// The ground it is cut to, to say which of its nodes are where it ends
+    /// against a strip.
+    pub(super) ground: &'a Ground,
     /// The area, its own edge counted in: a point on it is in, or clipping
     /// to the area would cut it into bits ([`with_edge`](crate::strategy::with_edge)).
     pub(super) within: Region,
@@ -99,7 +103,7 @@ impl Layer<'_> {
     fn by_field(&self, line: (&[DVec2], bool), w: &mut Worked) {
         let runs = guided::sweep(
             self.seat,
-            self.grid,
+            (self.grid, &|n| self.ground.against_a_strip(n)),
             line,
             self.thin,
             &self.sweep,

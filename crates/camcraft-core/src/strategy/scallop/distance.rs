@@ -8,144 +8,325 @@
 //! the rings grow outward from them, and where the tool leaves the part is
 //! their far end, cut last.
 //!
+//! # Zones
+//!
+//! Where strips the tool rolls over a sharp edge along break the ground
+//! ([`ROLLING`]), each piece of it either side is a zone with a field of its
+//! own, cut one after the next (decision 0039). Inside out, from the innermost
+//! out, each is measured from its inner edges: the area's holes on it, faces
+//! avoided, and the far border of the strip inside it; its outer edge, the
+//! near border of the strip round it or where the tool leaves the part, is
+//! its far end. A zone with no inner edge is measured from every edge of it,
+//! as the whole ground with none is.
+//!
 //! Down a cliff, where a grid edge falls steeper than 45° and bends inside
 //! its cell, the edge is measured along the surface the tool rides, from
 //! drops along it ([`guided::bent`]), not by the straight line that cuts its
 //! corner (decision 0035).
+//!
+//! [`guided::bent`]: super::guided::bent
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use camcraft_geom::contour::{Contour, Region};
-use camcraft_geom::cut::{CutGrid, NO_BAND, View};
-use camcraft_geom::geodesic::{Seed, march_along};
+use camcraft_geom::cut::{CutGrid, NO_BAND};
+use camcraft_geom::geodesic::Seed;
 use camcraft_geom::trigrid::TriSurface;
+use glam::{DVec2, DVec3};
 use rayon::prelude::*;
 
 use crate::cutter::surfaces::Seat;
-use crate::strategy::StrategyError;
 use crate::strategy::field::{AreaGrid, OFF_PART};
 use crate::strategy::nesting::Order;
 
-use super::ground::{AVOIDED, Edge, Ground, MACHINED};
-use super::{ScallopParams, ScallopReport, guided};
+use super::ground::{AVOIDED, Edge, Ground, MACHINED, ROLLING};
+use super::{ScallopParams, ScallopReport};
 
-/// The field of distances over the ground.
-pub(super) struct Field {
+/// The field of distances over a zone of the ground, or all of it.
+pub(super) struct Field<'g> {
     /// The ground it is measured over.
-    pub(super) ground: Ground,
+    pub(super) ground: &'g Ground,
     /// Each node's distance, of the grid cut's: negative outside the area,
-    /// infinite where unknown.
+    /// infinite where unknown, as off the zone.
     pub(super) d: Vec<f64>,
+    /// Whether it is measured out from the zone's inner edges alone: inside
+    /// out, where there are any.
+    pub(super) outward: bool,
+    /// The zone's edges the rings start from: where faces avoided begin,
+    /// and, unless measured out from those, where the tool leaves the part
+    /// and the strips either side.
+    pub(super) edges: Vec<Edge>,
+    /// Measured out from the inner edges, its outer edges: where the tool
+    /// leaves the part, or the near border of a strip round it. The field's
+    /// far end, cut last.
+    pub(super) far_edges: Vec<Edge>,
+    /// The band of the grid cut the zone is; `None`, all of the ground.
+    band: Option<u32>,
+    /// Whether the area's rings that lie on no band are cut with the zone's:
+    /// the last zone's.
+    last: bool,
+}
+
+/// The fields over the ground, a zone each, in the order they are cut.
+pub(super) struct Fields<'g> {
+    pub(super) zones: Vec<Field<'g>>,
     /// Measured out from the inner edges, each node's distance along the
     /// surface from the outer boundary.
     pub(super) beyond: Option<Vec<f64>>,
-    /// Whether it is measured out from the ground's inner edges alone: inside
-    /// out, where there are any.
-    pub(super) outward: bool,
-    /// The ground's edges the rings start from: where faces avoided begin,
-    /// and, unless measured out from those, where the tool leaves the part.
-    pub(super) edges: Vec<Edge>,
-    /// Measured out from the inner edges, where the tool leaves the part: the
-    /// field's far end, cut last.
-    pub(super) far_edges: Vec<Edge>,
-    /// The highest point of where the tool leaves the part from above.
-    pub(super) leaves_at: Option<f64>,
-    /// The length along the surface of each grid edge bent down a cliff
-    /// ([`cliff_edges`]), by its key, lower node first.
-    cliffs: HashMap<(u32, u32), f64>,
 }
 
-impl Field {
-    /// The field over `area`, whose bounds are `bounds`, as `params` ask.
-    pub(super) fn build(
+impl<'g> Field<'g> {
+    /// The fields over `ground`, inside `area`, as `params` ask: one, or,
+    /// where strips break it, one a zone.
+    pub(super) fn zones(
         seat: &Seat<'_>,
+        ground: &'g Ground,
         area: &Region,
-        bounds: (glam::DVec2, glam::DVec2),
         params: &ScallopParams,
         report: &mut ScallopReport,
-    ) -> Result<Self, StrategyError> {
-        let ground = Ground::sampled(seat, area, bounds, params, report)?;
-        let view = ground.cut.view(None);
-        let cliffs = cliff_edges(seat, &view, params.tolerance);
-        params.watch.check()?;
-        let measure = |seeds: &[Seed]| march(&view, &cliffs, seeds);
+    ) -> Fields<'g> {
         let (outer, holes): (Vec<Contour>, Vec<Contour>) = area
             .rings()
             .iter()
             .cloned()
             .partition(|r| r.signed_area() > 0.0);
-        let inner = seeds_along(&ground.cut, AVOIDED);
-        let outward = params.order == Order::InsideOut && (!holes.is_empty() || !inner.is_empty());
-        let (mut d, beyond) = if outward {
-            // From the inner edges; and how far the outer boundary is, along
-            // the surface, which its ring finishes up to. Where the tool
-            // leaves the part the field reaches exactly, its ring along it: a
-            // line near it is no sliver in bits along the area's edge, and
-            // left out, it would leave the way down to it, as steep as a
-            // square root, wider than a stepover.
-            let mut seeds = feet(seat, &ground.on, &Region::new(holes));
-            seeds.extend(&inner);
-            let d = measure(&seeds);
-            (
-                d,
-                Some(measure(&feet(seat, &ground.on, &Region::new(outer)))),
-            )
+        let edges = ground.edges();
+        let zones = if edges.iter().any(|e| e.past == ROLLING) {
+            zoned(seat, ground, area, &holes, edges, params.order)
         } else {
-            let mut seeds = feet(seat, &ground.on, area);
-            seeds.extend(&inner);
-            seeds.extend(&seeds_along(&ground.cut, OFF_PART));
-            (measure(&seeds), None)
+            vec![whole(seat, ground, area, &holes, edges, params.order)]
         };
-        report.unreached = unreached(&ground, area, &d);
-        // Outside the area, negative, so only the lines inside it are passes.
-        // Measured out from the inner edges, the field runs on past the
-        // area's outer edge from inside it, and its lines are cut there: it
-        // does not fall to 0 there.
-        if !outward {
-            for (n, v) in (0u32..).zip(d.iter_mut()) {
-                if !inside(&ground, area, n) {
-                    *v = -*v;
-                }
-            }
-        }
-        let (far_edges, edges) = ground
-            .edges()
-            .into_iter()
-            .partition(|e| outward && e.past == OFF_PART);
-        let leaves_at = ground.leaves_at(area);
-        Ok(Self {
-            ground,
-            d,
-            beyond,
-            outward,
-            edges,
-            far_edges,
-            leaves_at,
-            cliffs,
-        })
+        report.unreached = unreached(ground, area, &zones);
+        // How far the outer boundary is, along the surface, which the outer
+        // zone's ring finishes up to.
+        let beyond = zones
+            .iter()
+            .any(|z| z.outward)
+            .then(|| ground.measure(&feet(seat, &ground.on, &Region::new(outer))));
+        Fields { zones, beyond }
     }
 
     /// Each node's distance along the surface from `seeds`, measured as the
     /// field is.
     pub(super) fn measure(&self, seeds: &[Seed]) -> Vec<f64> {
-        march(&self.ground.cut.view(None), &self.cliffs, seeds)
+        self.ground.measure(seeds)
+    }
+
+    /// Whether the area's ring `ring` is cut with the zone's: where most of
+    /// the nodes beside it are on its band, or, beside none of the ground,
+    /// it is the last.
+    pub(super) fn owns(&self, ring: &Contour) -> bool {
+        let Some(band) = self.band else {
+            return true;
+        };
+        let cut = &self.ground.cut;
+        let mut count: Vec<(u32, usize)> = Vec::new();
+        for (n, ..) in self
+            .ground
+            .on
+            .boundary_feet(&Region::new(vec![ring.clone()]))
+        {
+            let b = cut.band_of(n);
+            if b == NO_BAND {
+                continue;
+            }
+            match count.iter_mut().find(|(c, _)| *c == b) {
+                Some((_, k)) => *k += 1,
+                None => count.push((b, 1)),
+            }
+        }
+        match count
+            .iter()
+            .max_by_key(|(b, k)| (*k, std::cmp::Reverse(*b)))
+        {
+            Some(&(most, _)) => most == band,
+            None => self.last,
+        }
     }
 
     /// Whether node `n` of its grid is inside `area`.
     pub(super) fn inside(&self, area: &Region, n: u32) -> bool {
-        inside(&self.ground, area, n)
+        inside(self.ground, area, n)
     }
 }
 
-/// Each node of `view`'s distance along the surface from `seeds`, down each
-/// of `cliffs` along the surface the tool rides.
-fn march(view: &View<'_>, cliffs: &HashMap<(u32, u32), f64>, seeds: &[Seed]) -> Vec<f64> {
-    march_along(
-        view,
-        seeds,
-        |n| view.point(n),
-        |a, b| cliffs.get(&(a.min(b), a.max(b))).copied(),
-    )
+/// The one field over all of `ground`, with `edges`, inside `area` with
+/// `holes`, cut in `order`.
+fn whole<'g>(
+    seat: &Seat<'_>,
+    ground: &'g Ground,
+    area: &Region,
+    holes: &[Contour],
+    edges: Vec<Edge>,
+    order: Order,
+) -> Field<'g> {
+    let inner = seeds_along(&ground.cut, |_, class| class == AVOIDED);
+    let outward = order == Order::InsideOut && (!holes.is_empty() || !inner.is_empty());
+    let seeds = if outward {
+        // From the inner edges. Where the tool leaves the part the field
+        // reaches exactly, its ring along it: a line near it is no sliver in
+        // bits along the area's edge, and left out, it would leave the way
+        // down to it, as steep as a square root, wider than a stepover.
+        let mut seeds = feet(seat, &ground.on, &Region::new(holes.to_vec()));
+        seeds.extend(&inner);
+        seeds
+    } else {
+        let mut seeds = feet(seat, &ground.on, area);
+        seeds.extend(&inner);
+        seeds.extend(seeds_along(&ground.cut, |_, class| class == OFF_PART));
+        seeds
+    };
+    let mut d = ground.measure(&seeds);
+    if !outward {
+        negate_outside(ground, area, &mut d);
+    }
+    let (far_edges, edges) = edges
+        .into_iter()
+        .partition(|e| outward && e.past == OFF_PART);
+    Field {
+        ground,
+        d,
+        outward,
+        edges,
+        far_edges,
+        band: None,
+        last: true,
+    }
+}
+
+/// A field for each band of `ground`, its `edges` broken by strips, inside
+/// `area` with `holes`, in the order they are cut: inside out, from the
+/// innermost. Measured out from the zone's inner edges, where it has any;
+/// from every edge of it, where it has none. Each of the area's rings is cut
+/// with the zone most of it lies beside, or, beside none, the last
+/// ([`Field::owns`]).
+fn zoned<'g>(
+    seat: &Seat<'_>,
+    ground: &'g Ground,
+    area: &Region,
+    holes: &[Contour],
+    edges: Vec<Edge>,
+    order: Order,
+) -> Vec<Field<'g>> {
+    let cut = &ground.cut;
+    let band_at = |n: u32| cut.cut(n).map_or_else(|| cut.band_of(n), |c| c.bands.0);
+    // A strip's far border is a hole of the ground round it.
+    let inner = |e: &Edge| e.past == AVOIDED || (e.past == ROLLING && e.closed && !turns_left(e));
+    let inner_nodes: HashSet<u32> = edges
+        .iter()
+        .filter(|e| e.past == ROLLING && inner(e))
+        .flat_map(|e| e.nodes.iter().copied())
+        .collect();
+    let hole_feet = feet(seat, &ground.on, &Region::new(holes.to_vec()));
+    let area_feet = feet(seat, &ground.on, area);
+    let mut by_band: Vec<Vec<Edge>> = (0..cut.bands()).map(|_| Vec::new()).collect();
+    for e in edges {
+        if let Some(own) = usize::try_from(e.band)
+            .ok()
+            .and_then(|b| by_band.get_mut(b))
+        {
+            own.push(e);
+        }
+    }
+    let extents = extents(ground);
+    let mut zones: Vec<(f64, u32, Field<'g>)> = Vec::new();
+    for (b, edges) in (0u32..).zip(by_band) {
+        let mut seeds: Vec<Seed> = hole_feet
+            .iter()
+            .filter(|s| band_at(s.node) == b)
+            .copied()
+            .collect();
+        seeds.extend(seeds_along(cut, |n, class| {
+            band_at(n) == b && (class == AVOIDED || (class == ROLLING && inner_nodes.contains(&n)))
+        }));
+        let outward = order == Order::InsideOut && !seeds.is_empty();
+        if !outward {
+            seeds = area_feet
+                .iter()
+                .filter(|s| band_at(s.node) == b)
+                .copied()
+                .collect();
+            seeds.extend(seeds_along(cut, |n, _| band_at(n) == b));
+        }
+        if seeds.is_empty() {
+            continue;
+        }
+        let mut d = ground.measure(&seeds);
+        if !outward {
+            negate_outside(ground, area, &mut d);
+        }
+        let (edges, far_edges) = edges.into_iter().partition(|e| !outward || inner(e));
+        let extent = extents
+            .get(usize::try_from(b).unwrap_or(usize::MAX))
+            .copied();
+        zones.push((
+            extent.unwrap_or(0.0),
+            b,
+            Field {
+                ground,
+                d,
+                outward,
+                edges,
+                far_edges,
+                band: Some(b),
+                last: false,
+            },
+        ));
+    }
+    // Inside out, the innermost first: each zone lies in the hole of the
+    // one round it, so its extent is less.
+    zones.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    if order == Order::OutsideIn {
+        zones.reverse();
+    }
+    if let Some((.., zone)) = zones.last_mut() {
+        zone.last = true;
+    }
+    zones.into_iter().map(|(.., zone)| zone).collect()
+}
+
+/// Whether closed `edge` turns left round what it bounds, seen from above:
+/// the ground inside it.
+fn turns_left(edge: &Edge) -> bool {
+    let flat: Vec<DVec2> = edge.points.iter().map(|p: &DVec3| p.truncate()).collect();
+    let n = flat.len();
+    let twice: f64 = (0..n)
+        .filter_map(|i| Some(flat.get(i)?.perp_dot(*flat.get((i + 1) % n)?)))
+        .sum();
+    twice > 0.0
+}
+
+/// The area seen from above of the box round each band of `ground`'s grid
+/// cut.
+fn extents(ground: &Ground) -> Vec<f64> {
+    let cut = &ground.cut;
+    let mut boxes =
+        vec![(DVec2::INFINITY, DVec2::NEG_INFINITY); usize::try_from(cut.bands()).unwrap_or(0)];
+    for n in 0..cut.grid().nodes() {
+        let b = cut.band_of(n);
+        if let (Some(p), Some(bx)) = (
+            cut.grid().xy(n),
+            usize::try_from(b).ok().and_then(|b| boxes.get_mut(b)),
+        ) {
+            *bx = (bx.0.min(p), bx.1.max(p));
+        }
+    }
+    boxes
+        .into_iter()
+        .map(|(lo, hi)| (hi - lo).max(DVec2::ZERO).element_product())
+        .collect()
+}
+
+/// `d` negative outside `area`, so only the lines inside it are passes.
+/// Measured out from the inner edges, the field runs on past the area's outer
+/// edge from inside it, and its lines are cut there: it does not fall to 0
+/// there.
+fn negate_outside(ground: &Ground, area: &Region, d: &mut [f64]) {
+    for (n, v) in (0u32..).zip(d.iter_mut()) {
+        if !inside(ground, area, n) {
+            *v = -*v;
+        }
+    }
 }
 
 /// Seeds at each node within a cell's diagonal of `rings` where they cross the
@@ -168,16 +349,15 @@ fn feet(seat: &Seat<'_>, on: &AreaGrid, rings: &Region) -> Vec<Seed> {
         .collect()
 }
 
-/// Seeds at no distance at each cut of the ground's edge with `class` past
-/// it: where faces avoided begin, or where the tool leaves the part.
-fn seeds_along(cut: &CutGrid, class: u32) -> Vec<Seed> {
+/// Seeds at no distance at each cut of the ground's edge, as a node of the
+/// grid cut, that `keep` says to, by the class of what lies past it.
+fn seeds_along(cut: &CutGrid, keep: impl Fn(u32, u32) -> bool) -> Vec<Seed> {
     let lattice = cut.grid().nodes();
-    cut.cuts()
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.bands.1 == NO_BAND && cut.class(c.edge.1) == class)
-        .map(|(i, _)| Seed {
-            node: lattice + u32::try_from(i).unwrap_or(0),
+    (lattice..)
+        .zip(cut.cuts())
+        .filter(|(n, c)| c.bands.1 == NO_BAND && keep(*n, cut.class(c.edge.1)))
+        .map(|(node, _)| Seed {
+            node,
             distance: 0.0,
         })
         .collect()
@@ -195,55 +375,21 @@ fn inside(ground: &Ground, area: &Region, n: u32) -> bool {
     }
 }
 
-/// How many nodes of the ground inside `area`, in a triangle of it, the field
-/// `d` never reached.
-fn unreached(ground: &Ground, area: &Region, d: &[f64]) -> u64 {
+/// How many nodes of the ground inside `area`, in a triangle of it, no zone's
+/// field reached.
+fn unreached(ground: &Ground, area: &Region, zones: &[Field<'_>]) -> u64 {
     let (cut, view) = (&ground.cut, ground.cut.view(None));
     (0..cut.grid().nodes())
         .filter(|&n| {
             inside(ground, area, n)
                 && cut.class(n) == MACHINED
                 && view.triangles_at(n).next().is_some()
-                && !usize::try_from(n)
-                    .ok()
-                    .and_then(|i| d.get(i))
-                    .is_some_and(|v| v.is_finite())
+                && !zones.iter().any(|z| {
+                    usize::try_from(n)
+                        .ok()
+                        .and_then(|i| z.d.get(i))
+                        .is_some_and(|v| v.is_finite())
+                })
         })
         .count() as u64
-}
-
-/// The length along the surface the tool rides of each bent edge of `grid`
-/// ([`guided::bent`]), by its key, lower node first: the straight line
-/// between the nodes cuts the corner where a wall turns onto the ground above
-/// or below it inside the cell, by up to the cell's width, and the rings
-/// beside it would be that much too far apart.
-fn cliff_edges(
-    seat: &Seat<'_>,
-    grid: &(impl TriSurface + Sync),
-    tolerance: f64,
-) -> HashMap<(u32, u32), f64> {
-    let found: Vec<((u32, u32), f64)> = (0..grid.nodes())
-        .into_par_iter()
-        .map_init(Vec::new, |scratch, a| {
-            let mut out = Vec::new();
-            let Some(pa) = grid.point(a) else {
-                return out;
-            };
-            let mut seen = Vec::new();
-            for (_, nodes) in grid.triangles_at(a) {
-                for b in nodes {
-                    let Some(pb) = grid.point(b).filter(|_| b > a && !seen.contains(&b)) else {
-                        continue;
-                    };
-                    seen.push(b);
-                    if let Some(line) = guided::bent(seat, (pa, pb), tolerance, scratch) {
-                        out.push(((a, b), guided::length(&line)));
-                    }
-                }
-            }
-            out
-        })
-        .flatten_iter()
-        .collect();
-    found.into_iter().collect()
 }

@@ -33,6 +33,7 @@ use camcraft_geom::bvh::MeshBvh;
 use camcraft_geom::contour::{Region, RegionError};
 use camcraft_geom::mesh::TriMesh;
 use camcraft_geom::shadow::{Shadow, shadow_above};
+use camcraft_geom::topology::CREASE_DEGREES;
 use glam::{DVec2, DVec3, dvec3};
 
 use crate::cutter::allowance::{Allowance, EffectiveTool};
@@ -339,27 +340,39 @@ impl Seat<'_> {
     /// change from one to the other along a line is found where it is, and
     /// not a tolerance's height either side of it, which across a face
     /// running smoothly into one avoided is far along it.
-    pub fn rest_in(&self, x: f64, y: f64, scratch: &mut Vec<u32>) -> Option<Rest> {
+    ///
+    /// And whether it rests there by a sharp convex edge alone, rolling over
+    /// it ([`by_an_edge`]), asked of the triangles of the group that holds it.
+    pub fn rest_in(&self, x: f64, y: f64, scratch: &mut Vec<u32>) -> Option<(Rest, bool)> {
+        let mut holding = Vec::new();
         match &self.on {
-            On::Whole(cutter) => cutter
-                .drop_at_in(&self.tool, x, y, scratch)
-                .map(|z| Rest { z, machined: true }),
+            On::Whole(cutter) => {
+                let z = cutter.rest_on_in(&self.tool, (x, y), scratch, &mut holding)?;
+                Some((
+                    Rest { z, machined: true },
+                    by_an_edge(cutter.mesh(), &holding),
+                ))
+            }
             On::Grouped(held) => {
-                let mut best: Option<Rest> = None;
+                let mut best: Option<(Rest, bool)> = None;
                 for h in held {
-                    let Some(z) = h.cutter.drop_at_in(&h.tool, x, y, scratch) else {
+                    let Some(z) = h.cutter.rest_on_in(&h.tool, (x, y), scratch, &mut holding)
+                    else {
                         continue;
                     };
                     // As high to rounding is a tie, which the machined win.
                     let noise = 1e-9 * (1.0 + z.abs());
-                    let higher = best.is_none_or(|b| {
+                    let higher = best.is_none_or(|(b, _)| {
                         z > b.z + noise || (z >= b.z - noise && h.machined && !b.machined)
                     });
                     if higher {
-                        best = Some(Rest {
-                            z,
-                            machined: h.machined,
-                        });
+                        best = Some((
+                            Rest {
+                                z,
+                                machined: h.machined,
+                            },
+                            by_an_edge(h.cutter.mesh(), &holding),
+                        ));
                     }
                 }
                 best
@@ -571,6 +584,38 @@ fn drop_by(
         Some(grown) => cutter.drop_at(&grown, x, y),
         None => cutter.drop_at(tool, x, y).map(|z| z + by),
     }
+}
+
+/// How far, in millimetres, a triangle's corner may stand above another's
+/// plane and the two still be convex to one another: the rounding of a mesh's
+/// coordinates.
+const CONVEX_SLACK: f64 = 1e-6;
+
+/// Whether the triangles of `mesh` `holding` a tool hold it by a sharp convex
+/// edge alone: two of them fold further apart than a crease
+/// ([`CREASE_DEGREES`]) and lie each on or under the other's plane. A convex
+/// tool cannot touch a convex pair in two places, so that is one contact, on
+/// their shared edge or corner: the tool is rolling over it. Asks nothing of
+/// which triangles are neighbours, or of the tool's shape.
+fn by_an_edge(mesh: &TriMesh, holding: &[u32]) -> bool {
+    let crease = CREASE_DEGREES.to_radians().cos();
+    let faces: Vec<([DVec3; 3], DVec3)> = holding
+        .iter()
+        .filter_map(|&i| {
+            let t = mesh.triangle(usize::try_from(i).ok()?)?;
+            let n = (t[1] - t[0]).cross(t[2] - t[0]).try_normalize()?;
+            Some((t, n))
+        })
+        .collect();
+    let under = |t: &[DVec3; 3], (on, n): (DVec3, DVec3)| {
+        t.iter().all(|&v| (v - on).dot(n) <= CONVEX_SLACK)
+    };
+    faces.iter().enumerate().any(|(i, (a, na))| {
+        faces
+            .iter()
+            .skip(i + 1)
+            .any(|(b, nb)| na.dot(*nb) < crease && under(b, (a[0], *na)) && under(a, (b[0], *nb)))
+    })
 }
 
 /// The highest of `drops`, `None` where none has anything under it.

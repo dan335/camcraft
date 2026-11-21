@@ -10,28 +10,58 @@
 //! over it, run right to where it ends (decision 0037).
 //!
 //! Its edges are lines through those cuts, the ground on their left, in
-//! pieces by what lies past them: the edge of a face avoided, or the line
-//! where the tool leaves the part.
+//! pieces by what lies past them: the edge of a face avoided, the line where
+//! the tool leaves the part, or a strip where it rolls over a sharp edge.
+//!
+//! # Strips where the tool rolls over a sharp edge
+//!
+//! Where the tool rests on the part by a sharp convex edge alone, its contact
+//! stays on the edge while its tip goes round it, a tool's radius times the
+//! angle the faces turn through ([`Seat::rest_in`]). Rings that meet such an
+//! edge at a slant climb over it and back, each cutting the same line again.
+//! Where those nodes make a ring-shaped strip, closed round one hole, the
+//! strip is a break in the ground ([`ROLLING`]): the ground stops at its near
+//! border and starts again at its far one, each found exactly as the ground's
+//! other edges are, and each a ring of its own, the tool touching the edge
+//! from one side, then from the other. The ground either side is a zone of its
+//! own, a band of the grid cut (decision 0039). Rolling nodes that make no
+//! such strip stay ground, and the rings cross them as before.
 
 use std::collections::HashMap;
 
 use camcraft_geom::contour::Region;
 use camcraft_geom::cut::{CutGrid, NO_BAND};
-use camcraft_geom::trigrid::TriSurface;
+use camcraft_geom::geodesic::{Seed, march_along};
+use camcraft_geom::trigrid::{TriGrid, TriSurface};
 use glam::{DVec2, DVec3};
+use rayon::prelude::*;
 
 use crate::cutter::surfaces::{Rest, Seat};
 use crate::cutter::tool::ToolProfile;
 use crate::strategy::StrategyError;
 use crate::strategy::field::{self, AreaGrid, OFF_PART};
+use crate::strategy::nesting::Order;
 
-use super::{MAX_HALVINGS, ScallopParams, ScallopReport};
+use super::{MAX_HALVINGS, ScallopParams, ScallopReport, guided};
 
 /// The class of a node the tool rests on a face it machines at.
 pub(super) const MACHINED: u32 = 0;
 
 /// The class of a node the tool rests on faces it avoids alone at.
 pub(super) const AVOIDED: u32 = 1;
+
+/// The class of a node where the tool rests by a sharp convex edge alone, in
+/// a strip ring-shaped round one hole: a break between the ground either
+/// side.
+pub(super) const ROLLING: u32 = 2;
+
+/// How many nodes deep the ground lies round a strip that breaks it, at the
+/// least: so the cells cut where the ground ends against the strip are cut by
+/// nothing else. Up a wall nearly upright, seen from above a node or two wide,
+/// the cells at its top are cut at its foot too, and the ground between, a
+/// sliver, breaks into pieces: on a bowl in the tests, its wall 0.6 mm wide at
+/// its steepest, its rings up the wall came out open.
+const BESIDE: i64 = 2;
 
 /// How many times, at most, islands finer than the grid are taken into the
 /// ground round them and the grid cut again: once takes every island there
@@ -45,6 +75,9 @@ pub(super) struct Ground {
     /// The grid, its cells cut where the tool goes from resting on a face it
     /// machines to resting on faces it avoids alone, or off the part.
     pub(super) cut: CutGrid,
+    /// The length along the surface of each grid edge bent down a cliff
+    /// ([`cliff_edges`]), by its key, lower node first.
+    cliffs: HashMap<(u32, u32), f64>,
 }
 
 /// A piece of an edge of the ground: a line through cuts of its grid, the
@@ -56,8 +89,11 @@ pub(super) struct Edge {
     pub(super) points: Vec<DVec3>,
     /// Whether it closes on itself.
     pub(super) closed: bool,
-    /// The class of what lies past it: [`AVOIDED`] or [`OFF_PART`].
+    /// The class of what lies past it: [`AVOIDED`], [`OFF_PART`] or
+    /// [`ROLLING`].
     pub(super) past: u32,
+    /// The band of the grid cut it bounds.
+    pub(super) band: u32,
 }
 
 impl Ground {
@@ -65,7 +101,8 @@ impl Ground {
     /// stepover apart, and fine enough for the tool's own curvature;
     /// coarsened, if it must be, to stay within the budget, and no further
     /// than half a stepover. The tool's height at each node, dropped exactly,
-    /// and whether a face it machines holds it there.
+    /// and whether a face it machines holds it there. Inside out, the strips
+    /// where it rolls over a sharp edge round a hole are breaks in it.
     pub(super) fn sampled(
         seat: &Seat<'_>,
         area: &Region,
@@ -74,8 +111,13 @@ impl Ground {
         report: &mut ScallopReport,
     ) -> Result<Self, StrategyError> {
         let s = params.stepover;
-        let class_of = |rest: Rest| if rest.machined { MACHINED } else { AVOIDED };
-        let (on, classes) = AreaGrid::sampled(
+        let strips = params.order == Order::InsideOut;
+        let class_of = |rest: Rest, rolling: bool| match (rest.machined, rolling && strips) {
+            (false, _) => AVOIDED,
+            (true, true) => ROLLING,
+            (true, false) => MACHINED,
+        };
+        let (on, mut classes) = AreaGrid::sampled(
             area,
             (lo, hi),
             field::pitch(s, seat.tool().max_radius()),
@@ -84,15 +126,39 @@ impl Ground {
             // The drops are most of the field's work; the field, a third of
             // the whole.
             &params.watch.part(0.0, 0.3),
-            |x, y, scratch| seat.rest_in(x, y, scratch).map(|r| (r.z, class_of(r))),
+            |x, y, scratch| {
+                let (r, rolling) = seat.rest_in(x, y, scratch)?;
+                Some((r.z, class_of(r, rolling)))
+            },
         )?;
         report.pitch = on.grid.pitch();
         report.nodes = u64::from(on.grid.nodes());
         report.coarsened = on.coarsened;
         params.watch.check()?;
+        keep_ring_shaped(&on.grid, &mut classes);
         let mut cut = cut_where_it_ends(seat, &on, classes, params.tolerance);
         level_where_it_leaves(&mut cut, params.ramp.tan());
-        Ok(Self { on, cut })
+        let cliffs = cliff_edges(seat, &cut, params.tolerance);
+        params.watch.check()?;
+        Ok(Self { on, cut, cliffs })
+    }
+
+    /// Whether node `n` of the grid cut is where the ground ends against a
+    /// strip the tool rolls over a sharp edge along.
+    pub(super) fn against_a_strip(&self, n: u32) -> bool {
+        against_a_strip(&self.cut, n)
+    }
+
+    /// Each node's distance along the surface from `seeds`, down each cliff
+    /// along the surface the tool rides.
+    pub(super) fn measure(&self, seeds: &[Seed]) -> Vec<f64> {
+        let view = self.cut.view(None);
+        march_along(
+            &view,
+            seeds,
+            |n| view.point(n),
+            |a, b| self.cliffs.get(&(a.min(b), a.max(b))).copied(),
+        )
     }
 
     /// Its edges, each piece by what lies past it.
@@ -101,7 +167,7 @@ impl Ground {
         (0..cut.bands())
             .flat_map(|b| cut.edges(b))
             .flat_map(|(chain, closed)| pieces(cut, &chain, closed))
-            .filter(|e| e.past == AVOIDED || e.past == OFF_PART)
+            .filter(|e| e.past == AVOIDED || e.past == OFF_PART || e.past == ROLLING)
             .collect()
     }
 
@@ -135,9 +201,18 @@ fn cut_where_it_ends(
     tolerance: f64,
 ) -> CutGrid {
     let grid = &on.grid;
-    let find = |a: u32, b: u32| ends_between(seat, grid, (a, b), tolerance);
-    let machined = |class: u32| class == MACHINED;
-    let mut cut = CutGrid::new(grid.clone(), classes.clone(), machined, find);
+    let cut_by = |classes: &[u32]| {
+        // Toward a strip, the ground ends where the tool starts rolling.
+        let rolls = |n: u32| usize::try_from(n).ok().and_then(|i| classes.get(i)) == Some(&ROLLING);
+        let find = |a: u32, b: u32| ends_between(seat, grid, (a, b), rolls(b), tolerance);
+        CutGrid::new(
+            grid.clone(),
+            classes.to_vec(),
+            |class| class == MACHINED,
+            find,
+        )
+    };
+    let mut cut = cut_by(&classes);
     for _ in 0..MAX_ISLAND_ROUNDS {
         let islands: HashMap<u32, u32> = (0..cut.bands())
             .filter(|&b| !cut.resolved(b))
@@ -151,11 +226,100 @@ fn cut_where_it_ends(
                 *class = round;
             }
         }
-        cut = CutGrid::new(grid.clone(), classes.clone(), machined, find);
+        cut = cut_by(&classes);
     }
     cut
 }
 
+/// Each strip of `classes` over `grid` where the tool rolls over a sharp edge
+/// ([`ROLLING`]) kept a break in the ground only where it is ring-shaped,
+/// one piece, its nodes joined across cells, corners included, round one hole,
+/// with ground all round it, [`BESIDE`] nodes deep: a break between two pieces
+/// of ground. Any other is ground, as one that runs off the grid, or to where
+/// the tool leaves the part, or to a face avoided, or beside ground too narrow
+/// seen from above, as up a wall nearly upright.
+///
+/// A piece's holes are counted from the squares of four nodes round each cell,
+/// the grid's own edge a cell wide of nodes not of it: with `q1` the squares
+/// holding one node of it, `q3` three, and `qd` two across a corner, its
+/// Euler number, pieces less holes, is `(q1 - q3 - 2 qd) / 4` (Gray's). Nought
+/// is one piece round one hole.
+fn keep_ring_shaped(grid: &TriGrid, classes: &mut [u32]) {
+    let (nx, ny) = (i64::from(grid.nx()), i64::from(grid.ny()));
+    let at = |x: i64, y: i64| {
+        (x >= 0 && y >= 0 && x < nx && y < ny)
+            .then(|| usize::try_from(y * nx + x).ok())
+            .flatten()
+    };
+    let rolls = |classes: &[u32], i: usize| classes.get(i) == Some(&ROLLING);
+    // Each node's piece, joined across cells, corners included.
+    let mut piece = vec![usize::MAX; classes.len()];
+    let mut pieces = 0;
+    let mut between = Vec::new();
+    for start in 0..classes.len() {
+        if !rolls(classes, start) || piece.get(start) != Some(&usize::MAX) {
+            continue;
+        }
+        let mut stack = vec![start];
+        if let Some(p) = piece.get_mut(start) {
+            *p = pieces;
+        }
+        let mut ground_round = true;
+        while let Some(i) = stack.pop() {
+            let (x, y) = (i as i64 % nx, i as i64 / nx);
+            for dy in -BESIDE..=BESIDE {
+                for dx in -BESIDE..=BESIDE {
+                    let Some(j) = at(x + dx, y + dy) else {
+                        ground_round = false;
+                        continue;
+                    };
+                    if !rolls(classes, j) {
+                        ground_round &= classes.get(j) == Some(&MACHINED);
+                    } else if dx.abs() <= 1
+                        && dy.abs() <= 1
+                        && let Some(p) = piece.get_mut(j)
+                        && *p == usize::MAX
+                    {
+                        *p = pieces;
+                        stack.push(j);
+                    }
+                }
+            }
+        }
+        between.push(ground_round);
+        pieces += 1;
+    }
+    // Four times each piece's Euler number. Two pieces never share a square:
+    // they would be joined across its corner.
+    let mut euler = vec![0i64; pieces];
+    for y in -1..ny {
+        for x in -1..nx {
+            let corners = [at(x, y), at(x + 1, y), at(x + 1, y + 1), at(x, y + 1)].map(|i| {
+                i.and_then(|i| piece.get(i).copied())
+                    .filter(|&p| p != usize::MAX)
+            });
+            let Some(p) = corners.iter().flatten().next().copied() else {
+                continue;
+            };
+            let held = corners.iter().flatten().count();
+            let [first, _, opposite, _] = corners;
+            let across = held == 2 && first.is_some() == opposite.is_some();
+            if let Some(e) = euler.get_mut(p) {
+                *e += match held {
+                    1 => 1,
+                    3 => -1,
+                    2 if across => -2,
+                    _ => 0,
+                };
+            }
+        }
+    }
+    for (class, p) in classes.iter_mut().zip(&piece) {
+        if *class == ROLLING && (euler.get(*p) != Some(&0) || between.get(*p) != Some(&true)) {
+            *class = MACHINED;
+        }
+    }
+}
 /// Where the tool leaves the part, each run of its cuts given the highest
 /// heights no higher than its own and rising or falling along it no more
 /// steeply than `slope`, as a rise over a run.
@@ -232,11 +396,14 @@ fn lowest_within(points: &[DVec3], closed: bool, slope: f64) -> Vec<f64> {
 /// height the tool rests at there moves by less than that from one halving to
 /// the next. Where the tool leaves the part, the way down to the edge is steep
 /// as a square root, and the height is what matters: the last ring is laid
-/// along it. NaN where either end is off the grid or `a` is off the part.
+/// along it. Toward a strip where the tool rolls over a sharp edge (`rolls`),
+/// where it starts rolling. NaN where either end is off the grid or `a` is off
+/// the part.
 fn ends_between(
     seat: &Seat<'_>,
     grid: &impl TriSurface,
     (a, b): (u32, u32),
+    rolls: bool,
     tolerance: f64,
 ) -> DVec3 {
     let mut scratch = Vec::new();
@@ -244,7 +411,7 @@ fn ends_between(
         return DVec3::NAN;
     };
     let rest = |p: DVec2, scratch: &mut Vec<u32>| seat.rest_in(p.x, p.y, scratch);
-    let Some(start) = rest(pa, &mut scratch) else {
+    let Some((start, _)) = rest(pa, &mut scratch) else {
         return DVec3::NAN;
     };
     let close = 0.01 * tolerance;
@@ -256,11 +423,11 @@ fn ends_between(
         }
         let mid = near.midpoint(away);
         match rest(mid, &mut scratch) {
-            Some(r) if r.machined == start.machined => {
+            Some((r, rolling)) if r.machined == start.machined && !(rolls && rolling) => {
                 moved = (r.z - here.z).abs();
                 (near, here) = (mid, r);
             }
-            r => (away, there) = (mid, r),
+            r => (away, there) = (mid, r.map(|(r, _)| r)),
         }
     }
     match there {
@@ -315,12 +482,14 @@ fn pieces(cut: &CutGrid, chain: &[u32], closed: bool) -> Vec<Edge> {
     let Some(&first) = chain.first() else {
         return Vec::new();
     };
+    let band = cut.cut(first).map_or(NO_BAND, |c| c.bands.0);
     if chain.iter().all(|&c| past(c) == past(first)) {
         return vec![Edge {
             nodes: chain.to_vec(),
             points: chain.iter().filter_map(|&c| at(c)).collect(),
             closed,
             past: past(first),
+            band,
         }];
     }
     // A closed chain started where what lies past it changes, so no piece
@@ -356,10 +525,52 @@ fn pieces(cut: &CutGrid, chain: &[u32], closed: bool) -> Vec<Edge> {
                     points,
                     closed: false,
                     past: class,
+                    band,
                 });
             }
         }
         last = Some(class);
     }
     out
+}
+
+/// The length along the surface the tool rides of each bent edge of `grid`
+/// ([`guided::bent`]), by its key, lower node first: the straight line
+/// between the nodes cuts the corner where a wall turns onto the ground above
+/// or below it inside the cell, by up to the cell's width, and the rings
+/// beside it would be that much too far apart.
+/// Edges with an end where the ground ends against a strip are measured
+/// within their ends' heights ([`guided::bent`]).
+fn cliff_edges(seat: &Seat<'_>, cut: &CutGrid, tolerance: f64) -> HashMap<(u32, u32), f64> {
+    let grid = &cut.view(None);
+    let found: Vec<((u32, u32), f64)> = (0..grid.nodes())
+        .into_par_iter()
+        .map_init(Vec::new, |scratch, a| {
+            let mut out = Vec::new();
+            let Some(pa) = grid.point(a) else {
+                return out;
+            };
+            let mut seen = Vec::new();
+            for (_, nodes) in grid.triangles_at(a) {
+                for b in nodes {
+                    let Some(pb) = grid.point(b).filter(|_| b > a && !seen.contains(&b)) else {
+                        continue;
+                    };
+                    seen.push(b);
+                    let strip = against_a_strip(cut, a) || against_a_strip(cut, b);
+                    if let Some(line) = guided::bent(seat, (pa, pb), (tolerance, strip), scratch) {
+                        out.push(((a, b), guided::length(&line)));
+                    }
+                }
+            }
+            out
+        })
+        .flatten_iter()
+        .collect();
+    found.into_iter().collect()
+}
+
+/// Whether node `n` of `cut` is a cut where the ground ends against a strip.
+fn against_a_strip(cut: &CutGrid, n: u32) -> bool {
+    cut.cut(n).is_some_and(|c| cut.class(c.edge.1) == ROLLING)
 }

@@ -117,6 +117,32 @@ impl<'a> DropCutter<'a> {
         y: f64,
         scratch: &mut Vec<u32>,
     ) -> Option<f64> {
+        self.drop_holding(tool, (x, y), scratch, None)
+    }
+
+    /// As [`drop_at_in`](Self::drop_at_in), with the triangles that hold the
+    /// tool there in `holding`: each whose own drop is where the tool comes to
+    /// rest, to rounding.
+    pub fn rest_on_in<T: DropTest>(
+        &self,
+        tool: &T,
+        (x, y): (f64, f64),
+        scratch: &mut Vec<u32>,
+        holding: &mut Vec<u32>,
+    ) -> Option<f64> {
+        self.drop_holding(tool, (x, y), scratch, Some(holding))
+    }
+
+    /// The drop at `(x, y)`, and, given `holding`, the triangles that hold
+    /// the tool there. Without it, the triangles are looked at only until no
+    /// later one can be higher; with it, on while one could be as high.
+    fn drop_holding<T: DropTest>(
+        &self,
+        tool: &T,
+        (x, y): (f64, f64),
+        scratch: &mut Vec<u32>,
+        mut holding: Option<&mut Vec<u32>>,
+    ) -> Option<f64> {
         self.bvh
             .candidates_in_column(x, y, tool.max_radius(), scratch);
 
@@ -126,7 +152,7 @@ impl<'a> DropCutter<'a> {
             static HIGHEST: RefCell<Vec<(f64, u32)>> = const { RefCell::new(Vec::new()) };
         }
         let lift = tool.above_contact();
-        let drop = |order: &mut Vec<(f64, u32)>| {
+        let mut drop = |order: &mut Vec<(f64, u32)>| {
             order.clear();
             order.extend(scratch.iter().filter_map(|&i| {
                 let tri = self.mesh.triangle(i as usize)?;
@@ -138,19 +164,36 @@ impl<'a> DropCutter<'a> {
             // The highest contact is the same in any order.
             order.sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
             let mut best: Option<f64> = None;
+            let mut touched: Vec<(f64, u32)> = Vec::new();
             for &(top, index) in order.iter() {
-                if best.is_some_and(|b| top + lift <= b) {
+                let past = |b: f64| match holding {
+                    Some(_) => top + lift < b - rounding(b),
+                    None => top + lift <= b,
+                };
+                if best.is_some_and(past) {
                     break;
                 }
                 let Some(tri) = self.mesh.triangle(index as usize) else {
                     continue;
                 };
                 if let Some(z) = tool.drop_triangle(x, y, &tri) {
+                    if holding.is_some() {
+                        touched.push((z, index));
+                    }
                     best = Some(match best {
                         Some(b) if b >= z => b,
                         _ => z,
                     });
                 }
+            }
+            if let (Some(out), Some(b)) = (holding.as_deref_mut(), best) {
+                out.clear();
+                out.extend(
+                    touched
+                        .iter()
+                        .filter(|(z, _)| *z >= b - rounding(b))
+                        .map(|&(_, i)| i),
+                );
             }
             best
         };
@@ -159,6 +202,12 @@ impl<'a> DropCutter<'a> {
             Err(_) => drop(&mut Vec::new()),
         })
     }
+}
+
+/// How far below where the tool rests a triangle's own drop may be and still
+/// hold it: rounding, at the height's scale.
+fn rounding(z: f64) -> f64 {
+    1e-9 * (1.0 + z.abs())
 }
 
 // ---------------------------------------------------------------------------

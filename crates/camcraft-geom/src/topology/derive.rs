@@ -45,7 +45,7 @@ pub struct DeriveParams {
 impl Default for DeriveParams {
     fn default() -> Self {
         Self {
-            crease_degrees: 30.0,
+            crease_degrees: super::CREASE_DEGREES,
             plane_degrees: 0.5,
             plane_dominance: 4.0,
         }

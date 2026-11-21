@@ -59,11 +59,13 @@ pub(super) struct Plan {
 }
 
 /// The tree's nodes; those cut before every root, each a root of its own;
-/// and those cut after them.
+/// and those cut after them. Whether its field is measured out from the inner
+/// edges.
 pub(super) struct Planned {
     pub(super) plans: Vec<Plan>,
     pub(super) first: Vec<usize>,
     pub(super) last: Vec<usize>,
+    pub(super) outward: bool,
 }
 
 /// The rings of `field` over `grid`, its cut grid, in their tree, with the
@@ -72,7 +74,7 @@ pub(super) struct Planned {
 pub(super) fn plan(
     seat: &Seat<'_>,
     grid: &View<'_>,
-    (field, area): (&Field, &Region),
+    (field, area): (&Field<'_>, &Region),
     params: &ScallopParams,
     report: &mut ScallopReport,
 ) -> Planned {
@@ -122,21 +124,25 @@ pub(super) fn plan(
             Order::InsideOut => last.push(root),
         }
     }
-    Planned { plans, first, last }
+    Planned {
+        plans,
+        first,
+        last,
+        outward: field.outward,
+    }
 }
 
 /// The rings below where the tool leaves the part ([`rings_below`]), each a
 /// node nested in the one cut before it, in order down from that line, or,
-/// from the boundary in, up to it; the root of them. And the height the
-/// level rings start under, theirs or where the tool leaves the part.
+/// from the boundary in, up to it; the root of them. And, where there are
+/// any, the height the level rings start under, theirs.
 fn below(
     seat: &Seat<'_>,
-    field: &Field,
+    field: &Field<'_>,
     params: &ScallopParams,
     plans: &mut Vec<Plan>,
     report: &mut ScallopReport,
 ) -> Option<usize> {
-    report.walls_from = field.leaves_at;
     let (mut rings, to) = rings_below(seat, field, params)?;
     report.blended += rings.len() as u64;
     report.walls_from = Some(to + params.stepover);
@@ -174,9 +180,9 @@ fn levels(
         lines.push(Vec::new());
     }
     let regions = nest(grid, d, step, &lines);
-    report.levels = u64::from(levels);
-    report.lines = lines.iter().map(|l| l.len() as u64).sum();
-    report.top_ups = regions.iter().filter(|r| !r.top_up.is_empty()).count() as u64;
+    report.levels = report.levels.max(u64::from(levels));
+    report.lines += lines.iter().map(|l| l.len() as u64).sum::<u64>();
+    report.top_ups += regions.iter().filter(|r| !r.top_up.is_empty()).count() as u64;
     (lines, regions)
 }
 
@@ -226,7 +232,7 @@ fn by_region(
 /// node of their own a piece, cut last: those nodes.
 fn with_edges(
     grid: &View<'_>,
-    field: &Field,
+    field: &Field<'_>,
     (area, far_edges): (&Region, &[&Edge]),
     regions: &[isoline::Region],
     plans: &mut Vec<Plan>,
@@ -250,6 +256,7 @@ fn with_edges(
             piece
                 .rings()
                 .iter()
+                .filter(|c| field.owns(c))
                 .filter(|c| (!field.outward || c.signed_area() > 0.0) == outer)
                 .map(|c| {
                     // The field rises toward an outer ring it is measured out to:
@@ -346,7 +353,11 @@ fn into_band(
 /// cut, and the height the level rings start at: where it is the one line
 /// the tool leaves the part along and closed, the slope range reaches
 /// upright, and the field reaches it.
-fn rings_below(seat: &Seat<'_>, field: &Field, params: &ScallopParams) -> Option<(Vec<Run>, f64)> {
+fn rings_below(
+    seat: &Seat<'_>,
+    field: &Field<'_>,
+    params: &ScallopParams,
+) -> Option<(Vec<Run>, f64)> {
     if params.slope_to < std::f64::consts::FRAC_PI_2 {
         return None;
     }

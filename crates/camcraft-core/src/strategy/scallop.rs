@@ -32,6 +32,13 @@
 //!   rings that turn gradually from the one into the other, and below it
 //!   rings go down beside the wall to the first level ring, rather than both
 //!   being cut into arcs by it (decision 0038).
+//! - **Zones** ([`ground`], [`distance`]). Inside out, where the tool rolls
+//!   over a sharp convex edge along a strip that runs right round a hole with
+//!   ground either side, as over a bowl's rim, the strip is a break in the
+//!   ground: the ground either side is a zone, measured from its own inner
+//!   edge and blended into its outer one, the strip's two borders a ring
+//!   each, and the zones cut one after the next from the innermost (decision
+//!   0039). The rings no longer climb over the edge and back.
 //! - **Laid on the part** ([`lay`], [`guided`]). Every point of every pass is
 //!   an exact cutter location, refined along the pass until it is within
 //!   tolerance of the part, as a parallel pass is. Where a line crosses a grid
@@ -63,7 +70,8 @@ pub use crate::strategy::nesting::Order;
 use crate::strategy::parallel::{ParallelParams, ParallelReport, Run};
 use crate::strategy::{StrategyError, check, slope, with_edge};
 
-use distance::Field;
+use distance::{Field, Fields};
+use ground::Ground;
 use lay::{Layer, Worked};
 use rings::Planned;
 
@@ -225,14 +233,15 @@ pub fn scallop_finish(
     let Some(bounds) = area.bounds() else {
         return Ok((Toolpath::new(), report));
     };
-    let mut field = Field::build(seat, area, bounds, params, &mut report)?;
-    report.leaves_at = field.leaves_at;
-    let view = field.ground.cut.view(None);
-    let Planned {
-        mut plans,
-        first,
-        last,
-    } = rings::plan(seat, &view, (&field, area), params, &mut report);
+    let ground = Ground::sampled(seat, area, bounds, params, &mut report)?;
+    report.leaves_at = ground.leaves_at(area);
+    report.walls_from = report.leaves_at;
+    let Fields { zones, beyond } = Field::zones(seat, &ground, area, params, &mut report);
+    let view = ground.cut.view(None);
+    let mut planned: Vec<Planned> = zones
+        .iter()
+        .map(|field| rings::plan(seat, &view, (field, area), params, &mut report))
+        .collect();
 
     // The field and its lines are done: what is left is laying each node's
     // lines on the part, an equal share of the rest each.
@@ -241,8 +250,9 @@ pub fn scallop_finish(
     let layer = Layer {
         seat,
         grid: &view,
+        ground: &ground,
         within: with_edge(area, params.tolerance),
-        beyond: field.beyond.take(),
+        beyond,
         sweep: ParallelParams {
             stepover: params.stepover,
             tolerance: params.tolerance,
@@ -254,26 +264,31 @@ pub fn scallop_finish(
         slopes: (params.slope_from, params.slope_to),
     };
     let each = params.watch.part(0.4, 1.0);
-    let share = share(1, plans.len());
-    let worked: Vec<Result<Worked, StrategyError>> = plans
-        .par_iter_mut()
-        .map(|plan| {
-            params.watch.check()?;
-            let w = layer.lay(plan)?;
-            if params.watch.showing() {
-                params.watch.show(w.runs.iter().map(Run::shown));
-            }
-            each.add(share);
-            Ok(w)
-        })
-        .collect();
-    let worked: Vec<Worked> = worked.into_iter().collect::<Result<_, _>>()?;
-    for w in &worked {
-        report.outside_slope += w.slopes.outside_slope;
-        report.fragments += w.fragments;
-        report.sweep += w.sweep;
+    let share = share(1, planned.iter().map(|p| p.plans.len()).sum());
+    let mut worked = Vec::with_capacity(planned.len());
+    for zone in &mut planned {
+        let laid: Vec<Result<Worked, StrategyError>> = zone
+            .plans
+            .par_iter_mut()
+            .map(|plan| {
+                params.watch.check()?;
+                let w = layer.lay(plan)?;
+                if params.watch.showing() {
+                    params.watch.show(w.runs.iter().map(Run::shown));
+                }
+                each.add(share);
+                Ok(w)
+            })
+            .collect();
+        let laid: Vec<Worked> = laid.into_iter().collect::<Result<_, _>>()?;
+        for w in &laid {
+            report.outside_slope += w.slopes.outside_slope;
+            report.fragments += w.fragments;
+            report.sweep += w.sweep;
+        }
+        worked.push(laid);
     }
-    let (path, passes) = order::cut(seat, (plans, worked), (first, last), field.outward, params)?;
+    let (path, passes) = order::cut(seat, planned.into_iter().zip(worked).collect(), params)?;
     report.passes = passes;
     Ok((path, report))
 }

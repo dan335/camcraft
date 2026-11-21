@@ -6,6 +6,25 @@ the same notes at more length.
 
 ## Unreleased
 
+- **Scallop stops at a sharp rim and starts again past it**
+  ([decision 0039](docs/decisions/0039-scallop-zones-at-a-sharp-rim.md)).
+  Round a user's bowl, whose flat rim lies between two sharp edges, the
+  rings up the inside wall met the rim at a slant, and 11 to 13 of them each
+  climbed over an edge onto the rim and dropped back twice a lap: 4 to 9
+  crossings at a section did nothing but roll the ball over an edge, its
+  contact staying on the edge while its tip rose 3 to 4 mm. Now, inside out,
+  where the tool rolls over a sharp convex edge along a strip that runs right
+  round, with ground either side, the rings stop where it starts rolling and
+  start again where it has rolled over, each of those lines a ring: the rings
+  up the wall blend into the first, the rings across the rim start from the
+  second, and so on over the outer edge and down the outside. No ring rolls
+  over either edge but those two, the tool goes over each once, staying down
+  on the seam, and it feeds 41.90 m where it fed 42.87, lifting once at the
+  end as before; the simulated stock is left no higher on the wall's top,
+  the rim or the outside's top. An edge that runs off the area, or along a
+  wall too narrow seen from above, is crossed as before, and outside in is
+  as it was.
+
 - **A finish over the part goes across and down to a ring just under the
   last** ([decision 0004, amended](docs/decisions/0004-linking-and-entries.md)).
   Where the next ring starts nearly under the last, down a wall steeper than

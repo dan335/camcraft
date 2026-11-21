@@ -42,12 +42,23 @@ const PROFILE_PIECES: u32 = 8;
 /// straight line between its ends, as at a wall's foot or top inside the cell,
 /// or down a cliff, the straight line between the nodes cuts the corner and is
 /// no measure of the way along it. Then the tool dropped at [`PROFILE_PIECES`]
-/// even steps, the nodes at the ends. `None` where the edge is gentle or
-/// straight, or the tool is off the part anywhere along it.
+/// even steps, the nodes at the ends. With `strip`, an end where the ground
+/// ends against a strip the tool rolls over a sharp edge along (decision
+/// 0039), each no higher than the higher end and no lower than the lower: the
+/// way from one to the other climbs or falls, and where the straight line
+/// across the cell strays into the strip, the drop there is not the
+/// ground's. Where the wall under the edge stands upright or overhangs, the
+/// tool's path climbs it as a cliff to the strip's border, and a sample a
+/// hair inside the strip is on top of the cliff, above either end: round a
+/// user's bowl, where its rim's inner edge turns through 90° and more, the
+/// profile of a cell's diagonal from the wall's foot to the border went over
+/// that bump, and the rings up the wall jumped by up to 0.27 mm from one
+/// point to the next. `None` where the edge is gentle or straight, or the
+/// tool is off the part anywhere along it.
 pub(super) fn bent(
     seat: &Seat<'_>,
     (a, b): (DVec3, DVec3),
-    tolerance: f64,
+    (tolerance, strip): (f64, bool),
     scratch: &mut Vec<u32>,
 ) -> Option<Vec<DVec3>> {
     if (a.z - b.z).abs() <= STEEP * a.truncate().distance(b.truncate()) {
@@ -58,13 +69,18 @@ pub(super) fn bent(
     if (rest - m.z).abs() <= tolerance {
         return None;
     }
+    let (lo, hi) = if strip {
+        (a.z.min(b.z), a.z.max(b.z))
+    } else {
+        (f64::NEG_INFINITY, f64::INFINITY)
+    };
     let mut out = Vec::new();
     out.push(a);
     for k in 1..PROFILE_PIECES {
         let q = a
             .truncate()
             .lerp(b.truncate(), f64::from(k) / f64::from(PROFILE_PIECES));
-        out.push(q.extend(seat.drop_at_in(q.x, q.y, scratch)?));
+        out.push(q.extend(seat.drop_at_in(q.x, q.y, scratch)?.clamp(lo, hi)));
     }
     out.push(b);
     Some(out)
@@ -98,22 +114,23 @@ fn at_length(points: &[DVec3], mut along: f64) -> Option<DVec3> {
 /// Where the grid's line point `p` is on the part, by the grid: on a bent
 /// edge ([`bent`]), as far along the surface down it as `p` is along the
 /// edge, the way the field measured it; elsewhere, `p` at the grid's height
-/// there.
+/// there. `strip` says which nodes are where the ground ends against a strip.
 fn lifted(
     seat: &Seat<'_>,
-    grid: &impl TriSurface,
+    (grid, strip): (&impl TriSurface, &impl Fn(u32) -> bool),
     p: DVec2,
     tolerance: f64,
     scratch: &mut Vec<u32>,
 ) -> DVec3 {
     let flat = p.extend(grid.height_at(p).unwrap_or(f64::NAN));
-    let Some((a, b)) = edge_at(grid, p).and_then(|(a, b)| Some((grid.point(a)?, grid.point(b)?)))
+    let Some(((a, b), against)) = edge_at(grid, p)
+        .and_then(|(a, b)| Some(((grid.point(a)?, grid.point(b)?), strip(a) || strip(b))))
     else {
         return flat;
     };
     let span = a.truncate().distance(b.truncate());
     let f = (p.distance(a.truncate()) / span).clamp(0.0, 1.0);
-    bent(seat, (a, b), tolerance, scratch)
+    bent(seat, (a, b), (tolerance, against), scratch)
         .and_then(|line| at_length(&line, f * length(&line)))
         .unwrap_or(flat)
 }
@@ -149,10 +166,11 @@ struct Guide {
 /// line through its neighbours, then sampled and refined to the tolerance as
 /// a parallel pass is, and broken where one is. On ground steeper than
 /// [`STEEP`] each point is found at the grid's height there, round the wall
-/// across the slope ([`beside`]).
+/// across the slope ([`beside`]). `strip` says which nodes of `grid` are where
+/// the ground ends against a strip.
 pub(super) fn sweep(
     seat: &Seat<'_>,
-    grid: &impl TriSurface,
+    (grid, strip): (&impl TriSurface, &impl Fn(u32) -> bool),
     (points, closed): (&[DVec2], bool),
     thin: f64,
     params: &ParallelParams,
@@ -161,7 +179,7 @@ pub(super) fn sweep(
     let mut scratch = Vec::new();
     let lifted: Vec<DVec3> = points
         .iter()
-        .map(|&p| lifted(seat, grid, p, params.tolerance, &mut scratch))
+        .map(|&p| lifted(seat, (grid, strip), p, params.tolerance, &mut scratch))
         .collect();
     let guides: Vec<Guide> = thinned(&lifted, closed, thin)
         .into_iter()

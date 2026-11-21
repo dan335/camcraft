@@ -197,7 +197,8 @@ rings are level, are as they were.
 - Outside in with an inner edge, the field is measured from both edges, and
   each level's ring by the floor and its ring by the far edge are cut one
   after the other: on the bowl 29 lifts between the two.
-- Up the inside wall each ring still rises onto the flat rim and drops back
-  onto the wall, as before.
+- Up the inside wall each ring still rose onto the flat rim and dropped back
+  onto the wall, as before. Inside out it no longer does
+  ([decision 0039](0039-scallop-zones-at-a-sharp-rim.md)).
 - With the floor's group removed, the innermost rings still turn to a point
   at the ends of the lens-shaped floor, as before.

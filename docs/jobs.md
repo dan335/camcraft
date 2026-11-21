@@ -129,6 +129,15 @@ there over a range of heights, which the part's facets would have it jump
 about in. Where a ring starts a step under the last, down a steep wall, the
 tool goes down onto it along it at the linking's default ramp angle, above
 it, and the level rings below are gone down onto the same way.
+Inside out, where the tool rolls over a sharp convex edge along a strip that
+runs right round, ground either side, as over the edges of a bowl's flat rim,
+the rings stop where the tool starts rolling over it and start again where it
+has rolled over, each of those lines a ring: rings up to it blend into it as
+into the line where the tool leaves the part, and the ground past it is
+ringed out from its far side. So no ring climbs over the edge and back
+([decision 0039](decisions/0039-scallop-zones-at-a-sharp-rim.md)). An edge
+that runs off the area, or one beside a wall too narrow seen from above, is
+crossed as before.
 Up an
 upright wall above a face avoided, as a pocket's above its floor, the rings
 run up the wall from its foot. It cuts

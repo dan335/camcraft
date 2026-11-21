@@ -245,6 +245,9 @@ fn a_bowl_is_finished_in_one_family_of_rings() {
             furthest = (d, p);
         }
     };
+    // Where the tool rolls over the rim's sharp edges its contact stays on
+    // the edge, which the rings either side cut (decision 0039).
+    let mut scratch = Vec::new();
     let mut x = -32.0;
     while x < 32.0 {
         let mut y = -32.0;
@@ -252,6 +255,9 @@ fn a_bowl_is_finished_in_one_family_of_rings() {
             if let Some(rest) = seat.rest_at(x, y, 0.5 * tol)
                 && rest.machined
                 && rest.z > BOTTOM + tol
+                && !seat
+                    .rest_in(x, y, &mut scratch)
+                    .is_some_and(|(_, rolling)| rolling)
             {
                 look(dvec3(x, y, rest.z));
             }
@@ -333,6 +339,122 @@ fn a_bowl_is_finished_in_one_family_of_rings() {
     assert!(starts.len() > 20, "{} ring starts", starts.len());
     assert!(off < 0.01, "a ring starts {off} off the seam: {starts:?}");
     assert!(lifts <= 8, "{lifts} lifts");
+}
+
+/// The radii of a bowl as [`radii`]'s, its inside wall wider: 3.5 mm at its
+/// steepest, 71°, and 8.9 at its gentlest, 48°, seen from above. A wall
+/// nearly upright is too narrow, seen from above, for the strip at its top
+/// to break the ground (`ground::BESIDE`).
+fn wide(theta: f64) -> [f64; 4] {
+    let floor = 12.0 + 3.0 * theta.cos() + 1.5 * (2.0 * theta).sin();
+    let wall = floor + 3.5 + 2.7 * (1.0 + theta.sin());
+    let rim = wall + 3.0;
+    [floor, wall, rim, rim + 4.0]
+}
+
+/// The bowl with the wider wall, named as [`bowl`]'s.
+fn wide_bowl() -> Body {
+    let ring = |i: usize| move |theta: f64| wide(theta)[i];
+    let (a, b, c, d) = (ring(0), ring(1), ring(2), ring(3));
+    ringed(
+        &[(&a, FLOOR), (&b, RIM), (&c, RIM), (&d, SKIRT), (&d, 0.0)],
+        &[1, 2, 3, 3],
+        4,
+    )
+}
+
+/// The wider bowl's profile at `theta` from +X, out from its middle, as how
+/// far out and how high: its floor's edge, the inside wall's top, the rim's
+/// outside, the skirt's top and its foot.
+fn profile(theta: f64) -> [DVec2; 5] {
+    let [floor, wall, rim, skirt] = wide(theta);
+    [
+        dvec2(floor, FLOOR),
+        dvec2(wall, RIM),
+        dvec2(rim, RIM),
+        dvec2(skirt, SKIRT),
+        dvec2(skirt, 0.0),
+    ]
+}
+
+/// Inside out round the wider bowl, whose rim is flat between two sharp edges
+/// and whose inside wall is longer on some sides than others, so the rings up
+/// it meet the rim at a slant: they stop where the tool starts rolling over
+/// the rim's inner edge and start again where it has rolled over, and the
+/// same at its outer edge (decision 0039). So no pass crosses either edge
+/// rolling over it, where with the strips no break 1 to 3 crossed the inner
+/// edge at each of 36 sections and 2 or 3 the outer; and either side of each,
+/// where the tool touches the part, the rings are no further apart than a
+/// stepover.
+#[test]
+fn inside_out_no_ring_rolls_over_the_rim() {
+    let body = wide_bowl();
+    let bodies: Bodies<'_> = [("bowl", &body)].into_iter().collect();
+    let job: Job = toml::from_str(JOB).unwrap();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let op = &result.operations[0];
+    assert_eq!(result.verify.gouged, 0);
+    let radius = 2.0;
+    // A tool rolling over an edge strictly: three degrees past where it
+    // touches either face.
+    let margin = 3f64.to_radians().cos();
+    let (mut rolling, mut widest) = (Vec::new(), (0.0f64, 0.0f64));
+    for k in 0..36 {
+        let theta = std::f64::consts::TAU * f64::from(k) / 36.0;
+        let dir = dvec2(theta.cos(), theta.sin());
+        let at = profile(theta);
+        let lengths: Vec<f64> = at.windows(2).map(|w| w[0].distance(w[1])).collect();
+        // Where each crossing's tool touches the part, as how far along the
+        // profile; and over which edge, the wall's top 1 or the rim's
+        // outside 2, it rolls strictly.
+        let mut touches = Vec::new();
+        for q in section(&op.path, theta, wide(theta)[0] + 0.5) {
+            let centre = dvec2(q.truncate().dot(dir), q.z + radius);
+            let (mut best, mut along, mut vertex) = (f64::INFINITY, 0.0, None);
+            let mut start = 0.0;
+            for (i, w) in at.windows(2).enumerate() {
+                let (a, b) = (w[0], w[1]);
+                let t = ((centre - a).dot(b - a) / (b - a).length_squared()).clamp(0.0, 1.0);
+                let d = centre.distance(a.lerp(b, t));
+                if d < best {
+                    best = d;
+                    along = start + t * lengths[i];
+                    vertex = if t <= 0.0 {
+                        Some(i)
+                    } else if t >= 1.0 {
+                        Some(i + 1)
+                    } else {
+                        None
+                    };
+                }
+                start += lengths[i];
+            }
+            // The outward normals of the faces either side of a vertex: the
+            // profile turned left.
+            let normal = |i: usize| (at[i + 1] - at[i]).normalize().perp();
+            if let Some(v) = vertex.filter(|&v| v == 1 || v == 2) {
+                let u = (centre - at[v]).normalize();
+                if u.dot(normal(v - 1)) < margin && u.dot(normal(v)) < margin {
+                    rolling.push((theta, v, q));
+                }
+            }
+            touches.push(along);
+        }
+        touches.sort_by(f64::total_cmp);
+        // Either side of the two edges: from 3 below the wall's top to 3
+        // past the rim's outside.
+        let (from, to) = (lengths[0] - 3.0, lengths[0] + lengths[1] + 3.0);
+        for w in touches.windows(2) {
+            if w[0] > from && w[1] < to && w[1] - w[0] > widest.0 {
+                widest = (w[1] - w[0], theta);
+            }
+        }
+    }
+    assert!(rolling.is_empty(), "rolling over the rim: {rolling:?}");
+    assert!(
+        widest.0 < 1.1 * STEPOVER,
+        "rings {widest:?} apart where the tool touches the rim"
+    );
 }
 
 /// A ring's radius at an angle from +X.

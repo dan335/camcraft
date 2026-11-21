@@ -494,3 +494,41 @@ fn down_a_wall_the_passes_are_a_stepover_apart_along_the_surface() {
         }
     }
 }
+
+/// A sharp edge that is no ring round a hole, a step's top running right
+/// across the area, is no break in the ground, though the tool rolls over it:
+/// the ground is one field over all of it, as before strips were breaks, and
+/// the rings cross the edge as they did (decision 0039).
+#[test]
+fn an_open_sharp_edge_is_no_break() {
+    let mesh = synthetic::step(4.0, 12.0);
+    let part = PartSurfaces::whole(DropCutter::new(&mesh));
+    let seat = part.under(&ball(1.0)).unwrap();
+    let params = ScallopParams {
+        order: Order::InsideOut,
+        ..params(0.5)
+    };
+    let area = square(10.0);
+    let mut report = ScallopReport::default();
+    let ground =
+        ground::Ground::sampled(&seat, &area, area.bounds().unwrap(), &params, &mut report)
+            .unwrap();
+    let mut scratch = Vec::new();
+    let rolls = (0..41)
+        .filter(|&i| {
+            let x = -2.0 + 0.1 * f64::from(i);
+            seat.rest_in(x, 0.0, &mut scratch)
+                .is_some_and(|(_, rolling)| rolling)
+        })
+        .count();
+    assert!(
+        rolls > 5,
+        "the tool rolls over the step's edge at {rolls} places"
+    );
+    assert!(
+        ground.edges().iter().all(|e| e.past != ground::ROLLING),
+        "an open edge broke the ground"
+    );
+    let fields = distance::Field::zones(&seat, &ground, &area, &params, &mut report);
+    assert_eq!(fields.zones.len(), 1);
+}

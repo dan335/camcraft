@@ -1,0 +1,169 @@
+# 0039 — Scallop stops at a sharp rim and starts again past it
+
+**Status:** decided, 2026-11-21 · **Milestone:** 0.11
+
+## Question
+
+A user's bowl has a flat rim 3 to 4.2 mm wide between two sharp edges: the
+inside wall turns onto it through 64° to 94°, and it turns down onto the
+outside. The rings, each a fixed distance along the surface from the edge of
+the floor the operation avoids, meet the rim at a slant, the wall being
+longer on some sides than others. So 11 to 13 of them each climbed onto the
+rim and dropped back twice a lap, and at any section 5 to 9 crossings near
+the rim did nothing but roll the ball over an edge: its contact stays on the
+edge line while its tip goes round it, a tool's radius times the angle the
+faces turn through, 4 mm and more of height. Every one of those re-cuts the
+same line. How should the rings meet a sharp edge they run at a slant to?
+
+## What was measured
+
+On that bowl, a 9.525 mm ball, a stepover of 0.973, inside out from the
+floor avoided:
+
+- **Where the tool rolls.** The tool rests on the part by a sharp convex edge
+  alone where the triangles holding it, those whose own drop is where it
+  comes to rest to rounding, include two whose normals are further apart
+  than the crease angle, 30°, the angle `topology::derive` already calls an
+  edge between faces, and that lie convex to one another, each on or under
+  the other's plane. A convex tool cannot touch a convex pair in two places,
+  so that is one contact, on their shared edge or corner. Asked at every node
+  of the field's grid (pitch 0.324), 25,695 nodes roll, in two pieces, each
+  round all 72 five-degree sectors of the bowl: the inner edge's, 14,211
+  nodes from Z-8.53 to Z-3.78, 4.7 to 8.0 mm wide seen from above; the
+  outer's, 11,484 from Z-5.56 to Z-3.81, 3.1 to 6.3 mm wide. Nothing else
+  rolls, not the floor's edge, which is hollow, nor any facet of a tight
+  curve. The same without the floor's group.
+- **The rings across the strips.** By the sections' own measure (each
+  crossing with its neighbours on a circle the tool's radius, convex, above
+  Z-12), 4 to 9 crossings rolled over an edge at eight sections round the
+  bowl.
+- **Up a wall nearly upright, a strip's near border is the wall's top.** Seen
+  from above the ground there is a sliver between the floor's edge and the
+  strip, and its cells are cut on both sides: on a bowl in the tests whose
+  wall is 0.6 mm wide at its steepest, the rings up the wall came out open.
+  And across a cell cut at the strip, the straight line from a corner to the
+  far cut strays into the strip, where the tool is higher than either end:
+  a grid edge's profile ([`guided::bent`]) went over that bump, and the
+  heights it gave the rings up the user's wall jumped by up to 0.27 mm from
+  one point to the next, breaking the blended rings into open pieces.
+
+## What was decided
+
+- **Rolling is told by the drop** (`DropCutter::rest_on_in`, `Rest::rolling`):
+  the drop cutter gives the triangles that hold the tool as it finds the
+  rest, looking on past the highest only while another could be as high; the
+  seat asks of the group that holds the tool whether two of them are a convex
+  pair across the crease angle. The crease angle is one constant,
+  `topology::CREASE_DEGREES`.
+- **A ring-shaped strip with ground round it is a break in the ground**
+  (`scallop::ground`). Inside out, the nodes where the tool rolls are a class
+  of their own; a piece of them, its nodes joined across cells, corners
+  included, is kept as one only where it runs round one hole, its Euler
+  number from the grid's squares of four nodes (Gray's) nought, and the ground
+  lies all round it two nodes deep. Any other rolling node is ground as
+  before: an edge that runs off the grid, or to where the tool leaves the
+  part or to a face avoided, or along a wall too narrow seen from above.
+  Toward a strip the ground ends where the tool starts rolling, found by
+  halving along each grid edge as the ground's other edges are, so both of
+  its borders are edges of the ground: the tool touching the edge from one
+  face, then from the other. Both are needed: with only one, the face on the
+  other side would be left a sliver as tall as the stepover squared over
+  twice the tool's radius at the edge.
+- **The ground either side is a zone, with a field of its own, cut one after
+  the next** (`scallop::distance`). Inside out, from the innermost out, each
+  is measured from its inner edges: the area's holes on it, faces avoided,
+  and the strip's far border round its hole. Its outer edge, the near border
+  of the strip round it or where the tool leaves the part, is its far end,
+  and its rings blend into it as into the line where the tool leaves the part
+  (decision 0038). A zone with no inner edge is measured from every edge of
+  it, as the whole ground with none is. Each of the area's rings is cut with
+  the zone most of it lies beside, or the last. One field a zone, the trees
+  cut one after another, rather than one field with each zone's levels
+  offset: each zone's far edge, band and order are its own, and the ground,
+  its grid and the lengths down its cliffs are shared.
+- **Between zones the tool rolls over the edge once**: the link from the
+  near border's ring to the far border's, on the seam, stays down over the
+  part, a few millimetres. The seam carries on into the next zone.
+- **Across a cell cut at a strip, a grid edge's profile keeps between its
+  ends' heights** (`guided::bent`): the way from one to the other climbs or
+  falls, and where the straight line strays into the strip the drop there is
+  not the ground's. Only edges with an end where the ground ends against a
+  strip; every other profile is as it was.
+- **A band with no whole triangle of the lattice in it**, thin down a wall
+  so steep every cell is cut, has its width at its widest, `a + b`, for the
+  count of its rings, where no spacing could be measured (`blend::band`).
+  On the bowl in the tests, the band into where the tool leaves its tilted
+  bulge, measured from the rim's far border, was such a band.
+
+## Considered and not chosen
+
+- **One field, each zone's levels offset**: the band, the far edge, the order
+  and the direction would each have to be told which zone they are in.
+- **Clamping every bent profile between its ends**: it moved the points of
+  rings near where the tool leaves the bowl by a tenth, outside in too, where
+  no strip is.
+- **Strips beside a wall too narrow, broken anyway**: the rings up the wall
+  came out open on the bowl in the tests. Rings up such a wall cross the rim
+  as before.
+
+## Figures
+
+The user's bowl, inside out, the floor avoided, before (8ef8e32) and now:
+
+| | before | now |
+|---|---|---|
+| Fed | 42.87 m | 41.90 m |
+| of it, inside / rim | 16.89 / 2.31 m | 16.72 / 2.44 m |
+| of it, outside above Z-34 / below | 15.65 / 8.02 m | 14.85 / 7.88 m |
+| Rapid | 0.09 m | 0.10 m |
+| Lifts | 1, the last retract | 1, the last retract |
+| Crossings rolling over an edge, eight sections | 4 to 9 | 0 or 1 |
+| Rings rolling over the inner edge, every 5° | 0 to 7, 5.4 on average | 1, its near border's |
+| Gaps over 1.1 mm at the six sections | none | one, 2.92, across the outer strip |
+| Most left on the wall's top 10 mm (simulated) | 0.870 mm | 0.864 mm |
+| on the rim | 0.026 mm | 0.025 mm |
+| on the outside's top 10 mm | 0.052 mm | 0.049 mm |
+
+Across a strip the passes are a tool's radius times its angle apart where
+the tool's tip is, and nought where it touches: the gap at the sections is
+the outer strip's, and the stock says what is left. The most left on the
+wall's top is in the same place before and now, under the inner edge where
+the wall overhangs.
+
+The same job with the floor's group removed: 40.96 m and 40.86 m, one lift
+each; the most left on the wall's top 10 mm 2.201 mm before and 0.884 now,
+the rim and the outside's top as above. Outside in, both programs are byte
+for byte as they were: zones are built inside out only.
+
+On Fusion's `ops_3d` cut inside out with its 6 mm ball at a stepover of
+0.6, the pocket's rim is a strip: the pocket is better than before, no ring
+rolling over its rim, but the rest of the part is a zone measured out from
+the rim, the band from it to where the tool leaves the part is too wide to
+blend, and its rings end in arcs there, four families of them. It feeds
+14.42 m where it fed 14.89, and lifts 6 times where 3, 0.49 m at rapid where
+0.11. Outside in it is byte for byte as it was.
+
+On a bowl in the tests with a sharp flat rim and a wall from 48° to 71°,
+longer on some sides than others (`run::tests_bowl`): with the strips no
+break, 1 to 3 crossings at each of 36 sections rolled over the inner edge
+and 2 or 3 over the outer; now none, and either side of each edge the rings
+are no further apart than a stepover where the tool touches the part. On
+Fusion's `ops_3d`, cut outside in, Scallop's programs and Contour's are as
+they were.
+
+## Still not done
+
+- A zone measured out from its inner edge whose rings do not blend into its
+  outer edge ends them in arcs there, as `ops_3d`'s outside of its pocket
+  does inside out: 6 lifts where 3.
+
+- Outside in, a zone with an inner and an outer edge is still measured from
+  both, and the rings from each meet in the middle: on the user's bowl 36
+  lifts between them.
+- Up the user's inside wall each ring still rises and falls 2 to 6 mm a lap,
+  turning four times: the wall's height round the bowl, the rings a fixed
+  distance from the floor's edge.
+- With the floor's group removed, the innermost rings still turn to a point
+  at the ends of the lens-shaped floor.
+- The three blended rings nearest where the tool leaves the part still turn
+  in height a tenth of a millimetre every few millimetres (decision 0038).
