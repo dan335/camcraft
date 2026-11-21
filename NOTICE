@@ -17,7 +17,6 @@ licence in crates/camcraft-gui/assets/themes/LICENSE-Omarchy.txt.
 
 Other dependencies are listed in Cargo.lock and carry their own licences.
 
-camcraft is an independent project and is not affiliated with, sponsored by or endorsed by
-Autodesk, Inc. Autodesk and Fusion are trademarks of Autodesk, Inc., used here only to describe
-the behaviour camcraft follows and the programs it is compared with. Other product names are
-trademarks of their respective owners.
+camcraft is an independent project. It is not affiliated with, sponsored by or endorsed by any
+CAD or CAM vendor. Product names that appear in file formats camcraft reads are trademarks of
+their owners.

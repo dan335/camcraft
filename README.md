@@ -9,7 +9,8 @@ will write it.
 > machine. Its G-code can be wrong in ways that crash the machine, break tools, ruin
 > the part or hurt someone. Check every program yourself before it cuts: in a
 > simulator you trust, then as an air cut above the stock, with a hand near the
-> e-stop. The software comes with no warranty (see the licences), and its authors
+> e-stop. The software comes with no warranty (see the licences and
+> [DISCLAIMER.md](DISCLAIMER.md)), and its authors
 > are not responsible for crashed machines, broken tools, ruined parts or any other
 > damage.
 
@@ -26,23 +27,19 @@ cutting the stock, and writes a G-code program for each operation. There is a
 desktop app for doing this by hand and a command line for scripting it. Both run
 the same engine, so they always produce the same program.
 
-If you know Fusion's CAM, it should feel familiar: the operations, their settings
-and the programs they post follow Fusion's. (camcraft is not affiliated with
-Autodesk.)
-
 - **Models:** STEP and STL. STEP files are read in the units they declare, and
   every import is checked against the file it came from.
 - **Roughing:** adaptive clearing and pocket clearing.
 - **Finishing:** parallel, scallop, contour, ramp, flat, pencil, project, morph,
   spiral, radial and morphed spiral.
 - **Faces:** a 3D finish machines the faces picked for it and keeps clear of
-  others, each group with its own offsets, as Fusion's Surface Manager does.
+  others, each group with its own offsets.
 - **2D:** profiles, pockets, 2D adaptive clearing, facing, slot, trace, 2D
   chamfer, engraving, bore, circular, thread milling and drilling.
 - **Tools:** flat, ball, bullnose, V-bit and chamfer cutters, drills and
   single-profile thread mills, with speed and feed
-  presets. There is a built-in library of twenty-three common bits, and Fusion tool
-  libraries import from CSV.
+  presets. There is a built-in library of twenty-three common bits, and tool
+  libraries exported as CSV, as tool makers publish them, import into it.
 - **Setups:** several per job, each with its own orientation, work zero and work
   offset.
 - **Stock:** a box around the models, a box of a fixed size, or a sheet that
@@ -58,9 +55,8 @@ Autodesk.)
 Version 0.11, pre-alpha. The app runs, checks, plays back and posts jobs. File
 formats change without notice. [Releases](https://github.com/dan335/camcraft/releases)
 carry builds for Windows and Linux, with no installer; on macOS, build it from
-source. [PROGRESS.md](PROGRESS.md) lists, feature by feature against Fusion's
-3-axis milling, what is done and what is left, and what the simulator cannot
-check for you.
+source. [PROGRESS.md](PROGRESS.md) lists, feature by feature, what is done and
+how it is tested, what is left, and what the simulator cannot check for you.
 
 ## Try it
 
@@ -102,6 +98,7 @@ cargo run --release -p camcraft-cli -- job examples/rail-jig.camcraft --out out 
 | How simulation and verification work                   | [docs/simulation.md](docs/simulation.md)     |
 | Why things are the way they are                        | [docs/decisions/](docs/decisions/)           |
 | What is done, what is left, and open questions         | [PROGRESS.md](PROGRESS.md)                   |
+| The gates and the rules for a change                   | [CONTRIBUTING.md](CONTRIBUTING.md)           |
 
 ## Development
 
@@ -196,11 +193,25 @@ Windows, `.\scripts\check.ps1` (and `-Full`) checks every crate.
 Plain `cargo build` and `cargo test` cover only the app, so that `cargo run`
 opens it. Add `--workspace` to build or test everything.
 
+[CONTRIBUTING.md](CONTRIBUTING.md) lists the gates and the rules every change
+keeps to.
+
+## Independence
+
+camcraft is an independent project. Its behaviour is designed from general
+machining practice, public documentation and what its users report, and its
+tests check its own results: that every check passes and nothing gouges, figures
+recorded from its own runs, and values worked out from the geometry. It is not
+affiliated with, sponsored by or endorsed by any CAD or CAM vendor.
+[CONTRIBUTING.md](CONTRIBUTING.md) sets out the rules that keep it so, and
+[DISCLAIMER.md](DISCLAIMER.md) what camcraft does not promise.
+
 ## License
 
 Dual licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
 option. Third-party code and assets keep their own licences, which
-[NOTICE](NOTICE) lists.
+[NOTICE](NOTICE) lists. [DISCLAIMER.md](DISCLAIMER.md) adds to the licences'
+warranty and liability terms.
 
 Nothing in the repository or in a `camcraft` binary is LGPL: STEP import is
 ogeom, MIT or Apache-2.0. See

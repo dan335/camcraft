@@ -10,7 +10,7 @@ disagree about what runs.
 
 ## Documents
 
-Jobs are documents, as in Fusion: File › New, Open (several at once), Open Recent,
+Jobs are documents: File › New, Open (several at once), Open Recent,
 Save, Save As and Close, each job in its own tab at the top (⌃Tab switches), with a
 prompt before unsaved work is lost, and undo and redo (⌘Z; ⌘⇧Z or ⌘Y) of whole
 edits ([decision 0019](decisions/0019-undo.md)): a field typed into is one step,
@@ -27,7 +27,7 @@ the desktop's file chooser on Linux, the open and save panels on macOS
 ([decision 0032](decisions/0032-native-file-dialogs.md)). It sorts, searches and
 lists recent files, and is modal to the window, which keeps drawing behind it.
 Each kind of file starts in the folder that kind was last picked from,
-remembered between runs: jobs, models, machine profiles, Fusion tool
+remembered between runs: jobs, models, machine profiles, imported tool
 libraries, and the folder programs were last posted into. Save As starts at the
 job's own file, and finding a missing model starts where it was. Models,
 profiles and tool libraries can be picked from *All files* too, and `.STEP` is
@@ -42,19 +42,20 @@ Cancel: rfd, which shows the dialog, answers both alike.
 The window is the job's tree on the left, the properties panel beside it, the view,
 and the transport under the view. The Add menu adds models, stocks, setups and
 operations; View opens the log and the checks in their own windows; the Setup menu
-posts. Operations are grouped as Fusion's toolbar groups them, in the Add menu and
+posts. Operations are in three groups, in the Add menu and
 a setup's right-click menu alike: 2D (face, 2D adaptive clearing, pocket,
 profile, slot, trace, thread, bore, circular, engrave, 2D chamfer), 3D
 (adaptive clearing, pocket clearing, then parallel, scallop, contour, ramp,
 flat, pencil, project, morph, spiral, radial and morphed spiral) and drilling.
 Every operation that was planned is built. One planned would be listed
 in `browser::PLANNED`, after the rest of its group, greyed, saying *Not
-implemented yet* under the pointer; nothing is there now. Fusion's operations
-that need its Manufacturing Extension are not listed: they are not planned.
+implemented yet* under the pointer; nothing is there now. Steep and shallow,
+blend, flow, corner and geodesic finishing and hole recognition are not listed:
+they are not planned.
 
 ## The tree
 
-After Fusion's browser: Models, Stocks and Setups, each setup with its operations.
+Models, Stocks and Setups, each setup with its operations.
 Each setup and each operation has its own status dot (not run, running with
 progress, verified, warnings, refused, out of date, turned off). Right-click adds,
 duplicates, moves up or down, removes, and turns an operation off or on; a model
@@ -141,7 +142,7 @@ it.
     holds a tool without a holder of its own: one of the built-in machines,
     copied into the job when chosen.
 - **Operation**, on tabs: *Tool* (the tool and its feeds and speeds), *Geometry*
-  (Fusion's machining boundary: the stock, the part's bounding box or silhouette,
+  (the machining boundary: the stock, the part's bounding box or silhouette,
   or picked faces and edges; where the tool goes against it; an additional
   offset. For a 2D profile or pocket, the outline it cuts round or clears (the
   part's silhouette or picked faces and edges) and whether a profile cuts
@@ -150,7 +151,7 @@ it.
   cards' **Select in view…** picks more later. New operations start on the
   part's silhouette: parallel with the tool's centre inside it, adaptive and pocket
   clearing reaching in from outside with a channel a tool wide. Under it, a 3D
-  finish has its *Surfaces*, as Fusion's Surface Manager: *Model*, machine or
+  finish has its *Surfaces*: *Model*, machine or
   avoid, for every face in no group, then a card for each group of faces
   picked in the view, machined or avoided, with its offsets: *Extra on walls*
   and *Extra on floors* on a group machined, *Clearance beside* and *Clearance
@@ -166,7 +167,7 @@ it.
   drawn in the view as planes), *Passes* and *Linking* (retract feed, safe
   distance, stay-down distance, and the lead radius or the ramp angle and feed;
   how a pass is entered, where the strategy offers a choice (flat's ramp along
-  the ring or plunge, a new one plunging as Fusion's Flat starts); a
+  the ring or plunge, a new one plunging); a
   profile's level lead arcs on and off each ring, their radius, sweep and
   straight run; *Reorder passes*, the nearest next, and *Reverse passes*,
   greyed where the operation cuts both ways and so takes each pass from its
@@ -174,7 +175,7 @@ it.
   neither on scallop, which keeps its field's order
   ([decision 0035](decisions/0035-scallop-over-every-slope.md));
   one left out says what the strategy's default comes to for the tool). A new
-  operation starts with Fusion's defaults, as expressions where they follow
+  operation starts with its defaults, as expressions where they follow
   the tool ([decision 0020](decisions/0020-defaults.md)): its stepover (the
   tolerance's cusp with a round end, a quarter of the diameter with a square
   one; 0.6 of it for pockets, 0.3 for flat, adaptive's *Optimal load* 0.4,
@@ -218,7 +219,7 @@ it.
   *Stay-down clearance* and *Lift height*; its *Geometry* has *Rest machining*
   and, ticked, *Ignore stock less than*; pocket clearing's climb or conventional, *Flat areas* and the
   shortest ring worth cutting. A 2D operation's *Passes* has climb
-  or conventional; a profile has no stepover. *Multiple depths*, as Fusion's,
+  or conventional; a profile has no stepover. *Multiple depths*
   is ticked to step down in levels, then the stepdown: unticked cuts the bottom
   in one pass. Profiles and pockets start ticked at 2 mm, facing unticked, and
   pocket and adaptive clearing always cut in levels, so cannot be unticked; parallel,
@@ -230,19 +231,18 @@ it.
   millimetre, with *Even stepdowns* under it; a bore's *Finishing passes* has
   only its stepover. Their *Linking* has the leads, with *Lead to center* under
   them, and neither a ramp nor a stay-down distance: each pass comes down its
-  lead and lifts out after, as Fusion's do. A thread's *Passes* has its
+  lead and lifts out after. A thread's *Passes* has its
   *Pitch*, the thread mill's to start, *Pitch diameter offset*, *Threading
   hand*, climb or conventional, and *Multiple passes*, ticked, with the *Number
   of stepovers* and their stepover; no stock to leave, multiple depths,
   smoothing or shaft and holder. Its *Linking* has the leads without their
   vertical arc, with *Helical leads* under them, and *Lead to center*; it lifts
   to the Retract height between holes. A slot's *Passes* has *Backoff distance*, *Repeat finishing pass* and
-  *Preserve order*; it has *Multiple depths* (a millimetre when ticked, as
-  Fusion's Maximum Stepdown) and only a floor's stock to leave; its *Linking* has
+  *Preserve order*; it has *Multiple depths* (a millimetre when ticked) and only a floor's stock to leave; its *Linking* has
   the ramp angle and feed, the *Maximum ramp stepdown*, how far its ramp back
   and forth along the slot goes down there and back (half each leg; a tenth of
   the tool without levels), and the *Ramp clearance height* it starts at over
-  the Top. A tool narrower than the slot leaves its walls, as Fusion's does.
+  the Top. A tool narrower than the slot leaves its walls.
   A trace's *Passes* has *Sideways
   compensation* (on the curve, left or right), *Axial offset*, *Pass extension*,
   *Maximum angle*, *Repeat passes* and *Preserve order*; under *Multiple depths*,
@@ -265,7 +265,7 @@ it.
   unticked to start, with *Even stepdowns* under it; its *Linking* has the
   *Stay-down level*, *Stay-down clearance* and *Lift height*, and its *Geometry*
   a 2D pocket's outline. *Stock to
-  leave*, as Fusion's, is ticked to leave any (starting at 0.5 mm), then its
+  leave* is ticked to leave any (starting at 0.5 mm), then its
   wall and floor amounts, negative to cut past the part; the floor follows the
   wall until it is given its own. A drill has none, and a profile on the
   boundary only a floor. Every strategy but drilling, bore, circular and thread,
@@ -280,7 +280,7 @@ it.
   Profiles can leave tabs, from *Passes*: shape,
   width, height and spacing. A setting that only counts while another is on
   hangs under it, indented with a guide down its left. Any number of an
-  operation's can be worked out from an expression instead, as Fusion's:
+  operation's can be worked out from an expression instead:
   *ƒx* beside it starts one at its value, typed in place as
   `tool_diameter * 0.4` ([jobs](jobs.md#expressions)); the field then shows
   what it comes to, an expression that cannot be worked out is red with why on
@@ -292,7 +292,7 @@ it.
 
 ## Help on hover
 
-As in Fusion, hovering any field, its label or the field itself, pops up its
+Hovering any field, its label or the field itself, pops up its
 name, a sentence or two on what it does, and for many a small sketch with the
 dimension it sets in amber: stepover between two passes, the four heights through
 the stock, a tool's stickout. It covers every panel, the tool library, settings
@@ -306,8 +306,8 @@ frame; the `help_popups` snapshot lays them all out to look over.
 ## Picking in the view
 
 Every model has faces, edges and corners: the file's own B-rep faces for STEP,
-faces found from the triangles for STL (`camcraft_geom::topology`). As in Fusion,
-the view picks only while a slot is armed by its button in the panel (**Select in
+faces found from the triangles for STL (`camcraft_geom::topology`). The view
+picks only while a slot is armed by its button in the panel (**Select in
 view…**); otherwise a click does nothing. Hovering lights what a click would pick,
 and a slot being picked into brings its tab forward. Choosing another tab stops
 picking. Legends under the picks name what the view draws. On an arranged
@@ -331,8 +331,8 @@ place, and is refused.
 
 Any boundary but the stock's is drawn in the view at the stock's top. It shows
 the boundary as chosen (wide), where the tool's centre may go against it (thin),
-and, hatched, what the tool cuts outside the part. Containment and offset are as
-Fusion's: the tool's centre on the boundary, the whole tool inside it, or the
+and, hatched, what the tool cuts outside the part. The tool goes against it in
+one of three ways: the tool's centre on the boundary, the whole tool inside it, or the
 tool reaching in from outside it. A positive offset moves the boundary out, or
 in when the whole tool is kept inside. Choosing the part's bounding box or
 silhouette with the tool reaching in from outside, when the offset is 0, sets
@@ -340,10 +340,10 @@ the offset to the tool's diameter. That clears a channel two tools wide round
 the part, where an offset of 0 would only touch its walls.
 - A drilling operation takes holes by their round top rims, and optionally their
   bottom rims. Each hole is drilled down to its own bottom, where its round wall
-  ends, as Fusion's drilling goes to the hole's bottom: a blind hole to its
+  ends: a blind hole to its
   floor, a through hole to the part's far side. A picked bottom rim takes its
   hole there instead, and a Bottom height set takes every hole there.
-- A bore or a circular takes faces, as Fusion's: the round wall of each hole or
+- A bore or a circular takes faces: the round wall of each hole or
   boss, which it cuts from the wall's top down to its bottom, inside a hole and
   round the outside of a boss. The faces of one wall, as a file often splits a
   cylinder into halves, are taken together: one is enough where it runs the
@@ -352,7 +352,7 @@ the part, where an offset of 0 would only touch its walls.
 - A slot takes the edges round each slot's floor, a click taking the whole
   loop as for a boundary, or its floor as a face. Each slot is cut from the Top
   down to its own floor.
-- A trace takes edges, open or closed, as Fusion's chain selection does: a click
+- A trace takes edges, open or closed, in chains: a click
   takes the edge and the edges running on from it without a corner, either way,
   so a hole's rim in halves, or an outline rounded all the way round, comes
   whole, and a square outline a side at a time. The panel lists each chain once.
@@ -431,7 +431,7 @@ only after ticking "I know why" and pressing Post anyway.
 The view has two modes for each setup, switched by the **Setup** and **Playback**
 tabs on the bar under it. Each setup keeps its own mode, camera and playhead.
 
-**The view cube**, in its top right corner, after Fusion's, turns the view. Click
+**The view cube**, in its top right corner, turns the view. Click
 the middle of a face to look straight at it (Top, Bottom, Front, Back, Left,
 Right), a side of one for the edge between two faces, or a corner for the
 corner's isometric view; the view turns there in a fifth of a second. Drag the
@@ -502,11 +502,11 @@ machine profile gives a rate. How the material keeps up is in
 
 ## Tool library
 
-**Tools** opens the per-user library, after Fusion's Tool Library
+**Tools** opens the per-user library
 (`~/Library/Application Support/camcraft/tools.toml` on macOS, or
 `CAMCRAFT_TOOL_LIBRARY`), which saves itself as you edit. Tools are grouped in
 folders that nest (a folder per machine, say); drag a tool onto a folder, or use
-Move to. Tools carry Fusion-style detail: flutes, lengths, shank, stickout,
+Move to. Tools carry the detail a cut needs: flutes, lengths, shank, stickout,
 holder, material and vendor, with a scale drawing and per-field checks. A value
 left out reads "not given". A holder is segments from its face up, each a
 cylinder or a taper (*Ø* to *to Ø*); **Standard…** puts one of the built-in
@@ -520,8 +520,8 @@ down-cut and ball nose are T21 to T23), built into the app
 (`camcraft_session::library::system`). It is read-only and never written to
 `tools.toml`. **Copy to my library**, or dragging a bit onto a folder, copies it
 into the person's last folder under their next tool number, to change there.
-Up-cut, down-cut and compression are flat end mills, as Fusion has them; the flute
-direction is in the name and description. Each bit has a preset for each material
+Up-cut, down-cut and compression are flat end mills, whose cutting geometry is the
+same; the flute direction is in the name and description. Each bit has a preset for each material
 it suits (softwood, hardwood, MDF / plywood, and acrylic, HDPE, aluminum or sign
 foam where they fit), its feed from a conservative chip load at 18,000 rev/min
 (16,000 for 1/2" shanks and surfacing): a start for a hobby router, not a maker's
@@ -547,7 +547,7 @@ feed. Helixes and ramps go down at the ramp feed.
 A tool says which way its spindle turns (M3, or M4 for a left-hand cutter) and its
 coolant (off, flood M8 or mist M7), and the program says so.
 
-**Import…** reads Fusion tool libraries exported as CSV, as makers such as
+**Import…** reads tool libraries exported as CSV, as tool makers such as
 Bits & Bits publish theirs (`fixtures/tools/` holds two), into the folder
 showing; the file dialog starts where the last was imported from.
 Each tool's rows become one tool with a preset per row, in millimetres; columns
@@ -557,7 +557,7 @@ Chamfer mills and spot drills come in as cones, drills as drills, thread mills
 as thread mills with their pitch and profile angle; types this build cannot cut
 with are skipped, and the manager says which and why.
 
-Not yet: Fusion's own `.json` libraries, which carry holders; a library of
+Not yet: tool libraries in JSON, which carry holders; a library of
 the person's own holders and machines; tapered ball mills;
 the work offset manager.
 
