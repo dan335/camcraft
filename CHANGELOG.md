@@ -4,7 +4,7 @@ What changed in each release, newest first. Each release's page
 ([Releases](https://github.com/dan335/camcraft/releases)) has the downloads and
 the same notes at more length.
 
-## Unreleased
+## 0.11.0 — 2026-11-21
 
 - **Outside in too, Scallop's innermost rings go round a spine**
   ([decision 0040](docs/decisions/0040-scallop-spine-inside-the-last-smooth-ring.md)).
@@ -96,10 +96,11 @@ the same notes at more length.
   on the seam, and it feeds 41.90 m where it fed 42.87, lifting once at the
   end as before; the simulated stock is left no higher on the wall's top,
   the rim or the outside's top. An edge that runs off the area, or along a
-  wall too narrow seen from above, is crossed as before. Where the rim breaks the ground into zones whose rings cannot
-  all close, as on a block with an off-centre pocket, whose rings from the
-  rim out would end in arcs on the block's edge, the ground is cut as one,
-  as it was: the program is byte for byte the one before, lifting 3 times.
+  wall too narrow seen from above, is crossed as before. Where the rim
+  breaks the ground into zones whose rings cannot all close, as on a block
+  with an off-centre pocket, whose rings from the rim out would end in arcs
+  on the block's edge, the ground is cut as one, as it was: the program is
+  byte for byte the one before, lifting 3 times.
 
 - **A finish over the part goes across and down to a ring just under the
   last** ([decision 0004, amended](docs/decisions/0004-linking-and-entries.md)).
