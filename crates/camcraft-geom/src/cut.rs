@@ -563,11 +563,6 @@ impl View<'_> {
     fn ours(&self, band: u32) -> bool {
         self.band.is_none_or(|b| b == band)
     }
-
-    /// The grid it is a view of.
-    pub fn cut_grid(&self) -> &CutGrid {
-        self.cut
-    }
 }
 
 impl TriSurface for View<'_> {
@@ -788,7 +783,7 @@ mod tests {
                 distance: 0.0,
             })
             .collect();
-        let d = march(&view, &seeds, |n| view.point(n)).d;
+        let d = march(&view, &seeds, |n| view.point(n));
         let n = g.grid().node(36, 20).unwrap();
         let exact = view.xy(n).unwrap().distance(centre) - 3.1;
         assert!(

@@ -30,27 +30,9 @@ pub struct Seed {
     pub distance: f64,
 }
 
-/// A field of distances, one a node.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Distances {
-    /// Each node's distance from the seeds; infinite where none was reached.
-    pub d: Vec<f64>,
-    /// The seed each node's distance was carried from, by its place among the
-    /// seeds; `u32::MAX` where none was. Where fronts from far-apart seeds
-    /// meet, neighbouring nodes have far-apart seeds: the field's ridge.
-    pub from: Vec<u32>,
-}
-
-impl Distances {
-    /// Node `n`'s distance, if it was reached.
-    pub fn at(&self, n: u32) -> Option<f64> {
-        let d = *self.d.get(usize::try_from(n).ok()?)?;
-        d.is_finite().then_some(d)
-    }
-}
-
-/// The distance of every defined node of `grid` from `seeds`, measured across its
-/// triangles with each node at `position`.
+/// The distance of every defined node of `grid` from `seeds`, one a node,
+/// infinite where none was reached, measured across its triangles with each
+/// node at `position`.
 ///
 /// `position` is where a node is in 3D: the grid's own lifted point, or somewhere
 /// else the surface is measured at. A seed may be lowered by the march, if a
@@ -59,7 +41,7 @@ pub fn march(
     grid: &impl TriSurface,
     seeds: &[Seed],
     position: impl Fn(u32) -> Option<DVec3>,
-) -> Distances {
+) -> Vec<f64> {
     march_along(grid, seeds, position, |_, _| None)
 }
 
@@ -73,14 +55,13 @@ pub fn march_along(
     seeds: &[Seed],
     position: impl Fn(u32) -> Option<DVec3>,
     along: impl Fn(u32, u32) -> Option<f64>,
-) -> Distances {
+) -> Vec<f64> {
     let count = usize::try_from(grid.nodes()).unwrap_or(0);
     let mut d = vec![f64::INFINITY; count];
-    let mut from = vec![u32::MAX; count];
     let mut known = vec![false; count];
     let mut heap: BinaryHeap<Reverse<(u64, u32)>> = BinaryHeap::new();
 
-    for (i, s) in (0u32..).zip(seeds) {
+    for s in seeds {
         if !(s.distance.is_finite() && s.distance >= 0.0) || !grid.defined(s.node) {
             continue;
         }
@@ -88,20 +69,10 @@ pub fn march_along(
             && s.distance < *slot
         {
             *slot = s.distance;
-            if let Some(f) = usize::try_from(s.node).ok().and_then(|n| from.get_mut(n)) {
-                *f = i;
-            }
             // Not negative, so the bits order as the values do.
             heap.push(Reverse((s.distance.to_bits(), s.node)));
         }
     }
-    let source = |from: &[u32], n: u32| {
-        usize::try_from(n)
-            .ok()
-            .and_then(|i| from.get(i))
-            .copied()
-            .unwrap_or(u32::MAX)
-    };
 
     let value = |d: &[f64], n: u32| {
         usize::try_from(n)
@@ -136,41 +107,34 @@ pub fn march_along(
                 let other = nodes.iter().copied().find(|&m| m != node && m != c);
                 let to_c = along(node, c);
                 let edge = t_node + to_c.unwrap_or_else(|| p.distance(pc));
-                // Carried from the nearer of the corners it comes across from.
-                let (candidate, came) = match other {
-                    Some(o) if is_known(&known, o) => match position(o) {
+                let candidate = match other.filter(|&o| is_known(&known, o)) {
+                    Some(o) => match position(o) {
                         Some(po) => {
                             let t_o = value(&d, o);
-                            let came = if t_o < t_node { o } else { node };
-                            let across = match (to_c, along(o, c), along(node, o)) {
+                            match (to_c, along(o, c), along(node, o)) {
                                 (None, None, None) => update((p, t_node), (po, t_o), pc),
                                 (nc, oc, no) => update_lengths(
                                     (t_node, nc.unwrap_or_else(|| p.distance(pc))),
                                     (t_o, oc.unwrap_or_else(|| po.distance(pc))),
                                     no.unwrap_or_else(|| p.distance(po)),
                                 ),
-                            };
-                            (across, came)
+                            }
                         }
-                        None => (edge, node),
+                        None => edge,
                     },
-                    _ => (edge, node),
+                    None => edge,
                 };
                 if let Some(slot) = usize::try_from(c).ok().and_then(|i| d.get_mut(i))
                     && candidate < *slot
                 {
                     *slot = candidate;
-                    let seed = source(&from, came);
-                    if let Some(f) = usize::try_from(c).ok().and_then(|i| from.get_mut(i)) {
-                        *f = seed;
-                    }
                     heap.push(Reverse((candidate.to_bits(), c)));
                 }
             }
         }
     }
 
-    Distances { d, from }
+    d
 }
 
 /// The distance at `c` from a front known at `a` and `b`, the other corners of a
@@ -246,6 +210,11 @@ mod tests {
     use crate::trigrid::TriGrid;
     use glam::{DVec2, dvec2};
 
+    /// Node `n`'s distance in `d`, if it was reached.
+    fn at(d: &[f64], n: u32) -> Option<f64> {
+        d.get(n as usize).copied().filter(|v| v.is_finite())
+    }
+
     /// A grid of `n × n` nodes `pitch` apart with heights from `height`.
     fn grid(n: u32, pitch: f64, height: impl Fn(DVec2) -> f64) -> TriGrid {
         let mut z = Vec::new();
@@ -286,7 +255,7 @@ mod tests {
                 })
                 .collect();
             let field = march(&g, &seeds, |n| g.point(n));
-            assert!((0..g.nodes()).all(|n| field.at(n).is_some()));
+            assert!((0..g.nodes()).all(|n| at(&field, n).is_some()));
             // Only where the way back to the front stays well inside the grid: a node
             // on its edge is reached from outside it, which no triangle carries, and
             // what it gets wrong is carried a row or two in.
@@ -296,7 +265,7 @@ mod tests {
             };
             let worst = (0..g.nodes())
                 .filter(|&n| side(n) >= 1.0 && inland(n))
-                .map(|n| (field.at(n).unwrap() - exact(n)).abs())
+                .map(|n| (at(&field, n).unwrap() - exact(n)).abs())
                 .fold(0.0, f64::max);
             // Exact but for what the grid's edges carry in, which dies away fast:
             // nanometres.
@@ -327,7 +296,7 @@ mod tests {
                     let r = g.xy(m).unwrap().distance(centre);
                     (3.0..4.5).contains(&r)
                 })
-                .map(|m| (field.at(m).unwrap() - g.xy(m).unwrap().distance(centre)).abs())
+                .map(|m| (at(&field, m).unwrap() - g.xy(m).unwrap().distance(centre)).abs())
                 .fold(0.0, f64::max)
         };
         let coarse = error(0.1);
@@ -354,9 +323,9 @@ mod tests {
         let x = g.xy(n).unwrap().x;
         let expected = x + 3.0 - 0.25;
         assert!(
-            (field.at(n).unwrap() - expected).abs() < 0.25 + 1e-9,
+            (at(&field, n).unwrap() - expected).abs() < 0.25 + 1e-9,
             "{} vs {expected}",
-            field.at(n).unwrap()
+            at(&field, n).unwrap()
         );
     }
 
@@ -364,6 +333,6 @@ mod tests {
     fn nodes_no_front_reaches_have_no_distance() {
         let g = grid(5, 1.0, |_| 0.0);
         let field = march(&g, &[], |n| g.point(n));
-        assert!((0..g.nodes()).all(|n| field.at(n).is_none()));
+        assert!((0..g.nodes()).all(|n| at(&field, n).is_none()));
     }
 }

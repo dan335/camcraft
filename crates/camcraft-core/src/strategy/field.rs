@@ -1,5 +1,7 @@
-//! A grid over an area, for a field worked out across it: scallop's distances
-//! along the part, a morphed spiral's blend from the boundary to its centre.
+//! A grid over an area, for a field worked out across it: scallop's and
+//! pencil's distances along the part, a morphed spiral's blend from the
+//! boundary to its centre, and the steep ground the finishes over the part
+//! leave to rings round the walls.
 //!
 //! The grid only places passes, seen from above (decision 0009): each node is
 //! inside the area or beside it, and has a height, the tool's over the part or

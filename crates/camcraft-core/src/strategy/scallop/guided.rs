@@ -22,6 +22,8 @@ use glam::{DVec2, DVec3};
 use crate::cutter::surfaces::Seat;
 use crate::strategy::parallel::{Line, ParallelParams, ParallelReport, Run, runs_of};
 
+use super::MAX_HALVINGS;
+
 /// Steeper than this, as a rise over a run, a point is found at its height
 /// round the wall, not dropped: 45°, where a millimetre sideways is more than
 /// a millimetre up.
@@ -30,9 +32,6 @@ const STEEP: f64 = 1.0;
 /// How many steps either way across the slope a point's height is looked for
 /// in, before the search gives up and drops it where it is.
 const SEARCH: u32 = 6;
-
-/// The most halvings of a bracket across a slope: far past any tolerance.
-const MAX_HALVINGS: u32 = 48;
 
 /// How many pieces a bent grid edge is measured in.
 const PROFILE_PIECES: u32 = 8;

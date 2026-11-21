@@ -970,7 +970,7 @@ fn beside(
     near.par_sort_by(|a, b| a.node.cmp(&b.node).then(a.distance.total_cmp(&b.distance)));
     near.dedup_by_key(|s| s.node);
     params.watch.check()?;
-    let d = march(grid, &near, |n| grid.point(n)).d;
+    let d = march(grid, &near, |n| grid.point(n));
     let lines = level_lines(grid, &d, params.stepover, params.stepovers);
     let sweep = ParallelParams {
         stepover: params.stepover,

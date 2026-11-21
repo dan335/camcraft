@@ -6,7 +6,7 @@ use crate::cutter::tool::{Ball, Flat};
 use crate::path::toolpath::MoveRole;
 use camcraft_geom::contour::Contour;
 use camcraft_geom::synthetic;
-use glam::{DVec3, dvec2};
+use glam::{DVec2, DVec3, dvec2};
 
 /// Each pass in `path`: its points, in order.
 fn passes(path: &Toolpath) -> Vec<Vec<DVec3>> {

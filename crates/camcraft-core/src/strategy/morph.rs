@@ -170,7 +170,7 @@ fn morph_piece(
         .into_iter()
         .map(|(node, distance, _)| Seed { node, distance })
         .collect();
-    let from_edge = march(grid, &seeds, flat).d;
+    let from_edge = march(grid, &seeds, flat);
     let inside = |n: usize| on.inside.get(n).copied().unwrap_or(false);
 
     // To the centre.
@@ -197,7 +197,7 @@ fn morph_piece(
             })
         })
         .collect();
-    let from_centre = march(grid, &seeds, flat).d;
+    let from_centre = march(grid, &seeds, flat);
 
     // The blend: 0 on the boundary, 1 at the centre, negative outside.
     let blend: Vec<f64> = from_edge
