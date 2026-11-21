@@ -136,7 +136,16 @@ pub(super) fn scallop_paths(
     warnings: &mut Vec<String>,
 ) -> Result<Paths, RunError> {
     let (job, op) = (work.job, work.op);
-    let area = finish_area(work, limit, true)?;
+    // Up to a tolerance past where the tool leaves the part: its field finds
+    // that line itself, and its last ring runs along it.
+    let shadow = work.prepared.shadow().map_err(in_op(op))?;
+    let past = work
+        .surfaces
+        .past_contact(shadow, work.tool, job.tolerance)
+        .map_err(in_op(op))?;
+    let area = finish_area(work, limit, false)?
+        .intersection(&past)
+        .map_err(in_op(op))?;
     let (slope_from, slope_to) = work.slopes();
     let params = ScallopParams {
         // The field most of the work, the rings below it the rest.
@@ -163,7 +172,13 @@ pub(super) fn scallop_paths(
     // what overhangs. There height is the only measure, and level rings a
     // stepover apart in it finish it.
     let (field, mut report) = scallop_finish(&work.seat()?, &area, &params).map_err(in_op(op))?;
-    let (below, rings) = below_reach(work, limit, direction, (slope_from, slope_to))?;
+    let (below, rings) = below_reach(
+        work,
+        limit,
+        report.leaves_at,
+        direction,
+        (slope_from, slope_to),
+    )?;
     report.walls = rings;
     report.passes += rings;
     // The field's rings, from its first edge on, and then on down the wall
@@ -192,22 +207,31 @@ pub(super) fn scallop_paths(
 }
 
 /// Level rings a stepover apart down the walls a scallop's field cannot cover,
-/// from the top to the Bottom, within the sweep and `limit`, as contour
-/// finishing finds them, each way as `direction` asks, within the slopes asked:
-/// kept only where the tool on them is more than half a stepover below where
-/// it would rest dropped from above, or has nothing under it. Above that, the
-/// field's passes are within half a stepover: so nothing is cut twice, and a
-/// wall's rings take over where the field stops, a stepover on down. Each level's
-/// last ring goes down along the wall onto the next, at the linking's default
-/// ramp angle, as contour finishing's do. The rings, and how many.
+/// from a stepover below `leaves_at`, the highest point of where the tool
+/// leaves the part from above, the field's last ring, to the Bottom, within
+/// the sweep and `limit`, as contour finishing finds them, each way as
+/// `direction` asks, within the slopes asked: kept only where the tool on
+/// them is more than the tolerance below where it would rest dropped from
+/// above, or has nothing under it. Above that the field's rings run, on to
+/// the line where the tool leaves the part: so nothing is cut twice, and
+/// nothing between that line and the first ring below it is wider than a
+/// stepover. Each level's last ring goes down along the wall onto the next,
+/// at the linking's default ramp angle, as contour finishing's do. The
+/// rings, and how many.
 fn below_reach(
     work: &Work<'_>,
     limit: Option<&Region>,
+    leaves_at: Option<f64>,
     direction: CutDirection,
     (slope_from, slope_to): (f64, f64),
 ) -> Result<(Toolpath, u64), RunError> {
     let (job, op) = (work.job, work.op);
     let (top, bottom) = op.levels_3d(work.heights);
+    // Where the tool never leaves the part from above, it rests on it
+    // everywhere, and the field covers it all.
+    let Some(top) = leaves_at.map(|z| z.min(top)) else {
+        return Ok((Toolpath::new(), 0));
+    };
     if top <= bottom {
         return Ok((Toolpath::new(), 0));
     }
@@ -236,21 +260,42 @@ fn below_reach(
     };
     let (rings, _) = waterline(&mut reach, &seat, &area, &params).map_err(in_op(op))?;
     let tolerance = job.tolerance;
-    // Where the tool would rest from above no more than half a stepover over
-    // the ring, the field's passes, which run on that, are within half a
-    // stepover of it: it is theirs, and a ring there would be a sliver of
-    // one, kept and dropped as the part's facets put the rest a hair either
-    // side of it.
-    let half = 0.5 * op.passes.stepover;
-    let covered = |p: DVec3| seat.drop_at(p.x, p.y).is_some_and(|z| z <= p.z + half);
+    // Where the tool would rest from above within the tolerance of the ring,
+    // it is on the surface the field's rings run over, down to where the tool
+    // leaves the part: the field's.
+    let covered = |p: DVec3| seat.drop_at(p.x, p.y).is_some_and(|z| z <= p.z + tolerance);
     // Looked along as finely as a pass is sampled where it is flat.
     let step = (seat.tool().max_radius() * 0.5).max(tolerance);
     // Where the wall's top is not level, its upper rings are arcs, each
     // level's in as many pieces as the wall has stretches below the field.
     // They stay level by level, from the top down, so no ring is cut under
     // material a ring above it has yet to take.
-    let (kept, report) = cut_out(&rings, covered, step, tolerance).map_err(in_op(op))?;
-    Ok((kept, report.after))
+    let (kept, _) = cut_out(&rings, covered, step, tolerance).map_err(in_op(op))?;
+    // Where the line the tool leaves the part along dips only just past a
+    // ring, the ring is left a bit shorter than the tool's radius there: a
+    // dimple between the field's last ring and the ring below, lifted to and
+    // from. Left to those, as the field leaves its own.
+    let mut long = Toolpath::new();
+    let mut passes = 0;
+    let mut at: Option<DVec3> = None;
+    for pass in kept.passes() {
+        let mut from = at;
+        let mut cut = 0.0;
+        for m in pass {
+            if m.role == crate::path::toolpath::MoveRole::Cut
+                && let Some(f) = from
+            {
+                cut += m.length(f);
+            }
+            from = Some(m.to);
+        }
+        at = from;
+        if cut >= seat.tool().max_radius() {
+            long.append(pass).map_err(in_op(op))?;
+            passes += 1;
+        }
+    }
+    Ok((long, passes))
 }
 
 /// Rings round the walls passes laid over the part leave out, up to `slope_to`: a

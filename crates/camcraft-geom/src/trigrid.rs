@@ -20,6 +20,87 @@
 
 use glam::{DVec2, DVec3, dvec2, dvec3};
 
+/// A surface split into triangles seen from above, each node lifted to its
+/// height: what fields are measured along ([`crate::geodesic`]) and lines
+/// drawn across ([`crate::isoline`]). A [`TriGrid`] is one; so is a grid
+/// whose cells an edge cuts through, each side of it triangulated up to the
+/// edge ([`crate::cut`]).
+pub trait TriSurface {
+    /// How many nodes there are: node ids run below it.
+    fn nodes(&self) -> u32;
+    /// Where node `n` is, seen from above.
+    fn xy(&self, n: u32) -> Option<DVec2>;
+    /// Node `n`'s height, if it is defined.
+    fn z(&self, n: u32) -> Option<f64>;
+    /// Triangle `t`'s nodes, anticlockwise seen from above, if it exists.
+    fn triangle(&self, t: u32) -> Option<[u32; 3]>;
+    /// Every triangle that exists, in id order, with its nodes.
+    fn triangles(&self) -> impl Iterator<Item = (u32, [u32; 3])> + '_;
+    /// The triangles that exist with node `n` a corner of them, with their
+    /// nodes.
+    fn triangles_at(&self, n: u32) -> impl Iterator<Item = (u32, [u32; 3])> + '_;
+    /// The triangle that exists over `p`, if any.
+    fn locate(&self, p: DVec2) -> Option<u32>;
+    /// The spacing of the grid it is laid on, in millimetres.
+    fn pitch(&self) -> f64;
+
+    /// Whether node `n` is defined: with a height.
+    fn defined(&self, n: u32) -> bool {
+        self.z(n).is_some()
+    }
+
+    /// Node `n`, lifted to its height, if it is defined.
+    fn point(&self, n: u32) -> Option<DVec3> {
+        let p = self.xy(n)?;
+        self.z(n).map(|z| dvec3(p.x, p.y, z))
+    }
+
+    /// How steep triangle `t` is, lifted: the angle of its plane from level, in
+    /// radians.
+    fn slope(&self, t: u32) -> Option<f64> {
+        let [a, b, c] = self.triangle(t)?.map(|n| self.point(n));
+        let n = (b? - a?).cross(c? - a?);
+        let len = n.length();
+        (len > 0.0).then(|| (n.z.abs() / len).clamp(0.0, 1.0).acos())
+    }
+
+    /// The way down triangle `t`, seen from above: the unit direction its plane
+    /// falls fastest in, and how steep it is as a rise over a run. A level
+    /// triangle falls nowhere: its direction is zero.
+    fn fall(&self, t: u32) -> Option<(DVec2, f64)> {
+        let [a, b, c] = self.triangle(t)?.map(|n| self.point(n));
+        let n = (b? - a?).cross(c? - a?);
+        // Wound anticlockwise seen from above, so the normal points up and
+        // leans the way the plane goes down.
+        let across = n.truncate();
+        (n.z > 0.0).then(|| (across.normalize_or_zero(), across.length() / n.z))
+    }
+
+    /// The height of the lifted surface over `p`: the plane of the triangle
+    /// there, so on an edge the two either side agree, and at a node it is the
+    /// node's.
+    fn height_at(&self, p: DVec2) -> Option<f64> {
+        self.interpolate(p, |n| self.z(n))
+    }
+
+    /// A field of one value a node, `value`, at `p`: linear across the
+    /// triangle there, as [`height_at`](Self::height_at) is. `None` off the
+    /// triangles, or where a corner has no value.
+    fn interpolate(&self, p: DVec2, value: impl Fn(u32) -> Option<f64>) -> Option<f64> {
+        let [a, b, c] = self.triangle(self.locate(p)?)?;
+        let (pa, pb, pc) = (self.xy(a)?, self.xy(b)?, self.xy(c)?);
+        let (va, vb, vc) = (value(a)?, value(b)?, value(c)?);
+        let (ab, ac, ap) = (pb - pa, pc - pa, p - pa);
+        let det = ab.perp_dot(ac);
+        if det.abs() < f64::MIN_POSITIVE {
+            return None;
+        }
+        let v = ap.perp_dot(ac) / det;
+        let w = ab.perp_dot(ap) / det;
+        Some(va + v * (vb - va) + w * (vc - va))
+    }
+}
+
 /// Which way a cell is split, seen from above.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Diagonal {
@@ -190,50 +271,6 @@ impl TriGrid {
         self.triangle(t).map(|_| t)
     }
 
-    /// How steep triangle `t` is, lifted: the angle of its plane from level, in
-    /// radians.
-    pub fn slope(&self, t: u32) -> Option<f64> {
-        let [a, b, c] = self.triangle(t)?.map(|n| self.point(n));
-        let n = (b? - a?).cross(c? - a?);
-        let len = n.length();
-        (len > 0.0).then(|| (n.z.abs() / len).clamp(0.0, 1.0).acos())
-    }
-
-    /// The way down triangle `t`, seen from above: the unit direction its plane
-    /// falls fastest in, and how steep it is as a rise over a run. A level
-    /// triangle falls nowhere: its direction is zero.
-    pub fn fall(&self, t: u32) -> Option<(DVec2, f64)> {
-        let [a, b, c] = self.triangle(t)?.map(|n| self.point(n));
-        let n = (b? - a?).cross(c? - a?);
-        // Wound anticlockwise seen from above, so the normal points up and
-        // leans the way the plane goes down.
-        let across = n.truncate();
-        (n.z > 0.0).then(|| (across.normalize_or_zero(), across.length() / n.z))
-    }
-
-    /// The height of the lifted grid over `p`: the plane of the triangle there,
-    /// so on an edge the two either side agree, and at a node it is the node's.
-    pub fn height_at(&self, p: DVec2) -> Option<f64> {
-        self.interpolate(p, |n| self.z(n))
-    }
-
-    /// A field of one value a node, `value`, at `p`: linear across the
-    /// triangle there, as [`height_at`](Self::height_at) is. `None` off the
-    /// triangles, or where a corner has no value.
-    pub fn interpolate(&self, p: DVec2, value: impl Fn(u32) -> Option<f64>) -> Option<f64> {
-        let [a, b, c] = self.triangle(self.locate(p)?)?;
-        let (pa, pb, pc) = (self.xy(a)?, self.xy(b)?, self.xy(c)?);
-        let (va, vb, vc) = (value(a)?, value(b)?, value(c)?);
-        let (ab, ac, ap) = (pb - pa, pc - pa, p - pa);
-        let det = ab.perp_dot(ac);
-        if det.abs() < f64::MIN_POSITIVE {
-            return None;
-        }
-        let v = ap.perp_dot(ac) / det;
-        let w = ab.perp_dot(ap) / det;
-        Some(va + v * (vb - va) + w * (vc - va))
-    }
-
     /// Triangle `t`'s nodes, whether they exist or not.
     fn triangle_nodes(&self, t: u32) -> Option<[u32; 3]> {
         if t >= self.triangle_slots() {
@@ -277,6 +314,40 @@ impl TriGrid {
             (None, ..) | (_, _, None, _) => Diagonal::Falling,
             _ => Diagonal::Rising,
         }
+    }
+}
+
+impl TriSurface for TriGrid {
+    fn nodes(&self) -> u32 {
+        TriGrid::nodes(self)
+    }
+
+    fn xy(&self, n: u32) -> Option<DVec2> {
+        TriGrid::xy(self, n)
+    }
+
+    fn z(&self, n: u32) -> Option<f64> {
+        TriGrid::z(self, n)
+    }
+
+    fn triangle(&self, t: u32) -> Option<[u32; 3]> {
+        TriGrid::triangle(self, t)
+    }
+
+    fn triangles(&self) -> impl Iterator<Item = (u32, [u32; 3])> + '_ {
+        TriGrid::triangles(self)
+    }
+
+    fn triangles_at(&self, n: u32) -> impl Iterator<Item = (u32, [u32; 3])> + '_ {
+        TriGrid::triangles_at(self, n)
+    }
+
+    fn locate(&self, p: DVec2) -> Option<u32> {
+        TriGrid::locate(self, p)
+    }
+
+    fn pitch(&self) -> f64 {
+        TriGrid::pitch(self)
     }
 }
 

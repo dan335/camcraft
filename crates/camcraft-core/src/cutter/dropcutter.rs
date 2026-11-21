@@ -80,6 +80,17 @@ impl<'a> DropCutter<'a> {
         self.mesh
     }
 
+    /// The point of the mesh nearest `p` and the triangle it is on, if one
+    /// lies within `within` of it.
+    pub fn nearest(&self, p: DVec3, within: f64) -> Option<(u32, DVec3)> {
+        let (t, _) = self.bvh.nearest(self.mesh, p, within)?;
+        let corners = self.mesh.triangle(usize::try_from(t).ok()?)?;
+        Some((
+            t,
+            camcraft_geom::mesh::closest_point_on_triangle(p, corners),
+        ))
+    }
+
     /// Tool-tip Z at `(x, y)`, or `None` when no geometry lies under the tool.
     ///
     /// "Nothing underneath" is a normal answer — over open stock there is simply no

@@ -65,6 +65,8 @@ pub mod turn;
 
 pub mod trigrid;
 
+pub mod cut;
+
 pub mod geodesic;
 
 pub mod isoline;

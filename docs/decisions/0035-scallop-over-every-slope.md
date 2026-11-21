@@ -2,6 +2,16 @@
 
 **Status:** decided, 2026-11-20 · **Milestone:** 0.10
 
+> **Amended by [decision 0037](0037-scallop-to-where-the-tool-leaves-the-part.md).**
+> The field's grid is cut where the ground machined ends, so it runs right to
+> where the tool leaves the part and to the edge of a face avoided, each found
+> exactly, and each edge is a ring. The area runs a tolerance past where the
+> tool touches the part. The level rings start a stepover below the highest
+> point of where the tool leaves the part and are kept where the tool on them
+> is more than the tolerance below where it would rest from above. Beside an
+> upright wall, the face the tool rises beside decides which side of the edge
+> the wall is on.
+
 ## Question
 
 Scallop left ground steeper than a plunge to rings round the walls

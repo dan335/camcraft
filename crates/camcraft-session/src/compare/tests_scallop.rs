@@ -51,10 +51,11 @@ use super::tests_pencil::{Bounds, held_to};
 ///   (decision 0035): the edge of the ground machined is an edge of the field,
 ///   a pass along it. Fusion's start from 10.2 mm out from the dome's axis,
 ///   where the ball kept clear of the dome stops; camcraft's from where the
-///   ball comes within half the tolerance of the floor alone, so round the
-///   dome the cusps fall elsewhere: 58.9% of the columns alike where, laid
-///   across the dome and cut out of it, 61.8% were. The bound is loosened for
-///   that, a choice of where the first ring runs that is camcraft's own.
+///   ball goes from resting on the floor to resting on the dome, found
+///   exactly (decision 0037), so round the dome the cusps fall elsewhere:
+///   58.7% of the columns alike where, laid across the dome and cut out of
+///   it, 61.8% were. The bound is loosened for that, a choice of where the
+///   first ring runs that is camcraft's own.
 /// - Fusion's passes run on up the faces avoided past where the ball rests
 ///   on one machined and one avoided at once, as its Parallel's do: with only
 ///   the floor machined, up the fillets and walls round it, cutting what the
@@ -62,12 +63,16 @@ use super::tests_pencil::{Bounds, held_to};
 ///   the ball touches both.
 /// - Laid round what is avoided, camcraft's lines are no longer cut into
 ///   pieces by it: with only the floor machined it lifts 3 times, as Fusion's
-///   does, where it lifted 12, and feeds 22% less than Fusion's, its passes
+///   does, where it lifted 12, and feeds 24% less than Fusion's, its passes
 ///   stopping at the tie where Fusion's run on up the walls; with the dome
-///   avoided 10 times to Fusion's 8, where it lifted 15, and 3% less. With
-///   only the floor machined 42.0% of the columns alike where 42.8% were, and
+///   avoided 7 times to Fusion's 8, where it lifted 15, and 3% less. With
+///   only the floor machined 42.4% of the columns alike where 42.8% were, and
 ///   the bounds on that and on what it feeds are loosened for it: its passes
-///   stopping at the tie are camcraft's own (decision 0033).
+///   stopping at the tie are camcraft's own (decision 0033). Since decision
+///   0037 the tie is found exactly, where it was found to within half the
+///   tolerance of the floor, a little further up the fillet: the median
+///   difference there went from 0.020 mm to 0.034, and 2% less is removed
+///   and fed.
 ///
 /// Each bound is this run's figure with a little room.
 fn holds(name: &str, change: impl FnOnce(&mut Operation), bounds: &Bounds, contacts: u64) {
@@ -91,11 +96,13 @@ fn a_new_scallop_leaves_what_fusions_does() {
     holds("scallop", |_| {}, &bounds, 0);
 }
 
-/// The dome avoided, 1 mm sideways and 1 mm down: 58.9% of 685,892 columns
-/// alike, the median 0.0065 mm and the 95th percentile 0.25, 1.2% less
-/// removed and 2.6% less fed; it lifts 10 times to Fusion's 8. It was 61.8%,
+/// The dome avoided, 1 mm sideways and 1 mm down: 58.7% of 685,934 columns
+/// alike, the median 0.0065 mm and the 95th percentile 0.25, 1.1% less
+/// removed and 2.6% less fed; it lifts 7 times to Fusion's 8. It was 61.8%,
 /// 0.0056, 0.24, 1.2% less and 12% more, lifting 15 times: its rings now go
-/// round the dome, as Fusion's do, but from a ring of their own.
+/// round the dome, as Fusion's do, but from a ring of their own, found
+/// exactly where the ball goes from the floor to the dome (decision 0037),
+/// where it lifted 10 times.
 #[test]
 fn a_scallop_avoiding_the_dome_leaves_what_fusions_does() {
     let bounds = Bounds {
@@ -118,20 +125,21 @@ fn a_scallop_avoiding_the_dome_leaves_what_fusions_does() {
     );
 }
 
-/// The model avoided, the floor alone machined: 42.0% of 447,140 columns
-/// alike, the median 0.020 mm and the 95th percentile 3.4, 10.1% less
-/// removed, Fusion's passes running on up the fillets and walls, and 22% less
+/// The model avoided, the floor alone machined: 42.4% of 447,140 columns
+/// alike, the median 0.034 mm and the 95th percentile 3.7, 12.1% less
+/// removed, Fusion's passes running on up the fillets and walls, and 24% less
 /// fed; it lifts 3 times, as Fusion's does. It was 42.8%, 0.028, 3.6, 11.6%
-/// less and 9% less, lifting 12 times. Fusion's rapids meet the roughing's
-/// stock once, 1.96 mm deep.
+/// less and 9% less, lifting 12 times; then, the floor's edge found to
+/// within half the tolerance, 42.0%, 0.020, 3.4, 10.1% and 22%. Fusion's
+/// rapids meet the roughing's stock once, 1.96 mm deep.
 #[test]
 fn a_scallop_machining_the_floor_alone_leaves_what_fusions_does() {
     let bounds = Bounds {
         agree: 0.41,
-        median: 0.025,
-        p95: 3.7,
-        removed: 0.11,
-        fed: 0.24,
+        median: 0.04,
+        p95: 3.75,
+        removed: 0.13,
+        fed: 0.26,
         lowest: 1e-3,
     };
     holds(

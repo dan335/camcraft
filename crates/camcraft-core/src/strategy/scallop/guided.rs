@@ -16,7 +16,7 @@
 //! the middle.
 
 use camcraft_geom::mesh::closest_point_on_segment;
-use camcraft_geom::trigrid::TriGrid;
+use camcraft_geom::trigrid::TriSurface;
 use glam::{DVec2, DVec3};
 
 use crate::cutter::surfaces::Seat;
@@ -102,7 +102,7 @@ fn at_length(points: &[DVec3], mut along: f64) -> Option<DVec3> {
 /// there.
 fn lifted(
     seat: &Seat<'_>,
-    grid: &TriGrid,
+    grid: &impl TriSurface,
     p: DVec2,
     tolerance: f64,
     scratch: &mut Vec<u32>,
@@ -121,7 +121,7 @@ fn lifted(
 
 /// The edge of the grid `p` lies on, by its nodes, lower first, if it lies on
 /// one: as a point of a line of the field does.
-pub(super) fn edge_at(grid: &TriGrid, p: DVec2) -> Option<(u32, u32)> {
+pub(super) fn edge_at(grid: &impl TriSurface, p: DVec2) -> Option<(u32, u32)> {
     let nodes = grid.triangle(grid.locate(p)?)?;
     let flat = |n: u32| grid.xy(n).map(|q| q.extend(0.0));
     [(0, 1), (1, 2), (2, 0)]
@@ -153,7 +153,7 @@ struct Guide {
 /// across the slope ([`beside`]).
 pub(super) fn sweep(
     seat: &Seat<'_>,
-    grid: &TriGrid,
+    grid: &impl TriSurface,
     (points, closed): (&[DVec2], bool),
     thin: f64,
     params: &ParallelParams,

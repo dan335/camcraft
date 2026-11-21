@@ -33,7 +33,7 @@ use camcraft_geom::bvh::MeshBvh;
 use camcraft_geom::contour::{Region, RegionError};
 use camcraft_geom::mesh::TriMesh;
 use camcraft_geom::shadow::{Shadow, shadow_above};
-use glam::{DVec3, dvec3};
+use glam::{DVec2, DVec3, dvec3};
 
 use crate::cutter::allowance::{Allowance, EffectiveTool};
 use crate::cutter::dropcutter::DropCutter;
@@ -42,7 +42,7 @@ use crate::strategy::StrategyError;
 use crate::strategy::adaptive::flat_heights;
 use crate::strategy::merged_highest;
 use crate::strategy::reach::{LevelReach, ReachError};
-use crate::strategy::scallop::contact_region;
+use crate::strategy::scallop::{contact_region, past_contact};
 
 /// The part as an operation's tool meets it: what the tool comes to rest on,
 /// dropped anywhere, and what keeps it off at a level.
@@ -181,11 +181,34 @@ impl<'a> PartSurfaces<'a> {
         tool: &EffectiveTool,
         tolerance: f64,
     ) -> Result<Region, StrategyError> {
+        self.touched(shadow, tool, tolerance, contact_region)
+    }
+
+    /// As [`contact`](Self::contact), a tolerance past where `tool` stops
+    /// touching the part rather than short of it ([`past_contact`]): for a
+    /// pattern that finds that line itself, as scallop's does.
+    pub fn past_contact(
+        &self,
+        shadow: &Shadow,
+        tool: &EffectiveTool,
+        tolerance: f64,
+    ) -> Result<Region, StrategyError> {
+        self.touched(shadow, tool, tolerance, past_contact)
+    }
+
+    /// `region` round the part's shadow and each group's grown wider.
+    fn touched(
+        &self,
+        shadow: &Shadow,
+        tool: &EffectiveTool,
+        tolerance: f64,
+        region: impl Fn(&Shadow, f64, f64) -> Result<Region, StrategyError>,
+    ) -> Result<Region, StrategyError> {
         let radius = tool.max_radius();
-        let mut touched = contact_region(shadow, radius, tolerance)?;
+        let mut touched = region(shadow, radius, tolerance)?;
         if let Form::Grouped(groups) = &self.form {
             for g in groups.iter().filter(|g| g.offset.radial() > 0.0) {
-                let wider = contact_region(g.shadow()?, radius + g.offset.radial(), tolerance)?;
+                let wider = region(g.shadow()?, radius + g.offset.radial(), tolerance)?;
                 touched = touched.union(&wider)?;
             }
         }
@@ -305,6 +328,146 @@ impl Seat<'_> {
                 held.iter()
                     .map(|h| h.cutter.drop_at_in(&h.tool, x, y, scratch)),
             ),
+        }
+    }
+
+    /// Where the tool comes to rest dropped at `(x, y)`, and whether a face
+    /// it machines holds it there: over a part in groups, whether the group
+    /// that holds it highest is one machined, a machined one winning a tie
+    /// to rounding; always on the whole part. `None` where nothing is under
+    /// it. Exact, where [`rest_at`](Self::rest_at) asks to a tolerance: the
+    /// change from one to the other along a line is found where it is, and
+    /// not a tolerance's height either side of it, which across a face
+    /// running smoothly into one avoided is far along it.
+    pub fn rest_in(&self, x: f64, y: f64, scratch: &mut Vec<u32>) -> Option<Rest> {
+        match &self.on {
+            On::Whole(cutter) => cutter
+                .drop_at_in(&self.tool, x, y, scratch)
+                .map(|z| Rest { z, machined: true }),
+            On::Grouped(held) => {
+                let mut best: Option<Rest> = None;
+                for h in held {
+                    let Some(z) = h.cutter.drop_at_in(&h.tool, x, y, scratch) else {
+                        continue;
+                    };
+                    // As high to rounding is a tie, which the machined win.
+                    let noise = 1e-9 * (1.0 + z.abs());
+                    let higher = best.is_none_or(|b| {
+                        z > b.z + noise || (z >= b.z - noise && h.machined && !b.machined)
+                    });
+                    if higher {
+                        best = Some(Rest {
+                            z,
+                            machined: h.machined,
+                        });
+                    }
+                }
+                best
+            }
+        }
+    }
+
+    /// The way, seen from above, from `at` toward a wall that rises past `z`
+    /// beside it: the middle of the arc of ways round `at`, `reach` out,
+    /// where the tool dropped comes to rest above `z`, its ends found by
+    /// halving. Beside a wall straight, or curved no tighter than `reach`,
+    /// that arc faces it, its middle square to it. `None` where the tool
+    /// rests above `z` every way round or none, or the ways above it are not
+    /// one arc.
+    pub fn upright_toward(
+        &self,
+        at: DVec2,
+        z: f64,
+        reach: f64,
+        scratch: &mut Vec<u32>,
+    ) -> Option<DVec2> {
+        /// Ways looked along first.
+        const WAYS: u32 = 16;
+        /// Halvings of the angle between two of them where the arc ends:
+        /// far past any tolerance at any reach.
+        const HALVINGS: u32 = 30;
+        let step = std::f64::consts::TAU / f64::from(WAYS);
+        let above = |angle: f64, scratch: &mut Vec<u32>| {
+            let q = at + DVec2::from_angle(angle) * reach;
+            self.drop_at_in(q.x, q.y, scratch).is_some_and(|h| h > z)
+        };
+        let ways: Vec<bool> = (0..WAYS)
+            .map(|k| above(step * f64::from(k), scratch))
+            .collect();
+        // Where the arc starts, going round, and where it ends.
+        let (mut start, mut end) = (None, None);
+        for (k, (&here, &there)) in (0..WAYS).zip(ways.iter().zip(ways.iter().cycle().skip(1))) {
+            if here == there {
+                continue;
+            }
+            let (mut lo, mut hi) = (step * f64::from(k), step * f64::from(k + 1));
+            for _ in 0..HALVINGS {
+                let mid = 0.5 * (lo + hi);
+                if above(mid, scratch) == here {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let crossing = 0.5 * (lo + hi);
+            let slot = if there { &mut start } else { &mut end };
+            if slot.replace(crossing).is_some() {
+                return None;
+            }
+        }
+        let (start, mut end) = (start?, end?);
+        if end < start {
+            end += std::f64::consts::TAU;
+        }
+        Some(DVec2::from_angle(0.5 * (start + end)))
+    }
+
+    /// What the tool touches with its tip at `z` over `at`, beside a face that
+    /// stands upright toward `toward` (a unit vector seen from above): the
+    /// point of the part nearest the tool's widest circle on that side, and
+    /// whether a face it machines holds it; `None` where nothing is within
+    /// the tool's radius of it.
+    ///
+    /// Where the tool's path stands upright, beside a wall, a drop rests at
+    /// its foot or at its top and finds nothing between: moved up beside the
+    /// wall, the tool touches it where it is widest, its profile's largest
+    /// radius at the height it reaches it ([`ToolProfile::height_at`]), a
+    /// ball at its equator, a flat mill at its tip's edge. It is looked for
+    /// as far as the tool's radius, not the tolerance: a wall a hair off
+    /// upright, or hollowed a little under a rim above it, is still the face
+    /// the tool rises beside, the tool within its radius of nothing else,
+    /// where a hollow of half a tenth under a user's bowl's rim, deeper than
+    /// the tolerance, flipped the answer along it. Over a part in groups, the
+    /// nearest of them, the machined winning a tie, as a drop's.
+    pub fn beside(&self, at: DVec2, toward: DVec2, z: f64) -> Option<(DVec3, bool)> {
+        let widest = |tool: &EffectiveTool| {
+            let r = tool.max_radius();
+            let h = tool.height_at(r).unwrap_or(0.0);
+            (at + toward * r).extend(z - tool.tip_offset() + h)
+        };
+        match &self.on {
+            On::Whole(cutter) => {
+                let (_, point) = cutter.nearest(widest(&self.tool), self.tool.max_radius())?;
+                Some((point, true))
+            }
+            On::Grouped(held) => {
+                let mut best: Option<(f64, DVec3, bool)> = None;
+                for h in held {
+                    let q = widest(&h.tool);
+                    let Some((_, point)) = h.cutter.nearest(q, h.tool.max_radius()) else {
+                        continue;
+                    };
+                    let d = point.distance(q);
+                    let noise = 1e-9 * (1.0 + d);
+                    let nearer = best.is_none_or(|(b, _, machined)| {
+                        d < b - noise || (d <= b + noise && h.machined && !machined)
+                    });
+                    if nearer {
+                        best = Some((d, point, h.machined));
+                    }
+                }
+                best.map(|(_, point, machined)| (point, machined))
+            }
         }
     }
 

@@ -6,6 +6,29 @@ the same notes at more length.
 
 ## Unreleased
 
+- **Scallop finishes down to where the tool leaves the part, and up upright
+  walls** ([decision 0037](docs/decisions/0037-scallop-to-where-the-tool-leaves-the-part.md)).
+  Its field's grid ended a cell short of where the tool leaves the part,
+  where the way down falls as a square root, and its area's edge a tolerance
+  short of it: down a user's bulging bowl a band round its widest part was
+  left with gaps of 2.4 to 3.3 mm between the passes, against 0.97 elsewhere,
+  and the ring above it wandered 4.2 mm up and down. Now the grid's cells are
+  cut where the ground machined ends, where the tool leaves the part and
+  where it leaves a face machined for faces avoided, each found exactly, so
+  the rings run right down to that line and the last along it; the level
+  rings below start a stepover under its highest point. At the six sections
+  measured on that bowl no gap is over 1.1 mm but one of 1.20, where it was
+  up to 3.25; it feeds 39.4 m where it fed 38.0, and lifts 28 times where it
+  lifted 16, its rings, cut one way, ending in arcs on that line, each an
+  arc's length from where the next starts. Without the floor avoided, cut
+  outside in, it feeds 40.1 m where it fed 39.0 and lifts 12 times where it
+  lifted 19. Beside an upright wall the tool's path stands upright, and
+  where a face avoided meets the wall's foot, as a pocket's floor, the
+  wall was left out; the face the tool rises beside now decides, so the
+  rings run up such a wall from its foot. The edge of a face avoided is
+  found exactly, where it zigzagged by ±6° across a face running smoothly
+  into it; with only a pocket's floor machined the Fusion comparison's
+  median moved from 0.020 mm to 0.034.
 - **A round whose edge stands a little off it reads at 0.01 mm.** STEP import
   is ogeom 0.11.5, which draws the seam it adds round a face with no seam edge
   to the tolerance asked: on 0.11.0 that seam stood 0.09 mm off when the

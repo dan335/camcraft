@@ -15,8 +15,11 @@
 //! ([`camcraft_geom::isoline`]). The grid decides where a pass runs, seen from
 //! above, and nothing else: decision 0009, a narrow exception to 0003.
 //!
-//! - The first pass is the boundary itself: the machining boundary, and where the
-//!   tool stops touching the part, from the mesh's shadow. Not from the grid.
+//! - The first pass is the boundary itself: the machining boundary, seen from
+//!   above, and where the tool leaves the part and where it leaves a face it
+//!   machines for faces it avoids alone, each found exactly along the grid's
+//!   edges and the grid's cells cut there, so the field runs right to them
+//!   (decision 0037).
 //! - Every point of every pass is an exact cutter location, refined along the
 //!   pass until it is within tolerance of the part, as a parallel pass is
 //!   ([`crate::strategy::parallel::sweep_polyline`]).
@@ -59,22 +62,23 @@
 //! started, so the seam where each steps to the next is straight seen from
 //! above.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use camcraft_geom::contour::{Contour, Region, polyline_length};
+use camcraft_geom::cut::{CutGrid, NO_BAND};
 use camcraft_geom::geodesic::{Seed, march_along};
-use camcraft_geom::isoline::{self, IsoLine, nest};
+use camcraft_geom::isoline::{IsoLine, nest};
 use camcraft_geom::shadow::Shadow;
-use camcraft_geom::trigrid::TriGrid;
+use camcraft_geom::trigrid::TriSurface;
 use glam::{DVec2, DVec3};
 use rayon::prelude::*;
 
 use crate::control::{Watch, share};
-use crate::cutter::surfaces::Seat;
+use crate::cutter::surfaces::{Rest, Seat};
 use crate::cutter::tool::ToolProfile;
 use crate::path::toolpath::Toolpath;
 use crate::strategy::adaptive::Direction;
-use crate::strategy::field::{self, AreaGrid, count, level_lines};
+use crate::strategy::field::{self, AreaGrid, OFF_PART, count, level_lines};
 pub use crate::strategy::nesting::Order;
 use crate::strategy::nesting::{Cuts, Nested, distance, take_nearest};
 use crate::strategy::parallel::{ParallelParams, ParallelReport, Run, sweep_polyline};
@@ -164,6 +168,9 @@ pub struct ScallopReport {
     pub fragments: u64,
     /// Nodes inside the boundary the field never reached.
     pub unreached: u64,
+    /// The highest point of where the tool leaves the part from above, if it
+    /// does inside the area: the level rings below start a stepover under it.
+    pub leaves_at: Option<f64>,
     /// What sampling the passes on the part found, as for parallel finishing.
     pub sweep: ParallelReport,
 }
@@ -188,6 +195,22 @@ pub fn contact_region(
         .map_err(StrategyError::from)
 }
 
+/// Up to a tolerance past where the tool touches the part: within its widest
+/// radius of the part's `shadow` seen from above, and a tolerance more. For
+/// a pattern that finds where the tool leaves the part itself, exactly, as
+/// scallop's field does: drawn short of it, the area's edge would be a
+/// tolerance short, down a wall's vertical fall to where the tool leaves the
+/// part a millimetre or more of height.
+pub fn past_contact(
+    shadow: &Shadow,
+    max_radius: f64,
+    tolerance: f64,
+) -> Result<Region, StrategyError> {
+    shadow
+        .grown(max_radius + tolerance, tolerance * 0.5)
+        .map_err(StrategyError::from)
+}
+
 /// Scallop passes over `area`, where the tool's centre may go and touches the part.
 ///
 /// The path holds [`MoveRole::Cut`] passes separated by [`MoveRole::Link`] moves, in
@@ -209,8 +232,11 @@ pub fn scallop_finish(
     let s = params.stepover;
 
     let mut field = Field::build(seat, area, lo, hi, params, &mut report)?;
+    report.leaves_at = field.leaves_at;
+    let beyond = field.beyond.take();
     let outward = field.outward;
-    let grid = &field.grid;
+    let view = field.cut.view(None);
+    let grid = &view;
     let d = &field.d;
     let on_edge = with_edge(area, params.tolerance);
     // Measured out from the inner edges, the field runs on to the boundary at
@@ -219,7 +245,6 @@ pub fn scallop_finish(
     // half a stepover of the boundary along the surface is left to the
     // boundary's ring, cut last; any other is kept whole, cutting none into
     // bits where it runs along the boundary at about that distance.
-    let beyond = field.beyond.take();
     let far_enough = |(points, _): &(Vec<DVec2>, bool)| match &beyond {
         Some(beyond) => points.iter().any(|&p| {
             let value = |n: u32| {
@@ -253,8 +278,8 @@ pub fn scallop_finish(
     let levels = count((top / s).floor()).unwrap_or(0).min(MAX_LEVELS);
     let mut level_lines = level_lines(grid, d, s, levels);
     match level_lines.first_mut() {
-        Some(first) => *first = std::mem::take(&mut field.edges),
-        None => level_lines.push(std::mem::take(&mut field.edges)),
+        Some(first) => first.clear(),
+        None => level_lines.push(Vec::new()),
     }
     let mut regions = nest(grid, d, s, &level_lines);
     report.levels = u64::from(levels);
@@ -277,16 +302,10 @@ pub fn scallop_finish(
                         .collect()
                 })
                 .unwrap_or_default();
-            // At 0, the edges of the ground avoided, each point where the
-            // edge was found: placed seen from above, as the area's edge is.
-            let (lines, edges) = if r.level == 0 {
-                (Vec::new(), lines)
-            } else {
-                (lines, Vec::new())
-            };
             Plan {
                 lines,
-                edges,
+                edges: Vec::new(),
+                found: Vec::new(),
                 children: r.children.clone(),
                 root: r.level == 0,
             }
@@ -300,6 +319,7 @@ pub fn scallop_finish(
         nodes.push(Plan {
             lines: r.top_up.iter_mut().map(|l| sloped(grid, l)).collect(),
             edges: Vec::new(),
+            found: Vec::new(),
             children: Vec::new(),
             root: false,
         });
@@ -307,44 +327,66 @@ pub fn scallop_finish(
             plan.children.push(id);
         }
     }
-    // The boundary's rings, to the level-0 region of the piece they bound: but
-    // measured out from the inner edges, its outer rings are the far end, cut
-    // last, each a root of its own.
+    // The boundary's rings, to the level-0 region of the piece they bound, as
+    // the ground's edges found in it are: but measured out from the inner
+    // edges, its outer rings, and where the tool leaves the part, are the far
+    // end, cut last, each a root of its own.
     let mut last = Vec::new();
+    let found = |edges: &[(Vec<DVec3>, bool)], piece: &Region| -> Vec<Sloped> {
+        edges
+            .iter()
+            .filter(|(points, _)| points.first().is_some_and(|p| piece.contains(p.truncate())))
+            .map(|(points, closed)| {
+                let flat: Vec<DVec2> = points.iter().map(|p| p.truncate()).collect();
+                boundary(grid, &flat, *closed)
+            })
+            .collect()
+    };
     for piece in area.pieces() {
         let (outer, inner): (Vec<&Contour>, Vec<&Contour>) = piece
             .rings()
             .iter()
             .partition(|c| !outward || c.signed_area() > 0.0);
         let ring = |rings: Vec<&Contour>| -> Vec<Sloped> {
-            rings.iter().map(|c| boundary(grid, c.points())).collect()
+            rings
+                .iter()
+                .map(|c| boundary(grid, c.points(), true))
+                .collect()
         };
         let (home_rings, far_rings) = if outward {
             (ring(inner), ring(outer))
         } else {
             (ring(outer), Vec::new())
         };
-        report.lines += (home_rings.len() + far_rings.len()) as u64;
-        if !far_rings.is_empty() {
+        let (home_found, far_found) =
+            (found(&field.edges, &piece), found(&field.far_edges, &piece));
+        report.lines +=
+            (home_rings.len() + far_rings.len() + home_found.len() + far_found.len()) as u64;
+        if !far_rings.is_empty() || !far_found.is_empty() {
             last.push(nodes.len());
             nodes.push(Plan {
                 lines: Vec::new(),
                 edges: far_rings,
+                found: far_found,
                 children: Vec::new(),
                 root: false,
             });
         }
-        if home_rings.is_empty() {
+        if home_rings.is_empty() && home_found.is_empty() {
             continue;
         }
         let home = regions
             .iter()
             .position(|r| r.level == 0 && grid.xy(r.rep).is_some_and(|p| piece.contains(p)));
         match home.and_then(|i| nodes.get_mut(i)) {
-            Some(plan) => plan.edges.extend(home_rings),
+            Some(plan) => {
+                plan.edges.extend(home_rings);
+                plan.found.extend(home_found);
+            }
             None => nodes.push(Plan {
                 lines: Vec::new(),
                 edges: home_rings,
+                found: home_found,
                 children: Vec::new(),
                 root: true,
             }),
@@ -387,7 +429,14 @@ pub fn scallop_finish(
             };
             let lines = kept(std::mem::take(&mut plan.lines), &mut w);
             let edges = kept(std::mem::take(&mut plan.edges), &mut w);
-            for (stretches, of_field) in [(lines, true), (edges, false)] {
+            let found = kept(std::mem::take(&mut plan.found), &mut w);
+            // The field's lines, and the edges of the ground found on its grid,
+            // placed by it; the area's edge, seen from above.
+            for (stretches, of_field, by_field) in [
+                (lines, true, true),
+                (found, false, true),
+                (edges, false, false),
+            ] {
                 // The area's own edge: a point on it is in, or clipping it to
                 // the area cuts it into bits ([`with_edge`]).
                 let stretches: Vec<(Vec<DVec2>, bool)> = if of_field {
@@ -400,7 +449,7 @@ pub fn scallop_finish(
                         w.fragments += 1;
                         continue;
                     }
-                    if of_field {
+                    if by_field {
                         // Placed by the field, height and all: round a wall at
                         // its height where the ground is steep.
                         let line = (points.as_slice(), closed);
@@ -495,11 +544,34 @@ pub fn scallop_finish(
     Ok((cut.emit.path, report))
 }
 
+/// The class of a node the tool rests on a face it machines at.
+const MACHINED: u32 = 0;
+
+/// The class of a node the tool rests on faces it avoids alone at.
+const AVOIDED: u32 = 1;
+
+/// How many halvings a change in what the tool rests on is found in along a
+/// grid edge, at most: far past any tolerance.
+const MAX_HALVINGS: u32 = 48;
+
+/// How many times, at most, islands finer than the grid are taken into the
+/// ground round them and the grid cut again: once takes every island there
+/// is, and taking one in makes no other.
+const MAX_ISLAND_ROUNDS: u32 = 4;
+
+/// Whether ground of `class` is the field's: what the tool rests on there
+/// is a face it machines.
+fn machined(class: u32) -> bool {
+    class == MACHINED
+}
+
 /// The field of distances along the surface from the edges it is measured
-/// from, on its grid.
+/// from, on its grid cut where the ground it machines ends.
 struct Field {
-    grid: TriGrid,
-    /// Each node's distance: negative outside the ground it is measured over,
+    /// The grid, its cells cut where the tool goes from resting on a face it
+    /// machines to resting on faces it avoids alone, or off the part.
+    cut: CutGrid,
+    /// Each node's distance, of the grid cut's: negative outside the area,
     /// infinite where unknown.
     d: Vec<f64>,
     /// Measured out from the inner edges, each node's distance along the
@@ -508,8 +580,15 @@ struct Field {
     /// Whether it is measured out from the ground's inner edges alone: inside
     /// out, where there are any.
     outward: bool,
-    /// The edges of the ground avoided it is measured out from, its lines at 0.
-    edges: Vec<IsoLine>,
+    /// The ground's edges the field is measured from, each a line through
+    /// its cuts, closed or not: where faces avoided begin, and, unless
+    /// measured out from those, where the tool leaves the part.
+    edges: Vec<(Vec<DVec3>, bool)>,
+    /// Measured out from the inner edges, where the tool leaves the part:
+    /// the field's far end, cut last.
+    far_edges: Vec<(Vec<DVec3>, bool)>,
+    /// The highest point of where the tool leaves the part from above.
+    leaves_at: Option<f64>,
 }
 
 impl Field {
@@ -522,10 +601,13 @@ impl Field {
         report: &mut ScallopReport,
     ) -> Result<Self, StrategyError> {
         let s = params.stepover;
+        let tolerance = params.tolerance;
         // A third of a stepover, and fine enough for the tool's own curvature;
         // coarsened, if it must be, to stay within the budget, and no further
-        // than half a stepover. The tool's height at each node, dropped exactly.
-        let on = AreaGrid::over(
+        // than half a stepover. The tool's height at each node, dropped
+        // exactly, and whether a face it machines holds it there.
+        let class_of = |rest: Rest| if rest.machined { MACHINED } else { AVOIDED };
+        let (on, classes) = AreaGrid::sampled(
             area,
             (lo, hi),
             field::pitch(s, seat.tool().max_radius()),
@@ -534,91 +616,161 @@ impl Field {
             // The drops are most of the field's work; the field, a third of
             // the whole.
             &params.watch.part(0.0, 0.3),
-            |x, y, scratch| seat.drop_at_in(x, y, scratch),
+            |x, y, scratch| seat.rest_in(x, y, scratch).map(|r| (r.z, class_of(r))),
         )?;
         report.pitch = on.grid.pitch();
         report.nodes = u64::from(on.grid.nodes());
         report.coarsened = on.coarsened;
-        let grid = &on.grid;
+        params.watch.check()?;
 
         // The ground it machines ends where the tool goes from resting on a
-        // face it machines to resting on faces it avoids alone: an edge of
-        // the field, as the area's are, its first pass along it, the field
-        // never measured across what it avoids. Inside out, the ground's
-        // inner edges, if it has any, the area's holes and those: measured
-        // out from them alone, the passes are rings round them from the
-        // first, outward.
-        let inside_out = params.order == Order::InsideOut;
-        // Drawn where the tool comes within half the tolerance of a face it
-        // machines: the first pass runs along it, and what comes within the
-        // tolerance of faces avoided and not of one machined is cut out
-        // ([`crate::path::avoid`]), so a pass on the edge itself would be cut
-        // into bits wherever it strays a little to the side avoided.
-        let edge_tolerance = 0.5 * params.tolerance;
-        let avoided = if seat.avoids_any() {
-            avoided_nodes(seat, grid, edge_tolerance)
-        } else {
-            Vec::new()
+        // face it machines to resting on faces it avoids alone, and where it
+        // leaves the part: each found along the grid's edges by halving, to a
+        // hundredth of the tolerance seen from above, and until the height
+        // the tool rests at there moves by less than that from one halving to
+        // the next. Where the tool leaves the part, the way down to the edge
+        // is steep as a square root, and the height is what matters: the
+        // last ring is laid along it.
+        let grid = &on.grid;
+        let find = |a: u32, b: u32| {
+            let mut scratch = Vec::new();
+            let (Some(pa), Some(pb)) = (grid.xy(a), grid.xy(b)) else {
+                return DVec3::NAN;
+            };
+            let rest = |p: DVec2, scratch: &mut Vec<u32>| seat.rest_in(p.x, p.y, scratch);
+            let Some(start) = rest(pa, &mut scratch) else {
+                return DVec3::NAN;
+            };
+            let (mut near, mut away, mut moved) = (pa, pb, f64::INFINITY);
+            let (mut here, mut there) = (start, None);
+            for _ in 0..MAX_HALVINGS {
+                if near.distance(away) <= 0.01 * tolerance && moved <= 0.01 * tolerance {
+                    break;
+                }
+                let mid = near.midpoint(away);
+                match rest(mid, &mut scratch) {
+                    Some(r) if r.machined == start.machined => {
+                        moved = (r.z - here.z).abs();
+                        (near, here) = (mid, r);
+                    }
+                    r => (away, there) = (mid, r),
+                }
+            }
+            // Closed in on where the tool's path stands upright, its height
+            // jumping a hair across: beside a wall, seen from above. Dropped
+            // there it rests at the foot or at the top, whichever side of the
+            // jump it lands, and finds nothing between; moved up beside the
+            // wall it touches the face it rises beside ([`Seat::beside`]).
+            // The stretch is that face's: machined, as a pocket's wall above
+            // a floor avoided, the change at the foot of it and the wall the
+            // field's; avoided, at the top of it. Where nothing is within
+            // the tool's radius of it at its widest, under an overhang, it
+            // touches the overhang above with its side: the top's.
+            if let Some(there) = there
+                && near.distance(away) <= 0.01 * tolerance
+                && (there.z - here.z).abs() > tolerance
+            {
+                let (foot, top) = if here.z < there.z {
+                    (here, there)
+                } else {
+                    (there, here)
+                };
+                let middle = 0.5 * (foot.z + top.z);
+                let face = seat
+                    .upright_toward(near, middle, tolerance, &mut scratch)
+                    .and_then(|toward| seat.beside(near, toward, middle))
+                    .map_or(top.machined, |(_, machined)| machined);
+                return near.extend(if face == foot.machined { top.z } else { foot.z });
+            }
+            near.extend(here.z)
         };
-        let is_avoided = |n: u32| {
-            usize::try_from(n)
-                .ok()
-                .and_then(|i| avoided.get(i))
-                .copied()
-                .unwrap_or(false)
+        // The grid resolves what the tool rests on to its pitch and no finer:
+        // where the faces' facets turn it on and off an edge a hair either
+        // side of a node, ground may come out lying wholly in cells its edges
+        // cut, an island of a node or two. It is taken into the ground round
+        // it, and the grid cut again.
+        let mut classes = classes;
+        let mut cut = CutGrid::new(on.grid.clone(), classes.clone(), machined, find);
+        for _ in 0..MAX_ISLAND_ROUNDS {
+            let islands: HashMap<u32, u32> = (0..cut.bands())
+                .filter(|&b| !cut.resolved(b))
+                .filter_map(|b| Some((b, cut.class_round(b)?)))
+                .collect();
+            if islands.is_empty() {
+                break;
+            }
+            for (n, class) in (0u32..).zip(classes.iter_mut()) {
+                if let Some(&round) = islands.get(&cut.band_of(n)) {
+                    *class = round;
+                }
+            }
+            cut = CutGrid::new(on.grid.clone(), classes.clone(), machined, find);
+        }
+        let view = cut.view(None);
+        let cliffs = cliff_edges(seat, &view, tolerance);
+        params.watch.check()?;
+
+        // The seeds: each node within a cell's diagonal of `rings` where
+        // they cross the part, at its exact distance to the nearest point of
+        // them, over the part, one drop a node. Off the part the area's edge
+        // is no edge of the ground: it ends where the tool leaves the part,
+        // found exactly, and a node up the steep way down to there measured
+        // to the area's edge seen from above would be a fraction of its way
+        // along the surface from it.
+        let feet = |rings: Region| -> Vec<Seed> {
+            on.boundary_feet(&rings)
+                .par_iter()
+                .map_init(Vec::new, |scratch, &(n, _, foot)| {
+                    let rest = seat.drop_at_in(foot.x, foot.y, scratch)?;
+                    Some(Seed {
+                        node: n,
+                        distance: grid.point(n)?.distance(foot.extend(rest)),
+                    })
+                })
+                .flatten()
+                .collect()
         };
+        // And the ground's edges, each cut at no distance: where faces
+        // avoided begin, and where the tool leaves the part.
+        let lattice = cut.grid().nodes();
+        let edge_of = |class: u32| -> Vec<Seed> {
+            cut.cuts()
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.bands.1 == NO_BAND && cut.class(c.edge.1) == class)
+                .map(|(i, _)| Seed {
+                    node: lattice + u32::try_from(i).unwrap_or(0),
+                    distance: 0.0,
+                })
+                .collect()
+        };
+        let (inner, leaving) = (edge_of(AVOIDED), edge_of(OFF_PART));
         let holes: Vec<Contour> = area
             .rings()
             .iter()
             .filter(|r| r.signed_area() <= 0.0)
             .cloned()
             .collect();
-        let (edge_seeds, crossings) = if avoided.is_empty() {
-            (Vec::new(), HashMap::new())
-        } else {
-            avoided_edges(seat, grid, &is_avoided, edge_tolerance)
-        };
-        let outward = inside_out && (!holes.is_empty() || !edge_seeds.is_empty());
-
-        // The seeds: each node within a cell's diagonal of `rings`, at its
-        // exact distance to the nearest point of them, over the part, one drop
-        // a node.
-        let feet = |rings: Region| -> Vec<Seed> {
-            on.boundary_feet(&rings)
-                .par_iter()
-                .map_init(Vec::new, |scratch, &(n, flat, foot)| {
-                    let rest = seat.drop_at_in(foot.x, foot.y, scratch);
-                    let distance = match (grid.point(n), rest) {
-                        (Some(p), Some(zf)) => p.distance(foot.extend(zf)),
-                        _ => flat,
-                    };
-                    Seed { node: n, distance }
-                })
-                .collect()
-        };
-        params.watch.check()?;
-        let seeded: HashSet<u32> = edge_seeds.iter().map(|s| s.node).collect();
-        let cliffs = cliff_edges(seat, grid, params.tolerance);
-        // Not measured across the ground avoided: the field goes round it,
-        // from its edge.
+        let inside_out = params.order == Order::InsideOut;
+        let outward = inside_out && (!holes.is_empty() || !inner.is_empty());
         let measure = |seeds: &[Seed]| {
             march_along(
-                grid,
+                &view,
                 seeds,
-                |n| {
-                    (!is_avoided(n) || seeded.contains(&n))
-                        .then(|| grid.point(n))
-                        .flatten()
-                },
+                |n| view.point(n),
                 |a, b| cliffs.get(&(a.min(b), a.max(b))).copied(),
             )
             .d
         };
         let (mut d, beyond) = if outward {
             // From the inner edges; and how far the outer boundary is, along
-            // the surface, which its ring finishes up to.
+            // the surface, which its ring finishes up to. Where the tool
+            // leaves the part the field reaches exactly, its ring along it:
+            // a line near it is no sliver in bits along the area's edge, and
+            // left out, it would leave the way down to it, as steep as a
+            // square root, wider than a stepover.
             let mut seeds = feet(Region::new(holes));
-            seeds.extend(&edge_seeds);
+            seeds.extend(&inner);
             let outer: Vec<Contour> = area
                 .rings()
                 .iter()
@@ -628,55 +780,130 @@ impl Field {
             (measure(&seeds), Some(measure(&feet(Region::new(outer)))))
         } else {
             let mut seeds = feet(area.clone());
-            seeds.extend(&edge_seeds);
+            seeds.extend(&inner);
+            seeds.extend(&leaving);
             (measure(&seeds), None)
         };
-        report.unreached = d
-            .iter()
-            .zip(&on.inside)
-            .enumerate()
-            .filter(|&(n, (d, &inside))| {
-                let n = u32::try_from(n).unwrap_or(u32::MAX);
-                inside && !d.is_finite() && grid.defined(n) && !is_avoided(n)
+        let is_inside = |n: u32| match cut.cut(n) {
+            Some(c) => area.contains(c.at.truncate()),
+            None => usize::try_from(n)
+                .ok()
+                .and_then(|i| on.inside.get(i))
+                .copied()
+                .unwrap_or(false),
+        };
+        report.unreached = (0..lattice)
+            .filter(|&n| {
+                is_inside(n)
+                    && machined(cut.class(n))
+                    && view.triangles_at(n).next().is_some()
+                    && !usize::try_from(n)
+                        .ok()
+                        .and_then(|i| d.get(i))
+                        .is_some_and(|v| v.is_finite())
             })
             .count() as u64;
-        for (n, (d, &inside)) in d.iter_mut().zip(&on.inside).enumerate() {
-            let n = u32::try_from(n).unwrap_or(u32::MAX);
-            // Over the ground avoided, negative, so its edge is the line at 0;
-            // and outside the area, so only the lines inside it are passes.
-            // Measured out from the inner edges, the field runs on past the
-            // area's outer edge from inside it, and its lines are cut there:
-            // it does not fall to 0 there.
-            if is_avoided(n) || (!inside && !outward) {
-                *d = -*d;
+        // Outside the area, negative, so only the lines inside it are
+        // passes. Measured out from the inner edges, the field runs on past
+        // the area's outer edge from inside it, and its lines are cut there:
+        // it does not fall to 0 there.
+        if !outward {
+            for (n, v) in (0u32..).zip(d.iter_mut()) {
+                if !is_inside(n) {
+                    *v = -*v;
+                }
             }
         }
-        // The edges of the ground avoided, as lines of the field: each point
-        // put where the edge was found along the grid edge it crosses, on the
-        // side machined, where the line through the field's values at its ends
-        // could put it a little either side, and the side avoided is cut out.
-        let mut edges = if edge_seeds.is_empty() {
-            Vec::new()
-        } else {
-            let across = grid.triangles().filter_map(|(t, nodes)| {
-                let avoided = nodes.iter().filter(|&&n| is_avoided(n)).count();
-                (avoided > 0 && avoided < 3).then_some(t)
-            });
-            isoline::lines(grid, &d, 0.0, across)
-        };
-        for p in edges.iter_mut().flat_map(|line| line.points.iter_mut()) {
-            if let Some(found) = guided::edge_at(grid, *p).and_then(|e| crossings.get(&e)) {
-                *p = *found;
+        // The edges as lines through their cuts, each piece of one by what
+        // lies past it.
+        let mut edges = Vec::new();
+        let mut far_edges = Vec::new();
+        for b in 0..cut.bands() {
+            for (chain, closed) in cut.edges(b) {
+                for (points, closed, past) in pieces(&cut, &chain, closed) {
+                    if past == OFF_PART && outward {
+                        far_edges.push((points, closed));
+                    } else if past == AVOIDED || past == OFF_PART {
+                        edges.push((points, closed));
+                    }
+                }
             }
         }
+        let leaves_at = cut
+            .cuts()
+            .iter()
+            .filter(|c| {
+                c.bands.1 == NO_BAND
+                    && cut.class(c.edge.1) == OFF_PART
+                    && area.contains(c.at.truncate())
+            })
+            .map(|c| c.at.z)
+            .filter(|z| z.is_finite())
+            .reduce(f64::max);
         Ok(Self {
-            grid: on.grid,
+            cut,
             d,
             beyond,
             outward,
             edges,
+            far_edges,
+            leaves_at,
         })
     }
+}
+
+/// `chain`, a line through cuts of `cut` with the ground on its left,
+/// closed back to its first if `closed`, in pieces by what lies past each
+/// cut: each piece its cuts' places, whether it is closed, and that.
+fn pieces(cut: &CutGrid, chain: &[u32], closed: bool) -> Vec<(Vec<DVec3>, bool, u32)> {
+    let past = |n: u32| cut.cut(n).map(|c| cut.class(c.edge.1));
+    let at = |n: u32| cut.cut(n).map(|c| c.at);
+    let n = chain.len();
+    let same = (0..n).all(|i| {
+        past(chain.get(i).copied().unwrap_or(0)) == past(chain.first().copied().unwrap_or(0))
+    });
+    if same {
+        let points: Vec<DVec3> = chain.iter().filter_map(|&c| at(c)).collect();
+        let class = chain.first().and_then(|&c| past(c)).unwrap_or(OFF_PART);
+        return vec![(points, closed, class)];
+    }
+    // A closed chain started where what lies past it changes, so no piece
+    // runs round its join.
+    let start = if closed {
+        (0..n)
+            .find(|&i| {
+                past(chain.get(i).copied().unwrap_or(0))
+                    != past(chain.get((i + n - 1) % n).copied().unwrap_or(0))
+            })
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let order: Vec<u32> = (0..n)
+        .filter_map(|k| chain.get((start + k) % n).copied())
+        .collect();
+    let mut out: Vec<(Vec<DVec3>, bool, u32)> = Vec::new();
+    let mut last: Option<u32> = None;
+    for (i, &c) in order.iter().enumerate() {
+        let class = past(c).unwrap_or(OFF_PART);
+        let Some(p) = at(c) else { continue };
+        match out.last_mut() {
+            Some(piece) if last == Some(class) => piece.0.push(p),
+            _ => {
+                // Each piece begins where the last ended, so none leaves a gap.
+                let mut points = Vec::new();
+                if i > 0
+                    && let Some(prev) = order.get(i - 1).and_then(|&q| at(q))
+                {
+                    points.push(prev);
+                }
+                points.push(p);
+                out.push((points, false, class));
+            }
+        }
+        last = Some(class);
+    }
+    out
 }
 
 /// The length along the surface the tool rides of each bent edge of `grid`
@@ -684,7 +911,11 @@ impl Field {
 /// between the nodes cuts the corner where a wall turns onto the ground above
 /// or below it inside the cell, by up to the cell's width, and the rings
 /// beside it would be that much too far apart.
-fn cliff_edges(seat: &Seat<'_>, grid: &TriGrid, tolerance: f64) -> HashMap<(u32, u32), f64> {
+fn cliff_edges(
+    seat: &Seat<'_>,
+    grid: &(impl TriSurface + Sync),
+    tolerance: f64,
+) -> HashMap<(u32, u32), f64> {
     let found: Vec<((u32, u32), f64)> = (0..grid.nodes())
         .into_par_iter()
         .map_init(Vec::new, |scratch, a| {
@@ -711,91 +942,8 @@ fn cliff_edges(seat: &Seat<'_>, grid: &TriGrid, tolerance: f64) -> HashMap<(u32,
     found.into_iter().collect()
 }
 
-/// Whether, at each node of `grid`, the tool rests only on faces it avoids,
-/// to within `tolerance` ([`Seat::rest_at`]).
-fn avoided_nodes(seat: &Seat<'_>, grid: &TriGrid, tolerance: f64) -> Vec<bool> {
-    (0..grid.nodes())
-        .into_par_iter()
-        .map(|n| {
-            grid.xy(n)
-                .filter(|_| grid.defined(n))
-                .and_then(|p| seat.rest_at(p.x, p.y, tolerance))
-                .is_some_and(|rest| !rest.machined)
-        })
-        .collect()
-}
-
-/// How many halvings place an edge of the ground avoided along a grid edge:
-/// to a thousandth of the pitch.
-const EDGE_HALVINGS: u32 = 10;
-
-/// The nodes either side of each edge of the ground avoided, by `avoided`,
-/// each at its distance to it over the part: found along every grid edge from
-/// a node machined to one avoided, where the tool there stops resting on a
-/// face machined, halved [`EDGE_HALVINGS`] times. A node beside more than one
-/// such edge takes the nearest.
-fn avoided_edges(
-    seat: &Seat<'_>,
-    grid: &TriGrid,
-    avoided: &(impl Fn(u32) -> bool + Sync),
-    tolerance: f64,
-) -> (Vec<Seed>, HashMap<(u32, u32), DVec2>) {
-    let machined = |p: DVec2| {
-        seat.rest_at(p.x, p.y, tolerance)
-            .is_some_and(|rest| rest.machined)
-    };
-    let found: Vec<(Seed, Seed, DVec2)> = (0..grid.nodes())
-        .into_par_iter()
-        .filter(|&m| grid.defined(m) && !avoided(m))
-        .flat_map_iter(|m| {
-            let mut out = Vec::new();
-            let Some(pm) = grid.point(m) else {
-                return out;
-            };
-            let mut seen = Vec::new();
-            for (_, nodes) in grid.triangles_at(m) {
-                for a in nodes {
-                    if a == m || !avoided(a) || seen.contains(&a) {
-                        continue;
-                    }
-                    seen.push(a);
-                    let Some(pa) = grid.point(a) else { continue };
-                    let (mut lo, mut hi) = (pm.truncate(), pa.truncate());
-                    for _ in 0..EDGE_HALVINGS {
-                        let mid = lo.midpoint(hi);
-                        if machined(mid) {
-                            lo = mid;
-                        } else {
-                            hi = mid;
-                        }
-                    }
-                    let Some(z) = seat.drop_at(lo.x, lo.y) else {
-                        continue;
-                    };
-                    let edge = lo.extend(z);
-                    let near = |node: u32, at: DVec3| Seed {
-                        node,
-                        distance: at.distance(edge),
-                    };
-                    out.push((near(m, pm), near(a, pa), lo));
-                }
-            }
-            out
-        })
-        .collect();
-    let crossings = found
-        .iter()
-        .map(|(m, a, at)| ((m.node.min(a.node), m.node.max(a.node)), *at))
-        .collect();
-    // Each node once, at its nearest; in node order, as found on any thread.
-    let mut seeds: Vec<Seed> = found.into_iter().flat_map(|(m, a, _)| [m, a]).collect();
-    seeds.sort_by(|a, b| a.node.cmp(&b.node).then(a.distance.total_cmp(&b.distance)));
-    seeds.dedup_by_key(|s| s.node);
-    (seeds, crossings)
-}
-
 /// A line of the field, its points taken, with its triangles' slopes.
-fn sloped(grid: &TriGrid, line: &mut IsoLine) -> Sloped {
+fn sloped(grid: &impl TriSurface, line: &mut IsoLine) -> Sloped {
     Sloped {
         own: vec![true; line.points.len()],
         points: std::mem::take(&mut line.points),
@@ -806,8 +954,8 @@ fn sloped(grid: &TriGrid, line: &mut IsoLine) -> Sloped {
 
 /// A ring of the boundary, split so no segment is longer than the grid's pitch,
 /// with the slope under the middle of each.
-fn boundary(grid: &TriGrid, ring: &[DVec2]) -> Sloped {
-    Sloped::split(ring, true, grid.pitch(), |m, _| {
+fn boundary(grid: &(impl TriSurface + Sync), ring: &[DVec2], closed: bool) -> Sloped {
+    Sloped::split(ring, closed, grid.pitch(), |m, _| {
         grid.locate(m).and_then(|t| grid.slope(t))
     })
 }
@@ -816,9 +964,12 @@ fn boundary(grid: &TriGrid, ring: &[DVec2]) -> Sloped {
 struct Plan {
     /// The field's lines, placed by it, height and all.
     lines: Vec<Sloped>,
-    /// The area's edge, and the edges of faces avoided, placed seen from
-    /// above.
+    /// The area's edge, placed seen from above.
     edges: Vec<Sloped>,
+    /// The ground's edges found on the field's grid, where faces avoided
+    /// begin and where the tool leaves the part, placed by it as its lines
+    /// are.
+    found: Vec<Sloped>,
     children: Vec<usize>,
     root: bool,
 }

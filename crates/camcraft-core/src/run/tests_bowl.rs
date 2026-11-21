@@ -34,35 +34,49 @@ const SKIRT: f64 = 4.0;
 /// 0, the inside wall 1, the rim 2, the outside wall 3, down a slope and then
 /// an upright skirt, and its base 4.
 fn bowl() -> Body {
+    let ring = |i: usize| move |theta: f64| radii(theta)[i];
+    let (a, b, c, d) = (ring(0), ring(1), ring(2), ring(3));
+    ringed(
+        &[(&a, FLOOR), (&b, RIM), (&c, RIM), (&d, SKIRT), (&d, 0.0)],
+        &[1, 2, 3, 3],
+        4,
+    )
+}
+
+/// A body of rings round the origin, ring `i` [`AROUND`] points `rings[i].0`
+/// of `theta` from it at height `rings[i].1`, out from the first: closed over
+/// from the middle of the first on face 0, each strip from a ring to the
+/// next on face `faces[i]`, and closed under from below the last on face
+/// `base`. The triangles wound so their normals face out of the material.
+fn ringed(rings: &[(&dyn Fn(f64) -> f64, f64)], faces: &[u32], base: u32) -> Body {
     let n = AROUND;
-    let mut v = vec![dvec3(0.0, 0.0, FLOOR)];
-    // Rings out from the floor's middle, each `n` round.
-    let rings: [(usize, f64); 5] = [(0, FLOOR), (1, RIM), (2, RIM), (3, SKIRT), (3, 0.0)];
+    let mut v = vec![dvec3(0.0, 0.0, rings[0].1)];
     for (radius, z) in rings {
         for k in 0..n {
             let theta = std::f64::consts::TAU * f64::from(k) / f64::from(n);
-            let r = radii(theta)[radius];
-            v.push(dvec3(r * theta.cos(), r * theta.sin(), z));
+            let r = radius(theta);
+            v.push(dvec3(r * theta.cos(), r * theta.sin(), *z));
         }
     }
     let under = u32::try_from(v.len()).unwrap();
-    v.push(dvec3(0.0, 0.0, 0.0));
+    v.push(dvec3(0.0, 0.0, rings[rings.len() - 1].1));
     let at = |ring: u32, k: u32| 1 + ring * n + k % n;
+    let last = u32::try_from(rings.len() - 1).unwrap();
     let (mut t, mut labels) = (Vec::new(), Vec::new());
     for k in 0..n {
         t.push([0, at(0, k), at(0, k + 1)]);
         labels.push(0);
-        // Each strip from a ring to the next out, its triangles wound so
-        // their normals face out of the bowl's material.
-        for (ring, face) in [(0, 1), (1, 2), (2, 3), (3, 3)] {
+        for (ring, &face) in faces.iter().enumerate() {
+            let ring = u32::try_from(ring).unwrap();
             t.push([at(ring, k), at(ring + 1, k), at(ring + 1, k + 1)]);
             t.push([at(ring, k), at(ring + 1, k + 1), at(ring, k + 1)]);
             labels.extend([face, face]);
         }
-        t.push([under, at(4, k + 1), at(4, k)]);
-        labels.push(4);
+        t.push([under, at(last, k + 1), at(last, k)]);
+        labels.push(base);
     }
-    Body::with_faces(TriMesh::new(v, t).unwrap(), labels, 5).unwrap()
+    let count = base.max(faces.iter().copied().max().unwrap_or(0)) + 1;
+    Body::with_faces(TriMesh::new(v, t).unwrap(), labels, count).unwrap()
 }
 
 /// Its 4 mm ball, a stepover of 0.8 inside out from the floor's edge, the
@@ -319,4 +333,251 @@ fn a_bowl_is_finished_in_one_family_of_rings() {
     assert!(starts.len() > 20, "{} ring starts", starts.len());
     assert!(off < 0.01, "a ring starts {off} off the seam: {starts:?}");
     assert!(lifts <= 8, "{lifts} lifts");
+}
+
+/// A ring's radius at an angle from +X.
+type Radius = Box<dyn Fn(f64) -> f64>;
+
+/// How far a bulging bowl's outside swells out at half its height.
+const BULGE: f64 = 3.0;
+
+/// A bowl as the first, inside and rim, whose outside swells out from its rim
+/// by [`BULGE`] at half its height and tucks back in to its base: below its
+/// widest the wall is an undercut a ball from above cannot reach.
+fn bulging() -> Body {
+    const STEPS: u32 = 24;
+    let ring = |i: usize| move |theta: f64| radii(theta)[i];
+    let (floor, wall, rim) = (ring(0), ring(1), ring(2));
+    let outside: Vec<(Radius, f64)> = (1..=STEPS)
+        .map(|i| {
+            let z = RIM * (1.0 - f64::from(i) / f64::from(STEPS));
+            let swell = BULGE * (std::f64::consts::PI * (RIM - z) / RIM).sin();
+            let radius: Radius = Box::new(move |t| radii(t)[2] + swell);
+            (radius, z)
+        })
+        .collect();
+    let mut rings: Vec<(&dyn Fn(f64) -> f64, f64)> =
+        vec![(&floor, FLOOR), (&wall, RIM), (&rim, RIM)];
+    rings.extend(outside.iter().map(|(r, z)| (r.as_ref(), *z)));
+    let mut faces = vec![1, 2];
+    faces.extend((1..=STEPS).map(|_| 3));
+    ringed(&rings, &faces, 4)
+}
+
+/// The cuts of `path` crossing the upright half-plane out from the bowl's
+/// middle at `theta`, beyond `from` from it: where the tool's tip is, seen
+/// in that plane as how far out and how high, highest first.
+fn section(path: &crate::path::toolpath::Toolpath, theta: f64, from: f64) -> Vec<DVec3> {
+    let dir = dvec2(theta.cos(), theta.sin());
+    let side = |p: DVec3| dir.perp_dot(p.truncate());
+    let mut out = Vec::new();
+    let mut at = path.moves()[0].to;
+    for m in path.moves() {
+        if m.role == MoveRole::Cut {
+            let (a, b) = (side(at), side(m.to));
+            if a * b < 0.0 {
+                let p = at.lerp(m.to, a / (a - b));
+                if p.truncate().dot(dir) > from {
+                    out.push(p);
+                }
+            }
+        }
+        at = m.to;
+    }
+    out.sort_by(|a, b| b.z.total_cmp(&a.z));
+    out
+}
+
+/// Down the outside of a bowl that bulges and tucks in under its widest:
+/// the rings over the part are no more than a stepover apart along the
+/// surface the tool rides, right down to where the tool leaves it, where the
+/// field's grid ended a cell short and the area's edge a tolerance short of
+/// it, leaving a band unfinished; their last runs along
+/// that line, at the height where the tool's side meets the bulge's widest
+/// all round, smoothly; and the level rings below start within a stepover of
+/// it and go on a stepover apart to the Bottom.
+#[test]
+fn down_a_bulge_the_rings_reach_where_the_tool_leaves_it() {
+    // Inside out from the floor's edge, the line the tool leaves the part
+    // along is the field's far end; outside in, an edge it is measured from.
+    down_a_bulge("inside-out");
+    down_a_bulge("outside-in");
+}
+
+/// [`down_a_bulge_the_rings_reach_where_the_tool_leaves_it`], cut `order`.
+fn down_a_bulge(order: &str) {
+    let body = bulging();
+    let bodies: Bodies<'_> = [("bowl", &body)].into_iter().collect();
+    let job: Job = toml::from_str(&JOB.replace("inside-out", order)).unwrap();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let op = &result.operations[0];
+    assert_eq!(result.verify.gouged, 0);
+    assert_eq!(op.sim.rapid_contacts, 0);
+    let StrategyDetail::Scallop(report) = &op.detail else {
+        panic!("{:?}", op.detail);
+    };
+    let radius = 2.0;
+    // Where the tool's side meets the bulge's widest: its tip a radius below
+    // half the bowl's height.
+    let widest = 0.5 * RIM - radius;
+    let leaves = report.leaves_at.unwrap();
+    assert!(
+        (leaves - widest).abs() < 0.05,
+        "leaves the part at {leaves}"
+    );
+    let tol = job.tolerance;
+    let mut worst_field = 0.0f64;
+    let mut worst_join = 0.0f64;
+    let mut last_rings = Vec::new();
+    for k in 0..24 {
+        let theta = std::f64::consts::TAU * f64::from(k) / 24.0;
+        let out = radii(theta)[2] + BULGE + radius;
+        let cut = section(&op.path, theta, radii(theta)[2] + 0.5);
+        // The rings over the part, down to where the tool leaves it, and the
+        // level rings below.
+        let (over, below): (Vec<DVec3>, Vec<DVec3>) = cut.iter().partition(|p| p.z > widest - 0.1);
+        // How far apart the rings are, where the tool's tip is.
+        for w in over.windows(2) {
+            worst_field = worst_field.max(w[0].distance(w[1]));
+        }
+        let last = *over.last().unwrap();
+        last_rings.push((last.z, last.truncate().length() - out));
+        let first_below = below.first().unwrap();
+        worst_join = worst_join.max(last.z - first_below.z);
+        for w in below.windows(2) {
+            assert!(
+                w[0].z - w[1].z < STEPOVER + tol,
+                "{theta}: level rings {} apart",
+                w[0].z - w[1].z
+            );
+        }
+        assert!((below.last().unwrap().z - BOTTOM).abs() < tol);
+    }
+    // Over the part, a stepover apart along the surface the tool rides.
+    assert!(worst_field < 1.05 * STEPOVER, "rings {worst_field} apart");
+    // The last ring over the part along where the tool leaves it, all round:
+    // as high to within a few hundredths, the tool's side on the widest.
+    let (lo, hi) = last_rings
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(lo, hi), &(z, _)| {
+            (lo.min(z), hi.max(z))
+        });
+    assert!(
+        hi - lo < 0.05,
+        "the last ring over the part from {lo} to {hi} high"
+    );
+    // Seen from above on the bulge's widest offset by the tool, to what its
+    // chords keep to: inside it where the outline bulges out, outside where
+    // it curves in, 0.052 measured.
+    for &(_, off) in &last_rings {
+        assert!(
+            off.abs() < 2.0 * tol,
+            "the last ring over the part {off} off the widest"
+        );
+    }
+    // And the level rings start within a stepover of it.
+    assert!(
+        worst_join < STEPOVER + tol,
+        "{worst_join} from the last ring to the first level one"
+    );
+}
+
+/// A cup, its floor avoided, its wall straight up from it at `degrees` to a
+/// sharp rim: upright at 90°.
+fn cup(degrees: f64) -> Body {
+    let lean = (RIM - FLOOR) / degrees.to_radians().tan();
+    let (floor, top, rim) = (
+        |_: f64| CUP,
+        move |_: f64| CUP + lean,
+        move |_: f64| CUP + lean + 3.0,
+    );
+    ringed(
+        &[(&floor, FLOOR), (&top, RIM), (&rim, RIM), (&rim, 0.0)],
+        &[1, 2, 3],
+        4,
+    )
+}
+
+/// The cup's floor's radius.
+const CUP: f64 = 10.0;
+
+/// Up a pocket's wall from a floor avoided to a sharp rim, upright or a few
+/// degrees off it, the rings run a stepover apart on the wall from its foot
+/// to its top, each whole and level. Beside an upright wall the tool's path
+/// stands upright, its foot where it rests on the floor and its top where it
+/// starts rolling over the rim: dropped there it rests at one or the other,
+/// and the wall is seen only from beside it.
+#[test]
+fn up_an_upright_wall_the_rings_reach_its_top() {
+    let r = 2.0;
+    for degrees in [90.0, 89.0, 87.0, 85.0] {
+        let body = cup(degrees);
+        let bodies: Bodies<'_> = [("bowl", &body)].into_iter().collect();
+        let job: Job = toml::from_str(JOB).unwrap();
+        let result = run_setup(&job, 0, &bodies).unwrap();
+        let op = &result.operations[0];
+        assert_eq!(result.verify.gouged, 0, "{degrees}°");
+        let mut passes: Vec<Vec<DVec3>> = Vec::new();
+        let mut cutting = false;
+        for m in op.path.moves() {
+            if m.role == MoveRole::Cut {
+                if !cutting {
+                    passes.push(Vec::new());
+                }
+                if let Some(p) = passes.last_mut() {
+                    p.push(m.to);
+                }
+            }
+            cutting = m.role == MoveRole::Cut;
+        }
+        // The passes up the wall: above the floor, below the rim, inside the
+        // cup.
+        let lean = (RIM - FLOOR) / degrees.to_radians().tan();
+        let on_wall = |q: &DVec3| {
+            q.z > FLOOR + 0.01 && q.z < RIM - 0.01 && q.truncate().length() < CUP + lean
+        };
+        let rings: Vec<&Vec<DVec3>> = passes.iter().filter(|p| p.iter().all(on_wall)).collect();
+        // A ball touches a wall at `degrees` its radius times one less its
+        // cosine above its tip; above where that is the rim, it rolls over
+        // the rim's edge.
+        let above = r * (1.0 - degrees.to_radians().cos());
+        let rolls = RIM - above;
+        let mut heights = Vec::new();
+        for p in &rings {
+            let (lo, hi) = p
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), q| {
+                    (lo.min(q.z), hi.max(q.z))
+                });
+            if lo >= rolls - 0.01 {
+                continue;
+            }
+            // Level to the field's placing up a cliff, from its edges'
+            // profiles, some across the grid and some aslant it, as down a
+            // wall: a tenth or two at its foot.
+            assert!(
+                hi - lo < 0.25 * STEPOVER,
+                "{degrees}°: a ring up the wall from {lo} to {hi}"
+            );
+            let around: f64 = p.windows(2).map(|w| w[0].distance(w[1])).sum();
+            assert!(
+                around > 0.95 * std::f64::consts::TAU * (CUP - r),
+                "{degrees}°: a ring up the wall {around} round"
+            );
+            heights.push((0.5 * (lo + hi) + above).min(RIM));
+        }
+        heights.sort_by(f64::total_cmp);
+        // How far up the wall each touches, from the floor's touch to the rim.
+        let up = |z: f64| (z - FLOOR) / degrees.to_radians().sin();
+        let mut along: Vec<f64> = heights.iter().map(|&z| up(z)).collect();
+        along.insert(0, up(FLOOR + above));
+        along.push(up(RIM));
+        for w in along.windows(2) {
+            assert!(
+                w[1] - w[0] <= STEPOVER + 2.0 * job.tolerance,
+                "{degrees}°: rings {} apart up the wall: {along:.2?}",
+                w[1] - w[0]
+            );
+        }
+    }
 }

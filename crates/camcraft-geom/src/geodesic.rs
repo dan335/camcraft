@@ -1,4 +1,4 @@
-//! Distance along a lifted surface, from seeds: fast marching on a [`TriGrid`].
+//! Distance along a lifted surface, from seeds: fast marching on a [`TriSurface`].
 //!
 //! # Why fast marching
 //!
@@ -19,7 +19,7 @@ use std::collections::BinaryHeap;
 
 use glam::DVec3;
 
-use crate::trigrid::TriGrid;
+use crate::trigrid::TriSurface;
 
 /// A node whose distance is known to start with.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -35,6 +35,10 @@ pub struct Seed {
 pub struct Distances {
     /// Each node's distance from the seeds; infinite where none was reached.
     pub d: Vec<f64>,
+    /// The seed each node's distance was carried from, by its place among the
+    /// seeds; `u32::MAX` where none was. Where fronts from far-apart seeds
+    /// meet, neighbouring nodes have far-apart seeds: the field's ridge.
+    pub from: Vec<u32>,
 }
 
 impl Distances {
@@ -51,7 +55,11 @@ impl Distances {
 /// `position` is where a node is in 3D: the grid's own lifted point, or somewhere
 /// else the surface is measured at. A seed may be lowered by the march, if a
 /// shorter way to it is found.
-pub fn march(grid: &TriGrid, seeds: &[Seed], position: impl Fn(u32) -> Option<DVec3>) -> Distances {
+pub fn march(
+    grid: &impl TriSurface,
+    seeds: &[Seed],
+    position: impl Fn(u32) -> Option<DVec3>,
+) -> Distances {
     march_along(grid, seeds, position, |_, _| None)
 }
 
@@ -61,28 +69,39 @@ pub fn march(grid: &TriGrid, seeds: &[Seed], position: impl Fn(u32) -> Option<DV
 /// way down and along. A triangle with such an edge is unfolded flat by its
 /// three lengths, and the front carried across it as across any other.
 pub fn march_along(
-    grid: &TriGrid,
+    grid: &impl TriSurface,
     seeds: &[Seed],
     position: impl Fn(u32) -> Option<DVec3>,
     along: impl Fn(u32, u32) -> Option<f64>,
 ) -> Distances {
     let count = usize::try_from(grid.nodes()).unwrap_or(0);
     let mut d = vec![f64::INFINITY; count];
+    let mut from = vec![u32::MAX; count];
     let mut known = vec![false; count];
     let mut heap: BinaryHeap<Reverse<(u64, u32)>> = BinaryHeap::new();
 
-    for s in seeds {
+    for (i, s) in (0u32..).zip(seeds) {
         if !(s.distance.is_finite() && s.distance >= 0.0) || !grid.defined(s.node) {
             continue;
         }
-        if let Some(slot) = usize::try_from(s.node).ok().and_then(|i| d.get_mut(i))
+        if let Some(slot) = usize::try_from(s.node).ok().and_then(|n| d.get_mut(n))
             && s.distance < *slot
         {
             *slot = s.distance;
+            if let Some(f) = usize::try_from(s.node).ok().and_then(|n| from.get_mut(n)) {
+                *f = i;
+            }
             // Not negative, so the bits order as the values do.
             heap.push(Reverse((s.distance.to_bits(), s.node)));
         }
     }
+    let source = |from: &[u32], n: u32| {
+        usize::try_from(n)
+            .ok()
+            .and_then(|i| from.get(i))
+            .copied()
+            .unwrap_or(u32::MAX)
+    };
 
     let value = |d: &[f64], n: u32| {
         usize::try_from(n)
@@ -117,34 +136,41 @@ pub fn march_along(
                 let other = nodes.iter().copied().find(|&m| m != node && m != c);
                 let to_c = along(node, c);
                 let edge = t_node + to_c.unwrap_or_else(|| p.distance(pc));
-                let candidate = match other {
+                // Carried from the nearer of the corners it comes across from.
+                let (candidate, came) = match other {
                     Some(o) if is_known(&known, o) => match position(o) {
                         Some(po) => {
                             let t_o = value(&d, o);
-                            match (to_c, along(o, c), along(node, o)) {
+                            let came = if t_o < t_node { o } else { node };
+                            let across = match (to_c, along(o, c), along(node, o)) {
                                 (None, None, None) => update((p, t_node), (po, t_o), pc),
                                 (nc, oc, no) => update_lengths(
                                     (t_node, nc.unwrap_or_else(|| p.distance(pc))),
                                     (t_o, oc.unwrap_or_else(|| po.distance(pc))),
                                     no.unwrap_or_else(|| p.distance(po)),
                                 ),
-                            }
+                            };
+                            (across, came)
                         }
-                        None => edge,
+                        None => (edge, node),
                     },
-                    _ => edge,
+                    _ => (edge, node),
                 };
                 if let Some(slot) = usize::try_from(c).ok().and_then(|i| d.get_mut(i))
                     && candidate < *slot
                 {
                     *slot = candidate;
+                    let seed = source(&from, came);
+                    if let Some(f) = usize::try_from(c).ok().and_then(|i| from.get_mut(i)) {
+                        *f = seed;
+                    }
                     heap.push(Reverse((candidate.to_bits(), c)));
                 }
             }
         }
     }
 
-    Distances { d }
+    Distances { d, from }
 }
 
 /// The distance at `c` from a front known at `a` and `b`, the other corners of a
@@ -217,6 +243,7 @@ fn across((ta, edge_b): (f64, f64), (tb, edge_a): (f64, f64), cos: f64) -> f64 {
 )]
 mod tests {
     use super::*;
+    use crate::trigrid::TriGrid;
     use glam::{DVec2, dvec2};
 
     /// A grid of `n × n` nodes `pitch` apart with heights from `height`.

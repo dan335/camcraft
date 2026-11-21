@@ -7,7 +7,7 @@
 
 use camcraft_geom::contour::{Contour, Region};
 use camcraft_geom::steps::bounded_count;
-use camcraft_geom::trigrid::TriGrid;
+use camcraft_geom::trigrid::{TriGrid, TriSurface};
 use glam::DVec2;
 use rayon::prelude::*;
 

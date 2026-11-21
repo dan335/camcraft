@@ -107,10 +107,15 @@ thread or drilling), a tool, heights, passes and linking. Scallop (`"scallop"`) 
 along the surface, offset in from the boundary and from where the tool stops
 touching the part, so the cusp is the same on a slope as on the flat
 ([decision 0009](decisions/0009-scallop-distance-field.md)). Its passes cut every
-slope, walls included, a stepover apart along the surface down them; below
-where the tool last rests on the part from above, as down a part's upright
-outside, level rings a stepover apart finish it to the Bottom
-([decision 0035](decisions/0035-scallop-over-every-slope.md)). It cuts
+slope, walls included, a stepover apart along the surface down them, right
+down to the line where the tool leaves the part from above, found exactly,
+their last along it; below that, as down a part's upright or tucked-in
+outside, level rings a stepover apart from a stepover under its highest
+point finish it to the Bottom
+([decision 0035](decisions/0035-scallop-over-every-slope.md),
+[0037](decisions/0037-scallop-to-where-the-tool-leaves-the-part.md)). Up an
+upright wall above a face avoided, as a pocket's above its floor, the rings
+run up the wall from its foot. It cuts
 `direction = "both-ways"` (closed rings climbing, open passes from their nearer
 end) unless `"climb"` or `"conventional"`, `order = "outside-in"` unless
 `"inside-out"`, and only where the surface is between `slope_from` and

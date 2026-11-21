@@ -1,4 +1,4 @@
-//! Lines of equal value across a field on a [`TriGrid`], and how the regions they
+//! Lines of equal value across a field on a [`TriSurface`], and how the regions they
 //! bound nest.
 //!
 //! # Marching triangles
@@ -25,7 +25,7 @@ use std::collections::HashMap;
 
 use glam::DVec2;
 
-use crate::trigrid::TriGrid;
+use crate::trigrid::TriSurface;
 
 /// A line of equal value.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -48,7 +48,7 @@ fn value(d: &[f64], n: u32) -> Option<f64> {
 
 /// The triangles each level `k · step` crosses, `k` from 1: index `k` holds level
 /// `k`'s, index 0 none. At most `max_levels` levels.
-pub fn crossings(grid: &TriGrid, d: &[f64], step: f64, max_levels: u32) -> Vec<Vec<u32>> {
+pub fn crossings(grid: &impl TriSurface, d: &[f64], step: f64, max_levels: u32) -> Vec<Vec<u32>> {
     let mut levels: Vec<Vec<u32>> = Vec::new();
     if !(step.is_finite() && step > 0.0) {
         return levels;
@@ -100,7 +100,7 @@ fn edge(a: u32, b: u32) -> u64 {
 
 /// The lines where the field `d` is `level`, across `triangles`.
 pub fn lines(
-    grid: &TriGrid,
+    grid: &impl TriSurface,
     d: &[f64],
     level: f64,
     triangles: impl IntoIterator<Item = u32>,
@@ -115,7 +115,7 @@ pub fn lines(
 }
 
 /// The piece of the level's line in triangle `t`, higher side on its left.
-fn piece(grid: &TriGrid, d: &[f64], level: f64, t: u32) -> Option<Piece> {
+fn piece(grid: &impl TriSurface, d: &[f64], level: f64, t: u32) -> Option<Piece> {
     // Each corner: its node, its value, and whether it is at or above the level.
     let [a, b, c] = grid
         .triangle(t)?
@@ -260,7 +260,7 @@ pub struct Region {
 ///
 /// Regions come out top level first; every region of level `k > 0` has a parent at
 /// `k − 1`.
-pub fn nest(grid: &TriGrid, d: &[f64], step: f64, lines: &[Vec<IsoLine>]) -> Vec<Region> {
+pub fn nest(grid: &impl TriSurface, d: &[f64], step: f64, lines: &[Vec<IsoLine>]) -> Vec<Region> {
     let mut regions: Vec<Region> = Vec::new();
     let count = grid.nodes();
     // Every node on or above level 0, highest first, ties by number.
@@ -512,6 +512,7 @@ impl Sets {
 )]
 mod tests {
     use super::*;
+    use crate::trigrid::TriGrid;
     use glam::dvec2;
 
     /// A flat grid of `n × n` nodes `pitch` apart, and a field from `f`.

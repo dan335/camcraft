@@ -6,10 +6,11 @@
 //! none, and the field's lines are passes that are then cut on the part exactly.
 
 use camcraft_geom::contour::Region;
+use camcraft_geom::cut::UNKNOWN;
 use camcraft_geom::heightmap::narrow;
 use camcraft_geom::isoline::{IsoLine, crossings, lines};
 use camcraft_geom::mesh::closest_point_on_segment;
-use camcraft_geom::trigrid::TriGrid;
+use camcraft_geom::trigrid::{TriGrid, TriSurface};
 use glam::DVec2;
 use rayon::prelude::*;
 
@@ -23,9 +24,18 @@ pub(crate) fn pitch(stepover: f64, max_radius: f64) -> f64 {
     (stepover / 3.0).min(max_radius / 2.0).max(1e-3)
 }
 
+/// The class of a node asked its height that has none: nothing is under the
+/// tool there ([`AreaGrid::sampled`]).
+pub(crate) const OFF_PART: u32 = u32::MAX - 2;
+
 /// The lines of the field `d` over `grid` at each whole `step`, up to `max` of
 /// them, found level by level in parallel: level `k`'s at index `k`, none at 0.
-pub(crate) fn level_lines(grid: &TriGrid, d: &[f64], step: f64, max: u32) -> Vec<Vec<IsoLine>> {
+pub(crate) fn level_lines(
+    grid: &(impl TriSurface + Sync),
+    d: &[f64],
+    step: f64,
+    max: u32,
+) -> Vec<Vec<IsoLine>> {
     crossings(grid, d, step, max)
         .par_iter()
         .enumerate()
@@ -62,13 +72,29 @@ impl AreaGrid {
     /// stop.
     pub(crate) fn over(
         area: &Region,
-        (lo, hi): (DVec2, DVec2),
-        mut pitch: f64,
+        bounds: (DVec2, DVec2),
+        pitch: f64,
         coarsest: f64,
         max_nodes: u32,
         watch: &Watch,
         height: impl Fn(f64, f64, &mut Vec<u32>) -> Option<f64> + Sync,
     ) -> Result<Self, StrategyError> {
+        let sample = |x: f64, y: f64, scratch: &mut Vec<u32>| height(x, y, scratch).map(|z| (z, 0));
+        Self::sampled(area, bounds, pitch, coarsest, max_nodes, watch, sample).map(|(on, _)| on)
+    }
+
+    /// As [`over`](Self::over), `sample` giving each node asked a height and
+    /// a class of the caller's: with each node's class, [`UNKNOWN`] where it
+    /// was not asked and [`OFF_PART`] where it has no height.
+    pub(crate) fn sampled(
+        area: &Region,
+        (lo, hi): (DVec2, DVec2),
+        mut pitch: f64,
+        coarsest: f64,
+        max_nodes: u32,
+        watch: &Watch,
+        sample: impl Fn(f64, f64, &mut Vec<u32>) -> Option<(f64, u32)> + Sync,
+    ) -> Result<(Self, Vec<u32>), StrategyError> {
         let size = |pitch: f64| {
             let span = hi - lo + DVec2::splat(4.0 * pitch);
             let nx = count((span.x / pitch).ceil() + 1.0)?;
@@ -135,24 +161,30 @@ impl AreaGrid {
                 }
             });
 
-        // The height at each, row by row in parallel.
+        // The height and class at each, row by row in parallel.
         let mut z = vec![f32::NAN; count_nodes];
+        let mut class = vec![UNKNOWN; count_nodes];
         let rows = 1.0 / f64::from(ny.max(1));
         z.par_chunks_mut(wide.max(1))
+            .zip(class.par_chunks_mut(wide.max(1)))
             .enumerate()
-            .for_each_init(Vec::new, |scratch, (iy, row)| {
+            .for_each_init(Vec::new, |scratch, (iy, (row, classes))| {
                 if watch.stopped() {
                     return;
                 }
                 watch.add(rows);
                 let y = origin.y + f64::from(u32::try_from(iy).unwrap_or(0)) * pitch;
-                for (ix, cell) in row.iter_mut().enumerate() {
+                for (ix, (cell, k)) in row.iter_mut().zip(classes.iter_mut()).enumerate() {
                     if !asked.get(iy * wide + ix).copied().unwrap_or(false) {
                         continue;
                     }
                     let x = origin.x + f64::from(u32::try_from(ix).unwrap_or(0)) * pitch;
-                    if let Some(v) = height(x, y, scratch) {
-                        *cell = narrow(v);
+                    match sample(x, y, scratch) {
+                        Some((v, c)) => {
+                            *cell = narrow(v);
+                            *k = c;
+                        }
+                        None => *k = OFF_PART,
                     }
                 }
             });
@@ -160,12 +192,15 @@ impl AreaGrid {
         // A node not beside the area was given no height, so takes no part.
         let grid = TriGrid::new(origin, pitch, nx, ny, z)
             .ok_or_else(|| StrategyError::Region("the field's grid could not be made".into()))?;
-        Ok(Self {
-            grid,
-            inside,
-            asked,
-            coarsened,
-        })
+        Ok((
+            Self {
+                grid,
+                inside,
+                asked,
+                coarsened,
+            },
+            class,
+        ))
     }
 
     /// The cells where the tool leaves the part, each by its corners: a corner
