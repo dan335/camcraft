@@ -388,9 +388,24 @@ fn profile(theta: f64) -> [DVec2; 5] {
 /// stepover.
 #[test]
 fn inside_out_no_ring_rolls_over_the_rim() {
+    no_ring_rolls_over_the_rim("inside-out");
+}
+
+/// Outside in round the wider bowl, the mirror: the zones are cut from the
+/// outermost in, the inside's measured from the rim's inner edge and blended
+/// into the floor's edge (decision 0039). No pass crosses either edge rolling
+/// over it; and either side of each, the rings are no further apart than a
+/// stepover.
+#[test]
+fn outside_in_no_ring_rolls_over_the_rim() {
+    no_ring_rolls_over_the_rim("outside-in");
+}
+
+/// [`inside_out_no_ring_rolls_over_the_rim`], cut `order`.
+fn no_ring_rolls_over_the_rim(order: &str) {
     let body = wide_bowl();
     let bodies: Bodies<'_> = [("bowl", &body)].into_iter().collect();
-    let job: Job = toml::from_str(JOB).unwrap();
+    let job: Job = toml::from_str(&JOB.replace("inside-out", order)).unwrap();
     let result = run_setup(&job, 0, &bodies).unwrap();
     let op = &result.operations[0];
     assert_eq!(result.verify.gouged, 0);
@@ -450,10 +465,13 @@ fn inside_out_no_ring_rolls_over_the_rim() {
             }
         }
     }
-    assert!(rolling.is_empty(), "rolling over the rim: {rolling:?}");
+    assert!(
+        rolling.is_empty(),
+        "{order}: rolling over the rim: {rolling:?}"
+    );
     assert!(
         widest.0 < 1.1 * STEPOVER,
-        "rings {widest:?} apart where the tool touches the rim"
+        "{order}: rings {widest:?} apart where the tool touches the rim"
     );
 }
 

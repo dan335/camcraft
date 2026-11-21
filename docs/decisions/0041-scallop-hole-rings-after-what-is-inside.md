@@ -83,14 +83,13 @@ dome avoided, now feeding 4.8% less than Fusion's, keeps a bound of 5%.
 
 ## Still not done
 
-The 7 lifts left on the user's bowl cut outside in:
+The 2 lifts left on the user's bowl cut outside in:
 
 - One from the bottom of the rings below where the tool leaves the part,
   cut first, at (137.5, 139.4), to the start of the first ring over the part
   at (115.6, 12.3), 129 mm off across the bowl, as before.
-- Five near the rim, 28 to 76 mm each, from the end of one pass over the
-  rim and the wall's top (between Z-11 and the rim) to the start of the next
-  across the bowl: the same five, to the coordinate, as before. Outside in
-  has no strips, and the rings that meet the rim's edges at a slant come out
-  in pieces there, one ending far from where the next starts.
 - The last retract.
+
+The five near the rim this left, where the rings met the rim's edges at a
+slant and came out in pieces there, went when outside in had zones too
+(decision 0039).

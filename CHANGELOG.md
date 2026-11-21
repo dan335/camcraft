@@ -6,6 +6,18 @@ the same notes at more length.
 
 ## Unreleased
 
+- **Outside in, Scallop stops at a sharp rim and starts again past it too**
+  ([decision 0039](docs/decisions/0039-scallop-zones-at-a-sharp-rim.md)).
+  Cut outside in, a user's bowl's rings still crossed its flat rim's two
+  edges at a slant and came out in pieces there: 7 rings rolled over each
+  edge, and the tool lifted 5 times between the pieces. Now the zones either
+  side of each edge are cut from the outermost in, each measured in from its
+  outer edges and its rings blended into the one closed edge inside it, the
+  strip's border or the floor's edge: one ring touches each edge, and it
+  lifts twice, where 7 times, feeding 40.70 m where 39.82, the rings under
+  the rim a stepover apart. Fusion's `ops_3d` and Scallop's comparisons with
+  Fusion are as they were.
+
 - **From the boundary in, Scallop cuts a region's rings round its holes after
   what is inside it** ([decision 0041](docs/decisions/0041-scallop-hole-rings-after-what-is-inside.md)).
   A region with a hole, measured from both its edges, has a ring toward its
@@ -49,8 +61,7 @@ the same notes at more length.
   on the seam, and it feeds 41.90 m where it fed 42.87, lifting once at the
   end as before; the simulated stock is left no higher on the wall's top,
   the rim or the outside's top. An edge that runs off the area, or along a
-  wall too narrow seen from above, is crossed as before, and outside in is
-  as it was. Where the rim breaks the ground into zones whose rings cannot
+  wall too narrow seen from above, is crossed as before. Where the rim breaks the ground into zones whose rings cannot
   all close, as on a block with an off-centre pocket, whose rings from the
   rim out would end in arcs on the block's edge, the ground is cut as one,
   as it was: the program is byte for byte the one before, lifting 3 times.

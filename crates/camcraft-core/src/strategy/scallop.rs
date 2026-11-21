@@ -76,6 +76,7 @@ pub use crate::strategy::nesting::Order;
 use crate::strategy::parallel::{ParallelParams, ParallelReport, Run};
 use crate::strategy::{StrategyError, check, slope, with_edge};
 
+use blend::Band;
 use distance::{Field, Fields};
 use ground::Ground;
 use lay::{Layer, Worked};
@@ -241,25 +242,28 @@ pub fn scallop_finish(
     };
     let sampled = Ground::sampled(seat, area, bounds, params, &mut report)?;
     // Strips break the ground into zones so that every ring closes. Where a
-    // zone's rings cannot close, its far edge refused, the zones are not
-    // doing their job, and the ground is cut as one, its strips ground again
-    // (decision 0039).
+    // zone's rings cannot close, the band into its far edge refused, the
+    // zones are not doing their job, and the ground is cut as one, its strips
+    // ground again (decision 0039). The bands found go on to the plan.
     let fields = Field::zones(seat, &sampled, area, params, &mut report);
+    let bands = blends(seat, &sampled, &fields, area, params);
     let unstripped;
-    let (ground, Fields { zones, beyond }) =
-        if !sampled.has_strips() || every_zone_closes(seat, &sampled, &fields, area, params) {
-            (&sampled, fields)
+    let (ground, Fields { zones, beyond }, bands) =
+        if !sampled.has_strips() || every_zone_closes(&bands) {
+            (&sampled, fields, bands)
         } else {
             unstripped = sampled.without_strips(seat, params)?;
             let fields = Field::zones(seat, &unstripped, area, params, &mut report);
-            (&unstripped, fields)
+            let bands = blends(seat, &unstripped, &fields, area, params);
+            (&unstripped, fields, bands)
         };
     report.leaves_at = ground.leaves_at(area);
     report.walls_from = report.leaves_at;
     let view = ground.cut.view(None);
     let mut planned: Vec<Planned> = zones
         .iter()
-        .map(|field| rings::plan(seat, &view, (field, area), params, &mut report))
+        .zip(bands)
+        .map(|(field, bands)| rings::plan(seat, &view, (field, area), bands, params, &mut report))
         .collect();
 
     // The field and its lines are done: what is left is laying each node's
@@ -313,23 +317,35 @@ pub fn scallop_finish(
     Ok((path, report))
 }
 
-/// Whether every zone of `fields` over `ground` closes its rings: has no far
-/// edge, or blends into one, asked as the plan asks it ([`blend::band`]).
-fn every_zone_closes(
+/// Each zone of `fields` over `ground`: its band into each of its far edges,
+/// where its rings blend into that edge ([`blend::band`]).
+fn blends(
     seat: &Seat<'_>,
     ground: &Ground,
     fields: &Fields<'_>,
     area: &Region,
     params: &ScallopParams,
-) -> bool {
+) -> Vec<Vec<Option<Band>>> {
     let grid = ground.cut.view(None);
     let diameter = 2.0 * seat.tool().max_radius();
-    fields.zones.iter().all(|zone| {
-        zone.far_edges.is_empty()
-            || zone.far_edges.iter().any(|far| {
-                blend::band(&grid, (zone, area), far, params.stepover, diameter).is_some()
-            })
-    })
+    fields
+        .zones
+        .iter()
+        .map(|zone| {
+            zone.far_edges
+                .iter()
+                .map(|far| blend::band(&grid, (zone, area), far, params.stepover, diameter))
+                .collect()
+        })
+        .collect()
+}
+
+/// Whether every zone closes its rings, its bands into its far edges
+/// `bands`: it has no far edge, or blends into one.
+fn every_zone_closes(bands: &[Vec<Option<Band>>]) -> bool {
+    bands
+        .iter()
+        .all(|zone| zone.is_empty() || zone.iter().any(Option::is_some))
 }
 
 /// The length of a polyline.

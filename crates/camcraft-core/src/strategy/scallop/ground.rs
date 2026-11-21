@@ -40,7 +40,6 @@ use crate::cutter::surfaces::{Rest, Seat};
 use crate::cutter::tool::ToolProfile;
 use crate::strategy::StrategyError;
 use crate::strategy::field::{self, AreaGrid, OFF_PART};
-use crate::strategy::nesting::Order;
 
 use super::{MAX_HALVINGS, ScallopParams, ScallopReport, guided, length};
 
@@ -103,8 +102,8 @@ impl Ground {
     /// stepover apart, and fine enough for the tool's own curvature;
     /// coarsened, if it must be, to stay within the budget, and no further
     /// than half a stepover. The tool's height at each node, dropped exactly,
-    /// and whether a face it machines holds it there. Inside out, the strips
-    /// where it rolls over a sharp edge round a hole are breaks in it.
+    /// and whether a face it machines holds it there. The strips where it
+    /// rolls over a sharp edge round a hole are breaks in it.
     pub(super) fn sampled(
         seat: &Seat<'_>,
         area: &Region,
@@ -113,8 +112,7 @@ impl Ground {
         report: &mut ScallopReport,
     ) -> Result<Self, StrategyError> {
         let s = params.stepover;
-        let strips = params.order == Order::InsideOut;
-        let class_of = |rest: Rest, rolling: bool| match (rest.machined, rolling && strips) {
+        let class_of = |rest: Rest, rolling: bool| match (rest.machined, rolling) {
             (false, _) => AVOIDED,
             (true, true) => ROLLING,
             (true, false) => MACHINED,

@@ -16,9 +16,12 @@
 //! out, each is measured from its inner edges: the area's holes on it, faces
 //! avoided, and the far border of the strip inside it; its outer edge, the
 //! near border of the strip round it or where the tool leaves the part, is
-//! its far end. A zone with no inner edge is measured from every edge of it,
-//! as the whole ground with none is; inside the last smooth ring going in,
-//! its rings are laid out from a spine instead ([`spine`]).
+//! its far end. Outside in, from the outermost in, the mirror: a zone with one
+//! inner edge, closed, and no hole of the area on it is measured from its
+//! outer edges, and that inner edge is its far end. Any other zone is
+//! measured from every edge of it, as the whole ground with no strip is;
+//! inside out, inside the last smooth ring going in, its rings are laid out
+//! from a spine instead ([`spine`]).
 //!
 //! The whole ground is one field, measured out from every inner edge of it or
 //! from every edge, where a zone's is measured from its own: the same seeds
@@ -66,8 +69,9 @@ pub(super) struct Field<'g> {
     /// and the strips either side.
     pub(super) edges: Vec<Edge>,
     /// Measured out from the inner edges, its outer edges: where the tool
-    /// leaves the part, or the near border of a strip round it. The field's
-    /// far end, cut last.
+    /// leaves the part, or the near border of a strip round it; measured in
+    /// toward a zone's one inner edge, that edge. The field's far end, cut
+    /// last.
     pub(super) far_edges: Vec<Edge>,
     /// The band of the grid cut the zone is; `None`, all of the ground.
     band: Option<u32>,
@@ -202,8 +206,10 @@ fn whole<'g>(
 
 /// A field for each band of `ground`, its `edges` broken by strips, inside
 /// `area` with `holes`, in the order they are cut: inside out, from the
-/// innermost. Measured out from the zone's inner edges, where it has any;
-/// from every edge of it, where it has none. Each of the area's rings is cut
+/// innermost, and outside in, from the outermost. Inside out, measured out
+/// from the zone's inner edges, where it has any; outside in, in from its
+/// outer edges toward its one inner edge, where that is closed and no hole of
+/// the area is on the zone; from every edge of it otherwise. Each of the area's rings is cut
 /// with the zone most of it lies beside, or, beside none, the last
 /// ([`Field::owns`]).
 fn zoned<'g>(
@@ -237,28 +243,45 @@ fn zoned<'g>(
     let extents = extents(ground);
     let mut zones: Vec<(f64, u32, Field<'g>)> = Vec::new();
     for (b, edges) in (0u32..).zip(by_band) {
+        let inner_node =
+            |n: u32, class: u32| class == AVOIDED || (class == ROLLING && inner_nodes.contains(&n));
         let mut seeds: Vec<Seed> = hole_feet
             .iter()
             .filter(|s| band_at(s.node) == b)
             .copied()
             .collect();
+        let holed = !seeds.is_empty();
         seeds.extend(seeds_along(cut, |n, class| {
-            band_at(n) == b && (class == AVOIDED || (class == ROLLING && inner_nodes.contains(&n)))
+            band_at(n) == b && inner_node(n, class)
         }));
         let outward = order == Order::InsideOut && !seeds.is_empty();
+        // Outside in, in toward the zone's one inner edge, where it is closed
+        // and no hole of the area is on the zone: that edge its far end.
+        let inward = (order == Order::OutsideIn && !holed)
+            .then(|| one_closed(&edges, inner))
+            .flatten();
         if !outward {
             seeds = area_feet
                 .iter()
                 .filter(|s| band_at(s.node) == b)
                 .copied()
                 .collect();
-            seeds.extend(seeds_along(cut, |n, _| band_at(n) == b));
+            seeds.extend(seeds_along(cut, |n, class| {
+                band_at(n) == b && (inward.is_none() || !inner_node(n, class))
+            }));
         }
         if seeds.is_empty() {
             continue;
         }
         let d = measured(ground, area, &seeds, outward);
-        let (edges, far_edges) = edges.into_iter().partition(|e| !outward || inner(e));
+        let (far_edges, edges): (Vec<_>, Vec<_>) = edges
+            .into_iter()
+            .enumerate()
+            .partition(|&(i, ref e)| (outward && !inner(e)) || inward == Some(i));
+        let (far_edges, edges) = (
+            far_edges.into_iter().map(|(_, e)| e).collect(),
+            edges.into_iter().map(|(_, e)| e).collect(),
+        );
         let extent = extents
             .get(usize::try_from(b).unwrap_or(usize::MAX))
             .copied();
@@ -286,6 +309,16 @@ fn zoned<'g>(
         zone.last = true;
     }
     zones.into_iter().map(|(.., zone)| zone).collect()
+}
+
+/// Which of `edges` is the one `inner` says is, where there is one and it is
+/// closed.
+fn one_closed(edges: &[Edge], inner: impl Fn(&Edge) -> bool) -> Option<usize> {
+    let mut found = edges.iter().enumerate().filter(|(_, e)| inner(e));
+    match (found.next(), found.next()) {
+        (Some((i, e)), None) if e.closed => Some(i),
+        _ => None,
+    }
 }
 
 /// Whether closed `edge` turns left round what it bounds, seen from above:

@@ -56,8 +56,8 @@ floor avoided:
   pair across the crease angle. The crease angle is one constant,
   `topology::CREASE_DEGREES`.
 - **A ring-shaped strip with ground round it is a break in the ground**
-  (`scallop::ground`). Inside out, the nodes where the tool rolls are a class
-  of their own; a piece of them, its nodes joined across cells, corners
+  (`scallop::ground`). In either order, the nodes where the tool rolls are a
+  class of their own; a piece of them, its nodes joined across cells, corners
   included, is kept as one only where it runs round one hole, its Euler
   number from the grid's squares of four nodes (Gray's) nought, and the ground
   lies all round it two nodes deep. Any other rolling node is ground as
@@ -75,8 +75,12 @@ floor avoided:
   and the strip's far border round its hole. Its outer edge, the near border
   of the strip round it or where the tool leaves the part, is its far end,
   and its rings blend into it as into the line where the tool leaves the part
-  (decision 0038). A zone with no inner edge is measured from every edge of
-  it, as the whole ground with none is. Each of the area's rings is cut with
+  (decision 0038). Outside in, the mirror, from the outermost in: a zone with
+  one inner edge, closed, and no hole of the area on it is measured from its
+  outer edges, and that inner edge, the near border of the strip inside it
+  or the edge of a face avoided, is its far end, its rings blended into it.
+  Any other zone is measured from every edge of it, as the whole ground with
+  no strip is. Each of the area's rings is cut with
   the zone most of it lies beside, or the last. One field a zone, the trees
   cut one after another, rather than one field with each zone's levels
   offset: each zone's far edge, band and order are its own, and the ground,
@@ -90,7 +94,8 @@ floor avoided:
   ground again, the grid cut a second time from the same drops, and the
   field measured over it. It is all or nothing for the operation; choosing
   strip by strip, keeping those whose zones close and grinding the rest
-  again, was not tried.
+  again, was not tried. The bands the test finds go on to the plan, so none
+  is worked out twice.
 - **Between zones the tool rolls over the edge once**: the link from the
   near border's ring to the far border's, on the seam, stays down over the
   part, a few millimetres. The seam carries on into the next zone.
@@ -142,8 +147,9 @@ the wall overhangs.
 
 The same job with the floor's group removed: 40.96 m and 40.86 m, one lift
 each; the most left on the wall's top 10 mm 2.201 mm before and 0.884 now,
-the rim and the outside's top as above. Outside in, both programs are byte
-for byte as they were: zones are built inside out only.
+the rim and the outside's top as above. Outside in, both programs were then
+byte for byte as before: zones were built inside out only, until the mirror
+below.
 
 On Fusion's `ops_3d` cut inside out with its 6 mm ball at a stepover of
 0.6, the pocket's rim is a strip, and the rest of the part is a zone
@@ -167,6 +173,49 @@ and 2 or 3 over the outer; now none, and either side of each edge the rings
 are no further apart than a stepover where the tool touches the part. On
 Fusion's `ops_3d`, cut outside in, Scallop's programs and Contour's are as
 they were.
+
+### Outside in
+
+The user's bowl, outside in, the floor avoided, before the mirror (163a9dc)
+and with it:
+
+| | before | now |
+|---|---|---|
+| Fed | 39.82 m | 40.70 m |
+| of it, inside / rim | 16.88 / 2.45 m | 17.29 / 2.43 m |
+| of it, outside above Z-34 / below | 12.81 / 7.68 m | 13.30 / 7.68 m |
+| Rapid | 0.56 m | 0.28 m |
+| Lifts | 7 | 2: the first, as before, and the last retract |
+| Rings with the tool on an edge's line over a tenth of their length | 7 on each edge | 1, the border's |
+| Most left inside the rim, Z-10 to -5 (simulated) | 0.232 mm | 0.226 mm |
+| columns there over 0.1 mm | 176 | 254 |
+
+The extra 0.88 m is inside, 0.41 m, and on the outside above Z-34, 0.49 m,
+where the two bands are. The inside's band into the floor's edge has 12
+rings: its far edge's nodes are 1.15 to 6.48 mm from the last whole ring,
+but its rings are counted by where they would lie furthest apart, 11.88 mm
+across a triangle of the lattice, so where it is narrow they are as little
+as 0.09 mm apart. The outside's band into the outer strip's border has 10
+rings over 0.78 to 10.32 mm; the rim's into the inner border, 1 over 0.76
+to 1.87 mm.
+
+Inside out leaves less under the inner edge, 0.194 mm and 120 columns over
+0.1, because its band into the rim's border packs its rings there 0.47 to
+0.49 mm apart, half a stepover. Outside in that band is at the floor's edge,
+and the rings under the rim are a stepover apart, 0.97 to 0.98, as asked.
+The wall there is upright or nearly, where what is left measured straight up
+is the cusp over the cosine of the wall's angle: 0.025 mm at 85° is 0.29 mm
+up. So the yardstick is the rings' spacing where the tool touches, and the
+most left against outside in before. At two sections, 170° and 300° round
+the bowl's middle, one ring touches on the inner edge, its border's, with the
+last touch up the wall 0.02 to 0.26 mm below it and the first on the rim 0.05
+to 0.66 mm past it, where before 7 or 8 rings rolled on that edge; across
+the rim and the outer edge the largest gap is 1.11 mm, as before (1.10).
+
+With the floor's group removed: 40.39 m where 40.90, 2 lifts as before, one
+ring on each edge where 12. `ops_3d` outside in, and Scallop's three
+comparisons with Fusion, are byte for byte as they were: the zones round the
+pocket's rim do not all close, and the ground is cut as one.
 
 ## Still not done
 
@@ -197,9 +246,15 @@ they were.
   the field keeps where two fronts meet inside a cliff's edge, as a node of
   its own there, a zone is not measured from every edge to close its rings,
   and such a pocket's rim is climbed.
-- Outside in there are no zones: the rings still cross a sharp rim at a
-  slant and come out in pieces there, 5 lifts between them on the user's bowl
-  (decision 0041, which took the other 29 away).
+- With the floor's group removed, outside in still measures the inside in
+  from the rim's inner border, the zone having no inner edge, so its
+  innermost rings still come to points at the ends of the lens-shaped floor:
+  16 rings turn more than 45° over a millimetre, where 21 did. The spine is
+  laid inside out only (decision 0040).
+- A band whose rings are counted by its widest spacing measured on a
+  triangle, as the inside's into the floor's edge outside in, packs them
+  where it is narrow: 12 rings across 1.15 to 6.48 mm, as little as 0.09 mm
+  apart.
 - Up the user's inside wall each ring still rises and falls 2 to 6 mm a lap,
   turning four times: the wall's height round the bowl, the rings a fixed
   distance from the floor's edge.
@@ -207,5 +262,5 @@ they were.
   in height by 0.06 to 0.09 mm every few millimetres, about the job's
   tolerance of 0.05 (decision 0038).
 
-With the floor's group removed, the innermost rings turned to a point at the
-ends of the lens-shaped floor; decision 0040 took those away.
+With the floor's group removed, inside out, the innermost rings turned to a
+point at the ends of the lens-shaped floor; decision 0040 took those away.

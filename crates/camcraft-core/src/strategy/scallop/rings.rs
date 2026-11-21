@@ -78,11 +78,13 @@ pub(super) struct Planned {
 
 /// The rings of `field` over `grid`, its cut grid, in their tree, with the
 /// edges of `area` it is measured from, as `params` ask, for the tool `seat`
-/// holds.
+/// holds; `bands` its band into each of its far edges, where it has one
+/// ([`blend::band`]).
 pub(super) fn plan(
     seat: &Seat<'_>,
     grid: &View<'_>,
     (field, area): (&Field<'_>, &Region),
+    bands: Vec<Option<Band>>,
     params: &ScallopParams,
     report: &mut ScallopReport,
 ) -> Planned {
@@ -103,20 +105,17 @@ pub(super) fn plan(
             }
         }
     }
-    // Measured out from the inner edges, the far edge the rings blend into,
-    // and the region of the last whole ring before it.
-    let blended = field
-        .outward
-        .then(|| {
-            field.far_edges.iter().enumerate().find_map(|(i, far)| {
-                let band = blend::band(grid, (field, area), far, step, diameter)?;
-                let home = regions
-                    .iter()
-                    .position(|r| r.level == band.level && band.holds(r.rep))?;
-                Some((i, band, home))
-            })
-        })
-        .flatten();
+    // The far edge the rings blend into, and the region of the last whole
+    // ring before it: measured out from the inner edges, where the tool
+    // leaves the part or the strip round them; in toward a zone's one inner
+    // edge, that edge.
+    let blended = bands.into_iter().enumerate().find_map(|(i, band)| {
+        let band = band?;
+        let home = regions
+            .iter()
+            .position(|r| r.level == band.level && band.holds(r.rep))?;
+        Some((i, band, home))
+    });
     let far_edges: Vec<&Edge> = field
         .far_edges
         .iter()

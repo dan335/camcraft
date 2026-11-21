@@ -129,15 +129,20 @@ there over a range of heights, which the part's facets would have it jump
 about in. Where a ring starts a step under the last, down a steep wall, the
 tool goes down onto it along it at the linking's default ramp angle, above
 it, and the level rings below are gone down onto the same way.
-Inside out, where the tool rolls over a sharp convex edge along a strip that
-runs right round, ground either side, as over the edges of a bowl's flat rim,
-the rings stop where the tool starts rolling over it and start again where it
-has rolled over, each of those lines a ring: rings up to it blend into it as
-into the line where the tool leaves the part, and the ground past it is
-ringed out from its far side. So no ring climbs over the edge and back
-([decision 0039](decisions/0039-scallop-zones-at-a-sharp-rim.md)). An edge
-that runs off the area, or one beside a wall too narrow seen from above, is
-crossed as before.
+Where the tool rolls over a sharp convex edge along a strip that runs right
+round, ground either side, as over the edges of a bowl's flat rim, the rings
+stop where the tool starts rolling over it and start again where it has
+rolled over, each of those lines a ring. Inside out, rings up to it blend
+into it as into the line where the tool leaves the part, and the ground past
+it is ringed out from its far side; outside in, the ground past it is ringed
+in from its near side and blends into the one closed edge inside it, where
+it has one, as the floor's edge of a bowl whose floor is avoided. So no ring
+climbs over the edge and back
+([decision 0039](decisions/0039-scallop-zones-at-a-sharp-rim.md)). Where
+the rings of the ground either side cannot all close so, a band into an edge
+being too wide to blend, as round a pocket off centre in a block, the edges
+are crossed as before; so is an edge that runs off the area, or one beside a
+wall too narrow seen from above.
 Inside out, where rings in from an edge would come to points, as at the ends
 of an oval floor with nothing avoided, the last ring going in with no corner
 is kept and inside it the rings go out from a spine, a line midway between
