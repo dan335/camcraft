@@ -1,6 +1,6 @@
 # Progress
 
-camcraft 0.9.0, updated 2026-11-20.
+camcraft 0.10.0, updated 2026-11-20.
 
 What camcraft does and what it has yet to do, measured against Fusion's
 3-axis milling: each of Fusion's milling operations, and the settings, tools,

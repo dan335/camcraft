@@ -4,7 +4,7 @@ What changed in each release, newest first. Each release's page
 ([Releases](https://github.com/dan335/camcraft/releases)) has the downloads and
 the same notes at more length.
 
-## Unreleased
+## 0.10.0 — 2026-11-20
 
 - **Scallop finishes down to where the tool leaves the part, and up upright
   walls** ([decision 0037](docs/decisions/0037-scallop-to-where-the-tool-leaves-the-part.md)).
@@ -19,8 +19,9 @@ the same notes at more length.
   rings below start a stepover under its highest point. At the six sections
   measured on that bowl no gap is over 1.1 mm but one of 1.20, where it was
   up to 3.25; it feeds 39.4 m where it fed 38.0, and lifts 28 times where it
-  lifted 16, its rings, cut one way, ending in arcs on that line, each an
-  arc's length from where the next starts. Without the floor avoided, cut
+  lifted 16: its rings, cut one way, end in arcs on that line, each lower
+  down the bulge than the last, and the link from one to the next would
+  plunge. Without the floor avoided, cut
   outside in, it feeds 40.1 m where it fed 39.0 and lifts 12 times where it
   lifted 19. Beside an upright wall the tool's path stands upright, and
   where a face avoided meets the wall's foot, as a pocket's floor, the
@@ -35,12 +36,14 @@ the same notes at more length.
   face's edge was a file's slop off its surface, and the part was refused.
   Every other part meshes exactly as before. ogeom stays on 0.11: from 0.12 it
   is LGPL-2.1-only, and nothing in a `camcraft` binary is LGPL.
-
 - **Simulating 3D finishing is about ten times faster**: a climbing move's
   samples are swept a row of cells at a time, passing over cells the tool
   cannot come under, leaving the same material bit for bit. Simulating a
   Parallel finish over a pocket and dome took 17.6 s and takes 1.6 s.
-
+- **The tests run faster.** They build camcraft-session, camcraft-import and
+  camcraft-post optimised, as the geometry crates already were: two Fusion
+  comparisons ran in 165 s where they took 325. Tests that ran the same job
+  share one run, and the determinism gate runs three more tests.
 - **Cut by area, adaptive clearing comes to each area where the tool last was
   in it** ([decision 0036](docs/decisions/0036-adaptive-levels-order-and-entries.md)):
   a level starts each area nearest where that area's last pass below ended,
@@ -48,10 +51,6 @@ the same notes at more length.
   comes from it staying down, rather than lifting. On a user's part the
   adaptive lifts 14 times where it lifted 19, with 1,395 mm of rapids where
   there were 2,119.
-
-- **3/8" bits in the System library:** an up-cut and a down-cut spiral and a
-  ball nose, each on a 3/8" shank, as T21 to T23, so the first twenty keep
-  their numbers.
 - **Adaptive clearing lifts only where it must**
   ([decision 0036](docs/decisions/0036-adaptive-levels-order-and-entries.md)).
   A way back across what a level has cleared stays down wherever it is no
@@ -61,6 +60,9 @@ the same notes at more length.
   lifting out; and a slab's own level starts nearest where the tool is. On a
   user's part the adaptive lifts 19 times where it lifted 57, with 2,119 mm of
   rapids where there were 5,051, removing the same material.
+- **3/8" bits in the System library:** an up-cut and a down-cut spiral and a
+  ball nose, each on a 3/8" shank, as T21 to T23, so the first twenty keep
+  their numbers.
 - **Adaptive clearing cuts by area in an order a machinist would**
   ([decision 0036](docs/decisions/0036-adaptive-levels-order-and-entries.md)).
   By area, each area gets each slab's level and then its fine levels up the

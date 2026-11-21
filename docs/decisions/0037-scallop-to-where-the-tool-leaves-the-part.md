@@ -103,9 +103,9 @@ the tool leaves the part?
   taken out: on the user's bowl it changed nothing, the same 28 lifts. The
   links it lifts for are no longer than twice the tool; they are refused
   because each falls 5 to 8 mm onto the next arc's start, steeper than a
-  plunge and further than a cut step. So every finish over the part still
-  stays down no further than twice the tool for Scallop, as Fusion's, and
-  their comparisons with Fusion are not measured again here.
+  plunge and further than a cut step. So every finish over the part, Scallop
+  among them, still stays down no further than twice the tool, and the
+  others' comparisons with Fusion are not measured again here.
 - **A finer grid near where the tool leaves the part.** The fall there is
   vertical; each halving of the cell shortens the band missed by only √2.
 - **Bands between the part's edges, a morph across each, on a field measured
