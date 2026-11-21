@@ -91,10 +91,10 @@ follows the stock when it changes size.
   boundary is then offset for `containment` (tool centre, whole tool inside, or tool
   reaching in from outside) and `margin`. Parallel clips each scanline exactly to the
   boundary; roughing intersects it with the stock's footprint. Pocket, trace and
-  engrave will read the same fields. Later, picks became one of Fusion's machining
+  engrave will read the same fields. Later, picks became one of the machining
   boundaries (`Geometry::boundary`), beside the stock, the part's bounding box and
-  its silhouette. The offset took Fusion's sign (in, for the whole tool inside),
-  and containment the real cutter's radius, without the stock to leave. On
+  its silhouette. The offset's sign was settled as in for the whole tool inside,
+  and containment took the real cutter's radius, without the stock to leave. On
   2026-09-27 `Geometry` was split: the picks are the operation's `selection`,
   the 3D boundary its `boundary` (`MachiningBoundary`), a 2D operation's shape
   its `outline`, and the top and bottom moved to `heights`.

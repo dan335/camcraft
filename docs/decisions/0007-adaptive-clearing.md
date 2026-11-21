@@ -1,4 +1,4 @@
-# 0007 — Adaptive clearing, after Fusion's 3D Adaptive
+# 0007 — Adaptive clearing, at a constant load
 
 **Status:** decided, 2026-09-28 · **Milestone:** before the first cut
 
@@ -6,16 +6,15 @@
 
 Z-level roughing offsets the reachable region inward by the stepover, so its first
 ring into full material is a full slot and every inside corner buries the tool.
-Fusion's 3D Adaptive Clearing holds the tool's load constant instead, so it takes
+Adaptive clearing holds the tool's load constant instead, so it takes
 the whole flute length down at a light radial load. How is it done, and can
 camcraft do it?
 
-## What Fusion does
+## The method
 
-Fusion's Adaptive is Freesteel's Adaptive Clearing (Julian Todd and Martin
-Dunschen, 2004), which became the HSMWorks kernel Autodesk bought in 2012; it was
-never patented, and the idea is Stori and Wright's constant-engagement paths
-(2000). Each Z level is a 2D problem in two regions: where the tool's centre may
+Adaptive clearing is Freesteel's Adaptive Clearing (Julian Todd and Martin
+Dunschen, 2004); it was never patented, and the idea is Stori and Wright's
+constant-engagement paths (2000). Each Z level is a 2D problem in two regions: where the tool's centre may
 be, and what is still standing. The tool is stepped forward a little at a time,
 each step turned toward or away from the material until the arc of its edge in
 material is what the *optimal load* gives; what it sweeps is taken out of what is
@@ -64,7 +63,7 @@ and fine stepdown steps back up each slab over the terraces left on slopes.
 On the lego brick with a quarter-inch flat at a tenth of the tool, no gouges and
 no rapid through material, 484,000 mm³ removed against Z-level roughing's 459,000
 (its flat levels take the terraces over the brick's top and between its studs).
-The studs' channels are cleared as Fusion's are, in arcs advancing into them.
+The studs' channels are cleared in arcs advancing into them.
 
 | stepdown | passes | worked out | program, at the feeds |
 |----------|--------|------------|-----------------------|
@@ -90,10 +89,10 @@ down at rapid to the safe distance (16.6 min of plunging became 4.2).
   ([decision 0036](0036-adaptive-levels-order-and-entries.md)).
 - **A pass that goes round on the spot ends**, and material too narrow to load
   the tool is taken in a pass along it; a helix is never made smaller than
-  Fusion's Minimum Ramp Diameter, and where none fits the area is ramped into
+  the minimum ramp diameter, and where none fits the area is ramped into
   along its middle ([decision 0036](0036-adaptive-levels-order-and-entries.md)).
-- **Rest machining** from the operations before it in the setup, as Fusion's
-  from previous operations, with its Ignore Stock Less Than. Each earlier
+- **Rest machining** from the operations before it in the setup, with a
+  thickness of stock to ignore. Each earlier
   operation's moves are swept exactly at every level, with the real tool it
   was cut with, as wide as it is that far above its tip, so the grid rule holds:
   what the simulator's stock says is not read. A tool only widens going up, so
@@ -105,8 +104,8 @@ down at rapid to the safe distance (16.6 min of plunging became 4.2).
   before it.
 - **Minimum cutting radius**: an opening of where the tool may be by it, kept
   inside it. Its inside corners are rounded, so the tool never turns tighter
-  there, and the material in them is left, as Fusion's leaves it; nothing
-  narrower than the tool and twice the radius is cut, which is Fusion's too.
+  there, and the material in them is left; nothing narrower than the tool and
+  twice the radius is cut.
 - **Machine cavities**: off, a level ends where what is left has no way in
   from the side, and what it left is counted apart from what it missed.
 - **Order by area**: each pass is placed by the piece of where the tool may be
@@ -133,7 +132,8 @@ down at rapid to the safe distance (16.6 min of plunging became 4.2).
   is, or the levels would come nearer than the minimum shallow stepdown. The
   terrace is where the tool may be at the upper level, a hair below it so a flat
   face there is the part's, and not at the lower, where there is stock: as the
-  tool's centre goes, so its width is the horizontal step Fusion measures. Each
+  tool's centre goes, so its width is the horizontal step between the two
+  levels. Each
   level added cuts only where the terrace it was added for is that wide, and as
   far again as the tool's radius to come at it from: where the tool may be is
   kept to there, never the material, so the tool is never steered into material
@@ -142,7 +142,7 @@ down at rapid to the safe distance (16.6 min of plunging became 4.2).
   is counted left, not an area to go down into. On the serving tray, 32 levels
   were added; the scallop finish after the roughing took 277,406 mm³ where it
   took 327,528.
-- **Flat area detection finds peaks**, as Fusion's does: each corner of the
+- **Flat area detection finds peaks**: each corner of the
   mesh, found by where it is, that no corner within the tool's width stands
   above, on a face that faces up, is a level as a flat face is. Its **minimum
   stepdown** leaves out a flat or peak level less than it below the level above

@@ -1,4 +1,4 @@
-# 0008 — Pocket clearing, after Fusion's 3D Pocket Clearing
+# 0008 — Pocket clearing, offsets a level at a time
 
 **Status:** decided, 2026-09-28 · **Milestone:** before the first cut
 
@@ -8,14 +8,14 @@ Z-level roughing cleared each level with offsets of the reachable region, from
 its boundary inward. So its first ring ran along the part's wall at full width,
 and its passes were reordered for travel, which could run a ring either way. It
 had no climb or conventional setting, and it left a terrace a stepdown deep on
-any flat face between levels. Fusion's 3D Pocket Clearing is the same idea, an
-offset clearing a level at a time, but without those faults. What does it do
+any flat face between levels. Pocket clearing is the same idea, an offset
+clearing a level at a time, and need not have those faults. What must it do
 differently, and is it worth a strategy of its own?
 
 ## Decision
 
 - **One strategy, renamed.** Z-level roughing *is* offset pocket clearing, so it
-  is upgraded and called what Fusion calls it: `"pocket-clearing"` in a job,
+  is upgraded and called that: `"pocket-clearing"` in a job,
   *Pocket clearing* in the 3D menu. There is one job format, so the old name
   is not read.
 - **The same rings, from the middle out.** The rings are still the reachable
@@ -48,8 +48,8 @@ the stock's edge. On the router jig those rings, clipped by the stock's
 rectangular edge, came out as open arcs. Each arc cut in the climbing
 direction, so the tool went back across the part after each one. There were
 2879 passes against 1154, 427 m of rapids against 36, and the roughing took
-344 min against 259. Fusion's rings are offsets of the whole region, the
-stock's side included, and stay closed; so are these.
+344 min against 259. Offsets of the whole region, the stock's side included,
+stay closed, and these rings are those.
 
 ## Consequences
 
@@ -69,6 +69,6 @@ material. The flat levels add a quarter of an hour, and take off two thirds of
 what the finish was left.
 
 - The first ring of each region into full material is a slot, which a ramp goes
-  down into, as in Fusion's. Holding the load constant is adaptive clearing's.
-- Still not Fusion's: no smoothing of sharp corners, no finishing pass, and no
+  down into. Holding the load constant is adaptive clearing's.
+- Still not done: no smoothing of sharp corners, no finishing pass, and no
   choice of cutting a pocket from the outside in.

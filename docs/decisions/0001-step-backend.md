@@ -4,7 +4,7 @@
 
 ## Question
 
-STEP is how parts arrive from Fusion and Plasticity, so it is a first-class input,
+STEP is how parts arrive from CAD programs, so it is a first-class input,
 not an optional feature. The open question was only the *backend*, and therefore what
 the build prerequisites are.
 
@@ -283,7 +283,7 @@ extension. What building it on real files added to the above:
   Both failure directions are covered by a test that scales a real mesh by 25.4 each
   way.
 - **The unit is read from the file independently of OpenCascade,** from the
-  `GLOBAL_UNIT_ASSIGNED_CONTEXT` rather than the first unit defined. Fusion exports
+  `GLOBAL_UNIT_ASSIGNED_CONTEXT` rather than the first unit defined. Some CAD exports
   define inch, millimetre and metre and assign only one. Unknown or conflicting
   units are errors, never millimetres.
 - **The file's face count is checked against the kernel's,** since a face dropped in

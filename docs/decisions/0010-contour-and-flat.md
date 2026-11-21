@@ -10,7 +10,7 @@
 
 Scallop and parallel finishing leave anything steeper than a plunge "for a
 waterline pass" (CC211), and they are poor on floors: a ball end mill's cusps,
-or a flat one riding over a floor's edge. Fusion finishes walls with Contour,
+or a flat one riding over a floor's edge. Walls are finished with Contour,
 passes round the part at levels a stepdown apart, and floors with Flat, each
 flat face cleared at its own height. How is each done with what the engine
 already has, and how does that square with decision 0003, that grids are only
@@ -53,9 +53,10 @@ for stock?
 - **Contour: slopes, order and direction.** The slope range works as scallop's
   and the pattern strategies' do: on the slope of the cutter-location surface,
   measured by central differences of the drop-cutter. It leaves out shallow
-  stretches for a scallop or parallel pass. Fusion's pairing is scallop from 0°
-  to 30° and contour from 30° to 90°. Each ring has the part on its left, so
-  climbing with a clockwise spindle cuts it against the way it runs. By depth,
+  stretches for a scallop or parallel pass: a scallop from 0° to 30° and a
+  contour from 30° to 90° finish the part between them. Each ring has the
+  part on its left, so climbing with a clockwise spindle cuts it against the
+  way it runs. By depth,
   each level is cut before the next; by area, each piece of the lowest level's
   footprint is cut all the way down before the next.
 - **Flat: between two of those regions.** At a flat's height `z`, the region at
@@ -108,6 +109,6 @@ for stock?
 - Contour's cost is otherwise pocket clearing's per level: the banded region. A
   ball at a fine tolerance has many bands. Exact slicing of the offset
   surface, still open under 0003, would make it cheaper.
-- Still to do: Fusion's contour ramps from one level to the next, a helix round
-  the wall, rather than stepping down; a flat's own multiple depths. Smoothing
+- Still to do: ramping from one level to the next, a helix round the wall,
+  rather than stepping down; a flat's own multiple depths. Smoothing
   since, in [decision 0015](0015-smoothing.md).

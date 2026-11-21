@@ -14,8 +14,8 @@
 
 Parallel finishing lays its passes a stepover apart seen from above. On a slope
 they are further apart along the surface, and the cusps between them taller, the
-steeper it is. Fusion's Scallop "creates passes that are at a constant distance
-from one another by offsetting them inwards along the surface", from the
+steeper it is. Scallop finishing lays its passes a constant distance apart
+along the surface, each offset inward from the one before, starting from the
 boundary, so the cusp is the same everywhere. Offsetting along a surface has no
 exact form for a triangle mesh under a round tool. How is it done, and how does
 it square with decision 0003, that grids are only for stock?
@@ -55,8 +55,7 @@ it square with decision 0003, that grids are only for stock?
   are cut region by region, nearest next: from the boundary in, or each region's
   inner ones first. Where a region rises more than half a stepover past its last
   pass, it gets one more halfway up. Without that the cusp along a crest could be
-  four times as tall; with it, the passes run in until they collapse, as Fusion's
-  do.
+  four times as tall; with it, the passes run in until they collapse.
 - **Steep faces are left.** The drop-cutter's surface cannot show a wall, so the
   passes bunch up on one. Any stretch steeper than a plunge (84°) is left out and
   counted, for a waterline pass. The slope range asked for leaves out the rest,
@@ -64,7 +63,7 @@ it square with decision 0003, that grids are only for stock?
   slope where the tool touches the part wherever it touches at one smooth point.
 - **Direction.** Climbing with a clockwise spindle has the side still to finish
   on the tool's right: inward from the outside in, outward from the inside out.
-  Both ways, Fusion's default, keeps closed rings climbing and starts an open pass
+  Both ways, the default, keeps closed rings climbing and starts an open pass
   at its nearer end. Its order is its own, so travel reordering is off for it.
 
 ## Consequences
@@ -85,6 +84,6 @@ it square with decision 0003, that grids are only for stock?
 - Features smaller than a cell don't shape the spacing, though every Z stays
   exact. A part too large for the grid's budget (2²³ nodes) is coarsened and said
   so, and one needing a pitch over half a stepover is refused.
-- Not yet Fusion's: a limit on the number of stepovers, rest machining,
-  a contact point boundary, and up/down milling (smoothing since, in
+- Not yet done: a limit on the number of stepovers, rest machining, a
+  contact point boundary, and up/down milling (smoothing since, in
   [decision 0015](0015-smoothing.md)).
