@@ -6,6 +6,17 @@ the same notes at more length.
 
 ## Unreleased
 
+- **From the boundary in, Scallop's rings start where the level rings below
+  them end** ([decision 0041](docs/decisions/0041-scallop-hole-rings-after-what-is-inside.md)).
+  Cut outside in, the level rings down the wall below where the tool leaves
+  the part go first, and the field's rings started where the first of them
+  was found: on a user's bowl the tool lifted from the last level ring and
+  went 129 mm across the bowl to it. Now the first ring over the part starts
+  nearest where the level rings ended, its seam running on from there, and
+  the tool steps up onto it staying down: it lifts once, at the end, where
+  twice, and goes 0.08 m at rapid where 0.28. Inside out, Fusion's `ops_3d`,
+  and Scallop's comparisons with Fusion are as they were.
+
 - **Outside in, Scallop stops at a sharp rim and starts again past it too**
   ([decision 0039](docs/decisions/0039-scallop-zones-at-a-sharp-rim.md)).
   Cut outside in, a user's bowl's rings still crossed its flat rim's two

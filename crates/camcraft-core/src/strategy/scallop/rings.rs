@@ -76,20 +76,69 @@ pub(super) struct Planned {
     pub(super) outward: bool,
 }
 
-/// The rings of `field` over `grid`, its cut grid, in their tree, with the
-/// edges of `area` it is measured from, as `params` ask, for the tool `seat`
-/// holds; `bands` its band into each of its far edges, where it has one
-/// ([`blend::band`]).
+/// A field's lines at each whole stepover, level by level, and the regions
+/// they bound.
+pub(super) struct Levels {
+    lines: Vec<Vec<IsoLine>>,
+    regions: Vec<isoline::Region>,
+    /// How many levels.
+    count: u32,
+}
+
+impl Levels {
+    /// The lines of `field` over `grid` at each whole `step`, level by level
+    /// in parallel, and the regions they bound: at level 0 none, the edges the
+    /// field is measured from taking their place.
+    pub(super) fn of(grid: &View<'_>, field: &Field<'_>, step: f64) -> Self {
+        let top = field
+            .d
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold(0.0, f64::max);
+        let count = count((top / step).floor()).unwrap_or(0).min(MAX_LEVELS);
+        let mut lines = level_lines(grid, &field.d, step, count);
+        if lines.is_empty() {
+            lines.push(Vec::new());
+        }
+        let regions = nest(grid, &field.d, step, &lines);
+        Self {
+            lines,
+            regions,
+            count,
+        }
+    }
+
+    /// Where `band` goes: the region of its last whole ring that it holds,
+    /// its home. `None` where there is none, and it is no band.
+    pub(super) fn home(&self, band: &Band) -> Option<usize> {
+        self.regions
+            .iter()
+            .position(|r| r.level == band.level && band.holds(r.rep))
+    }
+}
+
+/// The rings of `field` over `grid`, its cut grid, in their tree, from its
+/// `levels`, with the edges of `area` it is measured from, as `params` ask,
+/// for the tool `seat` holds; `bands` its band into each of its far edges and
+/// that band's home ([`Levels::home`]), where it has one.
 pub(super) fn plan(
     seat: &Seat<'_>,
     grid: &View<'_>,
     (field, area): (&Field<'_>, &Region),
-    bands: Vec<Option<Band>>,
+    (levels, bands): (Levels, Vec<Option<(Band, usize)>>),
     params: &ScallopParams,
     report: &mut ScallopReport,
 ) -> Planned {
     let step = params.stepover;
-    let (lines, mut regions) = levels(grid, &field.d, step, report);
+    let Levels {
+        lines,
+        mut regions,
+        count,
+    } = levels;
+    report.levels = report.levels.max(u64::from(count));
+    report.lines += lines.iter().map(|l| l.len() as u64).sum::<u64>();
+    report.top_ups += regions.iter().filter(|r| !r.top_up.is_empty()).count() as u64;
     let mut plans = by_region(grid, lines, &mut regions);
     let diameter = 2.0 * seat.tool().max_radius();
     // Inside out, inside the last smooth ring of each chain, rings out from
@@ -109,13 +158,10 @@ pub(super) fn plan(
     // ring before it: measured out from the inner edges, where the tool
     // leaves the part or the strip round them; in toward a zone's one inner
     // edge, that edge.
-    let blended = bands.into_iter().enumerate().find_map(|(i, band)| {
-        let band = band?;
-        let home = regions
-            .iter()
-            .position(|r| r.level == band.level && band.holds(r.rep))?;
-        Some((i, band, home))
-    });
+    let blended = bands
+        .into_iter()
+        .enumerate()
+        .find_map(|(i, band)| band.map(|(band, home)| (i, band, home)));
     let far_edges: Vec<&Edge> = field
         .far_edges
         .iter()
@@ -206,32 +252,6 @@ fn below(
         nodes,
         order::children_first(params.order, field.outward),
     )
-}
-
-/// The lines of `d` over `grid` at each whole `step`, level by level in
-/// parallel, and the regions they bound: at level 0 none, the edges the field
-/// is measured from taking their place.
-fn levels(
-    grid: &View<'_>,
-    d: &[f64],
-    step: f64,
-    report: &mut ScallopReport,
-) -> (Vec<Vec<IsoLine>>, Vec<isoline::Region>) {
-    let top = d
-        .iter()
-        .copied()
-        .filter(|v| v.is_finite())
-        .fold(0.0, f64::max);
-    let levels = count((top / step).floor()).unwrap_or(0).min(MAX_LEVELS);
-    let mut lines = level_lines(grid, d, step, levels);
-    if lines.is_empty() {
-        lines.push(Vec::new());
-    }
-    let regions = nest(grid, d, step, &lines);
-    report.levels = report.levels.max(u64::from(levels));
-    report.lines += lines.iter().map(|l| l.len() as u64).sum::<u64>();
-    report.top_ups += regions.iter().filter(|r| !r.top_up.is_empty()).count() as u64;
-    (lines, regions)
 }
 
 /// A node for each of `regions`, with its lines of `lines`, and one for each

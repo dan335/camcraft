@@ -58,7 +58,7 @@ use crate::strategy::projected::{Curve, ProjectParams, ProjectReport, project};
 use crate::strategy::ramp::{RampParams, ramp};
 use crate::strategy::reach::LevelReach;
 use crate::strategy::round::{Round, RoundReport};
-use crate::strategy::scallop::{ScallopParams, scallop_finish};
+use crate::strategy::scallop::{ScallopParams, scallop_plan};
 use crate::strategy::slope::steep_ground;
 use crate::strategy::slot::{Slot, SlotReport};
 use crate::strategy::trace::{Beside, TraceReport};

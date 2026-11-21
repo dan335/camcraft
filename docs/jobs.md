@@ -128,7 +128,11 @@ and falls no faster than the tool ramps: the tool touches the part the same
 there over a range of heights, which the part's facets would have it jump
 about in. Where a ring starts a step under the last, down a steep wall, the
 tool goes down onto it along it at the linking's default ramp angle, above
-it, and the level rings below are gone down onto the same way.
+it, and the level rings below are gone down onto the same way. Outside in,
+the level rings are cut first, from the top of the wall down, and the
+rings over the part start where the last of them ended, the tool stepping
+up onto the first staying down
+([decision 0041](decisions/0041-scallop-hole-rings-after-what-is-inside.md)).
 Where the tool rolls over a sharp convex edge along a strip that runs right
 round, ground either side, as over the edges of a bowl's flat rim, the rings
 stop where the tool starts rolling over it and start again where it has

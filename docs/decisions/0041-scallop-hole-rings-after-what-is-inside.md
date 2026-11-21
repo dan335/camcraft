@@ -32,6 +32,21 @@ In what order should a region's two families be cut?
   region and keep the chain's order. From the boundary in the outer lines
   go before the children and the holes' rings after; from the middle out the
   other way.
+- **From the boundary in, the field's rings start where the level rings
+  below them end** (`scallop_plan`, `ScallopPlan::cut`), the mirror of the
+  middle out, where the level rings are gone down onto from where the
+  field's last ring ended. The rings are planned and laid first, which says
+  where the level rings start; the level rings, cut from the top of the wall
+  down, then say where the tool is; and the field's first ring starts
+  nearest there, its seam running on from it. So the tool steps up from the
+  last level ring onto the first ring over the part, staying down. Before,
+  the field's seam was fixed where its first ring was found, and the tool
+  lifted to it: on the user's bowl from (137.5, 139.4, Z-39.2) to
+  (115.6, 12.3, Z-34.6), 129 mm across. Now it lifts once, at the end, and
+  goes 0.08 m at rapid where 0.28, feeding 40.73 m where 40.70; the same with
+  the floor's group removed, once where twice. Inside out, `ops_3d` either
+  way, and Scallop's comparisons with Fusion are byte for byte and figure
+  for figure as they were.
 
 ## What was measured
 
@@ -83,13 +98,8 @@ dome avoided, now feeding 4.8% less than Fusion's, keeps a bound of 5%.
 
 ## Still not done
 
-The 2 lifts left on the user's bowl cut outside in:
-
-- One from the bottom of the rings below where the tool leaves the part,
-  cut first, at (137.5, 139.4), to the start of the first ring over the part
-  at (115.6, 12.3), 129 mm off across the bowl, as before.
-- The last retract.
-
-The five near the rim this left, where the rings met the rim's edges at a
-slant and came out in pieces there, went when outside in had zones too
-(decision 0039).
+Nothing on the user's bowl cut outside in: it lifts once, the last retract.
+The five lifts near the rim this left, where the rings met the rim's edges
+at a slant and came out in pieces there, went when outside in had zones too
+(decision 0039); the one from the level rings below to the first ring over
+the part, when the field started where they end (above).

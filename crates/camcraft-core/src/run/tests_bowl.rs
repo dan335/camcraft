@@ -945,6 +945,55 @@ fn down_a_bulge(order: &str) {
     );
 }
 
+/// From the boundary in, the level rings down the bowl's skirt are cut
+/// first, from its top down, and the field's first ring starts where the
+/// last of them ended, its seam running on from there: the tool steps from
+/// the one to the other staying down, and lifts twice, where it lifted 3
+/// times with the field's first ring started where it was found.
+#[test]
+fn outside_in_the_rings_start_where_the_level_rings_end() {
+    let body = bowl();
+    let bodies: Bodies<'_> = [("bowl", &body)].into_iter().collect();
+    let job: Job = toml::from_str(&JOB.replace("inside-out", "outside-in")).unwrap();
+    let result = run_setup(&job, 0, &bodies).unwrap();
+    let op = &result.operations[0];
+    assert_eq!(result.verify.gouged, 0);
+    assert_eq!(op.sim.rapid_contacts, 0);
+    let StrategyDetail::Scallop(report) = &op.detail else {
+        panic!("{:?}", op.detail);
+    };
+    assert!(report.walls > 0, "no level rings: {report:?}");
+    // From the last cut down the skirt to the first a millimetre over its
+    // top, on the field's rings up the outside: no rapid.
+    let moves = op.path.moves();
+    let up = moves
+        .iter()
+        .position(|m| m.role == MoveRole::Cut && m.to.z > SKIRT + 1.0)
+        .unwrap();
+    let down = moves[..up]
+        .iter()
+        .rposition(|m| m.role == MoveRole::Cut && m.to.z < SKIRT)
+        .unwrap();
+    let rapids: Vec<DVec3> = moves[down..up]
+        .iter()
+        .filter(|m| m.role == MoveRole::Rapid)
+        .map(|m| m.to)
+        .collect();
+    assert!(
+        rapids.is_empty(),
+        "from the level rings onto the field: {rapids:?}"
+    );
+    let mut lifts = 0;
+    let mut at = moves[0].to;
+    for m in moves {
+        if m.role == MoveRole::Rapid && m.to.z > at.z + 1e-9 && m.to.truncate() == at.truncate() {
+            lifts += 1;
+        }
+        at = m.to;
+    }
+    assert!(lifts <= 2, "{lifts} lifts");
+}
+
 /// How far the widest of a tilted bulge stands above half the bowl's height
 /// at +X, and below it at -X.
 const TILT: f64 = 1.5;

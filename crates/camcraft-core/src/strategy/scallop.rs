@@ -80,7 +80,7 @@ use blend::Band;
 use distance::{Field, Fields};
 use ground::Ground;
 use lay::{Layer, Worked};
-use rings::Planned;
+use rings::{Levels, Planned};
 
 /// The most halvings a search along a line makes, for where the ground ends
 /// along a grid edge or for a point round a wall: far past any tolerance.
@@ -231,6 +231,46 @@ pub fn scallop_finish(
     area: &Region,
     params: &ScallopParams,
 ) -> Result<(Toolpath, ScallopReport), StrategyError> {
+    scallop_plan(seat, area, params)?.cut(seat, params, None)
+}
+
+/// Scallop's rings over an area, laid on the part, yet to be cut into a path
+/// ([`ScallopPlan::cut`]).
+pub struct ScallopPlan {
+    zones: Vec<(Planned, Vec<Worked>)>,
+    report: ScallopReport,
+}
+
+impl ScallopPlan {
+    /// What was found laying them out: where the tool leaves the part, and
+    /// where the level rings below the rings start
+    /// ([`ScallopReport::walls_from`]), among it.
+    pub fn report(&self) -> &ScallopReport {
+        &self.report
+    }
+
+    /// The rings cut into a path, as `params` ask, the first started nearest
+    /// where the tool is, `from`, where it is anywhere, and the seam running
+    /// on from there; with what happened.
+    pub fn cut(
+        self,
+        seat: &Seat<'_>,
+        params: &ScallopParams,
+        from: Option<DVec3>,
+    ) -> Result<(Toolpath, ScallopReport), StrategyError> {
+        let mut report = self.report;
+        let (path, passes) = order::cut(seat, self.zones, params, from)?;
+        report.passes = passes;
+        Ok((path, report))
+    }
+}
+
+/// Scallop's rings over `area`, as [`scallop_finish`] lays them, not yet cut.
+pub fn scallop_plan(
+    seat: &Seat<'_>,
+    area: &Region,
+    params: &ScallopParams,
+) -> Result<ScallopPlan, StrategyError> {
     check("stepover", params.stepover)?;
     check("tolerance", params.tolerance)?;
     check("feed", params.feed)?;
@@ -238,32 +278,38 @@ pub fn scallop_finish(
     slope::check_range(params.slope_from, params.slope_to)?;
     let mut report = ScallopReport::default();
     let Some(bounds) = area.bounds() else {
-        return Ok((Toolpath::new(), report));
+        return Ok(ScallopPlan {
+            zones: Vec::new(),
+            report,
+        });
     };
     let sampled = Ground::sampled(seat, area, bounds, params, &mut report)?;
     // Strips break the ground into zones so that every ring closes. Where a
-    // zone's rings cannot close, the band into its far edge refused, the
-    // zones are not doing their job, and the ground is cut as one, its strips
-    // ground again (decision 0039). The bands found go on to the plan.
+    // zone's rings cannot close, no band into its far edge that can be placed,
+    // the zones are not doing their job, and the ground is cut as one, its
+    // strips ground again (decision 0039). The levels and bands found go on
+    // to the plan, so what passes is what is planned.
     let fields = Field::zones(seat, &sampled, area, params, &mut report);
-    let bands = blends(seat, &sampled, &fields, area, params);
+    let levelled = level_zones(seat, &sampled, &fields, area, params);
     let unstripped;
-    let (ground, Fields { zones, beyond }, bands) =
-        if !sampled.has_strips() || every_zone_closes(&bands) {
-            (&sampled, fields, bands)
+    let (ground, Fields { zones, beyond }, levelled) =
+        if !sampled.has_strips() || every_zone_closes(&levelled) {
+            (&sampled, fields, levelled)
         } else {
             unstripped = sampled.without_strips(seat, params)?;
             let fields = Field::zones(seat, &unstripped, area, params, &mut report);
-            let bands = blends(seat, &unstripped, &fields, area, params);
-            (&unstripped, fields, bands)
+            let levelled = level_zones(seat, &unstripped, &fields, area, params);
+            (&unstripped, fields, levelled)
         };
     report.leaves_at = ground.leaves_at(area);
     report.walls_from = report.leaves_at;
     let view = ground.cut.view(None);
     let mut planned: Vec<Planned> = zones
         .iter()
-        .zip(bands)
-        .map(|(field, bands)| rings::plan(seat, &view, (field, area), bands, params, &mut report))
+        .zip(levelled)
+        .map(|(field, levelled)| {
+            rings::plan(seat, &view, (field, area), levelled, params, &mut report)
+        })
         .collect();
 
     // The field and its lines are done: what is left is laying each node's
@@ -312,40 +358,52 @@ pub fn scallop_finish(
         }
         worked.push(laid);
     }
-    let (path, passes) = order::cut(seat, planned.into_iter().zip(worked).collect(), params)?;
-    report.passes = passes;
-    Ok((path, report))
+    Ok(ScallopPlan {
+        zones: planned.into_iter().zip(worked).collect(),
+        report,
+    })
 }
 
-/// Each zone of `fields` over `ground`: its band into each of its far edges,
-/// where its rings blend into that edge ([`blend::band`]).
-fn blends(
+/// A zone's levels, and its band into each of its far edges with the band's
+/// home, where its rings blend into that edge.
+type Levelled = (Levels, Vec<Option<(Band, usize)>>);
+
+/// Each zone of `fields` over `ground`, levelled: a band only where it can be
+/// placed, its home found ([`blend::band`], [`Levels::home`]).
+fn level_zones(
     seat: &Seat<'_>,
     ground: &Ground,
     fields: &Fields<'_>,
     area: &Region,
     params: &ScallopParams,
-) -> Vec<Vec<Option<Band>>> {
+) -> Vec<Levelled> {
     let grid = ground.cut.view(None);
     let diameter = 2.0 * seat.tool().max_radius();
     fields
         .zones
         .iter()
         .map(|zone| {
-            zone.far_edges
+            let levels = Levels::of(&grid, zone, params.stepover);
+            let bands = zone
+                .far_edges
                 .iter()
-                .map(|far| blend::band(&grid, (zone, area), far, params.stepover, diameter))
-                .collect()
+                .map(|far| {
+                    let band = blend::band(&grid, (zone, area), far, params.stepover, diameter)?;
+                    let home = levels.home(&band)?;
+                    Some((band, home))
+                })
+                .collect();
+            (levels, bands)
         })
         .collect()
 }
 
-/// Whether every zone closes its rings, its bands into its far edges
-/// `bands`: it has no far edge, or blends into one.
-fn every_zone_closes(bands: &[Vec<Option<Band>>]) -> bool {
-    bands
+/// Whether every zone closes its rings, `levelled`: it has no far edge, or
+/// blends into one.
+fn every_zone_closes(levelled: &[Levelled]) -> bool {
+    levelled
         .iter()
-        .all(|zone| zone.is_empty() || zone.iter().any(Option::is_some))
+        .all(|(_, bands)| bands.is_empty() || bands.iter().any(Option::is_some))
 }
 
 /// The length of a polyline.

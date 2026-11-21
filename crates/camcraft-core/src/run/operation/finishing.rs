@@ -176,24 +176,37 @@ pub(super) fn scallop_paths(
     // touches it from above, which has no width seen from above, and under
     // what overhangs. There height is the only measure, and level rings a
     // stepover apart in it finish it.
-    let (field, mut report) = scallop_finish(&work.seat()?, &area, &params).map_err(in_op(op))?;
-    // Inside out, down from where the field's last ring ended.
-    let after = match order {
-        PassOrder::InsideOut => field.moves().last().map(|m| m.to),
-        PassOrder::OutsideIn => None,
+    let seat = work.seat()?;
+    let planned = scallop_plan(&seat, &area, &params).map_err(in_op(op))?;
+    let walls_from = planned.report().walls_from;
+    let below_from = |after: Option<DVec3>| {
+        below_reach(
+            work,
+            (limit, after),
+            walls_from,
+            direction,
+            (slope_from, slope_to),
+        )
     };
-    let (below, rings) = below_reach(
-        work,
-        (limit, after),
-        report.walls_from,
-        direction,
-        (slope_from, slope_to),
-    )?;
+    // Inside out, the field's rings, from its first edge on, and then down
+    // the wall below them from where its last ring ended; from the boundary
+    // in, down the wall from its top, and then the field's rings from where
+    // the last level ring ended, its first ring started nearest there.
+    let (field, mut report, (below, rings)) = match order {
+        PassOrder::InsideOut => {
+            let (field, report) = planned.cut(&seat, &params, None).map_err(in_op(op))?;
+            let below = below_from(field.moves().last().map(|m| m.to))?;
+            (field, report, below)
+        }
+        PassOrder::OutsideIn => {
+            let below = below_from(None)?;
+            let from = below.0.moves().last().map(|m| m.to);
+            let (field, report) = planned.cut(&seat, &params, from).map_err(in_op(op))?;
+            (field, report, below)
+        }
+    };
     report.walls = rings;
     report.passes += rings;
-    // The field's rings, from its first edge on, and then on down the wall
-    // below them; from the boundary in, from the top of the wall down to it
-    // and then in.
     let mut path = Toolpath::new();
     let parts = match order {
         PassOrder::InsideOut => [&field, &below],

@@ -16,6 +16,8 @@
 //! strips break the ground into zones (decision 0039), each zone's tree is
 //! cut whole before the next's, on the one seam.
 
+use glam::DVec3;
+
 use crate::cutter::surfaces::Seat;
 use crate::cutter::tool::ToolProfile;
 use crate::path::toolpath::Toolpath;
@@ -45,11 +47,14 @@ pub(super) fn children_first(order: Order, outward: bool) -> bool {
 /// The rings of each zone's tree, laid on the part as `worked`, cut into a
 /// path zone by zone, each from its `first`, then its roots, then its
 /// `last`, each the nearest next; with how many passes it has. One seam runs
-/// through them all.
+/// through them all, from where the first ring starts: nearest where the tool
+/// is, `from`, where it is anywhere, as where the level rings below the
+/// field end, cut before it from the boundary in.
 pub(super) fn cut(
     seat: &Seat<'_>,
     zones: Vec<(Planned, Vec<Worked>)>,
     params: &ScallopParams,
+    from: Option<DVec3>,
 ) -> Result<(Toolpath, u64), StrategyError> {
     let conventional = params.direction == Direction::Conventional;
     let mut emit = Emit::new(params.feed);
@@ -60,6 +65,9 @@ pub(super) fn cut(
     // where the last ended.
     emit.ramp = Some((params.ramp, 0.5 * seat.tool().max_radius()));
     emit.ramp_past = Some(params.max_cut_step);
+    if let Some(at) = from {
+        emit.after(at);
+    }
     let mut cut = Cut {
         emit,
         reverse: false,

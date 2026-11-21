@@ -87,15 +87,18 @@ floor avoided:
   its grid and the lengths down its cliffs are shared.
 - **Zones only where they do their job** (`scallop_finish`). Strips break
   the ground into zones so that every ring closes and none climbs over a
-  sharp edge. Where a zone has a far edge and the band into it is refused
-  (`blend::band`, asked as the plan asks it), its rings cannot close: they
-  would end in arcs on that edge. There the zones are not doing their job,
+  sharp edge. Where a zone has a far edge and no band into it (`blend::band`)
+  that can be placed, its rings cannot close: they would end in arcs on that
+  edge. A band is placed in the region of its last whole ring that it holds,
+  its home (`rings::Levels::home`); one with none is no band, so a zone that
+  passes is one the plan blends. There the zones are not doing their job,
   and the ground is cut as one, as before strips broke it: every rolling node
   ground again, the grid cut a second time from the same drops, and the
   field measured over it. It is all or nothing for the operation; choosing
   strip by strip, keeping those whose zones close and grinding the rest
-  again, was not tried. The bands the test finds go on to the plan, so none
-  is worked out twice.
+  again, was not tried. Each zone's levels, and the bands the test finds
+  with their homes, go on to the plan, so none is worked out twice and the
+  test and the plan cannot disagree.
 - **Between zones the tool rolls over the edge once**: the link from the
   near border's ring to the far border's, on the seam, stays down over the
   part, a few millimetres. The seam carries on into the next zone.
@@ -185,7 +188,7 @@ and with it:
 | of it, inside / rim | 16.88 / 2.45 m | 17.29 / 2.43 m |
 | of it, outside above Z-34 / below | 12.81 / 7.68 m | 13.30 / 7.68 m |
 | Rapid | 0.56 m | 0.28 m |
-| Lifts | 7 | 2: the first, as before, and the last retract |
+| Lifts | 7 | 2: the first, as before (since gone, decision 0041), and the last retract |
 | Rings with the tool on an edge's line over a tenth of their length | 7 on each edge | 1, the border's |
 | Most left inside the rim, Z-10 to -5 (simulated) | 0.232 mm | 0.226 mm |
 | columns there over 0.1 mm | 176 | 254 |
@@ -251,10 +254,14 @@ pocket's rim do not all close, and the ground is cut as one.
   innermost rings still come to points at the ends of the lens-shaped floor:
   16 rings turn more than 45° over a millimetre, where 21 did. The spine is
   laid inside out only (decision 0040).
-- A band whose rings are counted by its widest spacing measured on a
-  triangle, as the inside's into the floor's edge outside in, packs them
-  where it is narrow: 12 rings across 1.15 to 6.48 mm, as little as 0.09 mm
-  apart.
+- A band's rings are counted by its widest spacing measured on a triangle,
+  `1 / |∇t|`, and on the inside's band into the floor's edge outside in one
+  triangle sets it at 11.88 mm where the band is 8.48 wide at its widest:
+  there `a` grows 0.70 a millimetre, not 1, and `1 / |∇t|` takes that for
+  width. So its 12 rings are as little as 0.09 mm apart where it is narrow.
+  With the two gradients' directions kept and their sizes not, the count
+  would be 8 there and 6 in the band into the no-group spine's ring, every
+  other band as it is, feeding 0.60 m and 0.21 m less.
 - Up the user's inside wall each ring still rises and falls 2 to 6 mm a lap,
   turning four times: the wall's height round the bowl, the rings a fixed
   distance from the floor's edge.
