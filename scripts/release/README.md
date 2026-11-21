@@ -45,4 +45,6 @@ Windows machine with WSL's Ubuntu (glibc 2.39). macOS builds from source.
    "camcraft X.Y.Z"), push the tag, then
    `gh release create vX.Y.Z --title "camcraft X.Y.Z" --notes-file NOTES --verify-tag`
    with the two archives and `SHA256SUMS`. The notes keep the use-at-your-own-risk
-   warning, the downloads table, what each archive holds, and what changed.
+   warning, the downloads table, what each archive holds, and what changed. They
+   say what camcraft does in its own terms and name no other product, as the
+   changelog does ([CONTRIBUTING.md](../../CONTRIBUTING.md)).
