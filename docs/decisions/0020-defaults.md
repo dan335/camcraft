@@ -1,4 +1,4 @@
-# 0020 — Defaults: Fusion's, as expressions where they follow the tool
+# 0020 — Defaults, as expressions where they follow the tool
 
 **Status:** decided, 2026-11-05 · **Milestone:** 0.6
 
@@ -9,57 +9,42 @@ stepdown, feeds, heights, leads. Many were camcraft's own guesses, fixed
 numbers that suit one tool and starve or overload the next. What should a new
 operation start with?
 
-## What was found
-
-Fusion's defaults, from two sources that agree wherever both speak:
-
-- **Autodesk's note of the defaults it changed in March 2022**, old and new
-  expressions side by side ("Default Changes in Fusion 360's Manufacturing
-  Workspace", [archived](https://web.archive.org/web/20250424091512/https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/Default-Changes-in-Fusion-360-s-Manufacturing-Workspace.html)).
-- **Every parameter of a fresh operation of each strategy**, as a Fusion
-  install's API gives them, in a metric document
-  ([grace-xwerks/fusion_mcp_testing](https://github.com/grace-xwerks/fusion_mcp_testing/tree/master/docs/strategy_params)).
-  It may carry that person's own "Make Default"s: one value looked so (3D
-  adaptive's optimal load), and Dan's own Fusion settled it as
-  `tool_diameter * 0.4`.
-- Saved Fusion templates on GitHub only where several agree; Fusion's online
-  help gives no defaults.
-
 ## What was decided
 
-A new operation starts with Fusion's defaults. Where Fusion's follows the
-tool, so does camcraft's, as the same expression, saved with the operation
-(`StrategySpec::default_expressions`). A number typed over one, or a preset's,
+A new operation starts with the defaults below. Where a default follows the
+tool, it is an expression of the tool's sizes and feeds, saved with the
+operation (`StrategySpec::default_expressions`), so it suits whichever tool
+the operation has. A number typed over one, or a preset's,
 takes its place. A job file still reads as it always did: what it leaves out
 means what it meant, so a saved job does not change under it; only new
 operations start differently.
 
-| Setting | Strategies | Default | Was | Source |
-| --- | --- | --- | --- | --- |
-| Stepover | parallel, scallop, spiral, radial, morphed spiral | the tolerance's cusp with a round end, `tool_diameter / 4` with a square one | same | dump |
-| Stepover | 3D pocket, 2D pocket | `tool_diameter * 0.6` | same | 2022 note |
-| Optimal load | adaptive | `tool_diameter * 0.4` | same | Dan's Fusion |
-| Stepover | flat | `tool_diameter * 0.3` | 0.6 × | dump |
-| Stepover | face | `Math.max((tool_diameter - 2 * tool_cornerRadius) * 0.7; tool_diameter * 0.05)` | 0.95 × the flat | 2022 note |
-| Pass extension | face | `tool_diameter / 2 + tolerance`, to the tool's centre (amended below) | 0 | 2022 note |
-| Stepdown | adaptive | `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)` | same | 2022 note |
-| Stepdown | 3D pocket | `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)` | adaptive's; 2 mm | 2022 note |
-| Stepdown | 2D pocket | none: Multiple Depths off; ticked, `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)` (amended below) | 2 mm | Fusion's API |
-| Stepdown | profile | none: Multiple Depths off; ticked, `tool_fluteLength * 0.75` (amended below) | 2 mm | Fusion's API |
-| Stock to leave | 2D pocket | 0.5 mm each way (amended below) | none | Fusion's API |
-| Entry | profile | plunge: Ramp off (amended below) | helix | Fusion's API |
-| Stepdown | contour | 1 mm | same | dump |
-| Minimum cutting radius | adaptive | `tool_diameter * 0.1` | none | dump |
-| Stay-down clearance | adaptive | `Math.max(Math.min(tool_diameter * 0.1; 15mm); 2mm)` | 0 | dump |
-| Slot width | adaptive | `tool_diameter * 1.25` | the tool's | dump |
-| Lift height | adaptive | 0.2 mm | 0 | 2022 note |
-| Plunge feed | all but drilling | `tool_feedCutting / 3` | 300 mm/min | dump (a new tool's) |
-| Ramp feed | all that ramp | `tool_feedPlunge` | 60% of cutting | dump (a new tool's) |
-| Clearance height | all | 15 mm above the stock: 10 above the retract | 10 above the stock | dump |
-| Helix diameter | 2D pocket | `Math.max((tool_diameter - 2 * tool_cornerRadius) * 0.95; tool_diameter * 0.25)` | 0.9 × the tool | 2022 note |
-| Maximum directional change | feed optimisation | 25° | 45° | dump |
-| Reduced feed radius | feed optimisation | `tool_diameter * 0.05` | the tool's radius | dump |
-| Reduced feed distance | feed optimisation | `tool_diameter * 0.2` | the tool's radius | dump |
+| Setting | Strategies | Default | Was |
+| --- | --- | --- | --- |
+| Stepover | parallel, scallop, spiral, radial, morphed spiral | the tolerance's cusp with a round end, `tool_diameter / 4` with a square one | same |
+| Stepover | 3D pocket, 2D pocket | `tool_diameter * 0.6` | same |
+| Optimal load | adaptive | `tool_diameter * 0.4` | same |
+| Stepover | flat | `tool_diameter * 0.3` | 0.6 × |
+| Stepover | face | `Math.max((tool_diameter - 2 * tool_cornerRadius) * 0.7; tool_diameter * 0.05)` | 0.95 × the flat |
+| Pass extension | face | `tool_diameter / 2 + tolerance`, to the tool's centre (amended below) | 0 |
+| Stepdown | adaptive | `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)` | same |
+| Stepdown | 3D pocket | `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)` | adaptive's; 2 mm |
+| Stepdown | 2D pocket | none: Multiple Depths off; ticked, `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)` (amended below) | 2 mm |
+| Stepdown | profile | none: Multiple Depths off; ticked, `tool_fluteLength * 0.75` (amended below) | 2 mm |
+| Stock to leave | 2D pocket | 0.5 mm each way (amended below) | none |
+| Entry | profile | plunge: Ramp off (amended below) | helix |
+| Stepdown | contour | 1 mm | same |
+| Minimum cutting radius | adaptive | `tool_diameter * 0.1` | none |
+| Stay-down clearance | adaptive | `Math.max(Math.min(tool_diameter * 0.1; 15mm); 2mm)` | 0 |
+| Slot width | adaptive | `tool_diameter * 1.25` | the tool's |
+| Lift height | adaptive | 0.2 mm | 0 |
+| Plunge feed | all but drilling | `tool_feedCutting / 3` | 300 mm/min |
+| Ramp feed | all that ramp | `tool_feedPlunge` | 60% of cutting |
+| Clearance height | all | 15 mm above the stock: 10 above the retract | 10 above the stock |
+| Helix diameter | 2D pocket | `Math.max((tool_diameter - 2 * tool_cornerRadius) * 0.95; tool_diameter * 0.25)` | 0.9 × the tool |
+| Maximum directional change | feed optimisation | 25° | 45° |
+| Reduced feed radius | feed optimisation | `tool_diameter * 0.05` | the tool's radius |
+| Reduced feed distance | feed optimisation | `tool_diameter * 0.2` | the tool's radius |
 
 The helix and feed optimisation's sizes are what the code works out where a
 job leaves them out, so they change for saved jobs too: the 2D pocket's helix
@@ -70,60 +55,43 @@ is a new default, and feed optimisation arrived in 0.5.
 - **Contour's** 1 mm stepdown, **radial's** limits, **stock to leave** (half
   a millimetre on roughing, none on finishing), the **retract height** (5 mm
   above the stock), **leads** (a tenth of the tool, a quarter turn) and the
-  **ramp angle** (2°): already Fusion's.
-- **Tabs**: Fusion's templates disagree, and camcraft's (6 mm wide, 3 mm tall,
-  every 150 mm) suit sheet goods on a router.
-- **Fine stepdown**, Fusion's `Math.min(tool_diameter * 0.5; maximumStepdown * 0.1)`:
-  off, as it is not known to be on in a fresh Fusion adaptive.
-- **Safe distance and retraction**: Fusion's differ by strategy
-  (`maximumStepdown + 1mm` for a pocket, `Math.min(1mm; tool_diameter * 0.2)`
-  for a profile, full retraction for adaptive), and camcraft's links are not
-  Fusion's, so 2 mm and minimum retraction stay until they are compared on a
-  real job.
-- **Spiral and morphed spiral** climb; Fusion's go both ways, which a single
-  spiral has no meaning for in camcraft.
-- **The cutting feed** a new operation gets with no preset, 1200 mm/min
-  (Fusion's new tool's is 1000).
+  **ramp angle** (2°).
+- **Tabs**: camcraft's (6 mm wide, 3 mm tall, every 150 mm) suit sheet goods
+  on a router.
+- **Fine stepdown**: off.
+- **Safe distance and retraction**: 2 mm and minimum retraction.
+- **Spiral and morphed spiral** climb (amended below).
+- **The cutting feed** a new operation gets with no preset, 1200 mm/min.
 
-## Amended 2026-11-11: held to Fusion's own programs
+## Amended 2026-11-11: four defaults set again
 
-A part made in Fusion (`fixtures/step/ops_block.step`) was given a new Face,
-2D Contour, 2D Pocket and Drill in Fusion, through its API, and each was
-posted with the Masso post (`fixtures/nc/ops_block_*.nc`); camcraft's new
-operations were run on the same part and compared with `camcraft compare`,
-which cuts both programs from the same material with the same tool. Every
-parameter of Fusion's fresh operations was read back from the API. Four
-defaults above were Fusion's numbers without Fusion's switches:
+Four defaults above were set again, each for a new operation only:
 
 - **2D Pocket and 2D Contour start with Multiple Depths off**: one pass to
   the bottom, the pocket's helix straight down to its floor. Their stepdown
-  expressions are Fusion's *Maximum Roughing Stepdown*, which is read only
-  once the box is ticked; camcraft's had them on, the pocket at 0.6 mm a
-  level (25 helixes on the test part, 6.6 minutes feeding to Fusion's 1.6).
-  A new one now starts with none, and ticking it brings the expression.
-- **2D Pocket starts with Stock to Leave ticked, 0.5 mm each way**, as
-  Fusion's roughing does; camcraft's started unticked.
+  expressions apply only once the box is ticked; camcraft's had them on, the
+  pocket at 0.6 mm a level (25 helixes on the test part, 6.6 minutes
+  feeding). A new one now starts with none, and ticking it brings the
+  expression.
+- **2D Pocket starts with Stock to Leave ticked, 0.5 mm each way**, as a
+  roughing pass leaves for a finish; camcraft's started unticked.
 - **2D Contour starts with Ramp off**: straight down onto the lead-in at the
   plunge feed. camcraft's helixed down at 2°, about 630 mm of helix on a
   22 mm cut. A new profile starts with `entry = "plunge"`; a job file that
   leaves the entry out still reads as a helix.
-- **Face's pass extension is to the tool's centre**: Fusion's default, half
-  the tool and the tolerance, ends each pass with the tool just clear.
-  camcraft added it after the tool was clear, so each pass ran a radius
-  further than Fusion's at each end. Passes now cross the faced area grown by
-  the extension, which is Fusion's at 0° and keeps an extension of at least
-  the radius clear at any angle; a job file that leaves it out runs the
-  tool's radius, just clear, as it did.
-
-Set so, each of the four leaves the same material as Fusion's program, to
-0.01 mm, and `crates/camcraft-session/src/compare/tests.rs` holds them to it.
+- **Face's pass extension is to the tool's centre**: half the tool and the
+  tolerance ends each pass with the tool just clear. camcraft added it after
+  the tool was clear, so each pass ran a radius further than it needed at
+  each end. Passes now cross the faced area grown by the extension, which
+  keeps an extension of at least the radius clear at any angle; a job file
+  that leaves it out runs the tool's radius, just clear, as it did.
 
 ## Amended 2026-11-19: spirals both ways, flat straight down
 
-A new Spiral and a new Morphed Spiral start both ways, as Fusion's Direction
-does: the spiral turns to climb and each piece the part cuts it into is taken
-from its nearer end, which is what both ways means for one. A new Flat comes
-straight down onto each ring, as Fusion's Flat starts with Ramp off, its ramp
-along the ring a setting. A job file that leaves either out reads as before:
+A new Spiral and a new Morphed Spiral start both ways: the spiral turns to
+climb and each piece the part cuts it into is taken from its nearer end,
+which is what both ways means for one. A new Flat comes straight down onto
+each ring, its ramp along the ring a setting. A job file that leaves either
+out reads as before:
 climbing, and ramping
 ([decision 0034](0034-entries-and-order-of-the-finishes-over-the-part.md)).

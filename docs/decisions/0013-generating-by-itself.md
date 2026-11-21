@@ -9,8 +9,8 @@ another, and a run could not be stopped: a run superseded by another was
 dropped when it answered, but worked on until it did. On a large curved part
 (a serving tray: 442 × 249 × 44 mm, 440 000 triangles) roughing took two
 minutes to work out and the scallop after it twenty seconds, one waiting for
-the other, so every change was a wait and a press. Fusion generates as you
-change a toolpath and shows it as it goes. What should camcraft do, and how,
+the other, so every change was a wait and a press. A toolpath could be made
+as it is changed and shown as it goes. What should camcraft do, and how,
 without ever making a toolpath that differs from one made the old way?
 
 ## What was decided

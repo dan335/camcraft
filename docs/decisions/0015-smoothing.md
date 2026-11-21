@@ -8,8 +8,8 @@ A strategy's passes are its steps. Adaptive's are at most a fifth of the
 tool's radius, so on a serving tray with a 3/8" flat its program is 1.3 million
 lines, 34 MB, and at its 5,842 mm/min feed about 200 moves a second. A
 controller reads only so many lines a second; past that it waits between
-moves, and the cut stutters. Fusion's Smoothing fits the moves with arcs and
-longer lines within a tolerance. Is that the smoothing
+moves, and the cut stutters. Smoothing fits the moves with arcs and longer
+lines within a tolerance. Is that the smoothing
 [decision 0003](0003-grids-only-for-stock.md) rules out?
 
 ## What was decided
@@ -18,7 +18,7 @@ longer lines within a tolerance. Is that the smoothing
 smoothing that hides where a path really runs, as a grid's staircase would have
 been hidden. Fitting describes the path the strategy made in fewer moves, each
 within a tolerance of it, both ways; it moves nothing further than that, and it
-is off unless asked for, as Fusion's is.
+is off unless asked for.
 
 - **A transform, before linking** (`core::path::fit`), as the toolpath module
   always meant arc fitting to be. The linker joins the fitted passes and cuts
@@ -42,9 +42,9 @@ is off unless asked for, as Fusion's is.
   along than the one before, so it never doubles back. From each point the arc
   or line reaching furthest is taken, found by doubling the reach, then halving
   back.
-- **The tolerance is its own,** the job's unless given, and adds to it, as
-  Fusion's total tolerance is the two together: the setup is verified to the
-  job's tolerance and the largest smoothing tolerance among its operations.
+- **The tolerance is its own,** the job's unless given, and adds to it, since
+  a fitted move can be off by both: the setup is verified to the job's
+  tolerance and the largest smoothing tolerance among its operations.
 
 ## Result
 
@@ -59,5 +59,5 @@ read back as a controller would, cuts the paths it was posted from.
 ## Not taken yet
 
 - Helices about X or Y: a helix is fitted only about Z.
-- Feed optimisation at corners, Fusion's other filter on the same tab, is
-  taken: [decision 0016](0016-feed-optimisation.md).
+- Feed optimisation at corners is taken:
+  [decision 0016](0016-feed-optimisation.md).

@@ -34,8 +34,7 @@ do there, and on Windows, macOS and other Linux desktops?
 - **Zed** has `"theme": {"mode": "system", "light": …, "dark": …}` and theme
   files; **VS Code** a preferred light and dark theme it switches between
   with the system's; **Obsidian** light, dark or the system's, with its own
-  accent picker; **Blender** theme presets; **Fusion** a few built-in UI
-  themes, not following the system. None takes its palette from the
+  accent picker; **Blender** theme presets. None takes its palette from the
   system, only light or dark; an OS accent is rare.
 
 ## What was decided

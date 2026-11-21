@@ -3,13 +3,12 @@
 **Status:** decided, 2026-09-28 · **Milestone:** before the first cut
 
 > **Amended by [decision 0034](0034-entries-and-order-of-the-finishes-over-the-part.md).**
-> Spiral, Radial and Morphed Spiral are cut the nearest pass next, Fusion's
-> Shortest Machining Distance; `linking.reorder = false` keeps the order laid
-> out.
+> Spiral, Radial and Morphed Spiral are cut the nearest pass next;
+> `linking.reorder = false` keeps the order laid out.
 
 ## Question
 
-Fusion finishes round shapes with a Spiral about a centre, Radial spokes out
+Round shapes are finished with a Spiral about a centre, Radial spokes out
 from it, and a Morphed Spiral that turns from the boundary's shape into a
 centre. Each is a pattern laid out seen from above and dropped onto the part,
 as Parallel's lines are. How much of parallel and scallop do they share, and
@@ -33,9 +32,8 @@ how is a spiral that follows any boundary laid out?
   A pattern's slope is the cutter location's, as scallop's grid measures it.
   It is measured by central differences of the drop-cutter at each segment's
   middle, a third of a stepover apart, and only when a range is asked for.
-  A pattern keeps to the range and nothing else, both ends included, as
-  Fusion's From and To slope angles ("only areas equal to or greater than ...
-  equal to or less than this value are machined"): steep stretches are cut down
+  A pattern keeps to the range and nothing else, both ends included: steep
+  stretches are cut down
   the part and broken where one falls further than a cut step, as a parallel
   pass is. (They were once also left wherever steeper than a plunge, but only
   when a range was asked for, so 0 to 89.9° cut far less than 0 to 90°.)
@@ -99,5 +97,5 @@ how is a spiral that follows any boundary laid out?
   cleared, parallel- and scallop-finished.
 - The pattern strategies share the linker's stay-down-over-the-part arm with
   parallel and scallop.
-- Still to do: picking the centre on the model; Fusion's spiral limits by
-  contact point. Smoothing since, in [decision 0015](0015-smoothing.md).
+- Still to do: picking the centre on the model; limiting a spiral by contact
+  point. Smoothing since, in [decision 0015](0015-smoothing.md).
