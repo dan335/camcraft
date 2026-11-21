@@ -13,14 +13,16 @@
 //! are the field's far end, each piece's a node of its own, cut last.
 //!
 //! Inside the last ring with no corner going in, the field's rings further
-//! in give way to rings laid out from a spine ([`spine`]), in either order.
+//! in give way to rings laid out from a spine ([`spine`]), one node's
+//! sequence under that ring's region, listed from it in to the spine.
 //!
 //! Where the rings blend into the far edge ([`blend`]), the field's lines past
-//! the last whole ring give way to the blended rings, each nested in the one
-//! before under that ring's region, the far edge last. The rings below where
-//! the tool leaves the part are nested one in the next too, a root of their
-//! own: cut first from the boundary in, up to that line, and last from the
-//! inner edges out, down from it.
+//! the last whole ring give way to the blended rings and the far edge, one
+//! node's sequence under that ring's region. The rings below where the tool
+//! leaves the part are a sequence too, a root of its own, listed from the
+//! Bottom up to that line: cut first from the boundary in, and last from the
+//! middle out. When each line and sequence is cut is the rule in
+//! [`order`](super::order).
 
 use camcraft_geom::contour::Region;
 use camcraft_geom::cut::View;
@@ -38,8 +40,9 @@ use crate::strategy::slope::Sloped;
 use super::blend::{self, Band};
 use super::distance::Field;
 use super::ground::Edge;
+use super::order::Side;
 use super::spine;
-use super::{ScallopParams, ScallopReport, order};
+use super::{ScallopParams, ScallopReport};
 
 /// The most levels of rings: far past any real part.
 const MAX_LEVELS: u32 = 100_000;
@@ -60,20 +63,20 @@ pub(super) struct Plan {
     pub(super) children: Vec<usize>,
     /// Whether it is a root, cut from where the tool is.
     pub(super) root: bool,
-    /// Whether it is nested one in the next with others by [`chain`], not a
-    /// region: its rings are cut in the chain's order, whichever way they
-    /// turn.
-    pub(super) chained: bool,
+    /// Rings that are no region's, cut one after another, each its own
+    /// plan's lines, listed from the boundary in.
+    pub(super) sequence: Vec<Plan>,
 }
 
 /// The tree's nodes; those cut before every root, each a root of its own;
-/// and those cut after them. Whether its field is measured out from the inner
-/// edges.
+/// and those cut after them. The side of its regions that its field's lines
+/// lie on, where the field says: every one a hole's, measured out from the
+/// inner edges.
 pub(super) struct Planned {
     pub(super) plans: Vec<Plan>,
     pub(super) first: Vec<usize>,
     pub(super) last: Vec<usize>,
-    pub(super) outward: bool,
+    pub(super) side: Side,
 }
 
 /// A field's lines at each whole stepover, level by level, and the regions
@@ -141,9 +144,7 @@ pub(super) fn plan(
     report.top_ups += regions.iter().filter(|r| !r.top_up.is_empty()).count() as u64;
     let mut plans = by_region(grid, lines, &mut regions);
     let diameter = 2.0 * seat.tool().max_radius();
-    // Inside the last smooth ring of each chain, rings out from its spine,
-    // in either order: chained under it, the spine deepest, they are cut
-    // from the spine out inside out and in to it outside in.
+    // Inside the last smooth ring of each chain, rings round its spine.
     for star in spine::last_smooth(&regions, &plans, step) {
         let ring = spine::ring_of(&plans, star).map(|l| l.points.clone());
         if let (Some(region), Some(ring)) = (regions.get(star), ring)
@@ -180,7 +181,13 @@ pub(super) fn plan(
         && let Some(far) = field.far_edges.get(i)
     {
         report.blended += band.rings.len() as u64;
-        into_band(grid, &regions, &mut plans, (band, home), far);
+        into_band(
+            grid,
+            &regions,
+            &mut plans,
+            (band, home),
+            (far, field.outward),
+        );
     }
     let mut first = Vec::new();
     if let Some(root) = below(seat, field, params, &mut plans, report) {
@@ -193,15 +200,18 @@ pub(super) fn plan(
         plans,
         first,
         last,
-        outward: field.outward,
+        side: if field.outward {
+            Side::Hole
+        } else {
+            Side::Outer
+        },
     }
 }
 
 /// Inside `R*`, region `star`, the field's rings further in give way to
-/// those laid out from its spine (`inside`): the spine, an open pass, and the
-/// rings out from it, nested one in the next under `star`, the spine
-/// deepest. Inside out the spine is cut first and the rings out from it;
-/// outside in, the rings in to it and the spine last.
+/// those laid out from its spine (`inside`): a sequence under `star`, listed
+/// from the boundary in, the rings in to the spine and the spine, an open
+/// pass, last.
 fn give_way(grid: &View<'_>, plans: &mut Vec<Plan>, star: usize, inside: spine::Inside) {
     let mut stack: Vec<usize> = plans
         .get(star)
@@ -218,19 +228,38 @@ fn give_way(grid: &View<'_>, plans: &mut Vec<Plan>, star: usize, inside: spine::
         found: vec![boundary(grid, &flat, false)],
         ..Plan::default()
     };
-    let out = inside.rings.into_iter().map(|mut ring| Plan {
-        lines: vec![sloped(grid, &mut ring)],
-        ..Plan::default()
-    });
-    let root = chain(plans, std::iter::once(spine).chain(out), true);
+    // The rings out from the spine, turned to go in to it.
+    let mut sequence: Vec<Plan> = inside
+        .rings
+        .into_iter()
+        .rev()
+        .map(|mut ring| Plan {
+            lines: vec![sloped(grid, &mut ring)],
+            ..Plan::default()
+        })
+        .collect();
+    sequence.push(spine);
+    let id = push_sequence(plans, sequence);
     if let Some(plan) = plans.get_mut(star) {
-        plan.children = root.into_iter().collect();
+        plan.children = id.into_iter().collect();
     }
 }
-/// The rings below where the tool leaves the part ([`rings_below`]), each a
-/// node nested in the one cut before it, in order down from that line, or,
-/// from the boundary in, up to it; the root of them. And, where there are
-/// any, the height the level rings start under, theirs.
+
+/// `sequence` pushed onto `plans` as one node: its index, where it has any.
+fn push_sequence(plans: &mut Vec<Plan>, sequence: Vec<Plan>) -> Option<usize> {
+    if sequence.is_empty() {
+        return None;
+    }
+    plans.push(Plan {
+        sequence,
+        ..Plan::default()
+    });
+    Some(plans.len() - 1)
+}
+
+/// The rings below where the tool leaves the part ([`rings_below`]), a
+/// sequence listed from the Bottom up to that line: its node. And, where
+/// there are any, the height the level rings start under, theirs.
 fn below(
     seat: &Seat<'_>,
     field: &Field<'_>,
@@ -238,21 +267,18 @@ fn below(
     plans: &mut Vec<Plan>,
     report: &mut ScallopReport,
 ) -> Option<usize> {
-    let (mut rings, to) = rings_below(seat, field, params)?;
+    let (rings, to) = rings_below(seat, field, params)?;
     report.blended += rings.len() as u64;
     report.walls_from = Some(to + params.stepover);
-    if params.order == Order::OutsideIn {
-        rings.reverse();
-    }
-    let nodes = rings.into_iter().map(|ring| Plan {
-        placed: vec![ring],
-        ..Plan::default()
-    });
-    chain(
-        plans,
-        nodes,
-        order::children_first(params.order, field.outward),
-    )
+    let sequence = rings
+        .into_iter()
+        .rev()
+        .map(|ring| Plan {
+            placed: vec![ring],
+            ..Plan::default()
+        })
+        .collect();
+    push_sequence(plans, sequence)
 }
 
 /// A node for each of `regions`, with its lines of `lines`, and one for each
@@ -378,15 +404,17 @@ fn with_edges(
 }
 
 /// `band`'s rings in place of the field's lines past its last whole ring:
-/// each region past that level on the band, and its top-up, emptied, and the
-/// band's rings nested one in the next under the region of that ring,
-/// `home`, the far edge `far` last.
+/// each region past that level on the band, and its top-up, emptied, and a
+/// sequence under the region of that ring, `home`, of the band's rings and
+/// the far edge `far`, listed from the boundary in: from the far edge in
+/// where it is the outside of the band, `far_outside`, as where the field
+/// is measured out to it, and to it otherwise.
 fn into_band(
     grid: &View<'_>,
     regions: &[isoline::Region],
     plans: &mut Vec<Plan>,
     (band, home): (Band, usize),
-    far: &Edge,
+    (far, far_outside): (&Edge, bool),
 ) {
     for (i, r) in regions.iter().enumerate() {
         if r.level <= band.level || !band.holds(r.rep) {
@@ -403,17 +431,24 @@ fn into_band(
             }
         }
     }
-    let rings = band.rings.into_iter().map(|mut ring| Plan {
-        lines: vec![sloped(grid, &mut ring)],
-        ..Plan::default()
-    });
-    let far = Plan {
+    let mut sequence: Vec<Plan> = band
+        .rings
+        .into_iter()
+        .map(|mut ring| Plan {
+            lines: vec![sloped(grid, &mut ring)],
+            ..Plan::default()
+        })
+        .collect();
+    sequence.push(Plan {
         found: vec![line_along(grid, far, true)],
         ..Plan::default()
-    };
-    let root = chain(plans, rings.chain(std::iter::once(far)), false);
+    });
+    if far_outside {
+        sequence.reverse();
+    }
+    let id = push_sequence(plans, sequence);
     if let Some(plan) = plans.get_mut(home) {
-        plan.children = root.into_iter().collect();
+        plan.children = id.into_iter().collect();
     }
 }
 
@@ -448,39 +483,6 @@ fn rings_below(
         }
     }
     Some((rings, to))
-}
-
-/// `nodes` pushed onto `plans`, each nested in the one before, or, where
-/// children are cut first, in the one after, so they are cut in the order
-/// given: the root of them, if there are any.
-fn chain(
-    plans: &mut Vec<Plan>,
-    nodes: impl IntoIterator<Item = Plan>,
-    children_first: bool,
-) -> Option<usize> {
-    let ids: Vec<usize> = nodes
-        .into_iter()
-        .map(|plan| {
-            plans.push(Plan {
-                chained: true,
-                ..plan
-            });
-            plans.len() - 1
-        })
-        .collect();
-    for pair in ids.windows(2) {
-        let &[a, b] = pair else { continue };
-        let (parent, child) = if children_first { (b, a) } else { (a, b) };
-        if let Some(plan) = plans.get_mut(parent) {
-            plan.children.push(child);
-        }
-    }
-    if children_first {
-        ids.last()
-    } else {
-        ids.first()
-    }
-    .copied()
 }
 
 /// The ground's edge `edge` as a line placed by the field: as it runs, the

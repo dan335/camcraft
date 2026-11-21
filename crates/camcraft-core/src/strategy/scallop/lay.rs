@@ -2,7 +2,8 @@
 //! the field's lines and the ground's edges placed by the field, height and
 //! all ([`guided`]), the area's edge dropped onto the part seen from above;
 //! and the rings below where the tool leaves the part, found beside the wall
-//! already, as they are.
+//! already, as they are. Each line is laid on its [`Side`] of its region, which
+//! decides when it is cut ([`order`](super::order)).
 
 use camcraft_geom::contour::{Region, polyline_length, simplify};
 use camcraft_geom::trigrid::TriSurface;
@@ -17,16 +18,19 @@ use crate::strategy::slope::{SlopeCounts, Sloped};
 use super::distance::at;
 use super::ground::Ground;
 use super::guided;
+use super::order::Side;
 use super::rings::Plan;
 use super::{length, turns_left};
 
 /// A node's lines, laid on the part, and what was left out.
 #[derive(Default)]
 pub(super) struct Worked {
-    /// Its rings round its region's outside, and every other pass.
+    /// Its lines on [`Side::Outer`] of its region.
     pub(super) outer: Vec<Run>,
-    /// Its rings round a hole of its region.
+    /// Its lines on [`Side::Hole`].
     pub(super) holes: Vec<Run>,
+    /// Its sequence's rings, each one's runs, listed from the boundary in.
+    pub(super) sequence: Vec<Vec<Run>>,
     pub(super) sweep: ParallelReport,
     pub(super) slopes: SlopeCounts,
     pub(super) fragments: u64,
@@ -52,20 +56,23 @@ pub(super) struct Layer<'a> {
 }
 
 impl Layer<'_> {
-    /// `plan`'s lines, its own taken, laid on the part: those round a hole of
-    /// its region apart from the rest. A line has its region's side on its
-    /// left, so a closed one turning right goes round a hole of it. Measured
-    /// out from the inner edges (`outward`), every line is a hole's, as every
-    /// ring grows out from one, and so are its pieces where the boundary cuts
-    /// it. Nodes chained one in the next are no region, and their rings go
-    /// with the rest.
-    pub(super) fn lay(&self, plan: &mut Plan, outward: bool) -> Result<Worked, StrategyError> {
+    /// `plan`'s lines, its own taken, laid on the part, each on its side of
+    /// its region, `side` that of every line of a field measured out from
+    /// inner edges, where every ring grows out from a hole and so do its
+    /// pieces where the boundary cuts it; and its sequence, ring by ring.
+    pub(super) fn lay(&self, plan: &mut Plan, side: Side) -> Result<Worked, StrategyError> {
         let mut w = Worked::default();
-        let chained = plan.chained;
-        let hole =
-            |line: &Sloped| outward || (!chained && line.closed && !turns_left(&line.points));
+        // A line has its region on its left, so a closed one turning right
+        // goes round a hole of it.
+        let side_of = |line: &Sloped| {
+            if side == Side::Hole || (line.closed && !turns_left(&line.points)) {
+                Side::Hole
+            } else {
+                Side::Outer
+            }
+        };
         let families = |lines: Vec<Sloped>| -> (Vec<Sloped>, Vec<Sloped>) {
-            lines.into_iter().partition(|l| !hole(l))
+            lines.into_iter().partition(|l| side_of(l) == Side::Outer)
         };
         let (lines, hole_lines) = families(std::mem::take(&mut plan.lines));
         let (edges, hole_edges) = families(std::mem::take(&mut plan.edges));
@@ -74,14 +81,21 @@ impl Layer<'_> {
         self.lay_into((lines, found, edges), &mut outer, &mut w)?;
         let mut holes = Vec::new();
         self.lay_into((hole_lines, hole_found, hole_edges), &mut holes, &mut w)?;
-        // The rings below where the tool leaves the part go as the field's.
-        if outward {
-            holes.append(&mut plan.placed);
-        } else {
-            outer.append(&mut plan.placed);
-        }
         w.outer = outer;
         w.holes = holes;
+        // Each ring of the sequence, all its runs one group, cut in turn.
+        for mut ring in std::mem::take(&mut plan.sequence) {
+            let mut runs = Vec::new();
+            let lines = (
+                std::mem::take(&mut ring.lines),
+                std::mem::take(&mut ring.found),
+                std::mem::take(&mut ring.edges),
+            );
+            self.lay_into(lines, &mut runs, &mut w)?;
+            // The rings below where the tool leaves the part, as they are.
+            runs.append(&mut ring.placed);
+            w.sequence.push(runs);
+        }
         Ok(w)
     }
 

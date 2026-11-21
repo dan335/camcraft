@@ -157,6 +157,7 @@ the same notes at more length.
   rings conventional.
 - Scallop is less code: one way to read a field at a node, to find the one line of a field at a level, to measure a polyline and to tell which way a ring turns; the spine's part lives in its own module, each step a function; the strip test is split into its pieces, the ground round them and their Euler numbers; and the placing of lines asks the ground itself where a strip is. Every program it writes is unchanged.
 - Linking is less code: each way a link is made without lifting (round onto the next pass, over the part, beside it, at a level, across and down) is one function, tried in one order, and what they ask of the part and the material is asked in one place each; every program it writes is unchanged.
+- Scallop says when a ring is cut in one place: each line lies on one side of its region, round its outside or a hole, and is cut before what is inside the region where the cut goes on into it; rings that are no region's (a band, the rings below where the tool leaves the part, the rings round a spine) are one sequence each. Every program it writes is unchanged.
 
 ## 0.10.0 — 2026-11-20
 

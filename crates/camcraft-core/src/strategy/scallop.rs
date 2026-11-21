@@ -340,11 +340,15 @@ pub fn scallop_plan(
             .par_iter_mut()
             .map(|plan| {
                 params.watch.check()?;
-                let w = layer.lay(plan, zone.outward)?;
+                let w = layer.lay(plan, zone.side)?;
                 if params.watch.showing() {
-                    params
-                        .watch
-                        .show(w.outer.iter().chain(&w.holes).map(Run::shown));
+                    params.watch.show(
+                        w.outer
+                            .iter()
+                            .chain(&w.holes)
+                            .chain(w.sequence.iter().flatten())
+                            .map(Run::shown),
+                    );
                 }
                 each.add(share);
                 Ok(w)

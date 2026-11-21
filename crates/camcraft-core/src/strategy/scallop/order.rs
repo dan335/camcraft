@@ -1,20 +1,33 @@
 //! The rings cut into the path, in the tree's order, each the way it cuts.
 //!
+//! # The rule
+//!
 //! The regions each ring bounds nest, and are cut region by region, the
-//! nearest next ([`Nested`]): from the boundary in (outside in), or each
-//! region's inner ones first (inside out). A region's rings round its
-//! outside are cut before what is inside them and its rings round its holes
-//! after, from the boundary in, and the other way from the middle out, so
-//! the two families are not cut by turns (decision 0041). Measured out from
-//! the inner edges every ring is a hole's, and inside out is the field's own
-//! order, as outside in is from the boundary; the far end's nodes are cut
-//! last. Climbing with a clockwise spindle has the
-//! side not yet finished on the tool's right. Both ways keeps closed rings
-//! climbing, and starts an open pass at whichever end is nearer. Each closed
-//! ring starts where it crosses the line out from where the first started, so
-//! the seam where each steps to the next is straight seen from above. Where
-//! strips break the ground into zones (decision 0039), each zone's tree is
-//! cut whole before the next's, on the one seam.
+//! nearest next ([`Nested`]). Each line lies on one side of its region
+//! ([`Side`]): round its outside, the region inside it, or round a hole of
+//! it, the region outside it. A line is cut before its region's children
+//! where the cut goes on into its region ([`before_children`]): from the
+//! boundary in (outside in), the rings round a region's outside, then what
+//! is inside them, then the rings round its holes; from the middle out
+//! (inside out), the other way, so the two families are not cut by turns
+//! (decision 0041). A field measured out from inner edges grows every ring
+//! out from a hole, so every line of it is a hole's, and inside out is its
+//! own order. Each line is cut toward the side still to finish, its field's
+//! higher side where its field's lines are cut before their children.
+//!
+//! Rings that are no region's, cut one after another (the band into a far
+//! edge, the rings below where the tool leaves the part, the rings round a
+//! spine), are one node's sequence ([`Pass::Sequence`]), listed from the
+//! boundary in, cut in that order from the boundary in and the other way
+//! from the middle out.
+//!
+//! Climbing with a clockwise spindle has the side not yet finished on the
+//! tool's right. Both ways keeps closed rings climbing, and starts an open
+//! pass at whichever end is nearer. Each closed ring starts where it crosses
+//! the line out from where the first started, so the seam where each steps
+//! to the next is straight seen from above. Where strips break the ground
+//! into zones (decision 0039), each zone's tree is cut whole before the
+//! next's, on the one seam.
 
 use glam::DVec3;
 
@@ -31,17 +44,37 @@ use super::ScallopParams;
 use super::lay::Worked;
 use super::rings::Planned;
 
-/// Whether a region's rings round its outside are cut after what is inside
-/// them: inside out. Its rings round its holes the other way.
-fn outer_after(order: Order) -> bool {
-    order == Order::InsideOut
+/// Which side of a line its region lies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Side {
+    /// Round the region's outside: the region inside it.
+    Outer,
+    /// Round a hole of the region: the region outside it.
+    Hole,
 }
 
-/// Whether nodes chained one in the next are cut child first: inside out,
-/// where the rings in them go after their children, but where the field is
-/// measured out from the inner edges (`outward`), every ring being a hole's.
-pub(super) fn children_first(order: Order, outward: bool) -> bool {
-    outer_after(order) && !outward
+/// Whether a line on `side` of its region is cut before the region's
+/// children, cut in `order`: where the cut goes on into its region.
+pub(super) fn before_children(order: Order, side: Side) -> bool {
+    (order == Order::OutsideIn) == (side == Side::Outer)
+}
+
+/// What a node of the tree cuts: a pass, taken with the rest of its slot the
+/// nearest next, or a sequence of groups, each taken so in turn.
+enum Pass {
+    Run(Run),
+    Sequence(Vec<Vec<Run>>),
+}
+
+impl Pass {
+    /// Where it starts, seen from above.
+    fn start(&self) -> Option<glam::DVec2> {
+        match self {
+            Self::Run(run) => run.points.first(),
+            Self::Sequence(groups) => groups.iter().flatten().next()?.points.first(),
+        }
+        .map(|p| p.truncate())
+    }
 }
 
 /// The rings of each zone's tree, laid on the part as `worked`, cut into a
@@ -75,15 +108,27 @@ pub(super) fn cut(
         seat,
         tolerance: params.tolerance,
     };
+    let inside_out = params.order == Order::InsideOut;
     for (planned, worked) in zones {
-        let toward_higher = !children_first(params.order, planned.outward);
+        let toward_higher = before_children(params.order, planned.side);
         let mut tree = Nested::new();
         let mut roots = Vec::new();
         for (plan, w) in planned.plans.into_iter().zip(worked) {
-            let i = tree.push(if outer_after(params.order) {
-                (w.holes, w.outer)
+            let runs = |runs: Vec<Run>| runs.into_iter().map(Pass::Run).collect::<Vec<_>>();
+            // A sequence sits where a line round the region's outside does.
+            let mut outer = runs(w.outer);
+            if !w.sequence.is_empty() {
+                let mut sequence = w.sequence;
+                if inside_out {
+                    sequence.reverse();
+                }
+                outer.push(Pass::Sequence(sequence));
+            }
+            let holes = runs(w.holes);
+            let i = tree.push(if before_children(params.order, Side::Outer) {
+                (outer, holes)
             } else {
-                (w.outer, w.holes)
+                (holes, outer)
             });
             // A child nested before it is pushed: only the parent must be there.
             for c in plan.children {
@@ -93,7 +138,7 @@ pub(super) fn cut(
                 roots.push(i);
             }
         }
-        tree.settle(|r| r.points.first().map(|p| p.truncate()));
+        tree.settle(Pass::start);
         // The higher side of a line as found is on its left: the side still
         // to finish, cutting toward the higher.
         cut.reverse = toward_higher == (params.climb_right != conventional);
@@ -155,17 +200,9 @@ impl Cut<'_> {
                 .insert(i + 1, q.truncate().extend(rest.map_or(q.z, |z| z.max(q.z)))),
         }
     }
-}
 
-impl Cuts<Run> for Cut<'_> {
-    type Error = StrategyError;
-
-    fn at(&self) -> Option<glam::DVec2> {
-        self.emit.at
-    }
-
-    /// Runs the same distance in, the nearest next, each the way it cuts.
-    fn cut(&mut self, mut runs: Vec<Run>) -> Result<(), StrategyError> {
+    /// `runs`, the nearest next, each the way it cuts.
+    fn runs(&mut self, mut runs: Vec<Run>) -> Result<(), StrategyError> {
         for run in &mut runs {
             if self.reverse {
                 run.points.reverse();
@@ -175,5 +212,34 @@ impl Cuts<Run> for Cut<'_> {
             }
         }
         self.emit.nearest_first(runs, self.both_ways)
+    }
+}
+
+impl Cuts<Pass> for Cut<'_> {
+    type Error = StrategyError;
+
+    fn at(&self) -> Option<glam::DVec2> {
+        self.emit.at
+    }
+
+    /// A slot's runs, the nearest next; then each sequence, group by group.
+    fn cut(&mut self, passes: Vec<Pass>) -> Result<(), StrategyError> {
+        let mut runs = Vec::new();
+        let mut sequences = Vec::new();
+        for pass in passes {
+            match pass {
+                Pass::Run(run) => runs.push(run),
+                Pass::Sequence(groups) => sequences.push(groups),
+            }
+        }
+        if !runs.is_empty() {
+            self.runs(runs)?;
+        }
+        for group in sequences.into_iter().flatten() {
+            if !group.is_empty() {
+                self.runs(group)?;
+            }
+        }
+        Ok(())
     }
 }
