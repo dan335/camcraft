@@ -6,6 +6,18 @@ the same notes at more length.
 
 ## 0.11.0 — 2026-11-21
 
+- **camcraft's tests check camcraft's own results.** The tests that held
+  camcraft's programs to other software's now hold them to what camcraft's
+  own runs recorded: every check passes, nothing gouges, and the lifts, the
+  length fed and the simulated stock left are as recorded. The G-code
+  programs made by other software, the tests that compared camcraft's
+  programs with them and the scripts that drove that software are gone from
+  the repository. The documents describe camcraft in its own terms.
+  `CONTRIBUTING.md` says how to work on camcraft and the rules every change
+  keeps, and `DISCLAIMER.md` says what camcraft does not promise. A new gate,
+  "names", in `scripts/check.sh` and `check.ps1`, fails if a tracked file
+  names another product.
+
 - **Outside in too, Scallop's innermost rings go round a spine**
   ([decision 0040](docs/decisions/0040-scallop-spine-inside-the-last-smooth-ring.md)).
   A new Scallop starts outside in, and there, with nothing avoided, a user's
@@ -14,8 +26,7 @@ the same notes at more length.
   rings inside the last smooth ring are the ones inside out lays round a
   spine along its middle, cut in to it, the spine last: only the two
   smallest round the spine turn so sharply. It feeds 41.03 m where 40.43,
-  lifting once as before. Fusion's `ops_3d`, Scallop's comparisons with
-  Fusion, and inside out are as they were.
+  lifting once as before. Inside out is as it was.
 
 - **Scallop's blended rings are counted by their real spacing**
   ([decision 0038, amended](docs/decisions/0038-scallop-rings-blend-into-an-edge-at-a-slant.md)).
@@ -27,8 +38,7 @@ the same notes at more length.
   8.48 at most, 12 rings where 8 do. Now each distance's gradient is taken
   as unit, as a distance's is: it feeds 40.13 m where 40.73, and with nothing
   avoided, inside out, 41.44 m where 41.65, the rings no further apart where
-  the tool touches than a stepover. Every other band, Fusion's `ops_3d` and
-  Scallop's comparisons with Fusion are as they were.
+  the tool touches than a stepover. Every other band is as it was.
 
 - **From the boundary in, Scallop's rings start where the level rings below
   them end** ([decision 0041](docs/decisions/0041-scallop-hole-rings-after-what-is-inside.md)).
@@ -38,8 +48,7 @@ the same notes at more length.
   went 129 mm across the bowl to it. Now the first ring over the part starts
   nearest where the level rings ended, its seam running on from there, and
   the tool steps up onto it staying down: it lifts once, at the end, where
-  twice, and goes 0.08 m at rapid where 0.28. Inside out, Fusion's `ops_3d`,
-  and Scallop's comparisons with Fusion are as they were.
+  twice, and goes 0.08 m at rapid where 0.28. Inside out is as it was.
 
 - **Outside in, Scallop stops at a sharp rim and starts again past it too**
   ([decision 0039](docs/decisions/0039-scallop-zones-at-a-sharp-rim.md)).
@@ -50,8 +59,7 @@ the same notes at more length.
   outer edges and its rings blended into the one closed edge inside it, the
   strip's border or the floor's edge: one ring touches each edge, and it
   lifts twice, where 7 times, feeding 40.70 m where 39.82, the rings under
-  the rim a stepover apart. Fusion's `ops_3d` and Scallop's comparisons with
-  Fusion are as they were.
+  the rim a stepover apart.
 
 - **From the boundary in, Scallop cuts a region's rings round its holes after
   what is inside it** ([decision 0041](docs/decisions/0041-scallop-hole-rings-after-what-is-inside.md)).
@@ -61,8 +69,8 @@ the same notes at more length.
   tool went back and forth between the two families, lifting 36 times. Now
   the rings round a region's outside are cut before what is inside them and
   its rings round its holes after, from the middle out the other way: it
-  lifts 7 times, feeding 39.82 m where it fed 40.52. Held to Fusion's
-  programs, Scallop with the dome avoided lifts 4 times where 3, feeding
+  lifts 7 times, feeding 39.82 m where it fed 40.52. On the `ops_3d` test
+  part, Scallop with the dome avoided lifts 4 times where 3, feeding
   2.9% less, and with only the floor machined 3 times where twice. Pocket
   clearing, flat finishing and inside out are as they were.
 
@@ -111,8 +119,8 @@ the same notes at more length.
   its lead, across at that height, and straight down at the plunge feed onto
   the next ring's lead, as a profile goes to its ring's next depth. On a
   user's part its scallop lifts 26 times where it lifted 28, and 9 where 12
-  without its face avoided, feeding a little less; held to Fusion's programs,
-  Scallop lifts once, as Fusion's does, where it lifted 12 times, and 5 times
+  without its face avoided, feeding a little less; on the `ops_3d` test part,
+  Scallop lifts once where it lifted 12 times, and 5 times
   where 7 with the dome avoided, Spiral once where twice, and Parallel with
   the dome avoided 9 times where 11; the example rail jig's finish lifts 77
   times where 113. The same material comes off. Going across, what the tool
@@ -147,7 +155,7 @@ the same notes at more length.
   ring is level or not**, riding above it, where it lifted; after a ring
   ramped onto, the next starts where the tool is rather than back at the
   seam; and the level rings below the field are ramped onto, the first from
-  where the field's last ring ended. On Fusion's `ops_3d` it lifts 3 times
+  where the field's last ring ended. On the `ops_3d` test part it lifts 3 times
   where 5 with the dome avoided, and twice where 3 with only the floor
   machined.
 - Inside out from an inner edge, the line where the tool leaves the part and
@@ -184,8 +192,7 @@ the same notes at more length.
   wall was left out; the face the tool rises beside now decides, so the
   rings run up such a wall from its foot. The edge of a face avoided is
   found exactly, where it zigzagged by ±6° across a face running smoothly
-  into it; with only a pocket's floor machined the Fusion comparison's
-  median moved from 0.020 mm to 0.034.
+  into it.
 - **A round whose edge stands a little off it reads at 0.01 mm.** STEP import
   is ogeom 0.11.5, which draws the seam it adds round a face with no seam edge
   to the tolerance asked: on 0.11.0 that seam stood 0.09 mm off when the
@@ -197,8 +204,8 @@ the same notes at more length.
   cannot come under, leaving the same material bit for bit. Simulating a
   Parallel finish over a pocket and dome took 17.6 s and takes 1.6 s.
 - **The tests run faster.** They build camcraft-session, camcraft-import and
-  camcraft-post optimised, as the geometry crates already were: two Fusion
-  comparisons ran in 165 s where they took 325. Tests that ran the same job
+  camcraft-post optimised, as the geometry crates already were: two long
+  tests ran in 165 s where they took 325. Tests that ran the same job
   share one run, and the determinism gate runs three more tests.
 - **Cut by area, adaptive clearing comes to each area where the tool last was
   in it** ([decision 0036](docs/decisions/0036-adaptive-levels-order-and-entries.md)):
@@ -233,13 +240,12 @@ the same notes at more length.
   than the tool is taken in passes along it, a sliver in one: on a user's part a
   third of the program's lines had been a pass going round an octagon a
   quarter of a millimetre across. The helix into a closed area is never made
-  smaller than Fusion's Minimum Ramp Diameter, where it went down to a quarter
+  smaller than half the tool less its corners, where it went down to a quarter
   of its size; where not even that fits, the area is ramped into back and
   forth along its middle at the ramp angle, rather than left. A fine level
   starts nearest where the level below it ended. On the user's part the
   program is 109,213 lines where it was 169,671, removing the same material,
-  with a lift and 185 mm of rapids fewer. Every Fusion comparison of a finish starts
-  from a new adaptive's roughing, so their figures were measured again.
+  with a lift and 185 mm of rapids fewer.
 - **Scallop cuts every slope, as one family of rings**
   ([decision 0035](docs/decisions/0035-scallop-over-every-slope.md)). Its
   passes no longer leave ground steeper than a plunge to rings round the
@@ -248,7 +254,7 @@ the same notes at more length.
   and down walls, upright ones included. Below where the tool last rests on
   the part from above, as down a part's upright outside, level rings a
   stepover apart finish it to the Bottom. The edge of a face avoided is an
-  edge of the rings, as Fusion's lay them anew round what is avoided, instead
+  edge of the rings, laid anew round what is avoided, instead
   of being laid across it and cut out of it; inside out, where the ground has
   a hole or a face avoided in it, the rings start along that edge and grow
   outward.
@@ -259,33 +265,28 @@ the same notes at more length.
   down where the way between is clear of the part, which joins the rings round
   the walls of Parallel, Spiral, Radial and Morphed Spiral too: on `ops_3d`,
   unroughed, they lift 4, 47, 3 and 111 times where they lifted 40, 83, 40 and
-  147. Held to Fusion's programs, Scallop's columns alike go from 89.2% to
-  94.6% and it feeds 2% further than Fusion's where it fed 16% further, but
-  lifts 12 times to Fusion's once, taking the field's regions in its own
-  order; with only the floor machined it lifts 3 times, as Fusion's does,
-  where it lifted 12. CC211 is no longer raised.
-- **The finishes over the part enter and link as Fusion's**
+  147. There Scallop lifts 12 times, taking the field's regions in its own
+  order, and with only the floor machined 3 times, where it lifted 12. CC211
+  is no longer raised.
+- **The finishes over the part come straight down onto a pass and cut the
+  nearest next**
   ([decision 0034](docs/decisions/0034-entries-and-order-of-the-finishes-over-the-part.md)).
   Parallel, Scallop, Spiral, Radial and Morphed Spiral no longer ramp into a
   pass: the tool comes straight down at the plunge feed, onto the vertical
-  lead where it is clear of the material, as Fusion's, which have no ramp
-  settings, and as Pencil, Project and Morph already did. Spiral, Radial and
-  Morphed Spiral cut the nearest pass next, Fusion's *Shortest machining
-  distance*, as Parallel does; unticking *Reorder passes* cuts them in the
+  lead where it is clear of the material, as Pencil, Project and Morph
+  already did, and they have no ramp settings. Spiral, Radial and
+  Morphed Spiral cut the nearest pass next, as Parallel does; unticking *Reorder passes* cuts them in the
   order laid out. Where an operation cuts both ways (Parallel always,
   the others with direction both ways), a pass is taken from its nearer end;
   asked to cut one way it is cut as laid. A new Spiral and Morphed Spiral cut
-  both ways, as Fusion's start, and a new Flat comes straight down onto each
-  ring, as Fusion's Flat starts with its Ramp off; its ramp along the ring is
-  a choice on its *Linking* tab. Held to Fusion's programs for `ops_3d`,
-  Spiral lifts twice to Fusion's 5 where it lifted 71 times and feeds 30%
-  further where it fed four times as far; with the dome avoided, it lifts 8
-  times to Fusion's 6 where it lifted 121.
+  both ways, and a new Flat comes straight down onto each ring; its ramp
+  along the ring is a choice on its *Linking* tab. On `ops_3d`, Spiral lifts
+  twice where it lifted 71 times, and with the dome avoided 8 times where it
+  lifted 121.
   A job file reads as before: ramp settings on these finishes are not read, a
   Spiral or Morphed Spiral that leaves its direction out climbs, and a Flat
   that leaves its entry out ramps.
-- **Faces machined and avoided**, Fusion's Surface Manager, on every 3D
-  finish: Parallel, Scallop, Spiral, Radial, Morphed Spiral, Pencil, Project,
+- **Faces machined and avoided**, on every 3D finish: Parallel, Scallop, Spiral, Radial, Morphed Spiral, Pencil, Project,
   Morph, Contour, Ramp and Flat
   ([decision 0033](docs/decisions/0033-surface-groups.md)). In the job file,
   `[setup.operation.surfaces]` says whether the model is machined or avoided,
@@ -298,12 +299,9 @@ the same notes at more length.
   kept where it touches a face machined, and cut out, not lifted over, where it
   touches only faces avoided. A link that would stay down on or beside a face
   avoided lifts. CC111 fails a program that comes within an avoided face's
-  clearance, which Fusion does not check. Held to sixteen of Fusion's programs
-  for `ops_3d`, eleven of them with groups. camcraft stops where the tool
-  touches a face machined and one avoided at once, where Fusion's Parallel,
-  Scallop and Spiral run on up the face avoided, and keeps the ring there that
-  Fusion's Contour and Ramp cut out; and it lifts where Fusion's Scallop and
-  Spiral turn back at the clearance and stay down. Refused: groups on
+  clearance. Where the tool touches a face machined and one avoided at once,
+  Parallel, Scallop and Spiral stop and Contour and Ramp keep the ring there;
+  at an avoided face's clearance the tool lifts. Refused: groups on
   roughing, 2D operations and drilling, a face in two groups, the model
   avoided with nothing machined, and a V-bit or chamfer mill where anything is
   avoided. A roughing before such a finish still cuts beside the faces
@@ -323,8 +321,7 @@ the same notes at more length.
   or `zenity`: with neither, none appears, and that looks like Cancel. The
   dialog is not drawn in the app's theme.
 - **A boundary or outline set to picked faces and edges starts picking at
-  once** when nothing is picked yet, as Fusion's selection does when it is
-  chosen. Before, the view waited for **Select in view…** on the Faces or
+  once** when nothing is picked yet. Before, the view waited for **Select in view…** on the Faces or
   Edges card to be pressed, and the operation failed to generate meanwhile.
 - **An operation's status line wraps beside its button.** A long reason for a
   failure ran under **Try again** and was cut off.
@@ -353,43 +350,31 @@ the same notes at more length.
   work zero nor a Morph's curves can be picked on a part of several copies.
   `examples/sheet.camcraft` lays three copies of one part and two of another on
   a board and cuts them out.
-- **Fusion's Morph**, a new 3D finishing strategy (`strategy = "morph"`) in the
+- **Morph**, a new 3D finishing strategy (`strategy = "morph"`) in the
   job file and the app's 3D menu
-  ([decision 0030](docs/decisions/0030-morph.md)), the last of Fusion's 3-axis
-  milling operations: the app's menus list none as planned now. Passes between
+  ([decision 0030](docs/decisions/0030-morph.md)); with it the app's menus
+  list no operation as planned. Passes between
   two curves picked on the part, both open or both closed, each a step of the
   way from the one to the other, as many as keep each point of one within a
   stepover of its match on the next, dropped onto the part within the
   boundary. Direction (both ways, one way, other way), the stepover and the
-  slopes, as a new Morph of Fusion's starts. Fusion's programs for `ops_3d`
-  between the dome's foot and the floor's edge, as a new one starts and one
-  way, and between the R8 round's two edges, are `fixtures/nc/ops_3d_morph*.nc`,
-  made by `scripts/fusion/ops_3d/cam.py`, and a test holds camcraft's Morph to
-  each.
-- **Fusion's Project**, a new 3D finishing strategy (`strategy = "project"`) in
+  slopes.
+- **Project**, a new 3D finishing strategy (`strategy = "project"`) in
   the job file and the app's 3D menu
   ([decision 0029](docs/decisions/0029-project.md)). Edges picked on the part,
   open or closed, each seen from above and dropped onto it, the tool run along
-  where it rests there, within the boundary, in the order picked: Fusion's
-  Project in its Drop mode. Direction (both ways, one way, other way), Axial
-  Offset and the slopes, as a new Project of Fusion's starts. Fusion's
-  programs for `ops_3d` along the dome's foot, the floor's edge and the
-  round's lower edge, as a new one starts, the other way, a millimetre up
-  and with the 12 mm ball, are `fixtures/nc/ops_3d_project*.nc`, made by
-  `scripts/fusion/ops_3d/cam.py`, and a test holds camcraft's Project to each.
+  where it rests there, within the boundary, in the order picked. Direction
+  (both ways, one way, other way), axial offset and the slopes.
   A strategy whose picks are the curves it follows can no longer be given
   them as its boundary too.
-- **Fusion's Pencil**, a new 3D finishing strategy (`strategy = "pencil"`) in
+- **Pencil**, a new 3D finishing strategy (`strategy = "pencil"`) in
   the job file and the app's 3D menu
   ([decision 0028](docs/decisions/0028-pencil.md)). The tool run along where
   it touches the part in two places at once: the foot of every wall it
   reaches and every crease between faces that meet sharper than the
   bitangency angle, each point where the tool rests dropped onto the part.
-  Direction (both ways, one way, other way), Bitangency Angle, Overthickness
-  and Number of Stepovers, as a new Pencil of Fusion's starts. Fusion's
-  programs for `ops_3d` with its 12 mm ball, its 6 mm ball, a bitangency angle
-  of 40° and two stepovers are `fixtures/nc/ops_3d_pencil*.nc`, made again by
-  `scripts/fusion/ops_3d/cam.py`, and a test holds camcraft's Pencil to each.
+  Direction (both ways, one way, other way), bitangency angle, overthickness
+  and number of stepovers.
 - **Radial is no longer refused where a spoke stops short of the middle.**
   `camcraft post fixtures/step/ops_3d.step --strategy radial --stepover 0.5`
   ended "the arc to … is not a usable arc from where the path is", and wrote
@@ -398,14 +383,14 @@ the same notes at more length.
   them was made a half turn that wide, which is no arc. Passes in line, no
   further apart than the tolerance, are now joined by the straight line
   between them. No program was written wrong: the operation was refused.
-- **Fusion's Manufacturing Extension operations are not planned.** Steep and
-  shallow, blend, flow, corner and geodesic are gone from the app's 3D menu,
-  where they were listed greyed as not implemented yet, and with hole
-  recognition from `PROGRESS.md`'s list, which names them under Not planned.
+- **Steep and shallow, blend, flow, corner and geodesic finishing are not
+  planned.** They are gone from the app's 3D menu, where they were listed
+  greyed as not implemented yet, and with hole recognition from
+  `PROGRESS.md`'s list, which names them under Not planned.
 
 ## 0.8.2 — 2026-11-14
 
-- **Fusion's Ramp**, a new 3D finishing strategy (`strategy = "ramp"`) in the
+- **Ramp**, a new 3D finishing strategy (`strategy = "ramp"`) in the
   job file and the app's 3D menu
   ([decision 0027](docs/decisions/0027-ramp.md)). Contour's rings, gone down
   wall by wall without stopping: each wall entered from the level above its
@@ -413,14 +398,11 @@ the same notes at more length.
   then down to each ring below with the tool on the part at every height
   between, a stepdown each time round the longer of the two rings and no
   steeper than the ramp angle, and once round its foot. Direction, flat areas,
-  the slopes, the stepdown and the ramp angle, as a new Ramp of Fusion's
-  starts; it lifts to the retract height between walls.
+  the slopes, the stepdown and the ramp angle; it lifts to the retract height
+  between walls.
 - **A part for the 3D finishing operations to come**,
-  `fixtures/step/ops_3d.step`, made in Fusion by `scripts/fusion/ops_3d/`:
-  steep and drafted walls, a rounded edge, concave fillets, sharp inside
-  corners and a dome. Fusion's programs for its Ramp, as a new one starts, with
-  a stepdown of 2 mm and with a ramp angle of 0.5°, are
-  `fixtures/nc/ops_3d_ramp*.nc`, and a test holds camcraft's Ramp to each.
+  `fixtures/step/ops_3d.step`: steep and drafted walls, a rounded edge,
+  concave fillets, sharp inside corners and a dome.
 - **The example job's programs are written again.** `camcraft job
   examples/rail-jig.camcraft --out DIR` refused its roughing since 0.7.0 at
   the latest: "does not read back to its path". The program was right and
@@ -462,11 +444,8 @@ the same notes at more length.
 
 ## 0.8.0 — 2026-11-13
 
-- **Fusion's other 2D operations**, each a new strategy in the job file and
-  the app's 2D menu, and each held by a test to Fusion's own program for the
-  same part (`fixtures/step/ops_2d.step`, `ops_engrave.step`,
-  `fixtures/nc/ops_2d_*.nc`, `ops_engrave_*.nc`): the two programs leave the
-  same material, column by column.
+- **Eight more 2D operations**, each a new strategy in the job file and
+  the app's 2D menu:
   - **Bore** and **Circular** ([decision 0022](docs/decisions/0022-bore-and-circular.md)):
     holes and bosses picked by their round walls. Bore goes down a helix, by
     pitch or ramp angle; Circular level by level, each pass down its own lead.
@@ -475,7 +454,7 @@ the same notes at more length.
   - **Slot** and **Trace** ([decision 0023](docs/decisions/0023-slot-and-trace.md)):
     Slot cuts a closed slot along its middle, ramping back and forth along
     its whole length from the ramp clearance height, then once along the
-    floor; a tool narrower than the slot leaves the walls, as Fusion's does.
+    floor; a tool narrower than the slot leaves the walls.
     Trace follows picked edges, on the curve or to its left or right, with
     axial offset, pass extension, maximum angle and multiple depths.
   - **2D Chamfer** and **2D Adaptive Clearing**
@@ -494,17 +473,18 @@ the same notes at more length.
     the pitch from the bottom to the top, and back to the centre. Pitch,
     pitch diameter offset, right or left hand, climb or conventional,
     multiple passes. The thread cut into the wall is held by the checks
-    as cut on purpose. Fusion's helical lead carries the thread's slope
-    below a blind hole's floor, and so does camcraft's: the run says how
+    as cut on purpose. The helical lead carries the thread's slope
+    below a blind hole's floor: the run says how
     far (CC224) and the part check refuses it until the Bottom is raised
     that much or the leads are levelled.
 - **A thread mill** is a kind of tool (`thread-mill`), with its pitch and
-  profile angle, in the tool library and editor and read from Fusion's CSV.
+  profile angle, in the tool library and editor and read from a tool
+  library's CSV.
 - **Operations still to come are in the menus**, greyed out, saying "Not
   implemented yet".
 - **[PROGRESS.md](PROGRESS.md)** says where camcraft stands, feature by
-  feature, against Fusion's 3-axis milling: done, partial or not started,
-  with what each lacks. It replaces `STATUS.md`.
+  feature: done, partial or not started, with what each lacks. It replaces
+  `STATUS.md`.
 - **A ramp round a whole circle is a helix.** Where a pass was one arc all
   the way round, a tool pocketing a hole not much wider than itself, the ramp
   down onto it went straight down into the material. It now goes round the
@@ -515,10 +495,6 @@ the same notes at more length.
   to keep its clearance), CC222 (a bore's passes past a hole's middle left
   out), CC223 (an engraving cuts into the part), CC224 (a thread's lead goes
   below a hole's floor).
-- **`scripts/fusion/`** gained the scripts that made those parts and
-  programs, and `params.py`, which writes out every setting of every Fusion
-  milling strategy as a new operation starts with it: what the new
-  operations' defaults were taken from.
 
 ## 0.7.0 — 2026-11-11
 
@@ -543,33 +519,24 @@ the same notes at more length.
   went down to the operation's Bottom height, which starts at the part's
   bottom, so a blind hole was drilled through the part (and refused by the
   material check, CC107). Each hole now goes to its own bottom, where its round
-  wall ends, as Fusion's drilling goes "from hole bottom"; a Bottom height set
+  wall ends; a Bottom height set
   still takes every hole there.
-- **New 2D pockets and contours start as Fusion's do**, found by holding them
-  to Fusion's own programs ([decision 0020](docs/decisions/0020-defaults.md),
-  amended): one pass to the bottom, Multiple Depths off (a new 2D pocket
-  stepped down 0.6 mm a level, taking four times as long as Fusion's); a 2D
-  pocket leaving 0.5 mm each way, as Fusion's roughing; and a 2D contour
-  straight down onto its lead, Ramp off, where it helixed down at 2°. These
-  are how new operations start; saved jobs keep theirs. Face's pass extension
-  is now to the tool's centre, as Fusion's, so passes end where Fusion's do: a
-  saved job's runs a radius shorter at each end, and one that leaves it out
-  stops just clear, as before.
-- **`camcraft compare`** holds camcraft's programs to another CAM system's:
-  it runs a setup, cuts each other program from the material camcraft had
-  before that operation, with the same tool, and compares what the two
-  programs do and the material each leaves, column by column and against the
-  part. A test holds new Face, 2D Contour, 2D Pocket and Drill operations to
-  Fusion's own programs for the same part, made in Fusion
-  (`fixtures/step/ops_block.step`, `fixtures/nc/ops_block_*.nc`): each leaves
-  the same material to 0.01 mm. The other program is read as Masso, Haas and
-  Centroid read one, the motion before a drilling cycle in force again after
-  `G80`, as Fusion's posts write; camcraft's own are still held to
-  RS274/NGC's stricter reading, so they run on either.
-- **`scripts/fusion/`** drives Fusion through its API: an add-in runs the
-  scripts dropped into a folder, on this machine or over SSH on another, and
-  the scripts kept there build the test part, set up Fusion's operations and
-  post them, remaking those fixtures byte for byte.
+- **New 2D pockets and contours start differently**
+  ([decision 0020](docs/decisions/0020-defaults.md), amended): one pass to
+  the bottom, Multiple Depths off, where a new 2D pocket stepped down 0.6 mm
+  a level; a 2D pocket leaving 0.5 mm each way; and a 2D contour straight
+  down onto its lead, Ramp off, where it helixed down at 2°. These are how
+  new operations start; saved jobs keep theirs. Face's pass extension is now
+  to the tool's centre: a saved job's runs a radius shorter at each end, and
+  one that leaves it out stops just clear, as before.
+- **`camcraft compare`** cuts another G-code program from the same stock and
+  compares it with camcraft's own: it runs a setup, cuts each other program
+  from the material camcraft had before that operation, with the same tool,
+  and compares what the two programs do and the material each leaves, column
+  by column and against the part. The other program is read as Masso, Haas
+  and Centroid read one, the motion before a drilling cycle in force again
+  after `G80`; camcraft's own are still held to RS274/NGC's stricter reading,
+  so they run on either.
 
 ## 0.6.0 — 2026-11-05
 
@@ -582,12 +549,12 @@ the same notes at more length.
   ATC spindle); a holder's segments can taper, and **Standard…** puts an ER
   nut, a BT30 holder or an ISO30 ER16 to ER32 holder on a tool. Playback and
   the tool's drawing show the whole of it.
-- **Shaft and holder**, as Fusion's, on each 3D operation and drilling:
+- **Shaft and holder** on each 3D operation and drilling:
   off, as before; pull away or trim, finishes lifted or cut out where the
   rest of the tool would meet the part or stock, levels kept to where it
   clears, links lifted over the material by it, and holes it cannot reach
   not drilled; or fail.
-- **New operations start with Fusion's defaults**
+- **New defaults for new operations**
   ([decision 0020](docs/decisions/0020-defaults.md)), as expressions where
   they follow the tool: pockets step down
   `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)` and profiles three
@@ -597,15 +564,15 @@ the same notes at more length.
   plunges are a third of the cutting feed and ramps the plunge feed, and the
   clearance height is 10 mm above the retract. Feed optimisation slows at
   25°, within a twentieth of the tool, from a fifth of it before, and a 2D
-  pocket's helix is Fusion's size: both for saved jobs too, where they leave
-  them out. Otherwise a saved job reads as it did.
+  pocket's helix is 0.95 of the tool less its corners across, no less than a
+  quarter of the tool: both for saved jobs too, where they leave them out. Otherwise a saved job reads as it did.
 - **Undo, made whole** ([decision 0019](docs/decisions/0019-undo.md)): what an
   edit's expressions work out undoes with it, where undoing a tool's diameter
   used to seem to do nothing; each field typed into is its own step; the Edit
   menu says what it undoes (*Undo stepover of rough*), and undoing shows where,
   the operation selected and the setting's tab open; Ctrl+Y redoes; and the
   tool library has undo, so a tool or folder deleted there comes back.
-- **Stepovers and stepdowns start as expressions**, as Fusion's defaults do: a
+- **Stepovers and stepdowns start as expressions**: a
   new operation's follows its tool, and a number typed over one, or a preset's,
   takes its place; ↺ brings the expression back.
 - **Generating starts when a value is entered**, without the mouse having to
@@ -629,14 +596,14 @@ the same notes at more length.
   switched. Moves, picks, the material and ok, warning and error keep their
   colours ([decision 0018](docs/decisions/0018-themes.md), which plans the
   rest: a light theme, following the system's light or dark, palette files).
-- **Expressions**, as Fusion's: any number of an operation's can be worked
+- **Expressions**: any number of an operation's can be worked
   out from the tool and its other settings, `tool_diameter * 0.4` or
   `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)`, with ƒx beside it,
   and follows a new tool. Saved in the job file beside the number.
 - **Times in the tree**: each operation's estimated machining time beside it,
-  and the setup's total beside the setup, as Fusion has them. The table of
+  and the setup's total beside the setup. The table of
   passes and volumes under the tree is a one-line verdict now.
-- **Adaptive's starting values are Fusion's, from the tool**: an optimal load
+- **Adaptive's starting values follow the tool**: an optimal load
   of `tool_diameter * 0.4`, and for adaptive and pocket clearing a stepdown of
   `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)`, set as the tool is
   chosen, as the stepover already was.
@@ -644,7 +611,7 @@ the same notes at more length.
   with a guide down its left: slot clearing under machine cavities, the
   minimum stepdown under flat areas, the shallow area settings, a helix's
   diameter, leads, reversing under reordering, and each ticked group's rows.
-- **Adaptive clearing gets Fusion's rest machining**, from the operations before
+- **Adaptive clearing gets rest machining**, from the operations before
   it in the setup, each swept exactly with the tool it was cut with, and its
   *Ignore stock less than*.
 - **And its minimum cutting radius, machine cavities and order by area.** A
@@ -653,26 +620,26 @@ the same notes at more length.
   down into; by area clears each pocket all the way down before the next.
 - **Adaptive stays down round what stands between passes**, through what it has
   cleared, rather than lifting wherever the way straight is blocked.
-- **Adaptive has no Deepest step cut**, as Fusion's has none: its passes stay on
+- **Adaptive has no Deepest step cut**: its passes stay on
   their levels.
 - **Better help for adaptive's Passes tab**: sketches for fine stepdown, flat
   areas, deepest step cut, both ways, minimum cutting radius and machine
   cavities.
-- **Adaptive machines shallow areas**, as Fusion's: where the levels leave a
+- **Adaptive machines shallow areas**: where the levels leave a
   terrace wider than the most asked, levels are added between, cutting only
   there. On a serving tray the scallop finish after it takes 15% less.
-- **And the rest of Fusion's adaptive settings**: flat area detection finds
+- **And more of adaptive's settings**: flat area detection finds
   peaks too, with a minimum stepdown, and a minimum axial engagement leaves out
   levels that would only skim; slot clearing cuts a slot along a pocket's middle
   before clearing out from it; and on the Linking tab, the stay-down level,
   stay-down clearance and lift height.
-- **Smoothing**, as Fusion's, on every operation but drilling: runs of short
+- **Smoothing**, on every operation but drilling: runs of short
   moves fitted with arcs and longer lines within a tolerance, before linking,
   so what is simulated and checked is the program. On a serving tray the
   adaptive program went from 34 MB to 6 MB, and 1.3 million lines to 181,000.
 - **Smoothing fits helices**, about Z: a ramp round a ring is a few arcs
   falling as they turn, rather than lines.
-- **Feed optimisation**, as Fusion's, on every operation but drilling and
+- **Feed optimisation**, on every operation but drilling and
   adaptive clearing: cuts slowed into and out of sharp corners and round tight
   arcs, only those turning into the material unless asked.
 - **Generating keeps more of what it worked out.** An operation unchanged
@@ -725,11 +692,10 @@ the same notes at more length.
   ([decision 0013](docs/decisions/0013-generating-by-itself.md)).
 - **Each operation shows as it is made,** with how far each has got in the tree
   and the operation's panel.
-- **A curved part finished as Fusion does it:** adaptive's fine stepdown; a Top
+- **More for finishing a curved part:** adaptive's fine stepdown; a Top
   and Bottom on every 3D finish; finishing ramped into; scallop leaving its steep
   ground to rings round the walls; contour keeping rings along a boundary; a
-  short open pass ramped into back and forth. A serving tray's stock now matches
-  Fusion's to 0.03 mm at the 99th percentile.
+  short open pass ramped into back and forth.
 - **The app:** no freeze adding a 3D operation to a large part, or on Save As;
   every input shows and resets its default; typing `.0` no longer completes
   early; a tool import says in full what it skipped.
