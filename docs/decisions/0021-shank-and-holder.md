@@ -15,12 +15,13 @@ does a holder belong in the tool library?
 
 ## How others do it
 
-- **Mastercam** has holder libraries and five ways for an operation to meet
-  a collision: ignore it, trim the passes, pull away, detect the length that
-  clears, or fail.
-- **Kiri:Moto** adds a wider shaft to the tool's drop profile, so its 3D
-  passes keep it clear; **FreeCAD**, **Carbide Create** and, as far as found,
-  **Vectric** do nothing for the shank or holder.
+- By their public documentation, commercial systems range from holder
+  libraries with five ways for an operation to meet a collision (ignore it,
+  trim the passes, pull away, detect the length that clears, or fail) to
+  nothing for the shank or holder at all.
+- Of the open-source ones, **Kiri:Moto** adds a wider shaft to the tool's
+  drop profile, so its 3D passes keep it clear, and **FreeCAD** does nothing
+  for the shank or holder.
 - **OpenCAMLib** gives the primitive the others rest on: a *composite
   cutter*, rings of cylinders and cones each at its own height, dropped onto
   the part as one tool.

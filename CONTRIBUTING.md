@@ -55,10 +55,12 @@ every check passes and nothing gouges, figures recorded from camcraft's own runs
 (lifts, feed length, the simulated stock left), and values worked out by hand or
 from the geometry.
 
-**Other products are not named.** Not in code, comments, documentation, commit
-messages, issues or release notes. Say what camcraft does in its own terms. The
-**names** gate fails if a tracked file names the ones it knows. File formats keep their own
-names (STEP, STL, G-code), and identifiers already in job files stay as they are.
+**Commercial products are not named.** Not in code, comments, documentation,
+commit messages, issues or release notes. Say what camcraft does in its own
+terms. The **names** gate fails if a tracked file names the ones it knows. An
+open-source project may be named to say what camcraft uses from it, or that it
+takes nothing from it. File formats keep their own names (STEP, STL, G-code),
+and identifiers already in job files stay as they are.
 
 **No copyleft code.** Do not copy, port or read GPL, LGPL or AGPL code for this
 project, and do not add a dependency under any of them. Every dependency must be
