@@ -1,10 +1,9 @@
 //! Round walls: holes and bosses picked by their walls, and milled round them.
-//! Fusion's Bore and Circular.
 //!
 //! # From the picked walls
 //!
-//! A hole or a boss is picked by its round wall, a face, as Fusion's Bore and
-//! Circular select theirs. A face whose edges are circles about one upright axis,
+//! A hole or a boss is picked by its round wall, a face. A face whose edges are
+//! circles about one upright axis,
 //! all the same size, is a straight round wall ([`rounds`]); which side of it the
 //! material is on says whether it is a hole or a boss. A wall split into several
 //! faces, as a file often splits a cylinder in halves, is one wall: the faces on
@@ -17,10 +16,9 @@
 //! a hole's wall, or outside a boss's. With more than one stepover, the passes
 //! before it are a stepover apart further from the wall: from the middle out in a
 //! hole, from outside in round a boss, so the last pass is the one at the wall. A
-//! hole's pass that would be past its middle is left out, as Fusion's Bore leaves
-//! it out, and the report counts it. A hole the passes do not reach the middle
-//! of is left with a core standing in it, as Fusion's are, and the report says
-//! so.
+//! hole's pass that would be past its middle is left out, and the report counts
+//! it. A hole the passes do not reach the middle of is left with a core standing
+//! in it, and the report says so.
 //!
 //! A bore's finishing passes go on out from where those stop, a finishing
 //! stepover apart, the last at the wall.
@@ -30,7 +28,7 @@
 //! Each pass starts at the top, comes onto its circle along a level lead from the
 //! waste, goes down a helix round it to the bottom, at the pitch (or as steeply
 //! as the angle asked for takes it round the circle the tool's outer edge
-//! sweeps, as Fusion's does), once round level there,
+//! sweeps), once round level there,
 //! and off along a lead. Every move is a true arc, of at most half a turn: one
 //! that ends where it starts, seen from above, reads to the linker's ramp as
 //! straight down.
@@ -39,7 +37,7 @@
 //!
 //! The same circles, cut level by level: at each level, each pass from the
 //! middle out comes onto its circle along a lead, goes once round it, and leads
-//! off, as Fusion's Circular does. The linker takes the tool down onto each
+//! off. The linker takes the tool down onto each
 //! lead along its vertical arc, into the material where the level is still
 //! there, and lifts it out after.
 //!
@@ -311,7 +309,7 @@ pub struct RoundParams {
 pub enum Down {
     /// So many millimetres a turn, round every circle.
     Pitch(f64),
-    /// At this angle from level, in radians, as Fusion's Bore sets it: each
+    /// At this angle from level, in radians: each
     /// turn down as far as the angle takes it round the circle the tool's
     /// outer edge sweeps, the pass's circle widened by the tool.
     Angle(f64),
@@ -407,10 +405,8 @@ fn passes(round: &Round, p: &RoundParams) -> Result<(Vec<Pass>, Option<f64>, u64
         // Further out is further from the wall: nothing to keep from.
         all.retain(|(r, _)| r.is_finite());
     } else {
-        // A pass past the middle is left out, as Fusion's Bore leaves it out
-        // ("Some passes were discarded"), never the one at the wall. Where
-        // Fusion's cut-off lies between nothing and a millimetre is not
-        // known: here it is a sliver more than nothing.
+        // A pass past the middle, or within a sliver of it, is left out, never
+        // the one at the wall.
         let last = all.len().saturating_sub(1);
         all = all
             .into_iter()
@@ -474,9 +470,9 @@ fn leads(
         return (None, None);
     };
     let to_centre = p.to_centre && !round.boss;
-    // In a hole, the arc no wider than half the circle, as Fusion's is made
-    // smaller where there is no room; then, where the straight still leaves
-    // it, half and a quarter of both.
+    // In a hole, the arc no wider than half the circle, made smaller where
+    // there is no room; then, where the straight still leaves it, half and a
+    // quarter of both.
     let radius = if round.boss {
         asked.radius
     } else {
@@ -581,7 +577,7 @@ fn level(
 }
 
 /// The circles round `round` gone down a helix, each pass from the top to the
-/// bottom: Fusion's Bore. Each pass a link to where it starts at the top, a
+/// bottom. Each pass a link to where it starts at the top, a
 /// lead onto its circle, the helix, once round level at the bottom, and a lead
 /// off.
 pub fn bore(
@@ -618,7 +614,7 @@ pub fn bore(
         let ccw = anticlockwise(round, p);
         let way = if ccw { 1.0 } else { -1.0 };
         for (rho, feed) in all {
-            // By its angle, as Fusion's Bore: the circle the tool's outer
+            // By its angle: the circle the tool's outer
             // edge sweeps, its diameter times the angle's tangent, a turn.
             let pitch = match down {
                 Down::Pitch(pitch) => pitch,
@@ -676,7 +672,7 @@ fn helix(
         level(path, span, top, MoveRole::Lead, feed)?;
     }
     round_about(path, c, rho, (0.0, total), (top, bottom), feed)?;
-    // Once round level at the bottom, as Fusion's bore ends: the helix leaves
+    // Once round level at the bottom: the helix leaves
     // the floor a turn's fall higher on one side than the other.
     round_about(
         path,
@@ -692,7 +688,7 @@ fn helix(
     Ok(())
 }
 
-/// The circles round `round` cut level by level: Fusion's Circular. At each
+/// The circles round `round` cut level by level. At each
 /// level, each pass a link to where its lead starts, the lead onto its circle,
 /// once round, and a lead off.
 pub fn circular(

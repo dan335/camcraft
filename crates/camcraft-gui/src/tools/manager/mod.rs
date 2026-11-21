@@ -1,4 +1,4 @@
-//! The tool manager: the user's tool library, after Fusion's Tool Library.
+//! The tool manager: the user's tool library.
 //!
 //! It opens in a window inside the app and manages only the library. A job's
 //! tools are chosen inside its operations, which copy them into the job, never
@@ -119,7 +119,7 @@ pub struct ToolManager {
     message: Option<Message>,
     /// Closing was asked for with unsaved changes.
     closing: bool,
-    /// The person asked to import a Fusion tool library; the app opens the dialog.
+    /// The person asked to import a tool library CSV; the app opens the dialog.
     pub import_requested: bool,
 }
 
@@ -431,7 +431,7 @@ impl ToolManager {
                         "Import…",
                     )
                     .on_hover_text(
-                        "Import a Fusion tool library exported as CSV, as makers publish them, \
+                        "Import tools from a tool library CSV file, as tool makers publish them, \
                              into the folder showing",
                     )
                     .on_disabled_hover_text(LOCKED)

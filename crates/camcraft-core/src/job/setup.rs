@@ -123,8 +123,7 @@ impl Origin {
     }
 
     /// The stock's front-left corner on its top, so X and Y run into the part
-    /// and Z is zero where the tool is touched off: the corner Autodesk's own
-    /// Fusion tutorials and setup sample pick (`TOP_XMIN_YMIN`).
+    /// and Z is zero where the tool is touched off.
     pub fn stock_corner() -> Self {
         Origin::BoxPoint {
             of: BoxOf::Stock,

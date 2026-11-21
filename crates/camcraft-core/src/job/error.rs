@@ -187,7 +187,7 @@ pub enum JobError {
         group: usize,
     },
     /// The model is avoided and no group is machined: there is nothing to
-    /// cut. Fusion cuts everything.
+    /// cut.
     #[error(
         "operation '{op}': the model is avoided and no surface group is machined, so there is \
          nothing to cut"

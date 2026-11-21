@@ -112,10 +112,9 @@ fn cut_points(path: &Toolpath, x: f64) -> Vec<DVec3> {
 }
 
 /// A wall avoided 1 mm sideways: the ball stops its radius and the clearance
-/// from it, 3 mm, as Fusion's stops 10 + 3 + 2 from its boss's axis, and runs
-/// right up to there along the shelf it machines. Nothing of the plateau or
-/// the wall is cut, rings round the wall above its foot included, and no move
-/// that feeds goes into the clearance.
+/// from it, 3 mm, and runs right up to there along the shelf it machines.
+/// Nothing of the plateau or the wall is cut, rings round the wall above its
+/// foot included, and no move that feeds goes into the clearance.
 #[test]
 fn the_tool_stops_its_radius_and_the_clearance_from_an_avoided_wall() {
     let body = step();
@@ -556,7 +555,7 @@ fn turns_across_the_first_ridge(result: &SetupResult) -> (usize, usize) {
 /// both ways: each piece taken from its nearer end, so they turn both ways
 /// round, and the tool goes back and forth across the ridge. Asked to climb,
 /// every piece turns the way the spiral does and the tool goes back to the
-/// start of each, as Fusion's One Way: no fewer lifts.
+/// start of each: no fewer lifts.
 #[test]
 fn a_spiral_turns_its_pieces_round_only_where_it_cuts_both_ways() {
     let both = new_on_ridges("spiral");
@@ -792,7 +791,7 @@ fn a_ramp_keeps_above_an_avoided_floor() {
 }
 
 /// Flat finishing on the boss and the plate from the whole stock: a new one
-/// goes straight down onto each ring, as Fusion's Flat starts; one whose
+/// goes straight down onto each ring; one whose
 /// entry a job file leaves out ramps along its ring into the material, as it
 /// always has. Both clear the same flats, every check passing.
 #[test]

@@ -2,9 +2,9 @@
 //!
 //! Z-level roughing ([`crate::strategy::pocket_clearing`]) offsets the reachable region inward by
 //! the stepover, so the first ring into full material is a full slot, and every
-//! inside corner buries the tool. Adaptive clearing, after Fusion's (Freesteel's
+//! inside corner buries the tool. Adaptive clearing (after Freesteel's
 //! Adaptive Clearing, 2004, and Stori and Wright's constant-engagement paths,
-//! 2000), steers the tool instead: step by step, it turns toward or away from the
+//! 2000) steers the tool instead: step by step, it turns toward or away from the
 //! material until the arc of its edge in material, the engagement angle, is the
 //! one the **optimal load** gives. So it can take the whole flute length down at
 //! once, at a light radial load, and never slot.
@@ -110,7 +110,7 @@ const MAX_FUTILE: usize = 64;
 /// Which way the passes cut.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Direction {
-    /// Every pass climbing. Fusion's default.
+    /// Every pass climbing. The default.
     #[default]
     Climb,
     /// Every pass conventional.
@@ -125,8 +125,7 @@ pub enum Direction {
 pub struct AdaptiveParams {
     /// Deepest each level may be, in millimetres.
     pub stepdown: f64,
-    /// The radial width of cut the tool is held to, in millimetres: Fusion's
-    /// optimal load.
+    /// The radial width of cut the tool is held to, in millimetres.
     pub optimal_load: f64,
     /// Cutting feed, in mm/min.
     pub feed: f64,
@@ -145,24 +144,22 @@ pub struct AdaptiveParams {
     /// centre goes, in millimetres; zero to plunge.
     pub helix_radius: f64,
     /// The smallest the helix is made where there is no room for
-    /// `helix_radius`, in millimetres: Fusion's Minimum Ramp Diameter, halved.
+    /// `helix_radius`, in millimetres: half the least helix diameter.
     /// Where not even it fits, the area is ramped into along its middle.
     pub least_helix_radius: f64,
     /// The longest link made without lifting, in millimetres.
     pub stay_down: f64,
     /// How far round what stands between a link stays down, from none, 0,
-    /// straight only, to 1, as far as `stay_down` allows: Fusion's Stay-Down
-    /// Level. A way round may be longer than straight by this much of what
-    /// `stay_down` leaves.
+    /// straight only, to 1, as far as `stay_down` allows. A way round may be
+    /// longer than straight by this much of what `stay_down` leaves.
     pub stay_down_level: f64,
     /// How far the tool stays off the material along a link it stays down
-    /// for, in millimetres, but where it leaves a pass and comes to the next:
-    /// Fusion's Minimum Stay-Down Clearance.
+    /// for, in millimetres, but where it leaves a pass and comes to the next.
     pub stay_down_clearance: f64,
     /// How far the tool rises off the level for a link it stays down for, in
-    /// millimetres: Fusion's Lift Height. No higher than the level above.
+    /// millimetres. No higher than the level above.
     pub lift_height: f64,
-    /// Fusion's Slot Clearing: a closed area gone down into is first cut a
+    /// Slot clearing: a closed area gone down into is first cut a
     /// slot this wide along its middle, in millimetres, no narrower than the
     /// tool; none when `None`.
     pub slot_width: Option<f64>,
@@ -178,23 +175,23 @@ pub struct AdaptiveParams {
     /// Extra levels, each on a flat face of the part, raised by the stock to
     /// leave down: cut after the level below each, over what it left.
     pub flats: Vec<f64>,
-    /// Fusion's fine stepdown, in millimetres: levels this far apart up from
+    /// The fine stepdown, in millimetres: levels this far apart up from
     /// each level and flat, cut as flats are ([`with_fine_levels`]); none
     /// when `None`.
     pub fine_stepdown: Option<f64>,
     /// Flat levels, `flats`, less than this below the level above their own,
-    /// in millimetres, are left out: Fusion's flat area Minimum Stepdown.
+    /// in millimetres, are left out.
     pub min_flat_stepdown: f64,
     /// Fine and shallow levels less than this below the level above their
-    /// own, in millimetres, are left out: Fusion's Minimum Axial Engagement.
+    /// own, in millimetres, are left out.
     /// Every level between two a stepdown apart cuts into material standing
     /// up to the upper one.
     pub min_axial_engagement: f64,
-    /// Fusion's Machine Shallow Areas: levels added between two where the
+    /// Shallow areas machined: levels added between two where the
     /// terrace between them is too wide. None when `None`.
     pub shallow: Option<Shallow>,
-    /// Whether to go down into material there is no way into from the side:
-    /// Fusion's Machine Cavities. Off, such areas are left.
+    /// Whether to go down into material there is no way into from the side.
+    /// Off, such areas are left.
     pub machine_cavities: bool,
     /// The tightest the tool's centre may turn in an inside corner, in
     /// millimetres; none when zero.
@@ -286,7 +283,7 @@ pub struct AdaptiveReport {
     pub overloads: u64,
 }
 
-/// The heights of the part's flat faces that face up: where Fusion's flat area
+/// The heights of the part's flat faces that face up: where flat area
 /// detection adds a level.
 pub fn flat_heights(mesh: &TriMesh, tolerance: f64) -> Vec<f64> {
     // Within half a degree of level.
@@ -1090,7 +1087,7 @@ fn arrivals(cuts: &[LevelCut], areas: Option<&[Indexed]>) -> Vec<Arrival> {
 /// A helix down onto `end` about `centre`, from `top`, as adaptive clearing
 /// goes down into material: no steeper than the ramp angle, nor than the ramp's
 /// most in one turn, counter-clockwise when `ccw`, then once round level at the
-/// bottom, as Fusion's ends. Where it starts, and its turns. `None` for a helix
+/// bottom. Where it starts, and its turns. `None` for a helix
 /// with no radius, or nowhere to go down.
 fn helix(
     centre: DVec2,

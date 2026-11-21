@@ -220,15 +220,15 @@ pub(crate) fn stepped_levels(top: f64, bottom: f64, stepdown: Option<f64>, even:
     }
 }
 
-/// `slabs`, as [`slabs`] makes them from the top down to `top`, with Fusion's
+/// `slabs`, as [`slabs`] makes them from the top down to `top`, with the
 /// fine stepdown in each: levels between the slab's level and each flat in
 /// it, and from the highest of them up to the level above, or `top`, so the
 /// steps between are no taller than `fine`. Each is cut, as a flat level is,
 /// after the slab's level and the ones below it in the slab, over what they
 /// left: on a slope, the terraces they leave cut down to steps `fine` tall.
 ///
-/// Up to the level above they are `fine` apart from the level below, as
-/// Fusion's are. Up to a flat they are as many as keep each step within
+/// Up to the level above they are `fine` apart from the level below. Up to a
+/// flat they are as many as keep each step within
 /// `fine`, spaced evenly: counted up from below, the last would fall
 /// anywhere short of the flat, as close as a hair, and a level a hair below
 /// one that must be cut takes nothing the flat level would not, while it

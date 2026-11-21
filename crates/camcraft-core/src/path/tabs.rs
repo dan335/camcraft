@@ -1,5 +1,5 @@
 //! Tabs: bridges of material left standing across a cut, so what the cut frees
-//! stays held. Fusion's holding tabs.
+//! stays held.
 //!
 //! # Any operation's
 //!

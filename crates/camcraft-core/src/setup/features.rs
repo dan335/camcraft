@@ -148,8 +148,8 @@ pub enum FeatureError {
     /// A polygon operation failed.
     #[error("the boundary could not be built: {0}")]
     Region(String),
-    /// A face is in two surface groups. Fusion lets the lower one win, which
-    /// is a rule nobody reading a job file could see, so it is refused.
+    /// A face is in two surface groups. Letting one of them win would be a
+    /// rule nobody reading a job file could see, so it is refused.
     #[error(
         "face {face} on '{model}' is in surface groups {first} and {second}: a face can be in \
          one group"
@@ -814,8 +814,8 @@ pub fn picks(
     Ok(Picked::find(selection, prepared, bodies, job_tolerance)?.picks())
 }
 
-/// How far the tool's centre may go past a boundary: Fusion's containment and
-/// additional offset. The offset moves the boundary out, or in when the whole tool
+/// How far the tool's centre may go past a boundary, from its containment and
+/// offset. The offset moves the boundary out, or in when the whole tool
 /// is kept inside it.
 pub fn containment_offset(b: &MachiningBoundary, tool_radius: f64) -> f64 {
     match b.containment {

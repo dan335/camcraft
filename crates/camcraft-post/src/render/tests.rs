@@ -23,11 +23,11 @@ fn masso() -> Profile {
     p
 }
 
-/// The Masso profile as it is shipped writes as Fusion's Masso post does:
-/// blocks numbered in fives from N10, comments not, and numbers without
-/// their trailing zeros but with their point.
+/// The Masso profile as it is shipped numbers blocks in fives from N10,
+/// comments not, and writes numbers without their trailing zeros but with
+/// their point.
 #[test]
-fn masso_writes_as_fusions_post_does() {
+fn masso_numbers_blocks_and_keeps_points() {
     let p = Profile::builtin("masso").unwrap().unwrap();
     let g = program(&p);
     let lines: Vec<&str> = g.lines().collect();
@@ -46,11 +46,11 @@ fn masso_writes_as_fusions_post_does() {
     );
 }
 
-/// The Avid profile writes as Fusion's Avid CNC post does: across after the
+/// The Avid profile writes as Avid CNC's own post does: across after the
 /// change, then down taking up the tool's length offset; Z home before the
 /// change and at the end, then over the work origin.
 #[test]
-fn centroid_avid_writes_as_fusions_avid_post_does() {
+fn centroid_avid_writes_as_avids_post_does() {
     let p = Profile::builtin("centroid-avid").unwrap().unwrap();
     let g = program(&p);
     let lines: Vec<&str> = g.lines().collect();
@@ -167,7 +167,7 @@ fn writes_a_recognisable_program() {
 }
 
 /// The tool goes up clear before the tool change, and the first move after
-/// it goes across at that height and then down, as Fusion's does: never
+/// it goes across at that height and then down: never
 /// diagonally from wherever the change left it. It states every word, as the
 /// machine has no remembered position to suppress against.
 #[test]
@@ -300,8 +300,8 @@ fn cycles_render() {
     );
 }
 
-/// A dwell is written in seconds to the millisecond, as Fusion's posts write
-/// it, not to the feed's places: a quarter second is not a fifth.
+/// A dwell is written in seconds to the millisecond, not to the feed's
+/// places: a quarter second is not a fifth.
 #[test]
 fn a_dwell_is_to_the_millisecond() {
     let ops = vec![
@@ -355,11 +355,10 @@ fn arc_program(p: &Profile, from: DVec3, arcs: &[(DVec3, Option<Arc>)]) -> Strin
         .join("\n")
 }
 
-/// Fusion's lead into its lego contour, in inches, written here in the same
-/// words as Fusion wrote it: down a quarter turn in the YZ plane,
-/// then along the XY plane, which is selected again.
+/// A profile's lead onto the lego contour, in inches: down a quarter turn in
+/// the YZ plane, then along the XY plane, which is selected again.
 #[test]
-fn a_vertical_lead_is_written_as_fusion_writes_it() {
+fn a_vertical_lead_selects_its_plane_and_the_level_one_again() {
     let inch = |x: f64, y: f64, z: f64| dvec3(x, y, z) * 25.4;
     let down = Arc {
         centre: inch(4.86, 0.825, 0.065),
@@ -396,8 +395,8 @@ fn a_vertical_lead_is_written_as_fusion_writes_it() {
 }
 
 /// An arc too short across for its ends to stay apart once rounded would read
-/// as a full circle, so it is written as a straight move along it, as
-/// Fusion's posts write one shorter than 0.25 mm.
+/// as a full circle, so one shorter than 0.25 mm is written as a straight move
+/// along it.
 #[test]
 fn an_arc_too_short_across_is_written_straight() {
     let short = Arc {

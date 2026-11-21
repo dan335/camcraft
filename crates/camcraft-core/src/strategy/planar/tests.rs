@@ -147,7 +147,7 @@ fn leads_arc_on_and_off_in_the_waste() {
     assert!(path.moves().iter().all(|m| m.role != MoveRole::Lead));
 }
 
-/// Ramped into, a ring is one pass, as Fusion cuts it: on along the lead at
+/// Ramped into, a ring is one pass: on along the lead at
 /// the top, down along the ring the way it cuts, once round at each level
 /// from where the ramp reached it, straight on down to the next, and off
 /// along the lead at the end. Never up between.

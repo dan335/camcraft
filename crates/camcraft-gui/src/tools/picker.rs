@@ -1,4 +1,4 @@
-//! Choosing an operation's tool, as in Fusion: from the tools the job already has,
+//! Choosing an operation's tool: from the tools the job already has,
 //! or from a folder of the library.
 //!
 //! A library tool is copied into the job when chosen, never linked, and a copy the

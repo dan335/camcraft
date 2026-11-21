@@ -436,8 +436,8 @@ pub(super) fn contour_paths(
         order: order.engine(),
         slope_from,
         slope_to,
-        // Down the wall from level to level, as Fusion's smooth transition,
-        // where it may stay down at all.
+        // Down the wall from level to level, a smooth transition, where it may
+        // stay down at all.
         ramp: (op.stay_down(work.spec.diameter) > 0.0).then(|| op.linking.ramp_angle.to_radians()),
     };
     let (path, report) = waterline(&mut reach, &work.seat()?, &area, &params).map_err(in_op(op))?;
@@ -488,7 +488,7 @@ pub(super) fn ramp_paths(
         climb_right: work.clockwise(),
         slope_from,
         slope_to,
-        // Fusion's Ramping Angle, on its Linking tab: the steepest the tool
+        // The linking's ramp angle: the steepest the tool
         // goes down a wall, where a stepdown each time round would be
         // steeper.
         ramp: op.linking.ramp_angle.to_radians(),

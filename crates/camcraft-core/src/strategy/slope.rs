@@ -1,5 +1,5 @@
-//! Slopes: where a pass is kept to the range of steepness asked for, as Fusion's
-//! contact angle limits. What scallop and the other 3D finishing strategies share.
+//! Slopes: where a pass is kept to the range of steepness asked for. What
+//! scallop and the other 3D finishing strategies share.
 //!
 //! A slope is the cutter location's: how steep the surface the tool's tip rides
 //! is, in radians from level, as scallop's grid measures it (decision 0009).

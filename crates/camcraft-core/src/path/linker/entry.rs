@@ -218,8 +218,7 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
     /// its vertical lead, if it has one: the largest helix clear of the part,
     /// no smaller than the least, if there is material to go down through at
     /// all. Where there is no room for one, along the pass, where a pass with
-    /// no room is ramped into, as Fusion's helix ramp type falls back to a
-    /// profile ramp. `None` for neither.
+    /// no room is ramped into. `None` for neither.
     fn helix_into(
         &self,
         to: DVec3,
@@ -358,7 +357,7 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
                 (p, arc)
             })
             .collect::<Vec<_>>();
-        // Then once round level at the bottom, as Fusion's helix ends: a helix
+        // Then once round level at the bottom: a helix
         // leaves its circle cut deeper on one side than the other, by up to a
         // turn's descent, and the next depth's way in would cut that at feed.
         moves.push((
@@ -381,7 +380,7 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
     ///
     /// `None` where the pass is too short to ramp along. A closed one is gone
     /// round, a helix, so one under a quarter of the tool's width round is too
-    /// small, as Fusion's smallest helix. An open one is gone back and forth
+    /// small. An open one is gone back and forth
     /// along, each way a little lower, which is gentler however short it is,
     /// going down no faster than the ramp's feed down its slope, where a plunge
     /// goes straight in at the plunge feed: too short only where it is next to
@@ -494,7 +493,7 @@ fn lead_plane(p: DVec3, t: DVec3, radius: f64) -> Option<(DVec3, DVec3, DVec3)> 
     Some((u, DVec3::Z.cross(u), p + radius * normal))
 }
 
-/// The vertical lead into a pass starting at `to` along `t`, as Fusion's: an arc
+/// The vertical lead into a pass starting at `to` along `t`: an arc
 /// of `radius` in the pass's vertical plane, from straight down to the pass's own
 /// slope. Where it starts, and the arc from there to `to`.
 fn lead_in(to: DVec3, t: DVec3, radius: f64) -> Option<(DVec3, Arc)> {

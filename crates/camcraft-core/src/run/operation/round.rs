@@ -1,5 +1,5 @@
-//! The paths of the strategies that cut round walls, Fusion's Bore, Circular
-//! and Thread, and the walls they cut, found from the picked faces.
+//! The paths of the strategies that cut round walls, Bore, Circular and
+//! Thread, and the walls they cut, found from the picked faces.
 
 use camcraft_geom::topology::EdgeKind;
 
@@ -32,8 +32,8 @@ fn round_params(work: &Work<'_>, asked: RoundAsked) -> RoundParams {
         leave: op.stock_to_leave().radial,
         stepovers: asked.stepovers,
         stepover: op.passes.stepover,
-        // A bore's finishing pass is one, at the cutting feed, as Fusion's
-        // has no more: its stepover is all it is given.
+        // A bore has one finishing pass, at the cutting feed: its stepover is
+        // all it is given.
         finishing: op.finishing(diameter).map(|f| WallFinish {
             passes: 1,
             stepover: f.stepover,
@@ -128,7 +128,7 @@ pub(super) struct ThreadAsked {
 }
 
 /// Each of `walls` threaded with `work`'s thread mill. Where a lead goes below
-/// a hole's floor, as Fusion's does in a blind hole whose thread runs to its
+/// a hole's floor, as in a blind hole whose thread runs to its
 /// bottom, the run says where and how far; the part check then fails there,
 /// unchanged.
 pub(super) fn thread_paths(
@@ -169,7 +169,7 @@ pub(super) fn thread_paths(
     if let Some(([x, y], deep)) = report.below_floor {
         warnings.push(format!(
             "the thread's lead goes {deep:.3} mm below the floor of the hole at X{x:.3} \
-             Y{y:.3}, as Fusion's does where a thread runs to a blind hole's bottom: set the \
+             Y{y:.3}, as it can where a thread runs to a blind hole's bottom: set the \
              Bottom that much higher, or level leads"
         ));
     }
@@ -244,8 +244,8 @@ pub(in crate::run) fn round_walls(
         }
     }
     let mut found = rounds(&walls, tol).map_err(in_op(op))?;
-    // A Top or Bottom set goes for every wall; left out, each its own, as
-    // Fusion's are derived from the face picked.
+    // A Top or Bottom set goes for every wall; left out, each its own, from
+    // the face picked.
     let (top, bottom) = op.levels_3d(ctx);
     let axial = op.stock_to_leave().axial;
     for r in &mut found {

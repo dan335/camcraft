@@ -1,4 +1,4 @@
-//! The view cube, after Fusion's ViewCube: a small cube in the view's corner,
+//! The view cube: a small cube in the view's corner,
 //! turned as the view is, that turns the view to where it is clicked.
 //!
 //! Each face is cut three by three. Its middle is the face, and looks straight at

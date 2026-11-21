@@ -137,7 +137,7 @@ pub fn facts(text: &str) -> Result<StepFacts, Part21Error> {
             }
             // (name, position, radius, semi-angle). A cone reaches its apex, which no
             // point in the file need mark: a face can come to a point there with no
-            // vertex, as a cone does from Fusion.
+            // vertex, as a cone may.
             "CONICAL_SURFACE" => {
                 max_radius = max_radius.max(radius(body) * s);
                 let n = numbers(body);

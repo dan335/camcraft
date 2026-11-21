@@ -316,9 +316,9 @@ pub(super) fn model(
 }
 
 /// Where model `name` sits in the job: its position, its rotation about the
-/// job's X, then Y, then Z, and its scale, uniform unless unlocked, as
-/// Fusion's. On a sheet, `sheet`, the sheet places it: its rotation and scale
-/// say which face is up, and it has no position to give.
+/// job's X, then Y, then Z, and its scale, uniform unless unlocked. On a
+/// sheet, `sheet`, the sheet places it: its rotation and scale say which face
+/// is up, and it has no position to give.
 fn transform(
     ui: &mut egui::Ui,
     m: Measure,

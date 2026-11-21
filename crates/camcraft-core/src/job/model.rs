@@ -36,9 +36,8 @@ pub struct ModelDef {
 }
 
 /// Where a model sits in the job: its file's points scaled, then turned, then
-/// moved, as Fusion's position, rotation and scale. Everything past loading sees
-/// the model where this puts it; only picks keep the file's coordinates, so they
-/// move with it.
+/// moved. Everything past loading sees the model where this puts it; only picks
+/// keep the file's coordinates, so they move with it.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(default)]
@@ -443,8 +442,7 @@ impl<'de> serde::de::Visitor<'de> for RotationVisitor {
 }
 
 /// A block of a fixed size, as a board bought to size is: on each axis it is
-/// placed against the box of the models, the way Fusion's fixed size box is, so
-/// it follows them when they move.
+/// placed against the box of the models, so it follows them when they move.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(from = "FixedBoxFile", into = "FixedBoxFile")]
 pub struct FixedBox {
@@ -459,7 +457,7 @@ pub struct FixedBox {
 
 impl FixedBox {
     /// A block of `size`, centred on the models in X and Y with its top flush with
-    /// theirs: where Fusion puts a new one.
+    /// theirs: where a new one goes.
     pub fn centred(size: [f64; 3]) -> Self {
         Self {
             size,

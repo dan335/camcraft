@@ -93,8 +93,7 @@ fn turn(points: &[DVec3]) -> f64 {
 /// Between two open lines of different lengths, each pass is the same step
 /// of the way from every point of the one to its match on the other: its
 /// ends a step of the way between theirs. There are as many steps as keep
-/// matched points a stepover apart, as Fusion's lines across the floor of
-/// `ops_3d` are, and they are cut where the tool rests.
+/// matched points a stepover apart, and they are cut where the tool rests.
 #[test]
 fn passes_between_two_lines_end_a_step_of_the_way_between_their_ends() {
     let mesh = synthetic::plane(1.0, 20.0);
@@ -121,8 +120,8 @@ fn passes_between_two_lines_end_a_step_of_the_way_between_their_ends() {
 }
 
 /// A second curve picked running the other way is turned round to run as the
-/// first does: Fusion's Morph gives no passes at all for two that run
-/// opposite ways, and an edge picked in camcraft runs the way it does.
+/// first does: a curve picked runs the way its edges do, which need not be
+/// the way the other runs.
 #[test]
 fn a_second_curve_running_the_other_way_is_turned_round() {
     let mesh = synthetic::plane(0.0, 20.0);

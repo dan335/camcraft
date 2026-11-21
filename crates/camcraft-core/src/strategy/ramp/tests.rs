@@ -68,7 +68,7 @@ fn xy_length(points: &[DVec3]) -> f64 {
 }
 
 /// Down a boss's wall in one pass, never going up, a stepdown each time round,
-/// and once round at its foot: as Fusion's Ramp goes down `ops_3d`'s outside.
+/// and once round at its foot.
 #[test]
 fn a_wall_is_gone_down_in_one_pass_a_stepdown_each_time_round() {
     let mesh = boss();
@@ -155,7 +155,7 @@ fn going_down_a_dome_the_tool_is_on_the_part_all_the_way() {
 }
 
 /// Two bosses are two walls, each its own pass, the second gone once round at
-/// its top level before going on down, as every wall but Fusion's first is.
+/// its top level before going on down, as every wall but the first is.
 #[test]
 fn every_wall_but_the_first_is_gone_round_at_its_top() {
     let left = synthetic::cuboid(DVec3::new(-15.0, -5.0, 0.0), DVec3::new(-5.0, 5.0, 5.0));

@@ -338,8 +338,8 @@ fn held_clear(
     // above it left material over it that it would meet. Failing, any of
     // them that would meet it stops.
     let how = match op.strategy {
-        // Fusion's Slot, Trace, 2D Adaptive, Engrave and Thread have no Shaft
-        // and Holder: the checks still sweep the whole tool.
+        // Slot, Trace, 2D Adaptive, Engrave and Thread have no shaft and
+        // holder settings: the checks still sweep the whole tool.
         StrategySpec::Slot { .. }
         | StrategySpec::Trace { .. }
         | StrategySpec::Adaptive2d { .. }
@@ -348,7 +348,7 @@ fn held_clear(
             return Ok(None);
         }
         _ if mode == HolderMode::Fail => Some(Clear::Trim),
-        // Its 2D Chamfer has one, and is linked over the part: its passes
+        // 2D Chamfer has one, and is linked over the part: its passes
         // are lifted or trimmed as a finishing pass's are.
         _ if op.strategy.uses().links == Links::OverPart => Some(match mode {
             HolderMode::PullAway => Clear::PullAway,
@@ -746,7 +746,7 @@ pub(super) fn plan_operation(
     };
 
     // A finishing path over the part keeps between the Top and Bottom it is
-    // given, as Fusion's does: what goes past either is trimmed away, and what
+    // given: what goes past either is trimmed away, and what
     // is left is passes for the linker to join. Without them, all of it.
     // A trace has no Top or Bottom: it follows its curves where they are.
     let uses = op.strategy.uses();
@@ -771,7 +771,7 @@ pub(super) fn plan_operation(
     };
 
     // And to the faces it machines: what rests only on faces it avoids is cut
-    // out, as Fusion's is, and what is left is passes for the linker to join.
+    // out, and what is left is passes for the linker to join.
     let (raw, passes) = if work.surfaces.avoids_any() {
         let (kept, report) =
             machined_only(&raw, &work.seat()?, work.job.tolerance).map_err(in_op(op))?;
@@ -899,7 +899,7 @@ pub(super) fn cut_operation(
 
     // Traverses clear the material as it stood before the operation: never lower
     // than it will stand, so they are safe whatever the operation cuts first.
-    // Between cuts, the safe distance over it, as Fusion's minimum retraction;
+    // Between cuts, the safe distance over it, the least it lifts;
     // with a full one, the retract height or higher. The clearance height is
     // where the tool arrives and leaves.
     let clearance_z = op.heights.clearance.resolve(ctx);

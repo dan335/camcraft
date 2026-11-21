@@ -1,4 +1,4 @@
-//! How the passes are laid out: Fusion's Passes tab.
+//! How the passes are laid out.
 
 use serde::{Deserialize, Serialize};
 
@@ -11,12 +11,12 @@ pub struct Passes {
     /// Distance between neighbouring passes, in millimetres.
     #[serde(default = "default_stepover")]
     pub stepover: f64,
-    /// Deepest each level may be, in millimetres: Fusion's multiple depths, for
-    /// a strategy that cuts in levels ([`Uses::depths`](super::Uses::depths)).
+    /// Deepest each level may be, in millimetres: multiple depths, for a
+    /// strategy that cuts in levels ([`Uses::depths`](super::Uses::depths)).
     /// Straight to the bottom in one when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stepdown: Option<f64>,
-    /// Fusion's fine stepdown, in millimetres, for a strategy that has one
+    /// The fine stepdown, in millimetres, for a strategy that has one
     /// ([`Uses::fine_stepdown`](super::Uses::fine_stepdown)): levels this far
     /// apart up from each level and flat, between it and the level above, each
     /// cutting only what the ones below it left there. On a slope, that is the
@@ -27,12 +27,12 @@ pub struct Passes {
     /// Cutting feed, in mm/min.
     #[serde(default = "default_feed")]
     pub feed: f64,
-    /// Material to leave behind: Fusion's radial and axial stock to leave. What
-    /// the operation cuts with is [`Operation::stock_to_leave`].
+    /// Material to leave behind: radial and axial stock to leave. What the
+    /// operation cuts with is [`Operation::stock_to_leave`].
     #[serde(default, skip_serializing_if = "is_default")]
     pub stock_to_leave: StockToLeave,
-    /// Largest Z drop that may be traversed as a cut: Fusion has none. What
-    /// the operation cuts with is [`Operation::max_cut_step`].
+    /// Largest Z drop that may be traversed as a cut. What the operation cuts
+    /// with is [`Operation::max_cut_step`].
     #[serde(default = "default_max_cut_step")]
     pub max_cut_step: f64,
     /// Spindle speed; the tool's own when not given.
@@ -45,52 +45,48 @@ pub struct Passes {
     pub tabs: Option<Tabs>,
     /// Passes along a pocket's walls with the side of the tool after each
     /// level is cleared, the clearing leaving them their stepovers; none when
-    /// not given, as Fusion's 2D pocket has none until asked
-    /// ([`Uses::finishing`](super::Uses::finishing)).
+    /// not given ([`Uses::finishing`](super::Uses::finishing)).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finishing: Option<Finishing>,
     /// Fit the passes' runs of short moves with arcs and longer lines, for a
     /// strategy that may be ([`Uses::smoothing`](super::Uses::smoothing)):
-    /// Fusion's Smoothing, off until asked ([`crate::path::fit`]).
+    /// off until asked ([`crate::path::fit`]).
     #[serde(default, skip_serializing_if = "is_default")]
     pub smoothing: bool,
-    /// How far the fitted moves may stray from the passes, in millimetres:
-    /// Fusion's Smoothing Tolerance. The job's tolerance when not given.
+    /// How far the fitted moves may stray from the passes, in millimetres. The
+    /// job's tolerance when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smoothing_tolerance: Option<f64>,
     /// Cuts slowed into and out of their sharp corners and round their tight
     /// arcs, for a strategy that may be
-    /// ([`Uses::feed_optimization`](super::Uses::feed_optimization)): Fusion's
-    /// Feed Optimization, off until asked ([`crate::path::corners`]).
+    /// ([`Uses::feed_optimization`](super::Uses::feed_optimization)): off until
+    /// asked ([`crate::path::corners`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feed_optimization: Option<FeedOptimization>,
-    /// How its tool's shank and holder are kept off the material: Fusion's
-    /// Shaft and Holder ([decision 0021]). Every program is checked for them
-    /// whatever this says; it says how near counts, and what generating does
-    /// about them.
+    /// How its tool's shank and holder are kept off the material
+    /// ([decision 0021]). Every program is checked for them whatever this
+    /// says; it says how near counts, and what generating does about them.
     ///
     /// [decision 0021]: ../../../../docs/decisions/0021-shank-and-holder.md
     #[serde(default, skip_serializing_if = "is_default")]
     pub holder: HolderClearance,
 }
 
-/// How an operation keeps its tool's shank and holder off the material:
-/// Fusion's Shaft and Holder, its clearances Fusion's.
+/// How an operation keeps its tool's shank and holder off the material, and
+/// how near they may come.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HolderClearance {
     /// What generating does where they would meet the material.
     #[serde(default, skip_serializing_if = "is_default")]
     pub mode: HolderMode,
-    /// How near the neck and shank may come, in millimetres: Fusion's Shaft
-    /// Clearance.
+    /// How near the neck and shank may come, in millimetres.
     #[serde(
         default = "default_shank_clearance",
         skip_serializing_if = "is_default_shank_clearance"
     )]
     pub shank_clearance: f64,
-    /// How near the holder, or the spindle's nose, may come, in millimetres:
-    /// Fusion's Holder Clearance.
+    /// How near the holder, or the spindle's nose, may come, in millimetres.
     #[serde(
         default = "default_holder_clearance",
         skip_serializing_if = "is_default_holder_clearance"
@@ -111,20 +107,19 @@ impl Default for HolderClearance {
 default_number!(default_shank_clearance, is_default_shank_clearance = 1.0);
 default_number!(default_holder_clearance, is_default_holder_clearance = 5.0);
 
-/// What generating does where the shank or holder would meet the material:
-/// Fusion's Shaft and Holder modes.
+/// What generating does where the shank or holder would meet the material.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HolderMode {
     /// Nothing: the check says where they would, and the program is refused.
-    /// Fusion's default in 3-axis.
+    /// The default.
     #[default]
     Off,
-    /// Lift the tool clear, leaving material: Fusion's Pull Away.
+    /// Lift the tool clear, leaving material.
     PullAway,
-    /// Leave out what would collide: Fusion's Trimmed.
+    /// Leave out what would collide.
     Trim,
-    /// Stop with where they would first meet: Fusion's Fail on Collision.
+    /// Stop with where they would first meet.
     Fail,
 }
 
@@ -148,31 +143,29 @@ impl Default for Passes {
     }
 }
 
-/// A pocket's finishing passes along its walls: Fusion's 2D pocket's.
+/// A pocket's finishing passes along its walls.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Finishing {
-    /// How many, each a stepover nearer the wall, the last at it: Fusion's
-    /// Number of Finishing Passes, one when not given.
+    /// How many, each a stepover nearer the wall, the last at it: one when not
+    /// given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passes: Option<u32>,
     /// The distance between them, and the most the last takes off the wall,
-    /// in millimetres: a tenth of the tool when not given, Fusion's.
+    /// in millimetres: a tenth of the tool when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stepover: Option<f64>,
-    /// Feed along the last, in mm/min: Fusion's Finish Feedrate, the cutting
-    /// feed when not given.
+    /// Feed along the last, in mm/min: the cutting feed when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feed: Option<f64>,
-    /// Whether the last is cut twice, for a tool that springs from the wall:
-    /// Fusion's Repeat Finishing Pass.
+    /// Whether the last is cut twice, for a tool that springs from the wall.
     #[serde(default, skip_serializing_if = "is_default")]
     pub repeat: bool,
 }
 
 impl Finishing {
-    /// Every value its own, or Fusion's for a tool `diameter` across cutting
-    /// at `feed`.
+    /// Every value its own, or its default for a tool `diameter` across
+    /// cutting at `feed`.
     pub fn sizes(&self, diameter: f64, feed: f64) -> FinishingSizes {
         FinishingSizes {
             passes: self.passes.unwrap_or(1),
@@ -197,35 +190,29 @@ pub struct FinishingSizes {
     pub repeat: bool,
 }
 
-/// Fusion's Feed Optimization: where cuts slow, and to what. Fusion's
-/// reference gives no defaults; these are camcraft's.
+/// Feed optimisation: where cuts slow, and to what.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FeedOptimization {
-    /// The most a cut may turn into the next without slowing, in degrees:
-    /// Fusion's Maximum Directional Change. 25 degrees when not given, as
-    /// Fusion's.
+    /// The most a cut may turn into the next without slowing, in degrees. 25
+    /// degrees when not given.
     #[serde(
         default = "default_max_directional_change",
         skip_serializing_if = "is_default_max_directional_change"
     )]
     pub max_directional_change: f64,
-    /// An arc tighter than this is slowed along, in millimetres: Fusion's
-    /// Reduced Feed Radius. A twentieth of the tool when not given, as
-    /// Fusion's.
+    /// An arc tighter than this is slowed along, in millimetres. A twentieth
+    /// of the tool when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reduced_feed_radius: Option<f64>,
     /// How far before a corner the cut slows, and after it speeds up again,
-    /// in millimetres: Fusion's Reduced Feed Distance. A fifth of the tool
-    /// when not given, as Fusion's.
+    /// in millimetres. A fifth of the tool when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reduced_feed_distance: Option<f64>,
-    /// The feed slowed to, in mm/min: Fusion's Reduced Feedrate. Half the
-    /// cutting feed when not given.
+    /// The feed slowed to, in mm/min. Half the cutting feed when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reduced_feed: Option<f64>,
-    /// Only the corners that turn into the material: Fusion's Only Inner
-    /// Corners, on unless turned off.
+    /// Only the corners that turn into the material, on unless turned off.
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub only_inner_corners: bool,
 }
@@ -256,8 +243,8 @@ impl FeedOptimization {
     }
 }
 
-/// Fusion's Feed Optimization, every value its own or its default for the
-/// tool and the cutting feed.
+/// Feed optimisation, every value its own or its default for the tool and the
+/// cutting feed.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FeedOptimizationSizes {
     /// The most a cut may turn without slowing, in degrees.
@@ -278,7 +265,7 @@ default_number!(
 );
 
 /// Tabs: bridges of material left standing across the deepest cut, so a part cut
-/// free of its sheet stays held in it. Fusion's holding tabs, placed by distance.
+/// free of its sheet stays held in it, placed by distance.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Tabs {
@@ -330,7 +317,7 @@ fn default_max_cut_step() -> f64 {
     0.5
 }
 
-/// Material to leave, radial and axial, in millimetres: Fusion's stock to leave.
+/// Material to leave, radial and axial, in millimetres: stock to leave.
 ///
 /// Positive leaves material for a later operation to finish, zero cuts to the
 /// part, and negative cuts past it, for a looser fit. Where a surface is neither

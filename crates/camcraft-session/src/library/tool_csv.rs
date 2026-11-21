@@ -1,15 +1,15 @@
-//! Tools from a Fusion tool library exported as CSV, which is how makers such as
-//! Bits & Bits publish theirs.
+//! Tools from a tool library CSV file, as tool makers such as Bits & Bits
+//! publish theirs.
 //!
-//! Fusion writes one row per preset, tab-separated with every field quoted, under
-//! a header whose cells read `"Label (key)"`: `"Diameter (tool_diameter)"`. Columns
-//! are found by that key, never by position, so a file from another Fusion version
-//! with columns added or moved still reads. The header ends with a
-//! `CSV_TOOLS_VERSION_1` cell the rows have no value for.
+//! The file has one row per preset, tab-separated with every field quoted (or
+//! comma-separated), under a header whose cells read `"Label (key)"`:
+//! `"Diameter (tool_diameter)"`. Columns are found by that key, never by
+//! position, so a file with columns added or moved still reads. The header ends
+//! with a `CSV_TOOLS_VERSION_1` cell the rows have no value for.
 //!
-//! Rows describing the same tool become one tool with a preset for each, named as
-//! Fusion named it. Lengths and feeds are converted to millimetres. Tool types this
-//! build cannot cut with are skipped, and each skip says why.
+//! Rows describing the same tool become one tool with a preset for each, named
+//! as the file names it. Lengths and feeds are converted to millimetres. Tool
+//! types this build cannot cut with are skipped, and each skip says why.
 
 use std::collections::HashMap;
 
@@ -19,7 +19,7 @@ use camcraft_core::job::{
 
 use super::{Folder, MM_PER_INCH, free_name};
 
-/// A file that is not a Fusion tool library.
+/// A file that is not a tool library CSV.
 #[derive(Debug, thiserror::Error)]
 pub enum ImportError {
     /// Not readable as CSV.
@@ -29,7 +29,7 @@ pub enum ImportError {
     #[error("the file is empty")]
     Empty,
     /// A column every tool needs is not there.
-    #[error("no '{0}' column: not a Fusion tool library export")]
+    #[error("no '{0}' column: not a tool library CSV")]
     MissingColumn(&'static str),
 }
 
@@ -42,7 +42,7 @@ pub struct Imported {
     pub skipped: Vec<String>,
 }
 
-/// Read a Fusion tool library CSV.
+/// Read a tool library CSV.
 pub fn import(text: &str) -> Result<Imported, ImportError> {
     let first = text.lines().next().ok_or(ImportError::Empty)?;
     let delimiter = if first.contains('\t') { b'\t' } else { b',' };
@@ -231,7 +231,7 @@ impl Row<'_> {
     /// The tool, without presets.
     fn tool(&self) -> Result<ToolSpec, String> {
         let kind_text = self.text("tool_type").unwrap_or_default();
-        let kind = match ToolKind::from_fusion_type(&kind_text) {
+        let kind = match ToolKind::from_type_name(&kind_text) {
             Some(kind) => kind,
             None if kind_text.is_empty() => return Err("no tool type".into()),
             None => return Err(format!("'{kind_text}' tools are not supported yet")),
@@ -292,7 +292,7 @@ impl Row<'_> {
         })
     }
 
-    /// The row's preset; `index` names one Fusion left unnamed.
+    /// The row's preset; `index` names one the file left unnamed.
     fn preset(&self, index: usize) -> Preset {
         Preset {
             name: self

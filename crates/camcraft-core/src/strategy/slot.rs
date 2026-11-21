@@ -1,9 +1,9 @@
 //! Slots: picked by the edges round their floors, and milled along their
-//! middles. Fusion's Slot.
+//! middles.
 //!
 //! # From the picked loop
 //!
-//! A slot is picked as Fusion's is, by the edges round its floor: a loop, level,
+//! A slot is picked by the edges round its floor: a loop, level,
 //! with two sides a constant width apart and a round end at each end, half that
 //! width across ([`slot_of`]). Its sides may be straight, arcs about one centre,
 //! or several of either; its middle is what is cut along. Each end is an arc of a
@@ -13,8 +13,7 @@
 //!
 //! # Passes
 //!
-//! As Fusion's Slot cuts one, from its programs for `ops_2d`'s slots: the
-//! tool comes down to the ramp clearance height over the slot's top, above
+//! The tool comes down to the ramp clearance height over the slot's top, above
 //! where its middle starts, and ramps back and forth along the whole middle,
 //! end to end, each leg falling as far, no more than half the maximum ramp
 //! stepdown (the most there and back) and no more steeply than the ramp angle,
@@ -22,13 +21,12 @@
 //! the ramp ended at to the other. With Multiple Depths each level, a whole
 //! stepdown and the last what is left, is ramped down to so from the one above
 //! and cut along. A slot is one pass, its ramp its own. A tool narrower than
-//! the slot cuts its middle only, as Fusion's does, and leaves its walls; the
+//! the slot cuts its middle only, and leaves its walls; the
 //! report says how much. A tool wider than the slot is refused.
 //!
-//! Where asked, the floor is cut a second time, back the way it came
-//! (Fusion's Repeat Finishing Pass), and at the end of each slot the tool backs
-//! off the end wall along the middle before it lifts (Fusion's Backoff
-//! Distance).
+//! Where asked, the floor is cut a second time, back the way it came, and at
+//! the end of each slot the tool backs off the end wall along the middle before
+//! it lifts.
 
 use std::f64::consts::PI;
 
@@ -274,10 +272,9 @@ pub struct SlotParams {
     /// The steepest the ramp may fall, in radians from level.
     pub ramp_angle: f64,
     /// The most the ramp may fall there and back along the slot, in
-    /// millimetres: Fusion's Maximum Ramp Stepdown. Each way, half of it.
+    /// millimetres. Each way, half of it.
     pub ramp_stepdown: f64,
-    /// How far above the slot's top the ramp starts, in millimetres: Fusion's
-    /// Ramp Clearance Height.
+    /// How far above the slot's top the ramp starts, in millimetres.
     pub ramp_clearance: f64,
     /// How far the tool backs off the wall at the end of each slot, in
     /// millimetres.
@@ -299,7 +296,7 @@ pub struct SlotReport {
     pub levels: u64,
     /// Legs of ramp, one way along a slot each.
     pub legs: u64,
-    /// Slots wider than the tool, whose walls are left uncut, as Fusion's are.
+    /// Slots wider than the tool, whose walls are left uncut.
     pub narrower: u64,
     /// The most left on a wall of one of them, in millimetres.
     pub most_left: f64,
@@ -328,13 +325,13 @@ fn check_params(p: &SlotParams) -> Result<(), StrategyError> {
     Ok(())
 }
 
-/// Each of `slots` cut along its middle, as Fusion's Slot cuts one: down by
+/// Each of `slots` cut along its middle: down by
 /// ramping back and forth along the whole middle, end to end, each leg
 /// falling as far, then once along it at the level, from the end the ramp
 /// ended at to the other. A slot is one pass: a link to above where its
 /// middle starts, its levels one after another, and at the end, where asked,
 /// the floor again and the tool backed off the wall. A tool narrower than a
-/// slot leaves its walls, as Fusion's does.
+/// slot leaves its walls.
 pub fn slot(slots: &[Slot], p: &SlotParams) -> Result<(Toolpath, SlotReport), SlotError> {
     check_params(p)?;
     let tol = p.tolerance;

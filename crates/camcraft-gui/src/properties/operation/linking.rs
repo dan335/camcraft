@@ -13,7 +13,7 @@ use crate::ui::measure::Measure;
 use crate::ui::widgets::{self, form};
 
 /// How the operation moves between cuts. A value left out is the strategy's own,
-/// as Fusion's, and says what that comes to for the tool chosen, whose corners
+/// and says what that comes to for the tool chosen, whose corners
 /// are of radius `corner`.
 pub(super) fn linking(
     ui: &mut egui::Ui,
@@ -49,7 +49,7 @@ pub(super) fn linking(
         d.row(ui, &link::SAFE_DISTANCE, "linking.safe_distance", |ui| {
             m.length_field(ui, &mut op.linking.safe_distance, 0.1, 1_000.0, "");
         });
-        // A trace stays down only when it keeps the tool down, as Fusion's.
+        // A trace stays down only when it keeps the tool down.
         let mut kept_down = true;
         if let StrategySpec::Trace { keep_tool_down, .. } = &mut op.strategy {
             d.row(ui, &link::KEEP_TOOL_DOWN, "keep_tool_down", |ui| {
@@ -58,7 +58,7 @@ pub(super) fn linking(
             kept_down = *keep_tool_down;
         }
         if uses.stay_down {
-            // Fusion's for the strategy: a length, or a multiple of the tool.
+            // The strategy's own: a length, or a multiple of the tool.
             let absent = match uses.reach {
                 Reach::Mm(mm) => format!("up to {}", m.length(f64::from(mm), 0)),
                 Reach::Tools(k) => of_tool(f64::from(k), &format!("up to {k} × the tool")),

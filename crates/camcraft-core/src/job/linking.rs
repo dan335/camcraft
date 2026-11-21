@@ -1,4 +1,4 @@
-//! How the tool moves between cuts: Fusion's Linking tab.
+//! How the tool moves between cuts.
 
 use serde::{Deserialize, Serialize};
 
@@ -6,7 +6,7 @@ use super::{Operation, StrategySpec, is_default, is_ninety, ninety, yes};
 
 /// How the tool moves between cuts.
 ///
-/// What each setting does, and why its default is Fusion's, is in
+/// What each setting does, and why it defaults as it does, is in
 /// `docs/decisions/0004-linking-and-entries.md`.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -37,8 +37,8 @@ pub struct Linking {
     )]
     pub safe_distance: f64,
     /// The longest link made without lifting clear, in millimetres: the
-    /// strategy's own when not given ([`Operation::stay_down`], Fusion's
-    /// Maximum Stay-Down Distance for it), zero to always lift.
+    /// strategy's own when not given ([`Operation::stay_down`]), zero to always
+    /// lift.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stay_down: Option<f64>,
     /// The radius of the vertical arcs each pass is entered and left along, for a
@@ -55,17 +55,16 @@ pub struct Linking {
         skip_serializing_if = "is_default_ramp_angle"
     )]
     pub ramp_angle: f64,
-    /// Feed along a ramp, in mm/min: 60% of the cutting feed when not given,
-    /// as Fusion's.
+    /// Feed along a ramp, in mm/min: 60% of the cutting feed when not given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ramp_feed: Option<f64>,
     /// The leads a 2D profile enters and leaves each ring along, in the waste
-    /// beside it: Fusion's lead-in and lead-out, on unless turned off, as
-    /// Fusion's are. `None` for none, written `leads = false`.
+    /// beside it: a lead-in and a lead-out, on unless turned off. `None` for
+    /// none, written `leads = false`.
     #[serde(
-        default = "fusion_leads",
+        default = "default_leads",
         with = "leads_setting",
-        skip_serializing_if = "is_fusion_leads"
+        skip_serializing_if = "is_default_leads"
     )]
     pub leads: Option<Leads>,
     /// How high the tool goes between cuts that are not made staying down.
@@ -82,15 +81,15 @@ pub struct Linking {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helix_diameter: Option<f64>,
     /// The most a helix or a ramp round a ring descends in one lap, and a
-    /// slot's ramp there and back along it, in millimetres: Fusion's maximum
-    /// ramp stepdown. The operation's stepdown when not given, or without one
+    /// slot's ramp there and back along it, in millimetres: the maximum ramp
+    /// stepdown. The operation's stepdown when not given, or without one
     /// the tool's diameter, or for a slot a tenth of it
     /// ([`Operation::ramp_stepdown_for`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ramp_stepdown: Option<f64>,
 }
 
-/// How high the tool goes between cuts, as Fusion's retraction policy.
+/// How high the tool goes between cuts: the retraction policy.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Retraction {
@@ -112,8 +111,7 @@ pub enum Entry {
     /// or beside where a pocket's first ring starts.
     #[default]
     Helix,
-    /// Straight down at the plunge feed, beside a profile's lead, as a 2D
-    /// contour without a ramp does in Fusion.
+    /// Straight down at the plunge feed, beside a profile's lead.
     Plunge,
     /// Down along the pass itself, in the direction it cuts, at the ramp angle.
     Ramp,
@@ -130,32 +128,31 @@ impl Entry {
     }
 }
 
-/// How a profile comes onto a ring and off it, in the waste beside it, as
-/// Fusion's lead-in and lead-out, the same both ways: down a vertical arc, along
-/// a straight, and round a level arc onto the ring, tangent to it; and off it the
-/// same, mirrored. Each is a tenth of the tool's diameter when not given, as
-/// Fusion's.
+/// How a profile comes onto a ring and off it, in the waste beside it: a
+/// lead-in and a lead-out, the same both ways: down a vertical arc, along a
+/// straight, and round a level arc onto the ring, tangent to it; and off it the
+/// same, mirrored. Each is a tenth of the tool's diameter when not given.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Leads {
     /// The level arc's radius, in millimetres.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radius: Option<f64>,
-    /// How far round the level arc turns, in degrees: Fusion's sweep angle.
+    /// How far round the level arc turns, in degrees: its sweep angle.
     #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
     pub sweep: f64,
     /// The straight before the level arc in and after it out, in millimetres:
-    /// Fusion's linear lead-in distance; zero for none.
+    /// the linear lead-in distance; zero for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub straight: Option<f64>,
-    /// The vertical arc's radius, in millimetres: Fusion's vertical lead-in
-    /// radius; zero for none.
+    /// The vertical arc's radius, in millimetres: the vertical lead-in radius;
+    /// zero for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vertical: Option<f64>,
 }
 
 impl Default for Leads {
-    /// Fusion's: every size a tenth of the tool, a quarter turn.
+    /// Every size a tenth of the tool, a quarter turn.
     fn default() -> Self {
         Self {
             radius: None,
@@ -166,19 +163,20 @@ impl Default for Leads {
     }
 }
 
-/// Fusion's leads, which a profile has unless they are turned off.
-fn fusion_leads() -> Option<Leads> {
+/// The default leads, which a profile has unless they are turned off.
+fn default_leads() -> Option<Leads> {
     Some(Leads::default())
 }
 
 // Serde's `skip_serializing_if` hands the field by reference.
 #[allow(clippy::ref_option)]
-fn is_fusion_leads(v: &Option<Leads>) -> bool {
-    *v == fusion_leads()
+fn is_default_leads(v: &Option<Leads>) -> bool {
+    *v == default_leads()
 }
 
 /// A profile's leads as a job file writes them: a table of their sizes, or
-/// `false` for none (and `true` for Fusion's, though leaving them out says so).
+/// `false` for none (and `true` for the defaults, though leaving them out says
+/// so).
 mod leads_setting {
     use serde::de::{self, MapAccess, Visitor};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -216,8 +214,8 @@ mod leads_setting {
 }
 
 impl Leads {
-    /// Fusion's leads for a tool `diameter` across: a quarter turn, and a tenth
-    /// of the diameter each.
+    /// The leads for a tool `diameter` across, each size its own or a tenth of
+    /// the diameter.
     pub fn sizes(&self, diameter: f64) -> LeadSizes {
         let tenth = 0.1 * diameter;
         LeadSizes {
@@ -254,7 +252,7 @@ impl Default for Linking {
             lead_radius: None,
             ramp_angle: default_ramp_angle(),
             ramp_feed: None,
-            leads: fusion_leads(),
+            leads: default_leads(),
             retraction: Retraction::Minimum,
             entry: None,
             helix_diameter: None,
@@ -263,8 +261,7 @@ impl Default for Linking {
     }
 }
 
-/// The share of the cutting feed a ramp goes at unless told otherwise: Fusion's
-/// program for the lego ramps at 90 in/min to its 150.
+/// The share of the cutting feed a ramp goes at unless told otherwise.
 const RAMP_SHARE: f64 = 0.6;
 
 default_number!(default_safe_distance, is_default_safe_distance = 2.0);
@@ -283,7 +280,7 @@ fn default_plunge_feed() -> f64 {
 // the defaults are, so the panel says what the run does.
 impl Operation {
     /// The feed along a ramp or a helix, in mm/min: as given, or 60% of the
-    /// cutting feed, as Fusion's program ramps.
+    /// cutting feed.
     pub fn ramp_feed(&self) -> f64 {
         self.linking
             .ramp_feed
@@ -296,7 +293,7 @@ impl Operation {
     /// that never stays down, and a trace that does not keep the tool down.
     pub fn stay_down(&self, diameter: f64) -> f64 {
         let uses = self.strategy.uses();
-        // A trace keeps the tool down only when asked, as Fusion's.
+        // A trace keeps the tool down only when asked.
         let kept_down = !matches!(
             self.strategy,
             StrategySpec::Trace {
@@ -381,10 +378,8 @@ impl Operation {
     }
 
     /// [`Operation::ramp_stepdown`] for a tool `diameter` across whose flutes
-    /// are `flute_length` long. A slot's, without a stepdown, is Fusion's
-    /// Slot's Maximum Ramp Stepdown with Multiple Depths off:
-    /// `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)`, as its
-    /// programs ramp.
+    /// are `flute_length` long. A slot's, without a stepdown, is
+    /// `Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)`.
     pub fn ramp_stepdown_for(&self, diameter: f64, flute_length: f64) -> f64 {
         let without = if matches!(self.strategy, StrategySpec::Slot { .. }) {
             (0.75 * flute_length).min(0.1 * diameter)

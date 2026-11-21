@@ -60,8 +60,8 @@ pub(super) fn geometry(
         }
     }
     if op.cuts_selection() {
-        // Round walls are faces, as Fusion's Bore and Circular pick them; a
-        // trace's curves are edges, as Fusion's Trace picks them.
+        // A bore's and a circular's round walls are picked as faces; a trace's
+        // curves as edges.
         let kinds: &[Kind] = if uses.holes == Some(Holes::Walls) {
             &[Kind::Face]
         } else if uses.curves == Some(Curves::Traced) {
@@ -70,8 +70,8 @@ pub(super) fn geometry(
             &[Kind::Face, Kind::Edge]
         };
         // Its outline or boundary set to what is picked just now, with nothing
-        // picked: picking starts at once, as Fusion's selection does when it
-        // is chosen, rather than waiting for the card's button to be found.
+        // picked: picking starts at once when it is chosen, rather than
+        // waiting for the card's button to be found.
         if !cut_selection
             && op.selection.faces.is_empty()
             && op.selection.edges.is_empty()
@@ -282,8 +282,8 @@ pub(super) fn legend(ui: &mut egui::Ui, items: &[(Swatch, &str)]) {
 }
 
 /// What a 2D operation cuts, its outline: the part's silhouette or picks, and a
-/// profile's side of it. Fusion's 2D Contour and 2D Pocket Geometry tabs, which
-/// select what is cut rather than fence the tool in. The tool's centre goes its radius and the
+/// profile's side of it: what is picked is what is cut, rather than a fence
+/// for the tool. The tool's centre goes its radius and the
 /// stock to leave beside it, so there is no containment or additional offset.
 fn outline_form(ui: &mut egui::Ui, d: &mut Defaults<Operation>, op: &mut Operation) {
     let pocket = matches!(
@@ -344,8 +344,7 @@ fn outline_form(ui: &mut egui::Ui, d: &mut Defaults<Operation>, op: &mut Operati
     }
 }
 
-/// What facing faces: the stock's footprint, and how far past it, Fusion's stock
-/// offset. It has nothing to pick.
+/// What facing faces: the stock's footprint, and how far past it. It has nothing to pick.
 fn face_form(
     ui: &mut egui::Ui,
     d: &mut Defaults<Operation>,
@@ -375,7 +374,7 @@ fn face_form(
     );
 }
 
-/// Rest machining, as Fusion's Geometry tab has it, for a strategy that has
+/// Rest machining, on the Geometry tab, for a strategy that has
 /// it: ticked to clear only what the operations before left, then how thin a
 /// skin of it is let be. Whether it was shown.
 fn rest_form(
@@ -412,8 +411,8 @@ fn rest_form(
     true
 }
 
-/// The machining boundary, where the tool may go against it, and how far past it:
-/// Fusion's Geometry tab. Picks are offered as the boundary only where
+/// The machining boundary, where the tool may go against it, and how far past
+/// it. Picks are offered as the boundary only where
 /// `picked`.
 fn boundary_form(
     ui: &mut egui::Ui,

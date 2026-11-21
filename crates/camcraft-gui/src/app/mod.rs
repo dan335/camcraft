@@ -858,7 +858,7 @@ impl App {
             }
             FileRequest::ImportTools => {
                 for path in &paths {
-                    self.tools.import_fusion(path);
+                    self.tools.import_csv(path);
                 }
             }
             FileRequest::Profile(id, setup) => {

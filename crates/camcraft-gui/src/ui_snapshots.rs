@@ -514,7 +514,7 @@ fn setup_panel() {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("operation-tab"), 3_usize));
     h.run_steps(3);
     shoot(&mut h, "operation_passes_rough");
-    // Made adaptive, with rest machining and Fusion's corner, cavity, slot,
+    // Made adaptive, with rest machining and its corner, cavity, slot,
     // order, flat and shallow area settings: its passes, rest machining on its
     // geometry, and how its links stay down.
     if let Some(doc) = h.state_mut().doc_for_snapshot() {
@@ -563,7 +563,7 @@ fn setup_panel() {
     shoot(&mut h, "operation_geometry_adaptive");
 
     // A fixed box at a corner, wherever the models are; then one placed against the
-    // setup's models the way Fusion places one, with the block it comes to.
+    // setup's models, with the block it comes to.
     if let Some(doc) = h.state_mut().doc_for_snapshot() {
         doc.selection = Selection::Stock("offcut".into());
     }
@@ -1520,7 +1520,7 @@ passes = {{ stepdown = 1.0, stepover = 0.8, feed = 1500.0 }}
 
 /// Every topic's popup laid out side by side, those with a sketch first, to
 /// look over together; then a real one, shown on hovering a field itself
-/// rather than its label, as Fusion shows it.
+/// rather than its label.
 #[test]
 #[ignore = "renders to PNG for looking at; run with --features ui-snapshots"]
 fn help_popups() {

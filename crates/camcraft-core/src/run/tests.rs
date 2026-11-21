@@ -563,7 +563,7 @@ fn a_hole_is_bored_and_milled_round() {
             .map(|m| m.to.z)
             .fold(f64::MAX, f64::min);
         assert!(lowest.abs() < 1e-9, "{strategy}: down to {lowest}");
-        // Neither ramps nor stays down, as Fusion's do not: each pass comes
+        // Neither ramps nor stays down: each pass comes
         // down its lead and lifts out after.
         assert!(
             op.path
@@ -861,12 +861,12 @@ fn left_over(result: &SetupResult, job: &Job, inside: impl Fn(DVec2) -> bool, fl
     count
 }
 
-/// Fusion's Slot, a new operation picked by the edges round the slot's floor
+/// Slot, a new operation picked by the edges round the slot's floor
 /// or by its floor, ramps back and forth along the middle from over the stock
 /// down to the floor and cuts along it: clean, verified, every ramp and cut on
 /// the middle, and the slot cut to the floor as wide as the tool. A tool as
 /// wide as the slot leaves nothing in it; a narrower one, in levels, leaves
-/// the walls standing, as Fusion's does.
+/// the walls standing.
 #[test]
 fn a_slot_is_cut_along_its_middle() {
     use crate::path::toolpath::MoveRole;
@@ -970,7 +970,7 @@ fn a_slot_refuses_what_it_cannot_cut() {
     assert!(not.contains("is not a slot"), "{not}");
 }
 
-/// Fusion's Trace, picked by the edges round the slot's floor, its tool kept
+/// Trace, picked by the edges round the slot's floor, its tool kept
 /// to their left, inside the loop: each cut its radius from the loop at the
 /// floor, the round ends as arcs, and the band it cuts down to the floor,
 /// clean and verified.
@@ -1011,8 +1011,8 @@ fn a_trace_follows_the_picked_edges() {
     assert!(left_over(&result, &job, band, 6.0) > 100);
 }
 
-/// A 6 mm 90° V-bit, as Fusion's Engrave was compared with, its flutes long
-/// enough to stand through the 2 mm of stock over the block.
+/// A 6 mm 90° V-bit, its flutes long enough to stand through the 2 mm of
+/// stock over the block.
 fn vee() -> crate::job::ToolSpec {
     crate::job::ToolSpec {
         kind: crate::job::ToolKind::Cone,
@@ -1023,7 +1023,7 @@ fn vee() -> crate::job::ToolSpec {
     }
 }
 
-/// Fusion's Engrave, a new operation picked by the slot's rim or by its floor:
+/// Engrave, a new operation picked by the slot's rim or by its floor:
 /// the slot is 6 mm wide, wider than the V reaches at its depth, 2.85 mm, so
 /// the V runs round the rim 2.85 mm in at that depth, round the ends as arcs;
 /// the slot is sunk 4 mm, deeper than that, so it is clean and verified, and
@@ -1632,8 +1632,8 @@ fn a_profile_leads_on_and_off_each_ring() {
     );
 }
 
-/// Stock to leave beside moves a profile out by it, and negative stock in by it,
-/// as Fusion's does; what is cut past the part on purpose is no gouge.
+/// Stock to leave beside moves a profile out by it, and negative stock in by it;
+/// what is cut past the part on purpose is no gouge.
 #[test]
 fn a_profile_leaves_stock_beside_or_cuts_past_the_part() {
     use crate::job::{ProfileSide, StockToLeave};
@@ -1773,7 +1773,7 @@ fn facing_takes_the_stock_down_to_the_part() {
     };
     let op = &mut job.setups[0].operations[0];
     let diameter = job.tools[op.tool.as_ref().unwrap()].diameter;
-    // Fusion's meaning: to the tool's centre, here a millimetre past clear.
+    // The extension is to the tool's centre, here a millimetre past clear.
     op.strategy = StrategySpec::Face {
         angle: 0.0,
         direction: FaceDirection::BothWays,
@@ -2174,7 +2174,7 @@ fn a_finish_over_the_part_leaves_its_walls_to_rings_round_them() {
     }
 }
 
-/// The dome roughed adaptive with Fusion's other settings on: levels added
+/// The dome roughed adaptive with its other settings on: levels added
 /// in its shallow areas and on its peak, those cutting too little left out,
 /// links lifted and kept off the material, staying down round what stands
 /// between only half as far: the result still verifies.
@@ -2546,7 +2546,7 @@ fn traced(edges: &'static [[f64; 3]], down: f64) -> Change {
     })
 }
 
-/// Fusion's 2D Chamfer, a 90° V-bit run round the slotted block's sharp top
+/// 2D Chamfer, a 90° V-bit run round the slotted block's sharp top
 /// outline, 1 mm wide with its tip the default millimetre below: every check
 /// passes, and the stock along the edge is the chamfer asked, to the job's
 /// tolerance: 1 mm down at the edge, rising at 45° to the top 1 mm in, and
@@ -2675,8 +2675,7 @@ fn chamfered_block() -> Body {
 /// A chamfer the model has, picked by its lower edges, followed with no width:
 /// the V-bit's flank lies along it, the stock is left as the model's chamfer,
 /// and nothing is a gouge. With a clearance, the top face beyond the chamfer
-/// is one the edges do not join, and the tool is lifted off it, as Fusion
-/// says to set no clearance for a chamfer the model has.
+/// is one the edges do not join, and the tool is lifted off it.
 #[test]
 fn a_chamfer_the_model_has_is_followed() {
     let body = chamfered_block();
@@ -2923,7 +2922,7 @@ fn pocketed_block() -> Body {
 const CLOSED_POCKET: [f64; 3] = [-22.0, 0.0, 5.0];
 const OPEN_POCKET: [f64; 3] = [20.0, 0.0, 6.0];
 
-/// Fusion's 2D Adaptive Clearing, a new operation picked by the floors of a
+/// 2D adaptive clearing, a new operation picked by the floors of a
 /// pocket with an island and of one open to the block's side, cut to size: a
 /// helix down into the closed one only, the open one entered from outside the
 /// stock, and both cleared to their floors round the island, every check

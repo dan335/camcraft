@@ -5,10 +5,9 @@ use super::{Compensation, Entry, HeightRef, ProfileSide, StrategySpec};
 impl StrategySpec {
     /// Which of the settings every operation has this strategy uses.
     pub fn uses(&self) -> Uses {
-        // Tabs go only where every ring is beside what is kept: a profile's, as
-        // Fusion's go only on a 2D contour. Put on a pocket's or a roughing
-        // level's clearing rings, they would leave pillars standing in the
-        // waste.
+        // Tabs go only where every ring is beside what is kept: a profile's.
+        // Put on a pocket's or a roughing level's clearing rings, they would
+        // leave pillars standing in the waste.
         let cuts_loops = Uses {
             boundary: true,
             surfaces: false,
@@ -43,18 +42,16 @@ impl StrategySpec {
             feed_optimization: true,
         };
         match *self {
-            // Down the surface in one pass, as Fusion's 3D finishing: it
-            // follows the part all the way down, but for what of it is above a
-            // Top or below a Bottom given it, which is trimmed away
-            // (`path::trim`). Without them, it is all kept: the part's top and
-            // bottom are only where the fields start from.
+            // Down the surface in one pass: it follows the part all the way
+            // down, but for what of it is above a Top or below a Bottom given
+            // it, which is trimmed away (`path::trim`). Without them, it is all
+            // kept: the part's top and bottom are only where the fields start
+            // from.
             // With no ramp: into each pass it comes straight down at the
             // plunge feed, onto its vertical lead where the lead's top is
-            // clear of the material, as Fusion's Parallel, which has no ramp
-            // settings, does in every program of its compared; onto the pass
-            // itself where it is not (decision 0034). Its passes are cut the
-            // nearest next, each from whichever end is nearer, as they
-            // alternate already.
+            // clear of the material, and onto the pass itself where it is not
+            // (decision 0034). Its passes are cut the nearest next, each from
+            // whichever end is nearer, as they alternate already.
             StrategySpec::Parallel { .. } => Uses {
                 depths: Depths::None,
                 links: Links::OverPart,
@@ -78,7 +75,7 @@ impl StrategySpec {
             StrategySpec::Scallop { .. } => Uses {
                 depths: Depths::None,
                 links: Links::OverPart,
-                // Fusion's: scallop's rings are closer than a pattern's laps.
+                // Scallop's rings are closer than a pattern's laps.
                 reach: Reach::Tools(2),
                 lead_radius: true,
                 ramp: false,
@@ -90,11 +87,9 @@ impl StrategySpec {
                 surfaces: true,
                 ..cuts_loops
             },
-            // As parallel: entered with no ramp, and its passes the
-            // nearest next, as Fusion's Shortest Machining Distance, each the
-            // way its direction asks. Asked not to reorder, they are cut in
-            // the order laid out, outside in or inside out as Fusion's other
-            // two.
+            // As parallel: entered with no ramp, and its passes the nearest
+            // next, each the way its direction asks. Asked not to reorder,
+            // they are cut in the order laid out, outside in or inside out.
             StrategySpec::Spiral { .. }
             | StrategySpec::Radial { .. }
             | StrategySpec::MorphedSpiral { .. } => Uses {
@@ -115,8 +110,7 @@ impl StrategySpec {
             // As scallop, its lines in its own order, the nearest next, each
             // the way it is asked to cut, staying down within five tools; but
             // with no ramp: into each line it comes straight down at the
-            // plunge feed onto its vertical lead, as Fusion's Pencil, which
-            // has no ramp settings, does in every program of its compared.
+            // plunge feed onto its vertical lead.
             StrategySpec::Pencil { .. } => Uses {
                 depths: Depths::None,
                 links: Links::OverPart,
@@ -135,10 +129,7 @@ impl StrategySpec {
             // dropped onto the part within its boundary, as a pattern is: no
             // stepover, no levels, its curves in the order picked. Between
             // curves it lifts, and comes straight down onto each along its
-            // vertical lead, as Fusion's Project, which has no ramp settings,
-            // does in every program of its compared: it lifted even between
-            // two curves 10 mm apart on the same flat top, within its
-            // Maximum Stay-Down Distance of five tools.
+            // vertical lead.
             StrategySpec::Project { .. } => Uses {
                 curves: Some(Curves::Traced),
                 stepover: false,
@@ -157,11 +148,9 @@ impl StrategySpec {
             // Its picks are two curves, as a project's are edges, and its
             // passes between them are dropped onto the part within its
             // boundary, in its own order: its stepover how far apart they
-            // are. Linked as parallel is, staying down within 50 mm, as
-            // Fusion's Morph's linking starts; but with no ramp: into each
-            // pass it comes straight down at the plunge feed onto its
-            // vertical lead, as Fusion's, which has no ramp settings, does in
-            // every program of its compared.
+            // are. Linked as parallel is, staying down within 50 mm; but with
+            // no ramp: into each pass it comes straight down at the plunge
+            // feed onto its vertical lead.
             StrategySpec::Morph { .. } => Uses {
                 curves: Some(Curves::Traced),
                 depths: Depths::None,
@@ -201,10 +190,9 @@ impl StrategySpec {
             // Contour's rings, gone down wall by wall: no stepover, its
             // stepdown how far down each time round, its order and its way
             // down its own (`strategy::ramp`). Each wall starts above where
-            // the last ended, and Fusion's programs lift between every two,
-            // to the retract height, and come down onto each along a
-            // vertical arc. Its levels start from the stock's top, as
-            // Fusion's Top does.
+            // the last ended; it lifts between every two, to the retract
+            // height, and comes down onto each along a vertical arc. Its
+            // levels start from the stock's top.
             StrategySpec::Ramp { .. } => Uses {
                 stepover: false,
                 depths: Depths::Required,
@@ -223,8 +211,7 @@ impl StrategySpec {
             // their own order, as a pocket clearing level's are. Only the
             // part's flats, from its top. Into material along its ring, as a
             // job file that does not say has it, or straight down, as a new
-            // one starts, Fusion's Flat having its Ramp off
-            // (`StrategySpec::fresh_entry`).
+            // one starts (`StrategySpec::fresh_entry`).
             StrategySpec::Flat { .. } => Uses {
                 depths: Depths::None,
                 reach: Reach::Tools(2),
@@ -237,8 +224,8 @@ impl StrategySpec {
             },
             // Slice by slice is what it is. Its order is its own, each level's
             // rings from the middle out, and each the way it cuts. Into
-            // material it goes down a helix, as Fusion's 3D pocket does by
-            // default, or ramps along its ring, or plunges.
+            // material it goes down a helix by default, or ramps along its
+            // ring, or plunges.
             // It clears what the operations before it left, ring by ring
             // round it, so it waits for them to be cut.
             StrategySpec::PocketClearing { .. } => Uses {
@@ -249,10 +236,9 @@ impl StrategySpec {
                 ..cuts_loops
             },
             // Its stepover is its optimal load. It goes down a helix, or
-            // straight, into what it cannot reach from the side, as Fusion's
-            // 3D Adaptive's ramp types (its Predrill aside): it has no ring to
-            // ramp along. Its passes are in the order it steers them, linked at
-            // the level where it has cleared the way.
+            // straight, into what it cannot reach from the side: it has no
+            // ring to ramp along. Its passes are in the order it steers them,
+            // linked at the level where it has cleared the way.
             // Every pass of its stays on its level, so it has no drop of its own
             // to cut down: its links and the check have the default deepest
             // step cut ([`Operation::max_cut_step`](super::Operation::max_cut_step)).
@@ -263,7 +249,7 @@ impl StrategySpec {
                 cut_step: false,
                 rest: rest_machining,
                 depths: Depths::Required,
-                // Fusion's 3D Adaptive's, between its levels.
+                // Finer levels between its own.
                 fine_stepdown: true,
                 links: Links::Own,
                 helix: HelixSize::Flat,
@@ -281,7 +267,7 @@ impl StrategySpec {
                 outline: true,
                 finishing: true,
                 entries: &[Entry::Helix, Entry::Ramp, Entry::Plunge],
-                // Fusion's 2D pocket's helix is its 3D strategies'.
+                // Its helix is sized as the 3D strategies' are.
                 helix: HelixSize::Flat,
                 ..cuts_loops
             },
@@ -371,10 +357,10 @@ impl StrategySpec {
                 feed_optimization: false,
                 ..cuts_loops
             },
-            // As a bore, but level by level, as Fusion's Circular: every pass
-            // at every level comes down its vertical lead, into the material
-            // where the level is still there, and lifts out after, never
-            // ramping and never staying down, as Fusion's programs do.
+            // As a bore, but level by level: every pass at every level comes
+            // down its vertical lead, into the material where the level is
+            // still there, and lifts out after, never ramping and never
+            // staying down.
             StrategySpec::Circular { .. } => Uses {
                 boundary: false,
                 holes: Some(Holes::Walls),
@@ -391,11 +377,10 @@ impl StrategySpec {
             },
             // Its picks are round walls, as a bore's, each hole threaded from
             // its own bottom to its own top, or top to bottom: no levels, no
-            // stock to leave, as Fusion's Thread has none with its Stock to
-            // Leave off. Its stepover is between its passes out to the
+            // stock to leave. Its stepover is between its passes out to the
             // thread. Each pass starts at the hole's centre, down at the
             // bottom: the linker comes down there and lifts out after, to the
-            // retract height between holes, as Fusion's programs do.
+            // retract height between holes.
             StrategySpec::Thread { .. } => Uses {
                 boundary: false,
                 holes: Some(Holes::Walls),
@@ -415,9 +400,8 @@ impl StrategySpec {
             // Its picks are the edges round each slot's floor, each slot cut
             // along its middle from the stock's top down to its own floor:
             // no area, no stepover, only its floor to leave anything on. Its
-            // ramp is its own, back and forth along the slot, as Fusion's
-            // Slot's profile ramp: each slot is one pass. Between slots it
-            // stays down within twice the tool, as Fusion's.
+            // ramp is its own, back and forth along the slot: each slot is one
+            // pass. Between slots it stays down within twice the tool.
             StrategySpec::Slot { .. } => Uses {
                 boundary: false,
                 curves: Some(Curves::Slots),
@@ -430,10 +414,10 @@ impl StrategySpec {
                 ..cuts_loops
             },
             // Its picks are edges, open or closed, each followed at its own
-            // height: no area, no stepover, its levels above the curve, its
-            // ramp none, as Fusion's Trace plunges. Entered and left along
-            // vertical arcs where asked; between passes it lifts, unless it
-            // keeps the tool down, over the part as a finishing pass does.
+            // height: no area, no stepover, its levels above the curve, no
+            // ramp: it plunges. Entered and left along vertical arcs where
+            // asked; between passes it lifts, unless it keeps the tool down,
+            // over the part as a finishing pass does.
             // Its stock to leave is beside it only with compensation.
             StrategySpec::Trace { compensation, .. } => Uses {
                 boundary: false,
@@ -455,10 +439,9 @@ impl StrategySpec {
             },
             // Its picks are the edges it chamfers, or the faces whose edges
             // it chamfers, each at its own height: no area, no stepover, no
-            // levels, nothing to leave, as Fusion's 2D Chamfer has none.
-            // Onto each pass along a straight from the waste and off it so,
-            // Fusion's lead; between them it lifts, as Fusion's keeps no tool
-            // down, over the part as a finishing pass does.
+            // levels, nothing to leave. Onto each pass along a straight from
+            // the waste and off it so, its lead; between them it lifts, over
+            // the part as a finishing pass does.
             StrategySpec::Chamfer2d { .. } => Uses {
                 boundary: false,
                 curves: Some(Curves::Chamfered),
@@ -475,14 +458,12 @@ impl StrategySpec {
                 ..cuts_loops
             },
             // Its picks are the shapes it engraves, by the edges round each or
-            // its floor: no area to keep to, no stepover, nothing to leave, as
-            // Fusion's Engrave has none; each shape from its own top down to
-            // its own depth, its levels a stepdown apart where asked. Each
-            // walk starts at a corner at the surface and goes round without
-            // lifting, down through its levels; between walks it lifts, as
-            // Fusion's does between shapes in every program of its compared:
-            // staying down from one shape to the next would drag the point
-            // across the surface between them.
+            // its floor: no area to keep to, no stepover, nothing to leave;
+            // each shape from its own top down to its own depth, its levels a
+            // stepdown apart where asked. Each walk starts at a corner at the
+            // surface and goes round without lifting, down through its levels;
+            // between walks it lifts: staying down from one shape to the next
+            // would drag the point across the surface between them.
             StrategySpec::Engrave { .. } => Uses {
                 boundary: false,
                 curves: Some(Curves::Engraved),
@@ -493,7 +474,6 @@ impl StrategySpec {
                 ramp: false,
                 top: None,
                 bottom: None,
-                // Fusion's has no feed optimisation.
                 feed_optimization: false,
                 ..cuts_loops
             },
@@ -525,16 +505,16 @@ impl StrategySpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Curves {
     /// Slots, by the edges round their floors, or their floors: a slot's
-    /// middle is what it runs along, as Fusion's Slot has them.
+    /// middle is what it runs along.
     Slots,
-    /// Edges, open or closed, the tool follows, as Fusion's Trace and Project
-    /// have them, or a morph's passes are laid between.
+    /// Edges, open or closed, the tool follows, as a trace and a project have
+    /// them, or a morph's passes are laid between.
     Traced,
-    /// Edges to chamfer, or faces whose edges to chamfer, as Fusion's 2D
-    /// Chamfer has them: its chains or its face contours.
+    /// Edges to chamfer, or faces whose edges to chamfer: chains of edges, or
+    /// the contours of faces.
     Chamfered,
     /// Shapes to engrave, by the edges round each, whole loops, or by each
-    /// one's floor, whose outline it is: Fusion's Engrave's contours.
+    /// one's floor, whose outline it is.
     Engraved,
 }
 
@@ -543,8 +523,8 @@ pub enum Curves {
 pub enum Holes {
     /// By their rims, the round edges at their tops, as drilling has them.
     Rims,
-    /// By their round walls, faces, as Fusion's Bore, Circular and Thread
-    /// have them: a hole's or a boss's.
+    /// By their round walls, faces, as a bore, a circular and a thread have
+    /// them: a hole's or a boss's.
     Walls,
 }
 
@@ -585,12 +565,12 @@ pub struct Uses {
     pub stock_to_leave: Leave,
     /// Whether it cuts in levels a stepdown apart.
     pub depths: Depths,
-    /// Finer levels between those, where they leave terraces: Fusion's fine
-    /// stepdown ([`Passes::fine_stepdown`](super::Passes::fine_stepdown)).
+    /// Finer levels between those, where they leave terraces: a fine stepdown
+    /// ([`Passes::fine_stepdown`](super::Passes::fine_stepdown)).
     pub fine_stepdown: bool,
     /// Tabs across the deepest cut of the loops it cuts.
     pub tabs: bool,
-    /// Finishing passes along a pocket's walls, as Fusion's 2D pocket has.
+    /// Finishing passes along a pocket's walls, as a 2D pocket has.
     pub finishing: bool,
     /// How the links it leaves to the linker are made.
     pub links: Links,
@@ -601,8 +581,7 @@ pub struct Uses {
     /// near-vertical drop it cuts down at the cutting feed. Without one, the
     /// default ([`Operation::max_cut_step`](super::Operation::max_cut_step)).
     pub cut_step: bool,
-    /// The longest of them when not given: Fusion's Maximum Stay-Down
-    /// Distance for the strategy.
+    /// The longest of them when not given, for the strategy.
     pub reach: Reach,
     /// How wide its helical entries are when not given.
     pub helix: HelixSize,
@@ -658,9 +637,8 @@ pub enum Links {
     Own,
 }
 
-/// The longest link a strategy makes without lifting when none is given, as
-/// Fusion's Maximum Stay-Down Distance for it: so many millimetres, or so many
-/// of the tool's diameters.
+/// The longest link a strategy makes without lifting when none is given: so
+/// many millimetres, or so many of the tool's diameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reach {
     /// Millimetres.
@@ -682,13 +660,12 @@ impl Reach {
 /// How wide a strategy's helical entries are when not given.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelixSize {
-    /// 0.9 × the tool's diameter, camcraft's for a 2D strategy, down to a
-    /// quarter of that where it has no room.
+    /// 0.9 × the tool's diameter, for a 2D strategy, down to a quarter of that
+    /// where it has no room.
     Tool,
-    /// Fusion's 3D strategies' Helical Ramp Diameter: 0.95 × the tool's
-    /// diameter less its corners, no less than a quarter of the tool; down to
-    /// its Minimum Ramp Diameter, half the tool less its corners, no less than
-    /// a quarter of the tool, where it has no room.
+    /// The 3D strategies' helix: 0.95 × the tool's diameter less its corners,
+    /// no less than a quarter of the tool; down to half the tool less its
+    /// corners, no less than a quarter of the tool, where it has no room.
     Flat,
 }
 
@@ -725,7 +702,7 @@ pub enum Leave {
     Both,
 }
 
-/// Whether a strategy cuts in levels a stepdown apart: Fusion's multiple depths.
+/// Whether a strategy cuts in levels a stepdown apart: multiple depths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Depths {
     /// Never: it has no levels, or its own way down.

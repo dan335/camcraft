@@ -1,5 +1,5 @@
-//! A finishing path kept between a Top and a Bottom, as Fusion's 3D finishing
-//! keeps to its Heights: what of each pass goes above the Top or below the
+//! A finishing path kept between the Top and the Bottom of its Heights: what
+//! of each pass goes above the Top or below the
 //! Bottom is cut away, and what is left of it, in pieces, is passes of their
 //! own, for the linker to join.
 //!

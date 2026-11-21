@@ -1,10 +1,10 @@
-//! Where the tool travels, and the levels it cuts between: Fusion's Heights tab.
+//! Where the tool travels, and the levels it cuts between.
 
 use serde::{Deserialize, Serialize};
 
 use super::{Operation, Outline};
 
-/// Where the tool travels, and the levels it cuts between: Fusion's Heights tab.
+/// Where the tool travels, and the levels it cuts between.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Heights {
@@ -12,7 +12,7 @@ pub struct Heights {
     #[serde(default = "default_clearance")]
     pub clearance: Height,
     /// The height it goes up to between cuts with a full retraction, and never
-    /// above with a minimum one: Fusion's retract height.
+    /// above with a minimum one: the retract height.
     #[serde(
         default = "default_retract",
         skip_serializing_if = "is_default_retract"
@@ -40,9 +40,9 @@ impl Default for Heights {
 }
 
 impl Heights {
-    /// A new operation's, as Fusion's: the clearance height 10 mm above the
-    /// retract height, which is 5 mm above the stock, where a job file that
-    /// leaves it out has it 10 mm above the stock.
+    /// A new operation's: the clearance height 10 mm above the retract height,
+    /// which is 5 mm above the stock, where a job file that leaves it out has
+    /// it 10 mm above the stock.
     pub fn fresh() -> Self {
         Self {
             clearance: Height {
@@ -69,7 +69,7 @@ fn default_clearance() -> Height {
     }
 }
 
-/// Fusion's: 5 mm above the stock.
+/// 5 mm above the stock.
 fn default_retract() -> Height {
     Height {
         reference: HeightRef::StockTop,
@@ -115,8 +115,8 @@ pub enum HeightRef {
     Absolute,
     /// The operation's picked faces and edges: their highest point for a top,
     /// their lowest for a bottom. A 2D operation measures each of its areas from
-    /// the picks in it, as Fusion's "selected contours". Only a top or a bottom
-    /// can be, and only with something picked.
+    /// the picks in it. Only a top or a bottom can be, and only with something
+    /// picked.
     Selection,
 }
 

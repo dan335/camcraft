@@ -1,4 +1,4 @@
-//! An operation's panel, on Fusion's tabs: the tool it cuts with ([`tool`]), its
+//! An operation's panel, on tabs: the tool it cuts with ([`tool`]), its
 //! geometry, what it is kept to, what it cuts round and what is picked
 //! ([`geometry`]) with the faces it machines and avoids ([`surfaces`]), its
 //! heights ([`heights`]), its passes ([`passes`]), and how its passes are linked

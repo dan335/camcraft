@@ -54,7 +54,7 @@ pub struct Format {
     #[serde(default)]
     pub strip_trailing_zeros: bool,
     /// Whether a number with its trailing zeros dropped keeps its point: `10.`
-    /// rather than `10`, as Fusion writes them.
+    /// rather than `10`.
     #[serde(default)]
     pub keep_point: bool,
 }
@@ -115,7 +115,7 @@ pub struct Profile {
     /// How comments are wrapped, as a pair of strings.
     pub comment: (String, String),
     /// The characters a comment may hold, letters in either case; any other is
-    /// left out, as Fusion's posts filter them. Absent, any may.
+    /// left out. Absent, any may.
     #[serde(default)]
     pub comment_chars: Option<String>,
     /// Whether comments are written in capitals.
@@ -135,7 +135,7 @@ pub struct Profile {
     /// Tool change style.
     pub tool_change: ToolChangeStyle,
     /// Whether the first move down after a tool change takes up the tool's
-    /// length offset, `G43 Z… H<tool>`, as Fusion's posts write it. Off, the
+    /// length offset, `G43 Z… H<tool>`. Off, the
     /// controller applies the offset itself, or has none.
     #[serde(default)]
     pub length_offset: bool,
@@ -309,8 +309,8 @@ impl Profile {
         self.number(v, self.format.feed_decimals)
     }
 
-    /// Format a time in seconds for a dwell word: to the millisecond, as
-    /// Fusion's posts write one, whatever the feed's places.
+    /// Format a time in seconds for a dwell word: to the millisecond, whatever
+    /// the feed's places.
     pub fn seconds(&self, v: f64) -> String {
         self.number(v, 3)
     }
@@ -399,8 +399,8 @@ mod tests {
     }
 
     /// The Avid profile in inches is its own file, and the millimetre one in
-    /// everything but its name, units and feed, which Fusion's Avid post writes
-    /// to a tenth in inches and to a whole number in millimetres.
+    /// everything but its name, units and feed, which Avid's post writes to a
+    /// tenth in inches and to a whole number in millimetres.
     #[test]
     fn centroid_avid_inch_is_centroid_avid_in_inches() {
         let mm = Profile::builtin("centroid-avid").unwrap().unwrap();
@@ -417,10 +417,10 @@ mod tests {
         assert_eq!(inch, expected);
     }
 
-    /// Avid as Fusion's Avid post writes it: no trailing zeros and no bare
-    /// point, and comments in capitals with only what that post lets through.
+    /// Avid as Avid's post writes it: no trailing zeros and no bare point, and
+    /// comments in capitals with only what that post lets through.
     #[test]
-    fn centroid_avid_writes_numbers_and_comments_as_fusion_does() {
+    fn centroid_avid_writes_numbers_and_comments_as_avids_post_does() {
         let p = Profile::builtin("centroid-avid").unwrap().unwrap();
         assert_eq!(p.axis(10.0), "10");
         assert_eq!(p.axis(2.25), "2.25");
@@ -430,7 +430,7 @@ mod tests {
         assert_eq!(p.comment("rough: top/side"), "(ROUGH TOPSIDE)");
     }
 
-    /// Masso as Fusion's post writes it: rounded to the places given, trailing
+    /// Masso: rounded to the places given, trailing
     /// zeros dropped and the point kept; inches to four places.
     #[test]
     fn rounds_to_the_stated_precision() {

@@ -65,7 +65,7 @@ pub enum FileRequest {
     Profile(DocId, String),
     /// The folder to post job `doc`'s programs into: one setup's, or every setup's.
     PostTo(DocId, Option<String>),
-    /// Fusion tool library exports to bring into the tool library.
+    /// Tool library CSV files to bring into the tool library.
     ImportTools,
 }
 
@@ -109,7 +109,7 @@ impl FileRequest {
             Self::Locate(..) => "Find the model",
             Self::Profile(..) => "Choose a machine profile",
             Self::PostTo(..) => "Post programs into",
-            Self::ImportTools => "Import Fusion tool libraries",
+            Self::ImportTools => "Import tools from CSV files",
         }
     }
 
@@ -155,7 +155,7 @@ struct Filter {
     extensions: &'static [&'static str],
 }
 
-// Each extension in lower and upper case: Fusion writes `.STEP`, and a portal's
+// Each extension in lower and upper case: some CAD programs write `.STEP`, and a portal's
 // file chooser matches a pattern's case, where Windows and macOS do not. The
 // lower-case one first: it is what Windows adds to a name saved without one.
 const JOBS: Filter = Filter {
@@ -171,7 +171,7 @@ const PROFILES: Filter = Filter {
     extensions: &["toml", "TOML"],
 };
 const TOOLS: Filter = Filter {
-    name: "Fusion tool libraries (CSV)",
+    name: "Tool libraries (CSV)",
     extensions: &["csv", "CSV"],
 };
 /// Every file, whatever it is named: `*` is every name to each of rfd's
@@ -565,7 +565,10 @@ mod tests {
                 filter.extensions[0].to_ascii_lowercase()
             );
         }
-        assert!(MODELS.extensions.contains(&"STEP"), "as Fusion writes it");
+        assert!(
+            MODELS.extensions.contains(&"STEP"),
+            "as some CAD programs write it"
+        );
         assert_eq!(ALL.extensions, ["*"]);
     }
 

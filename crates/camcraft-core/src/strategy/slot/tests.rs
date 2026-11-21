@@ -128,7 +128,7 @@ fn what_is_not_a_slot_is_refused() {
     ));
 }
 
-/// Fusion's own for a 6 mm flat in one of `ops_2d`'s slots: no levels, a
+/// A 6 mm flat in one of `ops_2d`'s slots: no levels, a
 /// ramp stepdown of a tenth of the tool, starting 2.5 mm over the top, at 2°.
 fn params(radius: f64) -> SlotParams {
     SlotParams {
@@ -170,7 +170,7 @@ fn moves(path: &Toolpath) -> Vec<(MoveRole, DVec3, f64)> {
         .collect()
 }
 
-/// As Fusion's program cuts it: from 2.5 mm over the top, back and forth
+/// From 2.5 mm over the top, back and forth
 /// along the whole middle, end to end, every leg falling as far and no more
 /// than half the ramp stepdown, 22 legs for 6.5 mm at 0.3 a leg, at the ramp
 /// feed; then once along the floor to the other end at the cutting feed. A

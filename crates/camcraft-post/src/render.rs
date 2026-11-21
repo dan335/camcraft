@@ -17,12 +17,12 @@ use crate::op::{CycleKind, Op};
 use crate::profile::{ArcStyle, Profile, ProgramUnits, ToolChangeStyle};
 
 /// Arcs shorter than this across their chord, in millimetres, are written as
-/// straight moves, as Fusion's posts write them (`minimumChordLength`): an arc
-/// whose ends round to the same point reads as a full circle.
+/// straight moves: an arc whose ends round to the same point reads as a full
+/// circle.
 const SHORTEST_CHORD: f64 = 0.25;
 
 /// How far the straight moves written for such an arc may stray from it, in
-/// millimetres: Fusion's posts' `tolerance`. Reading a program back allows
+/// millimetres. Reading a program back allows
 /// for it ([`readback`](crate::readback)).
 pub(crate) const STRAIGHTENED: f64 = 0.002;
 
@@ -134,7 +134,7 @@ impl<'a> Writer<'a> {
         if text.is_empty() {
             return;
         }
-        // Blocks are numbered, comments not, as Fusion's are.
+        // Blocks are numbered, comments not.
         if self.p.numbering.enabled && !text.starts_with(self.p.comment.0.as_str()) {
             let _ = write!(self.out, "N{} ", self.line_no);
             self.line_no = self.line_no.saturating_add(self.p.numbering.increment);
@@ -385,7 +385,7 @@ impl<'a> Writer<'a> {
     }
 
     /// A Z word, taking up the tool's length offset with it when one is
-    /// waiting: `G43 Z… H<tool>`, as Fusion writes it.
+    /// waiting: `G43 Z… H<tool>`.
     fn z_word(&mut self, z: &str) -> String {
         match self.offset.take() {
             Some(h) => format!("G43 Z{z} H{h}"),
@@ -474,7 +474,7 @@ impl<'a> Writer<'a> {
             block.push(' ');
         }
         block.push_str(g);
-        // Both of the plane's axes, always, as Fusion writes them; the third only
+        // Both of the plane's axes, always; the third only
         // where it moves, which makes a helix.
         for (axis, _, i) in axes {
             let _ = write!(block, " {axis}{}", self.p.length(to[i], self.inches));
@@ -527,7 +527,7 @@ impl<'a> Writer<'a> {
         };
         // Every word every time: a cycle is modal, but a program read by a person
         // should say where each hole is and how deep, whatever came before. In
-        // Fusion's order: where, then a peck or a dwell, then the feed.
+        // this order: where, then a peck or a dwell, then the feed.
         let mut block = format!(
             "{g} X{} Y{} Z{} R{}",
             self.p.length(at.x, self.inches),

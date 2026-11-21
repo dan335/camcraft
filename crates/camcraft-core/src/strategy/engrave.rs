@@ -1,4 +1,4 @@
-//! Picked shapes engraved with a V: Fusion's Engrave.
+//! Picked shapes engraved with a V.
 //!
 //! # The shape
 //!
@@ -1103,7 +1103,7 @@ fn check_params(p: &EngraveParams) -> Result<(), EngraveError> {
     Ok(())
 }
 
-/// `shapes` engraved: Fusion's Engrave. Each pass a link to where it starts and
+/// `shapes` engraved. Each pass a link to where it starts and
 /// the walk.
 pub fn engrave(
     shapes: &[Shape],

@@ -6,7 +6,7 @@
 //! program that still contains links is not machinable, and [`Toolpath::has_unplanned_links`]
 //! makes that checkable rather than assumed.
 //!
-//! What it does is Fusion's, and why is in `docs/decisions/0004-linking-and-entries.md`.
+//! Why it links as it does is in `docs/decisions/0004-linking-and-entries.md`.
 //!
 //! # The order a link is made in
 //!

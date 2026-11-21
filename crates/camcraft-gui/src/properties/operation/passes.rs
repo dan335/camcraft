@@ -61,7 +61,7 @@ pub(super) fn passes(
                 });
                 slopes(ui, d, slope_from, slope_to);
             }
-            // Fusion's Ramp's Direction is climb or conventional only.
+            // A ramp's direction is climb or conventional only.
             StrategySpec::Ramp {
                 direction,
                 flat_areas,
@@ -268,8 +268,8 @@ pub(super) fn passes(
                     });
                 });
             }
-            // Fusion's 2D Adaptive: no flats or cavities to choose, a pocket
-            // is always gone down into.
+            // 2D adaptive: no flats or cavities to choose, a pocket is always
+            // gone down into.
             StrategySpec::Adaptive2d {
                 direction,
                 min_cutting_radius,
@@ -585,7 +585,7 @@ pub(super) fn passes(
     }
 }
 
-/// Fusion's Feed Optimization: ticked to slow the cuts at their corners,
+/// Feed optimisation: ticked to slow the cuts at their corners,
 /// then where and to what. A value left out is camcraft's default, and says
 /// what it comes to.
 fn feed_optimization(
@@ -703,9 +703,9 @@ fn holder_modes(strategy: &StrategySpec) -> Option<&'static [(HolderMode, &'stat
         (HolderMode::Fail, "fail"),
     ];
     match strategy {
-        // Fusion's Trace has no Shaft and Holder, though it follows its curves
-        // as a finish follows the part; nor have its 2D Adaptive, its Engrave
-        // and its Thread.
+        // A trace has no shaft and holder settings, though it follows its
+        // curves as a finish follows the part; nor have 2D adaptive, engrave
+        // and thread.
         StrategySpec::Trace { .. }
         | StrategySpec::Adaptive2d { .. }
         | StrategySpec::Engrave { .. }
@@ -722,7 +722,7 @@ fn holder_modes(strategy: &StrategySpec) -> Option<&'static [(HolderMode, &'stat
     }
 }
 
-/// Fusion's Shaft and Holder: what generating does where the rest of the
+/// Shaft and holder: what generating does where the rest of the
 /// tool would meet the material, and how near each part of it may come.
 fn holder(
     ui: &mut egui::Ui,
@@ -763,7 +763,7 @@ fn holder(
     });
 }
 
-/// Fusion's Smoothing: ticked to fit the passes with arcs and longer lines,
+/// Smoothing: ticked to fit the passes with arcs and longer lines,
 /// then how far they may stray, the job's tolerance unless given.
 fn smoothing(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, passes: &mut Passes) {
     form(ui, "smoothing", |ui| {
@@ -791,10 +791,10 @@ fn smoothing(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, passes:
     });
 }
 
-/// A pocket's finishing passes along its walls, off until asked for, as
-/// Fusion's: how many, how far apart, how fast the last goes, and whether it
-/// goes twice; a `bore`'s, how far in from the wall its one is. A value left
-/// out is Fusion's, and says what it comes to.
+/// A pocket's finishing passes along its walls, off until asked for: how many,
+/// how far apart, how fast the last goes, and whether it goes twice; a
+/// `bore`'s, how far in from the wall its one is. A value left out is the
+/// default, and says what it comes to.
 fn finishing(
     ui: &mut egui::Ui,
     d: &mut Defaults<Operation>,
@@ -881,8 +881,8 @@ fn round_passes(
     });
 }
 
-/// Passes out to a hole's wall or its thread, `to`, as Fusion's Multiple
-/// Passes: ticked, how many, the last at it, and how far apart, each row with
+/// Passes out to a hole's wall or its thread, `to`, as Multiple passes:
+/// ticked, how many, the last at it, and how far apart, each row with
 /// its help, `topics`.
 fn passes_out(
     ui: &mut egui::Ui,
@@ -979,19 +979,19 @@ fn angle_field(ui: &mut egui::Ui, angle: &mut f64) {
 }
 
 /// The stepdown a box ticked to step down in levels starts at: the
-/// strategy's own, or a slot's, a trace's and an engraving's Maximum Stepdown
-/// as Fusion's starts it, a millimetre, or 2 mm.
+/// strategy's own, or a millimetre for a slot, a trace and an engraving, or
+/// 2 mm.
 pub(super) fn starting_stepdown(op: &Operation) -> f64 {
-    let fusions = match op.strategy {
+    let otherwise = match op.strategy {
         StrategySpec::Slot { .. } | StrategySpec::Trace { .. } | StrategySpec::Engrave { .. } => {
             1.0
         }
         _ => 2.0,
     };
-    op.strategy.default_stepdown().unwrap_or(fusions)
+    op.strategy.default_stepdown().unwrap_or(otherwise)
 }
 
-/// Multiple depths, as Fusion's Passes tab has them: ticked to cut in levels,
+/// Multiple depths, on the Passes tab: ticked to cut in levels,
 /// then the deepest each may be. Unticked is the bottom in one pass. A strategy
 /// that always cuts in levels, as roughing does, cannot be unticked.
 fn multiple_depths(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, op: &mut Operation) {
@@ -1114,7 +1114,7 @@ fn multiple_depths(ui: &mut egui::Ui, d: &mut Defaults<Operation>, m: Measure, o
     });
 }
 
-/// Adaptive clearing's shallow areas, as Fusion's Passes tab has them: ticked
+/// Adaptive clearing's shallow areas, on the Passes tab: ticked
 /// to add levels where the terraces are wide, then the closest they come and
 /// the widest a terrace may be.
 fn shallow(
@@ -1170,7 +1170,7 @@ fn stock_to_start(op: &Operation) -> StockToLeave {
     }
 }
 
-/// Stock to leave, as Fusion's Passes tab has it: ticked to leave any, then how
+/// Stock to leave, on the Passes tab: ticked to leave any, then how
 /// much on the walls and floors, as far as the strategy leaves any on either.
 /// Unticked is none, and ticked starts at roughing's half a millimetre; set back
 /// to none, it unticks.

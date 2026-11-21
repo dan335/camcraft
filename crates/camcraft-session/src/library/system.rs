@@ -4,11 +4,10 @@
 //! It is built here, not read from a file, and is never saved: the manager puts it
 //! into the library as the folder [`SYSTEM`] when it loads the user's tools, and
 //! [`super::Library::save`] takes it out again. It cannot be changed; a bit is
-//! copied into the person's own folders to be changed, as Fusion's sample library
-//! is.
+//! copied into the person's own folders to be changed.
 //!
 //! The bits are inch bits, as sold for hobby routers. Up-cut, down-cut and
-//! compression bits are flat end mills, as Fusion and makers' libraries have them;
+//! compression bits are flat end mills, as tool makers' libraries have them;
 //! which way the flutes lift the chips is in the name and description. Each bit
 //! has a preset for each material it suits, its feed worked out from a
 //! conservative chip load, and a stepdown and stepover from its diameter.

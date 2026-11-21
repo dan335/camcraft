@@ -122,7 +122,7 @@ topics! {
         "How wide that slot is cut. Empty, or less than the tool, the tool's own width.",
         Figure::SlotClearing;
     PASS_EXTENSION: "Pass extension",
-        "How far the tool's centre runs past the faced area. Fusion's default, half the tool and the tolerance, just clears it; left empty, the tool's radius.",
+        "How far the tool's centre runs past the faced area. Half the tool and the tolerance just clears it; left empty, the tool's radius.",
         Figure::Facing(Facing::PassExtension);
     PECK: "Peck",
         "How deep to drill before backing out to clear chips. Left empty, each hole is drilled in one go.",
@@ -186,7 +186,7 @@ topics! {
     USE_RAMP_ANGLE: "Use ramp angle",
         "Sets the helix by its angle from level, so every circle goes down as steeply. Unticked, by its pitch.";
     BORE_RAMP_ANGLE: "Angle",
-        "How steeply the helix goes down, from level, round the circle the tool's outer edge sweeps, as Fusion's.";
+        "How steeply the helix goes down, from level, round the circle the tool's outer edge sweeps.";
     MULTIPLE_PASSES: "Multiple passes",
         "Cuts out to the wall in several passes, a stepover apart, the last at the wall. Unticked, the wall alone.";
     DIRECTION_ROUND: "Direction",

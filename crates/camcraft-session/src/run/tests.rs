@@ -401,10 +401,10 @@ fn a_watched_run_stopped_ends_stopped_with_what_it_made_told() {
     assert_eq!(told, 1);
 }
 
-/// A job on the part made in Fusion for the basic operations
-/// (`ops_block.step`), its stock 5 mm round it and 2 mm over, with Fusion's
-/// 6 mm flat end mill, `flat6`, and `tools`, and a setup called each of
-/// `setups`, none with operations yet.
+/// A job on the part made for the basic operations (`ops_block.step`), its
+/// stock 5 mm round it and 2 mm over, with a 6 mm flat end mill, `flat6`,
+/// and `tools`, and a setup called each of `setups`, none with operations
+/// yet.
 fn on_ops_block(tools: &str, setups: &[&str]) -> Job {
     let model = crate::test_support::fixture("ops_block.step")
         .display()
@@ -509,8 +509,8 @@ fn arcs_in(job: &Job, setup: usize, op: &camcraft_core::run::OperationResult) ->
     (arcs, program)
 }
 
-/// Fusion's Bore and Circular, each a new operation as the app makes one, cut
-/// the part made in Fusion for the basic operations (`ops_block.step`): its
+/// A Bore and a Circular, each a new operation as the app makes one, cut the
+/// part made for the basic operations (`ops_block.step`): its
 /// round pocket, 24 mm across and 8 deep, with a 6 mm flat end mill in
 /// multiple passes, and its two blind holes, 6 mm across, with a 4 mm one,
 /// after the stock's top is faced. Every check passes, every program reads
@@ -623,8 +623,8 @@ stickout = 20.0
     }
 }
 
-/// Fusion's Trace and Slot, each a new operation as the app makes one, on the
-/// part made in Fusion for the basic operations (`ops_block.step`). The trace
+/// A Trace and a Slot, each a new operation as the app makes one, on the part
+/// made for the basic operations (`ops_block.step`). The trace
 /// follows the edges round its pocket's floor, 8 mm down, a 6 mm flat end mill
 /// kept to their left, inside: every check passes, its program has the
 /// pocket's round corners as arcs, and it cuts the band beside the pocket's
@@ -688,8 +688,8 @@ fn trace_follows_a_pocket_floor_and_slot_refuses_it() {
     assert!(err.to_string().contains("is not a slot"), "{err}");
 }
 
-/// Fusion's 2D Adaptive and 2D Chamfer, each a new operation as the app makes
-/// one, on the part made in Fusion for the basic operations
+/// A 2D Adaptive and a 2D Chamfer, each a new operation as the app makes one,
+/// on the part made for the basic operations
 /// (`ops_block.step`), after a face takes the stock down to its top: 2D
 /// adaptive clears the rectangular pocket, picked by its floor, to size; a
 /// 90° V-bit chamfers its rim 1 mm wide. Every check passes, nothing is a

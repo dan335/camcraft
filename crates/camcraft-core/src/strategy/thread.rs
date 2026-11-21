@@ -1,5 +1,5 @@
 //! Threads milled round holes picked by their walls, with a single-profile
-//! thread mill: Fusion's Thread.
+//! thread mill.
 //!
 //! # From the picked walls
 //!
@@ -11,8 +11,7 @@
 //!
 //! The tooth's point goes round a circle the tool's radius in from the wall,
 //! and half the pitch diameter offset out: with none it only touches the wall,
-//! with a millimetre it cuts half a millimetre into it. Each pass, as Fusion's
-//! programs for its Thread go:
+//! with a millimetre it cuts half a millimetre into it. Each pass:
 //!
 //! - down the hole's centre to where the lead starts, a link the linker makes;
 //! - along a straight to the lead's arc (Lead To Center), round the arc onto
@@ -38,10 +37,9 @@
 //! anticlockwise, seen from above, and a left-hand one clockwise. With a
 //! clockwise spindle a climb cut keeps the wall on the tool's right: round a
 //! hole that is anticlockwise. So a right-hand thread climbing rises from the
-//! bottom, as Fusion's does, and conventional falls clockwise from the top; a
-//! left-hand thread climbing falls anticlockwise from the top, and
-//! conventional rises clockwise from the bottom. Only the first is held to a
-//! program of Fusion's.
+//! bottom, and conventional falls clockwise from the top; a left-hand thread
+//! climbing falls anticlockwise from the top, and conventional rises clockwise
+//! from the bottom.
 //!
 //! # With multiple passes
 //!
@@ -245,7 +243,7 @@ pub fn turning(p: &ThreadParams) -> (bool, bool) {
     (ccw, ccw == p.right_hand)
 }
 
-/// Each of `rounds` threaded, in order: Fusion's Thread.
+/// Each of `rounds` threaded, in order.
 pub fn thread(rounds: &[Round], p: &ThreadParams) -> Result<(Toolpath, ThreadReport), ThreadError> {
     check_params(p)?;
     let (ccw, rising) = turning(p);
@@ -438,7 +436,7 @@ fn pass(
 
 /// Round the helix about `c` of radius `rho`, from angle zero turning
 /// `total` radians (anticlockwise where positive), from height `from` to
-/// `to` evenly as it turns: as Fusion's programs write it, in half turns from
+/// `to` evenly as it turns: in half turns from
 /// where it starts and what is left, so no move ends where it starts, seen
 /// from above.
 fn helix(

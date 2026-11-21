@@ -1,5 +1,5 @@
 //! Contour finishing: passes round the part at levels a stepdown apart, each
-//! where the tool touches the walls at its height. Fusion's Contour, a waterline.
+//! where the tool touches the walls at its height: a waterline.
 //!
 //! # Where the passes run
 //!
@@ -27,8 +27,8 @@
 //! # Slopes
 //!
 //! Where the part is shallow, levels a stepdown apart are far apart along it. The
-//! slope range keeps the passes to where the surface is at least so steep, as
-//! Fusion's contact angle does, for a scallop or parallel pass to finish the rest.
+//! slope range keeps the passes to where the surface is at least so steep,
+//! for a scallop or parallel pass to finish the rest.
 //!
 //! # Between levels
 //!
@@ -36,8 +36,8 @@
 //! where it ended, the tool goes down to it along the wall rather than off and
 //! down: along the lower ring, from the height it left, at no more than the ramp
 //! angle, then once round that ring from where the ramp reaches it. That is
-//! Fusion's default, smooth, transition, which "avoids abrupt changes in Z by
-//! gradually ramping down along the surface". A lower ring is clear of the part
+//! the default, a smooth transition, with no sudden drop in Z. A lower ring is
+//! clear of the part
 //! at every height above it, as the part's shadow only grows going down, so the
 //! ramp cannot reach the part.
 //!
@@ -80,7 +80,7 @@ pub(crate) const PULL_TO: f64 = 0.02;
 /// Which order the levels are cut in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Order {
-    /// Each level all the way round before the next down. Fusion's default.
+    /// Each level all the way round before the next down. The default.
     #[default]
     ByDepth,
     /// Each piece of the part's footprint all the way down before the next.

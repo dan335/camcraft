@@ -1,6 +1,6 @@
-//! An operation, shaped the way Fusion shapes one: its strategy, then what it
-//! machines (Fusion's Geometry tab: a selection, a 3D boundary or a 2D outline,
-//! and the faces it machines and avoids), Heights, Passes and Linking.
+//! An operation: its strategy, then what it machines (its geometry: a
+//! selection, a 3D boundary or a 2D outline, and the faces it machines and
+//! avoids), Heights, Passes and Linking.
 
 use std::collections::BTreeMap;
 
@@ -57,8 +57,7 @@ pub struct Operation {
     /// cut, checked or posted.
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub enabled: bool,
-    /// Settings worked out from expressions, as Fusion's parameter
-    /// expressions are, each by its place in the job file
+    /// Settings worked out from expressions, each by its place in the job file
     /// (`passes.stepover = "tool_diameter * 0.4"`): worked out again whenever
     /// what they read changes ([`Job::work_out_expressions`](super::Job::work_out_expressions)).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -67,7 +66,7 @@ pub struct Operation {
 
 impl Operation {
     /// A new operation called `name` of `strategy`, with no tool yet, and
-    /// everything else as Fusion starts it: the strategy's own multiple depths
+    /// everything else as a new one starts: the strategy's own multiple depths
     /// and stock to leave ([`StrategySpec::default_stepdown`],
     /// [`StrategySpec::default_stock_to_leave`]), its stepover and stepdown
     /// worked out from its tool once it has one
@@ -114,9 +113,9 @@ impl Operation {
     /// levels need far too many offsets) and cannot leave stock (grown by a ball it
     /// is not a cone); it finishes, engraves and chamfers.
     ///
-    /// Negative stock shrinks the tool, as Fusion's does, so it can take no more
-    /// than the tool's radius beside; and in 3D, where a round end has to stay
-    /// round, no more than its corner radius down.
+    /// Negative stock shrinks the tool, so it can take no more than the tool's
+    /// radius beside; and in 3D, where a round end has to stay round, no more
+    /// than its corner radius down.
     pub fn cannot_use(&self, tool: &ToolSpec) -> Option<&'static str> {
         let uses = self.strategy.uses();
         // A thread mill's one tooth cuts a thread's profile and nothing else,
@@ -261,8 +260,9 @@ impl Operation {
     /// A new operation called `name` of `strategy`, cutting with the job's tool
     /// `tool`, described by `spec`, and its preset `preset`: as
     /// [`Operation::new`] starts one, with the preset's values, on the part's
-    /// silhouette as Fusion starts it ([`StrategySpec::starting_containment`]),
-    /// and with room round the part for the tool ([`Operation::fit_channel`]).
+    /// silhouette as its strategy starts
+    /// ([`StrategySpec::starting_containment`]), and with room round the part
+    /// for the tool ([`Operation::fit_channel`]).
     pub fn fresh(
         name: impl Into<String>,
         strategy: StrategySpec,
@@ -374,7 +374,7 @@ pub fn engrave_flank(tool: &ToolSpec) -> Option<f64> {
 }
 
 /// How deep an engraving with `tool` goes when its depth is not given: 0.95
-/// of how deep its flank reaches, a new Engrave of Fusion's Bottom offset,
+/// of how deep its flank reaches, as a new engraving's bottom starts,
 /// `0.95*((tool_diameter-tool_tipDiameter)/2)*tan(90 - tool_taperAngle)`.
 pub fn engrave_depth(tool: &ToolSpec) -> Option<f64> {
     engrave_flank(tool).map(|f| 0.95 * f)

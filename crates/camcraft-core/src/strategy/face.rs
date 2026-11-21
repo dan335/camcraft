@@ -1,5 +1,5 @@
 //! Facing: the stock's top cut flat, straight passes across it side by side,
-//! level by level down to the bottom. Fusion's Face.
+//! level by level down to the bottom.
 //!
 //! # From the stock, not the model
 //!
@@ -12,13 +12,13 @@
 //!
 //! The outermost passes put the tool's centre on the faced area's edges, so the
 //! tool reaches a radius past them, and every pass's tool centre runs on until it
-//! is the pass extension off the area, as Fusion's does: at its default, half the
+//! is the pass extension off the area: at its default, half the
 //! tool and the tolerance, the tool enters and leaves just clear of the stock, at
 //! any angle. The passes are spaced evenly, no more than the stepover apart.
 //!
 //! # Direction
 //!
-//! Both ways by default, as Fusion's: back and forth, stepping over off the stock
+//! Both ways by default: back and forth, stepping over off the stock
 //! at each end without lifting. Climb or conventional cut every pass the same way,
 //! and the linker brings the tool back between them. Each level starts from the
 //! side the one above finished on.
@@ -39,7 +39,7 @@ pub struct FaceParams {
     pub angle: f64,
     /// Distance between passes, in millimetres.
     pub stepover: f64,
-    /// How far off the area each pass's tool centre runs on to: Fusion's pass
+    /// How far off the area each pass's tool centre runs on to: the pass
     /// extension. More than the radius, the tool is clear of the area where it
     /// enters and leaves.
     pub extension: f64,
@@ -63,7 +63,7 @@ pub struct LevelsAsked {
     pub top: f64,
     /// The faced level.
     pub bottom: f64,
-    /// Deepest a level may be below the one above: Fusion's multiple depths.
+    /// Deepest a level may be below the one above.
     /// `None` cuts the bottom alone.
     pub stepdown: Option<f64>,
 }

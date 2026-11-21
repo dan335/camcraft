@@ -237,9 +237,9 @@ fn smoothed_and_slowed_programs_read_back_to_their_paths() {
     assert!(reads_back_for_every_post(&job, 0, &ran) > 100);
 }
 
-/// The lego brick's contour, as the command line's comparison with Fusion
-/// runs it: ramped down round the ring at three depths, with Fusion's leads,
-/// upright arcs among them.
+/// The lego brick's contour, as the command line's contour shape test runs it:
+/// ramped down round the ring at three depths, with a profile's leads, upright
+/// arcs among them.
 #[test]
 fn the_lego_contour_reads_back_for_every_post() {
     let text = format!(

@@ -45,11 +45,11 @@
 //!
 //! # Negative stock
 //!
-//! Negative stock cuts past the part, as Fusion's does: the same sum with the
-//! stock taken away, so the tool shrinks rather than grows and its tip goes
-//! below the contact rather than above it. A ball shrunk by `s` is a ball of
-//! `r - s`, and a flat mill shrunk stays flat, its corner already as sharp as it
-//! goes: the corner stops at zero,
+//! Negative stock cuts past the part: the same sum with the stock taken away,
+//! so the tool shrinks rather than grows and its tip goes below the contact
+//! rather than above it. A ball shrunk by `s` is a ball of `r - s`, and a flat
+//! mill shrunk stays flat, its corner already as sharp as it goes: the corner
+//! stops at zero,
 //!
 //! ```text
 //! effective = bullnose(R + b, max(c + min(a, b), 0)),   tip offset = a
@@ -57,7 +57,7 @@
 //!
 //! Past a round end's corner radius, down, the shrunk end is flat where the real
 //! one is round, so a slope is cut past by less than asked; the job refuses that
-//! in 3D, as Fusion does ([`crate::job::Operation::cannot_use`]). Beside, the
+//! in 3D ([`crate::job::Operation::cannot_use`]). Beside, the
 //! tool cannot shrink past nothing: `R + b` must stay above zero.
 //!
 //! # The tool that cuts

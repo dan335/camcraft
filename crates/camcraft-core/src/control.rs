@@ -11,7 +11,7 @@
 //!
 //! Work also shows its passes as it finds them ([`Watch::show`]), before they
 //! are linked and cut: for whoever watches to draw while the rest is worked
-//! out, as Fusion draws a toolpath as it generates it.
+//! out.
 //!
 //! A [`Watch`] by default watches nothing: it never stops, and what it is told
 //! goes nowhere. So a strategy run on its own, as the tests and the command

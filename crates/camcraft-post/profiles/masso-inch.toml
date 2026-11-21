@@ -24,8 +24,7 @@ header = [
   "G90 G94 G17",
 ]
 
-# Straight up to Z home, as Fusion's Masso post does, before a tool change and at
-# the end; then home across.
+# Straight up to Z home before a tool change and at the end; then home across.
 safe_retract = ["G28 G91 Z0", "G90"]
 end_home     = ["G28 G91 X0 Y0", "G90"]
 
@@ -33,8 +32,8 @@ footer = [
   "M30",
 ]
 
-# Written as Fusion's Masso post writes them: `Z2.2`, `I0.`, `F150.`, and blocks
-# numbered from N10 in fives, comments not.
+# Numbers keep their point but not their trailing zeros (`Z2.2`, `I0.`,
+# `F150.`), and blocks are numbered from N10 in fives, comments not.
 [format]
 axis_decimals        = 3
 inch_axis_decimals   = 4

@@ -222,10 +222,10 @@ fn unknown_settings_are_refused() {
     toml::from_str::<Job>(&fine).unwrap();
 }
 
-/// A profile's leads are Fusion's: a quarter turn, and every size a tenth of
-/// the tool, unless given; and nothing past the default is written.
+/// A profile's leads are a quarter turn, and every size a tenth of the tool,
+/// unless given; and nothing past the default is written.
 #[test]
-fn leads_are_fusions_unless_given() {
+fn leads_are_a_tenth_of_the_tool_unless_given() {
     let l = Leads::default().sizes(6.35);
     assert_eq!((l.radius, l.straight, l.vertical), (0.635, 0.635, 0.635));
     assert_eq!(l.sweep, 90.0);
@@ -277,9 +277,9 @@ fn an_entry_not_offered_is_refused() {
     ));
 }
 
-/// A pocket's finishing passes are off unless asked for, as Fusion's are; asked
-/// for, each value left out is Fusion's for the tool, a value out of range is
-/// refused, and only a pocket has them.
+/// A pocket's finishing passes are off unless asked for; asked for, each value
+/// left out is its default for the tool, a value out of range is refused, and
+/// only a pocket has them.
 #[test]
 fn a_pocket_finishes_its_walls_only_when_asked() {
     let pocket = |passes: &str| {
@@ -328,8 +328,8 @@ fn a_pocket_finishes_its_walls_only_when_asked() {
     assert_eq!(profile.finishing(6.0), None);
 }
 
-/// A profile has Fusion's leads unless they are turned off, as Fusion's does;
-/// off is written, and on at Fusion's sizes is not.
+/// A profile has leads unless they are turned off; off is written, and on at
+/// the default sizes is not.
 #[test]
 fn leads_are_on_unless_turned_off() {
     let profile = |linking: &str| {
@@ -670,10 +670,9 @@ fn stock_to_leave_is_what_the_strategy_uses() {
     j.validate().unwrap();
 }
 
-/// Adaptive clearing has no deepest step cut of its own, as Fusion's has
-/// none: its passes stay on their levels. Its links and the check cut with
-/// the default, whatever is set, and what is set is kept, unchecked, for a
-/// strategy that has one.
+/// Adaptive clearing has no deepest step cut of its own: its passes stay on
+/// their levels. Its links and the check cut with the default, whatever is
+/// set, and what is set is kept, unchecked, for a strategy that has one.
 #[test]
 fn adaptive_has_no_deepest_step_cut() {
     let mut j = sample();
@@ -689,9 +688,9 @@ fn adaptive_has_no_deepest_step_cut() {
     j.validate().unwrap();
 }
 
-/// Negative stock to leave cuts past the part, as Fusion's does: by less than
-/// the tool's radius beside, and in 3D by no more than a round end's corner
-/// radius down. Anything but a number is refused.
+/// Negative stock to leave cuts past the part: by less than the tool's radius
+/// beside, and in 3D by no more than a round end's corner radius down.
+/// Anything but a number is refused.
 #[test]
 fn stock_to_leave_may_be_negative_within_the_tool() {
     let mut j = sample();
@@ -745,8 +744,8 @@ fn a_stepover_wider_than_the_tool_is_refused() {
     j.validate().unwrap();
 }
 
-/// Roughing starts leaving half a millimetre for the finish, as Fusion's does;
-/// the rest cut to size. None written is none left.
+/// Roughing starts leaving half a millimetre for the finish; the rest cut to
+/// size. None written is none left.
 #[test]
 fn roughing_leaves_stock_to_start_and_none_is_not_written() {
     let rough = StrategySpec::PocketClearing {
@@ -777,8 +776,7 @@ fn roughing_leaves_stock_to_start_and_none_is_not_written() {
 #[test]
 fn each_strategy_says_what_it_uses() {
     let parallel = StrategySpec::Parallel { angle: 0.0 }.uses();
-    // Into material over a pass start, finishing plunges, as Fusion's: it has
-    // no ramp.
+    // Into material over a pass start, finishing plunges: it has no ramp.
     assert!(parallel.lead_radius && !parallel.tabs && !parallel.ramp && !parallel.leads);
     let pocket = StrategySpec::Pocket {
         conventional: false,
@@ -792,7 +790,7 @@ fn each_strategy_says_what_it_uses() {
     .uses();
     assert!(!profile.stepover && profile.tabs && profile.leads);
     assert_eq!(profile.entries, [Entry::Helix, Entry::Plunge, Entry::Ramp]);
-    // A pocket, 2D or 3D, goes down a helix by default, as Fusion's.
+    // A pocket, 2D or 3D, goes down a helix by default.
     assert_eq!(pocket.entries, [Entry::Helix, Entry::Ramp, Entry::Plunge]);
     let clearing = StrategySpec::named("pocket-clearing").unwrap().uses();
     assert_eq!(clearing.entries, [Entry::Helix, Entry::Ramp, Entry::Plunge]);
@@ -800,7 +798,7 @@ fn each_strategy_says_what_it_uses() {
         parallel.entries.is_empty(),
         "a finishing pass has no choice of entry"
     );
-    // Fusion's 3D Adaptive has no ring to ramp along.
+    // 3D adaptive clearing has no ring to ramp along.
     let adaptive = StrategySpec::named("adaptive").unwrap().uses();
     assert_eq!(adaptive.entries, [Entry::Helix, Entry::Plunge]);
     assert_eq!(profile.stock_to_leave, Leave::Both);
@@ -1036,8 +1034,8 @@ stepover = 0.5
 stock_to_leave = { radial = 0.0, axial = 0.0 }
 "#;
 
-/// A tool described the way Fusion describes one reads, checks clean and writes
-/// back unchanged, which is what copying between a library and a job relies on.
+/// A fully described tool reads, checks clean and writes back unchanged, which
+/// is what copying between a library and a job relies on.
 #[test]
 fn a_fully_described_tool_round_trips() {
     let tool: ToolSpec = toml::from_str(FULL_TOOL).unwrap();
@@ -1204,10 +1202,10 @@ fn an_operation_speed_must_turn() {
     assert!(matches!(j.validate(), Err(JobError::BadValue { .. })));
 }
 
-/// Fusion's stepovers: a quarter of a square end's width for parallel, the
+/// The default stepovers: a quarter of a square end's width for parallel, the
 /// tolerance's cusp for a round one, and 0.6 of the tool for clearing.
 #[test]
-fn stepovers_default_as_fusions() {
+fn stepovers_default_from_the_tool() {
     let j = sample();
     let mut op = j.setups[0].operations[1].clone();
     let tool = |kind, diameter, corner| ToolSpec {
@@ -1349,11 +1347,11 @@ fn an_origin_keeps_its_kind_when_its_offset_changes() {
     assert!(matches!(moved, Origin::Point { .. }));
 }
 
-/// A profile and a pocket read from a job as Fusion's 2D operations are set,
-/// take a preset's stepdown, and are written back the same. A V-bit profiles
-/// only on the line, and pockets nothing.
+/// A profile and a pocket read from a job, take a preset's stepdown, and are
+/// written back the same. A V-bit profiles only on the line, and pockets
+/// nothing.
 #[test]
-fn profiles_and_pockets_read_as_fusions() {
+fn profiles_and_pockets_read_and_write_back() {
     let text = SAMPLE.replace(
         "strategy = \"parallel\"",
         "strategy = \"profile\"\nside = \"inside\"\nconventional = true",
@@ -1427,8 +1425,8 @@ fn profiles_and_pockets_read_as_fusions() {
 }
 
 /// A 2D operation cuts round an outline, the silhouette unless the picks are
-/// chosen, as Fusion's 2D Contour and Pocket select only what they cut; a 3D one
-/// is kept to a boundary. Each strategy uses one or neither, never both.
+/// chosen; a 3D one is kept to a boundary. Each strategy uses one or neither,
+/// never both.
 #[test]
 fn a_2d_operation_has_an_outline_and_a_3d_one_a_boundary() {
     assert_eq!(Outline::default(), Outline::Silhouette);
@@ -1473,8 +1471,7 @@ fn a_2d_operation_has_an_outline_and_a_3d_one_a_boundary() {
 /// Multiple depths are one setting every operation has, used as its strategy
 /// says: roughing always cuts in levels, and without a stepdown is refused; 2D
 /// cutting and facing go straight to the bottom unless asked, and a new one
-/// starts so, as Fusion's do; finishing and drilling have none, whatever is
-/// written.
+/// starts so; finishing and drilling have none, whatever is written.
 #[test]
 fn multiple_depths_are_shared_and_used_as_the_strategy_says() {
     let mut j = sample();
@@ -1500,7 +1497,7 @@ fn multiple_depths_are_shared_and_used_as_the_strategy_says() {
             },
             Some(2.0),
         ),
-        // Fusion's 2D Contour and 2D Pocket start with Multiple Depths off.
+        // A 2D contour and a 2D pocket start with multiple depths off.
         (
             StrategySpec::Profile {
                 side: ProfileSide::Outside,
@@ -1535,13 +1532,12 @@ fn multiple_depths_are_shared_and_used_as_the_strategy_says() {
     }
 }
 
-/// A new 2D contour and 2D pocket start as Fusion's do: to the bottom in one
-/// pass, with no stepdown expression to put levels back; the pocket leaving
-/// half a millimetre each way, as roughing; the contour straight down onto its
-/// lead, as Fusion's with Ramp off. A job file that leaves the entry out still
-/// reads as it did.
+/// A new 2D contour and 2D pocket start to the bottom in one pass, with no
+/// stepdown expression to put levels back; the pocket leaving half a
+/// millimetre each way, as roughing; the contour straight down onto its lead.
+/// A job file that leaves the entry out still reads as it did.
 #[test]
-fn new_2d_contours_and_pockets_start_as_fusions() {
+fn new_2d_contours_and_pockets_start_in_one_pass() {
     use crate::job::{Entry, StockToLeave};
     let contour = Operation::new(
         "contour",
@@ -1579,11 +1575,11 @@ fn new_2d_contours_and_pockets_start_as_fusions() {
     assert_eq!(Linking::default().entry, None);
 }
 
-/// Facing reads with Fusion's defaults, both ways at the bottom alone, writes
+/// Facing reads with its defaults, both ways at the bottom alone, writes
 /// back only what differs from them. A ball end mill or a
 /// V-bit cannot face flat; a pass extension below zero is refused.
 #[test]
-fn facing_reads_with_fusions_defaults() {
+fn facing_reads_with_its_defaults() {
     let text = SAMPLE
         .replace(
             "strategy = \"pocket-clearing\"\ntool = \"rough-6-flat\"",
@@ -1622,7 +1618,7 @@ fn facing_reads_with_fusions_defaults() {
 
     let rough = j.tools["rough-6-flat"].clone();
     let op = &mut j.setups[0].operations[0];
-    // Fusion's since 2022: 0.7 of the flat of the end.
+    // 0.7 of the flat of the end.
     let over = default_stepover(op, &rough, 0.01).unwrap();
     assert!((over - 0.7 * rough.diameter).abs() < 1e-9, "{over}");
     let ball = j.tools["finish-4-ball"].clone();
@@ -1718,7 +1714,7 @@ fn every_strategy_is_named() {
     assert_eq!(StrategySpec::named("zlevel-rough"), None);
 }
 
-/// A bore and a circular read with Fusion's defaults, picked faces their holes,
+/// A bore and a circular read with their defaults, picked faces their holes,
 /// write back only what differs, and refuse what cannot be cut: a bore's pitch
 /// or angle, the number of passes, a drill or a V-bit, a height from the
 /// selection.
@@ -1799,7 +1795,7 @@ fn bore_and_circular_read_and_write_back() {
         assert!(matches!(v.validate(), Err(JobError::WrongTool { .. })));
     }
     // A new bore goes down its helix at 2°; a new circular steps down a
-    // millimetre a level, as Fusion's.
+    // millimetre a level.
     let bore = StrategySpec::named("bore").unwrap();
     let StrategySpec::Bore {
         use_ramp_angle,
@@ -1821,7 +1817,7 @@ fn bore_and_circular_read_and_write_back() {
     assert_eq!(Operation::new("c", circular).passes.stepdown, Some(1.0));
     assert!(bore.uses().finishing && !circular.uses().finishing);
     assert!(bore.uses().leads && circular.uses().leads);
-    // Neither ramps nor stays down, as Fusion's programs show.
+    // Neither ramps nor stays down.
     assert!(!bore.uses().ramp && !circular.uses().ramp);
     assert!(!bore.uses().stay_down && !circular.uses().stay_down);
     // Their stepover, half the tool, and straight leads a twentieth of it,
@@ -1844,8 +1840,7 @@ fn bore_and_circular_read_and_write_back() {
     }
 }
 
-/// Fusion's sample library's largest thread mill: M12 x 1.75, one 60° tooth
-/// 9.14 mm across.
+/// A thread mill for M12 x 1.75, one 60° tooth 9.14 mm across.
 fn thread_mill() -> ToolSpec {
     toml::from_str(
         "kind = \"thread-mill\"\ndiameter = 9.14\npitch = 1.75\nnumber = 5\n\
@@ -1854,20 +1849,19 @@ fn thread_mill() -> ToolSpec {
     .unwrap()
 }
 
-/// A thread mill reads and writes back as Fusion's describes one, its
-/// profile 60° unless given; it needs its pitch, a profile it can have, and
-/// cuts, seen from above, as its tooth's lower flank: a flat at the root's
-/// radius, Fusion's shoulder diameter, rising to its point at half the
+/// A thread mill reads and writes back, its profile 60° unless given; it needs
+/// its pitch, a profile it can have, and cuts, seen from above, as its tooth's
+/// lower flank: a flat at the root's radius, rising to its point at half the
 /// pitch. It mills threads, and nothing else does.
 #[test]
 fn a_thread_mill_is_a_tooth_on_a_neck() {
     let t = thread_mill();
     assert_eq!(t.kind, ToolKind::ThreadMill);
-    assert_eq!(t.kind.fusion_type(), "thread mill");
-    assert_eq!(ToolKind::from_fusion_type("Thread Mill"), Some(t.kind));
+    assert_eq!(t.kind.type_name(), "thread mill");
+    assert_eq!(ToolKind::from_type_name("Thread Mill"), Some(t.kind));
     assert!(t.check().is_empty(), "{:?}", t.check());
     assert_eq!(t.thread_profile(), 60.0);
-    // Fusion's own shoulder diameter for it, 6.108911 mm.
+    // Its root, 6.108911 mm across.
     assert!((2.0 * t.thread_root_radius() - 6.108_911).abs() < 1e-6);
     let written = toml::to_string(&t).unwrap();
     assert!(written.contains("kind = \"thread-mill\""), "{written}");
@@ -1891,7 +1885,7 @@ fn a_thread_mill_is_a_tooth_on_a_neck() {
     assert_eq!(bad(&|t| t.pitch = Some(0.0)), ["pitch"]);
     assert_eq!(bad(&|t| t.angle = Some(180.0)), ["angle"]);
     assert!(bad(&|t| t.angle = Some(55.0)).is_empty());
-    // Its pitch is an expression's, as Fusion's `tool_threadPitch`.
+    // Its pitch is an expression's `tool_threadPitch`.
     let op = Operation::new("t", StrategySpec::named("thread").unwrap());
     let v = |name: &str, tool: &ToolSpec| op.expression_value(name, Some(tool), 0.01);
     assert_eq!(
@@ -1905,12 +1899,12 @@ fn a_thread_mill_is_a_tooth_on_a_neck() {
     assert_eq!(v("tool_threadPitch", &vbit()), None);
 }
 
-/// A thread reads with Fusion's defaults, its holes picked by their walls,
-/// writes back only what differs, reads back its own settings, refuses what it
-/// cannot cut (anything but a thread mill, a pitch of nothing, no stepovers),
-/// and a new one starts as Fusion's does: the tool's pitch, no offset, right
-/// hand, climbing, one pass, helical leads from the centre, lifting to the
-/// retract height between holes. A thread mill cuts nothing else.
+/// A thread reads with its defaults, its holes picked by their walls, writes
+/// back only what differs, reads back its own settings, refuses what it cannot
+/// cut (anything but a thread mill, a pitch of nothing, no stepovers), and a
+/// new one starts with the tool's pitch, no offset, right hand, climbing, one
+/// pass, helical leads from the centre, lifting to the retract height between
+/// holes. A thread mill cuts nothing else.
 #[test]
 fn thread_reads_and_writes_back() {
     let finish = "strategy = \"parallel\"\ntool = \"finish-4-ball\"\nangle = 90.0\n";
@@ -2002,7 +1996,7 @@ fn thread_reads_and_writes_back() {
     milled.setups[0].operations[1].tool = Some("mill".into());
     assert!(matches!(milled.validate(), Err(JobError::WrongTool { .. })));
 
-    // A new thread, as Fusion's starts.
+    // A new thread.
     let new = Operation::new("t", StrategySpec::named("thread").unwrap());
     assert_eq!(new.passes.stepdown, None);
     assert_eq!(new.passes.stepover, 1.0);
@@ -2029,7 +2023,7 @@ fn thread_reads_and_writes_back() {
     assert_eq!(new.linking.leads.unwrap().straight, Some(0.457));
 }
 
-/// A slot and a trace read with Fusion's defaults, cut what is picked, write
+/// A slot and a trace read with their defaults, cut what is picked, write
 /// back only what differs, and refuse what cannot be cut: a V-bit in a slot or
 /// beside a curve, a negative backoff, a maximum angle that is no angle, no
 /// levels above a curve with multiple depths.
@@ -2119,11 +2113,11 @@ fn slot_and_trace_read_and_write_back() {
             assert!(matches!(v.validate(), Err(JobError::WrongTool { .. })));
         }
     }
-    // Both start with Multiple Depths off, as Fusion's; a slot ramps along
-    // itself from 2.5 mm over the Top, without levels as far as a tenth of the
-    // tool there and back, or three quarters of its flutes if that is less, as
-    // Fusion's; a trace has no ramp, no Top or Bottom, and starts with a full
-    // retraction and the tool lifted between passes.
+    // Both start with multiple depths off; a slot ramps along itself from
+    // 2.5 mm over the Top, without levels as far as a tenth of the tool there
+    // and back, or three quarters of its flutes if that is less; a trace has
+    // no ramp, no Top or Bottom, and starts with a full retraction and the
+    // tool lifted between passes.
     let slot = Operation::new("s", StrategySpec::named("slot").unwrap());
     assert_eq!(slot.passes.stepdown, None);
     assert!(matches!(
@@ -2167,10 +2161,10 @@ fn slot_and_trace_read_and_write_back() {
     );
 }
 
-/// A 2D chamfer and 2D adaptive read with Fusion's defaults, write back only
+/// A 2D chamfer and 2D adaptive read with their defaults, write back only
 /// what differs, read back every setting of their own, and refuse what they
 /// cannot cut: a chamfer anything but a cone, or one wider than its flank
-/// reaches; 2D adaptive a cone. New ones start as Fusion's do.
+/// reaches; 2D adaptive a cone. New ones start with their defaults.
 #[test]
 fn chamfer_2d_and_adaptive_2d_read_and_write_back() {
     let finish = "strategy = \"parallel\"
@@ -2379,10 +2373,10 @@ tool = \"{tool}\"
     assert_eq!(uses.entries, &[Entry::Helix, Entry::Plunge]);
 }
 
-/// An engraving reads with Fusion's defaults and writes back only what
-/// differs, reads back its own settings, refuses what it cannot cut (anything
-/// but a cone, a depth past the flank, a sharp corner angle past 180°), and a
-/// new one starts as Fusion's does.
+/// An engraving reads with its defaults and writes back only what differs,
+/// reads back its own settings, refuses what it cannot cut (anything but a
+/// cone, a depth past the flank, a sharp corner angle past 180°), and a new
+/// one starts with its defaults.
 #[test]
 fn engrave_reads_and_writes_back() {
     let finish = "strategy = \"parallel\"\ntool = \"finish-4-ball\"\nangle = 90.0\n";
@@ -2436,7 +2430,7 @@ fn engrave_reads_and_writes_back() {
     let mut flat = j.clone();
     flat.setups[0].operations[1].tool = Some("rough-6-flat".into());
     assert!(matches!(flat.validate(), Err(JobError::WrongTool { .. })));
-    // Fusion's Bottom offset for the V: 0.95 of its flank.
+    // The depth for the V: 0.95 of its flank.
     let v = vbit();
     let flank = (6.35 / 2.0) / 30f64.to_radians().tan();
     assert!((engrave_flank(&v).unwrap() - flank).abs() < 1e-9);
@@ -2457,11 +2451,11 @@ fn engrave_reads_and_writes_back() {
     assert!(new.cuts_selection());
 }
 
-/// A project reads with Fusion's defaults, both ways with no axial offset on
-/// every slope, writes back only what differs, starts as Fusion's does, on the
-/// part's silhouette with the tool's centre in it, to the retract height
-/// between curves, with no stepover; and refuses an axial offset that is no
-/// number, and its picks as its boundary too, since they are its curves.
+/// A project reads with its defaults, both ways with no axial offset on every
+/// slope, writes back only what differs, starts on the part's silhouette with
+/// the tool's centre in it, to the retract height between curves, with no
+/// stepover; and refuses an axial offset that is no number, and its picks as
+/// its boundary too, since they are its curves.
 #[test]
 fn project_reads_and_writes_back() {
     let finish = "strategy = \"parallel\"
@@ -2534,11 +2528,10 @@ slope_to = 80.0
     ));
 }
 
-/// A morph reads with Fusion's defaults, both ways on every slope, writes
-/// back only what differs, starts as Fusion's does, on the part's silhouette
-/// with the tool's centre in it, its stepover the cusp a parallel's is and
-/// staying down within 50 mm; and refuses its picks as its boundary too,
-/// since they are its curves.
+/// A morph reads with its defaults, both ways on every slope, writes back only
+/// what differs, starts on the part's silhouette with the tool's centre in it,
+/// its stepover the cusp a parallel's is and staying down within 50 mm; and
+/// refuses its picks as its boundary too, since they are its curves.
 #[test]
 fn morph_reads_and_writes_back() {
     let finish = "strategy = \"parallel\"
@@ -2608,7 +2601,7 @@ slope_to = 80.0
     ));
 }
 
-/// A pencil reads with Fusion's defaults, both ways at a bitangency angle of
+/// A pencil reads with its defaults, both ways at a bitangency angle of
 /// 20° with no overthickness and no stepovers, writes back only what differs,
 /// and refuses an angle of none or a half turn, a negative overthickness, and
 /// one with a cone, which grown all round is no longer a cone.
@@ -2698,12 +2691,12 @@ stepovers = 2
     cone.validate().unwrap();
 }
 
-/// Scallop reads with Fusion's defaults, both ways from the boundary in on
+/// Scallop reads with its defaults, both ways from the boundary in on
 /// every slope, and writes back only what differs; its stepover is parallel's,
 /// its passes kept in its field's order, each piece from its nearer end, and a
 /// slope range that is no range is refused.
 #[test]
-fn scallop_reads_with_fusions_defaults() {
+fn scallop_reads_with_its_defaults() {
     let text = SAMPLE.replace(
         "strategy = \"parallel\"\ntool = \"finish-4-ball\"\nangle = 90.0\n",
         "strategy = \"scallop\"\ntool = \"finish-4-ball\"\n",
@@ -2768,11 +2761,11 @@ fn scallop_reads_with_fusions_defaults() {
     assert!(toml::from_str::<Job>(&unknown).is_err());
 }
 
-/// The finishing strategies after Fusion's Contour, Flat, Spiral, Radial and
-/// Morphed Spiral each read with Fusion's defaults and write back only what
-/// differs from them; each refuses another's settings.
+/// Contour, flat, spiral, radial and morphed spiral finishing each read with
+/// their defaults and write back only what differs from them; each refuses
+/// another's settings.
 #[test]
-fn more_finishing_strategies_read_with_fusions_defaults() {
+fn more_finishing_strategies_read_with_their_defaults() {
     let with = |strategy: &str, extra: &str, passes: &str| {
         SAMPLE.replace(
             "strategy = \"parallel\"\ntool = \"finish-4-ball\"\nangle = 90.0\npasses = { stepover = 0.4, feed = 2400.0 }\n",
@@ -2870,7 +2863,7 @@ fn more_finishing_strategies_read_with_fusions_defaults() {
 /// What each new finishing strategy uses of the settings every operation has,
 /// and the stepover and stepdown it starts with.
 #[test]
-fn more_finishing_strategies_use_what_fusions_do() {
+fn more_finishing_strategies_use_their_settings() {
     let j = sample();
     let ball = j.tools["finish-4-ball"].clone();
     let op = |strategy| Operation {
@@ -3079,8 +3072,8 @@ fn every_value_a_strategy_reads_is_checked_up_front() {
     assert_eq!(field_of(&j), "top/finish.linking.lead_radius");
 
     // What a strategy does not read is not checked: a profile has no boundary,
-    // and parallel finishing no ramp, as Fusion's has none. Parallel is
-    // trimmed to a top, so that is.
+    // and parallel finishing no ramp. Parallel is trimmed to a top, so that
+    // is.
     let mut j = sample();
     j.setups[0].operations[1].linking.ramp_angle = f64::NAN;
     j.validate().unwrap();
@@ -3169,7 +3162,7 @@ fn each_strategy_says_how_it_links() {
 #[test]
 fn linking_values_default_as_the_strategy_says() {
     let op = |name: &str| Operation::new("o", StrategySpec::named(name).unwrap());
-    // Fusion's Maximum Stay-Down Distance for each.
+    // Each strategy's own longest link without lifting.
     assert_eq!(op("parallel").stay_down(6.0), 50.0);
     assert_eq!(op("scallop").stay_down(6.0), 12.0);
     assert_eq!(op("spiral").stay_down(6.0), 30.0);
@@ -3181,7 +3174,7 @@ fn linking_values_default_as_the_strategy_says() {
     assert!((op("contour").lead_radius(6.0) - 0.6).abs() < 1e-12);
     assert_eq!(op("pocket").lead_radius(6.0), 0.0);
     assert!((op("profile").helix_diameter(10.0, 0.0) - 9.0).abs() < 1e-12);
-    // Fusion's 3D helix: 0.95 × the tool less its corners, no less than a
+    // The 3D helix: 0.95 × the tool less its corners, no less than a
     // quarter of the tool; no smaller than half the tool less its corners.
     let clearing = op("pocket-clearing");
     assert!((clearing.helix_diameter(10.0, 0.0) - 9.5).abs() < 1e-12);
@@ -3189,8 +3182,8 @@ fn linking_values_default_as_the_strategy_says() {
     assert!((clearing.helix_diameter(10.0, 5.0) - 2.5).abs() < 1e-12);
     assert!((clearing.least_helix_diameter(10.0, 0.0) - 5.0).abs() < 1e-12);
     assert!((clearing.least_helix_diameter(10.0, 5.0) - 2.5).abs() < 1e-12);
-    // A new profile goes straight down, as Fusion's 2D Contour starts; one
-    // whose entry is left out, as a job file may, down a helix.
+    // A new profile goes straight down; one whose entry is left out, as a job
+    // file may, down a helix.
     assert_eq!(op("profile").entry(), Some(Entry::Plunge));
     let mut left_out = op("profile");
     left_out.linking.entry = None;
@@ -3215,13 +3208,12 @@ fn linking_values_default_as_the_strategy_says() {
 }
 
 /// The finishes laid over the part, as a pattern or as parallel's passes,
-/// enter as Fusion's do, with no ramp, straight down onto the vertical lead,
-/// as pencil, project and morph do; and are reordered the nearest next, as
-/// Fusion's Shortest Machining Distance, where pencil, project and morph keep
-/// their own order, and scallop its field's, each piece from its nearer end
-/// (decision 0035).
+/// enter with no ramp, straight down onto the vertical lead, as pencil,
+/// project and morph do; and are reordered the nearest next, where pencil,
+/// project and morph keep their own order, and scallop its field's, each piece
+/// from its nearer end (decision 0035).
 #[test]
-fn finishes_over_the_part_enter_and_order_as_fusions() {
+fn finishes_over_the_part_plunge_and_reorder() {
     for name in ["parallel", "scallop", "spiral", "radial", "morphed-spiral"] {
         let uses = StrategySpec::named(name).unwrap().uses();
         assert!(!uses.ramp && uses.lead_radius, "{name}");
@@ -3273,7 +3265,7 @@ fn passes_are_turned_round_where_they_cut_both_ways() {
     let op = |strategy: StrategySpec| Operation::new("o", strategy);
     let named = |name: &str| StrategySpec::named(name).unwrap();
     assert!(op(named("parallel")).reverses());
-    // Fusion's Direction starts both ways for each.
+    // A new one of each starts both ways.
     for name in ["scallop", "spiral", "radial", "morphed-spiral"] {
         assert!(op(named(name)).reverses(), "{name}");
     }
@@ -3310,9 +3302,9 @@ fn passes_are_turned_round_where_they_cut_both_ways() {
     assert!(!named("adaptive").cuts_both_ways());
 }
 
-/// A new spiral and morphed spiral cut both ways, as Fusion's start, and say
-/// so in the job file; one whose direction is left out, as a job file
-/// written before may, still climbs.
+/// A new spiral and morphed spiral cut both ways, and say so in the job file;
+/// one whose direction is left out, as a job file written before may, still
+/// climbs.
 #[test]
 fn a_new_spiral_cuts_both_ways_and_says_so() {
     for name in ["spiral", "morphed-spiral"] {
@@ -3334,10 +3326,9 @@ fn a_new_spiral_cuts_both_ways_and_says_so() {
     }
 }
 
-/// A new flat finish goes straight down onto each ring, as Fusion's Flat
-/// starts with Ramp off; one whose entry a job file leaves out ramps along
-/// its ring, as it always has. Its ramp is a setting: ramp or plunge, and
-/// nothing else.
+/// A new flat finish goes straight down onto each ring; one whose entry a job
+/// file leaves out ramps along its ring, as it always has. Its ramp is a
+/// setting: ramp or plunge, and nothing else.
 #[test]
 fn a_new_flat_plunges_and_one_read_ramps() {
     let new = Operation::new("flat", StrategySpec::named("flat").unwrap());
@@ -3371,7 +3362,7 @@ fn a_new_flat_plunges_and_one_read_ramps() {
 /// A new operation starts with its strategy's own depths and stock to leave,
 /// and no tool.
 #[test]
-fn a_new_operation_starts_as_fusions() {
+fn a_new_operation_starts_with_its_defaults() {
     let rough = Operation::new("rough", StrategySpec::named("adaptive").unwrap());
     assert_eq!(rough.name, "rough");
     assert_eq!(rough.tool, None);

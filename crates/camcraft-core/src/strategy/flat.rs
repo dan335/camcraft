@@ -1,5 +1,5 @@
 //! Flat finishing: each flat face of the part cleared at its own height, in rings
-//! a stepover apart in from its edges, and nothing else. Fusion's Flat.
+//! a stepover apart in from its edges, and nothing else.
 //!
 //! # Where the tool rests on a flat
 //!

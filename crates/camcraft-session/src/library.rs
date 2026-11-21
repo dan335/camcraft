@@ -3,7 +3,7 @@
 //! One file of tools, grouped in folders that nest (one per machine, say, and
 //! within it one per shank size). A tool is the same `ToolSpec` a job keeps, so
 //! choosing one for an operation copies it into the job literally. Jobs keep
-//! copies rather than links, as in Fusion: a job still cuts exactly what was
+//! copies rather than links, so a job still cuts exactly what was
 //! verified after the library changes.
 //!
 //! The file is `[tools.<name>]` for tools at the top and
@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::fs::write_atomically;
 
-pub mod fusion_csv;
 pub mod system;
+pub mod tool_csv;
 
 use camcraft_geom::MM_PER_INCH;
 

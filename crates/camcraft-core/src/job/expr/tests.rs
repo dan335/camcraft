@@ -21,9 +21,10 @@ fn near(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-9
 }
 
-/// Fusion's own defaults read as Fusion has them.
+/// Expressions of the kind the default settings are written in, on the tool's
+/// variables, are worked out.
 #[test]
-fn fusions_expressions_are_worked_out() {
+fn the_defaults_expressions_are_worked_out() {
     assert!(near(eval("tool_diameter * 0.4").unwrap(), 2.54));
     assert!(near(
         eval("Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)").unwrap(),

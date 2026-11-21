@@ -1,4 +1,4 @@
-//! Picked edges chamfered: Fusion's 2D Chamfer.
+//! Picked edges chamfered.
 //!
 //! # Where the tool goes
 //!
@@ -20,14 +20,13 @@
 //! Each curve is run with the part on the side a climbing cut keeps it,
 //! the tool's right with a clockwise spindle, so the tool is offset from it
 //! the other way ([`super::curve::offset`]), its outside corners rolled
-//! round, as Fusion's Outer Corner Mode starts.
+//! round.
 //!
 //! # On and off
 //!
 //! Onto each pass along a straight from the waste, square to it, and off it
-//! the same: a tenth of the tool, as a new Fusion 2D Chamfer's linear lead-in
-//! and lead-out. A closed curve's pass goes on past where it started by the
-//! finishing overlap before it leaves.
+//! the same: a tenth of the tool, as a new one starts. A closed curve's pass
+//! goes on past where it started by the finishing overlap before it leaves.
 //!
 //! # Clearance
 //!
@@ -328,7 +327,7 @@ fn points_along(curve: &Curve, step: f64, tol: f64) -> Vec<DVec3> {
     out
 }
 
-/// `edges` chamfered: Fusion's 2D Chamfer. Each a pass of its own, a link to
+/// `edges` chamfered. Each a pass of its own, a link to
 /// where its lead starts, the lead, the edge as the tool's tip follows it,
 /// and the lead off it.
 pub fn chamfer(

@@ -3,7 +3,7 @@
 //! A hole is picked by its rim, the round edge where it meets the top of the part.
 //! Pick its bottom rim as well and it is drilled to there; otherwise it is drilled
 //! to the bottom its caller gives for the rim: the hole's own, where its wall ends,
-//! as Fusion's drilling goes to the hole's bottom, or the operation's bottom height
+//! or the operation's bottom height
 //! where that is set. Each hole is a pass of its own: a link to just
 //! above it, plunges down (in pecks, when asked, backing out to clear chips between
 //! them), and a retract. So the linker, simulator and checks treat a drilled hole

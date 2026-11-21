@@ -16,8 +16,7 @@ fn polygon(points: &[[f64; 2]], z: f64) -> Curve {
     }
 }
 
-/// A 6 mm 90° V-bit with a point, as Fusion's test plate was engraved with:
-/// down 0.95 of its flank, 2.85 mm.
+/// A 6 mm 90° V-bit with a point, down 0.95 of its flank, 2.85 mm.
 fn vee() -> EngraveParams {
     EngraveParams {
         tip: 0.0,
@@ -61,7 +60,7 @@ fn passes_through(path: &Toolpath, x: f64, y: f64, z: f64) -> bool {
         .any(|m| m.to.distance(DVec3::new(x, y, z)) <= 2e-3)
 }
 
-/// The triangle as Fusion's program cuts it: from its lowest left corner at
+/// The triangle's cut: from its lowest left corner at
 /// the surface down the bisector, round the outline's offset 2.85 mm in at
 /// the Bottom, up into each corner and back, every wall one move, and the
 /// way back up to where it started left off.
@@ -132,8 +131,7 @@ fn a_rectangle_is_cut_round_and_into_its_corners() {
     }
 }
 
-/// All three, as Fusion's program cuts them: in the order given, each its own
-/// pass.
+/// All three: in the order given, each its own pass.
 #[test]
 fn shapes_are_cut_in_the_order_given() {
     let loops = [

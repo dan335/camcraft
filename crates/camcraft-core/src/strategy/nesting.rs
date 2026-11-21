@@ -15,7 +15,7 @@ use glam::DVec2;
 /// Which way round passes in nested regions are cut.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Order {
-    /// From the boundary in. Fusion's default.
+    /// From the boundary in. The default.
     #[default]
     OutsideIn,
     /// Each region's innermost passes first, out to the boundary.

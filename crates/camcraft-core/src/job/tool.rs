@@ -10,10 +10,10 @@ use crate::is_positive;
 /// A cutter.
 ///
 /// The engine cuts with `kind`, `diameter` and `corner`. Everything after them
-/// describes the physical tool the way Fusion's tool library does, for the person
-/// setting it up and, later, for holder collision in playback and the machine's
-/// tool table. All of it is optional, so a job that names only the cutting
-/// geometry is complete.
+/// describes the physical tool, as a tool library does, for the person setting
+/// it up and, later, for holder collision in playback and the machine's tool
+/// table. All of it is optional, so a job that names only the cutting geometry
+/// is complete.
 ///
 /// Its speeds and feeds are [`Preset`]s: named sets an operation copies from.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -205,7 +205,7 @@ pub enum ToolMaterial {
 }
 
 /// A tool holder, or a spindle's nose, as a stack of segments from the face
-/// the tool comes out of upward, as Fusion's holders are.
+/// the tool comes out of upward.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Holder {
@@ -337,8 +337,9 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
-    /// Every kind, as Fusion's tool libraries and expressions name it.
-    pub const FUSION_TYPES: [(Self, &'static str); 6] = [
+    /// Every kind by its type name: the value of the `tool_type` formula
+    /// variable and of a tool library CSV's `tool_type` column.
+    pub const TYPE_NAMES: [(Self, &'static str); 6] = [
         (Self::Flat, "flat end mill"),
         (Self::Ball, "ball end mill"),
         (Self::Bullnose, "bull nose end mill"),
@@ -347,21 +348,22 @@ impl ToolKind {
         (Self::ThreadMill, "thread mill"),
     ];
 
-    /// What Fusion calls this kind of tool (`tool_type`).
-    pub fn fusion_type(self) -> &'static str {
-        Self::FUSION_TYPES
+    /// This kind's type name, as `tool_type` gives it.
+    pub fn type_name(self) -> &'static str {
+        Self::TYPE_NAMES
             .iter()
             .find(|(k, _)| *k == self)
             .map_or("", |(_, name)| name)
     }
 
-    /// The kind Fusion's `name` is, ignoring case: a spot drill is a cone.
-    pub fn from_fusion_type(name: &str) -> Option<Self> {
+    /// The kind a type name, `name`, means, ignoring case: a spot drill is a
+    /// cone.
+    pub fn from_type_name(name: &str) -> Option<Self> {
         let name = name.to_ascii_lowercase();
         if name == "spot drill" {
             return Some(Self::Cone);
         }
-        Self::FUSION_TYPES
+        Self::TYPE_NAMES
             .iter()
             .find(|(_, n)| *n == name)
             .map(|(k, _)| *k)
@@ -376,7 +378,7 @@ pub const DRILL_POINT: f64 = 118.0;
 pub const THREAD_PROFILE: f64 = 60.0;
 
 impl ToolSpec {
-    /// The radius of its corner, as Fusion's `tool_cornerRadius`: a ball's is
+    /// The radius of its corner, an expression's `tool_cornerRadius`: a ball's is
     /// half its diameter, a bullnose's its corner, any other's none.
     pub fn corner_radius(&self) -> f64 {
         match self.kind {
@@ -394,9 +396,8 @@ impl ToolSpec {
 
     /// The radius of a thread mill's tooth at its root, where its flanks meet
     /// the neck: a V of its profile angle one pitch tall, its point at the
-    /// cutting diameter, as Fusion's sample thread mills are ground (their
-    /// shoulder diameter is this to the micron). Never below zero: a tooth
-    /// whose V would close before the axis comes to a point there.
+    /// cutting diameter. Never below zero: a tooth whose V would close before
+    /// the axis comes to a point there.
     pub fn thread_root_radius(&self) -> f64 {
         let half = self.thread_profile().to_radians() / 2.0;
         let pitch = self.pitch.unwrap_or(0.0);
@@ -409,7 +410,7 @@ impl ToolSpec {
         2.0 * self.diameter
     }
 
-    /// Its flute length, as Fusion's `tool_fluteLength`: its own, or where it
+    /// Its flute length, an expression's `tool_fluteLength`: its own, or where it
     /// gives none, [`ToolSpec::assumed_flute_length`].
     pub fn flute_length(&self) -> f64 {
         self.flute_length
@@ -424,9 +425,8 @@ impl ToolSpec {
         self.flute_length().max(3.0 * self.diameter)
     }
 
-    /// How far it sticks out of its holder, tip to the holder's face, as
-    /// Fusion's body length: its own, or where it gives none,
-    /// [`ToolSpec::assumed_stickout`].
+    /// How far it sticks out of its holder, tip to the holder's face: its own,
+    /// or where it gives none, [`ToolSpec::assumed_stickout`].
     pub fn stickout(&self) -> f64 {
         self.stickout
             .filter(|l| l.is_finite() && *l > 0.0)

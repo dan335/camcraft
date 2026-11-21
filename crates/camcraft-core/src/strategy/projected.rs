@@ -149,7 +149,7 @@ pub fn project(
     }
     let mut report = ProjectReport::default();
     // Slopes judged as scallop's grid does, and kept to the range asked for and
-    // nothing else, as Fusion's: a steep stretch is cut down the part as a
+    // nothing else: a steep stretch is cut down the part as a
     // parallel pass is, broken only where it falls further than a cut step.
     let pitch = field::pitch(params.stepover, seat.tool().max_radius());
     let range = (params.slope_from, params.slope_to, params.slope_to);
@@ -640,7 +640,7 @@ mod tests {
     use crate::cutter::surfaces::PartSurfaces;
     use crate::cutter::tool::Flat;
 
-    /// The slope range is the one asked for and nothing else, as Fusion's: a
+    /// The slope range is the one asked for and nothing else: a
     /// step lower than a cut step, steeper than a plunge where the tool drops
     /// off it, is cut down to 89.9° as it is to 90°.
     #[test]

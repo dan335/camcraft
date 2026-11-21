@@ -124,8 +124,8 @@ fn sled_base_mixed_analytic_and_nurbs() {
 /// and revolved, so the extent check has to bound the far side of an axis.
 ///
 /// The file leaves one hole: its inner floor (`#209`) is bounded inside by a circle
-/// 4.7e-6 mm across on the axis, which no other face closes, where Fusion revolved
-/// the profile to the axis.
+/// 4.7e-6 mm across on the axis, which no other face closes, where the profile was
+/// revolved to the axis.
 ///
 /// Its rim, 188 mm from its axis, needs more than 512 grid steps round at this
 /// tolerance, where ogeom 0.10 stopped and left it 0.0124 mm off
@@ -136,7 +136,7 @@ fn bowl_revolved_millimetre() {
 }
 
 /// A disc 200 mm across and 19 thick, its top edge one round of 19 mm: a torus
-/// face wrapping all the way round, with no seam edge, as Fusion writes one.
+/// face wrapping all the way round, with no seam edge, as a STEP file may have.
 /// Generated, so exact.
 ///
 /// The bowl's trouble on a part a third smaller: ogeom 0.10's 512 steps round the
@@ -148,17 +148,17 @@ fn a_round_edge() {
     check("round_edge.step", "millimetre", 3, [200.0, 200.0, 19.0], 0);
 }
 
-/// Made in Fusion to hold camcraft's basic operations to Fusion's, and written
-/// in centimetres, as Fusion writes a design: a third unit after inches and
-/// millimetres, so a conversion that knows only those two fails.
+/// Made for camcraft's basic operations, and written in centimetres: a third
+/// unit after inches and millimetres, so a conversion that knows only those two
+/// fails.
 #[test]
 fn ops_block_centimetre() {
     check("ops_block.step", "centimetre", 21, [100.0, 70.0, 20.0], 0);
 }
 
-/// Made in Fusion to hold camcraft's 2D operations to Fusion's: holes, a round
+/// Made for camcraft's 2D operations: holes, a round
 /// pocket, slots, V grooves, a pocket with an island and chamfered rims.
-/// Written in centimetres, as Fusion writes a design.
+/// Written in centimetres.
 ///
 /// ogeom gives it four triangles whose corners coincide, one at the point of
 /// each V groove's end, where a cone's two rulings meet
@@ -175,7 +175,7 @@ fn ops_2d_centimetre() {
     );
 }
 
-/// Made in Fusion to hold camcraft's Engrave to Fusion's, in centimetres too: a
+/// Made for camcraft's Engrave, in centimetres too: a
 /// plate with a triangle, an L and a rectangle sunk into its top, their floors
 /// and walls 16 faces of the 22.
 #[test]
@@ -183,8 +183,7 @@ fn ops_engrave_centimetre() {
     check("ops_engrave.step", "centimetre", 22, [80.0, 50.0, 10.0], 0);
 }
 
-/// Made in Fusion to hold camcraft's 3D finishing to Fusion's
-/// (`scripts/fusion/ops_3d/part.py`), in centimetres: a block with a pocket
+/// Made for camcraft's 3D finishing, in centimetres: a block with a pocket
 /// whose one wall is drafted, one corner and its floor filleted, a dome on its
 /// floor and a rounded top edge: planes, cylinders, a sphere and a torus.
 ///
@@ -266,7 +265,7 @@ fn a_loose_fit_beyond_the_files_claim_is_not_excused() {
 
 /// Private parts, when this machine has them. Each must load, with its checks
 /// passed or their skipping explained; none may fail.
-/// A cone that comes to a point with no vertex there, as Fusion writes one. The
+/// A cone that comes to a point with no vertex there, as a STEP file may have it. The
 /// size check once refused it, its box stopping short of the apex. Generated, so
 /// exact: 20 mm across and 30 tall (step-conformance's `cone_point`).
 #[test]

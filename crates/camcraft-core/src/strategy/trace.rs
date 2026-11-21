@@ -1,4 +1,4 @@
-//! Picked edges followed: Fusion's Trace.
+//! Picked edges followed.
 //!
 //! # The curves
 //!
@@ -6,24 +6,24 @@
 //! followed as they lie: each at its own height, a round edge lying level as an
 //! arc. A closed curve runs anticlockwise seen from above; an open one from its
 //! end lowest in X, then Y, then Z, so the way it runs depends on nothing but the
-//! curve. They are followed in the order picked, or, unless that is asked for
-//! (Fusion's Preserve Order), from the first picked always to the nearest next.
+//! curve. They are followed in the order picked, or, unless that is asked for,
+//! from the first picked always to the nearest next.
 //!
 //! # Where the tool goes
 //!
-//! On the curve, the tool's tip on it (Fusion's Sideways Compensation, center),
-//! or its centre the tool's radius and the radial stock to leave to the left or
-//! right of it as it runs ([`super::curve::offset`]). Every pass is moved up by
-//! the axial offset and the axial stock to leave. An open curve's passes run on
+//! On the curve, the tool's tip on it, or its centre the tool's radius and the
+//! radial stock to leave to the left or right of it as it runs
+//! ([`super::curve::offset`]). Every pass is moved up by the axial offset and
+//! the axial stock to leave. An open curve's passes run on
 //! past its ends along it by the pass extension. What of a pass is steeper than
 //! the maximum angle is left out, the pass broken there.
 //!
 //! # Levels
 //!
 //! With Multiple Depths, each curve is cut that many stepdowns above itself and
-//! then on itself: Fusion's Number of Stepdowns, each a stepdown apart, the last
+//! then on itself, each a stepdown apart, the last
 //! on the curve. Level by level across every curve, or each curve all the way
-//! down before the next (Fusion's Order by Depth). Both ways, an open curve's
+//! down before the next. Both ways, an open curve's
 //! levels go back and forth.
 
 use glam::{DVec2, DVec3};
@@ -33,7 +33,7 @@ use crate::strategy::curve::{Curve, Piece, offset};
 use crate::strategy::nesting::nearest_next;
 use crate::strategy::{StrategyError, at_least_zero, check};
 
-/// Where the tool goes against a curve: Fusion's Sideways Compensation.
+/// Where the tool goes against a curve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Beside {
     /// Its centre on it.
@@ -257,7 +257,7 @@ fn not_steeper(curve: &Curve, most: f64) -> (Vec<Curve>, u64) {
     (out, steep)
 }
 
-/// `curves` followed: Fusion's Trace. Each pass a link to where it starts and
+/// `curves` followed. Each pass a link to where it starts and
 /// the curve, as it is moved for the tool and the level.
 pub fn trace(curves: &[Curve], p: &TraceParams) -> Result<(Toolpath, TraceReport), TraceError> {
     check_params(p)?;

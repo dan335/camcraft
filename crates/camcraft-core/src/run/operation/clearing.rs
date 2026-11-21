@@ -355,8 +355,8 @@ pub(super) fn planar_paths(
         arc: work.job.tolerance * 0.5,
         radius: work.tool.cutter_radius(),
         kept_on_right: work.kept_on_right(),
-        // A profile's leads go onto every ring; a pocket's, as Fusion's 2D
-        // pocket's, onto its first finishing pass and off its last.
+        // A profile's leads go onto every ring; a pocket's onto its first
+        // finishing pass and off its last.
         leads: match op.strategy {
             StrategySpec::Pocket { .. } => op
                 .finishing(diameter)
@@ -365,7 +365,7 @@ pub(super) fn planar_paths(
             _ => op.leads(diameter),
         }
         .map(level_leads),
-        // Ramped into, a profile goes down each ring in one spiral, as Fusion's;
+        // Ramped into, a profile goes down each ring in one spiral;
         // a pocket ramps along its rings as the linker enters them.
         spiral: (matches!(op.strategy, StrategySpec::Profile { .. })
             && op.entry() == Some(Entry::Ramp))
@@ -467,8 +467,7 @@ pub(in crate::run) fn planar_areas(
         let b = prepared.stock_bounds();
         Region::rectangle(b.min.truncate(), b.max.truncate())
     });
-    // 2D adaptive goes past a picked pocket's open sides, as Fusion's
-    // detects open pockets.
+    // 2D adaptive goes past a picked pocket's open sides.
     let shape = if matches!(op.strategy, StrategySpec::Adaptive2d { .. })
         && op.outline == crate::job::Outline::Selection
     {
@@ -504,9 +503,8 @@ pub(in crate::run) fn planar_areas(
 /// outline runs along the edge of the part seen from above, with nothing of
 /// the part beyond it, what lies beyond is taken in, out past the stock's
 /// edge far enough for the whole tool to stand clear of it, so the tool can
-/// come at the pocket from outside
-/// it, as Fusion's open pockets are extended to the stock. Only what joins a
-/// pocket is taken in: beyond a wall, however thin, is not.
+/// come at the pocket from outside it. Only what joins a pocket is taken in:
+/// beyond a wall, however thin, is not.
 fn opened(
     shape: &Region,
     prepared: &Prepared,
@@ -660,8 +658,8 @@ pub(in crate::run) fn drill_holes(
         }
     };
     // A Bottom height set goes for every hole. Left as it starts, each hole goes
-    // to its own bottom, as Fusion's drilling goes "from hole bottom": a blind
-    // hole to its floor, not through the part to the operation's default.
+    // to its own bottom: a blind hole to its floor, not through the part to
+    // the operation's default.
     let (_, op_bottom) = op.levels_3d(ctx);
     let set = op.heights.bottom.is_some();
     let bottom = |c: &Chain| {
@@ -684,11 +682,11 @@ pub(in crate::run) fn drill_holes(
 }
 
 /// Where the round wall below the rim `edge` of `body` ends, as `height` measures
-/// it in the setup: the hole's own bottom, as Fusion's drilling's "from hole
-/// bottom" is. From the rim, down each face that runs from one rim of the wall to
-/// the next one below it (the same circle, further down its axis), until what
-/// follows is something else: the hole's floor, its drill point, or the far side
-/// of the part. So a drill's tip goes no deeper than the wall it was picked by.
+/// it in the setup: the hole's own bottom. From the rim, down each face that
+/// runs from one rim of the wall to the next one below it (the same circle,
+/// further down its axis), until what follows is something else: the hole's
+/// floor, its drill point, or the far side of the part. So a drill's tip goes
+/// no deeper than the wall it was picked by.
 ///
 /// `None` where the rim is not round, or no wall runs down from it: the top
 /// rim of a boss, say.

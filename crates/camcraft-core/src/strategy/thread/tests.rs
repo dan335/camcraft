@@ -2,14 +2,14 @@ use super::*;
 use crate::path::toolpath::{Move, MoveKind};
 use glam::dvec2;
 
-/// Fusion's thread mill: 9.14 mm, a single 60° tooth for 1.75 mm.
+/// The thread mill: 9.14 mm, a single 60° tooth for 1.75 mm.
 const TOOL: f64 = 9.14;
 const PITCH: f64 = 1.75;
 
-/// A new Thread of Fusion's, with its thread mill: right hand, climbing, its
+/// A new Thread, with the thread mill: right hand, climbing, its
 /// leads a tenth of the tool round a quarter turn, the straight a twentieth,
 /// helical, from the centre.
-fn fusions(offset: f64) -> ThreadParams {
+fn new_thread_params(offset: f64) -> ThreadParams {
     ThreadParams {
         radius: TOOL / 2.0,
         pitch: PITCH,
@@ -58,18 +58,18 @@ fn ends(path: &Toolpath) -> Vec<(DVec3, &Move)> {
 }
 
 fn near(a: DVec3, b: [f64; 3]) -> bool {
-    // Fusion's program is written to the thousandth.
+    // The figures are to the thousandth.
     a.distance(DVec3::from_array(b)) < 1.0e-3
 }
 
-/// The thread Fusion's program cuts in each hole, move for move, to the
-/// thousandth it is written to: down the centre to the lead's start, a
+/// camcraft's thread in each hole, move for move, to the thousandth: down
+/// the centre to the lead's start, a
 /// straight to the lead's arc, the arc rising onto the helix at +X, the helix
 /// up from the bottom anticlockwise in half turns and what is left, the arc
 /// off rising as far again, and a straight back to the centre.
 #[test]
-fn fusions_thread_move_for_move() {
-    let (path, report) = thread(&holes(), &fusions(0.0)).unwrap();
+fn each_hole_is_threaded_move_for_move() {
+    let (path, report) = thread(&holes(), &new_thread_params(0.0)).unwrap();
     assert_eq!((report.holes, report.passes), (2, 2));
     assert!(report.rising);
     let moves = path.moves();
@@ -141,12 +141,12 @@ fn fusions_thread_move_for_move() {
 }
 
 /// With a pitch diameter offset of a millimetre the circle is half a
-/// millimetre wider, as Fusion's is, and the leads rise less on it: what the
+/// millimetre wider, and the leads rise less on it: what the
 /// thread is meant to cut is the wall moved half a millimetre out, down to the
 /// hole's bottom, and nothing else.
 #[test]
 fn an_offset_cuts_half_of_it_into_the_wall() {
-    let (path, report) = thread(&holes(), &fusions(1.0)).unwrap();
+    let (path, report) = thread(&holes(), &new_thread_params(1.0)).unwrap();
     let moves = path.moves();
     for (m, w) in moves.iter().zip([
         [-55.0, 35.0, -0.102],
@@ -167,13 +167,13 @@ fn an_offset_cuts_half_of_it_into_the_wall() {
     assert!((blind.lowest - 9.864).abs() < 1e-3, "{}", blind.lowest);
     assert_eq!(blind.height_at(dvec2(-30.0, 42.4)), Some(10.0));
     // None: it only touches the wall, and nothing is meant.
-    let (_, none) = thread(&holes(), &fusions(0.0)).unwrap();
+    let (_, none) = thread(&holes(), &new_thread_params(0.0)).unwrap();
     assert_eq!(none.cuts[0].height_at(dvec2(-47.0, 35.0)), None);
 }
 
 /// The hand and the direction decide which way round each helix goes and
 /// whether it rises: a right-hand thread climbing rises anticlockwise from
-/// the bottom (Fusion's); conventional falls clockwise from the top; a
+/// the bottom; conventional falls clockwise from the top; a
 /// left-hand thread mirrors them: climbing falls anticlockwise, conventional
 /// rises clockwise. Each helix starts on +X, and its leads come in and go out
 /// the way it turns.
@@ -189,7 +189,7 @@ fn hand_and_direction() {
         let p = ThreadParams {
             right_hand,
             kept_on_right: climb,
-            ..fusions(0.0)
+            ..new_thread_params(0.0)
         };
         assert_eq!(turning(&p), (ccw, rising));
         let (path, report) = thread(&one, &p).unwrap();
@@ -242,7 +242,7 @@ fn level_leads_and_leads_from_beside() {
     let one = [holes()[1]];
     let level = ThreadParams {
         helical: false,
-        ..fusions(0.0)
+        ..new_thread_params(0.0)
     };
     let (path, report) = thread(&one, &level).unwrap();
     assert!((report.cuts[0].lowest - 10.0).abs() < 1e-12);
@@ -251,7 +251,7 @@ fn level_leads_and_leads_from_beside() {
     }
     let beside = ThreadParams {
         to_centre: false,
-        ..fusions(0.0)
+        ..new_thread_params(0.0)
     };
     let (path, _) = thread(&one, &beside).unwrap();
     let moves = path.moves();
@@ -273,7 +273,7 @@ fn level_leads_and_leads_from_beside() {
     );
     let none = ThreadParams {
         leads: None,
-        ..fusions(0.0)
+        ..new_thread_params(0.0)
     };
     let (path, _) = thread(&one, &none).unwrap();
     let moves = path.moves();
@@ -290,7 +290,7 @@ fn multiple_passes_out_to_the_thread() {
     let p = ThreadParams {
         stepovers: 3,
         stepover: 1.0,
-        ..fusions(1.0)
+        ..new_thread_params(1.0)
     };
     let (path, report) = thread(&one, &p).unwrap();
     assert_eq!((report.passes, report.dropped), (3, 0));
@@ -335,7 +335,7 @@ fn refuses_what_it_cannot_thread() {
         ..through
     };
     assert_eq!(
-        thread(&[boss], &fusions(0.0)).unwrap_err(),
+        thread(&[boss], &new_thread_params(0.0)).unwrap_err(),
         ThreadError::Boss { x: -55.0, y: 35.0 }
     );
     let small = Round {
@@ -343,11 +343,11 @@ fn refuses_what_it_cannot_thread() {
         ..through
     };
     assert!(matches!(
-        thread(&[small], &fusions(0.0)),
+        thread(&[small], &new_thread_params(0.0)),
         Err(ThreadError::TooSmall { .. })
     ));
     assert!(matches!(
-        thread(&[through], &fusions(-7.0)),
+        thread(&[through], &new_thread_params(-7.0)),
         Err(ThreadError::NoRoom { .. })
     ));
     let flat = Round {
@@ -355,13 +355,13 @@ fn refuses_what_it_cannot_thread() {
         ..through
     };
     assert!(matches!(
-        thread(&[flat], &fusions(0.0)),
+        thread(&[flat], &new_thread_params(0.0)),
         Err(ThreadError::NoDepth { .. })
     ));
     for pitch in [0.0, -1.0, f64::NAN] {
         let p = ThreadParams {
             pitch,
-            ..fusions(0.0)
+            ..new_thread_params(0.0)
         };
         assert!(matches!(
             thread(&[through], &p),
@@ -373,7 +373,7 @@ fn refuses_what_it_cannot_thread() {
     }
     let steep = ThreadParams {
         pitch: 300.0,
-        ..fusions(0.0)
+        ..new_thread_params(0.0)
     };
     assert!(matches!(
         thread(&[through], &steep),
@@ -388,7 +388,7 @@ fn refuses_what_it_cannot_thread() {
 fn deterministic() {
     let p = ThreadParams {
         stepovers: 2,
-        ..fusions(0.4)
+        ..new_thread_params(0.4)
     };
     let a = thread(&holes(), &p).unwrap();
     let b = thread(&holes(), &p).unwrap();

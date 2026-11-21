@@ -17,10 +17,10 @@
 //! It is written from the G-code standard (NIST RS274/NGC), not from the
 //! renderer, so the two can disagree; where they do, one of them is wrong.
 //!
-//! Two things are taken as given, as Fusion's posts take them: machine Z0 is the
-//! top of Z's travel, so `G53 Z0` raises the tool clear (as on a homed GRBL, and
-//! Avid's CNC12, whose posts call it "Move to Z home"); and a tool change
-//! leaves the tool no lower than it found it.
+//! Two things are taken as given: machine Z0 is the top of Z's travel, so
+//! `G53 Z0` raises the tool clear (as on a homed GRBL, and Avid's CNC12, whose
+//! posts call it "Move to Z home"); and a tool change leaves the tool no lower
+//! than it found it.
 
 use std::f64::consts::TAU;
 use std::fmt;
@@ -35,8 +35,8 @@ use crate::profile::{Profile, ProgramUnits};
 use camcraft_geom::MM_PER_INCH;
 
 // How far straight moves may stray from a short arc they are written for,
-// beyond rounding: Fusion's posts write an arc shorter than 0.25 mm across that
-// way, as an arc whose ends round together would read as a full circle. The
+// beyond rounding: an arc shorter than 0.25 mm across is written that way, as
+// an arc whose ends round together would read as a full circle. The
 // one figure the renderer writes them to.
 use crate::render::STRAIGHTENED;
 
@@ -243,8 +243,8 @@ pub enum Convention {
     /// own programs are held to, so they run on either.
     #[default]
     Standard,
-    /// Fanuc's, as Masso, Haas and Centroid read it, and as Fusion's posts for
-    /// them write: the drilling cycles are a group of their own, so `G80` ends
+    /// Fanuc's, as Masso, Haas and Centroid read it, and as posts for them
+    /// write: the drilling cycles are a group of their own, so `G80` ends
     /// one and the motion in force before it (`G0`, say) is in force again.
     Fanuc,
 }

@@ -660,7 +660,7 @@ pub fn role_srgb(role: MoveRole) -> [u8; 3] {
         MoveRole::Cut => PATH_CUT,
         MoveRole::Rapid => PATH_RAPID,
         MoveRole::Plunge => PATH_PLUNGE,
-        // Fusion draws leads and transitions alike; the system has one colour.
+        // Leads, ramps and transitions share one colour.
         MoveRole::Lead | MoveRole::Ramp | MoveRole::Transition => PATH_LEAD,
         MoveRole::Retract => GRAY_7,
         MoveRole::Link => GRAY_10,

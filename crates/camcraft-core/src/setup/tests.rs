@@ -53,7 +53,7 @@ fn the_default_setup_is_the_model_as_drawn() {
     assert_eq!(p.stocks[0].max, dvec3(12.0, 22.0, 8.0));
 }
 
-/// A fixed box sits against the models' box on each axis, as Fusion's does:
+/// A fixed box sits against the models' box on each axis:
 /// centred, beyond a low or high side, or at a coordinate.
 #[test]
 fn a_fixed_box_is_placed_against_the_models() {

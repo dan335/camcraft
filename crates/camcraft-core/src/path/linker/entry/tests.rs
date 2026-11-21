@@ -7,7 +7,7 @@ use crate::path::linker::tests::{FlatPart, level_material, params, roles, zigzag
 use crate::path::linker::{Air, ClearancePlane, LinkParams, NoPart, StayDown, link};
 use crate::path::toolpath::Toolpath;
 
-/// Fusion's vertical lead: a quarter turn of the lead radius from straight
+/// A vertical lead: a quarter turn of the lead radius from straight
 /// down to the pass, in the pass's vertical plane, ending on it level.
 #[test]
 fn a_lead_in_arcs_down_onto_the_pass() {
@@ -34,7 +34,7 @@ fn a_lead_in_arcs_down_onto_the_pass() {
 }
 
 /// Entered along a lead where one fits; straight down where the part rises
-/// behind the pass's start, as Fusion leaves the lead out there.
+/// behind the pass's start.
 #[test]
 fn a_lead_is_used_only_where_it_fits() {
     let plane = ClearancePlane::new(10.0).unwrap();
@@ -79,8 +79,7 @@ fn a_lead_is_used_only_where_it_fits() {
 /// leads that may go through material, as a profile's, the tool rapids down
 /// to the safe distance above the material, plunges onto the lead's top and
 /// goes down the lead through the rest; with leads kept out of material, as a
-/// finish over the part's, as Fusion's finishes come straight down, it
-/// plunges onto the pass itself.
+/// finish over the part's, it plunges onto the pass itself.
 #[test]
 fn a_lead_goes_down_through_material_only_where_it_may() {
     let plane = ClearancePlane::new(10.0).unwrap();

@@ -66,15 +66,15 @@ fn manager(name: &str) -> ToolManager {
     ToolManager::with_library(dir.join("never-written.toml"))
 }
 
-/// A maker's Fusion library lands in the folder showing, selected, and said
+/// A tool maker's CSV library lands in the folder showing, selected, and said
 /// so; a file that is not one is said to be not one.
 #[test]
-fn a_fusion_library_is_imported_into_the_folder_showing() {
+fn a_csv_library_is_imported_into_the_folder_showing() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/tools");
     let mut m = manager("import");
     let folder = m.library.edit().create(&[], "onefinity").unwrap();
     m.folder = folder.clone();
-    m.import_fusion(&fixtures.join("srf4-250up.csv"));
+    m.import_csv(&fixtures.join("srf4-250up.csv"));
     let tool = &m.library.edited.at(&folder).unwrap().tools["SRF4-250UP"];
     assert_eq!(tool.presets.len(), 4);
     assert_eq!(m.selected, Some((folder, "SRF4-250UP".to_string())));
@@ -86,7 +86,7 @@ fn a_fusion_library_is_imported_into_the_folder_showing() {
     );
     assert_eq!(said.detail, ["added SRF4-250UP"]);
 
-    m.import_fusion(&fixtures.join("../step/sled_base.step"));
+    m.import_csv(&fixtures.join("../step/sled_base.step"));
     assert!(
         m.message.as_ref().is_some_and(|s| s.level == Level::Err),
         "{:?}",
@@ -116,7 +116,7 @@ fn rows_left_out_of_an_import_are_a_warning_listed_on_hover() {
     let mut m = manager("skip");
     let folder = m.library.edit().create(&[], "onefinity").unwrap();
     m.folder = folder.clone();
-    m.import_fusion(&file);
+    m.import_csv(&file);
     assert_eq!(
         m.library.edited.at(&folder).unwrap().tools["SRF4-250UP"]
             .presets
@@ -138,7 +138,7 @@ fn rows_left_out_of_an_import_are_a_warning_listed_on_hover() {
     );
 
     // Again: nothing new, which is not a warning of its own.
-    m.import_fusion(&file);
+    m.import_csv(&file);
     let said = m.message.clone().unwrap();
     assert_eq!(
         said.text,

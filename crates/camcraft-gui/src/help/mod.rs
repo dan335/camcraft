@@ -1,4 +1,4 @@
-//! Help for every input, as Fusion gives it: hovering a field's label or the
+//! Help for every input: hovering a field's label or the
 //! field itself pops up its name, a sentence or two on what it does, and often a
 //! small sketch.
 //!
@@ -53,7 +53,7 @@ impl Help for egui::Response {
 }
 
 /// Show `topic` while the pointer is anywhere over `rect`, over the widgets
-/// already there too: a label and its field hovered as one, as Fusion's are.
+/// already there too: a label and its field hovered as one.
 /// It senses only hover, so what is under it still takes clicks and drags.
 pub fn over(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, topic: &Topic) {
     ui.interact(rect, id, egui::Sense::hover()).help(topic);

@@ -35,7 +35,7 @@ topics! {
         "The most a helix, or a ramp round a ring, goes down in one lap.",
         Figure::Helix(Helix::PerLap);
     ENTRY: "Entry",
-        "How the tool goes into material to start each ring: a helix, a plunge or a ramp along the ring. A new flat finish plunges, as Fusion's does.",
+        "How the tool goes into material to start each ring: a helix, a plunge or a ramp along the ring. A new flat finish plunges.",
         Figure::Entry;
     HELIX_DIAMETER: "Helix diameter",
         "The circle the tool's centre follows down the helix. Make it smaller where the waste has no room.",
@@ -62,7 +62,7 @@ topics! {
     HELICAL_LEADS: "Helical leads",
         "The leads rise with the thread, at its pitch, so start a little below its bottom: in a blind hole, into the floor. Unticked, they are level.";
     REORDER: "Reorder passes",
-        "Cuts the nearest pass next, Fusion's shortest machining distance. Unticked, passes go in the order laid out, outside in or inside out.";
+        "Cuts the nearest pass next, to keep the travel between passes short. Unticked, passes go in the order laid out, outside in or inside out.";
     REVERSE: "Reverse passes",
         "Lets reordering cut a pass backwards, turning climb into conventional, so off unless asked. A pass that cuts both ways starts at its nearer end anyway.";
     KEEP_TOOL_DOWN: "Keep tool down",

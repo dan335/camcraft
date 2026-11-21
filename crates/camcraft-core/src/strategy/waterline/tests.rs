@@ -313,7 +313,7 @@ fn is_deterministic() {
 }
 
 /// With a ramp, each level is reached from the one above down the wall, along
-/// its own ring, as Fusion's smooth transition goes: never up, never steeper
+/// its own ring, as a smooth transition goes: never up, never steeper
 /// than the ramp, and with no link between; and each level is still cut once
 /// all round at its height, as long as without the ramp.
 #[test]

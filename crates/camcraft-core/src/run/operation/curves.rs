@@ -1,5 +1,5 @@
-//! The paths of the strategies that run along what is picked, Fusion's Slot,
-//! Trace, 2D Chamfer and Engrave, and the slots, curves, edges and shapes
+//! The paths of the strategies that run along what is picked, Slot, Trace,
+//! 2D Chamfer and Engrave, and the slots, curves, edges and shapes
 //! they run along, found from the picked edges and faces.
 
 use camcraft_geom::mesh::TriMesh;
@@ -209,8 +209,7 @@ fn most_copies<'c, 'b: 'c>(copies: impl Iterator<Item = &'c Copies<'b>>) -> usiz
 /// unless set, down to its own floor, or the Bottom where one is set, raised
 /// by the stock to leave down. Each starts at its end lowest in X, then in Y;
 /// unless the order picked is kept, the one starting nearest the work zero is
-/// cut first, then always the one starting nearest where the last ended. So
-/// Fusion's Slot cuts the two slots of `ops_2d`.
+/// cut first, then always the one starting nearest where the last ended.
 pub(in crate::run) fn slots_picked(
     job: &Job,
     op: &Operation,
@@ -285,7 +284,7 @@ pub(in crate::run) fn curves_picked(
 }
 
 /// Each of `slots` cut along its middle, ramped down to each level along it.
-/// A slot wider than the tool keeps its walls, as Fusion's does: the checks
+/// A slot wider than the tool keeps its walls: the checks
 /// say how much is left on them (CC219).
 pub(super) fn slot_paths(
     work: &Work<'_>,
@@ -466,7 +465,7 @@ fn face_top(body: &Model, f: u32, frame: &Frame, stand: &Stand) -> Option<f64> {
 /// copy, each copy's in the order picked ([`most_copies`]): each picked face's
 /// outline, the loops of its edges, from the top of what stands round it,
 /// the surface it is sunk into; and the loops the picked edges close, each
-/// from its own height, Fusion's Top "from contour". Loops inside others are
+/// from its own height. Loops inside others are
 /// their islands ([`engrave::shapes`]).
 pub(in crate::run) fn engravings_picked(
     job: &Job,
@@ -579,7 +578,7 @@ pub(super) fn engrave_paths(
         feed: op.passes.feed,
         tolerance,
     };
-    // Fusion's: 0.95 of how deep the flank reaches.
+    // The default is 0.95 of how deep the flank reaches.
     params.depth = asked.depth.unwrap_or(0.95 * params.flank());
     let (path, mut report) = engrave::engrave(shapes, &params).map_err(in_op(op))?;
     // Where the V would go below what the part lets it: a shape sunk less deep

@@ -137,7 +137,7 @@ impl ToolManager {
         let (title, detail) = if self.filter.is_empty() {
             (
                 "No tools here",
-                "Add one, or import a maker's Fusion library.",
+                "Add one, or import a tool maker's CSV library.",
             )
         } else {
             (

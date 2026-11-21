@@ -1,5 +1,4 @@
-//! Pocket clearing: clearing material in horizontal slices, by offsets. Fusion's
-//! 3D Pocket Clearing.
+//! Pocket clearing: clearing material in horizontal slices, by offsets.
 //!
 //! At a level `z` the tool may be wherever the cutter would not overlap the part:
 //! the complement of [`LevelReach::forbidden`], which comes straight from the
@@ -26,7 +25,7 @@
 //! # From the middle out, the ring on the walls last
 //!
 //! Each piece of the reachable region is cleared by rings a stepover apart in
-//! from its edges, as Fusion's are. What is further in than each stepover falls
+//! from its edges. What is further in than each stepover falls
 //! into regions of its own as it narrows, and they nest: each is cut from its
 //! middle out, the regions inside it before its own rings, and of those left the
 //! nearest next. So the tool finishes one arm of a piece before moving to the
@@ -51,7 +50,7 @@
 //!
 //! A flat face of the part between two levels would be left a terrace as deep
 //! as a stepdown. With flat area detection a level is added on each one, cut
-//! after the level below it over what that left, as Fusion's is.
+//! after the level below it over what that left.
 
 use camcraft_geom::contour::{Contour, Region, contour_above, polyline_length};
 use camcraft_geom::heightmap::HeightMap;

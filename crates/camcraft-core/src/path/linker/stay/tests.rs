@@ -161,7 +161,7 @@ fn rings_down_a_side_are_joined_beside_it() {
 }
 
 /// Zigzag passes a stepover apart are joined without lifting, at the cutting
-/// feed, as Fusion's are, by its default smooth transition: a half turn out
+/// feed, by the default smooth transition: a half turn out
 /// past their ends, tangent to both. Further apart than the stay-down
 /// distance, they lift.
 #[test]
@@ -479,8 +479,8 @@ fn a_link_joining_a_steep_fall_comes_down_at_the_plunge_feed() {
 }
 
 /// A level link stays down only where it does not plough through material
-/// standing between the cuts it joins: across uncut stock it lifts, as
-/// Fusion's does, however short it is.
+/// standing between the cuts it joins: across uncut stock it lifts, however
+/// short it is.
 #[test]
 fn a_level_link_lifts_over_uncut_stock() {
     let plane = ClearancePlane::new(10.0).unwrap();

@@ -1,10 +1,10 @@
 # Centroid CNC12 on an Avid CNC router (the EX control), programs written in
 # inches: the centroid-avid profile with `units = "inch"`, which writes G20 and
-# converts every length and feed, and feeds to a tenth as Fusion's Avid post
-# writes them in inches. Kept the same as centroid-avid.toml in everything else.
+# converts every length and feed, and feeds to a tenth as Avid's post writes
+# them in inches. Kept the same as centroid-avid.toml in everything else.
 #
-# Written as Avid's own Fusion post for CNC12 writes programs ("Avid CNC EX
-# Router", avidcnc-ex-posts-for-fusion-1.0, the post Avid recommends with CNC12):
+# Written as Avid CNC's own posts for CNC12 write programs ("Avid CNC EX
+# Router", the post Avid recommends with CNC12):
 # `.tap` files, no line numbers, numbers without trailing zeros or a bare point,
 # comments in capitals holding only what that post lets through, and the tool's
 # length offset taken up with the first move down after the change.
@@ -16,7 +16,7 @@
 name      = "Centroid CNC12 (Avid CNC, inch)"
 extension = "tap"
 comment   = ["(", ")"]
-# What Fusion's Avid post lets into a comment. The brackets that stand in for a
+# What Avid's post lets into a comment. The brackets that stand in for a
 # stray parenthesis are left out with everything else.
 comment_chars = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,=_-"
 comment_upper = true
@@ -40,7 +40,7 @@ header = [
 
 # Z to its home at the top before the tool change and at the end, as Avid's
 # posts do ("G53 Z0", "Move to Z home"), then across to the work origin, where
-# Fusion's Avid post ends.
+# Avid's post ends.
 safe_retract = ["G53 G0 Z0"]
 end_home     = ["G0 X0 Y0"]
 

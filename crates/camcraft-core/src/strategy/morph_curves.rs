@@ -1,5 +1,5 @@
 //! Morph finishing: passes laid between two picked curves, each a step of the
-//! way from the one to the other, dropped onto the part. Fusion's Morph.
+//! way from the one to the other, dropped onto the part.
 //!
 //! # Between the two
 //!
@@ -8,32 +8,30 @@
 //! the other, and each pass is the same step of the way from every point of
 //! the first curve to its match: the first pass is the first curve, the last
 //! the second, and those between change shape from the one into the other.
-//! So Fusion's programs for `ops_3d` lay them (decision 0030): a corner of
+//! So they are laid (decision 0030): a corner of
 //! one curve is a corner of every pass, moved a step at a time towards its
 //! match on the other, and lines across the floor between two of its edges of
 //! different lengths end a step of the way between their ends.
 //!
 //! There are as many steps as keep every point of a pass within a stepover of
 //! its match on the next: the furthest apart two matched points are, over the
-//! stepover. Fusion's programs for two open curves have that many.
+//! stepover.
 //!
 //! Two open curves are matched end to end, the second turned round where it
-//! runs the other way: Fusion's Morph gives no passes for two that run
-//! opposite ways, and a curve picked in camcraft runs the way its edges do.
-//! Two closed ones both run clockwise seen from above, as Fusion's new chains
-//! do, and the second is started where it makes the matched points closest
+//! runs the other way: a curve picked runs the way its edges do, which need
+//! not be the way the other runs. Two closed ones both run clockwise seen from
+//! above, and the second is started where it makes the matched points closest
 //! on the whole. One open and one closed are refused.
 //!
 //! # Order and direction
 //!
 //! The passes are cut from one curve to the other, starting at the curve that
-//! comes nearer the work zero, as Fusion's programs do whichever was picked
-//! first. *One Way* runs each pass as the first curve runs, *Other Way* the
-//! reverse, and *Both Ways* each pass the other way from the one before: the
-//! first, open, from its end nearer the work zero, and closed, anticlockwise,
-//! as Fusion's programs start. They are then dropped onto the part as a
-//! pattern's lines are ([`crate::strategy::projected::project`]), in that
-//! order, each closed pass after the first started where the last left off.
+//! comes nearer the work zero, whichever was picked first. *One Way* runs each
+//! pass as the first curve runs, *Other Way* the reverse, and *Both Ways* each
+//! pass the other way from the one before: the first, open, from its end nearer
+//! the work zero, and closed, anticlockwise. They are then dropped onto the
+//! part as a pattern's lines are ([`crate::strategy::projected::project`]), in
+//! that order, each closed pass after the first started where the last left off.
 
 use camcraft_geom::contour::Region;
 use glam::{DVec2, DVec3};

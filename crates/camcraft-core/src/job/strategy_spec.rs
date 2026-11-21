@@ -22,7 +22,7 @@ pub enum StrategySpec {
     },
     /// Finishing passes a constant distance apart along the surface, offset in
     /// from the boundary, so the cusp between them is the same on a slope as on
-    /// the flat. Fusion's Scallop.
+    /// the flat.
     Scallop {
         /// Which way each pass cuts.
         #[serde(default, skip_serializing_if = "is_default")]
@@ -39,7 +39,7 @@ pub enum StrategySpec {
     },
     /// Passes round the part at levels a stepdown apart ([`Depths::Required`]),
     /// each where the tool touches the walls at its height, and one at the foot
-    /// of every wall standing on a flat. Fusion's Contour: a waterline.
+    /// of every wall standing on a flat: a waterline.
     Contour {
         /// Which way each pass cuts; climbing unless asked.
         #[serde(default = "climb", skip_serializing_if = "is_climb")]
@@ -56,93 +56,86 @@ pub enum StrategySpec {
     },
     /// Each wall gone down without stopping, round and round it a stepdown
     /// ([`Depths::Required`]) each time, on the part all the way, from the
-    /// wall's top to its foot, and once round there. Fusion's Ramp.
+    /// wall's top to its foot, and once round there.
     Ramp {
-        /// Which way each pass cuts; climbing unless asked: Fusion's
-        /// Direction.
+        /// Which way each pass cuts; climbing unless asked.
         #[serde(default = "climb", skip_serializing_if = "is_climb")]
         direction: CutDirection,
         /// A level at each flat face too, so a wall standing on one goes down
-        /// to it: Fusion's Flat Area Detection, on.
+        /// to it. On unless turned off.
         #[serde(default = "yes", skip_serializing_if = "is_yes")]
         flat_areas: bool,
         /// Only where the surface is at least this steep, in degrees from
-        /// level: Fusion's From Slope Angle.
+        /// level.
         #[serde(default, skip_serializing_if = "is_default")]
         slope_from: f64,
-        /// And at most this steep, in degrees from level: Fusion's To Slope
-        /// Angle.
+        /// And at most this steep, in degrees from level.
         #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
         slope_to: f64,
     },
     /// The tool run along where it touches the part in two places at once,
     /// the inside corners and valleys a larger tool left: the foot of each
     /// wall it reaches, and each crease between faces that meet sharper than
-    /// the bitangency angle. Fusion's Pencil.
+    /// the bitangency angle.
     Pencil {
         /// Which way each line cuts: both ways, from its nearer end, unless
         /// asked; climbing has the wall on the tool's right with a clockwise
-        /// spindle. Fusion's Direction: Both Ways, One Way, Other Way.
+        /// spindle.
         #[serde(default, skip_serializing_if = "is_default")]
         direction: CutDirection,
         /// The least angle between the two places the tool touches for it to
-        /// be a pencil line, in degrees: Fusion's Bitangency Angle, 20°.
+        /// be a pencil line, in degrees: 20° unless set.
         #[serde(
             default = "default_bitangency",
             skip_serializing_if = "is_default_bitangency"
         )]
         bitangency_angle: f64,
         /// The lines found for a tool this much larger, in millimetres, and
-        /// cut with the tool itself: Fusion's Overthickness, none.
+        /// cut with the tool itself: none unless set.
         #[serde(default, skip_serializing_if = "is_default")]
         overthickness: f64,
         /// Passes either side of each line, a stepover apart along the
-        /// surface: Fusion's Number of Stepovers, none.
+        /// surface: none unless set.
         #[serde(default, skip_serializing_if = "is_default")]
         stepovers: u32,
     },
     /// Picked edges, open or closed, seen from above and dropped onto the
     /// part: the tool run along each where it rests on the part below it,
-    /// within the boundary, in the order picked. Fusion's Project, its Drop
-    /// mode.
+    /// within the boundary, in the order picked.
     Project {
-        /// Which way each curve runs: Fusion's Direction, both ways unless
-        /// asked.
+        /// Which way each curve runs: both ways unless asked.
         #[serde(default, skip_serializing_if = "is_default")]
         direction: ProjectDirection,
         /// How far above where the tool rests the passes run, in millimetres,
-        /// negative to go below: Fusion's Axial Offset, none.
+        /// negative to go below: none unless set.
         #[serde(default, skip_serializing_if = "is_default")]
         axial_offset: f64,
         /// Only where the surface is at least this steep, in degrees from
-        /// level: Fusion's From Slope Angle.
+        /// level.
         #[serde(default, skip_serializing_if = "is_default")]
         slope_from: f64,
-        /// And at most this steep, in degrees from level: Fusion's To Slope
-        /// Angle.
+        /// And at most this steep, in degrees from level.
         #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
         slope_to: f64,
     },
     /// Passes between two picked curves, open or closed, each a step of the
     /// way from the one to the other, no point of one more than a stepover
     /// from its match on the next, seen from above and dropped onto the part
-    /// within the boundary. Fusion's Morph.
+    /// within the boundary.
     Morph {
-        /// Which way each pass runs: Fusion's Direction, both ways unless
-        /// asked.
+        /// Which way each pass runs: both ways unless asked.
         #[serde(default, skip_serializing_if = "is_default")]
         direction: ProjectDirection,
         /// Only where the surface is at least this steep, in degrees from
-        /// level: Fusion's From Slope Angle.
+        /// level.
         #[serde(default, skip_serializing_if = "is_default")]
         slope_from: f64,
-        /// And at most this steep, in degrees from level: Fusion's To Slope
-        /// Angle.
+        /// And at most this steep, in degrees from level.
         #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
         slope_to: f64,
     },
     /// Each flat face of the part cleared at its own height, rings a stepover
-    /// apart in from its edges, and nothing else. Fusion's Flat.
+    /// apart in from its edges, and nothing else.
     Flat {
         /// Which way each ring cuts; climbing unless asked.
         #[serde(default = "climb", skip_serializing_if = "is_climb")]
@@ -152,7 +145,7 @@ pub enum StrategySpec {
         order: PassOrder,
     },
     /// A spiral about a centre, a stepover further out each lap, dropped onto
-    /// the part. Fusion's Spiral.
+    /// the part.
     Spiral {
         /// Its centre, in the setup's frame; the boundary's middle unless given.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -181,7 +174,7 @@ pub enum StrategySpec {
         slope_to: f64,
     },
     /// Spokes out from a centre, no more than a stepover apart at the outer
-    /// radius, dropped onto the part. Fusion's Radial.
+    /// radius, dropped onto the part.
     Radial {
         /// Its centre, in the setup's frame; the boundary's middle unless given.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -210,7 +203,7 @@ pub enum StrategySpec {
         slope_to: f64,
     },
     /// A spiral that turns from the boundary's shape into a centre, its laps a
-    /// stepover apart, dropped onto the part. Fusion's Morphed Spiral.
+    /// stepover apart, dropped onto the part.
     MorphedSpiral {
         /// Where it turns into, in the setup's frame; the point furthest inside
         /// the boundary unless given.
@@ -232,7 +225,7 @@ pub enum StrategySpec {
     },
     /// Z-level clearing by offsets, a level each stepdown ([`Depths::Required`]):
     /// each level's rings a stepover apart in from its edges, cut from the middle
-    /// out, the one along the walls last. Fusion's 3D Pocket Clearing.
+    /// out, the one along the walls last.
     PocketClearing {
         /// Rings shorter than this are not worth the entry.
         #[serde(default = "default_min_ring")]
@@ -241,85 +234,80 @@ pub enum StrategySpec {
         #[serde(default, skip_serializing_if = "is_default")]
         conventional: bool,
         /// Add a level on each flat face, so floors are left just the stock to
-        /// leave down. Fusion's flat area detection.
+        /// leave down.
         #[serde(default = "yes", skip_serializing_if = "is_yes")]
         flat_areas: bool,
     },
     /// Z-level clearing with the tool's load held constant: each pass steered
     /// to keep the arc of the tool in material at the optimal load, the
-    /// stepover ([`Depths::Required`]). Fusion's 3D Adaptive Clearing.
+    /// stepover ([`Depths::Required`]).
     Adaptive {
         /// Which way the passes cut; climbing unless asked.
         #[serde(default = "climb", skip_serializing_if = "is_climb")]
         direction: CutDirection,
         /// Add a level on each flat face, so floors are left just the stock to
-        /// leave down. Fusion's flat area detection.
+        /// leave down.
         #[serde(default = "yes", skip_serializing_if = "is_yes")]
         flat_areas: bool,
-        /// Go down into what cannot be reached from the side, a closed pocket:
-        /// Fusion's Machine Cavities. Off, it only cuts from the outside in,
-        /// and leaves them.
+        /// Go down into what cannot be reached from the side, a closed pocket.
+        /// Off, it only cuts from the outside in, and leaves them.
         #[serde(default = "yes", skip_serializing_if = "is_yes")]
         machine_cavities: bool,
         /// The tightest the tool's centre turns in an inside corner, in
-        /// millimetres: Fusion's Minimum Cutting Radius. Every corner sharper
-        /// is blended, leaving material in it for a smaller tool; nothing
-        /// narrower than the tool and twice this is cut. None when zero.
+        /// millimetres. Every corner sharper is blended, leaving material in it
+        /// for a smaller tool; nothing narrower than the tool and twice this is
+        /// cut. None when zero.
         #[serde(default, skip_serializing_if = "is_default")]
         min_cutting_radius: f64,
         /// Level by level, or each area cleared all the way down before the
-        /// next: Fusion's Order by Depth and Order by Area.
+        /// next.
         #[serde(default, skip_serializing_if = "is_default")]
         order: ContourOrder,
-        /// Clear only what the operations before it in the setup left: Fusion's
-        /// Rest Machining from previous operations.
+        /// Clear only what the operations before it in the setup left.
         #[serde(default, skip_serializing_if = "is_default")]
         rest_machining: bool,
         /// With rest machining, material the operations before left thinner
-        /// than this is let be, in millimetres: Fusion's Ignore Stock Less
-        /// Than.
+        /// than this is let be, in millimetres.
         #[serde(default, skip_serializing_if = "is_default")]
         ignore_stock_less_than: f64,
         /// With flat areas, a level on a flat face or a peak less than this
         /// below the level above it is left out, leaving that much on it, in
-        /// millimetres: Fusion's flat area Minimum Stepdown. None when zero.
+        /// millimetres. None when zero.
         #[serde(default, skip_serializing_if = "is_default")]
         min_flat_stepdown: f64,
         /// A level between two a stepdown apart, a fine or a shallow one,
-        /// cutting less deep than this is left out, in millimetres: Fusion's
-        /// Minimum Axial Engagement. None when zero.
+        /// cutting less deep than this is left out, in millimetres. None when
+        /// zero.
         #[serde(default, skip_serializing_if = "is_default")]
         min_axial_engagement: f64,
-        /// Add levels where the terraces between two are wide: Fusion's
-        /// Machine Shallow Areas.
+        /// Add levels where the terraces between two are wide.
         #[serde(default, skip_serializing_if = "is_default")]
         shallow_areas: bool,
         /// The closest the levels shallow areas add come to another, in
-        /// millimetres: Fusion's Minimum Shallow Stepdown.
+        /// millimetres.
         #[serde(
             default = "default_min_shallow_stepdown",
             skip_serializing_if = "is_default_min_shallow_stepdown"
         )]
         min_shallow_stepdown: f64,
         /// The widest a terrace between two levels may be before shallow
-        /// areas add one between, in millimetres: Fusion's Maximum Shallow
-        /// Stepover.
+        /// areas add one between, in millimetres.
         #[serde(
             default = "default_max_shallow_stepover",
             skip_serializing_if = "is_default_max_shallow_stepover"
         )]
         max_shallow_stepover: f64,
         /// A closed pocket gone down into is first cut a slot along its
-        /// middle, and cleared out from it: Fusion's Use Slot Clearing.
+        /// middle, and cleared out from it.
         #[serde(default, skip_serializing_if = "is_default")]
         slot_clearing: bool,
         /// How wide that slot is, in millimetres: the tool's diameter when
-        /// zero, and never narrower. Fusion's Slot Clearing Width.
+        /// zero, and never narrower.
         #[serde(default, skip_serializing_if = "is_default")]
         slot_width: f64,
         /// How hard a link tries to stay down round what stands between, in
         /// percent: none, 0, goes only straight; 100 goes round as far as the
-        /// maximum stay-down distance allows. Fusion's Stay-Down Level.
+        /// maximum stay-down distance allows.
         #[serde(
             default = "default_stay_down_level",
             skip_serializing_if = "is_default_stay_down_level"
@@ -327,16 +315,16 @@ pub enum StrategySpec {
         stay_down_level: f64,
         /// How far the tool keeps off the material along a link it stays
         /// down for, but where it leaves a pass and comes to the next, in
-        /// millimetres: Fusion's Minimum Stay-Down Clearance.
+        /// millimetres.
         #[serde(default, skip_serializing_if = "is_default")]
         stay_down_clearance: f64,
         /// How far the tool rises for a link it stays down for, in
-        /// millimetres: Fusion's Lift Height.
+        /// millimetres.
         #[serde(default, skip_serializing_if = "is_default")]
         lift_height: f64,
     },
     /// A 2D contour: the tool run round the boundary, beside it or on it, level
-    /// by level down to its floor. Fusion's 2D Contour.
+    /// by level down to its floor.
     Profile {
         /// Which side of the boundary the tool cuts on.
         #[serde(default, skip_serializing_if = "is_default")]
@@ -346,7 +334,7 @@ pub enum StrategySpec {
         conventional: bool,
     },
     /// A 2D pocket: the boundary cleared, from its middle out to its walls, level
-    /// by level down to its floor. Fusion's 2D Pocket.
+    /// by level down to its floor.
     Pocket {
         /// Cut conventional rather than climb.
         #[serde(default, skip_serializing_if = "is_default")]
@@ -354,7 +342,7 @@ pub enum StrategySpec {
     },
     /// The stock's top cut flat, straight passes side by side across its
     /// footprint, down to the bottom: the model's top unless another is asked
-    /// for. Fusion's Face.
+    /// for.
     Face {
         /// Pass direction in degrees; zero runs along +X.
         #[serde(default, skip_serializing_if = "is_default")]
@@ -363,12 +351,11 @@ pub enum StrategySpec {
         #[serde(default, skip_serializing_if = "is_default")]
         direction: FaceDirection,
         /// How far past the faced area each pass's tool centre runs, in
-        /// millimetres: Fusion's Pass Extension, whose default, half the tool
-        /// and the tolerance, takes the tool just clear. Left out, the tool's
-        /// radius: just clear.
+        /// millimetres: a new one's, half the tool and the tolerance, takes the
+        /// tool just clear. Left out, the tool's radius: just clear.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pass_extension: Option<f64>,
-        /// How far past the stock's footprint is faced, in millimetres: Fusion's
+        /// How far past the stock's footprint is faced, in millimetres: the
         /// stock offset.
         #[serde(default, skip_serializing_if = "is_default")]
         stock_offset: f64,
@@ -384,14 +371,13 @@ pub enum StrategySpec {
     },
     /// Round holes and bosses, picked by their walls, each milled down a helix
     /// round its wall from its top to its bottom, then once round level at the
-    /// bottom. Fusion's Bore.
+    /// bottom.
     Bore {
         /// Whether the helix is set by its angle, `ramp_angle`, rather than
-        /// its `pitch`: Fusion's Use Ramp Angle, on unless turned off, as a
-        /// new Bore of Fusion's starts.
+        /// its `pitch`: on unless turned off.
         #[serde(default = "yes", skip_serializing_if = "is_yes")]
         use_ramp_angle: bool,
-        /// The helix's angle from level, in degrees: Fusion's Angle, 2°. Each
+        /// The helix's angle from level, in degrees: 2° unless set. Each
         /// pass goes down as far a turn as it takes it round its own circle.
         #[serde(
             default = "default_bore_angle",
@@ -399,55 +385,50 @@ pub enum StrategySpec {
         )]
         ramp_angle: f64,
         /// How far the helix goes down in a turn without the angle, in
-        /// millimetres: Fusion's Pitch, 1 mm.
+        /// millimetres: 1 mm unless set.
         #[serde(default = "default_pitch", skip_serializing_if = "is_default_pitch")]
         pitch: f64,
-        /// More than one pass out to the wall: Fusion's Multiple Passes, off
-        /// unless asked. Without, the wall alone.
+        /// More than one pass out to the wall: off unless asked. Without, the
+        /// wall alone.
         #[serde(default, skip_serializing_if = "is_default")]
         multiple_passes: bool,
         /// How many passes out to the wall with them, a stepover apart, the
-        /// last at it: Fusion's Number of Stepovers, 2.
+        /// last at it: 2 unless set.
         #[serde(default = "two", skip_serializing_if = "is_two")]
         stepovers: u32,
         /// Cut conventional rather than climb.
         #[serde(default, skip_serializing_if = "is_default")]
         conventional: bool,
-        /// Cut the last pass twice, for a tool that springs from the wall:
-        /// Fusion's Repeat Passes.
+        /// Cut the last pass twice, for a tool that springs from the wall.
         #[serde(default, skip_serializing_if = "is_default")]
         repeat: bool,
-        /// Lead onto each pass from the hole's centre and off it back there:
-        /// Fusion's Lead To Center.
+        /// Lead onto each pass from the hole's centre and off it back there.
         #[serde(default, skip_serializing_if = "is_default")]
         lead_to_center: bool,
     },
     /// Round holes and bosses, picked by their walls, each cut level by level
     /// down to its bottom: at each level the tool leads onto the wall from the
-    /// waste, goes once round it and leads off. Fusion's Circular.
+    /// waste, goes once round it and leads off.
     Circular {
-        /// More than one pass out to the wall at each level: Fusion's
-        /// Multiple Passes, off unless asked. Without, the wall alone.
+        /// More than one pass out to the wall at each level: off unless asked.
+        /// Without, the wall alone.
         #[serde(default, skip_serializing_if = "is_default")]
         multiple_passes: bool,
         /// How many passes out to the wall with them, a stepover apart, the
-        /// last at it: Fusion's Number of Stepovers, 2.
+        /// last at it: 2 unless set.
         #[serde(default = "two", skip_serializing_if = "is_two")]
         stepovers: u32,
         /// Cut conventional rather than climb.
         #[serde(default, skip_serializing_if = "is_default")]
         conventional: bool,
-        /// Cut the last pass twice, for a tool that springs from the wall:
-        /// Fusion's Repeat Passes.
+        /// Cut the last pass twice, for a tool that springs from the wall.
         #[serde(default, skip_serializing_if = "is_default")]
         repeat: bool,
         /// Its levels evenly spaced, none deeper than the stepdown, rather than
-        /// each a whole stepdown and the last what is left: Fusion's Use Even
-        /// Stepdowns.
+        /// each a whole stepdown and the last what is left.
         #[serde(default, skip_serializing_if = "is_default")]
         even_stepdowns: bool,
-        /// Lead onto each pass from the hole's centre and off it back there:
-        /// Fusion's Lead To Center.
+        /// Lead onto each pass from the hole's centre and off it back there.
         #[serde(default, skip_serializing_if = "is_default")]
         lead_to_center: bool,
     },
@@ -455,151 +436,145 @@ pub enum StrategySpec {
     /// down the hole's centre, onto the wall along a lead, round a helix at
     /// the pitch from the hole's bottom to its top, or from its top to its
     /// bottom, as the hand and the direction have it, and off along a lead
-    /// back to the centre. Fusion's Thread.
+    /// back to the centre.
     Thread {
-        /// How far the thread rises a turn, in millimetres: Fusion's Thread
-        /// Pitch, the tool's own as a new one starts.
+        /// How far the thread rises a turn, in millimetres: the tool's own as
+        /// a new one starts.
         #[serde(default = "default_pitch", skip_serializing_if = "is_default_pitch")]
         pitch: f64,
         /// How much wider across than the hole the thread's pitch diameter is
-        /// cut, in millimetres: Fusion's Pitch Diameter Offset, none. The
-        /// tooth goes half of it into the wall; with none it only touches it.
+        /// cut, in millimetres: none unless set. The tooth goes half of it into
+        /// the wall; with none it only touches it.
         #[serde(default, skip_serializing_if = "is_default")]
         pitch_diameter_offset: f64,
-        /// Which way the thread winds: Fusion's Threading Hand, right unless
-        /// asked.
+        /// Which way the thread winds: right unless asked.
         #[serde(default, skip_serializing_if = "is_default")]
         hand: ThreadHand,
-        /// Cut conventional rather than climb: Fusion's Direction.
+        /// Cut conventional rather than climb.
         #[serde(default, skip_serializing_if = "is_default")]
         conventional: bool,
         /// More than one pass out to the thread, each a stepover further in
-        /// than the next: Fusion's Multiple Passes, off unless asked.
+        /// than the next: off unless asked.
         #[serde(default, skip_serializing_if = "is_default")]
         multiple_passes: bool,
-        /// How many passes out to the thread with them, the last at it:
-        /// Fusion's Number of Stepovers, 2.
+        /// How many passes out to the thread with them, the last at it: 2
+        /// unless set.
         #[serde(default = "two", skip_serializing_if = "is_two")]
         stepovers: u32,
         /// Lead onto the thread and off it along arcs that rise or fall with
-        /// the helix, at its pitch: Fusion's Use Helical Leads, on. Off, they
-        /// are level.
+        /// the helix, at its pitch: on unless turned off. Off, they are level.
         #[serde(default = "yes", skip_serializing_if = "is_yes")]
         helical_leads: bool,
         /// Lead onto each pass from the hole's centre and off it back there:
-        /// Fusion's Lead To Center, on unless turned off.
+        /// on unless turned off.
         #[serde(default = "yes", skip_serializing_if = "is_yes")]
         lead_to_center: bool,
     },
     /// Slots, picked by the edges round their floors, each milled along its
     /// middle from end to end: down to each level by ramping back and forth
     /// along the whole of it, then once along it at the level. A tool
-    /// narrower than the slot leaves its walls. Fusion's Slot.
+    /// narrower than the slot leaves its walls.
     Slot {
         /// How far the tool backs off the wall at the end of each cut before
-        /// it lifts, in millimetres: Fusion's Backoff Distance, none.
+        /// it lifts, in millimetres: none unless set.
         #[serde(default, skip_serializing_if = "is_default")]
         backoff_distance: f64,
         /// How far above the Top the ramp down along each slot starts, in
-        /// millimetres: Fusion's Ramp Clearance Height, 2.5 mm.
+        /// millimetres: 2.5 mm unless set.
         #[serde(
             default = "default_ramp_clearance",
             skip_serializing_if = "is_default_ramp_clearance"
         )]
         ramp_clearance_height: f64,
         /// Go along the floor a second time at the end of each slot, for a
-        /// tool that springs from the walls: Fusion's Repeat Finishing Pass.
+        /// tool that springs from the walls.
         #[serde(default, skip_serializing_if = "is_default")]
         repeat: bool,
-        /// Cut the slots in the order picked: Fusion's Preserve Order. Off,
-        /// the one starting nearest the work zero first, then always the
-        /// nearest.
+        /// Cut the slots in the order picked. Off, the one starting nearest the
+        /// work zero first, then always the nearest.
         #[serde(default, skip_serializing_if = "is_default")]
         preserve_order: bool,
     },
     /// Picked edges followed, open or closed: the tool's tip on each, or its
     /// side beside it, at the edge's own height and an axial offset, in one
-    /// pass or several above it. Fusion's Trace.
+    /// pass or several above it.
     Trace {
         /// Where the tool's centre goes against each curve: on it, or its
-        /// radius to the left or right of it as it runs. Fusion's Sideways
-        /// Compensation, on it unless asked.
+        /// radius to the left or right of it as it runs. On it unless asked.
         #[serde(default, skip_serializing_if = "is_default")]
         compensation: Compensation,
         /// How far up the passes are moved from the curves, in millimetres,
-        /// negative to go below them: Fusion's Axial Offset, none.
+        /// negative to go below them: none unless set.
         #[serde(default, skip_serializing_if = "is_default")]
         axial_offset: f64,
         /// How far an open curve's passes run on past each of its ends, along
-        /// it, in millimetres: Fusion's Pass Extension, none.
+        /// it, in millimetres: none unless set.
         #[serde(default, skip_serializing_if = "is_default")]
         pass_extension: f64,
         /// The steepest a pass may go, in degrees from level: what of it is
-        /// steeper is left out. Fusion's Maximum Angle, 90°: all of it.
+        /// steeper is left out. 90° unless set: all of it.
         #[serde(default = "ninety", skip_serializing_if = "is_ninety")]
         max_angle: f64,
         /// With multiple depths, how many passes above the last each curve
-        /// gets, a stepdown apart: Fusion's Number of Stepdowns, 1.
+        /// gets, a stepdown apart: 1 unless set.
         #[serde(default = "one", skip_serializing_if = "is_one")]
         stepdowns: u32,
         /// With multiple depths, every curve at a level before the next one
-        /// down, or each curve all the way down before the next: Fusion's
-        /// Order by Depth, on.
+        /// down, or each curve all the way down before the next: level by
+        /// level unless asked.
         #[serde(default, skip_serializing_if = "is_default")]
         order: ContourOrder,
         /// With multiple depths, an open curve's levels cut back and forth,
-        /// each the other way from the one above: Fusion's Both Ways.
+        /// each the other way from the one above.
         #[serde(default, skip_serializing_if = "is_default")]
         both_ways: bool,
-        /// Cut the last pass of each curve twice: Fusion's Repeat Passes.
+        /// Cut the last pass of each curve twice.
         #[serde(default, skip_serializing_if = "is_default")]
         repeat: bool,
-        /// Follow the curves in the order picked: Fusion's Preserve Order.
-        /// Off, the first picked, then always the nearest.
+        /// Follow the curves in the order picked. Off, the first picked, then
+        /// always the nearest.
         #[serde(default, skip_serializing_if = "is_default")]
         preserve_order: bool,
         /// Go from one pass to the next without lifting where it is near:
-        /// Fusion's Keep Tool Down, off.
+        /// off unless asked.
         #[serde(default, skip_serializing_if = "is_default")]
         keep_tool_down: bool,
-        /// Come down onto each pass along a vertical arc: Fusion's Lead-In,
-        /// off.
+        /// Come down onto each pass along a vertical arc: off unless asked.
         #[serde(default, skip_serializing_if = "is_default")]
         lead_in: bool,
-        /// Go up off each pass along a vertical arc: Fusion's Lead-Out, off.
+        /// Go up off each pass along a vertical arc: off unless asked.
         #[serde(default, skip_serializing_if = "is_default")]
         lead_out: bool,
     },
     /// Picked edges chamfered with a chamfer mill or V-bit run round them: a
     /// sharp edge cut to a chamfer of the width asked, or a chamfer the model
-    /// has followed from its lower edge. Fusion's 2D Chamfer.
+    /// has followed from its lower edge.
     #[serde(rename = "chamfer-2d")]
     Chamfer2d {
         /// How wide a chamfer to cut on a sharp edge, across, in millimetres;
-        /// on a chamfer the model has, how far past it to cut. Fusion's
-        /// Chamfer Width, none.
+        /// on a chamfer the model has, how far past it to cut. None unless
+        /// set.
         #[serde(default, skip_serializing_if = "is_default")]
         width: f64,
         /// How far below the chamfer's lower edge the tool's tip goes, its
         /// flank still on the chamfer, so the cut is made with the flank and
-        /// not the point, in millimetres: Fusion's Chamfer Tip Offset, 1 mm.
+        /// not the point, in millimetres: 1 mm unless set.
         #[serde(
             default = "default_tip_offset",
             skip_serializing_if = "is_default_tip_offset"
         )]
         tip_offset: f64,
         /// How far the tool keeps off the part's faces other than those the
-        /// chamfered edges join, in millimetres: Fusion's Chamfer Clearance.
-        /// Where it would come nearer, it is lifted, and the chamfer is
-        /// narrower there. None when zero.
+        /// chamfered edges join, in millimetres. Where it would come nearer, it
+        /// is lifted, and the chamfer is narrower there. None when zero.
         #[serde(default, skip_serializing_if = "is_default")]
         clearance: f64,
         /// How far past where a closed edge's pass starts it goes on before
-        /// it leaves, in millimetres: Fusion's Finishing Overlap, none.
+        /// it leaves, in millimetres: none unless set.
         #[serde(default, skip_serializing_if = "is_default")]
         finishing_overlap: f64,
-        /// Chamfer the edges in the order picked: Fusion's Preserve Order.
-        /// Off, the first picked, then always the nearest.
+        /// Chamfer the edges in the order picked. Off, the first picked, then
+        /// always the nearest.
         #[serde(default, skip_serializing_if = "is_default")]
         preserve_order: bool,
     },
@@ -608,16 +583,16 @@ pub enum StrategySpec {
     /// that fits in the shape and touches the outline there, as deep as makes
     /// its flank touch the outline, no deeper than its depth: round the outline
     /// at that depth where the shape is wide, along its middle where it is
-    /// narrow, and up into its sharp corners. Fusion's Engrave.
+    /// narrow, and up into its sharp corners.
     Engrave {
-        /// How far below each shape's top it goes at most, in millimetres:
-        /// Fusion's Bottom, from the Top, by its offset. Left out, 0.95 of how
-        /// deep the tool's flank reaches, as a new Engrave of Fusion's starts.
+        /// How far below each shape's top it goes at most, in millimetres.
+        /// Left out, 0.95 of how deep the tool's flank reaches, as a new one
+        /// starts.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         depth: Option<f64>,
         /// Convex corners whose edges meet at less than this, in degrees, are
         /// run into, up their bisector to the corner at the surface; blunter
-        /// ones are gone round. Fusion's Sharp Corner Angle, 165°.
+        /// ones are gone round. 165° unless set.
         #[serde(
             default = "default_sharp_corner",
             skip_serializing_if = "is_default_sharp_corner"
@@ -627,46 +602,44 @@ pub enum StrategySpec {
     /// The picked pockets, open or closed and with islands, cleared with the
     /// tool's load held constant, as adaptive clearing does, at the 2D
     /// pocket's levels: down to each pocket's floor in one level, or a
-    /// stepdown at a time ([`Depths::Optional`]). Fusion's 2D Adaptive
-    /// Clearing.
+    /// stepdown at a time ([`Depths::Optional`]).
     #[serde(rename = "adaptive-2d")]
     Adaptive2d {
         /// Which way the passes cut; climbing unless asked.
         #[serde(default = "climb", skip_serializing_if = "is_climb")]
         direction: CutDirection,
         /// The tightest the tool's centre turns in an inside corner, in
-        /// millimetres: Fusion's Minimum Cutting Radius. None when zero.
+        /// millimetres. None when zero.
         #[serde(default, skip_serializing_if = "is_default")]
         min_cutting_radius: f64,
         /// With multiple depths, the levels evenly spaced, none deeper than
         /// the stepdown, rather than each a whole stepdown and the last what
-        /// is left: Fusion's Use Even Stepdowns.
+        /// is left.
         #[serde(default, skip_serializing_if = "is_default")]
         even_stepdowns: bool,
         /// Level by level across every pocket, or each pocket all the way
-        /// down before the next: Fusion's Order by Depth and Order by Area.
+        /// down before the next.
         #[serde(default, skip_serializing_if = "is_default")]
         order: ContourOrder,
         /// A closed pocket gone down into is first cut a slot along its
-        /// middle, and cleared out from it: Fusion's Use Slot Clearing.
+        /// middle, and cleared out from it.
         #[serde(default, skip_serializing_if = "is_default")]
         slot_clearing: bool,
         /// How wide that slot is, in millimetres: the tool's diameter when
-        /// zero, and never narrower. Fusion's Slot Clearing Width.
+        /// zero, and never narrower.
         #[serde(default, skip_serializing_if = "is_default")]
         slot_width: f64,
         /// How hard a link tries to stay down round what stands between, in
-        /// percent: 0, Fusion's Least, goes only straight; 100 goes round as
-        /// far as the maximum stay-down distance allows. Fusion's Stay-Down
-        /// Level, least.
+        /// percent: 0 goes only straight; 100 goes round as far as the
+        /// maximum stay-down distance allows. 0 unless set.
         #[serde(default, skip_serializing_if = "is_default")]
         stay_down_level: f64,
         /// How far the tool keeps off the material along a link it stays
-        /// down for, in millimetres: Fusion's Minimum Stay-Down Clearance.
+        /// down for, in millimetres.
         #[serde(default, skip_serializing_if = "is_default")]
         stay_down_clearance: f64,
         /// How far the tool rises for a link it stays down for, in
-        /// millimetres: Fusion's Lift Height.
+        /// millimetres.
         #[serde(default, skip_serializing_if = "is_default")]
         lift_height: f64,
     },
@@ -712,13 +685,13 @@ impl StrategySpec {
         }
     }
 
-    /// How a new operation of it keeps to the part's silhouette, as Fusion
-    /// starts one: finishing by a pattern dropped onto the part keeps the
-    /// tool's centre inside it; pocket and adaptive clearing, contour and flat
-    /// finishing reach in from outside, since kept inside the part's outline
-    /// the tool would never reach its walls. `None` for a 2D operation, whose
-    /// outline starts as the silhouette already, and for facing and the
-    /// strategies that cut holes, which have no boundary.
+    /// How a new operation of it keeps to the part's silhouette: finishing by
+    /// a pattern dropped onto the part keeps the tool's centre inside it;
+    /// pocket and adaptive clearing, contour and flat finishing reach in from
+    /// outside, since kept inside the part's outline the tool would never
+    /// reach its walls. `None` for a 2D operation, whose outline starts as the
+    /// silhouette already, and for facing and the strategies that cut holes,
+    /// which have no boundary.
     pub fn starting_containment(&self) -> Option<Containment> {
         match *self {
             StrategySpec::Parallel { .. }
@@ -778,11 +751,10 @@ impl StrategySpec {
             | StrategySpec::Spiral { direction, .. }
             | StrategySpec::MorphedSpiral { direction, .. } => Some(direction),
             // A slot's tool is as wide as the slot, cutting both ways at once;
-            // a trace's side is its compensation; a chamfer climbs, as
-            // Fusion's chains are picked to; an engraving's walk goes round
-            // each outline anticlockwise, the shape on its left; a project's
-            // curves and a morph's passes run clockwise or as picked, not to
-            // climb.
+            // a trace's side is its compensation; a chamfer climbs; an
+            // engraving's walk goes round each outline anticlockwise, the
+            // shape on its left; a project's curves and a morph's passes run
+            // clockwise or as picked, not to climb.
             StrategySpec::Parallel { .. }
             | StrategySpec::Project { .. }
             | StrategySpec::Morph { .. }
@@ -882,9 +854,9 @@ impl StrategySpec {
         }
     }
 
-    /// The stock to leave Fusion starts this strategy with: roughing, its 2D
-    /// Pocket among it, leaves half a millimetre each way for the finish, and
-    /// the rest cut to size.
+    /// The stock to leave a new operation of this strategy starts with:
+    /// roughing, a 2D pocket among it, leaves half a millimetre each way for
+    /// the finish, and the rest cut to size.
     pub fn default_stock_to_leave(&self) -> StockToLeave {
         match self {
             StrategySpec::PocketClearing { .. }
@@ -899,9 +871,7 @@ impl StrategySpec {
     }
 
     /// The expressions a new operation of this strategy works its settings out
-    /// from, so they follow its tool as Fusion's defaults do: Fusion's own,
-    /// from a fresh operation of each strategy and Autodesk's note of the
-    /// defaults it changed in 2022 ([decision 0020]).
+    /// from, so they follow its tool ([decision 0020]).
     ///
     /// - **Stepover:** for parallel finishing and the patterns dropped onto
     ///   the part (scallop, morph, spiral, radial, morphed spiral), the spacing that
@@ -917,14 +887,14 @@ impl StrategySpec {
     ///   profile's, three quarters of the flutes. Contour finishing's and a
     ///   circular's are a millimetre, [`StrategySpec::default_stepdown`].
     /// - **Feeds:** plunging at a third of the cutting feed, and ramping at
-    ///   the plunge feed, as a new tool of Fusion's does; drilling's own.
+    ///   the plunge feed; drilling's own.
     /// - **Adaptive's own,** 3D and 2D: a minimum cutting radius of a tenth of
     ///   the tool, a stay-down clearance of a tenth of it between 2 and 15 mm,
     ///   and a slot 1.25 tools wide when slot clearing is on. The 2D one's
     ///   stepdown is the 3D one's, read once Multiple Depths is ticked.
     /// - **A 2D chamfer's own:** a chamfer clearance of a tenth of the tool.
-    /// - **A thread's own:** the tool's pitch where it is a thread mill, as
-    ///   Fusion's `threadPitch`; its straight leads a twentieth of the tool.
+    /// - **A thread's own:** the tool's pitch where it is a thread mill; its
+    ///   straight leads a twentieth of the tool.
     /// - **Facing's own:** passes running half the tool and the tolerance past
     ///   the stock.
     ///
@@ -935,8 +905,7 @@ impl StrategySpec {
             : Math.roundto(tool_diameter / 4; 0.001)";
         const ROUGHING_STEPDOWN: &str = "Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)";
         const POCKET_STEPDOWN: &str = "Math.min(tool_fluteLength * 0.75; tool_diameter * 0.1)";
-        // A new Bore's and Circular's, as Fusion's API gives them; its
-        // Circular reference says 95% of the cutter less its corner instead.
+        // A new bore's and circular's.
         const ROUND_STEPOVER: &str = "tool_diameter * 0.5";
         const ROUND_LEAD: &str = "tool_diameter * 0.05";
         let mut own: Vec<(&'static str, &'static str)> = match self {
@@ -948,7 +917,7 @@ impl StrategySpec {
             | StrategySpec::Spiral { .. }
             | StrategySpec::Radial { .. }
             | StrategySpec::MorphedSpiral { .. } => vec![("passes.stepover", CUSP)],
-            // Fusion's Pencil's, between the passes beside its lines.
+            // A pencil's, between the passes beside its lines.
             StrategySpec::Pencil { .. } => vec![("passes.stepover", "tool_diameter * 0.5")],
             StrategySpec::PocketClearing { .. } | StrategySpec::Pocket { .. } => vec![
                 ("passes.stepover", "tool_diameter * 0.6"),
@@ -978,9 +947,9 @@ impl StrategySpec {
                 ("passes.stepover", ROUND_STEPOVER),
                 ("linking.leads.straight", ROUND_LEAD),
             ],
-            // Fusion's Thread's own pitch, the tool's where it is a thread
-            // mill, and its Linear Lead Length; its stepover is a millimetre,
-            // as a new operation's is.
+            // A thread's own pitch, the tool's where it is a thread mill, and
+            // its straight leads; its stepover is a millimetre, as a new
+            // operation's is.
             StrategySpec::Thread { .. } => vec![
                 (
                     "pitch",
@@ -1010,10 +979,9 @@ impl StrategySpec {
     /// What a new operation of this strategy starts with that is not worked
     /// out from its tool, where it is not what a job file that leaves the
     /// setting out reads: adaptive, 3D and 2D, lifts a fifth of a millimetre
-    /// off the floor between passes, as Fusion's has since 2022; a spiral and
-    /// a morphed spiral cut both ways, as Fusion's Direction starts, the
-    /// spiral climbing and each piece of it the part cuts it into taken from
-    /// its nearer end ([decision 0034]).
+    /// off the floor between passes; a spiral and a morphed spiral cut both
+    /// ways, the spiral climbing and each piece of it the part cuts it into
+    /// taken from its nearer end ([decision 0034]).
     ///
     /// [decision 0034]: ../../../../docs/decisions/0034-entries-and-order-of-the-finishes-over-the-part.md
     pub fn fresh(mut self) -> Self {
@@ -1029,10 +997,7 @@ impl StrategySpec {
 
     /// How high a new operation of this strategy goes between cuts, where that
     /// is not what a job file that leaves it out reads: a trace, a 2D chamfer,
-    /// an engraving, a thread, a ramp and a project to the retract height, as
-    /// Fusion's Trace, Ramp and Project start with a full retraction, its 2D
-    /// Chamfer and Engrave have no other, and its Thread's programs go up to
-    /// it between holes.
+    /// an engraving, a thread, a ramp and a project to the retract height.
     pub fn fresh_retraction(&self) -> Retraction {
         if matches!(
             self,
@@ -1051,9 +1016,8 @@ impl StrategySpec {
 
     /// How a new operation of this strategy goes down into the material, where
     /// that is not what a job file that leaves it out reads: a 2D profile
-    /// straight down onto its lead, as Fusion's 2D Contour starts with Ramp
-    /// off, and flat finishing straight down onto each ring, as Fusion's Flat
-    /// does ([decision 0034]).
+    /// straight down onto its lead, and flat finishing straight down onto
+    /// each ring ([decision 0034]).
     ///
     /// [decision 0034]: ../../../../docs/decisions/0034-entries-and-order-of-the-finishes-over-the-part.md
     pub fn fresh_entry(&self) -> Option<Entry> {
@@ -1066,12 +1030,10 @@ impl StrategySpec {
 
     /// The multiple depths this strategy starts with: roughing 2 mm a level;
     /// facing, a 2D profile, a 2D pocket, 2D adaptive, a slot, a trace and an
-    /// engraving their bottom in one pass, as Fusion's Face, 2D Contour, 2D
-    /// Pocket, 2D Adaptive, Slot, Trace and Engrave start with Multiple Depths
-    /// off.
-    /// Ticked, a profile's and a pocket's levels start at Fusion's Maximum
-    /// Roughing Stepdown ([`StrategySpec::default_expressions`]). A circular
-    /// starts with them on, a millimetre apart, as Fusion's Circular does.
+    /// engraving their bottom in one pass, with multiple depths off.
+    /// Ticked, a profile's and a pocket's levels start at the stepdown worked
+    /// out from the tool ([`StrategySpec::default_expressions`]). A circular
+    /// starts with them on, a millimetre apart.
     pub fn default_stepdown(&self) -> Option<f64> {
         match self.uses().depths {
             Depths::None => None,
@@ -1088,8 +1050,8 @@ impl StrategySpec {
             {
                 None
             }
-            // A finishing waterline's, as Fusion's Contour and Ramp; and
-            // Fusion's Circular's.
+            // A finishing waterline's, a contour's and a ramp's; and a
+            // circular's.
             _ if matches!(
                 self,
                 StrategySpec::Contour { .. }
@@ -1104,7 +1066,7 @@ impl StrategySpec {
     }
 }
 
-/// Which way a thread winds: Fusion's Threading Hand.
+/// Which way a thread winds.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ThreadHand {
@@ -1120,7 +1082,7 @@ pub enum ThreadHand {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FaceDirection {
-    /// Back and forth, one pass each way. Fusion's default.
+    /// Back and forth, one pass each way. The default.
     #[default]
     BothWays,
     /// Every pass climbing.
@@ -1133,9 +1095,8 @@ pub enum FaceDirection {
 /// flat, spiral and morphed spiral finishing, and adaptive clearing.
 ///
 /// Each strategy says what its default is: scallop and pencil go both ways,
-/// as Fusion's do, and the rest climb where a job file leaves it out; a new
-/// spiral or morphed spiral starts both ways, as Fusion's
-/// ([`StrategySpec::fresh`]).
+/// and the rest climb where a job file leaves it out; a new spiral or morphed
+/// spiral starts both ways ([`StrategySpec::fresh`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CutDirection {
@@ -1168,7 +1129,7 @@ impl CutDirection {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PassOrder {
-    /// From the boundary in. Fusion's default.
+    /// From the boundary in. The default.
     #[default]
     OutsideIn,
     /// Each region's innermost passes first, out to the boundary.
@@ -1190,7 +1151,7 @@ impl PassOrder {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ContourOrder {
-    /// Each level all the way round before the next down. Fusion's default.
+    /// Each level all the way round before the next down. The default.
     #[default]
     ByDepth,
     /// Each piece of the part all the way down before the next; each curve,
@@ -1212,7 +1173,7 @@ impl ContourOrder {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RadialDirection {
-    /// Out and back in, one after the other. Fusion's default.
+    /// Out and back in, one after the other. The default.
     #[default]
     BothWays,
     /// Every spoke from the centre out.
@@ -1232,19 +1193,17 @@ impl RadialDirection {
     }
 }
 
-/// Which way a project's curves run, or a morph's passes: Fusion's
-/// Direction.
+/// Which way a project's curves run, or a morph's passes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProjectDirection {
     /// A project's as one way, but an open curve from whichever end is nearer
     /// where the tool is; a morph's each the other way from the one before.
-    /// Fusion's default.
+    /// The default.
     #[default]
     BothWays,
-    /// A closed curve clockwise seen from above, as Fusion's new chains run;
-    /// an open one as picked, from its first edge's start. A morph's passes
-    /// as the first curve picked runs.
+    /// A closed curve clockwise seen from above; an open one as picked, from
+    /// its first edge's start. A morph's passes as the first curve picked runs.
     OneWay,
     /// The other way round: a closed curve anticlockwise, an open one from
     /// its far end.
@@ -1278,13 +1237,12 @@ pub enum ProfileSide {
     On,
 }
 
-/// Where a trace's tool goes against the curve it follows: Fusion's Sideways
-/// Compensation.
+/// Where a trace's tool goes against the curve it follows: its sideways
+/// compensation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Compensation {
-    /// Its centre on the curve, its tip at the curve's height. Fusion's
-    /// default.
+    /// Its centre on the curve, its tip at the curve's height. The default.
     #[default]
     Center,
     /// Its centre the tool's radius to the left of the curve as it runs, seen
@@ -1298,41 +1256,40 @@ pub enum Compensation {
 default_number!(full_turn, is_full_turn = 360.0);
 
 default_number!(
-    /// How far above the Top a slot's ramp starts, in millimetres: a new Slot
-    /// of Fusion's Ramp Clearance Height.
+    /// How far above the Top a slot's ramp starts, in millimetres.
     default_ramp_clearance,
     is_default_ramp_clearance = 2.5
 );
 
 default_number!(
     /// How far below a chamfer's lower edge the tool's tip goes, in
-    /// millimetres: a new 2D Chamfer of Fusion's.
+    /// millimetres.
     default_tip_offset,
     is_default_tip_offset = 1.0
 );
 
 default_number!(
     /// The bluntest a convex corner may be, between its edges, in degrees,
-    /// and still be run into: a new Engrave of Fusion's.
+    /// and still be run into.
     default_sharp_corner,
     is_default_sharp_corner = 165.0
 );
 
 default_number!(
     /// The least angle between where a pencil's tool touches twice, in
-    /// degrees: a new Pencil of Fusion's.
+    /// degrees.
     default_bitangency,
     is_default_bitangency = 20.0
 );
 
 default_number!(
-    /// A bore's pitch, in millimetres a turn: a new Bore of Fusion's.
+    /// A bore's pitch, in millimetres a turn.
     default_pitch,
     is_default_pitch = 1.0
 );
 
 default_number!(
-    /// A bore's helix angle, in degrees: a new Bore of Fusion's.
+    /// A bore's helix angle, in degrees.
     default_bore_angle,
     is_default_bore_angle = 2.0
 );
@@ -1368,13 +1325,13 @@ fn is_climb(d: &CutDirection) -> bool {
 }
 
 default_number!(
-    /// Fusion's Minimum Shallow Stepdown, in millimetres.
+    /// The minimum shallow stepdown, in millimetres.
     default_min_shallow_stepdown,
     is_default_min_shallow_stepdown = 0.5
 );
 
 default_number!(
-    /// Fusion's Maximum Shallow Stepover, in millimetres.
+    /// The maximum shallow stepover, in millimetres.
     default_max_shallow_stepover,
     is_default_max_shallow_stepover = 2.0
 );

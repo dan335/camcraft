@@ -236,7 +236,7 @@ pub(super) fn level_material() -> Unchanging {
     Unchanging(HeightMap::filled(dvec2(-20.0, -20.0), 0.5, 81, 81, 0.0).unwrap())
 }
 
-/// Fusion's safe distance: the tool rapids down until it is that far above the
+/// The safe distance: the tool rapids down until it is that far above the
 /// material, and only feeds from there; and feeds out of a cut only until it is
 /// that far clear, then rapids. Not metres of air at the plunge feed.
 #[test]

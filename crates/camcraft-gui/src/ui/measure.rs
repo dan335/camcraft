@@ -180,10 +180,10 @@ impl Measure {
         self.field(ui, mm, speed, -limit, limit, prefix, self.unit(), 4)
     }
 
-    /// Editors for stock to leave, Fusion's radial (wall) and axial (floor), as
+    /// Editors for stock to leave, radial (wall) and axial (floor), as
     /// much of it as `leave` says is used, each no lower than `least` has it.
-    /// The floor follows the wall while the two are the same, as Fusion's does
-    /// until the floor is given its own.
+    /// The floor follows the wall while the two are the same, until the floor
+    /// is given its own.
     pub fn stock_to_leave_fields(
         self,
         ui: &mut egui::Ui,
@@ -269,7 +269,7 @@ impl Measure {
 }
 
 /// Move the floor's stock to leave with the wall's, when the wall's changed from
-/// `before` and the floor's was the same as it: Fusion's axial follows radial
+/// `before` and the floor's was the same as it: axial follows radial
 /// until given its own.
 pub fn follow_radial(stock: &mut StockToLeave, before: StockToLeave) {
     // Exactly the same: a value typed, not one worked out.

@@ -1,5 +1,5 @@
 //! Scallop finishing: passes a constant distance apart along the surface, offset
-//! in from the boundary. Fusion's Scallop.
+//! in from the boundary.
 //!
 //! Parallel finishing lays its passes a stepover apart seen from above, so on a
 //! slope they are further apart along the surface, and the cusps between them
@@ -28,8 +28,7 @@
 //! - **The rings** ([`rings`]). The lines where a field is a whole number of
 //!   stepovers, and the edges, in a tree of the regions they bound. A region
 //!   rising more than half a stepover past its last ring gets one more,
-//!   halfway up to its crest: Fusion's run on until they collapse, and this is
-//!   where they do.
+//!   halfway up to its crest.
 //! - **The spine** ([`spine`]). Inside out, going in down a chain of the
 //!   regions, inside the last ring with no corner the rings go out from a
 //!   line midway between its sides and blend into it, where offsets in to the
@@ -192,7 +191,6 @@ impl ScallopReport {
 
 /// Where the tool touches the part: within its widest radius of the part's
 /// `shadow` seen from above, a tolerance short so as never to reach past it.
-/// Fusion's *contact only*.
 pub fn contact_region(
     shadow: &Shadow,
     max_radius: f64,

@@ -1,5 +1,4 @@
-//! Expressions a setting is worked out from, as Fusion's parameter expressions
-//! have them: `tool_diameter * 0.4`,
+//! Expressions a setting is worked out from: `tool_diameter * 0.4`,
 //! `Math.min(tool_fluteLength * 0.75; tool_diameter * 2.5)`,
 //! `tool_type == 'ball end mill' ? tolerance * 4 : 1mm`.
 //!
@@ -9,8 +8,8 @@
 //! - Text in single or double quotes, compared with `==` and `!=`.
 //! - `+ - * /`, `^` for a power, `( )`; `== != < <= > >=`; `&& || !`; and
 //!   `condition ? then : else`.
-//! - Fusion's functions, their arguments split by `;` (or `,`): `Math.min`,
-//!   `Math.max` (and Fusion's `Math.minimum`, `Math.maximum`), `Math.abs`,
+//! - Functions, their arguments split by `;` (or `,`): `Math.min`,
+//!   `Math.max` (also spelled `Math.minimum`, `Math.maximum`), `Math.abs`,
 //!   `Math.sqrt`, `Math.floor`, `Math.ceil`, `Math.round`, `Math.floorto`,
 //!   `Math.ceilto`, `Math.roundto` (to a step), `Math.sin`, `Math.cos`,
 //!   `Math.tan`, `Math.asin`, `Math.acos`, `Math.atan` (in radians),
@@ -460,7 +459,7 @@ fn eval(node: &Node, value: &dyn Fn(&str) -> Option<Value>) -> Result<Value, Exp
             Binary::And => Value::Bool(truth(&eval(a, value)?) && truth(&eval(b, value)?)),
             Binary::Or => Value::Bool(truth(&eval(a, value)?) || truth(&eval(b, value)?)),
             Binary::Eq | Binary::Ne => {
-                // Exactly, as Fusion's `==` compares.
+                // Exactly: numbers are equal only when they are the same.
                 #[allow(clippy::float_cmp)]
                 let same = match (eval(a, value)?, eval(b, value)?) {
                     (Value::Text(x), Value::Text(y)) => x == y,

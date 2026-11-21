@@ -1,7 +1,7 @@
 //! The whole tool, not only its cutting end: the shoulder and shank above the
 //! flutes, and the holder above those, or where the tool has none, the
 //! spindle's nose ([decision 0021]). Each piece is a frustum about the tool's
-//! axis, from the tip up, as Fusion and OpenCAMLib describe a tool assembly.
+//! axis, from the tip up, as OpenCAMLib describes a tool assembly.
 //!
 //! What cuts is [`crate::cutter::tool`]'s; this is what must not touch: the
 //! [`Body`] above the flutes, with a clearance round each piece, swept through

@@ -1,6 +1,6 @@
 //! Pencil finishing: the tool run along where it touches the part in two
 //! places at once, the inside corners and valleys a larger tool before it
-//! could not reach into. Fusion's Pencil.
+//! could not reach into.
 //!
 //! # Where the tool touches twice
 //!
@@ -13,7 +13,7 @@
 //! height jumps instead: the tool's side touches a wall while its end rests on
 //! what is below. The angle between the sheets either side, between where the
 //! tool touches each, or at a wall's foot between what is below and the
-//! wall's face, is Fusion's Bitangency Angle: a crease or a foot sharper than
+//! wall's face, is the bitangency angle: a crease or a foot sharper than
 //! it is a pencil line, one gentler is not ([decision 0028]). A ball whose
 //! side meets a wall where a fillet it fits rises into it touches the two in
 //! one place: the fillet faces the wall's way there, and it is no line.
@@ -50,30 +50,28 @@
 //!
 //! Where a line falls or climbs further than a cut step as steeply as a
 //! plunge, down a corner between two upright walls, that stretch is left to
-//! the linker, as a parallel pass's is: Fusion's goes straight down it at the
-//! cutting feed.
+//! the linker, as a parallel pass's is.
 //!
 //! # Overthickness
 //!
-//! The lines may be found for a tool larger than the one that cuts, by
-//! Fusion's Overthickness: the cutting tool is then run along where the larger
+//! The lines may be found for a tool larger than the one that cuts, by the
+//! overthickness: the cutting tool is then run along where the larger
 //! one would touch twice, at the height it rests at there itself.
 //!
 //! # Passes beside them
 //!
-//! With stepovers, Fusion's Number of Stepovers, passes run either side of the
+//! With stepovers, passes run either side of the
 //! lines a stepover apart along the surface, as scallop's run in from a
 //! boundary: the lines of equal distance from them across the tool's height
 //! over the part, worked out on the grid ([`camcraft_geom::geodesic`]), and cut
 //! on the part as a scallop pass is. They are cut from the outermost in, the
-//! pencil lines last, as Fusion's Inside/Outside Direction starts.
+//! pencil lines last.
 //!
 //! # Order and direction
 //!
 //! The nearest next. Both ways starts an open line at its nearer end. One way
 //! has the higher side, the wall or the dome, on the tool's right with a
-//! clockwise spindle, climbing, as Fusion's One Way had round its pocket's
-//! floor and its dome; the other way, the other.
+//! clockwise spindle, climbing; the other way, the other.
 //!
 //! [decision 0028]: ../../../../docs/decisions/0028-pencil.md
 
@@ -129,15 +127,14 @@ pub struct PencilParams {
     /// Cutting feed, in mm/min.
     pub feed: f64,
     /// The least angle between the two places the tool touches, in radians,
-    /// for it to be a pencil line: Fusion's Bitangency Angle.
+    /// for it to be a pencil line.
     pub bitangency: f64,
     /// Which way each line cuts.
     pub direction: Direction,
     /// Whether climbing puts the higher side on the tool's right, as it does
     /// with a clockwise spindle.
     pub climb_right: bool,
-    /// Passes either side of each line, a stepover apart along the surface:
-    /// Fusion's Number of Stepovers.
+    /// Passes either side of each line, a stepover apart along the surface.
     pub stepovers: u32,
     /// The distance between them, in millimetres.
     pub stepover: f64,
@@ -203,8 +200,8 @@ impl PencilReport {
 
 /// Pencil passes over `area`, where the tool's centre may go: the tool held
 /// as `seat` cuts them, along where the one held as `finder` touches the part
-/// twice. They are the same tool unless the lines are found for a larger one
-/// (Fusion's Overthickness).
+/// twice. They are the same tool unless the lines are found for a larger one,
+/// by the overthickness.
 ///
 /// The path holds [`MoveRole::Cut`](crate::path::toolpath::MoveRole::Cut)
 /// passes separated by

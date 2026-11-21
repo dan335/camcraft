@@ -5,7 +5,7 @@ fn params() -> FaceParams {
         area: (dvec2(0.0, 0.0), dvec2(100.0, 50.0)),
         angle: 0.0,
         stepover: 9.5,
-        // To the tool's centre, as Fusion's: its radius and 2 mm more.
+        // To the tool's centre: its radius and 2 mm more.
         extension: 7.0,
         radius: 5.0,
         levels: LevelsAsked {

@@ -1,5 +1,5 @@
 //! Curves picked on the part, as the strategies that run along them take them:
-//! Fusion's Slot and Trace.
+//! Slot and Trace.
 //!
 //! # Pieces
 //!

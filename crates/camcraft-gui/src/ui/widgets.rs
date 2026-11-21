@@ -297,7 +297,7 @@ pub fn key_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
 }
 
 /// A row of a [`form`]: `topic`'s label, then what `add` puts beside it, with
-/// the help shown on hovering either, as Fusion shows it.
+/// the help shown on hovering either.
 pub fn row<R>(ui: &mut egui::Ui, topic: &Topic, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     row_as(ui, topic.title, topic, add)
 }
@@ -392,7 +392,7 @@ pub enum ExpressionEdit {
     Dropped,
 }
 
-/// A setting's expression, `text`, as Fusion's parameter expressions, after
+/// A setting's expression, `text`, after
 /// the setting's own field, which then only shows what it comes to: edited
 /// in place, in red with why where it cannot be worked out (`fault`), and a
 /// button to drop it. With none, an ƒx to start one, at `start`. What was

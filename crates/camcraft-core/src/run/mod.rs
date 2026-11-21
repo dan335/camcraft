@@ -176,7 +176,7 @@ pub fn run_prepared_planned(
     };
     let plan_of = |i: usize| plans.get(i).unwrap_or(&Plan::Generate);
     // Smoothing strays from the passes by up to its tolerance, on top of the
-    // job's, as Fusion's total tolerance is the two together.
+    // job's: the total tolerance is the two together.
     let smoothing = setup
         .operations
         .iter()

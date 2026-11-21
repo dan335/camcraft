@@ -354,8 +354,8 @@ fn drilling_faults_are_caught() {
 }
 
 /// An arc too short across for its ends to stay apart once rounded would
-/// read as a full circle; it is written as straight moves instead, as Fusion
-/// writes it, and reads back to the arc.
+/// read as a full circle; it is written as straight moves instead, and
+/// reads back to the arc.
 #[test]
 fn an_arc_too_short_to_write_reads_back_to_itself() {
     let mut t = Toolpath::new();

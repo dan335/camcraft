@@ -1,8 +1,8 @@
-//! Settings worked out from expressions, as Fusion's parameter expressions
-//! are: an operation's `expressions` name a setting by its place in the job
-//! file ([`super::settings`]) and give the expression it is worked out from
-//! ([`crate::job::expr`]), reading the tool, the job's tolerance and the
-//! operation's own settings by Fusion's names ([`Operation::expression_value`]).
+//! Settings worked out from expressions: an operation's `expressions` name a
+//! setting by its place in the job file ([`super::settings`]) and give the
+//! expression it is worked out from ([`crate::job::expr`]), reading the tool,
+//! the job's tolerance and the operation's own settings by name
+//! ([`Operation::expression_value`]).
 //! The setting itself still holds the number, as a job file without
 //! expressions has it, so everything that reads a job reads it as before.
 
@@ -70,7 +70,7 @@ pub const NAMES: [(&str, &str); 21] = [
 
 impl Operation {
     /// What `name` reads in one of this operation's expressions, with `tool`
-    /// its tool and `tolerance` the job's: Fusion's names ([`NAMES`]). `None`
+    /// its tool and `tolerance` the job's, by the names in [`NAMES`]. `None`
     /// for a name with no such value, as a tool's overall length it does not
     /// give.
     pub fn expression_value(
@@ -99,15 +99,15 @@ impl Operation {
                     "tool_shoulderLength" => n(t.shoulder_length?),
                     "tool_shaftDiameter" => n(t.shank_diameter.unwrap_or(t.diameter)),
                     "tool_overallLength" => n(t.overall_length?),
-                    // Fusion measures a taper from the axis.
+                    // A taper is measured from the axis.
                     "tool_taperAngle" => n(t.angle? / 2.0),
                     "tool_numberOfFlutes" => n(f64::from(t.flutes?)),
-                    // A thread mill's alone, as Fusion's are.
+                    // A thread mill's alone.
                     "tool_threadPitch" if t.kind == ToolKind::ThreadMill => n(t.pitch?),
                     "tool_threadProfileAngle" if t.kind == ToolKind::ThreadMill => {
                         n(t.thread_profile())
                     }
-                    "tool_type" => Value::Text(t.kind.fusion_type().into()),
+                    "tool_type" => Value::Text(t.kind.type_name().into()),
                     _ => return None,
                 }
             }

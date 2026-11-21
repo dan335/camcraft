@@ -97,10 +97,10 @@ fn a_bore_goes_down_a_helix_at_the_pitch() {
 }
 
 /// By angle, each turn of the helix falls as far as the angle takes it round
-/// the circle the tool's outer edge sweeps, as Fusion's Bore does: with a 6 mm
+/// the circle the tool's outer edge sweeps: with a 6 mm
 /// tool at 2°, 0.5587 mm a turn in a hole 16 across and 0.4889 in one 14
 /// across, and 0.3491 and 0.2794 on passes a radius of 2 and 1 from their
-/// middles, as Fusion's programs for them go.
+/// middles.
 #[test]
 fn a_bore_by_angle_falls_with_the_tool_s_edge() {
     let fall = |radius: f64, stepovers: u32| {
@@ -122,7 +122,7 @@ fn a_bore_by_angle_falls_with_the_tool_s_edge() {
         }
         out
     };
-    // To Fusion's figures, read from programs written to a thousandth.
+    // To the figures above.
     let near = |got: f64, want: f64| (got - want).abs() < 2e-4;
     let one = fall(8.0, 1);
     assert!(
@@ -197,8 +197,8 @@ fn a_hole_too_small_for_the_tool_is_refused() {
 }
 
 /// Passes out to the wall a stepover apart, from the middle out, the last at
-/// the wall; one past the middle is left out, and counted, as Fusion's Bore
-/// discards it: three stepovers of 3 mm with a 6 mm tool leave a hole 16
+/// the wall; one past the middle is left out, and counted: three stepovers
+/// of 3 mm with a 6 mm tool leave a hole 16
 /// across two passes, at 2 and 5, and one 14 across two, at 1 and 4. Too few
 /// leave a core, and say how wide.
 #[test]
@@ -384,9 +384,8 @@ fn leads_stay_in_the_hole() {
             }
         }
     }
-    // The level arc no wider than half the circle, its straight as asked, as
-    // Fusion's on a pass a radius of 1 from its middle: radius 0.5, straight
-    // 0.3.
+    // The level arc no wider than half the circle, its straight as asked, on
+    // a pass a radius of 1 from its middle: radius 0.5, straight 0.3.
     let small = hole(4.0, 20.0, 12.0);
     let p = RoundParams {
         leads: Some(LeadArc {

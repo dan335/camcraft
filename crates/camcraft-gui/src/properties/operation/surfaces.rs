@@ -1,7 +1,7 @@
 //! The faces a 3D operation machines and those it keeps clear of, under its
-//! boundary on the Geometry tab: Fusion's Surface Manager, as what is done to
-//! every face in no group, then a card for each group of faces picked in the
-//! view, machined or avoided with offsets of its own.
+//! boundary on the Geometry tab: what is done to every face in no group, then
+//! a card for each group of faces picked in the view, machined or avoided with
+//! offsets of its own.
 
 use std::cmp::Ordering;
 

@@ -296,9 +296,9 @@ fn own(doc: &Document, model: &str, at: DVec3) -> DVec3 {
 /// What a click on `target` picks into `slot`: for edges, the whole loop the edge
 /// goes round ([`edge_loop`]), as they are only ever cut round in loops; for
 /// edges a trace follows, the edges running on smoothly from it
-/// ([`smooth_chain`]), as Fusion's chain selection takes them; for edges a 2D
+/// ([`smooth_chain`]); for edges a 2D
 /// chamfer chamfers, the loop where there is one and the chain where there is
-/// not ([`edge_run`]), as Fusion's 2D Chamfer chains what it is given.
+/// not ([`edge_run`]).
 pub fn widen(scene: &PickScene, slot: &Slot, target: Target) -> Target {
     match (slot, target) {
         (Slot::Edges { .. }, t) => whole_loop(scene, t),

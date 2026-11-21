@@ -1,5 +1,5 @@
 //! Feed optimisation: a path's cuts slowed into and out of its sharp corners
-//! and round its tight arcs. Fusion's Feed Optimization.
+//! and round its tight arcs.
 //!
 //! Where a pass turns sharply into the material, as into a pocket's corner,
 //! the tool is wrapped in more of it for a moment than along the walls either
@@ -38,19 +38,16 @@ const SHORTEST: f64 = 1.0e-6;
 /// How a path's corners are slowed.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CornerParams {
-    /// The most a cut may turn into the next without slowing, in radians:
-    /// Fusion's Maximum Directional Change.
+    /// The most a cut may turn into the next without slowing, in radians.
     pub most_turn: f64,
-    /// An arc tighter than this is slowed along, in millimetres: Fusion's
-    /// Reduced Feed Radius.
+    /// An arc tighter than this is slowed along, in millimetres.
     pub radius: f64,
     /// How far before a corner or tight arc the cut slows, and after it it
-    /// speeds up again, in millimetres: Fusion's Reduced Feed Distance.
+    /// speeds up again, in millimetres.
     pub distance: f64,
-    /// The feed slowed to, in mm/min: Fusion's Reduced Feedrate. A cut
-    /// already slower keeps its own.
+    /// The feed slowed to, in mm/min. A cut already slower keeps its own.
     pub feed: f64,
-    /// Only corners that turn into the material: Fusion's Only Inner Corners.
+    /// Whether only corners that turn into the material are slowed into.
     pub only_inner: bool,
     /// Which side of the passes the material is on, seen from above: on
     /// their right when `Some(true)`, their left when `Some(false)`, and

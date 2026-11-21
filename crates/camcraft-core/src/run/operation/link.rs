@@ -5,7 +5,7 @@ use super::*;
 use crate::job::Uses;
 
 /// How `work`'s operation links: its own settings, with the strategy's defaults
-/// where it gives none, as Fusion's.
+/// where it gives none.
 pub(super) fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
     let (op, linking) = (work.op, &work.op.linking);
     let diameter = work.spec.diameter;
@@ -33,8 +33,8 @@ pub(super) fn link_params(work: &Work<'_>, clearance_z: f64) -> LinkParams {
         entry,
         helix_radius: op.helix_diameter(diameter, corner) / 2.0,
         helix_min_radius: op.least_helix_diameter(diameter, corner) / 2.0,
-        // A pocket with no room for a helix ramps along its ring, as Fusion's
-        // helix ramp type allows; a profile goes straight down beside its lead.
+        // A pocket with no room for a helix ramps along its ring; a profile
+        // goes straight down beside its lead.
         ramp_where_no_helix: !profile,
         // A helix climbs as the cut does.
         helix_ccw: work.kept_on_right(),
@@ -93,8 +93,7 @@ fn vertical_leads(op: &Operation, uses: Uses, diameter: f64) -> (f64, Option<f64
     // Adaptive clearing's links go straight down into what it has cleared. A
     // profile's vertical lead is part of its leads; a finishing pass's is its
     // own setting. A thread has none: it comes straight down its hole's centre
-    // onto its own leads, and goes straight up from it, as Fusion's Thread's
-    // programs do.
+    // onto its own leads, and goes straight up from it.
     let radius = if uses.links == Links::Own {
         0.0
     } else if uses.lead_radius {
@@ -105,8 +104,8 @@ fn vertical_leads(op: &Operation, uses: Uses, diameter: f64) -> (f64, Option<f64
         op.leads(diameter).map_or(0.0, |l| l.vertical)
     };
     match op.strategy {
-        // A trace's vertical leads are each on or off, as Fusion's Lead-In and
-        // Lead-Out, the radius the same.
+        // A trace's vertical leads, in and out, are each on or off, the radius
+        // the same.
         StrategySpec::Trace {
             lead_in, lead_out, ..
         } => (

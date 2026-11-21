@@ -66,8 +66,7 @@ pub(super) fn heights(
             });
         }
         if let Some(unset) = bottom {
-            // Left unset, each hole goes down to its own bottom, as Fusion's
-            // drilling goes "from hole bottom".
+            // Left unset, each hole goes down to its own bottom.
             let absent = if uses.holes.is_some() {
                 "each hole's own bottom"
             } else if uses.curves.is_some() {
@@ -134,7 +133,7 @@ pub(super) fn heights(
         ),
         StrategySpec::Drill { .. } => Some(
             "Each hole starts at its picked rim and goes down to its own bottom, where \
-             its wall ends, as Fusion's drilling goes to the hole's bottom. A Bottom set \
+             its wall ends. A Bottom set \
              takes every hole there instead, and a hole whose bottom edge is picked \
              goes to that.",
         ),

@@ -1,12 +1,12 @@
-//! What an operation machines: Fusion's Geometry tab, which is four settings
-//! here: the picks, a 3D machining boundary, a 2D outline, and the faces a 3D
-//! operation machines and those it keeps clear of.
+//! What an operation machines, which is four settings: the picks, a 3D
+//! machining boundary, a 2D outline, and the faces a 3D operation machines and
+//! those it keeps clear of.
 
 use serde::{Deserialize, Serialize};
 
 use super::{FeatureRef, Operation, is_default};
 
-/// What a 3D operation is kept to, seen from above: Fusion's boundary mode.
+/// What a 3D operation is kept to, seen from above.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Boundary {
@@ -21,9 +21,9 @@ pub enum Boundary {
     Selection,
 }
 
-/// What a 2D operation cuts round or clears, seen from above: Fusion's contour
-/// or pocket selection. Unlike a [`MachiningBoundary`] it does not fence the tool
-/// in; the tool runs beside it, on the side the strategy says.
+/// What a 2D operation cuts round or clears, seen from above: the contour it
+/// follows or the pocket it clears. Unlike a [`MachiningBoundary`] it does not
+/// fence the tool in; the tool runs beside it, on the side the strategy says.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Outline {
@@ -48,7 +48,7 @@ impl From<Outline> for Boundary {
 #[serde(rename_all = "kebab-case")]
 pub enum Containment {
     /// The tool's centre stays inside the boundary, so its side reaches past it by
-    /// its radius. Fusion's default.
+    /// its radius. The default.
     #[default]
     Center,
     /// The whole tool stays inside.
@@ -87,7 +87,7 @@ impl Selection {
     }
 }
 
-/// Where a 3D operation's tool may go: Fusion's machining boundary, where the
+/// Where a 3D operation's tool may go: the machining boundary, where the
 /// tool may go against it, and how far past it.
 ///
 /// The stock's footprint, the default, machines the whole part and everything
@@ -102,7 +102,7 @@ pub struct MachiningBoundary {
     /// Where the tool may go against it.
     #[serde(default, skip_serializing_if = "is_default")]
     pub containment: Containment,
-    /// Fusion's additional offset, in millimetres: how far the boundary moves
+    /// The additional offset, in millimetres: how far the boundary moves
     /// out, or in when the whole tool is kept inside it. Past the stock's
     /// footprint, with no boundary.
     #[serde(default, skip_serializing_if = "is_default")]
@@ -132,7 +132,7 @@ impl Default for MachiningBoundary {
     }
 }
 
-/// What a 3D operation does to a face: Fusion's machining mode.
+/// What a 3D operation does to a face: machine it or avoid it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SurfaceAction {
@@ -144,9 +144,9 @@ pub enum SurfaceAction {
     Avoid,
 }
 
-/// The faces a 3D operation machines and those it keeps clear of, as Fusion's
-/// Surface Manager has them: groups of picked faces, each machined or avoided
-/// with its own offsets, and the model, every face in no group.
+/// The faces a 3D operation machines and those it keeps clear of: groups of
+/// picked faces, each machined or avoided with its own offsets, and the model,
+/// every face in no group.
 ///
 /// Each group's faces are met by the tool grown by the operation's stock to
 /// leave and the group's own offsets; the tool rests on whatever is highest,

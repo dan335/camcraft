@@ -1,6 +1,6 @@
 use super::*;
 
-/// The shape of a Fusion export: three length units defined, one assigned.
+/// A file with three length units defined, one assigned.
 const INCH: &str = "ISO-10303-21;
 HEADER; FILE_SCHEMA (('AUTOMOTIVE_DESIGN'));
 ENDSEC;
@@ -154,8 +154,7 @@ fn numbers_skip_references_and_strings() {
 
 /// A part placed in an assembly: the root's representation holds a placement the
 /// part's own origin is moved onto, 100 mm along X and turned a quarter about Z.
-/// The part's geometry hangs off its representation through a plain relationship,
-/// as Fusion writes it.
+/// The part's geometry hangs off its representation through a plain relationship.
 const ASSEMBLY: &str = "ISO-10303-21;
 HEADER; FILE_SCHEMA (('AUTOMOTIVE_DESIGN'));
 ENDSEC;
@@ -306,7 +305,7 @@ fn geometry_in_the_root_stays_put_while_an_empty_part_is_placed() {
 }
 
 /// A cone 20 mm across at its base on the origin, coming to a point 30 mm up with
-/// no vertex there, written as Fusion writes one: placed at the base, its axis
+/// no vertex there: placed at the base, its axis
 /// pointing down, the way it widens.
 const CONE: &str = "ISO-10303-21;
 HEADER; FILE_SCHEMA (('AUTOMOTIVE_DESIGN'));
@@ -350,7 +349,7 @@ fn a_cone_half_angle_in_degrees_is_read_as_degrees() {
     assert!(hi.z >= 30.0 - 1e-6, "{hi:?}");
 }
 
-/// Fusion states its fit as 0.01 mm, written in the file's own unit.
+/// A file that states its fit as 0.01 mm, written in the file's own unit.
 #[test]
 fn reads_the_stated_accuracy_in_millimetres() {
     assert_eq!(facts(INCH).unwrap().accuracy, None, "it states none");

@@ -1,7 +1,6 @@
 //! Smoothing: a path's runs of short straight moves fitted with fewer, longer
 //! ones, arcs where they lie on a circle and straight lines where they lie on a
-//! line, none further than a tolerance from the moves it stands for. Fusion's
-//! Smoothing.
+//! line, none further than a tolerance from the moves it stands for.
 //!
 //! A strategy's passes are its steps: adaptive's a fifth of the tool's radius
 //! at most, a finish's as close as the part needs. Each is a line of the
@@ -28,8 +27,7 @@
 //! # How far it strays
 //!
 //! It strays up to the tolerance from the path the strategy made, either way,
-//! so the tolerance the result is verified to is the job's and this together,
-//! as Fusion's total tolerance is.
+//! so the tolerance the result is verified to is the job's and this together.
 
 use std::f64::consts::{FRAC_PI_2, PI};
 

@@ -2,7 +2,7 @@
 //! library's tools; and the surface speed and chip load rows an operation's
 //! panel shares with it.
 //!
-//! The fields are on tabs, as Fusion's tool dialog has them, so each shows a
+//! The fields are on tabs, so each shows a
 //! short form rather than one long scroll. A tab with a field in error carries a
 //! red dot, so a problem out of sight is still seen.
 

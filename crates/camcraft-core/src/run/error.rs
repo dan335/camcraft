@@ -128,7 +128,7 @@ pub enum RunError {
         source: EngraveError,
     },
     /// The rest of the tool would meet the part, and the operation was to
-    /// fail where it would: Fusion's Shaft and Holder's Fail.
+    /// fail where it would.
     #[error(
         "operation '{op}': the shank or holder would meet the part at X{:.3} Y{:.3} Z{:.3}",
         at.x,

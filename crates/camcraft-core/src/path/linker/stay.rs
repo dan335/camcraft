@@ -111,8 +111,8 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
 
     /// The turn from the end of the last pass, at `from`, round onto the next
     /// at `to`, where they run opposite ways side by side, as zigzag passes
-    /// do: Fusion's default transition, smooth ("smooth tangential movements
-    /// using true arcs where appropriate"), as [`half_turn`] makes it.
+    /// do: the default transition, a smooth turn in arcs tangent to both, as
+    /// [`half_turn`] makes it.
     ///
     /// `None` where the passes do not run so ([`half_turn`]), or where the
     /// part rises into the turn, the tool would rest in it on a face it is
@@ -209,8 +209,8 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
     }
 
     /// From `off`, where the tool came off the last cut, across without
-    /// lifting and down `way` onto `to` at a lower level, as Fusion goes down
-    /// to a ring's next depth: across level at the height it came off, then
+    /// lifting and down `way` onto `to` at a lower level, as down to a ring's
+    /// next depth: across level at the height it came off, then
     /// down `way` as it would be come down after a lift, straight down onto
     /// its vertical lead or the pass, where the ways allow it ([`Ways::of`]).
     /// So a finish comes to a ring that starts nearly under the last, down a
@@ -311,7 +311,7 @@ impl<C: Clearance, M: Material, S: Surface> Linker<'_, C, M, S> {
     }
 
     /// Whether a link at level `z` from `a` to `b` would plough through material
-    /// the cuts either end of it leave standing: as Fusion's, a link stays down
+    /// the cuts either end of it leave standing: a link stays down
     /// only where it does not violate the work. Its first and last tool's radius
     /// are the cuts' own, coming off one and into the next as they engage; between,
     /// the tool may brush what stands beside its way ([`BRUSH`]), and no more.

@@ -8,7 +8,7 @@
 //!   benefit, and welding is nearly free during load.
 //! - **Units are not in the file.** STL carries no unit context at all, so the
 //!   caller must say what the numbers mean. Defaulting to millimetres would be the
-//!   failure that destroys a part: the same file exported from a Fusion document in
+//!   failure that destroys a part: the same part exported from a design in
 //!   inches is 25.4 times too small, and nothing in the data would say so.
 //! - **ASCII or binary is decided here, not by the reader.** `stl_io` calls a file
 //!   ASCII exactly when it begins `solid ` with a space. Many ASCII files begin

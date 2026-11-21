@@ -1,8 +1,8 @@
 //! The job model: models, stocks and setups, each setup an ordered list of
 //! operations sharing one stock.
 //!
-//! This is the contract between a person and the engine, and it is shaped the way
-//! Fusion shapes a CAM document. A job keeps three groups:
+//! This is the contract between a person and the engine. A job keeps three
+//! groups:
 //!
 //! - **Models**: the design files it machines, referenced by path relative to the
 //!   job file, never copied in.
@@ -12,13 +12,12 @@
 //!   models and stocks it includes (by name), its post and work offset, and its
 //!   operations.
 //!
-//! An operation is shaped the way Fusion shapes one, **Geometry, Heights, Passes,
-//! Linking**, because that factoring is proven and maps one-to-one onto the
-//! provisions this project was built around. Adopting it means the parameter layer
-//! never needs restructuring as strategies are added. Fusion's Geometry tab is
-//! four settings here, since it means different things to different strategies:
-//! the picks (`selection`), a 3D machining `boundary`, a 2D `outline`, and the
-//! `surfaces` a 3D operation machines and avoids.
+//! An operation has four parts, **Geometry, Heights, Passes, Linking**, a
+//! factoring that maps one-to-one onto the provisions this project was built
+//! around, so the parameter layer never needs restructuring as strategies are
+//! added. Geometry is four settings, since it means different things to
+//! different strategies: the picks (`selection`), a 3D machining `boundary`, a
+//! 2D `outline`, and the `surfaces` a 3D operation machines and avoids.
 //!
 //! # Heights are symbolic
 //!

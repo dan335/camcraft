@@ -1,12 +1,12 @@
 //! What the manager's edits do to the library, drawn or not: saving it, bringing
-//! a Fusion library in, and making, copying, moving and removing tools and
+//! a tool library CSV in, and making, copying, moving and removing tools and
 //! folders, the System library's kept as they are.
 
 use std::path::Path;
 
 use camcraft_core::job::ToolSpec;
 use camcraft_session::library::system::is_system;
-use camcraft_session::library::{Folder, FolderPath, Library, folder_label, free_name, fusion_csv};
+use camcraft_session::library::{Folder, FolderPath, Library, folder_label, free_name, tool_csv};
 
 use super::{LOCKED, Message, ToolManager};
 use crate::ui::widgets::Level;
@@ -184,9 +184,9 @@ impl ToolManager {
         self.library.dirty()
     }
 
-    /// Bring the tools in the Fusion tool library CSV at `path` into the folder
+    /// Bring the tools in the tool library CSV at `path` into the folder
     /// showing. A tool already there gets the file's presets beside its own.
-    pub fn import_fusion(&mut self, path: &Path) {
+    pub fn import_csv(&mut self, path: &Path) {
         if is_system(&self.folder) {
             self.message = Some(Message::err(LOCKED.into()));
             return;
@@ -198,7 +198,7 @@ impl ToolManager {
                 return;
             }
         };
-        let imported = match fusion_csv::import(&text) {
+        let imported = match tool_csv::import(&text) {
             Ok(i) => i,
             Err(e) => {
                 self.message = Some(Message::err(format!("{}: {e}", path.display())));
@@ -208,7 +208,7 @@ impl ToolManager {
         let Some(folder) = self.library.edit().at_mut(&self.folder) else {
             return;
         };
-        let merged = fusion_csv::merge(folder, imported.tools);
+        let merged = tool_csv::merge(folder, imported.tools);
         // Counts on the status bar, which has room for little; each tool and
         // each skip by name on its hover.
         let mut said = Vec::new();

@@ -2,7 +2,7 @@
 //! work that is kept between frames so the pointer can move freely over a large
 //! part.
 //!
-//! As in Fusion, the view picks only while a slot is armed, by its button in the
+//! The view picks only while a slot is armed, by its button in the
 //! panel: otherwise the pointer moves over the part and a click does nothing.
 //!
 //! Three things are worked out once and kept until what they depend on changes:

@@ -16,12 +16,12 @@
 //! groups, each machined or avoided, and each met by the tool grown by the
 //! group's own offsets as well as the operation's stock to leave. Each group is
 //! a mesh of its faces with an index of its own. The tool rests on whatever is
-//! highest, as Fusion's does: dropped, it comes to rest on the highest of each
+//! highest: dropped, it comes to rest on the highest of each
 //! group's drops, exactly, and at a level it may be only where none of them
 //! forbids it. A pass laid on that is kept where it rests on a face machined,
 //! and cut out where it rests on one avoided alone ([`Seat::avoids`]); resting
-//! on both, to within the tolerance, it is machined, as Fusion's ring round
-//! the foot of an avoided wall, touching the machined floor, stayed.
+//! on both, to within the tolerance, it is machined, so a ring round the foot
+//! of an avoided wall, touching the machined floor, stays.
 //!
 //! An operation that puts nothing in groups meets the whole part, through the
 //! drop-cutter the part's every operation shares, exactly as before there were

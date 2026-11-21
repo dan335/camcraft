@@ -1,6 +1,5 @@
 //! Project finishing: picked curves dropped onto the part, the tool run along
-//! each where it rests on the part below it. Fusion's Project, in its Drop
-//! mode, the only one it has for a 3-axis job.
+//! each where it rests on the part below it.
 //!
 //! Each curve is seen from above, as its points are wherever it lies: an edge
 //! of the part's top or of its floor is followed alike, at the height the tool
@@ -11,12 +10,11 @@
 //!
 //! # Which way
 //!
-//! Fusion's programs for `ops_3d` (decision 0029) run a closed curve clockwise
-//! seen from above, as its new chains are, and an open one from its first
-//! edge's start; *Other Way* the reverse of both. *Both Ways* runs each as
-//! *One Way* does, but an open curve from whichever end is nearer where the
-//! last one left the tool. A closed curve starts where the last left off, at
-//! its nearest point; the first at its own start.
+//! A closed curve is run clockwise seen from above (decision 0029), and an
+//! open one from its first edge's start; *Other Way* the reverse of both.
+//! *Both Ways* runs each as *One Way* does, but an open curve from whichever
+//! end is nearer where the last one left the tool. A closed curve starts where
+//! the last left off, at its nearest point; the first at its own start.
 
 use camcraft_geom::contour::Region;
 use glam::DVec2;
@@ -27,7 +25,7 @@ use crate::strategy::StrategyError;
 use crate::strategy::curve::Curve as Picked;
 use crate::strategy::projected::{Curve, ProjectParams, ProjectReport, project};
 
-/// Which way each curve is cut: Fusion's Direction.
+/// Which way each curve is cut.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Way {
     /// As one way, but an open curve from its nearer end.

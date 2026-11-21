@@ -87,8 +87,8 @@ pub struct LinkParams {
     /// The smallest a helical entry is made where there is no room for one of
     /// [`LinkParams::helix_radius`], in millimetres.
     pub helix_min_radius: f64,
-    /// Whether a pass with no room for a helix is ramped into along itself, as
-    /// Fusion's helix ramp type allows a pocket, rather than plunged.
+    /// Whether a pass with no room for a helix is ramped into along itself,
+    /// rather than plunged.
     pub ramp_where_no_helix: bool,
     /// Whether a helix turns counter-clockwise seen from above, which climbs
     /// with a clockwise spindle.

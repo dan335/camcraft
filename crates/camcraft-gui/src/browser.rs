@@ -1,4 +1,4 @@
-//! The job's tree, after Fusion's browser: Models, Stocks and Setups, each setup
+//! The job's tree: Models, Stocks and Setups, each setup
 //! with its operations.
 //!
 //! Clicking selects, and the properties panel edits what is selected. Right-click
@@ -466,7 +466,7 @@ fn setup(
 }
 
 /// Setup `name`'s estimated machining time, once its last run is made whole
-/// and stands, `status`: as Fusion gives it in its tree.
+/// and stands, `status`, shown in the tree.
 fn setup_time(d: &Document, name: &str, status: Status) -> Option<f64> {
     let whole = matches!(
         status,
@@ -641,10 +641,10 @@ pub fn strategy_label(s: &StrategySpec) -> &'static str {
 /// from.
 pub type NewOperation = (&'static str, StrategySpec);
 
-/// The kinds of operation there are to add, grouped as Fusion's toolbar groups
-/// them: 2D, 3D and drilling. Each group is sections with a line between, 3D's
-/// roughing above its finishing. Each starts as a job file that gives none of
-/// its strategy's parameters has it, found by the name the file gives it.
+/// The kinds of operation there are to add, in groups: 2D, 3D and drilling.
+/// Each group is sections with a line between, 3D's roughing above its
+/// finishing. Each starts as a job file that gives none of its strategy's
+/// parameters has it, found by the name the file gives it.
 pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
     let section = |names: &[&str]| -> Vec<NewOperation> {
         names
@@ -693,12 +693,12 @@ pub fn operation_groups() -> [(&'static str, Vec<Vec<NewOperation>>); 3] {
     ]
 }
 
-/// Fusion's operations camcraft has not built yet, each by the group of the
+/// Operations camcraft has not built yet, each by the group of the
 /// menus that add operations and the section of it it goes in, and its name
-/// there, in the order of Fusion's toolbar. The menus list them after that
+/// there, in the order they go in. The menus list them after that
 /// section's own, greyed, saying so. One that is built comes out of here and
-/// into [`operation_groups`], in the same place. Every one is built now: what
-/// Fusion has only with its Manufacturing Extension is not planned.
+/// into [`operation_groups`], in the same place. Every one planned is built
+/// now.
 pub const PLANNED: &[(&str, usize, &str)] = &[];
 
 /// What a planned operation's item says under the pointer.
@@ -1088,7 +1088,7 @@ mod menu_tests {
                 assert_eq!(planned, asked);
             }
         }
-        // 2D: Fusion's order, 2D adaptive clearing before the pocket, Slot,
+        // 2D: 2D adaptive clearing before the pocket, Slot,
         // Trace, Thread, Bore, Circular and Engrave after the profile, and 2D
         // chamfer last. Nothing of 2D is planned now.
         let two_d: Vec<String> = operation_menu_items()[0].1[0]

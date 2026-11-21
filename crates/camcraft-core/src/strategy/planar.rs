@@ -1,22 +1,22 @@
 //! 2D strategies: a profile round a boundary, and a pocket cleared inside one,
-//! each cut in flat levels down to a floor. Fusion's 2D Contour and 2D Pocket.
+//! each cut in flat levels down to a floor.
 //!
 //! # From the model, seen from above
 //!
 //! The boundary is the operation's: picked faces and edges, or the models'
-//! silhouette, as Fusion's select what they cut. The tool's centre follows it
+//! silhouette. The tool's centre follows it
 //! offset by the tool's radius and the stock to leave, and every ring here is an
 //! offset of it, so every point of a path comes from the model's geometry.
-//! Nothing here reads the stock. Nor the part below the boundary, as Fusion's 2D
-//! operations do not: a part that reaches past its boundary lower down is cut
+//! Nothing here reads the stock. Nor the part below the boundary: a part that
+//! reaches past its boundary lower down is cut
 //! into, and the verifier says so.
 //!
 //! # Areas and their floors
 //!
 //! Where the tool's centre goes falls into areas, each an outer ring and the holes
 //! inside it. Each is cut down to its own floor, the lowest picked point in it, so
-//! pockets picked at different depths are each cut to theirs, as Fusion's
-//! "selected contour" bottom. With nothing picked, or a bottom asked for, every
+//! pockets picked at different depths are each cut to theirs. With nothing
+//! picked, or a bottom asked for, every
 //! area goes to the same one; unless the bottom asked for is measured from the
 //! selection, when each is measured from the picks in it. A top measured from the
 //! selection is each area's own the same way.
@@ -93,8 +93,8 @@ fn exact_rings(region: &Region, moved: &[Ring], tolerance: f64) -> Vec<Ring> {
 /// How to cut the areas.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlanarParams {
-    /// Deepest a level may be below the one above, in millimetres: Fusion's
-    /// multiple depths. The levels are spaced evenly, so none is thinner than
+    /// Deepest a level may be below the one above, in millimetres. The levels
+    /// are spaced evenly, so none is thinner than
     /// the rest. `None` cuts the bottom alone.
     pub stepdown: Option<f64>,
     /// Distance between a pocket's rings, in millimetres.
@@ -110,7 +110,7 @@ pub struct PlanarParams {
     pub kept_on_right: bool,
     /// The arcs a profile enters and leaves each ring along, if any.
     pub leads: Option<LeadArc>,
-    /// A profile ramped into, cut as one spiral down each ring, as Fusion's is;
+    /// A profile ramped into, cut as one spiral down each ring;
     /// `None` cuts each level as a pass of its own.
     pub spiral: Option<Spiral>,
     /// A pocket's finishing passes along its walls, after each level is
@@ -118,7 +118,7 @@ pub struct PlanarParams {
     pub finishing: Option<WallFinish>,
 }
 
-/// A pocket's finishing passes along its walls, as Fusion's 2D pocket's: the
+/// A pocket's finishing passes along its walls: the
 /// clearing stops their stepovers short of the walls, and at each level, once
 /// it is cleared, they go round, the innermost first, the last at the walls.
 /// A pocket's leads, if any, take the tool onto the first and off the last.
@@ -149,7 +149,7 @@ pub struct Spiral {
 }
 
 /// A level arc a profile enters a ring along and leaves it along, in the waste
-/// beside it: Fusion's horizontal lead-in and lead-out, the same both ways.
+/// beside it: a horizontal lead-in and lead-out, the same both ways.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LeadArc {
     /// Its radius, in millimetres.
@@ -193,7 +193,7 @@ pub struct PlanarReport {
 /// side a profile cuts, and inside for a pocket, 2D adaptive's too. Zero for
 /// anything else. The
 /// geometry's additional offset is a 3D machining boundary's, and moves nothing
-/// here: as in Fusion, the stock to leave moves a 2D cut.
+/// here: the stock to leave moves a 2D cut.
 ///
 /// The stock to leave moves the tool and not the boundary, so a floor is still
 /// found among the picks on the boundary itself.
@@ -423,7 +423,7 @@ impl RingLeads {
     }
 }
 
-/// The lead onto the start of closed `ring` and off its end, as Fusion's: a
+/// The lead onto the start of closed `ring` and off its end: a
 /// straight, then a level arc of `lead` tangent to the ring, on its left when
 /// `left`, else its right; and off it the same, mirrored. The largest of the
 /// arc's radius, its half and its quarter whose lead stays in the waste, as
@@ -984,7 +984,7 @@ fn nearest_point(ring: &[DVec2], at: DVec2) -> Option<DVec2> {
     best.map(|(p, _)| p)
 }
 
-/// A ring ramped into cut as Fusion cuts one, as one pass: onto the ring along
+/// A ring ramped into, cut as one pass: onto the ring along
 /// the lead-in, `above` its `top`; down along it, in the direction it cuts, to
 /// the first level; once round there, from where the ramp reached it; straight
 /// on down to the next, and so on; and off along a lead from where the last lap
@@ -1008,7 +1008,7 @@ fn emit_spiral(
         .filter(|_| lap > 1e-9)
         .map_or(spiral.angle, |d| spiral.angle.min((d / lap).atan()));
     let slope = angle.tan();
-    // As Fusion's: the first full lap starts halfway along the ring's longest
+    // The first full lap starts halfway along the ring's longest
     // side, the first ramp ends there, and the lead-in is back along the ring
     // where that ramp starts. Where there is no room for the lead there, the
     // ring starts where it was going to.

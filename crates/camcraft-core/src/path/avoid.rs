@@ -1,5 +1,5 @@
-//! A finishing path kept to the faces its operation machines, as Fusion's
-//! keeps to its machine and avoid groups: what of each pass rests only on
+//! A finishing path kept to the faces its operation machines, by its machine
+//! and avoid groups: what of each pass rests only on
 //! faces avoided is cut out, and what is left of it, in pieces, is passes of
 //! their own, for the linker to join round.
 //!
@@ -7,8 +7,7 @@
 //! ([`PartSurfaces`](crate::cutter::surfaces::PartSurfaces)), every group of
 //! faces under the tool grown by its offsets, so a pass already keeps a face
 //! avoided's clearance; here it is cut where that is all it rests on. Cut, not
-//! lifted over: Fusion's programs lift between the pieces, its rapids doubled
-//! where a face is avoided.
+//! lifted over.
 
 use super::held::cut_out;
 use super::toolpath::{Toolpath, ToolpathError};

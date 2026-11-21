@@ -1,6 +1,5 @@
 //! Ramp finishing: the tool going down each wall without stopping, round and
 //! round it, a stepdown each time round, from the wall's top to its foot.
-//! Fusion's Ramp.
 //!
 //! # Rings, and walls
 //!
@@ -16,7 +15,7 @@
 //!
 //! # Down a wall
 //!
-//! As Fusion's programs for `fixtures/step/ops_3d.step` go ([decision 0027]):
+//! Each wall is gone down so ([decision 0027]):
 //!
 //! - From the level above the wall's top ring, or the Top for the first level,
 //!   along that ring, which is clear of the part at every height above it, down
@@ -44,8 +43,7 @@
 //! # What is not a wall
 //!
 //! A ring the area or the slope range breaks open is cut at its level, as
-//! contour finishing cuts it, after the walls: Fusion's programs cut what its
-//! slope range leaves open so.
+//! contour finishing cuts it, after the walls.
 //!
 //! [decision 0027]: ../../../../docs/decisions/0027-ramp.md
 
@@ -618,9 +616,8 @@ impl Down<'_, '_> {
             return Ok(());
         };
         let tan = self.params.ramp.tan();
-        // Started at its point nearest the lower left of the box round it,
-        // as Fusion's start: the pocket's at its lower left corner, the
-        // dome's at 227° round it.
+        // Started at its point nearest the lower left of the box round it:
+        // the pocket's at its lower left corner, the dome's at 227° round it.
         let mut u = top.nearest(top.lower_left());
         let start = top.at(u);
         self.path

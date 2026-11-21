@@ -752,8 +752,8 @@ impl<'a> Clearing<'a> {
     /// Go down into material there is no way into from the side: a helix, or a
     /// plunge, at the widest place there is room for one, cleared as it goes
     /// down. A helix is made smaller where there is no room for it, halved
-    /// each time, but never below the least asked for, Fusion's Minimum Ramp
-    /// Diameter: a smaller one goes round so many more times for its depth
+    /// each time, but never below the least asked for: a smaller one goes
+    /// round so many more times for its depth
     /// that it is mostly a plunge. Where none fits, a ramp along the area
     /// ([`Clearing::ramp_way`]). `None` where there is room for nothing.
     pub(super) fn enter(

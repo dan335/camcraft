@@ -222,25 +222,24 @@ impl UnitArg {
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
 enum StrategyArg {
-    /// Raster passes side by side. Fusion's Parallel.
+    /// Raster passes side by side.
     Parallel,
-    /// Passes a constant distance apart along the surface. Fusion's Scallop.
+    /// Passes a constant distance apart along the surface.
     Scallop,
-    /// Passes round the part at levels a stepdown apart. Fusion's Contour.
+    /// Passes round the part at levels a stepdown apart.
     Contour,
-    /// Down each wall without stopping, a stepdown each time round. Fusion's
-    /// Ramp.
+    /// Down each wall without stopping, a stepdown each time round.
     Ramp,
-    /// Each flat face cleared at its own height. Fusion's Flat.
+    /// Each flat face cleared at its own height.
     Flat,
     /// Along where the tool touches the part in two places at once: inside
-    /// corners and valleys. Fusion's Pencil.
+    /// corners and valleys.
     Pencil,
-    /// A spiral about the middle, dropped onto the part. Fusion's Spiral.
+    /// A spiral about the middle, dropped onto the part.
     Spiral,
-    /// Spokes out from the middle, dropped onto the part. Fusion's Radial.
+    /// Spokes out from the middle, dropped onto the part.
     Radial,
-    /// A spiral from the boundary into the middle. Fusion's Morphed Spiral.
+    /// A spiral from the boundary into the middle.
     MorphedSpiral,
 }
 

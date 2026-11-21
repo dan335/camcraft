@@ -1,13 +1,10 @@
-//! A 2D contour round the lego brick, as Fusion posts it and as camcraft does.
-//!
-//! `fixtures/nc/lego_2d_contour_01.nc` is Fusion's 2D Contour round the brick's
-//! outline, ramped into at three depths, posted for a Masso: up before the tool
-//! change, across then down, Fusion's three-piece lead onto the ring once (a
-//! vertical arc, a straight, a level arc), then one spiral: down along the ring
-//! to a depth, once round there, down again, and so on, never lifting; the lead
-//! off once, and home at the end. camcraft's program for the same contour must
-//! have the same shape. The two are not in the same place or units, as their
-//! setups differ, so each program is reduced to what each block does.
+//! A 2D contour round the lego brick, ramped into at three depths, as camcraft
+//! posts it: up before the tool change, across then down, the three-piece lead
+//! onto the ring once (a vertical arc, a straight, a level arc), then one
+//! spiral: down along the ring to a depth, once round there, down again, and so
+//! on, never lifting; the lead off once, and home at the end. The program is
+//! reduced to what each block does, so the test holds its shape, not its
+//! numbers.
 
 #![allow(
     clippy::unwrap_used,
@@ -126,8 +123,8 @@ fn blocks(program: &str) -> Vec<Block> {
     out
 }
 
-/// The contour, set as Fusion's is: round the brick's outline, outside it, at
-/// three depths, ramped into, with Fusion's leads.
+/// The contour: round the brick's outline, outside it, at three depths,
+/// ramped into, with a profile's leads.
 fn job(dir: &Path) -> String {
     let text = format!(
         r#"
@@ -180,8 +177,8 @@ linking = {{ entry = "ramp" }}
 }
 
 #[test]
-fn a_contour_is_the_shape_of_fusions() {
-    let dir = scratch("fusion-contour");
+fn a_ramped_contour_spirals_down_between_one_lead_on_and_one_off() {
+    let dir = scratch("contour-shape");
     let out = dir.join("out");
     let run = camcraft(&["job", &job(&dir), "--out", &out.to_string_lossy()]);
     assert!(
@@ -198,10 +195,9 @@ fn a_contour_is_the_shape_of_fusions() {
     let shape = |blocks: Vec<Block>| {
         let mut out: Vec<Block> = Vec::new();
         for b in blocks {
-            // camcraft feeds up out of the cut to the safe distance before it
-            // rapids, where Fusion rapids straight out; and it rapids down to
-            // the lead where the lead is clear of the material, where Fusion
-            // feeds the last of the way: the differences kept, on purpose.
+            // Feeding up out of the cut to the safe distance before a rapid,
+            // and down to the lead where it is clear of the material, are left
+            // out: the shape is the order of the moves that cut.
             if matches!(b, Retract | Plunge) {
                 continue;
             }
@@ -218,7 +214,7 @@ fn a_contour_is_the_shape_of_fusions() {
     };
     let expected = [
         Across, RapidZ, // over the start, and down
-        UprightArc, Line, // Fusion's lead onto it
+        UprightArc, Line, // the lead onto it
         Ramp, Line, Ramp, Line, Ramp, Line, // down to each depth, and round
         UprightArc, RapidZ, // off, once, and out
     ];

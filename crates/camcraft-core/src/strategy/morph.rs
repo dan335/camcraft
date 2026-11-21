@@ -1,5 +1,5 @@
 //! A spiral morphed from the boundary to a centre, laid out seen from above for
-//! [`crate::strategy::projected`] to drop onto the part: Fusion's Morphed Spiral.
+//! [`crate::strategy::projected`] to drop onto the part.
 //!
 //! # Rings from the boundary to the centre
 //!

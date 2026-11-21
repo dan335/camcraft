@@ -1,6 +1,5 @@
 //! A finishing path over the part kept clear of it by the rest of the tool:
-//! its shank, and its holder or the spindle's nose ([decision 0021]), as
-//! Fusion's Shaft and Holder does for its 3D finishing.
+//! its shank, and its holder or the spindle's nose ([decision 0021]).
 //!
 //! The rest of the tool is dropped onto the part as one tool with the cutter,
 //! each piece a flat-ended cylinder at its own height above the tip,
@@ -348,8 +347,7 @@ fn looked_along(at: DVec3, m: &Move, step: f64, tolerance: f64) -> Vec<DVec3> {
 
 /// `path`, holes each a pass, less those `held` says the rest of the tool
 /// would meet the part or the material going down into, to within
-/// `tolerance`: a hole is drilled to its depth or not at all, as Fusion's
-/// drilling skips what it cannot reach.
+/// `tolerance`: a hole is drilled to its depth or not at all.
 pub fn skip_unreached(
     path: &Toolpath,
     held: &HeldDrop<'_>,

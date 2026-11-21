@@ -821,7 +821,7 @@ fn operation_findings(
                         "{} pass(es) past the middle of a hole left out",
                         r.dropped
                     ),
-                    "as Fusion's Bore discards them: fewer stepovers, or narrower ones, would keep them"
+                    "a pass would be past the hole's middle, so it is not cut: fewer stepovers, or narrower ones, would keep them"
                         .into(),
                 ));
             }
@@ -842,9 +842,8 @@ fn operation_findings(
             }
         }
         StrategyDetail::Thread(r) => {
-            // As Fusion's Thread: the lead in continues the helix below the
-            // hole's bottom, into a blind hole's floor where the thread runs
-            // to it.
+            // The lead in continues the helix below the hole's bottom, into a
+            // blind hole's floor where the thread runs to it.
             if let Some(([x, y], deep)) = r.below_floor {
                 out.push(finding(
                     Level::Warn,
@@ -853,14 +852,14 @@ fn operation_findings(
                         "a thread's lead goes {deep:.3} mm below the floor of the hole at \
                          X{x:.3} Y{y:.3}"
                     ),
-                    "its helical lead continues the thread below the hole's bottom, as \
-                     Fusion's does: set the Bottom that much higher, or level the leads"
+                    "its helical lead continues the thread below the hole's bottom: set the \
+                     Bottom that much higher, or level the leads"
                         .into(),
                 ));
             }
         }
         StrategyDetail::Slot(r) => {
-            // As Fusion's Slot: the middle only, the walls left for a finish.
+            // A slot cuts the middle only, the walls left for a finish.
             if r.narrower > 0 {
                 out.push(finding(
                     Level::Note,
@@ -870,7 +869,7 @@ fn operation_findings(
                         r.narrower
                     ),
                     format!(
-                        "up to {:.2} mm on each wall, as Fusion's Slot leaves them: finish \
+                        "up to {:.2} mm on each wall: finish \
                          them with a 2D contour, or use a tool as wide as the slot",
                         r.most_left
                     ),

@@ -360,7 +360,7 @@ fn in_from_the_walls(p: DVec2) -> f64 {
     8.0 - p.x.abs().max(p.y.abs())
 }
 
-/// Fusion's pocket: from the middle out, the ring along the walls last, so
+/// A pocket: from the middle out, the ring along the walls last, so
 /// the tool goes in where there is room and never cuts a full width beside
 /// the wall.
 #[test]
@@ -423,7 +423,7 @@ fn in_from_the_edge(q: DVec2) -> f64 {
     12.0 - q.x.abs().max(q.y.abs())
 }
 
-/// Round a boss, as Fusion's pocket: the rings a stepover apart in from
+/// Round a boss: the rings a stepover apart in from
 /// the boss and the sweep's edge alike, cut from the middle out, the ring
 /// beside the boss last of its level.
 #[test]

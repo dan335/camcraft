@@ -23,8 +23,8 @@ use crate::strategy::{MATERIAL_THICKNESS, SAME_LEVEL, StrategyError, merged_high
 const MOST_SHALLOW: usize = 10_000;
 
 /// The heights of the part's peaks: each point no point of it within the
-/// tool's `radius` across stands above, on a face that faces up, where Fusion's
-/// flat area detection adds a level too. A level there takes the stock off
+/// tool's `radius` across stands above, on a face that faces up, where flat
+/// area detection adds a level too. A level there takes the stock off
 /// over the peak down to it, which the level below cannot reach.
 ///
 /// Points are the mesh's corners, found by where they are, as a face's own
@@ -112,7 +112,8 @@ pub(super) fn without_thin(
     }
 }
 
-/// Fusion's Machine Shallow Areas.
+/// Shallow areas machined: levels added between two where the terrace between
+/// them is too wide.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Shallow {
     /// The closest two levels may be, in millimetres: no level is added nearer

@@ -321,7 +321,7 @@ fn the_bounding_box_and_silhouette_are_the_part_from_above() {
     assert!(!shadow.contains(dvec2(0.0, 0.0)));
     assert!(shadow.contains(dvec2(10.0, 10.0)));
 
-    // Kept wholly inside, a positive offset moves it in, as Fusion's does.
+    // Kept wholly inside, a positive offset moves it in.
     b.containment = Containment::Inside;
     b.margin = 1.0;
     let inside = boundary(&body, &b, &s, 1.0).unwrap().unwrap();

@@ -405,8 +405,8 @@ impl<T: Serialize + DeserializeOwned> Defaults<T> {
 impl<T: Serialize + DeserializeOwned> Defaults<T> {
     /// Put the expressions edited into `value`. A setting put back to its
     /// default goes back to the default's expression, or has none if the
-    /// default has none; one typed over loses its expression, as Fusion's
-    /// does, rather than have it worked out again over what was typed.
+    /// default has none; one typed over loses its expression, rather
+    /// than have it worked out again over what was typed.
     fn apply_expressions(&self, value: &mut T) {
         let Some(e) = &self.expressions else {
             return;

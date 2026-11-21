@@ -1,5 +1,5 @@
 //! Patterns about a centre, laid out seen from above for [`crate::strategy::projected`] to
-//! drop onto the part: Fusion's Spiral and Radial.
+//! drop onto the part.
 //!
 //! - A spiral turns about its centre a stepover further out each lap, from its
 //!   inner radius to its outer. It is one line, cut outward or inward, and turns
