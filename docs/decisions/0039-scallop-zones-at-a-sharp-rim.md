@@ -170,7 +170,13 @@ they were.
   side, 1.52 mm apart and at a slant, a different one on each side of the
   block. A field measured from one edge, and the blend between two, are
   straight lines along such an edge and are right as they are; one measured
-  from two edges that meet on an upright wall is not, in either order. Until
+  from two edges that meet on an upright wall is not, in either order.
+  Measured on what is cut today, outside in, where every field is measured
+  from every edge, it leaves nothing: on the user's bowl no grid edge can
+  lose more than 0.56 of a stepover's ring, and on `ops_3d` with the dome
+  avoided the 428 edges that can lose a whole one, up to 4.9, are all on the
+  pocket's upright walls, which the tool's side cuts at any height; on its
+  left wall the stock left is 0.183 mm at most to Fusion's 0.234. Until
   the field keeps where two fronts meet inside a cliff's edge, as a node of
   its own there, a zone is not measured from every edge to close its rings.
 - Outside in there are no zones: the rings still cross a sharp rim at a
