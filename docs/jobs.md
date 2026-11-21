@@ -123,6 +123,12 @@ lowest point, rather than either being cut into arcs: above it, inside out
 from an inner edge where the line is closed and the band between a ring no wider than twice the tool's
 diameter, and below it where it is the one such line and the Bottom is under
 it ([decision 0038](decisions/0038-scallop-rings-blend-into-an-edge-at-a-slant.md)).
+That line's height is the highest under where the tool rests there that rises
+and falls no faster than the tool ramps: the tool touches the part the same
+there over a range of heights, which the part's facets would have it jump
+about in. Where a ring starts a step under the last, down a steep wall, the
+tool goes down onto it along it at the linking's default ramp angle, above
+it, and the level rings below are gone down onto the same way.
 Up an
 upright wall above a face avoided, as a pocket's above its floor, the rings
 run up the wall from its foot. It cuts

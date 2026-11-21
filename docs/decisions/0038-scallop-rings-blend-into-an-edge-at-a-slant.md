@@ -37,14 +37,34 @@ floor avoided:
 - **Below the line**, from Z-35.7 at its lowest to Z-32.3 at its highest,
   down to a level ring half a stepover under its lowest, at Z-36.2, four rings
   are needed, the deepest place 3.9 mm.
-- **What it costs.** It feeds 44.10 m where it fed 39.37: 3.24 m more down
-  the outside above Z-34 and 1.49 m more below it, the inside and the rim
+- **What it costs.** It feeds 42.87 m where it fed 39.35: 2.44 m more down
+  the outside above Z-34 and 1.07 m more below it, the inside and the rim
   as they were. A closed ring of the band is as long all round however thin
   the band is there, where the arcs it replaces stopped short: half the
   band's spread of widths over the stepover, in laps, about 6 laps of 0.49 m,
   as reckoned before it was built, and below the line two laps more. Started a
   stepover from the line rather than half, the band took a ring more and the
-  field a ring less: 44.05 m.
+  field a ring less, for the same feed.
+- **The line's height is ill-conditioned, and bobbed.** Dropped at the cuts
+  along the grid's edges, the height where the tool leaves the part went up
+  and down by 0.1 to 0.3 mm from one cut to the next, 673 times round the
+  bowl, and the rings near it with it. There the tool's tip is where its
+  widest circle passes the part's widest point, a flat maximum, and on the
+  part's facets which facet is widest changes from one grid edge to the
+  next: just inside the line the drop is already 0.03 to 0.16 mm higher a
+  ten-thousandth of a millimetre in, and beside it, nothing being under the
+  tool, the tool touches the part at the same place, to a ten-thousandth of a
+  millimetre, from 0.6 mm below that height up to it. So any height in that
+  range cuts the same; the drop's picks one at random. Fitting the fall's
+  square root further in, at a quarter and a whole millimetre, still bobbed
+  228 times.
+- **Steps down a steep wall.** With rings one under another, under the line
+  and on the steepest part above it, the way from one to the next fell
+  further than a cut step and steeper than a plunge, and lifted: two between
+  whole rings, five under the line. The ramp down along a ring was refused
+  on a ring not level. And after a ring was ramped onto, the next started
+  back at the seam, 28 mm behind where the ramp had left the tool, and the
+  way back lifted too.
 
 ## What was decided
 
@@ -85,6 +105,24 @@ floor avoided:
   no band is blended above it; the rings below it are cut first after the
   level rings, from the deepest up to the edge, and then the field's rings in.
   Each is cut the way the edge is, started on the seam.
+- **Where the tool leaves the part, the highest height that rises and falls
+  no faster than the tool ramps** (`ground::level_where_it_leaves`): each cut
+  along that line gets the least of its own dropped height and every other's
+  raised by the slope of the default ramp angle times how far along the line
+  it is. It is never above where the tool rests there, so the tool there still
+  touches the part where it leaves it, and placed beside the wall at that
+  height it is clear of the part.
+- **The ramp onto a ring rides above it** (`projected::Emit`): at each point,
+  the ring's own height and what is left of the drop, so it is never under
+  the ring however the ring rises and falls; a level ring's ramp is as it was.
+  A ring a step under the last, down a steep wall, is ramped onto whether it
+  is level or not. A ring starts on the seam only where the last left the tool
+  beside it, within as near as a ramp starts; after a ramp, nearest where the
+  tool is.
+- **The level rings below are ramped onto once the rings the field covers are
+  left out**, the first from where the field's last ring ended: laid first and
+  ramped, the ramps had run onto rings inside the bowl that were then left
+  out, and the first two level rings were joined by a lift.
 - **Two plain mistakes mended on the way.**
   - Measured out from the inner edges, the far end's lines, where the tool
     leaves the part and the outer boundary's ring, had the ground on their
@@ -115,46 +153,47 @@ floor avoided:
 
 The user's bowl, inside out, the floor avoided, before and after:
 
-| | 0.10.0 | now |
+| | before | now |
 |---|---|---|
-| Fed | 39.37 m | 44.10 m |
+| Fed | 39.35 m | 42.87 m |
 | of it, inside / rim | 16.89 / 2.31 m | 16.89 / 2.31 m |
-| of it, outside above Z-34 / below | 13.23 / 6.95 m | 16.47 / 8.44 m |
-| Rapid | 1.70 m | 0.35 m |
-| Lifts | 28 | 9 |
+| of it, outside above Z-34 / below | 13.21 / 6.95 m | 15.65 / 8.02 m |
+| Rapid | 1.66 m | 0.09 m |
+| Lifts | 26 | 1, the last retract |
 | Passes not closed rings | 19 arcs and 6 pieces of level rings | none |
 | Gaps over 1.1 mm at the six sections | one, 1.20 | none |
+| The line's ring, turns in height over 0.05 mm | 673 | 29 |
 
-Of the 9 lifts, one is the last retract; two are between whole rings on the
-steepest part of the outside, and five between rings one below another under
-the line, the edge's and the four below it and the first level ring: each
-next ring starts under the last, and the way down falls steeper than a
-plunge and further than a cut step, which the linker lifts for. One is
-between the first two level rings, whose ramp is lost after the level rings
-are laid; why is not found yet.
+Before is the program as it was with links across and down (decision 0004,
+amended). The rings below the line, and the level rings, turn once a lap; the
+three blended rings nearest the line still 38 to 75 times, 0.07 to 0.10 mm
+(below).
 
-The same job with the floor's group removed, inside out: 40.14 m and 12 lifts
-before, 41.46 m and 10 lifts now, the gaps at the six sections as they were;
-cut outside in, 40.17 m and 10 lifts before, 41.38 m and 3 now. The job cut
-outside in with the floor avoided: 39.78 m and 46 lifts before, 41.00 m and 39
-now.
+The same job with the floor's group removed, inside out: 40.12 m and 9 lifts
+before, 40.96 m and the last retract now, the gaps at the six sections as
+they were; cut outside in, 40.17 m and 10 lifts before, 40.90 m and 2 now.
+The job cut outside in with the floor avoided: 39.78 m and 46 lifts before,
+40.52 m and 36 now.
 
 On a bowl in the tests widest higher on one side than the other, a 4 mm ball,
 a stepover of 0.8 (`run::tests_bowl`): the band's measured spacing within 1%
 of its width, every pass off the floor's edge a closed ring, none further
 apart along the outside than 1.03 of a stepover inside out.
 
-On Fusion's `ops_3d` the three Scallop comparisons are as they were, move
-for move: cut outside in, as a new one starts, the field is measured from
-every edge and no band is blended, and no ring is laid below where the tool
-leaves the part.
+On Fusion's `ops_3d`, cut outside in as a new one starts, no band is blended
+and no ring laid below where the tool leaves the part; the columns alike are
+as they were, 94.6%, 58.7% and 42.4%, and with rings ramped onto along
+themselves it lifts once, 3 times and twice where it lifted once, 5 and 3
+times, with 1.0% more fed, 1.9% less and 24% less. Contour's programs, whose
+rings are level, are as they were.
 
 ## Still not done
 
-- The lifts between rings one below another down a steep wall, under the line
-  and on the steepest part of the outside: a finish over the part that
-  crossed at the height it came off and came down the short way would take
-  them (the linker's).
+- The three blended rings nearest the line, within about 3 mm of it along
+  the surface, still turn in height 38 to 75 times a lap, 0.07 to 0.10 mm,
+  every 3 to 7 mm: they run where the tool's path stands nearly upright
+  beside the bulge's widest, and take their heights from the grid there, its
+  nodes dropped on the same facets.
 - Outside in with an inner edge, the field is measured from both edges, and
   each level's ring by the floor and its ring by the far edge are cut one
   after the other: on the bowl 29 lifts between the two.

@@ -555,6 +555,34 @@ fn rings_blend_into_where_the_tool_leaves_a_tilted_bulge() {
             at = m.to;
         }
         assert!(open.is_empty(), "{order}: passes not closed {open:?}");
+        // Along where the tool leaves the part and below it, no ring bobs up
+        // and down: no two turns in height of more than a tenth of a stepover
+        // within the tool's radius along it. The line's height there is the
+        // tool's at the bulge's widest, which the facets would have it jump
+        // by from one grid edge to the next.
+        let mut ring: Vec<DVec3> = Vec::new();
+        let mut cutting = false;
+        let mut bobbing = Vec::new();
+        for m in op.path.moves() {
+            if m.role == MoveRole::Cut {
+                ring.push(m.to);
+            } else if cutting {
+                let leaving = |p: &DVec3| 0.5 * RIM + TILT * p.y.atan2(p.x).cos() - 2.0;
+                let outside = ring.iter().all(|p| {
+                    p.truncate().length() > radii(p.y.atan2(p.x))[2] + 0.5
+                        && p.z < leaving(p) + 0.05
+                });
+                if outside && let Some(at) = turns_within(&ring, 0.1 * STEPOVER, 2.0) {
+                    bobbing.push(at);
+                }
+                ring.clear();
+            }
+            cutting = m.role == MoveRole::Cut;
+        }
+        assert!(
+            bobbing.is_empty(),
+            "{order}: rings bob up and down at {bobbing:?}"
+        );
         if order == "outside-in" {
             continue;
         }
@@ -578,6 +606,39 @@ fn rings_blend_into_where_the_tool_leaves_a_tilted_bulge() {
         }
         assert!(lifts <= 3, "{lifts} lifts");
     }
+}
+/// Where along `points` two turns in height, each more than `size` from the
+/// last, come within `within` of each other along the way, if anywhere.
+fn turns_within(points: &[DVec3], size: f64, within: f64) -> Option<DVec3> {
+    let mut along = 0.0;
+    let mut extremes: Vec<(f64, DVec3)> = vec![(0.0, *points.first()?)];
+    let mut rising: Option<bool> = None;
+    for (a, b) in points.iter().zip(points.iter().skip(1)) {
+        along += a.distance(*b);
+        let last = extremes[extremes.len() - 1].1.z;
+        let (higher, lower) = (b.z > last + size, b.z < last - size);
+        match rising {
+            None if higher || lower => {
+                rising = Some(higher);
+                extremes.push((along, *b));
+            }
+            Some(up) if (up && b.z > last) || (!up && b.z < last) => {
+                let n = extremes.len() - 1;
+                extremes[n] = (along, *b);
+            }
+            Some(up) if (up && lower) || (!up && higher) => {
+                rising = Some(!up);
+                extremes.push((along, *b));
+            }
+            _ => {}
+        }
+    }
+    // The turns: every extreme but the start and the one still running.
+    let turns = &extremes[1..extremes.len().saturating_sub(1).max(1)];
+    turns
+        .windows(2)
+        .find(|w| w[1].0 - w[0].0 < within)
+        .map(|w| w[1].1)
 }
 /// A cup, its floor avoided, its wall straight up from it at `degrees` to a
 /// sharp rim: upright at 90°.

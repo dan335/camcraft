@@ -308,8 +308,8 @@ pub(crate) struct Emit {
     pub(crate) ramp: Option<(f64, f64)>,
     /// Only where the way straight down onto the ring falls steeper than a
     /// plunge, and further than this, the fall at the cutting feed the gate
-    /// refuses, which the linker would lift for; and only onto a ring level to
-    /// within it. `None`: onto every ring lower than the last.
+    /// refuses, which the linker would lift for. `None`: onto every ring lower
+    /// than the last.
     pub(crate) ramp_past: Option<f64>,
     /// Where the last pass left the tool, and whether it was closed.
     end: Option<(DVec3, bool)>,
@@ -367,6 +367,11 @@ impl Emit {
     /// where that ended, gone down to along itself at the ramp angle, from the
     /// height the tool left, and then cut once round from where the ramp
     /// reaches it. `false`, writing nothing, where it is not such a ring.
+    ///
+    /// The ramp rides above the ring: at each of its points, the ring's own
+    /// height and what is left of the drop. A ring's points are where the tool
+    /// is clear of the part, as it is anywhere above them, so a ring that rises
+    /// and falls is ramped onto as a level one is, never dipping under it.
     fn ramp_onto(&mut self, run: &Run) -> Result<bool, StrategyError> {
         let (Some((angle, near)), Some((left, true)), true) = (self.ramp, self.end, run.closed)
         else {
@@ -404,14 +409,9 @@ impl Emit {
         if n < 3 || drop <= 1e-9 || lap <= 1e-9 || gap > near {
             return Ok(false);
         }
-        // A ring that is not level, as a field's need not be, may fall away
-        // from where the ramp reaches it: only one level to within that.
-        let (low, high) = points.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
-            (lo.min(p.z), hi.max(p.z))
-        });
         if self
             .ramp_past
-            .is_some_and(|least| drop <= least || drop <= PLUNGE_RATIO * gap || high - low > least)
+            .is_some_and(|least| drop <= least || drop <= PLUNGE_RATIO * gap)
         {
             return Ok(false);
         }
@@ -453,7 +453,8 @@ impl Emit {
             along += piece;
             go(
                 &mut self.path,
-                b.truncate().extend(left.z - drop * along / length),
+                b.truncate()
+                    .extend(left.z - drop * along / length + (b.z - first.z)),
                 ramp,
             )?;
             i += 1;
@@ -471,6 +472,13 @@ impl Emit {
         self.at = Some(reached.truncate());
         self.end = Some((reached, true));
         Ok(true)
+    }
+
+    /// Cut on from where a closed ring ended, at `at`: the next ring starts
+    /// nearest it, and is ramped onto where it is lower.
+    pub(crate) fn after(&mut self, at: DVec3) {
+        self.at = Some(at.truncate());
+        self.end = Some((at, true));
     }
 
     /// The seam closed rings start on, once the first is cut, where one is
@@ -495,7 +503,13 @@ impl Emit {
             };
             if let Some(at) = at {
                 if run.closed {
-                    if !self.seam.is_some_and(|seam| seam.start(&mut run, at)) {
+                    // On the seam where the last ring left the tool beside it,
+                    // as near as a ramp starts; a ring ramped onto, or begun
+                    // elsewhere, leaves it further off, and the next starts
+                    // nearest where it is, as a ramp onto it would.
+                    let near = self.ramp.map_or(f64::INFINITY, |(_, near)| near);
+                    let seam = self.seam.filter(|seam| seam.beside(at, near));
+                    if !seam.is_some_and(|seam| seam.start(&mut run, at)) {
                         start_near(&mut run, at);
                     }
                 } else if both_ways
@@ -560,6 +574,12 @@ impl Seam {
             })
             .min_by(|x, y| x.2.total_cmp(&y.2))
             .map(|(i, t, _)| (i, t))
+    }
+
+    /// Whether `at` is within `near` of it.
+    fn beside(self, at: DVec2, near: f64) -> bool {
+        let off = at - self.from;
+        off.perp_dot(self.way).abs() <= near && off.dot(self.way) >= -near
     }
 
     /// `ring`, closed, started at its point nearest where it crosses the

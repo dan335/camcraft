@@ -2,6 +2,9 @@
 //! tool may go.
 
 use super::*;
+use crate::strategy::adaptive::Direction;
+use crate::strategy::parallel::Run;
+use crate::strategy::projected::Emit;
 
 /// Raster finishing, with the tool's centre kept to `limit` as well as the
 /// sweep, and off the steep ground, which rings round the walls finish
@@ -174,9 +177,14 @@ pub(super) fn scallop_paths(
     // what overhangs. There height is the only measure, and level rings a
     // stepover apart in it finish it.
     let (field, mut report) = scallop_finish(&work.seat()?, &area, &params).map_err(in_op(op))?;
+    // Inside out, down from where the field's last ring ended.
+    let after = match order {
+        PassOrder::InsideOut => field.moves().last().map(|m| m.to),
+        PassOrder::OutsideIn => None,
+    };
     let (below, rings) = below_reach(
         work,
-        limit,
+        (limit, after),
         report.walls_from,
         direction,
         (slope_from, slope_to),
@@ -220,12 +228,13 @@ pub(super) fn scallop_paths(
 /// above, or has nothing under it. Above that the field's rings run, on to
 /// the line where the tool leaves the part: so nothing is cut twice, and
 /// nothing between that line and the first ring below it is wider than a
-/// stepover. Each level's last ring goes down along the wall onto the next,
-/// at the linking's default ramp angle, as contour finishing's do. The
+/// stepover. Each ring is gone down onto along the wall from the one above,
+/// at the linking's default ramp angle, as contour finishing's are, the first
+/// from where the field's last ring ended, `after`, if it is cut first. The
 /// rings, and how many.
 fn below_reach(
     work: &Work<'_>,
-    limit: Option<&Region>,
+    (limit, after): (Option<&Region>, Option<DVec3>),
     from: Option<f64>,
     direction: CutDirection,
     (slope_from, slope_to): (f64, f64),
@@ -261,7 +270,8 @@ fn below_reach(
         order: ContourOrder::ByDepth.engine(),
         slope_from,
         slope_to,
-        ramp: Some(crate::job::Linking::default().ramp_angle.to_radians()),
+        // Ramped onto once the rings the field covers are left out, below.
+        ramp: None,
     };
     let (rings, _) = waterline(&mut reach, &seat, &area, &params).map_err(in_op(op))?;
     let tolerance = job.tolerance;
@@ -276,31 +286,41 @@ fn below_reach(
     // They stay level by level, from the top down, so no ring is cut under
     // material a ring above it has yet to take.
     let (kept, _) = cut_out(&rings, covered, step, tolerance).map_err(in_op(op))?;
-    // Where the line the tool leaves the part along dips only just past a
-    // ring, the ring is left a bit shorter than the tool's radius there: a
-    // dimple between the field's last ring and the ring below, lifted to and
-    // from. Left to those, as the field leaves its own.
-    let mut long = Toolpath::new();
-    let mut passes = 0;
-    let mut at: Option<DVec3> = None;
-    for pass in kept.passes() {
-        let mut from = at;
-        let mut cut = 0.0;
-        for m in pass {
-            if m.role == crate::path::toolpath::MoveRole::Cut
-                && let Some(f) = from
-            {
-                cut += m.length(f);
-            }
-            from = Some(m.to);
-        }
-        at = from;
-        if cut >= seat.tool().max_radius() {
-            long.append(pass).map_err(in_op(op))?;
-            passes += 1;
-        }
+    // Each ring the field leaves, in order, gone down onto from the one
+    // before: so each starts where the last ended, not where it was found.
+    let mut emit = Emit::new(op.passes.feed);
+    let ramp = crate::job::Linking::default().ramp_angle.to_radians();
+    emit.ramp = Some((ramp, 0.5 * seat.tool().max_radius()));
+    if let Some(at) = after {
+        emit.after(at);
     }
-    Ok((long, passes))
+    let both_ways = params.direction == Direction::BothWays;
+    for pass in kept.passes() {
+        // A ring the line the tool leaves the part along dips only just past
+        // is left a bit shorter than the tool's radius there: a dimple between
+        // the field's last ring and the ring below. Left to those, as the
+        // field leaves its own.
+        let mut points: Vec<DVec3> = pass.iter().map(|m| m.to).collect();
+        let along: f64 = points
+            .iter()
+            .zip(points.iter().skip(1))
+            .map(|(a, b)| a.distance(*b))
+            .sum();
+        if along < seat.tool().max_radius() {
+            continue;
+        }
+        let closed = points.len() > 3
+            && points
+                .first()
+                .zip(points.last())
+                .is_some_and(|(a, b)| a.distance(*b) < 1e-9);
+        if closed {
+            points.pop();
+        }
+        emit.nearest_first(vec![Run { points, closed }], both_ways)
+            .map_err(in_op(op))?;
+    }
+    Ok((emit.path, emit.passes))
 }
 
 /// Rings round the walls passes laid over the part leave out, up to `slope_to`: a

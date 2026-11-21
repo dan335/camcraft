@@ -37,10 +37,23 @@ the same notes at more length.
   closed rings go down beside the wall to the first level ring, which starts
   half a stepover under the line's lowest point. Every pass from the floor's
   edge to the Bottom is a closed ring and no gap at the six sections is over
-  1.1 mm; it lifts 9 times where it lifted 28, and feeds 44.1 m where it fed
-  39.4, a closed ring being as long however thin the band is there. Where
-  the band is wider than twice the tool's diameter, or not a ring, the rings
-  are cut by the line as before.
+  1.1 mm; it lifts once, at the end, where it lifted 26 times, and feeds
+  42.9 m where it fed 39.4, a closed ring being as long however thin the band
+  is there. Where the band is wider than twice the tool's diameter, or not a
+  ring, the rings are cut by the line as before.
+- **The line where the tool leaves the part no longer bobs up and down.**
+  Its height there, where the tool's widest circle passes the part's widest
+  point, jumped by 0.1 to 0.3 mm from one grid cell to the next with the
+  part's facets, 673 times round a user's bowl, though the tool touches the
+  same place over that height. It now takes the highest height under that
+  which rises and falls no faster than the tool ramps: 29 turns, every 5 mm.
+- **Down a steep wall Scallop ramps onto the next ring along it whether the
+  ring is level or not**, riding above it, where it lifted; after a ring
+  ramped onto, the next starts where the tool is rather than back at the
+  seam; and the level rings below the field are ramped onto, the first from
+  where the field's last ring ended. On Fusion's `ops_3d` it lifts 3 times
+  where 5 with the dome avoided, and twice where 3 with only the floor
+  machined.
 - Inside out from an inner edge, the line where the tool leaves the part and
   the outer boundary's ring are cut the way the rings before them are; they
   were cut the other way.

@@ -385,6 +385,18 @@ impl CutGrid {
         self.cuts.get(usize::try_from(i).ok()?)
     }
 
+    /// Cut node `n` given the height `z`, where the caller knows better than
+    /// its `find` which height along the change its edge is at; nothing else
+    /// of the grid depends on it.
+    pub fn set_height(&mut self, n: u32, z: f64) {
+        let Some(i) = n.checked_sub(self.grid.nodes()) else {
+            return;
+        };
+        if let Some(c) = usize::try_from(i).ok().and_then(|i| self.cuts.get_mut(i)) {
+            c.at.z = z;
+        }
+    }
+
     /// Band `band`'s triangles, or every band's with `None`, as a surface.
     pub fn view(&self, band: Option<u32>) -> View<'_> {
         View { cut: self, band }

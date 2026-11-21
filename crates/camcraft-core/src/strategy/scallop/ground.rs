@@ -90,7 +90,8 @@ impl Ground {
         report.nodes = u64::from(on.grid.nodes());
         report.coarsened = on.coarsened;
         params.watch.check()?;
-        let cut = cut_where_it_ends(seat, &on, classes, params.tolerance);
+        let mut cut = cut_where_it_ends(seat, &on, classes, params.tolerance);
+        level_where_it_leaves(&mut cut, params.ramp.tan());
         Ok(Self { on, cut })
     }
 
@@ -155,6 +156,75 @@ fn cut_where_it_ends(
     cut
 }
 
+/// Where the tool leaves the part, each run of its cuts given the highest
+/// heights no higher than its own and rising or falling along it no more
+/// steeply than `slope`, as a rise over a run.
+///
+/// There the tool's tip is where its widest circle passes the part's widest
+/// point: a flat maximum, whose height on the part's facets jumps from one
+/// facet to the next, as far as the square root of twice the bulge's radius
+/// times the facets' deviation. Dropped at the cuts along the grid's edges, a
+/// user's bowl's line alternated by 0.1 to 0.3 mm from cut to cut. Beside
+/// that line nothing is under the tool, and it touches the part at the same
+/// place from that height down (to a ten-thousandth of a millimetre over 0.6
+/// mm, measured), so any height under it cuts the same: the highest that rise
+/// and fall no faster than the tool ramps is taken, each cut's own height or,
+/// lower, another's raised by the slope over how far along the line it is.
+fn level_where_it_leaves(cut: &mut CutGrid, slope: f64) {
+    let leaving: Vec<(Vec<u32>, Vec<DVec3>, bool)> = (0..cut.bands())
+        .flat_map(|b| cut.edges(b))
+        .flat_map(|(chain, closed)| pieces(cut, &chain, closed))
+        .filter(|e| e.past == OFF_PART)
+        .map(|e| {
+            let own: Vec<(u32, DVec3)> = e
+                .nodes
+                .iter()
+                .zip(&e.points)
+                .filter(|(n, _)| {
+                    cut.cut(**n)
+                        .is_some_and(|c| cut.class(c.edge.1) == OFF_PART)
+                })
+                .map(|(&n, &p)| (n, p))
+                .collect();
+            let (nodes, points) = own.into_iter().unzip();
+            (nodes, points, e.closed)
+        })
+        .collect();
+    for (nodes, points, closed) in leaving {
+        for (n, z) in nodes.into_iter().zip(lowest_within(&points, closed, slope)) {
+            cut.set_height(n, z);
+        }
+    }
+}
+
+/// The highest heights over `points` no higher than each point's own and
+/// changing from one point to the next by no more than `slope` times how far
+/// apart they are seen from above: twice along the line, and round again
+/// where it is `closed`, each the least of its own and the last's raised.
+fn lowest_within(points: &[DVec3], closed: bool, slope: f64) -> Vec<f64> {
+    let n = points.len();
+    let mut z: Vec<f64> = points.iter().map(|p| p.z).collect();
+    let rounds = if closed { 2 } else { 1 };
+    for forward in [true, false] {
+        for k in 1..rounds * n {
+            let (i, j) = if forward {
+                (k % n, (k - 1) % n)
+            } else {
+                ((rounds * n - k - 1) % n, (rounds * n - k) % n)
+            };
+            let (Some(&p), Some(&q), Some(&zj)) = (points.get(i), points.get(j), z.get(j)) else {
+                continue;
+            };
+            let raised = zj + slope * p.truncate().distance(q.truncate());
+            if let Some(zi) = z.get_mut(i)
+                && raised < *zi
+            {
+                *zi = raised;
+            }
+        }
+    }
+    z
+}
 /// Where the ground machined ends along the grid edge from node `a`, of the
 /// ground's class, to node `b`: where the tool goes from resting on a face it
 /// machines to resting on faces it avoids alone, or off the part, found by
